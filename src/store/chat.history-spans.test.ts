@@ -202,3 +202,99 @@ describe('the end is authoritative on the live path too', () => {
     expect(spanWarnings()).toStrictEqual([])
   })
 })
+
+// r28 explicit outcome rule: cancelled/interrupted -> stopped; error/timeout
+// -> failed; parked leaves the supplied running lifecycle unchanged. Expected
+// values come from that rule, never from a socket/REST equality comparison.
+const NON_SUCCESS_ENDINGS = [
+  { status: 'cancelled', lifecycleState: 'stopped' },
+  { status: 'interrupted', lifecycleState: 'stopped' },
+  { status: 'error', lifecycleState: 'failed' },
+  { status: 'timeout', lifecycleState: 'failed' },
+  { status: 'parked', lifecycleState: 'running' },
+] as const
+
+function expectNonSuccessInActivity(status: SubagentEndFrame['status'], lifecycleState: NonNullable<SubagentSpan['lifecycleState']>) {
+  const view = activity() // real hook mounted over the actual reduced chat
+  if (status === 'parked') {
+    expect(view.running, 'a parked end cannot turn still-open work into a finished success').toHaveLength(1)
+    expect(view.running[0]).toMatchObject({ kind: 'agent', key: SPAN, status: 'running', lifecycleState: 'running', childSessionId: 'child-session-1' })
+    expect(view.runningChildren).toBe(1)
+    expect(view.recentlyFinished, 'the parked helper is not falsely listed as finished').toStrictEqual([])
+  } else {
+    expect(view.running, 'the ended failed/stopped helper is not open work').toStrictEqual([])
+    expect(view.runningChildren).toBe(0)
+    expect(view.recentlyFinished, 'one supplied helper yields one finished classification').toHaveLength(1)
+    expect(view.recentlyFinished[0], 'r28: the real Activity item must carry the independent failed/stopped outcome, not completed').toMatchObject({
+      kind: 'agent', key: SPAN, lifecycleState, childSessionId: 'child-session-1', durationMs: 4200, finalResult: 'End facts remain available',
+    })
+    expect(view.recentlyFinished[0].status, 'a non-success end must never be labelled successful').not.toBe('success')
+  }
+}
+
+describe('r28 non-success end authority reaches the real Activity hook', () => {
+  beforeEach(() => {
+    // The cases reuse synthetic source positions with different end outcomes.
+    // Reset the real session's out-of-store history facts too, not just Zustand
+    // rows; otherwise one independent fixture can poison the next one's input.
+    useChatStore.getState().releaseSessionHistory(SID)
+  })
+
+  it.each(NON_SUCCESS_ENDINGS)('r28 live $status end retains the independently required $lifecycleState lifecycle', ({ status, lifecycleState }) => {
+    useChatStore.getState().appendMessage({ id: 'r28-live-parent', role: 'assistant', content: 'Delegating', timestamp: STAMP, status: 'streaming', isStreaming: true })
+    transport = historyTransport()
+    transport.deliver(startFrame, stateFrame)
+    const before = activity()
+    expect(before.running, 'instrument: this exact helper really was open before its end').toHaveLength(1)
+    expect(before.running[0]).toMatchObject({ kind: 'agent', key: SPAN, status: 'running', lifecycleState: 'running' })
+    expect(before.runningChildren).toBe(1)
+    transport.deliver({ ...endFrame, status, final_result: 'End facts remain available' })
+
+    // Consumer oracle comes first; store-only metadata is not a substitute.
+    expectNonSuccessInActivity(status, lifecycleState)
+    expect(bucket().messagesById['r28-live-parent'].spans).toHaveLength(1)
+    expect(settled(bucket().messagesById['r28-live-parent'].spans![0])).toMatchObject({
+      spanId: SPAN, status, lifecycleState, hasRun: true, durationMs: 4200, finalResult: 'End facts remain available',
+    })
+    expect(spanWarnings()).toStrictEqual([])
+  })
+
+  it.each(NON_SUCCESS_ENDINGS)('r28 snapshot $status end restores the independently required $lifecycleState Activity outcome', ({ status, lifecycleState }) => {
+    const ending: SubagentEndFrame = { ...endFrame, status, final_result: 'End facts remain available' }
+    const source = entry(4, { id: 'span-end', role: 'system', type: 'system', content: '', system_subtype: 'subagent_end', subagent_end: ending })
+    attach([question, startEntry, stateEntry, source], [
+      replay(question), { ...startFrame, ...origin(2, 'span-start') },
+      { ...stateFrame, ...origin(3, 'span-state') }, { ...ending, ...origin(4, 'span-end') },
+    ], 4, false)
+
+    expectNonSuccessInActivity(status, lifecycleState)
+    expect(bucket().history.readerPositions).toStrictEqual([pos(1), pos(2), pos(3), pos(4)])
+    expect(spanRows()).toHaveLength(1)
+    expect(spanRows()[0].id, 'the outcome remains on its actual start row').toBe('span-start')
+    expect(spanRows()[0].spans).toHaveLength(1)
+    expect(settled(spanRows()[0].spans[0])).toMatchObject({
+      spanId: SPAN, status, lifecycleState, hasRun: true, durationMs: 4200, finalResult: 'End facts remain available',
+    })
+    expect(visibleRows().map(row => row.id)).toStrictEqual(['question', 'span-start'])
+    expect(spanWarnings()).toStrictEqual([])
+  })
+
+  it('r28 REST-only load mounts Activity afterward and independently shows recorded success as finished, not open', async () => {
+    // No socket reference state is constructed. The exact success oracle is
+    // independently fixed by the same end-authority rule as the live cases.
+    const rest = page([question, startEntry, stateEntry, endEntry], { rows: 4 })
+    expectValidPage(rest, [pos(1), pos(2), pos(3), pos(4)], 4)
+    vi.stubGlobal('fetch', async () => response(rest))
+    await useChatStore.getState().loadLatestHistory(SID)
+
+    expectFinishedInActivity() // mounts the real hook AFTER the REST load
+    expect(bucket().history.historyLoaded).toBe(true)
+    expect(bucket().history.readerPositions).toStrictEqual([pos(1), pos(2), pos(3), pos(4)])
+    expect(spanRows()).toHaveLength(1)
+    expect(spanRows()[0].id).toBe('span-start')
+    expect(spanRows()[0].spans).toHaveLength(1)
+    expect(settled(spanRows()[0].spans[0])).toMatchObject(FINISHED)
+    expect(visibleRows().map(row => row.id)).toStrictEqual(['question', 'span-start'])
+    expect(spanWarnings()).toStrictEqual([])
+  })
+})
