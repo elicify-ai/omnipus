@@ -33,6 +33,12 @@ const copy: Record<HistoryActionKind, string> = {
 export function createHistorySlice(context: HistorySliceContext): HistorySlice {
   const { get, withBucket } = context
   const state = (sid: string) => get().sessionsById[sid]
+  /** Record a failed read: its visible error copy and the query Retry re-runs. */
+  function failRead(sid: string, kind: HistoryActionKind, query: SessionHistoryQuery, error: string): void {
+    if (!failed.has(sid)) failed.set(sid, new Map())
+    failed.get(sid)!.set(kind, { ...query })
+    withBucket(sid, b => ({ history: { ...b.history, requests: { ...b.history.requests, [kind]: { ...b.history.requests[kind], status: 'error', error } } } }))
+  }
   function request(sid: string, kind: HistoryActionKind, query: SessionHistoryQuery): Promise<void> {
     const bucket = state(sid)
     if (bucket?.history.requests[kind].status === 'loading') return owners.get(sid)?.get(kind)?.promise ?? Promise.resolve()
@@ -60,12 +66,16 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
         if (!valid()) return
         // Protocol/transport errors have an action-owned, persistent recovery
         // surface. Do not print content, positions or unredacted causes.
+        failRead(sid, kind, query, error instanceof HistoryPageDeferredError ? error.message : copy[kind])
+        // A raw TypeError is an internal bug: it still rejects loudly, but only
+        // after the read shows its error and Retry, never a stuck 'loading'
+        // (final gate fg2-scsfh F1).
         if (error instanceof TypeError && !(error.name === 'ApiError')) throw error
-        if (!failed.has(sid)) failed.set(sid, new Map())
-        failed.get(sid)!.set(kind, { ...query })
-        withBucket(sid, b => ({ history: { ...b.history, requests: { ...b.history.requests, [kind]: { ...b.history.requests[kind], status: 'error', error: error instanceof HistoryPageDeferredError ? error.message : copy[kind] } } } }))
       } finally {
         owner.baseline = {}; owner.staged.length = 0
+        // Safety net: the still-valid current owner never leaves its direction
+        // 'loading' with no owner; a superseded read leaves it to its successor.
+        if (valid() && state(sid)?.history.requests[kind].status === 'loading') failRead(sid, kind, query, copy[kind])
         if (owners.get(sid)?.get(kind) === owner) {
           owners.get(sid)!.delete(kind)
           if (!owners.get(sid)!.size) owners.delete(sid)
