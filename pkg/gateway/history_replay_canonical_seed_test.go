@@ -98,6 +98,59 @@ func TestHistoryReplay_CanonicalLegacyDelegationProjects(t *testing.T) {
 			t.Run("messages", func(t *testing.T) {
 				response := pagingRequest(api, f.sid, "")
 				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				var page generated.SessionHistoryResponse
+				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &page))
+				require.Equal(t, f.sid, page.SessionId)
+				require.Len(t, page.Entries, tc.count, "D4: HTTP200 must contain every captured source group, not an empty successful body")
+				wantIDs := []string{"entry-asst-spawn"}
+				if tc.count == 2 {
+					wantIDs = append(wantIDs, "entry-nested-1")
+				}
+				require.Equal(t, wantIDs, pagingIDs(page), "saved source identities/order, not synthetic completion rows")
+				parent := page.Entries[0]
+				require.Equal(t, "mia", parent.AgentId)
+				require.NotNil(t, parent.Role)
+				require.Equal(t, "assistant", string(*parent.Role))
+				require.NotNil(t, parent.Content)
+				require.Equal(t, "Spawning a subagent.", *parent.Content, "saved narration survives the messages carrier")
+				require.NotNil(t, parent.HistoryPosition)
+				require.NotEmpty(t, *parent.HistoryPosition)
+				require.NotNil(t, parent.ToolCalls)
+				require.Len(t, *parent.ToolCalls, 1, "the saved delegation card cannot disappear behind intact narration")
+				call := (*parent.ToolCalls)[0]
+				require.Equal(t, "c1", call.Id)
+				require.Equal(t, "spawn", call.Tool)
+				require.Equal(t, tc.status, string(call.Status), "keep each case's actual pending/running/terminal tool status")
+				require.NotNil(t, call.Parameters)
+				require.Equal(t, map[string]any{"task": "replay-fidelity-b-1792953229836"}, *call.Parameters)
+				require.Nil(t, call.ParentToolCallId)
+				// Terminal controls change only the saved status. None of the
+				// parent fixtures records a result, so no case may invent one.
+				require.Nil(t, call.Result, "the captured spawn has no recorded result")
+				if !tc.terminal {
+					for _, entry := range page.Entries {
+						require.Nil(t, entry.SubagentEnd, "pending/running history cannot manufacture a terminal span")
+						if entry.SystemSubtype != nil {
+							require.NotEqual(t, "subagent_end", string(*entry.SystemSubtype))
+						}
+					}
+				}
+				if tc.count == 2 {
+					child := page.Entries[1]
+					require.Equal(t, "ray", child.AgentId)
+					require.NotNil(t, child.ToolCalls)
+					require.Len(t, *child.ToolCalls, 1)
+					nested := (*child.ToolCalls)[0]
+					require.Equal(t, "t2", nested.Id)
+					require.Equal(t, "shell", nested.Tool)
+					require.Equal(t, "success", string(nested.Status))
+					require.NotNil(t, nested.ParentToolCallId)
+					require.Equal(t, "c1", *nested.ParentToolCallId)
+					require.NotNil(t, nested.Parameters)
+					require.Equal(t, map[string]any{"cmd": "echo nested"}, *nested.Parameters)
+					require.NotNil(t, nested.Result)
+					require.Equal(t, map[string]any{"stdout": "nested\n"}, *nested.Result)
+				}
 			})
 			for _, carrier := range []string{"prepared_projection", "snapshot"} {
 				t.Run(carrier, func(t *testing.T) {
