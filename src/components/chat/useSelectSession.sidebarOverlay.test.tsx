@@ -232,7 +232,7 @@ describe('Q81: opening a session from the search modal closes the unpinned sideb
       .findByRole('button', { name: 'More actions for Mia' })
     expect(clickCatcher(), 'instrument: this real History path starts with an open sidebar backdrop').not.toBeNull()
     await user.click(actions)
-    await user.click(await screen.findByRole('menuitem', { name: 'History', exact: true }))
+    await user.click(await screen.findByRole('menuitem', { name: 'History' }))
     const row = await screen.findByRole('button', { name: /^Open Q81 overlay check/ })
     expect(useUiStore.getState()).toMatchObject({ searchModalOpen: true, searchModalWorkspaceFilter: 'ws-1', searchModalAgentFilter: 'mia' })
     expect(screen.queryByRole('button', { name: /^Open Jim-only history control/ }), 'the real agent filter excludes another owner').toBeNull()

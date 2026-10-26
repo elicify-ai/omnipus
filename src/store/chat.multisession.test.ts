@@ -4,6 +4,7 @@ import { useChatStore, getMessages } from './chat'
 import { useSessionStore } from './session'
 import { queryClient } from '@/lib/queryClient'
 import type { ServerFrame } from '@/lib/ws'
+import { expectValidFrame } from '../../tests/chat-history-paging/fixtures'
 
 // chat.multisession.test.ts — per-session sharding unit tests.
 //
@@ -86,12 +87,12 @@ describe('chat.multisession — (a) two session_started frames create two distin
     // button appears immediately without waiting for the first token frame.
     expect(getMessages(bucketA)).toEqual([])
     expect(bucketA.isStreaming).toBe(true)
-    expect(bucketA.sessionTokens).toBe(0)
+    expect(bucketA.sessionTokens, 'D16: no aggregate observation means unknown, not zero').toBeUndefined()
     expect(bucketA.sessionCost).toBe(0)
 
     expect(getMessages(bucketB)).toEqual([])
     expect(bucketB.isStreaming).toBe(true)
-    expect(bucketB.sessionTokens).toBe(0)
+    expect(bucketB.sessionTokens, 'D16: an independent new bucket does not borrow or fabricate a baseline').toBeUndefined()
     expect(bucketB.sessionCost).toBe(0)
   })
 })
@@ -252,7 +253,7 @@ describe('chat.multisession — (e) done frame on background session A while act
       useChatStore.getState().handleFrame({
         type: 'done',
         session_id: SID_A,
-        stats: { tokens: 50, cost: 0.001, duration_ms: 100 },
+        stats: { tokens: 50, session_tokens_total: 50, cost: 0.001, duration_ms: 100 },
       })
     })
 
@@ -490,5 +491,50 @@ describe('chat.multisession — (k) untagged session-scoped frame is dropped, en
     const bucketA = state.sessionsById[SID_A]
     const hasToken = bucketA ? getMessages(bucketA).some((m) => m.content.includes('should also be dropped')) : false
     expect(hasToken).toBeFalsy()
+  })
+})
+
+// D16 authority/ordering control: this is the REAL store, with generated-valid
+// addressed frames. Deliberately omitted observations remain omitted.
+describe('chat.multisession — D16 addressed absolute usage authority', () => {
+  it('keeps unknown distinct from zero, merges newer totals monotonically, and never counts deltas/replay twice or borrows another session', () => {
+    const stamp = '2026-10-26T09:00:00Z'
+    const current = (sid: string, total?: number): ServerFrame => ({
+      type: 'session_state', session_id: sid, user_id: 'c6-usage-reader', pending_approvals: [], emitted_at: stamp,
+      history_state: { status: 'available' }, ...(total === undefined ? {} : { session_tokens_total: total }),
+    })
+    const feed = (...incoming: ServerFrame[]) => {
+      incoming.forEach(expectValidFrame)
+      act(() => incoming.forEach(frame => useChatStore.getState().handleFrame(frame)))
+    }
+    act(() => useSessionStore.setState({ activeSessionId: SID_A }))
+    feed(current(SID_A, 100), current(SID_B))
+    expect(useChatStore.getState().sessionsById[SID_A].sessionTokens).toBe(100)
+    expect(useChatStore.getState().sessionsById[SID_B].sessionTokens, 'absent B never borrows known A').toBeUndefined()
+    expect(useChatStore.getState().sessionTokens).toBe(100)
+
+    feed({ type: 'done', session_id: SID_B, stats: { tokens: 777, cost: 0 } })
+    expect(useChatStore.getState().sessionsById[SID_B].sessionTokens,
+      'D16: new partial provider accounting is not an authoritative whole-session baseline').toBeUndefined()
+    feed(current(SID_B, 0))
+    expect(useChatStore.getState().sessionsById[SID_B].sessionTokens, 'an independently recorded zero is known').toBe(0)
+    expect(useChatStore.getState().sessionTokens, 'background true zero cannot erase foreground A').toBe(100)
+
+    // A larger turn delta is not the lifetime total, nor added on top of it.
+    const completed: ServerFrame = { type: 'done', session_id: SID_A, stats: { tokens: 9000, session_tokens_total: 120, cost: 0 } }
+    feed(completed)
+    expect(useChatStore.getState().sessionTokens).toBe(120)
+    expect(useChatStore.getState().sessionsById[SID_A].sessionTokens).toBe(120)
+    feed(current(SID_A, 80), current(SID_A), completed,
+      { type: 'done', session_id: SID_A, stats: { frames_emitted: 9999 } },
+      { type: 'done', session_id: SID_A, stats: { tokens: 555, cost: 0 } })
+    expect(useChatStore.getState().sessionTokens, 'stale-lower/omitted/replayed/duplicate observations neither lower nor double-count').toBe(120)
+    expect(useChatStore.getState().sessionsById[SID_A].sessionTokens).toBe(120)
+
+    const unscoped: ServerFrame = { type: 'session_state', user_id: 'c6-connection-reader', pending_approvals: [], emitted_at: stamp, session_tokens_total: 999999 }
+    feed(unscoped)
+    expect(useChatStore.getState().sessionTokens, 'generated-valid unscoped state has no addressed usage authority').toBe(120)
+    expect(useChatStore.getState().sessionsById[SID_A].sessionTokens).toBe(120)
+    expect(useChatStore.getState().sessionsById[SID_B].sessionTokens).toBe(0)
   })
 })

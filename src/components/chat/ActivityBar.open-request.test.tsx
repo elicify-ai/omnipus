@@ -1,11 +1,11 @@
-// Founder ruling 2026-10-25 supersedes the old automatic-opening squad
-// decision: Sessions/History Open goes straight to chat, no automatic panel.
-// Explicit Activity requests remain supported and session-owned; failed
-// attaches still cannot switch chats or request a panel. The other nine
-// original cases are retained. Empty-panel text is the existing idle copy.
+// Founder ruling 2026-10-25: Sessions/History Open goes straight to chat,
+// with no automatic panel. Q9/P3 explicitly retires the five unused
+// request/consume-API capability cases; manual Activity stays one click away.
+// The other five case bodies/oracles remain unchanged, including failed
+// attach and successful Open-without-panel. Production API removal is separate.
 
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render, screen, act } from '@testing-library/react'
 import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ActivityBar } from './ActivityBar'
@@ -53,15 +53,6 @@ function session(overrides: Partial<Session> = {}): Session {
 
 const workspace = { id: 'ws-1', name: 'My Workspace' } as Workspace
 
-function renderBar() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
-    <QueryClientProvider client={client}>
-      <ActivityBar />
-    </QueryClientProvider>,
-  )
-}
-
 describe('activity panel request', () => {
   const originalAttach = useSessionStore.getState().attachToSession
 
@@ -76,46 +67,6 @@ describe('activity panel request', () => {
   afterEach(() => {
     useSessionStore.setState({ attachToSession: originalAttach, activeSessionId: null })
     useUiStore.setState({ activityPanelRequest: null })
-  })
-
-  it('stores the requested session id', () => {
-    useUiStore.getState().requestActivityPanel(SESSION_ID)
-    expect(useUiStore.getState().activityPanelRequest).toBe(SESSION_ID)
-  })
-
-  it('replaces an older request so only the latest Open is pending', () => {
-    useUiStore.getState().requestActivityPanel(OTHER_ID)
-    useUiStore.getState().requestActivityPanel(SESSION_ID)
-    expect(useUiStore.getState().activityPanelRequest).toBe(SESSION_ID)
-  })
-
-  it('clears the request only when the consumed id is the one that was requested', () => {
-    useUiStore.getState().requestActivityPanel(SESSION_ID)
-    useUiStore.getState().consumeActivityPanelRequest(OTHER_ID)
-    expect(useUiStore.getState().activityPanelRequest).toBe(SESSION_ID)
-    useUiStore.getState().consumeActivityPanelRequest(SESSION_ID)
-    expect(useUiStore.getState().activityPanelRequest).toBeNull()
-  })
-
-  it('opens the Activity panel once the requested session is the active chat, then clears the request', async () => {
-    useSessionStore.setState({ activeSessionId: SESSION_ID })
-    useUiStore.getState().requestActivityPanel(SESSION_ID)
-    renderBar()
-    await waitFor(() => {
-      expect(screen.getByText('No background activity yet.')).toBeInTheDocument()
-    })
-    expect(useUiStore.getState().activityPanelRequest).toBeNull()
-  })
-
-  it('does not open the panel, and keeps the request, when the active chat is a different session', async () => {
-    useSessionStore.setState({ activeSessionId: SESSION_ID })
-    useUiStore.getState().requestActivityPanel(OTHER_ID)
-    renderBar()
-    await act(async () => {
-      await Promise.resolve()
-    })
-    expect(screen.queryByText('No background activity yet.')).not.toBeInTheDocument()
-    expect(useUiStore.getState().activityPanelRequest).toBe(OTHER_ID)
   })
 
   it.each([false])('wires origin-row Open through real attach, request store and ActivityBar when transport send=%s', async (sent) => {

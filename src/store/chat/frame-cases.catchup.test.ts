@@ -15,7 +15,7 @@ import { gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids,
 import type { ChatMessage } from './types'
 import type { ServerFrame } from '@/lib/ws'
 import { loadFixtureHistory } from '../../../tests/chat-history-paging/load-fixture-history'
-import { expectValidFrame } from '../../../tests/chat-history-paging/fixtures'
+import { entry, expectValidFrame, expectValidPage, page, pos, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 
 const SID = 'session-catchup-1'
 
@@ -49,7 +49,7 @@ function bucket() {
 }
 
 describe('session_snapshot (§6.2/§4.6)', () => {
-  it('D1: wipes history but preserves the pending tail and out-of-band state', () => {
+  it('D1: stages history until COMPLETE, then replaces it while preserving pending tail and current controls', () => {
     // Seed a bucket with one acknowledged assistant reply, one queued
     // (unsent) user message, and an active-turn announcement — mirrors
     // §4.6's "the wipe never erases pendingAsk/activeTurn/goal status".
@@ -68,17 +68,15 @@ describe('session_snapshot (§6.2/§4.6)', () => {
       },
     } as never)
 
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot',
-      session_id: SID,
-      seq: 42,
-      boot_id: 'boot-A',
-      reason: 'unknown_position',
-    } as ServerFrame)
+    const selected = page([], { sessionId: SID })
+    expectValidPage(selected, [], 0)
+    const announced: ServerFrame = { ...snapshot(selected), seq: 42, boot_id: 'boot-A' }
+    expectValidFrame(announced)
+    useChatStore.getState().handleFrame(announced)
 
-    const b = bucket()
-    expect(b.messageOrder).toEqual(['u2'])
-    expect(b.messagesById.a1).toBeUndefined()
+    let b = bucket()
+    expect(b.messageOrder, 'D7: announcement stages a replacement, never prematurely wipes the old reader').toEqual(['a1', 'u2'])
+    expect(b.messagesById.a1, 'D7: the published old reply survives until successful complete application').toStrictEqual({ id: 'a1', role: 'assistant', content: 'old reply', timestamp: 't', status: 'done' })
     expect(b.messagesById.u2?.deliveryStatus).toBe('sending')
     expect(b.activeTurnId).toBe('turn-live')
     expect(b.activeTurnAgentId).toBe('agent-1')
@@ -93,6 +91,24 @@ describe('session_snapshot (§6.2/§4.6)', () => {
     // catch_up_complete (see that describe block below) is now the sole
     // cursor-setter, firing only once the rebuild genuinely succeeded.
     expect(b.cursor).toBeNull()
+
+    const completed: ServerFrame[] = [
+      { type: 'session_state', session_id: SID, user_id: 'c10-reader', pending_approvals: [], emitted_at: '2026-10-26T09:00:00Z',
+        history_state: { status: 'available' }, active_turn: { turn_id: 'turn-live', agent_id: 'agent-1', started_at: '2026-10-26T08:59:00Z' } },
+      { type: 'done', session_id: SID, stats: { frames_emitted: 0 } },
+      { type: 'catch_up_complete', session_id: SID, seq: 42, boot_id: 'boot-A', mode: 'snapshot' },
+    ]
+    completed.forEach(expectValidFrame)
+    completed.forEach(frame => useChatStore.getState().handleFrame(frame))
+    b = bucket()
+    // D7 moves these exact original replacement oracles to the commit point.
+    expect(b.messageOrder).toEqual(['u2'])
+    expect(b.messagesById.a1).toBeUndefined()
+    expect(b.messagesById.u2?.deliveryStatus).toBe('sending')
+    expect(b.activeTurnId).toBe('turn-live')
+    expect(b.activeTurnAgentId).toBe('agent-1')
+    expect(b.history.historyLoaded).toBe(true)
+    expect(b.cursor).toStrictEqual({ bootId: 'boot-A', seq: 42 })
   })
 
   it('N4: a session that already HAD a cursor keeps it through the wipe (unchanged, not advanced) — catch_up_complete alone decides where it lands next', () => {
@@ -102,12 +118,54 @@ describe('session_snapshot (§6.2/§4.6)', () => {
       },
     } as never)
 
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 99, boot_id: 'boot-new', reason: 'boot_mismatch',
-    } as ServerFrame)
+    const selected = page([], { sessionId: SID })
+    expectValidPage(selected, [], 0)
+    const announced: ServerFrame = { ...snapshot(selected, 'boot_mismatch'), seq: 99, boot_id: 'boot-new' }
+    expectValidFrame(announced)
+    useChatStore.getState().handleFrame(announced)
 
     // Still the OLD cursor — not the snapshot's own seq:99/boot_id:'boot-new'.
     expect(bucket().cursor).toEqual({ bootId: 'boot-prior', seq: 7 })
+  })
+
+  it('D1-failure: contradictory staged row accounting cannot replace old history, cursor, pending input or active controls', () => {
+    const feed = (incoming: ServerFrame[]) => {
+      incoming.forEach(expectValidFrame)
+      incoming.forEach(frame => useChatStore.getState().handleFrame(frame))
+    }
+    const current: ServerFrame = { type: 'session_state', session_id: SID, user_id: 'c10-reader', pending_approvals: [],
+      emitted_at: '2026-10-26T09:00:00Z', history_state: { status: 'available' },
+      active_turn: { turn_id: 'turn-live', agent_id: 'agent-1', started_at: '2026-10-26T08:59:00Z' } }
+    const old = entry(1, { id: 'c10-old-reply', role: 'assistant', content: 'Previously committed reply.', agent_id: 'agent-1' })
+    const initial = page([old], { sessionId: SID })
+    expectValidPage(initial, [pos(1)], 1)
+    feed([
+      { ...snapshot(initial), seq: 7, boot_id: 'boot-prior' }, current, replay(old, SID),
+      { type: 'done', session_id: SID, stats: { frames_emitted: 1 } },
+      { type: 'catch_up_complete', session_id: SID, seq: 7, boot_id: 'boot-prior', mode: 'snapshot' },
+    ])
+    useChatStore.getState().appendMessage({ id: 'c10-pending', role: 'user', content: 'Pending input stays.',
+      timestamp: '2026-10-26T09:01:00Z', deliveryStatus: 'failed' })
+    expect(bucket().history.historyLoaded, 'instrument: real valid prior page loaded before the rejected replacement').toBe(true)
+    const before = structuredClone(bucket())
+    const replacement = entry(2, { id: 'c10-replacement', role: 'assistant', content: 'Must never publish.', agent_id: 'agent-1' })
+    // Intentional semantic contradiction: one narration source actually draws
+    // one row, but the generated-shaped metadata promises two. Do not repair.
+    const contradictory = page([replacement], { sessionId: SID, rows: 2 })
+    feed([
+      { ...snapshot(contradictory), seq: 42, boot_id: 'boot-new' }, current, replay(replacement, SID),
+      { type: 'done', session_id: SID, stats: { frames_emitted: 1 } },
+      { type: 'catch_up_complete', session_id: SID, seq: 42, boot_id: 'boot-new', mode: 'snapshot' },
+    ])
+    expect(bucket().messageOrder, 'D7: a failed replacement retains the exact prior published reader and pending tail').toStrictEqual(before.messageOrder)
+    expect(bucket().messagesById['c10-old-reply']).toStrictEqual(before.messagesById['c10-old-reply'])
+    expect(bucket().messagesById['c10-pending']).toStrictEqual(before.messagesById['c10-pending'])
+    expect(bucket().messagesById['c10-replacement']).toBeUndefined()
+    expect(bucket().activeTurnId).toBe('turn-live')
+    expect(bucket().activeTurnAgentId).toBe('agent-1')
+    expect(bucket().history.requests.latest.status, 'the contradictory snapshot is a named history failure, not an empty success').toBe('error')
+    expect(bucket().history.historyLoaded).toBe(false)
+    expect(bucket().cursor, 'failed replay cannot claim the new cut').toStrictEqual({ bootId: 'boot-prior', seq: 7 })
   })
 })
 

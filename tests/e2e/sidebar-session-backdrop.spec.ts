@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { backdropAgent, backdropTarget, backdropWorkspace, installSidebarBackdropEdges } from './fixtures/sidebar-session-backdrop';
+import { workspaceDisclosureButton } from './fixtures/selectors';
 
 // Founder Q81: either session-list entry point must dismiss the UNPINNED
 // sidebar/backdrop, leave chat topmost, and deliver the first composer click.
@@ -23,9 +24,14 @@ for (const entry of ['Sessions', 'History'] as const) {
     if (entry === 'Sessions') {
       await nav.getByRole('button', { name: 'Search sessions', exact: true }).click();
     } else {
-      const expand = nav.getByRole('button', { name: `Show ${backdropWorkspace.name} agents`, exact: true });
-      if (await expand.isVisible()) await expand.click();
-      await nav.getByRole('button', { name: `More actions for ${backdropAgent.name}`, exact: true }).click();
+      const expand = workspaceDisclosureButton(page, backdropWorkspace.name);
+      await expect(expand, 'PREREQUISITE: the actual workspace disclosure is present').toBeVisible();
+      if (await expand.getAttribute('aria-expanded') === 'false') await expand.click();
+      await expect(expand).toHaveAttribute('aria-expanded', 'true');
+      const roster = nav.getByRole('group', { name: backdropWorkspace.name, exact: true });
+      const agent = roster.getByRole('group', { name: backdropAgent.name, exact: true });
+      await expect(agent, 'PREREQUISITE: the typed member/main binding renders a real eligible agent row').toBeVisible();
+      await agent.getByRole('button', { name: `More actions for ${backdropAgent.name}`, exact: true }).click();
       await page.getByRole('menuitem', { name: 'History', exact: true }).click();
     }
     const sessions = page.getByRole('dialog', { name: /^Sessions/ });

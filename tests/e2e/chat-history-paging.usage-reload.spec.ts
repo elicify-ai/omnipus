@@ -41,9 +41,14 @@ test('T41 B55 B56: provider-accounted46323 survives REAL reload and fresh route;
   await absoluteCarriers(reload);
   await reload.record('same-recorded-46323-after-real-reload');
 
-  // Re-enter through the shipped standalone route after leaving the document;
-  // no hand-built store or cached footer object is supplied to the application.
-  await reload.page.goto(`${reload.gateway.baseURL}/#/`);
+  // A hash-only root round trip can leave the same chat mounted. Leave via
+  // a real settled screen before requiring fresh addressed attach readiness;
+  // no hand-built store, frame or cached footer is supplied to the application.
+  await reload.page.goto(`${reload.gateway.baseURL}/#/skills`);
+  await expect(reload.page.getByRole('heading', { name: 'Skills & Tools', exact: true }),
+    'PREREQUISITE: the route really left chat before re-entering').toBeVisible();
+  await expect(reload.page.locator(`[data-active-session-id="${reload.sessionId}"]`),
+    'PREREQUISITE: a same-chat navigation no-op cannot masquerade as a fresh route').toHaveCount(0);
   await reload.ready();
   expect(await reload.counter(SESSION_TOKENS, 'T41: fresh addressed route preserves46323')).toEqual(live);
   await reload.noReexecution(calls, inputs, 0);

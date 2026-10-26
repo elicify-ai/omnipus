@@ -245,3 +245,48 @@ describe('Train 1 Row 4 — honest failed member main', () => {
     expect(sender.send.mock.calls).toEqual([[{ type: 'attach_session', session_id: MAIN }]])
   })
 })
+
+// r19-c: D7 commits a first page only after complete application. D7a says
+// server availability is not proof of loaded history. A resolved main and
+// staged empty page must not advertise an already-ready empty conversation.
+describe('C2 r19 resolved-main history proof boundary', () => {
+  it('r19-c: a resolved healthy main shows no ready welcome before its staged snapshot completes, then keeps the exact normal welcome', async () => {
+    vi.mocked(fetchWorkspace).mockResolvedValue(team({ main_session_id: MAIN }))
+    await enter()
+    showChat()
+    expect(useSessionStore.getState().activeSessionId).toBe(MAIN)
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+    expect(sender.send.mock.calls).toStrictEqual([[{ type: 'attach_session', session_id: MAIN }]])
+    expect(useChatStore.getState().sessionsById[MAIN].history.historyLoaded,
+      'instrument: the real healthy main resolved before any page was supplied').toBe(false)
+    expect(screen.queryByText(READY, { exact: true }),
+      'D7/D7a: a known selected main without a loaded page is not successful empty history').not.toBeInTheDocument()
+    expect(screen.getByText('Loading messages…', { exact: true })).toHaveAttribute('role', 'status')
+
+    const history = page([], { sessionId: MAIN })
+    expectValidPage(history, [], 0)
+    const staged: ServerFrame[] = [
+      { ...snapshot(history), seq: 1, boot_id: 'row4-boot' },
+      { type: 'session_state', session_id: MAIN, user_id: 'row4-reader', pending_approvals: [],
+        emitted_at: '2026-10-10T00:00:00Z', history_state: { status: 'available' } },
+      { type: 'done', session_id: MAIN },
+    ]
+    staged.forEach(expectValidFrame)
+    act(() => staged.forEach(frame => useChatStore.getState().handleFrame(frame)))
+    expect(useChatStore.getState().sessionsById[MAIN].history.serverState).toStrictEqual({ status: 'available' })
+    expect(useChatStore.getState().sessionsById[MAIN].history.historyLoaded,
+      'D7: even a valid empty selected page is staged until matching COMPLETE').toBe(false)
+    expect(screen.queryByText(READY, { exact: true })).not.toBeInTheDocument()
+
+    const complete: ServerFrame = { type: 'catch_up_complete', session_id: MAIN, seq: 1, boot_id: 'row4-boot', mode: 'snapshot' }
+    expectValidFrame(complete)
+    act(() => useChatStore.getState().handleFrame(complete))
+    expect(useChatStore.getState().sessionsById[MAIN].history.historyLoaded).toBe(true)
+    expect(useChatStore.getState().sessionsById[MAIN].replayCompletedForSession).toBe(MAIN)
+    expect(screen.getByText(READY, { exact: true })).toBeVisible()
+    expect(screen.getByTestId('composer-input')).toBeEnabled()
+    expect(screen.getByTestId('chat-send')).toBeEnabled()
+    expect(vi.mocked(fetchWorkspace).mock.calls).toStrictEqual([[WS]])
+    expect(sender.send.mock.calls, 'history completion did not resend or reattach the main').toStrictEqual([[{ type: 'attach_session', session_id: MAIN }]])
+  })
+})

@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { Agent, AppState, GodModeStatus, SandboxStatus, Session, SessionDetail, SessionPage, Workspace } from '../../../src/lib/api/generated/schemas';
+import { Agent, AppState, GodModeStatus, Room, SandboxStatus, Session, SessionDetail, SessionPage, Workspace } from '../../../src/lib/api/generated/schemas';
 import { WsFrame } from '../../../src/lib/api/generated/ws-schemas';
 import { wireAvailableDetail, wireHistoryPage, wireHistorySnapshot } from '../../chat-history-paging/legacy-wire';
 
@@ -12,9 +12,19 @@ export const backdropAgent = Agent.parse({
   revision: '0'.repeat(64), needs_model: false, max_tool_iterations: 8,
   max_tool_iterations_source: 'global', max_tool_iterations_override_ignored: false,
 });
+// The real roster requires the server-computed member main binding. A
+// core_team entry alone intentionally renders Main chat unavailable, no menu.
+export const backdropMain = Session.parse({
+  id: 'q81-main', type: 'main', agent_id: backdropAgent.id, title: 'Q81 standing main',
+  status: 'active', lifecycle_state: 'done', workspace_id: 'q81-workspace',
+  protected: true, needs_attention: false,
+  created_at: timestamp, updated_at: timestamp, channel: 'webchat', partitions: [],
+  stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 0 },
+});
 export const backdropWorkspace = Workspace.parse({
   id: 'q81-workspace', name: 'Q81 Workspace', status: 'active', pinned: false,
   pin_order: 0, core_team: [backdropAgent.id], task_count: 0,
+  member_configs: { [backdropAgent.id]: { main_session_id: backdropMain.id } },
   revision: '0'.repeat(64), created_at: timestamp, updated_at: timestamp,
 });
 export const backdropTarget = Session.parse({
@@ -33,7 +43,7 @@ const state = AppState.parse({
 export async function installSidebarBackdropEdges(page: Page) {
   const traffic = { requests: [] as string[], unknown: [] as string[], attaches: [] as string[], errors: [] as string[] };
   page.on('pageerror', error => traffic.errors.push(error.message));
-  const sessions = [backdropInitial, backdropTarget];
+  const sessions = [backdropInitial, backdropMain, backdropTarget];
   const history = (id: string) => wireHistoryPage(id, [], 0);
   await page.routeWebSocket(/\/api\/v1\/chat\/ws/, socket => {
     let seq = 0;
@@ -66,6 +76,7 @@ export async function installSidebarBackdropEdges(page: Page) {
     if (endpoint === '/auth/validate') return json({ username: 'q81-api-fixture' });
     if (endpoint === '/workspaces') return json(url.searchParams.get('status') === 'archived' ? [] : [backdropWorkspace]);
     if (endpoint === `/workspaces/${backdropWorkspace.id}`) return json(backdropWorkspace);
+    if (endpoint === `/workspaces/${backdropWorkspace.id}/rooms`) return json(Room.array().parse([]));
     if (endpoint === '/agents') return json([backdropAgent]);
     if (endpoint === `/agents/${backdropAgent.id}`) return json(backdropAgent);
     if (endpoint === '/sessions') return json(SessionPage.parse({ sessions }));

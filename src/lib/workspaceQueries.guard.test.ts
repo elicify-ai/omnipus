@@ -19,11 +19,12 @@ function sources(dir: string): string[] {
 }
 
 function unwrap(expression: ts.Expression): ts.Expression {
-  while (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)
-    || ts.isSatisfiesExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isNonNullExpression(expression)) {
-    expression = expression.expression
+  let current = expression
+  while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current)
+    || ts.isSatisfiesExpression(current) || ts.isTypeAssertionExpression(current) || ts.isNonNullExpression(current)) {
+    current = current.expression
   }
-  return expression
+  return current
 }
 
 function propertyName(name: ts.PropertyName): string | undefined {

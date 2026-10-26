@@ -117,7 +117,9 @@ function catchUpOrLiveToken(content: string): TokenFrame {
 
 // The TURN's own completion `done` — carries real token/cost stats.
 function turnDone(): DoneFrame {
-  return { type: 'done', session_id: SID, stats: { tokens: 42, cost: 0.005 } }
+  // D16: the turn delta is not the session-wide counter; this addressed
+  // producer independently supplies the authoritative absolute observation.
+  return { type: 'done', session_id: SID, stats: { tokens: 42, session_tokens_total: 42, cost: 0.005 } }
 }
 
 function bucket() {
