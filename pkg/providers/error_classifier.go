@@ -226,11 +226,12 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// A refused tool call (ADR-087) is a deterministic content fault, never
 	// a transient provider fault — it must never cool down the candidate or
 	// trigger failover. This MUST run before any substring matching below:
-	// ToolArgumentsError's Error() embeds up to 256 bytes of the refused
-	// argument fragment verbatim (common.maxUndecodableArgumentsQuoted), and
-	// that fragment is attacker/model-controlled text that can coincidentally
-	// contain a classifier keyword ("authentication", "timeout", "rate
-	// limit", "429", "503", "overloaded", …). Classifying by content instead
+	// ToolArgumentsError's Error() no longer quotes the refused argument
+	// fragment (gate r1 M24: it is value-free), but its tool name and wrapped
+	// text are still not a provider-health signal, and the fragment was once
+	// attacker/model-controlled text that could coincidentally contain a
+	// classifier keyword ("authentication", "timeout", "rate limit", "429",
+	// "503", "overloaded", …). Classifying by content instead
 	// of by type would spuriously cool down (or even fail over away from) a
 	// perfectly healthy candidate for a fault that has nothing to do with
 	// its health. Returning nil here makes ClassifyError return "not

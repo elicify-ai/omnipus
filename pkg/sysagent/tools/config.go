@@ -140,7 +140,7 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	var denyErr, schemaErr, setErr, landErr error
 	var prevValue, storedValue any
 	var normalised []string
-	err := t.deps.WithConfig(func(cfg *config.Config) error {
+	err := t.deps.withGenericConfigWrite(key, value, func(cfg *config.Config) error {
 		// Validate that the key refers to a known, non-security-critical
 		// config path to prevent arbitrary injection and privilege escalation.
 		// #904 D15/D21: the global tool-iteration limit and its env-import

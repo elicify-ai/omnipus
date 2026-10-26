@@ -1,8 +1,8 @@
 title: Notification
 description: >
   A user-facing notification (#264) surfaced in the header notification center.
-  Raised on scheduled-run failures and on knowledge-base drift repair
-  (ADR-067 FR-038a); the type is open for future sources. Coalesced per source
+  Raised on scheduled-run failures, knowledge-base drift repair
+  (ADR-067 FR-038a), and operational Stop outcomes; the type is open for future sources. Coalesced per source
   where noted (e.g. one item per schedule, updated).
 type: object
 required:
@@ -21,6 +21,7 @@ properties:
     enum:
       - schedule_failed
       - knowledge_drift
+      - stop_notice
     description: >
       The event class. Extensible; consumers must tolerate unknown values.
 
@@ -30,6 +31,10 @@ properties:
       and the index is being rebuilt from that folder. It is raised ONLY when
       something was actually wrong — a healthy check produces no notification —
       and it never reports a change to the operator's own files.
+
+      "stop_notice" reports an operational Stop outcome: a selected request was
+      already approved, cleanup was partial, or Stop did not complete. It is a
+      non-terminal header notification and must not be sent as a chat ErrorFrame.
   title:
     type: string
     minLength: 1

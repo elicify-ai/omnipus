@@ -1,0 +1,1007 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from live > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+[ws] Web Worker construction failed — WS frame parsing will run inline on the main thread; this is a performance regression under burst input ReferenceError: Worker is not defined
+    at WsConnection._startWorker (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/lib/ws.ts:532:26)
+    at WsConnection.connect (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/lib/ws.ts:482:10)
+    at /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/components/chat/OmnipusRuntimeProvider.tsx:261:10
+    at Object.react_stack_bottom_frame (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:25989:20)
+    at runWithFiberInDEV (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+    at commitHookEffectListMount (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:13249:29)
+    at commitHookPassiveMountEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:13336:11)
+    at reconnectPassiveEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:15832:11)
+    at recursivelyTraverseReconnectPassiveEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:15784:9)
+    at reconnectPassiveEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:15885:11)
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from live > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from live > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from live > K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from live > K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from live > K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from live > K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from session_state > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from session_state > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from session_state > K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from session_state > K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from session_state > K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from session_state > K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > K7: origin text is literal text, never executable markup
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > K7: origin text is literal text, never executable markup
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+ ❯ src/components/layout/AppShell.wu4.test.tsx (24 tests | 7 failed) 15594ms
+     × K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision 1314ms
+     × K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision 897ms
+     × K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision 751ms
+     × K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision 657ms
+     × K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision 612ms
+     × K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision 651ms
+   × K7: origin text is literal text, never executable markup 731ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from live > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-origin"]
+
+Ignored nodes: comments, script, style
+[36m<section[39m
+  [33maria-describedby[39m=[32m"tool-approval-desc-stage1-approval"[39m
+  [33maria-labelledby[39m=[32m"tool-approval-title-stage1-approval"[39m
+  [33mclass[39m=[32m"my-[var(--space-2)] flex max-h-[60vh] flex-col overflow-hidden rounded-[var(--radius-medium)] border border-[var(--color-warning)]/40 bg-[var(--color-surface-1)]"[39m
+  [33mdata-testid[39m=[32m"tool-approval-panel"[39m
+[36m>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-row items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left"[39m
+  [36m>[39m
+    [36m<svg[39m
+      [33maria-hidden[39m=[32m"true"[39m
+      [33mclass[39m=[32m"text-[var(--color-warning)] shrink-0"[39m
+      [33mfill[39m=[32m"currentColor"[39m
+      [33mheight[39m=[32m"20"[39m
+      [33mviewBox[39m=[32m"0 0 256 256"[39m
+      [33mwidth[39m=[32m"20"[39m
+      [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+    [36m>[39m
+      [36m<path[39m
+        [33md[39m=[32m"M208,36H48A20,20,0,0,0,28,56v56c0,54.29,26.32,87.22,48.4,105.29,23.71,19.39,47.44,26,48.44,26.29a12.1,12.1,0,0,0,6.32,0c1-.28,24.73-6.9,48.44-26.29,22.08-18.07,48.4-51,48.4-105.29V56A20,20,0,0,0,208,36Zm-4,76c0,35.71-13.09,64.69-38.91,86.15A126.28,126.28,0,0,1,128,219.38a126.14,126.14,0,0,1-37.09-21.23C65.09,176.69,52,147.71,52,112V60H204Z"[39m
+      [36m/>[39m
+    [36m</svg>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex-1 min-w-0"[39m
+    [36m>[39m
+      [36m<h3[39m
+        [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] font-headline"[39m
+        [33mid[39m=[32m"tool-approval-title-stage1-approval"[39m
+      [36m>[39m
+        [0mTool Approval Required[0m
+      [36m</h3>[39m
+      [36m<p[39m
+        [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate"[39m
+        [33mid[39m=[32m"tool-approval-desc-stage1-approval"[39m
+      [36m>[39m
+        [36m<span[39m
+          [33mclass[39m=[32m"font-medium text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0mMia[0m
+        [36m</span>[39m
+        [0m [0m
+        [0mis requesting permission to run a tool.[0m
+      [36m</p>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"min-h-0 flex-1 overflow-y-auto"[39m
+    [33mdata-testid[39m=[32m"tool-approval-details"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mTool[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"font-mono text-[length:var(--type-body-compact-size)] text-[var(--color-accent)] font-semibold"[39m
+        [36m>[39m
+          [0mWrite file[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mArguments[0m
+        [36m</p>[39m
+        [36m<pre[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-surface-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m{
+  "path": "stage1-request.txt"
+}[0m
+        [36m</pre>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] pb-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex items-center justify-between mb-[var(--space-1)]"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"[39m
+        [36m>[39m
+          [0mExpires in[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m5m 0s[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33maria-valuemax[39m=[32m"100"[39m
+        [33maria-valuemin[39m=[32m"0"[39m
+        [33maria-valuenow[39m=[32m"0.009000210004900115"[39m
+        [33maria-valuetext[39m=[32m"0%"[39m
+        [33mclass[39m=[32m"relative w-full overflow-hidden rounded-full bg-[var(--color-surface-3)] forced-colors:border forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:[forced-color-adjust:none] h-1"[39m
+        [33mdata-max[39m=[32m"100"[39m
+        [33mdata-state[39m=[32m"loading"[39m
+        [33mdata-value[39m=[32m"0.009000210004900115"[39m
+        [33mrole[39m=[32m"progressbar"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"h-full bg-[var(--color-accent)] transition-all duration-500 motion-reduce:transition-none forced-colors:bg-[Highlight] w-full"[39m
+          [33mdata-max[39m=[32m"100"[39m
+          [33mdata-state[39m=[32m"loading"[39m
+          [33mdata-value[39m=[32m"0.009000210004900115"[39m
+          [33mstyle[39m=[32m"transform: translateX(-99.9909997899951%);"[39m
+        [36m/>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]"[39m
+  [36m>[39m
+    [36m<button[39m
+      [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] font-semibold rounded-md px-[var(--space-2-5)] h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"[39m
+      [33mdata-action-state[39m=[32m"idle"[39m
+      [33mdata-ds-action[39m=[32m""[39m
+      [33mtabindex[39m=[32m"0"[39m
+      [33mtype[39m=[32m"button"[39m
+    [36m>[39m
+      [36m<svg[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mfill[39m=[32m"currentColor"[39m
+        [33mheight[39m=[32m"14"[39m
+        [33mviewBox[39m=[32m"0 0 256 256"[39m
+        [33mwidth[39m=[32m"14"[39m
+        [33mxmlns[3...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/layout/AppShell.wu4.test.tsx:145:28
+    143|       // the modal's combined description gave, now with the origin pi…
+    144|       // at its own node.
+    145|       expect(within(panel).getByTestId('tool-approval-origin').textCon…
+       |                            ^
+    146|       expect(panel).toHaveAccessibleDescription('Mia is requesting per…
+    147|       // Focus flip is the SPEC, not a weakening: the retired modal gr…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from live > K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-origin"]
+
+Ignored nodes: comments, script, style
+[36m<section[39m
+  [33maria-describedby[39m=[32m"tool-approval-desc-stage1-approval"[39m
+  [33maria-labelledby[39m=[32m"tool-approval-title-stage1-approval"[39m
+  [33mclass[39m=[32m"my-[var(--space-2)] flex max-h-[60vh] flex-col overflow-hidden rounded-[var(--radius-medium)] border border-[var(--color-warning)]/40 bg-[var(--color-surface-1)]"[39m
+  [33mdata-testid[39m=[32m"tool-approval-panel"[39m
+[36m>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-row items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left"[39m
+  [36m>[39m
+    [36m<svg[39m
+      [33maria-hidden[39m=[32m"true"[39m
+      [33mclass[39m=[32m"text-[var(--color-warning)] shrink-0"[39m
+      [33mfill[39m=[32m"currentColor"[39m
+      [33mheight[39m=[32m"20"[39m
+      [33mviewBox[39m=[32m"0 0 256 256"[39m
+      [33mwidth[39m=[32m"20"[39m
+      [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+    [36m>[39m
+      [36m<path[39m
+        [33md[39m=[32m"M208,36H48A20,20,0,0,0,28,56v56c0,54.29,26.32,87.22,48.4,105.29,23.71,19.39,47.44,26,48.44,26.29a12.1,12.1,0,0,0,6.32,0c1-.28,24.73-6.9,48.44-26.29,22.08-18.07,48.4-51,48.4-105.29V56A20,20,0,0,0,208,36Zm-4,76c0,35.71-13.09,64.69-38.91,86.15A126.28,126.28,0,0,1,128,219.38a126.14,126.14,0,0,1-37.09-21.23C65.09,176.69,52,147.71,52,112V60H204Z"[39m
+      [36m/>[39m
+    [36m</svg>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex-1 min-w-0"[39m
+    [36m>[39m
+      [36m<h3[39m
+        [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] font-headline"[39m
+        [33mid[39m=[32m"tool-approval-title-stage1-approval"[39m
+      [36m>[39m
+        [0mTool Approval Required[0m
+      [36m</h3>[39m
+      [36m<p[39m
+        [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate"[39m
+        [33mid[39m=[32m"tool-approval-desc-stage1-approval"[39m
+      [36m>[39m
+        [36m<span[39m
+          [33mclass[39m=[32m"font-medium text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0mMia[0m
+        [36m</span>[39m
+        [0m [0m
+        [0mis requesting permission to run a tool.[0m
+      [36m</p>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"min-h-0 flex-1 overflow-y-auto"[39m
+    [33mdata-testid[39m=[32m"tool-approval-details"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mTool[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"font-mono text-[length:var(--type-body-compact-size)] text-[var(--color-accent)] font-semibold"[39m
+        [36m>[39m
+          [0mWrite file[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mArguments[0m
+        [36m</p>[39m
+        [36m<pre[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-surface-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m{
+  "path": "stage1-request.txt"
+}[0m
+        [36m</pre>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] pb-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex items-center justify-between mb-[var(--space-1)]"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"[39m
+        [36m>[39m
+          [0mExpires in[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m5m 0s[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33maria-valuemax[39m=[32m"100"[39m
+        [33maria-valuemin[39m=[32m"0"[39m
+        [33maria-valuenow[39m=[32m"0.009666860003866743"[39m
+        [33maria-valuetext[39m=[32m"0%"[39m
+        [33mclass[39m=[32m"relative w-full overflow-hidden rounded-full bg-[var(--color-surface-3)] forced-colors:border forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:[forced-color-adjust:none] h-1"[39m
+        [33mdata-max[39m=[32m"100"[39m
+        [33mdata-state[39m=[32m"loading"[39m
+        [33mdata-value[39m=[32m"0.009666860003866743"[39m
+        [33mrole[39m=[32m"progressbar"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"h-full bg-[var(--color-accent)] transition-all duration-500 motion-reduce:transition-none forced-colors:bg-[Highlight] w-full"[39m
+          [33mdata-max[39m=[32m"100"[39m
+          [33mdata-state[39m=[32m"loading"[39m
+          [33mdata-value[39m=[32m"0.009666860003866743"[39m
+          [33mstyle[39m=[32m"transform: translateX(-99.99033313999614%);"[39m
+        [36m/>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]"[39m
+  [36m>[39m
+    [36m<button[39m
+      [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] font-semibold rounded-md px-[var(--space-2-5)] h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"[39m
+      [33mdata-action-state[39m=[32m"idle"[39m
+      [33mdata-ds-action[39m=[32m""[39m
+      [33mtabindex[39m=[32m"0"[39m
+      [33mtype[39m=[32m"button"[39m
+    [36m>[39m
+      [36m<svg[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mfill[39m=[32m"currentColor"[39m
+        [33mheight[39m=[32m"14"[39m
+        [33mviewBox[39m=[32m"0 0 256 256"[39m
+        [33mwidth[39m=[32m"14"[39m
+        [33mxmlns[...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/layout/AppShell.wu4.test.tsx:145:28
+    143|       // the modal's combined description gave, now with the origin pi…
+    144|       // at its own node.
+    145|       expect(within(panel).getByTestId('tool-approval-origin').textCon…
+       |                            ^
+    146|       expect(panel).toHaveAccessibleDescription('Mia is requesting per…
+    147|       // Focus flip is the SPEC, not a weakening: the retired modal gr…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from live > K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-origin"]
+
+Ignored nodes: comments, script, style
+[36m<section[39m
+  [33maria-describedby[39m=[32m"tool-approval-desc-stage1-approval"[39m
+  [33maria-labelledby[39m=[32m"tool-approval-title-stage1-approval"[39m
+  [33mclass[39m=[32m"my-[var(--space-2)] flex max-h-[60vh] flex-col overflow-hidden rounded-[var(--radius-medium)] border border-[var(--color-warning)]/40 bg-[var(--color-surface-1)]"[39m
+  [33mdata-testid[39m=[32m"tool-approval-panel"[39m
+[36m>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-row items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left"[39m
+  [36m>[39m
+    [36m<svg[39m
+      [33maria-hidden[39m=[32m"true"[39m
+      [33mclass[39m=[32m"text-[var(--color-warning)] shrink-0"[39m
+      [33mfill[39m=[32m"currentColor"[39m
+      [33mheight[39m=[32m"20"[39m
+      [33mviewBox[39m=[32m"0 0 256 256"[39m
+      [33mwidth[39m=[32m"20"[39m
+      [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+    [36m>[39m
+      [36m<path[39m
+        [33md[39m=[32m"M208,36H48A20,20,0,0,0,28,56v56c0,54.29,26.32,87.22,48.4,105.29,23.71,19.39,47.44,26,48.44,26.29a12.1,12.1,0,0,0,6.32,0c1-.28,24.73-6.9,48.44-26.29,22.08-18.07,48.4-51,48.4-105.29V56A20,20,0,0,0,208,36Zm-4,76c0,35.71-13.09,64.69-38.91,86.15A126.28,126.28,0,0,1,128,219.38a126.14,126.14,0,0,1-37.09-21.23C65.09,176.69,52,147.71,52,112V60H204Z"[39m
+      [36m/>[39m
+    [36m</svg>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex-1 min-w-0"[39m
+    [36m>[39m
+      [36m<h3[39m
+        [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] font-headline"[39m
+        [33mid[39m=[32m"tool-approval-title-stage1-approval"[39m
+      [36m>[39m
+        [0mTool Approval Required[0m
+      [36m</h3>[39m
+      [36m<p[39m
+        [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate"[39m
+        [33mid[39m=[32m"tool-approval-desc-stage1-approval"[39m
+      [36m>[39m
+        [36m<span[39m
+          [33mclass[39m=[32m"font-medium text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0mMia[0m
+        [36m</span>[39m
+        [0m [0m
+        [0mis requesting permission to run a tool.[0m
+      [36m</p>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"min-h-0 flex-1 overflow-y-auto"[39m
+    [33mdata-testid[39m=[32m"tool-approval-details"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mTool[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"font-mono text-[length:var(--type-body-compact-size)] text-[var(--color-accent)] font-semibold"[39m
+        [36m>[39m
+          [0mWrite file[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mArguments[0m
+        [36m</p>[39m
+        [36m<pre[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-surface-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m{
+  "path": "stage1-request.txt"
+}[0m
+        [36m</pre>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] pb-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex items-center justify-between mb-[var(--space-1)]"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"[39m
+        [36m>[39m
+          [0mExpires in[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m5m 0s[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33maria-valuemax[39m=[32m"100"[39m
+        [33maria-valuemin[39m=[32m"0"[39m
+        [33maria-valuenow[39m=[32m"0.006000080001066681"[39m
+        [33maria-valuetext[39m=[32m"0%"[39m
+        [33mclass[39m=[32m"relative w-full overflow-hidden rounded-full bg-[var(--color-surface-3)] forced-colors:border forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:[forced-color-adjust:none] h-1"[39m
+        [33mdata-max[39m=[32m"100"[39m
+        [33mdata-state[39m=[32m"loading"[39m
+        [33mdata-value[39m=[32m"0.006000080001066681"[39m
+        [33mrole[39m=[32m"progressbar"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"h-full bg-[var(--color-accent)] transition-all duration-500 motion-reduce:transition-none forced-colors:bg-[Highlight] w-full"[39m
+          [33mdata-max[39m=[32m"100"[39m
+          [33mdata-state[39m=[32m"loading"[39m
+          [33mdata-value[39m=[32m"0.006000080001066681"[39m
+          [33mstyle[39m=[32m"transform: translateX(-99.99399991999893%);"[39m
+        [36m/>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]"[39m
+  [36m>[39m
+    [36m<button[39m
+      [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] font-semibold rounded-md px-[var(--space-2-5)] h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"[39m
+      [33mdata-action-state[39m=[32m"idle"[39m
+      [33mdata-ds-action[39m=[32m""[39m
+      [33mtabindex[39m=[32m"0"[39m
+      [33mtype[39m=[32m"button"[39m
+    [36m>[39m
+      [36m<svg[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mfill[39m=[32m"currentColor"[39m
+        [33mheight[39m=[32m"14"[39m
+        [33mviewBox[39m=[32m"0 0 256 256"[39m
+        [33mwidth[39m=[32m"14"[39m
+        [33mxmlns[...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/layout/AppShell.wu4.test.tsx:145:28
+    143|       // the modal's combined description gave, now with the origin pi…
+    144|       // at its own node.
+    145|       expect(within(panel).getByTestId('tool-approval-origin').textCon…
+       |                            ^
+    146|       expect(panel).toHaveAccessibleDescription('Mia is requesting per…
+    147|       // Focus flip is the SPEC, not a weakening: the retired modal gr…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from session_state > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-origin"]
+
+Ignored nodes: comments, script, style
+[36m<section[39m
+  [33maria-describedby[39m=[32m"tool-approval-desc-stage1-approval"[39m
+  [33maria-labelledby[39m=[32m"tool-approval-title-stage1-approval"[39m
+  [33mclass[39m=[32m"my-[var(--space-2)] flex max-h-[60vh] flex-col overflow-hidden rounded-[var(--radius-medium)] border border-[var(--color-warning)]/40 bg-[var(--color-surface-1)]"[39m
+  [33mdata-testid[39m=[32m"tool-approval-panel"[39m
+[36m>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-row items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left"[39m
+  [36m>[39m
+    [36m<svg[39m
+      [33maria-hidden[39m=[32m"true"[39m
+      [33mclass[39m=[32m"text-[var(--color-warning)] shrink-0"[39m
+      [33mfill[39m=[32m"currentColor"[39m
+      [33mheight[39m=[32m"20"[39m
+      [33mviewBox[39m=[32m"0 0 256 256"[39m
+      [33mwidth[39m=[32m"20"[39m
+      [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+    [36m>[39m
+      [36m<path[39m
+        [33md[39m=[32m"M208,36H48A20,20,0,0,0,28,56v56c0,54.29,26.32,87.22,48.4,105.29,23.71,19.39,47.44,26,48.44,26.29a12.1,12.1,0,0,0,6.32,0c1-.28,24.73-6.9,48.44-26.29,22.08-18.07,48.4-51,48.4-105.29V56A20,20,0,0,0,208,36Zm-4,76c0,35.71-13.09,64.69-38.91,86.15A126.28,126.28,0,0,1,128,219.38a126.14,126.14,0,0,1-37.09-21.23C65.09,176.69,52,147.71,52,112V60H204Z"[39m
+      [36m/>[39m
+    [36m</svg>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex-1 min-w-0"[39m
+    [36m>[39m
+      [36m<h3[39m
+        [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] font-headline"[39m
+        [33mid[39m=[32m"tool-approval-title-stage1-approval"[39m
+      [36m>[39m
+        [0mTool Approval Required[0m
+      [36m</h3>[39m
+      [36m<p[39m
+        [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate"[39m
+        [33mid[39m=[32m"tool-approval-desc-stage1-approval"[39m
+      [36m>[39m
+        [36m<span[39m
+          [33mclass[39m=[32m"font-medium text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0mMia[0m
+        [36m</span>[39m
+        [0m [0m
+        [0mis requesting permission to run a tool.[0m
+      [36m</p>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"min-h-0 flex-1 overflow-y-auto"[39m
+    [33mdata-testid[39m=[32m"tool-approval-details"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mTool[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"font-mono text-[length:var(--type-body-compact-size)] text-[var(--color-accent)] font-semibold"[39m
+        [36m>[39m
+          [0mWrite file[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mArguments[0m
+        [36m</p>[39m
+        [36m<pre[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-surface-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m{
+  "path": "stage1-request.txt"
+}[0m
+        [36m</pre>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] pb-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex items-center justify-between mb-[var(--space-1)]"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"[39m
+        [36m>[39m
+          [0mExpires in[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m5m 0s[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33maria-valuemax[39m=[32m"100"[39m
+        [33maria-valuemin[39m=[32m"0"[39m
+        [33maria-valuenow[39m=[32m"0.005666742223229644"[39m
+        [33maria-valuetext[39m=[32m"0%"[39m
+        [33mclass[39m=[32m"relative w-full overflow-hidden rounded-full bg-[var(--color-surface-3)] forced-colors:border forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:[forced-color-adjust:none] h-1"[39m
+        [33mdata-max[39m=[32m"100"[39m
+        [33mdata-state[39m=[32m"loading"[39m
+        [33mdata-value[39m=[32m"0.005666742223229644"[39m
+        [33mrole[39m=[32m"progressbar"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"h-full bg-[var(--color-accent)] transition-all duration-500 motion-reduce:transition-none forced-colors:bg-[Highlight] w-full"[39m
+          [33mdata-max[39m=[32m"100"[39m
+          [33mdata-state[39m=[32m"loading"[39m
+          [33mdata-value[39m=[32m"0.005666742223229644"[39m
+          [33mstyle[39m=[32m"transform: translateX(-99.99433325777677%);"[39m
+        [36m/>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]"[39m
+  [36m>[39m
+    [36m<button[39m
+      [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] font-semibold rounded-md px-[var(--space-2-5)] h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"[39m
+      [33mdata-action-state[39m=[32m"idle"[39m
+      [33mdata-ds-action[39m=[32m""[39m
+      [33mtabindex[39m=[32m"0"[39m
+      [33mtype[39m=[32m"button"[39m
+    [36m>[39m
+      [36m<svg[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mfill[39m=[32m"currentColor"[39m
+        [33mheight[39m=[32m"14"[39m
+        [33mviewBox[39m=[32m"0 0 256 256"[39m
+        [33mwidth[39m=[32m"14"[39m
+        [33mxmlns[...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/layout/AppShell.wu4.test.tsx:145:28
+    143|       // the modal's combined description gave, now with the origin pi…
+    144|       // at its own node.
+    145|       expect(within(panel).getByTestId('tool-approval-origin').textCon…
+       |                            ^
+    146|       expect(panel).toHaveAccessibleDescription('Mia is requesting per…
+    147|       // Focus flip is the SPEC, not a weakening: the retired modal gr…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from session_state > K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release approval-card origin from session_state > K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-origin"]
+
+Ignored nodes: comments, script, style
+[36m<section[39m
+  [33maria-describedby[39m=[32m"tool-approval-desc-stage1-approval"[39m
+  [33maria-labelledby[39m=[32m"tool-approval-title-stage1-approval"[39m
+  [33mclass[39m=[32m"my-[var(--space-2)] flex max-h-[60vh] flex-col overflow-hidden rounded-[var(--radius-medium)] border border-[var(--color-warning)]/40 bg-[var(--color-surface-1)]"[39m
+  [33mdata-testid[39m=[32m"tool-approval-panel"[39m
+[36m>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-row items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left"[39m
+  [36m>[39m
+    [36m<svg[39m
+      [33maria-hidden[39m=[32m"true"[39m
+      [33mclass[39m=[32m"text-[var(--color-warning)] shrink-0"[39m
+      [33mfill[39m=[32m"currentColor"[39m
+      [33mheight[39m=[32m"20"[39m
+      [33mviewBox[39m=[32m"0 0 256 256"[39m
+      [33mwidth[39m=[32m"20"[39m
+      [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+    [36m>[39m
+      [36m<path[39m
+        [33md[39m=[32m"M208,36H48A20,20,0,0,0,28,56v56c0,54.29,26.32,87.22,48.4,105.29,23.71,19.39,47.44,26,48.44,26.29a12.1,12.1,0,0,0,6.32,0c1-.28,24.73-6.9,48.44-26.29,22.08-18.07,48.4-51,48.4-105.29V56A20,20,0,0,0,208,36Zm-4,76c0,35.71-13.09,64.69-38.91,86.15A126.28,126.28,0,0,1,128,219.38a126.14,126.14,0,0,1-37.09-21.23C65.09,176.69,52,147.71,52,112V60H204Z"[39m
+      [36m/>[39m
+    [36m</svg>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex-1 min-w-0"[39m
+    [36m>[39m
+      [36m<h3[39m
+        [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] font-headline"[39m
+        [33mid[39m=[32m"tool-approval-title-stage1-approval"[39m
+      [36m>[39m
+        [0mTool Approval Required[0m
+      [36m</h3>[39m
+      [36m<p[39m
+        [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate"[39m
+        [33mid[39m=[32m"tool-approval-desc-stage1-approval"[39m
+      [36m>[39m
+        [36m<span[39m
+          [33mclass[39m=[32m"font-medium text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0mMia[0m
+        [36m</span>[39m
+        [0m [0m
+        [0mis requesting permission to run a tool.[0m
+      [36m</p>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"min-h-0 flex-1 overflow-y-auto"[39m
+    [33mdata-testid[39m=[32m"tool-approval-details"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mTool[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"font-mono text-[length:var(--type-body-compact-size)] text-[var(--color-accent)] font-semibold"[39m
+        [36m>[39m
+          [0mWrite file[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mArguments[0m
+        [36m</p>[39m
+        [36m<pre[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-surface-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m{
+  "path": "stage1-request.txt"
+}[0m
+        [36m</pre>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] pb-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex items-center justify-between mb-[var(--space-1)]"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"[39m
+        [36m>[39m
+          [0mExpires in[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m5m 0s[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33maria-valuemax[39m=[32m"100"[39m
+        [33maria-valuemin[39m=[32m"0"[39m
+        [33maria-valuenow[39m=[32m"0.0063334177789037185"[39m
+        [33maria-valuetext[39m=[32m"0%"[39m
+        [33mclass[39m=[32m"relative w-full overflow-hidden rounded-full bg-[var(--color-surface-3)] forced-colors:border forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:[forced-color-adjust:none] h-1"[39m
+        [33mdata-max[39m=[32m"100"[39m
+        [33mdata-state[39m=[32m"loading"[39m
+        [33mdata-value[39m=[32m"0.0063334177789037185"[39m
+        [33mrole[39m=[32m"progressbar"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"h-full bg-[var(--color-accent)] transition-all duration-500 motion-reduce:transition-none forced-colors:bg-[Highlight] w-full"[39m
+          [33mdata-max[39m=[32m"100"[39m
+          [33mdata-state[39m=[32m"loading"[39m
+          [33mdata-value[39m=[32m"0.0063334177789037185"[39m
+          [33mstyle[39m=[32m"transform: translateX(-99.9936665822211%);"[39m
+        [36m/>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]"[39m
+  [36m>[39m
+    [36m<button[39m
+      [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] font-semibold rounded-md px-[var(--space-2-5)] h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"[39m
+      [33mdata-action-state[39m=[32m"idle"[39m
+      [33mdata-ds-action[39m=[32m""[39m
+      [33mtabindex[39m=[32m"0"[39m
+      [33mtype[39m=[32m"button"[39m
+    [36m>[39m
+      [36m<svg[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mfill[39m=[32m"currentColor"[39m
+        [33mheight[39m=[32m"14"[39m
+        [33mviewBox[39m=[32m"0 0 256 256"[39m
+        [33mwidth[39m=[32m"14"[39m
+        [33mxmlns...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/layout/AppShell.wu4.test.tsx:145:28
+    143|       // the modal's combined description gave, now with the origin pi…
+    144|       // at its own node.
+    145|       expect(within(panel).getByTestId('tool-approval-origin').textCon…
+       |                            ^
+    146|       expect(panel).toHaveAccessibleDescription('Mia is requesting per…
+    147|       // Focus flip is the SPEC, not a weakening: the retired modal gr…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > K7: origin text is literal text, never executable markup
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-origin"]
+
+Ignored nodes: comments, script, style
+[36m<section[39m
+  [33maria-describedby[39m=[32m"tool-approval-desc-stage1-approval"[39m
+  [33maria-labelledby[39m=[32m"tool-approval-title-stage1-approval"[39m
+  [33mclass[39m=[32m"my-[var(--space-2)] flex max-h-[60vh] flex-col overflow-hidden rounded-[var(--radius-medium)] border border-[var(--color-warning)]/40 bg-[var(--color-surface-1)]"[39m
+  [33mdata-testid[39m=[32m"tool-approval-panel"[39m
+[36m>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-row items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left"[39m
+  [36m>[39m
+    [36m<svg[39m
+      [33maria-hidden[39m=[32m"true"[39m
+      [33mclass[39m=[32m"text-[var(--color-warning)] shrink-0"[39m
+      [33mfill[39m=[32m"currentColor"[39m
+      [33mheight[39m=[32m"20"[39m
+      [33mviewBox[39m=[32m"0 0 256 256"[39m
+      [33mwidth[39m=[32m"20"[39m
+      [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+    [36m>[39m
+      [36m<path[39m
+        [33md[39m=[32m"M208,36H48A20,20,0,0,0,28,56v56c0,54.29,26.32,87.22,48.4,105.29,23.71,19.39,47.44,26,48.44,26.29a12.1,12.1,0,0,0,6.32,0c1-.28,24.73-6.9,48.44-26.29,22.08-18.07,48.4-51,48.4-105.29V56A20,20,0,0,0,208,36Zm-4,76c0,35.71-13.09,64.69-38.91,86.15A126.28,126.28,0,0,1,128,219.38a126.14,126.14,0,0,1-37.09-21.23C65.09,176.69,52,147.71,52,112V60H204Z"[39m
+      [36m/>[39m
+    [36m</svg>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex-1 min-w-0"[39m
+    [36m>[39m
+      [36m<h3[39m
+        [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] font-headline"[39m
+        [33mid[39m=[32m"tool-approval-title-stage1-approval"[39m
+      [36m>[39m
+        [0mTool Approval Required[0m
+      [36m</h3>[39m
+      [36m<p[39m
+        [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate"[39m
+        [33mid[39m=[32m"tool-approval-desc-stage1-approval"[39m
+      [36m>[39m
+        [36m<span[39m
+          [33mclass[39m=[32m"font-medium text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0mMia[0m
+        [36m</span>[39m
+        [0m [0m
+        [0mis requesting permission to run a tool.[0m
+      [36m</p>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"min-h-0 flex-1 overflow-y-auto"[39m
+    [33mdata-testid[39m=[32m"tool-approval-details"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mTool[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"font-mono text-[length:var(--type-body-compact-size)] text-[var(--color-accent)] font-semibold"[39m
+        [36m>[39m
+          [0mWrite file[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]"[39m
+        [36m>[39m
+          [0mArguments[0m
+        [36m</p>[39m
+        [36m<pre[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-surface-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m{
+  "path": "stage1-request.txt"
+}[0m
+        [36m</pre>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"px-[var(--space-3)] pb-[var(--space-2-5)]"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex items-center justify-between mb-[var(--space-1)]"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"[39m
+        [36m>[39m
+          [0mExpires in[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]"[39m
+        [36m>[39m
+          [0m5m 0s[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33maria-valuemax[39m=[32m"100"[39m
+        [33maria-valuemin[39m=[32m"0"[39m
+        [33maria-valuenow[39m=[32m"0.008666868893607517"[39m
+        [33maria-valuetext[39m=[32m"0%"[39m
+        [33mclass[39m=[32m"relative w-full overflow-hidden rounded-full bg-[var(--color-surface-3)] forced-colors:border forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:[forced-color-adjust:none] h-1"[39m
+        [33mdata-max[39m=[32m"100"[39m
+        [33mdata-state[39m=[32m"loading"[39m
+        [33mdata-value[39m=[32m"0.008666868893607517"[39m
+        [33mrole[39m=[32m"progressbar"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"h-full bg-[var(--color-accent)] transition-all duration-500 motion-reduce:transition-none forced-colors:bg-[Highlight] w-full"[39m
+          [33mdata-max[39m=[32m"100"[39m
+          [33mdata-state[39m=[32m"loading"[39m
+          [33mdata-value[39m=[32m"0.008666868893607517"[39m
+          [33mstyle[39m=[32m"transform: translateX(-99.99133313110639%);"[39m
+        [36m/>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex shrink-0 flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]"[39m
+  [36m>[39m
+    [36m<button[39m
+      [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] font-semibold rounded-md px-[var(--space-2-5)] h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"[39m
+      [33mdata-action-state[39m=[32m"idle"[39m
+      [33mdata-ds-action[39m=[32m""[39m
+      [33mtabindex[39m=[32m"0"[39m
+      [33mtype[39m=[32m"button"[39m
+    [36m>[39m
+      [36m<svg[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mfill[39m=[32m"currentColor"[39m
+        [33mheight[39m=[32m"14"[39m
+        [33mviewBox[39m=[32m"0 0 256 256"[39m
+        [33mwidth[39m=[32m"14"[39m
+        [33mxmlns[...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/layout/AppShell.wu4.test.tsx:193:31
+    191|   const origin = 'for group <img src=x onerror="alert(1)">'
+    192|   const panel = await emitApprovalOrigin(socket, 'live', origin)
+    193|   const label = within(panel).getByTestId('tool-approval-origin')
+       |                               ^
+    194|   expect(label.textContent).toBe(origin)
+    195|   expect(label.children).toHaveLength(0)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  7 failed | 17 passed (24)
+   Start at  21:21:30
+   Duration  47.40s (transform 18.69s, setup 566ms, import 28.95s, tests 15.59s, environment 1.99s)
+
+exit=1

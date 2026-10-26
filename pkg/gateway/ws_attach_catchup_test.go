@@ -35,6 +35,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -124,6 +125,7 @@ type attachFixture struct {
 	store    *session.UnifiedStore
 	sid      string
 	streamer *wsStreamer
+	loop     *agent.AgentLoop
 }
 
 func newAttachFixture(t *testing.T, turnID, messageID string) *attachFixture {
@@ -140,7 +142,7 @@ func newAttachFixture(t *testing.T, turnID, messageID string) *attachFixture {
 	require.True(t, ok)
 	ws.SetTurnID(turnID)
 	ws.SetMessageID(messageID)
-	return &attachFixture{h: h, store: store, sid: meta.ID, streamer: ws}
+	return &attachFixture{h: h, store: store, sid: meta.ID, streamer: ws, loop: al}
 }
 
 func (f *attachFixture) newConn(chatID string) *wsConn {

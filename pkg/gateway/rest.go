@@ -667,6 +667,10 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 
 // registerCoreRoutes registers state, system, task, workspace, library, provider, tool, channel, agent, mailbox, token, and activity routes.
 func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
+	rae.cm.RegisterHTTPHandler("/api/v1/secret-requests/", rae.a.withAuthAndBodyLimit(rae.a.HandleSecretRequests, secretSubmitBodyLimit))
+	// K6 listing and K49 options: authenticated web user only; value-free.
+	rae.cm.RegisterHTTPHandler("/api/v1/secrets", rae.a.withAuth(rae.a.HandleSecrets))
+	rae.cm.RegisterHTTPHandler("/api/v1/secrets/", rae.a.withAuth(rae.a.HandleSecrets))
 	rae.cm.RegisterHTTPHandler("/api/v1/state", rae.a.withOptionalAuth(rae.a.HandleState))
 	rae.cm.RegisterHTTPHandler("/api/v1/system/cli-detect", rae.a.withAuth(rae.a.HandleSystemCliDetect))
 	// withAuth, never withOptionalAuth: this lists the operator's own disk.

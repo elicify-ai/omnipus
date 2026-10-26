@@ -17,15 +17,17 @@ import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { clearPendingAutoApproveOnSessionChange, readPersistedSessionByWorkspace, useSessionStore } from '@/store/session'
 
-export type WorkspaceEntryView =
+export type WorkspaceEntryView = (
   | { status: 'exact'; acknowledged: false }
   | WelcomeEntry
   | EmptyTeamEntry
   | Extract<EntryResult, { status: 'unavailable' }>
   | FailedAttempt
+) & { linkedSessionId?: string } // not-wire-format: preserves an explicit browser-link target for Retry
 
 let navigationIntent = 0
-const inFlight = new Map<string, Promise<void>>()
+const inFlight = new Map<string, { linkedSessionId: string | undefined; job: Promise<void> }>()
+const resolvingIntent = new Map<string, number>()
 const visibilityWaiters = new Set<() => void>()
 let resumeQueuedSends: (() => void) | null = null
 
@@ -101,10 +103,12 @@ function classifyPointer(
 
 /**
  * M3: the remembered id is absent from an INCOMPLETE list — unknown, not
- * deleted. Resolve it directly (GET /sessions/{id}) before anything may
- * overwrite the pointer: found here → 'visible' (the fetched record is
- * pushed onto the list so the exact path has its owner); a 404 is the ONE
- * truthful deletion (the welcome path may then take over); any other
+ * deleted. (Also used for an explicit link absent from the roots-only list,
+ * which may name a delegated child — see loadInputs.) Resolve it directly
+ * (GET /sessions/{id}) before anything may overwrite the pointer: found
+ * here → 'visible' (the fetched record is pushed onto the list so the exact
+ * path has its owner); a 404 is the ONE truthful deletion (the welcome
+ * path may then take over); any other
  * failure is a transport failure — the pointer is kept with Retry, never a
  * silent fallback to the main.
  */
@@ -132,7 +136,11 @@ async function resolvePartialListPointer(
   }
 }
 
-async function loadInputs(workspaceId: string): Promise<{
+async function loadInputs(
+  workspaceId: string,
+  remembered: string | null | undefined,
+  explicitLink = false,
+): Promise<{
   sessions: Session[]
   transportFailed: boolean
   team: EntryTeam
@@ -147,7 +155,6 @@ async function loadInputs(workspaceId: string): Promise<{
     ? sessionsResult.value
     : []
   const sessionsFailed = sessionsResult.status !== 'fulfilled' || !Array.isArray(sessionsResult.value)
-  const remembered = rememberedId(workspaceId)
   let pointerVerdict = classifyPointer(
     sessions,
     workspaceId,
@@ -155,7 +162,13 @@ async function loadInputs(workspaceId: string): Promise<{
     sessionsFailed,
     readSessionFetchCoverage(sessions).incomplete,
   )
-  if (pointerVerdict === 'partial-list' && typeof remembered === 'string') {
+  // The default GET /sessions listing pages over ROOT sessions only
+  // (ADR-057 FR-091): a delegated child chat is never in it. Absence there is
+  // therefore not proof of deletion for an explicit link, which may name a
+  // child (train 3 hands-on row F4). Resolve it directly: 404 stays 'deleted',
+  // another workspace stays 'hidden', so a missing link is still unavailable.
+  const unlistedLink = explicitLink && pointerVerdict === 'deleted'
+  if ((pointerVerdict === 'partial-list' || unlistedLink) && typeof remembered === 'string') {
     pointerVerdict = await resolvePartialListPointer(remembered, workspaceId, sessions)
   }
   // Exact restore needs only the visible session and its immutable owner.
@@ -206,20 +219,22 @@ function applyEntry(
   result: EntryResult,
   sessions: Session[],
   token: number,
+  linkedSessionId?: string,
 ): void {
   if (!navigationIntentCurrent(token)) return
   const stillViewing = useWorkspacesStore.getState().activeWorkspaceId === workspaceId
+  const linkedTarget = linkedSessionId ? { linkedSessionId } : {}
 
   if (result.status === 'failed-attempt') {
     if (stillViewing) {
-      useSessionStore.setState({ workspaceEntry: result })
+      useSessionStore.setState({ workspaceEntry: { ...result, ...linkedTarget } })
       useUiStore.getState().addToast({
         message: 'Could not restore your last conversation. Retry to try again.',
         variant: 'warning',
         action: {
           label: 'Retry',
           onClick: () => {
-            void runWorkspaceEntry(workspaceId)
+            void (linkedSessionId ? runWorkspaceEntry(workspaceId, linkedSessionId) : runWorkspaceEntry(workspaceId))
           },
         },
       })
@@ -229,7 +244,7 @@ function applyEntry(
 
   if (result.status === 'unavailable' || result.status === 'empty-team') {
     if (!stillViewing) return
-    useSessionStore.setState({ workspaceEntry: result })
+    useSessionStore.setState({ workspaceEntry: { ...result, ...linkedTarget } })
     if (useSessionStore.getState().activeSessionId !== null) {
       useSessionStore.getState().setActiveSession(null)
     }
@@ -263,7 +278,7 @@ function applyEntry(
       retry: true,
       fellBack: false,
     }
-    useSessionStore.setState({ workspaceEntry: failed })
+    useSessionStore.setState({ workspaceEntry: { ...failed, ...linkedTarget } })
     return
   }
   const view: WorkspaceEntryView = result.status === 'exact'
@@ -272,20 +287,38 @@ function applyEntry(
   useSessionStore.setState({ workspaceEntry: view })
 }
 
-async function execute(workspaceId: string): Promise<void> {
+/** A session id carried by the address (a /sessions/{id} deep link's
+ *  resulting chat address, #1437). While present it IS this entry's chat
+ *  pointer: the linked chat wins over whatever chat another tab last
+ *  remembered for the workspace. */
+function linkedPointer(linkedSessionId: string | null | undefined): string | null | undefined {
+  if (typeof linkedSessionId !== 'string' || linkedSessionId.trim() === '' || linkedSessionId === '__pending') {
+    return undefined
+  }
+  return linkedSessionId
+}
+
+async function execute(workspaceId: string, linkedSessionId?: string): Promise<void> {
   clearPendingAutoApproveOnSessionChange()
   const token = supersedeNavigationIntent()
   const state = useSessionStore.getState()
   const memoryDescriptor = state.sessionByWorkspace[workspaceId]
+  // An explicit address wins BEFORE the already-attached shortcut. An older
+  // committed chat is not proof that a different linked target was adopted.
+  const linked = linkedPointer(linkedSessionId)
+  const remembered = linked ?? rememberedId(workspaceId)
   if (
     memoryDescriptor
     && memoryDescriptor.id !== '__pending'
     && memoryDescriptor.id === state.activeSessionId
+    && remembered === state.activeSessionId
+    && !workspaceEntryBlocksSend(state, workspaceId)
   ) {
     return
   }
   const descriptorAtStart = memoryDescriptor
   const committed = committedNow()
+  resolvingIntent.set(workspaceId, token)
   useSessionStore.setState((current) => ({
     resolvingSessionForWorkspace: { ...current.resolvingSessionForWorkspace, [workspaceId]: true },
   }))
@@ -294,23 +327,28 @@ async function execute(workspaceId: string): Promise<void> {
       await waitForEntryVisibility(token)
     }
     if (!navigationIntentCurrent(token)) return
-    const loaded = await loadInputs(workspaceId)
+    const loaded = await loadInputs(workspaceId, remembered, typeof linked === 'string')
     // The tab may have become hidden while the network requests were in flight.
     while (typeof document !== 'undefined' && document.hidden && navigationIntentCurrent(token)) {
       await waitForEntryVisibility(token)
     }
     if (!navigationIntentCurrent(token)) return
     if (useSessionStore.getState().sessionByWorkspace[workspaceId] !== descriptorAtStart) return
-    const result = resolveWorkspaceEntry({
-      workspaceId,
-      entryKind: 'cold-reload',
-      rememberedSessionId: rememberedId(workspaceId),
-      pointerVerdict: loaded.pointerVerdict,
-      sessions: loaded.sessions,
-      team: loaded.team,
-      committed,
-    })
-    applyEntry(workspaceId, result, loaded.sessions, token)
+    // A missing explicit link is an error, not permission to open the team's
+    // main chat. Ordinary remembered-pointer entry keeps its existing fallback.
+    const linkedUnavailable = linked && ['deleted', 'hidden', 'forbidden'].includes(loaded.pointerVerdict)
+    const result: EntryResult = linkedUnavailable
+      ? { status: 'unavailable', sessionId: null, sendEnabled: false, acknowledged: false, retry: true }
+      : resolveWorkspaceEntry({
+        workspaceId,
+        entryKind: 'cold-reload',
+        rememberedSessionId: remembered,
+        pointerVerdict: loaded.pointerVerdict,
+        sessions: loaded.sessions,
+        team: loaded.team,
+        committed,
+      })
+    applyEntry(workspaceId, result, loaded.sessions, token, linked ?? undefined)
   } catch (error) {
     // Not a network failure (loadInputs absorbs those): something threw. Never
     // leave the entry silently unresolved — show the same unavailable state with Retry.
@@ -320,23 +358,29 @@ async function execute(workspaceId: string): Promise<void> {
     })
     if (navigationIntentCurrent(token) && useWorkspacesStore.getState().activeWorkspaceId === workspaceId) {
       useSessionStore.setState({
-        workspaceEntry: { status: 'unavailable', sessionId: null, sendEnabled: false, acknowledged: false, retry: true },
+        workspaceEntry: { status: 'unavailable', sessionId: null, sendEnabled: false, acknowledged: false, retry: true, ...(linked ? { linkedSessionId: linked } : {}) },
       })
     }
   } finally {
-    clearResolving(workspaceId)
+    // A superseded request for the same workspace must not clear its newer
+    // linked target's loading/send gate.
+    if (resolvingIntent.get(workspaceId) === token) {
+      resolvingIntent.delete(workspaceId)
+      clearResolving(workspaceId)
+    }
     if (navigationIntentCurrent(token) && useWorkspacesStore.getState().activeWorkspaceId === workspaceId) {
       resumeWorkspaceEntryQueue()
     }
   }
 }
 
-export function runWorkspaceEntry(workspaceId: string): Promise<void> {
+export function runWorkspaceEntry(workspaceId: string, linkedSessionId?: string): Promise<void> {
+  const linked = linkedPointer(linkedSessionId) ?? undefined
   const existing = inFlight.get(workspaceId)
-  if (existing) return existing
-  const job = execute(workspaceId)
-  inFlight.set(workspaceId, job)
+  if (existing && existing.linkedSessionId === linked) return existing.job
+  const job = execute(workspaceId, linked)
+  inFlight.set(workspaceId, { linkedSessionId: linked, job })
   return job.finally(() => {
-    if (inFlight.get(workspaceId) === job) inFlight.delete(workspaceId)
+    if (inFlight.get(workspaceId)?.job === job) inFlight.delete(workspaceId)
   })
 }

@@ -5,9 +5,13 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -71,6 +75,10 @@ func wu3BootRunContext(t *testing.T, tweak func(*config.Config)) *runContextWith
 	return rc
 }
 
+type wu4bGuardNetworkEdge func(*http.Request) (*http.Response, error)
+
+func (fn wu4bGuardNetworkEdge) RoundTrip(r *http.Request) (*http.Response, error) { return fn(r) }
+
 // pr-test-analyzer TC-03: the production wiring hands the boot's
 // outbound-request guard to configure_provider. A cloud provider pointed at a
 // loopback address is refused by that guard before any request; without the
@@ -91,13 +99,40 @@ func TestWU3ProductionWiringGuardsProviderCheck(t *testing.T) {
 	listing := lister.Execute(ctx, map[string]any{"name": "openai"})
 	require.NoError(t, json.Unmarshal([]byte(listing.ForLLM), &listed), listing.ForLLM)
 	require.Len(t, listed.Providers, 1)
+	// D2-A fixture adaptation: a prior real encrypted/bound card version is
+	// selected. The production URLChecker/wireSystemTools remain untouched.
+	recipient := credentials.CardRecipient{Kind: "provider_key", Provider: "openai", Endpoint: "https://127.0.0.1:1/v1", Protocol: "openai-compatible", Field: "api_key"}
+	receipt, err := rc.credStore.CommitCard("wu4b-gateway-wiring-request", "wu4b-gateway-wiring-session", []credentials.CardValue{{BaseName: "opaque-wiring-ref", Recipient: recipient, Value: "sk-wu3fixwiringsecret00000000000"}}, time.Unix(1_800_000_000, 0))
+	require.NoError(t, err)
+	require.Len(t, receipt.References, 1)
+	refsBefore, err := rc.credStore.CardSecretMetadata()
+	require.NoError(t, err)
+	require.Equal(t, recipient, refsBefore[receipt.References[0]].Recipient)
+	var outbound atomic.Int32
+	transport := http.DefaultTransport
+	http.DefaultTransport = wu4bGuardNetworkEdge(func(*http.Request) (*http.Response, error) {
+		outbound.Add(1)
+		return nil, errors.New("unexpected outbound request: production URLChecker was bypassed")
+	})
+	t.Cleanup(func() { http.DefaultTransport = transport })
 	result := tool.Execute(ctx, map[string]any{
-		"name": "openai", "api_key": "sk-wu3fixwiringsecret00000000000", "api_base": "https://127.0.0.1:1/v1",
+		"name": "openai", "api_key_ref": receipt.References[0], "api_base": "https://127.0.0.1:1/v1",
 		"expected_revision": listed.Providers[0]["revision"],
 	})
 	var body map[string]any
 	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &body), result.ForLLM)
 	assert.Equal(t, "saved but not working", body["outcome"])
 	assert.Contains(t, body["reason"], "outbound-request guard", "the wired guard refused the endpoint")
+	assert.Zero(t, outbound.Load(), "real production guard rejects before the network process edge")
 	assert.NotContains(t, result.ForLLM, "wu3fixwiringsecret")
+	refsAfter, err := rc.credStore.CardSecretMetadata()
+	require.NoError(t, err)
+	assert.Equal(t, refsBefore, refsAfter, "selection must not rewrite stored values or bindings")
+	value, err := rc.credStore.Get(receipt.References[0])
+	require.NoError(t, err)
+	assert.Equal(t, "sk-wu3fixwiringsecret00000000000", value)
+	listing = lister.Execute(ctx, map[string]any{"name": "openai"})
+	require.NoError(t, json.Unmarshal([]byte(listing.ForLLM), &listed), listing.ForLLM)
+	require.Len(t, listed.Providers, 1)
+	assert.Equal(t, receipt.References[0], listed.Providers[0]["api_key_ref"], "the saved consumer uses the prior approved bound reference")
 }

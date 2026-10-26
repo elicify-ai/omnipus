@@ -162,7 +162,7 @@ func (a *restAPI) writePagedSessionDetail(w http.ResponseWriter, r *http.Request
 	}
 	detail := generated.SessionDetail{HistoryState: historyStateForError(err)}
 	metadata := unifiedMetaToGenSession(a.withDisplayTitle(meta))
-	metadata.NeedsAttention = mainNeedsAttention(meta, a.pendingApprovalMains())
+	metadata.NeedsAttention = mainNeedsAttention(meta, a.withPendingSecretCards(a.pendingApprovalMains()))
 	metadata.Protected = computeSessionProtected(meta)
 	if failure := attachSessionRuntimeFields(&metadata, a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch()); failure != nil {
 		attempt.err = failure

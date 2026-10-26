@@ -139,9 +139,9 @@ func (al *AgentLoop) enqueueHelperSteeringFromMessage(msg bus.InboundMessage, ag
 		}
 		return nil
 	}
-	_, _, err = al.enqueueHumanSteeringMessage(msg.SessionID, agentID, providers.Message{
+	_, _, err = al.enqueueInboundSteeringMessage(msg.SessionID, agentID, providers.Message{
 		Role: "user", Content: msg.Content, Media: append([]string(nil), msg.Media...),
-	}, msg.TranscriptEntryID)
+	}, msg.TranscriptEntryID, inboundInputOrigin(msg))
 	return err
 }
 

@@ -10,6 +10,11 @@ linters:
     - dupword
     - err113
     - exhaustruct
+    # exhaustruct_v5 is exhaustruct renamed upstream in golangci-lint
+    # v2.15.0; the disable above is the project's standing decision, and
+    # without this line `default: all` would silently re-enable it under
+    # the new name.
+    - exhaustruct_v5
     - funcorder
     - gochecknoglobals
     - godot

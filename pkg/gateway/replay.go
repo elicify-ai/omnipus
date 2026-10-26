@@ -313,6 +313,12 @@ func (sr *streamReplayState) emitSpawnParentToolCall(
 	// The end is emitted before the still-active return so a stopped
 	// generation 1 is closed even while a newer generation is still running.
 	term := sr.spanReplayTerminal(sr.tcID, 1)
+	if term == spanReplayUseToolCall && (tc.Status == "pending" || tc.Status == "running") {
+		// A legacy launch without persisted brackets has only its tool-call
+		// status as evidence. Keep its start, but do not invent a terminal
+		// span or result from a call that has not completed (paging D4).
+		return streamReplayStateContinue, nil
+	}
 	if err2 := sr.emitReplaySpanEnd(tc, term, emitFrame); err2 != nil {
 		return streamReplayStateReturn, err2
 	}

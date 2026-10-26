@@ -80,3 +80,41 @@ The dev's second commit removed `CrossWorkspaceApprovalBanner`, its lib
 
 Proof: `AppShell.stage1.test.tsx` 18/18; every touched file serial exit 0;
 `npm run typecheck` exit 0. Logs in `tests/train3-b3-logs/final-*.log`.
+
+## Round 4 — Train 3 CI cause F: AppShell.wu4.test.tsx re-aimed (the file this ledger missed)
+
+The 8-file re-aim above missed `src/components/layout/AppShell.wu4.test.tsx`, whose 10
+approval pins still looked for the retired dialog (developer diagnosis:
+`coordination/squads/omnipus-l1/logs/t3-ci-f-rs25.stream.jsonl` — NO product regression;
+commit `d52b70bdc`, founder ruling 2026-10-18, ships `INLINE_TOOL_APPROVALS_ENABLED=true`,
+so `AppShell.tsx:301` does not mount the app-wide modal, by design). Re-aimed here at the
+same strength, following the re-aimed `AppShell.stage1.test.tsx` pattern (acting from the
+open main chat):
+
+| Before (pre-B3 pin) | After (B3 pin, same strength) |
+|---|---|
+| 6 exact-origin displays (3 origins × live/session_state) on the modal: origin testid exact text; description "Mia is requesting permission to run a tool. \<origin\>"; Deny HAS focus; Approve Once enabled; pathname stays /settings; session/workspace stable; zero writes | same 6 on the card (`tool-approval-thread-tail` → `tool-approval-panel`): origin testid exact text; description pinned at the describedby element ("Mia is requesting permission to run a tool.") with the origin at its own labelled element — the card splits the two nodes the modal's description combined; Deny NOT focused — the flip is the SPEC (R6: inline, not a dialog, "no focus on appearance"; the modal pinned the opposite direction); Approve Once enabled; pathname stays `MAIN_PATH` (no navigation, from the open main chat); session/workspace stable; zero writes; retired dialog absent, counting hidden nodes |
+| 2 omitted-origin cases: no origin testid, no guessed text, Approve Once enabled | same 2 at the card |
+| 1 XSS-literal origin: exact text, zero children | same 1 at the card |
+| wire-schema negative (empty origin rejected, valid-frame control) | unchanged — untouched and still green |
+| 1 reconnect stub: "an incomplete reconnect approval keeps its supplied origin and still offers Deny only" | RETIRED with its subject: the wire can no longer produce an incomplete reconnect approval — `SessionStatePendingApproval` REQUIRES `tool_call_id`/`turn_id`/`args` (generated `asyncapi-types.ts:802`; the supersession header above; the stub UI branches were deleted in `8f740826e`), so its Deny-only / "Approval Details Unavailable" assertions are unreachable from real traffic. The surviving current-wire equivalent — a session_state restore keeps the supplied origin and offers the full approvable card — is pinned by the session_state-carrier exact-origin cases. Cites: `d52b70bdc` (inline switch + required-fields wire), `8f740826e` (stub UI removal) |
+
+Plus the card-level gap the developer flagged for qa-lead: `ToolApprovalPanel.l1.test.tsx`
+had NO `tool-approval-origin`/`originLabel` pin — added the element-level exact pin to the
+FR-240/251 origin it.each (exact textContent at the labelled element, substring checks
+kept) and a new negative ("an omitted origin renders no origin element — no empty label,
+no guessed origin"; Approve Once still enabled; zero POSTs).
+
+Proof (logs in `tests/train3-b3-logs/`):
+
+- FAIL side, pre-change `bf7d3d2d3`: `wu4-red.log` — 10 failed / 15 passed (25), every
+  failure `Unable to find role="dialog" and name "Tool Approval Required"` at
+  `AppShell.wu4.test.tsx:99`. exit 1.
+- PASS side, this tree: `wu4-green.log` 24/24 (the removed stub is the −1);
+  `panel-l1-green.log` 17/17 (`panel-l1-list.log` names the new case);
+  `panel-bounded-green.log` 1/1; `npm run typecheck` exit 0 (`wu4-typecheck.log`).
+- Mutation (origin label removed from `ToolApprovalPanel.tsx`, reverted immediately
+  after, md5-verified identical to HEAD): `wu4-mutant-red.log` 7 failed / 17 passed —
+  exactly the 6 exact-origin + 1 XSS pins die; the omitted-origin cases pass as designed
+  (they assert absence); `panel-l1-mutant-red.log` 4 failed / 13 passed (3 origin rows +
+  the FR-092 substring case). Post-revert re-run `wu4-post-revert-green.log` 24/24.

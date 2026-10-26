@@ -1214,8 +1214,12 @@ remain. This amendment supersedes contrary original text in §§3–5, 6.1, 6.5�
 7.1–7.7 on the approved topics; it does not revive the historical code-simplifier
 write exception (removed 2026-10-06).
 
-**Text rollout is not tooling acceptance.** Quarantine reporting and full-CI workflow
-triggers need the separate backend implementation. Controller locking, process-group
-stop and load refusal, and the exact-version standing-instance rebuild script need
-their own execution receipts before being reported active. Until then, report gaps
-and raw CI results honestly; no new exception or founder-question shortcut is granted.
+**Implementation-status follow-up — 2026-10-23.** CI event selection and quarantine
+reporting/list are implemented in `05fa19f85`, integrated as `447c91139`; root
+`CLAUDE.md` ("CI implementation pointer") links their exact guide and sources.
+Controller locks, load refusal and local-receipt quota pre-flight are implemented
+outside the repo; root "Running CLI agents" and the planning skill's
+`knowledge/dispatch-and-watch.md` give the controller pointer and shared-launch-root
+exemptions. The standing-instance rebuild pipeline still needs its own campaign,
+version and readiness evidence. Implementation is not a passing later candidate;
+raw failures, independent verification and founder-question rules remain unchanged.

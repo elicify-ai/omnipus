@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -29,6 +30,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // Deps bundles all shared dependencies for system tools.
@@ -167,6 +169,61 @@ type Deps struct {
 	// path uses WaitForPendingReloadFunc below instead, which only polls
 	// the pending flag and never triggers.
 	WaitForReloadFunc func() error
+	// ReloadAndWaitFallback is remove_secret's live-apply path when
+	// WaitForReloadFunc is not wired: the agent loop's own TriggerReload plus
+	// a bounded wait for the pending flag to clear. WireSysagentDeps fills it.
+	ReloadAndWaitFallback func() error
+	// ChannelLiveStatus reports whether a configured channel instance runs
+	// after the last reload, with a value-free failure reason (connect_channel).
+	// WireSysagentDeps fills it from the agent loop's channel manager.
+	ChannelLiveStatus func(id string) (running bool, failure string, known bool)
+	// PairingAttempts returns the one manager-owned pairing store for channel
+	// writer ordering. Resolve it before taking a channel guard; a guard holder
+	// must never acquire the manager lock. Nil means no manager is wired.
+	PairingAttempts func() *channels.PairingAttempts
+	// PublishPairingProgress emits immutable envelopes after writer locks release.
+	PublishPairingProgress func([]channels.PairingProgress)
+	// AdmitPairing reserves the next QR pairing attempt of a channel for the
+	// approved connect call (request id) in its chat (session id), before
+	// anything is saved; an error refuses it (another attempt is in flight
+	// and keeps its owner). Gate r3 M1, M5. WireSysagentDeps fills it.
+	AdmitPairing func(channelID, requestID, sessionID string) (attemptID string, err error)
+	// CommitPairing makes the admitted attempt startable once its
+	// configuration saved and asks the next reload for a fresh start (M4,
+	// M10, M14). It reports false when the attempt is no longer admitted (a
+	// Stop revoked it). WireSysagentDeps fills it.
+	CommitPairing func(channelID, attemptID string) bool
+	// ReleasePairing ends an admitted attempt no start consumed (a failed
+	// save, or a confirmed reload that did not start it). WireSysagentDeps
+	// fills it.
+	ReleasePairing func(channelID, attemptID string)
+	// RequestChannelRestart asks the next reload to start a registered
+	// channel that is not running — one stopped in place or whose earlier
+	// start failed — through the reload lifecycle (gate r1 F04, gate r3
+	// M10). WireSysagentDeps fills it.
+	RequestChannelRestart func(id string) bool
+	// LastStartError returns a channel's most recent start failure, for a
+	// value-free cause and repair (gate r2 T2-SF-10). WireSysagentDeps fills it.
+	LastStartError func(id string) error
+	// AdmitEnablePairing reserves an unowned pairing attempt for enable_channel
+	// turning a QR-paired connector on, before anything is saved (gate r4
+	// R4-A02, M1/M2). An error refuses it: another attempt is in flight
+	// (channels.ErrPairingConflict) or the connector is being deleted
+	// (channels.ErrPairingDeleting). WireSysagentDeps fills it.
+	AdmitEnablePairing func(channelID string) (attemptID string, err error)
+	// SettlePairing closes an admitted attempt its own confirmed reload did
+	// not start, and tells its chat (gate r5 R5-A05). WireSysagentDeps fills
+	// it.
+	SettlePairing func(channelID, attemptID string)
+	// RevokePairingForDisable ends a not-yet-started pairing admission of a
+	// connector disable_channel turns off, so it can never start late (gate r4
+	// R4-A02). WireSysagentDeps fills it.
+	RevokePairingForDisable func(channelID string)
+	// PairingAttemptState returns an admitted attempt's current record, so a
+	// connect result reports what its own start did — a running pairing, an
+	// already-linked device or a failed start (gate r4 R4-A05).
+	// WireSysagentDeps fills it.
+	PairingAttemptState func(channelID, attemptID string) (channels.PairingAttempt, bool)
 	// WaitForPendingReloadFunc BLOCKS until any reload already queued by a
 	// prior publish hook (UpsertAgentFastFunc / ReloadFunc) has actually
 	// landed in memory, OR returns an error after reloadWaitTimeout elapses.
@@ -249,6 +306,10 @@ type Deps struct {
 	// inventory is unavailable (explicit skill IDs are rejected). A wired
 	// listing that returns no skills is a known-empty set, not a skip.
 	AgentConfigInventory func() AgentConfigInventory
+	// ToolCatalog snapshots real builtin and live MCP metadata for compact
+	// tool readback. Metadata is never executed; the reader applies the
+	// target agent's connector assignments and effective policies.
+	ToolCatalog func() []tools.Tool
 	// AgentIsLive reports whether id is present in the live agent registry.
 	// Registry membership alone does not prove which persisted revision is
 	// active; get_agent therefore uses AgentActiveRevision below.
@@ -432,7 +493,19 @@ func restoreConfig(cfg *config.Config, snapshotJSON []byte) error {
 //
 // Use this for all sysagent tool paths that mutate any part of the config.
 func (d *Deps) WithConfig(fn func(*config.Config) error) error {
+	// An unwired mutator is a wiring fault: refuse with the reason, never a
+	// nil-func panic that crashes the calling tool (same rule as the
+	// SaveConfigLocked check below).
+	if d.MutateConfig == nil {
+		return errors.New("config mutation is not wired (Deps.MutateConfig is nil); nothing was saved")
+	}
+	store := d.pairingStore()
 	return d.MutateConfig(func(cfg *config.Config) error {
+		if store != nil {
+			if err := store.CheckConfigSnapshot(cfg); err != nil {
+				return err
+			}
+		}
 		// Snapshot the JSON-serializable fields before mutation so any mutation
 		// can be rolled back without copying the sync.RWMutex field.
 		var snapshotBuf bytes.Buffer
@@ -583,46 +656,6 @@ func successJSON(v any) string {
 		return `{"success":true}`
 	}
 	return string(b)
-}
-
-// stringSliceArg coerces a JSON-decoded tool argument into a []string.
-// JSON arrays decode to []any; non-string elements are skipped. Returns nil
-// for nil/empty/non-array inputs so callers can leave the field unset.
-func stringSliceArg(v any) []string {
-	raw, ok := v.([]any)
-	if !ok || len(raw) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, e := range raw {
-		if s, ok := e.(string); ok {
-			out = append(out, s)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// stringMapArg coerces a JSON-decoded tool argument into a map[string]string.
-// JSON objects decode to map[string]any; non-string values are skipped. Returns
-// nil for nil/empty/non-object inputs so callers can leave the field unset.
-func stringMapArg(v any) map[string]string {
-	raw, ok := v.(map[string]any)
-	if !ok || len(raw) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(raw))
-	for k, e := range raw {
-		if s, ok := e.(string); ok {
-			out[k] = s
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // errorJSON returns a consistent error response per D.10.1.

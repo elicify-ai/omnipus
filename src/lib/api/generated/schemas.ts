@@ -242,6 +242,7 @@ type Message = {
         | "turn_canceled"
         | "judge_verdict"
         | "context_window_notice"
+        | "provider_fallback"
       )
     | undefined;
   view_membership?: ("chat" | "model" | "both") | undefined;
@@ -280,6 +281,8 @@ type Message = {
   cancel_method?: ("graceful" | "hard") | undefined;
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
+  unavailable_model?: string | undefined;
+  unavailable_code?: ("rate_limited" | "model_retired") | undefined;
   verdict?: JudgeVerdict | undefined;
   context_window_notice?: ContextWindowNotice | undefined;
   system_subtype?:
@@ -2174,6 +2177,7 @@ type Task = {
 };
 type Todo = {
   text: string;
+  active_form?: string | undefined;
   status: "pending" | "in_progress" | "completed";
 };
 type AcceptanceCriterion = {
@@ -2717,7 +2721,7 @@ type NotificationList = {
 };
 type Notification = {
   id: string;
-  type: "schedule_failed" | "knowledge_drift";
+  type: "schedule_failed" | "knowledge_drift" | "stop_notice";
   title: string;
   body?: string | undefined;
   severity: "info" | "warning" | "error";
@@ -3423,7 +3427,8 @@ type SecretNameEntry = {
     | "mcp_env"
     | "channel_credential"
     | "mailbox_password"
-    | "agent_private";
+    | "agent_private"
+    | "unbound";
   version: number;
   recipient: {
     kind:
@@ -3431,7 +3436,8 @@ type SecretNameEntry = {
       | "mcp_env"
       | "channel_credential"
       | "mailbox_password"
-      | "agent_private";
+      | "agent_private"
+      | "unbound";
     lines: Array<string>;
   };
   owner?: agent | undefined;
@@ -3912,6 +3918,7 @@ export const Message: z.ZodType<Message> = z.object({
       "turn_canceled",
       "judge_verdict",
       "context_window_notice",
+      "provider_fallback",
     ])
     .optional(),
   view_membership: z.enum(["chat", "model", "both"]).optional(),
@@ -3953,6 +3960,8 @@ export const Message: z.ZodType<Message> = z.object({
   cancel_method: z.enum(["graceful", "hard"]).optional(),
   descendants_canceled: z.array(z.string()).optional(),
   model: z.string().optional(),
+  unavailable_model: z.string().min(1).max(256).optional(),
+  unavailable_code: z.enum(["rate_limited", "model_retired"]).optional(),
   verdict: JudgeVerdict.optional(),
   context_window_notice: ContextWindowNotice.optional(),
   system_subtype: z
@@ -5219,6 +5228,14 @@ export const ChannelCreateResponse = z.object({
   type: z.string(),
   enabled: z.boolean(),
 });
+export const ChannelEnableRequest = z
+  .object({
+    pairing_retry: z.object({
+      request_id: z.string().min(1).max(128).regex(/\S/),
+      session_id: z.string().min(1).max(255).regex(/\S/),
+    }),
+  })
+  .partial();
 export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
   z.object({
     id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
@@ -5681,6 +5698,17 @@ export const DevicesResponse: z.ZodType<DevicesResponse> = z.object({
 });
 export const Todo: z.ZodType<Todo> = z.object({
   text: z.string().min(1).max(500),
+  active_form: z.string().superRefine((value, ctx) => {
+    if (Array.from(value).length > 500) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_big,
+        maximum: 500,
+        type: "string",
+        inclusive: true,
+        exact: false,
+      });
+    }
+  }).optional(),
   status: z.enum(["pending", "in_progress", "completed"]),
 });
 export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
@@ -6101,7 +6129,7 @@ export const ScheduleRunResult = z.object({
 });
 export const Notification: z.ZodType<Notification> = z.object({
   id: z.string(),
-  type: z.enum(["schedule_failed", "knowledge_drift"]),
+  type: z.enum(["schedule_failed", "knowledge_drift", "stop_notice"]),
   title: z.string().min(1),
   body: z.string().optional(),
   severity: z.enum(["info", "warning", "error"]),
@@ -7420,6 +7448,7 @@ export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
     "channel_credential",
     "mailbox_password",
     "agent_private",
+    "unbound",
   ]),
   version: z.number().int().gte(1),
   recipient: z.object({
@@ -7429,6 +7458,7 @@ export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
       "channel_credential",
       "mailbox_password",
       "agent_private",
+      "unbound",
     ]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
   }),
@@ -9664,9 +9694,15 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/channels/:id/enable",
     alias: "enableChannel",
-    description: `Sets the channel&#x27;s enabled flag to true in config.`,
+    description: `Sets the channel&#x27;s enabled flag to true in config. An absent body or {} is an ordinary enable that grants no chat ownership. A pairing_retry body is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the caller must own the session and the request/session pair must be the channel&#x27;s recorded pairing owner; the next pairing attempt is claimed for that chat before the channel is enabled. A refused Retry enables nothing and changes no ownership; a disable that already succeeded is not rolled back, so the channel stays disabled.
+`,
     requestFormat: "json",
     parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ChannelEnableRequest.optional(),
+      },
       {
         name: "id",
         type: "Path",
@@ -9676,13 +9712,40 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: ChannelEnabledResponse,
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `code pairing_retry_conflict: this chat can no longer retry this pairing (missing, stale or mismatched ownership, or a competing attempt). Nothing was enabled and no ownership changed. code pairing_in_progress: an ordinary enable of a WhatsApp connector while another of its pairings is starting, running or stopping. Nothing was changed.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The enable could not be completed. The error text says which state is saved: the configuration could not be saved or reloaded; the connection is enabled but its restart could not be confirmed yet (a Retry&#x27;s pairing keeps its chat and can still start); or the connection is enabled but its reserved pairing was cancelled before it started (nothing else starts). Never a refusal before effects, which is 404 or 409.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
@@ -13734,13 +13797,19 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
+      {
+        status: 503,
+        description: `Saved request state is unavailable (the service is not ready, or saved state could not be read or reconciled). This is not absence and not success; retrying this read is safe.
+`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
     method: "post",
     path: "/secret-requests/:id/submit",
     alias: "submitSecretRequest",
-    description: `Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of &#x60;values&#x60; or &#x60;cancel: true&#x60;. All checks run before any write; any failure writes nothing. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
+    description: `Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of &#x60;values&#x60; or &#x60;cancel: true&#x60;. All trust and payload checks run before the atomic store publication; a refusal or failed save writes no values. After publication, a metadata or continuation-dispatch failure returns 503 with state submitted and the committed references. The submission IS saved; boot or chat attach retries an undelivered continuation. If the request service or its saved state is unavailable before this attempt reaches publication, 503 instead carries an ErrorResponse: this attempt stored no values and returns no authoritative state. It does not prove that no request or earlier submission exists; read the state, or retry the same request id once available, and never resend values automatically. A repeated submit is idempotent and returns 409 with the same committed state, without storing another version. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
 `,
     requestFormat: "json",
     parameters: [
@@ -13782,6 +13851,17 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
         description: `Body larger than 65,536 bytes.`,
         schema: ErrorResponse,
       },
+      {
+        status: 500,
+        description: `The save failed before publication. No submitted values were stored; the request remains pending. The error is value-free.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `One of two bodies. A SecretRequestState body means the submission IS committed, but post-commit metadata or continuation dispatch is not confirmed: it has state submitted and the committed reference_names. Boot or chat attach retries an undelivered continuation; re-submitting returns 409 with the same state and never stores another version. An ErrorResponse body means the service or saved request state was unavailable before this attempt reached publication: this attempt committed no values and no authoritative state is returned. A pending or earlier submitted request may still exist; retry the same request id once available and never resend values automatically.
+`,
+        schema: z.union([SecretRequestState, ErrorResponse]),
+      },
     ],
   },
   {
@@ -13796,6 +13876,11 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
@@ -13839,6 +13924,11 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
@@ -14289,7 +14379,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/security/tool-policies",
     alias: "updateGlobalToolPolicies",
-    description: `Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15).
+    description: `Persists new global tool policies to config.json under the sandbox key and waits until the running-agent reload has finished. Changes are audit-logged (SEC-15). HTTP 200 means the policies were saved and the reload completed and was confirmed, so running agents are enforcing the saved policies. A reload that fails, or that does not confirm, does not roll the save back and is not HTTP 200: the response is 503 with ErrorResponse. This operation is not the dev_mode_bypass guard.
 `,
     requestFormat: "json",
     parameters: [
@@ -14313,7 +14403,8 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       },
       {
         status: 503,
-        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        description: `The policies were saved and were not rolled back, but they could not be applied to running agents because the reload failed or did not confirm. Retrying the same update, or restarting Omnipus, is the recovery. This 503 is not 503BypassActive and does not mean dev_mode_bypass refused the write. The error field is exactly &quot;The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus.&quot; No other field is required. The response must not say the write was undone.
+`,
         schema: ErrorResponse,
       },
     ],
@@ -17770,7 +17861,7 @@ export const WorkflowStart = z
 
 export const SecretRecipientDisplay = z
   .object({
-    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private"]),
+    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private", "unbound"]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
   })
   .strict();
@@ -17820,6 +17911,7 @@ export const SessionStateSecretRequest = z
     session_id: z.string().min(1).max(255),
     root_session_id: z.string().min(1).max(255).optional(),
     state: z.enum(["pending", "submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    continuation_unconfirmed: z.boolean().optional(),
     acting_agent_id: z.string().min(1).max(128),
     acting_agent_name: z.string().min(1).max(128),
     origin_label: z.string().min(1).max(200).optional(),
@@ -18488,7 +18580,7 @@ export const ProviderFallbackFrame = z
     turn_id: z.string().min(1).max(128),
     answered_model: z.string().min(1).max(256),
     unavailable_model: z.string().min(1).max(256),
-    unavailable_code: z.enum(["rate_limited", "model_retired"]),
+    unavailable_code: z.enum(["rate_limited", "model_retired", "model_not_found"]),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -18502,7 +18594,7 @@ export const ProviderFallbackNote = z
     timestamp: z.string(),
     answered_model: z.string().min(1).max(256).optional(),
     unavailable_model: z.string().min(1).max(256).optional(),
-    unavailable_code: z.enum(["rate_limited", "model_retired"]).optional(),
+    unavailable_code: z.enum(["rate_limited", "model_retired", "model_not_found"]).optional(),
     message: z.string().min(1).max(4096),
   })
   .strict();
@@ -18762,7 +18854,7 @@ export const WhatsAppPairingFrame = z
     session_id: z.string().min(1).max(255).optional(),
     type: z.literal("whatsapp_pairing"),
     channel_id: z.string().min(1),
-    status: z.enum(["waiting", "code", "linked", "timeout", "error"]),
+    status: z.enum(["waiting", "code", "linked", "timeout", "error", "stopped"]),
     qr: z.string().optional(),
     message: z.string().optional(),
   })
@@ -18782,7 +18874,7 @@ export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
     id: z.string().min(1),
-    notification_type: z.enum(["schedule_failed", "knowledge_drift"]),
+    notification_type: z.enum(["schedule_failed", "knowledge_drift", "stop_notice"]),
     title: z.string().min(1),
     body: z.string().optional(),
     severity: z.enum(["info", "warning", "error"]),

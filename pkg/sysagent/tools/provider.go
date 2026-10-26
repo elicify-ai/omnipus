@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -72,7 +72,10 @@ func credentialPresent(store *credentials.Store, ref string) bool {
 
 // ---- configure_provider ----
 
-type ProviderConfigureTool struct{ deps *Deps }
+type ProviderConfigureTool struct {
+	deps *Deps
+	secretSelectionAudit
+}
 
 func NewProviderConfigureTool(d *Deps) *ProviderConfigureTool {
 	return &ProviderConfigureTool{deps: d}
@@ -80,34 +83,50 @@ func NewProviderConfigureTool(d *Deps) *ProviderConfigureTool {
 func (t *ProviderConfigureTool) Name() string           { return "configure_provider" }
 func (t *ProviderConfigureTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ProviderConfigureTool) Description() string {
-	return "Store an LLM provider's API key in the encrypted credential store and wire it into config.json " +
-		"so the provider becomes usable, then check the SAVED entry: the configured endpoint is asked for its " +
-		"model list over the provider's protocol with the saved credential (local providers need no key). " +
-		"The result's outcome says whether that check passed; it does not prove that a chosen model runs. " +
-		"name must be a catalog provider id " +
-		"(list_models or the Settings → Providers screen show the valid ids; note the ids are " +
-		"'amazon-bedrock' and 'google', not 'bedrock' or 'gemini'). api_key is required for every cloud " +
-		"provider and optional only for local ones (ollama, lmstudio, vllm). api_base is optional and " +
-		"overrides the catalog's default endpoint; it must be a full http:// or https:// URL with a host. " +
-		"expected_revision is the provider's revision from list_providers (\"absent\" when it is not configured yet); " +
-		"the write is refused if the provider changed since. dry_run checks the input shape only and saves nothing.\n" +
-		"Parameters: name (required), api_key, api_base, expected_revision (required unless dry_run), dry_run."
+	return "Configure a provider by selecting api_key_ref; plaintext secrets are refused. " +
+		"First call request_secret with purpose and exactly one recipient: provider or endpoint. " +
+		"Wait for the person to submit the secure web card. Submit stores a version; this approved change selects it. " +
+		"A reference stored for a different recipient is refused: request a new card for the intended recipient. " +
+		"Cloud providers require api_key_ref; local providers need no key. Use catalog ids such as " +
+		"amazon-bedrock or google, not bedrock or gemini. " +
+		"This tool connects API-key and keyless local providers only: account sign-in (for example openai-chatgpt), " +
+		"coding-plan variants and providers needing more than one credential (for example amazon-bedrock: access key, secret, region) " +
+		"cannot be connected here — they are Settings → Providers paths; see the provider-config skill. " +
+		"After saving, this tool will check the SAVED entry by requesting a " +
+		"model list from the configured endpoint using its saved credential and protocol — when the protocol has a model listing; a protocol without one is reported as \"not checked\", leaving the endpoint and the credential untested. This does not prove that a chosen model runs. " +
+		"A failed reload or saved-entry check after commit is \"saved but not working\" with the reason; " +
+		"never report it as working or unsaved. Pass expected_revision from list_providers (\"absent\" for a new entry); " +
+		"stale writes are refused. dry_run checks input shape only, without saving, recipient validation or network calls."
 }
 
 func (t *ProviderConfigureTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":     map[string]any{"type": "string"},
-			"api_key":  map[string]any{"type": "string"},
-			"api_base": map[string]any{"type": "string"},
-			expectedRevisionParam: map[string]any{
+			"name": map[string]any{
 				"type":        "string",
-				"description": "The provider's revision from list_providers; \"absent\" for a provider that is not configured yet.",
+				"description": "Catalog provider id, such as amazon-bedrock or google; also the provider recipient for request_secret.",
+			},
+			"api_key_ref": map[string]any{
+				"type": "string",
+				"description": "Stored reference from request_secret with purpose and either provider or endpoint, never both, " +
+					"after the person's secure-card Submit. Required for cloud providers; local providers may omit it. " +
+					"Must match the exact recipient; otherwise request a new card for that recipient. Never pass a plaintext key.",
+			},
+			"api_base": map[string]any{
+				"type": "string",
+				"description": "Optional full http:// or https:// endpoint with a host, without credentials, query or fragment. " +
+					"The reference must match this effective recipient; if the recipient differs, request a new card for it.",
+			},
+			expectedRevisionParam: map[string]any{
+				"type": "string",
+				"description": "Provider revision from list_providers; \"absent\" for a new entry. Required unless dry_run. " +
+					"A stale revision is refused: re-read and obtain confirmation for the revised change before retrying.",
 			},
 			"dry_run": map[string]any{
-				"type":        "boolean",
-				"description": "Validate the provider id, key shape and api_base shape only; save nothing and make no network call.",
+				"type": "boolean",
+				"description": "Validate the catalog id, reference-name shape and endpoint shape only; " +
+					"no stored-reference or recipient checks, saves or network calls.",
 			},
 		},
 		"required": []string{"name"},
@@ -119,11 +138,11 @@ const providerCheckTimeout = 15 * time.Second
 
 // providerConfigureInput is configure_provider's validated input.
 type providerConfigureInput struct {
-	name    string
-	row     catalog.Provider
-	isLocal bool
-	apiKey  string
-	apiBase string
+	name      string
+	row       catalog.Provider
+	isLocal   bool
+	apiKeyRef string
+	apiBase   string
 }
 
 func (t *ProviderConfigureTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
@@ -140,41 +159,30 @@ func (t *ProviderConfigureTool) Execute(ctx context.Context, args map[string]any
 		return missing
 	}
 
-	// The credential store is the single source of truth; a provider's key is
-	// resolved through its config entry's APIKeyRef (looked up in credentials.json
-	// and injected to the environment at boot/reload). The ref name follows the
-	// onboarding convention "<provider>_API_KEY". If the provider already has a
-	// config entry carrying a ref, we update the key under that same ref so we
-	// don't strand the existing reference.
-	ref := in.name + "_API_KEY"
-	keyStored := false
+	// Selection never writes a credential. Under the shared revision boundary,
+	// validate the prospective endpoint/protocol of EVERY row before wiring
+	// the selected reference; an api_base change cannot redirect old consent.
 	writeErr := t.deps.withSharedResourceWrite(sharedProvider, in.name, expected, func() error {
-		if rep := representativeProviderRow(t.deps.GetCfg(), in.name); rep != nil && rep.APIKeyRef != "" {
-			ref = rep.APIKeyRef
-		}
-		if in.apiKey != "" {
-			if t.deps.CredStore == nil {
-				return &providerStepError{step: "credential", err: fmt.Errorf("no credential store is configured")}
+		return t.deps.WithConfig(func(cfg *config.Config) error {
+			if err := t.validateProviderSelection(cfg, in); err != nil {
+				return err
 			}
-			if err := t.deps.CredStore.Set(ref, in.apiKey); err != nil {
-				return &providerStepError{step: "credential", err: err}
-			}
-			keyStored = true
-		}
-		// Wire the config so the stored key is actually referenced (not orphaned).
-		if err := t.deps.WithConfig(func(cfg *config.Config) error {
-			wireProviderEntry(cfg, in, ref)
+			wireProviderEntry(cfg, in, in.apiKeyRef)
 			return nil
-		}); err != nil {
-			return &providerStepError{step: "config", err: err}
-		}
-		return nil
+		})
 	})
 	if r, ok := revisionConflictResult(writeErr, "list_providers"); ok {
 		return r
 	}
+	if r, ok := referenceSelectionRefusal(writeErr); ok {
+		return r
+	}
 	if writeErr != nil {
-		return providerWriteFailureResult(in.name, ref, keyStored, writeErr)
+		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED", "Failed to save the provider configuration: "+writeErr.Error(),
+			"Read list_providers and retry; the stored credential was not changed"))
+	}
+	if in.apiKeyRef != "" {
+		t.selected(ctx, t.Name(), in.name, []string{in.apiKeyRef})
 	}
 
 	// Apply immediately: re-injects provider credentials into the environment and
@@ -193,7 +201,7 @@ func (t *ProviderConfigureTool) Execute(ctx context.Context, args map[string]any
 
 	cfg := t.deps.GetCfg()
 	rep := representativeProviderRow(cfg, in.name)
-	apiKeyStored := keyStored || (rep != nil && credentialPresent(t.deps.CredStore, rep.APIKeyRef))
+	apiKeyStored := rep != nil && credentialPresent(t.deps.CredStore, rep.APIKeyRef)
 	result := map[string]any{
 		"name":           in.name,
 		"api_key_stored": apiKeyStored,
@@ -205,9 +213,12 @@ func (t *ProviderConfigureTool) Execute(ctx context.Context, args map[string]any
 	if ep, err := effectiveProviderEndpoint(rep); err == nil {
 		result["api_base"], result["protocol"] = ep.API, string(ep.Protocol)
 	}
+	if rep != nil {
+		result["api_key_ref"] = rep.APIKeyRef
+	}
 	if publishWarning != "" {
 		result["publish_warning"] = publishWarning
-		verdict = partlySaved(publishWarning, verdict.CheckScope, []string{"live reload"}, verdict.NotTested...)
+		verdict = savedNotWorking(publishWarning, verdict.CheckScope, append(verdict.NotTested, "live reload")...)
 	}
 	return changeSuccess(result, verdict)
 }
@@ -216,6 +227,10 @@ func (t *ProviderConfigureTool) Execute(ctx context.Context, args map[string]any
 // any write or network call. It is the whole of a dry run's check.
 func validateProviderConfigureInput(args map[string]any) (providerConfigureInput, *tools.ToolResult) {
 	var in providerConfigureInput
+	if _, supplied := args["api_key"]; supplied {
+		return in, tools.ErrorResult(errorJSON("PLAINTEXT_SECRET", "Plaintext API keys are refused; request a secret with request_secret first",
+			"Then pass its recipient-bound reference as api_key_ref"))
+	}
 	in.name, _ = args["name"].(string)
 	if in.name == "" {
 		return in, tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", "Provide a catalog provider id"))
@@ -228,36 +243,55 @@ func validateProviderConfigureInput(args map[string]any) (providerConfigureInput
 			"Use the catalog id (e.g. 'amazon-bedrock', not 'bedrock'; 'google', not 'gemini')",
 		))
 	}
-	in.apiKey, _ = args["api_key"].(string)
+	if raw, supplied := args["api_key_ref"]; supplied {
+		var valid bool
+		in.apiKeyRef, valid = raw.(string)
+		if !valid || strings.TrimSpace(in.apiKeyRef) == "" {
+			return in, tools.ErrorResult(errorJSON("INVALID_INPUT", "api_key_ref must be a non-empty reference name", "Use request_secret first"))
+		}
+	}
 	in.apiBase, _ = args["api_base"].(string)
 	if in.apiBase != "" {
-		if err := validateAPIBase(in.apiBase); err != nil {
+		endpoint, err := secretrequest.NormalizeEndpoint(in.apiBase)
+		if err != nil {
 			return in, tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(),
-				`Provide a full URL with scheme, e.g. "https://api.openai.com/v1"`))
+				"Provide a full http or https endpoint without credentials, query or fragment"))
 		}
+		in.apiBase = endpoint
 	}
-	if !in.isLocal && in.apiKey == "" {
+	if !in.isLocal && in.apiKeyRef == "" {
 		return in, tools.ErrorResult(errorJSON("INVALID_INPUT",
-			fmt.Sprintf("api_key is required for cloud provider %q", in.name),
-			"Provide your API key for this provider",
-		))
-	}
-	if in.apiKey != "" {
-		if err := validateAPIKeyShape(in.apiKey); err != nil {
-			return in, tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(),
-				"Paste the whole key exactly as the provider shows it"))
-		}
+			"api_key_ref is required for a cloud provider; request a secret with request_secret first",
+			"Pass the stored reference, never the API key value"))
 	}
 	return in, nil
 }
 
-// validateAPIKeyShape refuses a key no provider issues: one containing
-// whitespace or control characters (a paste that picked up a newline or a
-// label). It does not judge length or prefix — formats differ per provider.
-func validateAPIKeyShape(key string) error {
-	for _, r := range key {
-		if r <= ' ' || r == 0x7f {
-			return fmt.Errorf("api_key contains whitespace or a control character")
+// validateProviderSelection derives the destination after applying this call's
+// non-secret changes. All rows must agree with the stored recipient, including
+// when local setup keeps an existing key reference instead of supplying one.
+func (t *ProviderConfigureTool) validateProviderSelection(cfg *config.Config, in providerConfigureInput) error {
+	rows := providerRows(cfg, in.name)
+	if len(rows) == 0 {
+		rows = []*config.ModelConfig{{Provider: in.name, Model: in.name}}
+	}
+	for _, row := range rows {
+		prospective := *row
+		if in.apiBase != "" {
+			prospective.APIBase = in.apiBase
+		}
+		if in.apiKeyRef != "" {
+			prospective.APIKeyRef = in.apiKeyRef
+		}
+		if prospective.APIKeyRef == "" {
+			continue
+		}
+		recipient, err := providerReferenceRecipient(&prospective)
+		if err != nil {
+			return err
+		}
+		if err := checkSecretReference(t.deps.CredStore, prospective.APIKeyRef, recipient); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -280,49 +314,11 @@ func providerDryRunResult(in providerConfigureInput) *tools.ToolResult {
 	}))
 }
 
-// providerStepError names the configure_provider write step that failed.
-type providerStepError struct {
-	step string // "credential" or "config"
-	err  error
-}
-
-func (e *providerStepError) Error() string { return e.step + ": " + e.err.Error() }
-func (e *providerStepError) Unwrap() error { return e.err }
-
-// providerWriteFailureResult reports a failed configure_provider write
-// truthfully: a key already stored when the config write failed is a partly
-// saved change (BDD-9.6), never "nothing saved".
-func providerWriteFailureResult(name, ref string, keyStored bool, err error) *tools.ToolResult {
-	var se *providerStepError
-	if !errors.As(err, &se) {
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
-	}
-	if se.step == "credential" {
-		return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
-			"Failed to store API key: "+se.err.Error(), "Check that the credential store is unlocked"))
-	}
-	if !keyStored {
-		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED",
-			"Failed to save the provider configuration: "+se.err.Error(), "Read list_providers and retry"))
-	}
-	return changeErrorWithOutcome(map[string]any{
-		"success": false,
-		"error": map[string]any{
-			"code":       "CONFIG_SAVE_FAILED",
-			"message":    "Stored the key but failed to wire it into config: " + se.err.Error(),
-			"suggestion": "The key is saved under " + ref + "; read list_providers, then retry to finish configuring it",
-		},
-		"name":           name,
-		"changed_fields": []string{"api_key"},
-	}, partlySaved("the API key was stored under "+ref+" but the provider entry was not written: "+se.err.Error(),
-		"", []string{"provider configuration entry"}))
-}
-
 // providerChangedFields lists the parts this call wrote.
 func providerChangedFields(in providerConfigureInput) []string {
 	fields := []string{"provider_entry"}
-	if in.apiKey != "" {
-		fields = append(fields, "api_key")
+	if in.apiKeyRef != "" {
+		fields = append(fields, "api_key_ref")
 	}
 	if in.apiBase != "" {
 		fields = append(fields, "api_base")
@@ -338,7 +334,7 @@ func wireProviderEntry(cfg *config.Config, in providerConfigureInput, ref string
 		if p == nil || providerNameOf(p) != in.name {
 			continue
 		}
-		if in.apiKey != "" && p.APIKeyRef == "" {
+		if in.apiKeyRef != "" {
 			p.APIKeyRef = ref
 		}
 		if in.apiBase != "" {
@@ -348,7 +344,7 @@ func wireProviderEntry(cfg *config.Config, in providerConfigureInput, ref string
 	}
 	if !wired {
 		np := &config.ModelConfig{Provider: in.name, Model: in.name}
-		if in.apiKey != "" {
+		if in.apiKeyRef != "" {
 			np.APIKeyRef = ref
 		}
 		if in.apiBase != "" {
@@ -793,20 +789,4 @@ func (t *ModelsListTool) listProviderModels(ctx context.Context, cfg *config.Con
 		return nil, fmt.Sprintf("%s: could not fetch model list", name)
 	}
 	return upstream, ""
-}
-
-// validateAPIBase checks that s is a valid http:// or https:// URL with a non-empty host.
-// Empty s is accepted (means "use provider default").
-func validateAPIBase(s string) error {
-	u, err := url.Parse(s)
-	if err != nil {
-		return fmt.Errorf("api_base %q is not a valid URL: %w", s, err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("api_base %q must use http:// or https:// scheme (got %q)", s, u.Scheme)
-	}
-	if u.Host == "" {
-		return fmt.Errorf("api_base %q has no host — provide a full URL, e.g. https://api.example.com/v1", s)
-	}
-	return nil
 }

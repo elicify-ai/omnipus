@@ -294,16 +294,11 @@ var u19RoutingSessionIDScanFiles = []string{
 	"loop_run_turn_iterations.go",
 	"loop_run_turn_response.go",
 	"loop_run_turn_tools.go",
-	// fallback_note.go joined the list in the 2026-10-02 QA repair: the file
-	// was CREATED (a105e14ad, 2026-09-27, §7.4 provider_retry observer
-	// wiring and the fallback note) after this list's last verified
-	// re-derivation (2026-09-24), so the read-preserving amendment
-	// convention never saw it and its queueProviderFallbackNote
-	// ProviderFallbackPayload.SessionID stamp was invisible to the guard
-	// entirely. TestRoutingSessionID_ConsumerSetIsClosed now re-derives the
-	// file universe from the directory itself on every run
-	// (u19VerifyScanFileUniverse), so a future file carrying the field
-	// cannot hide the way this one did.
+	// Keep fallback_note.go scanned at ZERO permitted reads. The 2026-10-22
+	// fallback-live fix (18d2619bc) addresses its fallback event to the
+	// producing transcriptSessionID, not the cancellation root. Its former
+	// consumer permission is removed below; any reintroduced routingSessionID
+	// read must still be parsed and rejected by the closed-set classifier.
 	"fallback_note.go",
 	// loop_empty_tool_envelope.go joined the list in the #1278 fix (2026-10-12):
 	// handleEmptyToolEnvelope's ErrorPayload.SessionID stamp for the
@@ -490,16 +485,6 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 		if r.funcName == "reportSessionSaveFailure" {
 			return u19BucketWSStamping
 		}
-	case "fallback_note.go":
-		// Added 2026-10-02 (QA repair): the file's ONLY routingSessionID read
-		// is queueProviderFallbackNote's §7.4 ProviderFallbackPayload.
-		// SessionID stamp (a105e14ad, 2026-09-27) — a payload stamp exactly
-		// like its loop-family siblings: the canonical ts.routingSessionID
-		// copied into a WS frame payload. A second funcName reading the field
-		// here falls through and fails closed below, like anywhere else.
-		if r.funcName == "queueProviderFallbackNote" {
-			return u19BucketWSStamping
-		}
 	case "browser_deferral.go":
 		// ADR-085 BROWSER-FR-022 (B123): browserRootChatSessionID is
 		// browser_deferral.go's ONLY routingSessionID read, and it exists
@@ -559,9 +544,9 @@ func u19CountClassAInWS5Artefact(t *testing.T) int {
 // (binding Rule 4 — proving the search is live) BEFORE asserting closure,
 // then asserts every read classifies into one of the five named buckets
 // with the exact expected per-bucket count, and finally asserts the grand
-// total is exactly 31 (7 role-B + 2 pre-arm + 21 WS-stamping + 0
-// inheritance-copy + 1 browser control-gate — see the ADR-091 amendment and
-// the 2026-10-02 QA repair amendment in this file's header and each
+// total is exactly 32 (7 role-B + 2 pre-arm + 22 WS-stamping + 0
+// inheritance-copy + 1 browser control-gate — including the 2026-10-22
+// removal of the fallback notice's routing read; see each
 // assertion's own comment, for how this moved from the pre-ADR-091 total of
 // 34) — none outside the set, none silently missing.
 func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
@@ -625,8 +610,8 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"steered-child reconstruction path (steer_reconstruct.go) does not build or read a pre-arm "+
 			"key from a live turnState at all)", got)
 	}
-	if got := counts[u19BucketWSStamping]; got != 23 {
-		t.Errorf("WS-payload-stamping reads = %d, want 23 (the 21 below plus loop_empty_tool_envelope.go::handleEmptyToolEnvelope, #1278, 2026-10-12, plus turn_exit.go::reportSessionSaveFailure, #1178, 2026-10-14). The eighteen pre-2026-09-24 sites are "+
+	if got := counts[u19BucketWSStamping]; got != 22 {
+		t.Errorf("WS-payload-stamping reads = %d, want 22 (previously 23; fallback_note.go::queueProviderFallbackNote now addresses the producing transcriptSessionID, not routingSessionID). The historical derivation includes loop_empty_tool_envelope.go::handleEmptyToolEnvelope, #1278, 2026-10-12, and turn_exit.go::reportSessionSaveFailure, #1178, 2026-10-14. The eighteen pre-2026-09-24 sites were "+
 			"loop.go x5, its four loop_run_turn*.go siblings x11, and external_dispatch.go x2 "+
 			"(the classifier's own comment on this bucket has the per-site breakdown). Three verified "+
 			"additions since, each re-read site-by-site in the 2026-10-02 QA repair: the nineteenth is "+
@@ -726,7 +711,10 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	// independent per-site read of every grep hit for the field in this
 	// task's inventory — never by copying observed counts or subtracting
 	// prior comments.
-	const wantTotal = 33 // 31 + handleEmptyToolEnvelope (#1278, loop_empty_tool_envelope.go) + reportSessionSaveFailure (#1178, turn_exit.go)
+	// 2026-10-22 fallback-live amendment (18d2619bc): the fallback event now
+	// addresses its producing transcriptSessionID. Remove exactly that read:
+	// WS-stamping 23 -> 22 and total 33 -> 32; all other consumers are unchanged.
+	const wantTotal = 32 // 7 role-B + 2 pre-arm + 22 WS-stamping + 0 inheritance + 1 browser gate
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the named buckets, or one of the buckets "+

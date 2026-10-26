@@ -468,13 +468,16 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	// background-kill cascade above and for the same reason — this must NOT
 	// be gated on wasFired/ClaimCancel. Fires whenever sessionID resolved,
 	// unconditionally; a session with no pending set is a cheap no-op. ---
-	rc.al.cancelPendingAskForScope(rc.sessionID)
+	if err := rc.al.cancelPendingAskForScope(rc.sessionID); err != nil {
+		return CancelOutcome{}, err, true
+	}
 	if rc.scope.TurnOnly {
 		if err := rc.removeSelectedStopAdmission(); err != nil {
 			return CancelOutcome{}, err, true
 		}
 		// Parked/queued sessions have no live turn, but their approvals still
-		// belong to this Stop. The gateway hook matches only this exact ID.
+		// belong to this Stop. The gateway also withdraws pending helper
+		// approvals owned by this chat; already-running helpers stay untouched.
 		if rc.hooks.CancelPendingApprovals != nil {
 			rc.hooks.CancelPendingApprovals(rc.sessionID, "session canceled")
 		}
@@ -691,6 +694,10 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 				if nativeTurn {
 					rc.al.reportSessionSaveFailure(native, &messageNotSavedError{role: "system", cause: appendErr})
 				} else {
+					// Unreachable today: *turnState is the only TurnCancelHook
+					// implementor (turn.go; both cancel resolution paths refuse
+					// anything else), so any new implementor must surface its
+					// own marker-append failure — never log-only.
 					slog.Warn("agent: RequestCancel: could not append turn_canceled transcript entry",
 						"session_id", rc.sessionID, "error", appendErr)
 				}

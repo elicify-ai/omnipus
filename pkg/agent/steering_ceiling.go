@@ -8,7 +8,14 @@ func (ri *agentLoopRunTurnIteration) noteInTurnSteering(items []steeringQueueIte
 	for _, item := range items {
 		if !item.resumeOnly {
 			ri.inTurnSteering = true
-			ri.inTurnSteeringOrigin = mergeApprovalOrigin(ri.inTurnSteeringOrigin, item.origin)
+			origin := &ri.inTurnSteeringOrigin
+			if origin.channelPerson == "" && item.origin.channelPerson != "" {
+				origin.channelPerson, origin.connection = item.origin.channelPerson, item.origin.connection
+			}
+			if origin.peerAgentID == "" {
+				origin.peerAgentID = item.origin.peerAgentID
+			}
+			origin.approval = mergeApprovalOrigin(origin.approval, item.origin.approvalFor(ri.rf.rt.al))
 		}
 	}
 }

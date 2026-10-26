@@ -615,6 +615,7 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 		agentToolsCfg = nai.agentCfg.Tools
 	}
 	inst.toolPolicy.Store(agentToolsCfgToPolicy(nai.cfg, agentToolsCfg))
+	inst.configureSetTodosGuidance()
 	return inst
 }
 

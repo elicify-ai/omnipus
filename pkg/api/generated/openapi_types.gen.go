@@ -6752,6 +6752,7 @@ const (
 	MessageTypeContextWindowNotice MessageType = "context_window_notice"
 	MessageTypeJudgeVerdict        MessageType = "judge_verdict"
 	MessageTypeMessage             MessageType = "message"
+	MessageTypeProviderFallback    MessageType = "provider_fallback"
 	MessageTypeSystem              MessageType = "system"
 	MessageTypeToolCall            MessageType = "tool_call"
 	MessageTypeTurnCanceled        MessageType = "turn_canceled"
@@ -6768,11 +6769,31 @@ func (e MessageType) Valid() bool {
 		return true
 	case MessageTypeMessage:
 		return true
+	case MessageTypeProviderFallback:
+		return true
 	case MessageTypeSystem:
 		return true
 	case MessageTypeToolCall:
 		return true
 	case MessageTypeTurnCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageUnavailableCode.
+const (
+	MessageUnavailableCodeModelRetired MessageUnavailableCode = "model_retired"
+	MessageUnavailableCodeRateLimited  MessageUnavailableCode = "rate_limited"
+)
+
+// Valid indicates whether the value is a known member of the MessageUnavailableCode enum.
+func (e MessageUnavailableCode) Valid() bool {
+	switch e {
+	case MessageUnavailableCodeModelRetired:
+		return true
+	case MessageUnavailableCodeRateLimited:
 		return true
 	default:
 		return false
@@ -7032,6 +7053,7 @@ func (e NotificationSeverity) Valid() bool {
 const (
 	NotificationTypeKnowledgeDrift NotificationType = "knowledge_drift"
 	NotificationTypeScheduleFailed NotificationType = "schedule_failed"
+	NotificationTypeStopNotice     NotificationType = "stop_notice"
 )
 
 // Valid indicates whether the value is a known member of the NotificationType enum.
@@ -7040,6 +7062,8 @@ func (e NotificationType) Valid() bool {
 	case NotificationTypeKnowledgeDrift:
 		return true
 	case NotificationTypeScheduleFailed:
+		return true
+	case NotificationTypeStopNotice:
 		return true
 	default:
 		return false
@@ -7071,6 +7095,7 @@ func (e NotificationListNotificationsSeverity) Valid() bool {
 const (
 	NotificationListNotificationsTypeKnowledgeDrift NotificationListNotificationsType = "knowledge_drift"
 	NotificationListNotificationsTypeScheduleFailed NotificationListNotificationsType = "schedule_failed"
+	NotificationListNotificationsTypeStopNotice     NotificationListNotificationsType = "stop_notice"
 )
 
 // Valid indicates whether the value is a known member of the NotificationListNotificationsType enum.
@@ -7079,6 +7104,8 @@ func (e NotificationListNotificationsType) Valid() bool {
 	case NotificationListNotificationsTypeKnowledgeDrift:
 		return true
 	case NotificationListNotificationsTypeScheduleFailed:
+		return true
+	case NotificationListNotificationsTypeStopNotice:
 		return true
 	default:
 		return false
@@ -9801,6 +9828,7 @@ const (
 	SecretNameEntryKindMailboxPassword   SecretNameEntryKind = "mailbox_password"
 	SecretNameEntryKindMcpEnv            SecretNameEntryKind = "mcp_env"
 	SecretNameEntryKindProviderKey       SecretNameEntryKind = "provider_key"
+	SecretNameEntryKindUnbound           SecretNameEntryKind = "unbound"
 )
 
 // Valid indicates whether the value is a known member of the SecretNameEntryKind enum.
@@ -9816,6 +9844,8 @@ func (e SecretNameEntryKind) Valid() bool {
 		return true
 	case SecretNameEntryKindProviderKey:
 		return true
+	case SecretNameEntryKindUnbound:
+		return true
 	default:
 		return false
 	}
@@ -9828,6 +9858,7 @@ const (
 	SecretNameEntryRecipientKindMailboxPassword   SecretNameEntryRecipientKind = "mailbox_password"
 	SecretNameEntryRecipientKindMcpEnv            SecretNameEntryRecipientKind = "mcp_env"
 	SecretNameEntryRecipientKindProviderKey       SecretNameEntryRecipientKind = "provider_key"
+	SecretNameEntryRecipientKindUnbound           SecretNameEntryRecipientKind = "unbound"
 )
 
 // Valid indicates whether the value is a known member of the SecretNameEntryRecipientKind enum.
@@ -9842,6 +9873,8 @@ func (e SecretNameEntryRecipientKind) Valid() bool {
 	case SecretNameEntryRecipientKindMcpEnv:
 		return true
 	case SecretNameEntryRecipientKindProviderKey:
+		return true
+	case SecretNameEntryRecipientKindUnbound:
 		return true
 	default:
 		return false
@@ -15403,6 +15436,18 @@ type ChannelCreateResponse struct {
 	Type string `json:"type"`
 }
 
+// ChannelEnableRequest Optional body of PUT /api/v1/channels/{id}/enable. An absent body or {} is an ordinary enable and grants no chat ownership of a pairing. pairing_retry is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the gateway proves the caller owns session_id and that the request/session pair is the channel's recorded pairing owner, then claims the next pairing attempt for that chat before enabling. A WebSocket subscription never grants this ownership.
+type ChannelEnableRequest struct {
+	// PairingRetry The original connect call and chat of the pairing being retried (not newly minted identifiers). Compared verbatim. A mismatch, a stale owner or a competing attempt is refused with 409 pairing_retry_conflict and nothing is enabled.
+	PairingRetry *struct {
+		// RequestId The connect_channel tool-call ID that started the pairing.
+		RequestId string `json:"request_id"`
+
+		// SessionId The chat session that started the pairing.
+		SessionId string `json:"session_id"`
+	} `json:"pairing_retry,omitempty"`
+}
+
 // ChannelEnabledResponse Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
 type ChannelEnabledResponse struct {
 	// Enabled Whether the channel is now enabled.
@@ -20537,7 +20582,7 @@ type Message struct {
 	// MessagesCompacted Number of messages compacted (present only on compaction entries).
 	MessagesCompacted *int `json:"messages_compacted,omitempty"`
 
-	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
+	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries, and on a provider_fallback note it is the fallback model that actually answered (ProviderFallbackNote's answered_model). Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
 	Model *string `json:"model,omitempty"`
 
 	// Participant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
@@ -20627,7 +20672,7 @@ type Message struct {
 		// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
 		Reason *MessageSubagentEndReason `json:"reason,omitempty"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which this sub-turn ran.
@@ -20668,7 +20713,7 @@ type Message struct {
 		// SenderIdentity Agent ID (or "human") that authored the underlying message.
 		SenderIdentity string `json:"sender_identity"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which the parent's span is running.
@@ -20699,7 +20744,7 @@ type Message struct {
 		// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
 		ParentCallId string `json:"parent_call_id"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which this sub-turn is running.
@@ -20761,7 +20806,7 @@ type Message struct {
 		// HistoryOrigin Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
 		HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which the parent's span is running.
@@ -20830,8 +20875,14 @@ type Message struct {
 	// TurnId Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
 	TurnId *string `json:"turn_id,omitempty"`
 
-	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
+	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
 	Type *MessageType `json:"type,omitempty"`
+
+	// UnavailableCode Recorded fallback condition; model_retired controls the existing model-settings hint.
+	UnavailableCode *MessageUnavailableCode `json:"unavailable_code,omitempty"`
+
+	// UnavailableModel Recorded unavailable primary model on a provider_fallback note; omitted when unknown.
+	UnavailableModel *string `json:"unavailable_model,omitempty"`
 
 	// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
 	Verdict *struct {
@@ -20984,8 +21035,11 @@ type MessageToolCallsStatus string
 // MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means the reason is not recorded: readers do not default it to "cancelled" or to anything else (ADR-087 D2; session-core DEL-F36).
 type MessageTruncationReason string
 
-// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
+// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
 type MessageType string
+
+// MessageUnavailableCode Recorded fallback condition; model_retired controls the existing model-settings hint.
+type MessageUnavailableCode string
 
 // MessageVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
 type MessageVerdictPerCriterionEvidenceSource string
@@ -21154,7 +21208,7 @@ type ModelTokens struct {
 	Total int `json:"total"`
 }
 
-// Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+// Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures, knowledge-base drift repair (ADR-067 FR-038a), and operational Stop outcomes; the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
 type Notification struct {
 	// AgentId The agent the notification concerns.
 	AgentId *string `json:"agent_id,omitempty"`
@@ -21178,6 +21232,7 @@ type Notification struct {
 	// Type The event class. Extensible; consumers must tolerate unknown values.
 	//
 	// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+	// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 	Type NotificationType `json:"type"`
 
 	// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -21190,6 +21245,7 @@ type NotificationSeverity string
 // NotificationType The event class. Extensible; consumers must tolerate unknown values.
 //
 // "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 type NotificationType string
 
 // NotificationList The authenticated user's notifications plus the unread count (#264).
@@ -21218,6 +21274,7 @@ type NotificationList struct {
 		// Type The event class. Extensible; consumers must tolerate unknown values.
 		//
 		// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+		// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 		Type NotificationListNotificationsType `json:"type"`
 
 		// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -21234,6 +21291,7 @@ type NotificationListNotificationsSeverity string
 // NotificationListNotificationsType The event class. Extensible; consumers must tolerate unknown values.
 //
 // "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 type NotificationListNotificationsType string
 
 // OnboardingCompleteRequest Body for POST /onboarding/complete. WP5 (ADR-0010) composes this by auth mode: in local mode (open-source edition) the route runs BEFORE any session exists and mints the instance's first account — `admin` is REQUIRED, upstream's behaviour restored. In platform mode (hosted/desktop) the caller is ALREADY signed in (ADR-0008 rulings 1 and 2: the omnipus.ai account is the login) — `admin` is REFUSED (400) because no local credential is ever minted on that edition. `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014). `preferences` is optional in both modes.
@@ -24017,8 +24075,10 @@ type SecretNameEntry struct {
 	AvailableInChannelTurns *bool `json:"available_in_channel_turns,omitempty"`
 
 	// Consumers What uses this version (display labels). Never null.
-	Consumers []string            `json:"consumers"`
-	Kind      SecretNameEntryKind `json:"kind"`
+	Consumers []string `json:"consumers"`
+
+	// Kind Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
+	Kind SecretNameEntryKind `json:"kind"`
 
 	// Owner A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
 	Owner *struct {
@@ -24029,7 +24089,7 @@ type SecretNameEntry struct {
 		WorkspaceId string `json:"workspace_id"`
 	} `json:"owner,omitempty"`
 
-	// Recipient Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+	// Recipient Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
 	Recipient struct {
 		// Kind Recipient kind.
 		Kind SecretNameEntryRecipientKind `json:"kind"`
@@ -24044,7 +24104,7 @@ type SecretNameEntry struct {
 	Version   int64                `json:"version"`
 }
 
-// SecretNameEntryKind defines model for SecretNameEntry.Kind.
+// SecretNameEntryKind Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
 type SecretNameEntryKind string
 
 // SecretNameEntryRecipientKind Recipient kind.
@@ -24059,7 +24119,7 @@ type SecretOptionsUpdateRequest struct {
 	AvailableInChannelTurns bool `json:"available_in_channel_turns"`
 }
 
-// SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Absence is never read as success.
+// SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
 type SecretRequestState struct {
 	// ReferenceNames Reference names the values were stored under. Present only when state is `submitted`.
 	ReferenceNames *[]string               `json:"reference_names,omitempty"`
@@ -25707,6 +25767,9 @@ type Task struct {
 
 	// Todos Lightweight `{text, done}` checklist items on this task (Tier 1 of the three-tier model). A todo is NOT a task — it has no agent, no status, no trigger. Distinct from a subtask (a full child Task with `parent_task_id`).
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskTodosStatus `json:"status"`
 
@@ -25997,6 +26060,9 @@ type TaskCreateRequest struct {
 
 	// Todos Optional initial checklist items.
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskCreateRequestTodosStatus `json:"status"`
 
@@ -26419,6 +26485,9 @@ type TaskUpdateRequest struct {
 
 	// Todos Replacement checklist (replaces the current `todos` atomically).
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskUpdateRequestTodosStatus `json:"status"`
 
@@ -26519,6 +26588,9 @@ type TaskUpdateRequestTriggerType string
 
 // Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need an independent agent/trigger. The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy boolean `done` so a checklist can express work-in-progress (§3 tasks-system refactor — the `set_todos` agent scratchpad rides this same array).
 type Todo struct {
+	// ActiveForm Optional phrasing for the item while it is in progress.
+	ActiveForm *string `json:"active_form,omitempty"`
+
 	// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 	Status TodoStatus `json:"status"`
 
@@ -28482,6 +28554,11 @@ type GetRoomHistoryParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// SubmitSecretRequest503JSONResponseBody defines parameters for SubmitSecretRequest.
+type SubmitSecretRequest503JSONResponseBody struct {
+	union json.RawMessage
+}
+
 // ListSessionsParams defines parameters for ListSessions.
 type ListSessionsParams struct {
 	// AgentId Filter by agent ID.
@@ -28765,6 +28842,9 @@ type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
 
 // ConfigureChannelJSONRequestBody defines body for ConfigureChannel for application/json ContentType.
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
+
+// EnableChannelJSONRequestBody defines body for EnableChannel for application/json ContentType.
+type EnableChannelJSONRequestBody = ChannelEnableRequest
 
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
 type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest
@@ -31291,5 +31371,67 @@ func (t *SkillInstallRequest) UnmarshalJSON(b []byte) error {
 		}
 	}
 
+	return err
+}
+
+// AsSecretRequestState returns the union data inside the SubmitSecretRequest503JSONResponseBody as a SecretRequestState
+func (t SubmitSecretRequest503JSONResponseBody) AsSecretRequestState() (SecretRequestState, error) {
+	var body SecretRequestState
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSecretRequestState overwrites any union data inside the SubmitSecretRequest503JSONResponseBody as the provided SecretRequestState
+func (t *SubmitSecretRequest503JSONResponseBody) FromSecretRequestState(v SecretRequestState) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSecretRequestState performs a merge with any union data inside the SubmitSecretRequest503JSONResponseBody, using the provided SecretRequestState
+func (t *SubmitSecretRequest503JSONResponseBody) MergeSecretRequestState(v SecretRequestState) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsErrorResponse returns the union data inside the SubmitSecretRequest503JSONResponseBody as a ErrorResponse
+func (t SubmitSecretRequest503JSONResponseBody) AsErrorResponse() (ErrorResponse, error) {
+	var body ErrorResponse
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromErrorResponse overwrites any union data inside the SubmitSecretRequest503JSONResponseBody as the provided ErrorResponse
+func (t *SubmitSecretRequest503JSONResponseBody) FromErrorResponse(v ErrorResponse) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeErrorResponse performs a merge with any union data inside the SubmitSecretRequest503JSONResponseBody, using the provided ErrorResponse
+func (t *SubmitSecretRequest503JSONResponseBody) MergeErrorResponse(v ErrorResponse) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SubmitSecretRequest503JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *SubmitSecretRequest503JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
 	return err
 }

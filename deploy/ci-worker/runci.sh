@@ -282,7 +282,7 @@ run_govet()    { ensure_spa_stub; CGO_ENABLED=0 go vet -tags "$TAGS" ./...; }
 # golangci-lint with CGO_ENABLED=0 (so //go:build !cgo test helpers compile) and the
 # canonical build tags. Pinned to the version pr.yml uses. Installed once to the
 # persistent /cache/go/bin (already on PATH) so it survives stop/start.
-GOLANGCI_VERSION=v2.10.1
+GOLANGCI_VERSION=v2.15.0
 run_lint() {
   ensure_spa_stub
   # The size-budget guards discovered by scripts/guards.sh below need the

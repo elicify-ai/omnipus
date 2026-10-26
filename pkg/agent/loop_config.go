@@ -140,8 +140,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// real install. Mirror the two siblings above.
 	wireProjectShelfResolvers(al, registry)
 
-	// Atomically swap the config and registry under write lock
-	// This ensures readers see a consistent pair
+	// Expensive registry/provider preparation held no channel order. Validate
+	// the original snapshot at the actual publication, before taking al.mu.
+	unlockPairing, err := al.lockPairingConfigPublication(cfg)
+	if err != nil {
+		return err
+	}
+	// Atomically swap the config and registry under write lock.
 	al.mu.Lock()
 	oldRegistry := al.registry
 
@@ -160,6 +165,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	)
 
 	al.mu.Unlock()
+	unlockPairing()
 
 	al.hookRuntime.reset(al)
 	configureHookManagerFromConfig(al.hooks, cfg)

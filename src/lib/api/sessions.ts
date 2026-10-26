@@ -207,6 +207,25 @@ function rawToSession(raw: RawSession): Session {
 // Consumers that accept any message use the union alias `Message` (unchanged
 // surface area). Narrowing by role gives the role-specific status set.
 
+/**
+ * provider-messages spec US-6/FB-1…FB-4 and paging spec D10 PF=A — the one
+ * display marker for a provider-fallback note, set ONLY on the `role: 'system'`
+ * row for a live `provider_fallback` frame, a `replay_provider_fallback` carrier
+ * or a REST `type: provider_fallback` entry. Purely a render-time discriminator
+ * (like `goalAckGoalId`/`browserHandoverNoticeId`) so the two system-row
+ * renderers draw the grey event line. Never serialized to the wire.
+ */
+export type ProviderFallbackNoteMarker = { // not-wire-format: SPA display metadata derived from generated fields
+  /** The exact §6 one-liner — SPA-assembled from the live frame's models, the saved text verbatim otherwise. */
+  message: string
+  /** D12 — true when `unavailable_code` is `model_retired`; adds the pick-a-new-model hint line. */
+  pickNewModelHint?: boolean
+  /** Recorded answering model of a REST-loaded note (generated `Message.model`); absent when unknown. */
+  answeredModel?: WireMessage['model']
+  /** Recorded unavailable primary of a REST-loaded note (generated `Message.unavailable_model`); absent when unknown. */
+  unavailableModel?: WireMessage['unavailable_model']
+}
+
 interface MessageBase { // not-wire-format
   historyPosition?: HistoryPosition
   id: string
@@ -239,7 +258,9 @@ interface MessageBase { // not-wire-format
    */
   model?: string
   /** Generated classifications whose thread visibility is gated by Verbose chat. */
-  type?: Extract<WireMessage['type'], 'judge_verdict' | 'context_window_notice'>
+  type?: Extract<WireMessage['type'], 'judge_verdict' | 'context_window_notice' | 'provider_fallback'>
+  /** See ProviderFallbackNoteMarker. Set on live, replayed and REST-loaded fallback notes. */
+  providerFallbackNote?: ProviderFallbackNoteMarker
   /** The verdict payload when `type === 'judge_verdict'` (wire `Message.verdict`, same shape as the live `JudgeVerdictFrame` push minus the `type`/`session_id` discriminator fields). */
   verdict?: JudgeVerdict
   /** Retained Q33 diagnostic, shared by REST history and live/replayed notice frames. */
@@ -478,6 +499,9 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
   id: string
   type?: WireMessage['type']
   context_window_notice?: WireMessage['context_window_notice']
+  /** PF=A: recorded facts of a `type: provider_fallback` note (generated Message fields). */
+  unavailable_model?: WireMessage['unavailable_model']
+  unavailable_code?: WireMessage['unavailable_code']
   role?: 'user' | 'assistant' | 'system'
   content?: string
   summary?: string
@@ -644,6 +668,30 @@ function rawToMessage(raw: RawMessage): Message {
   }
   const spanRow = spanSourceMessage(raw)
   if (spanRow) return spanRow
+  if (raw.type === 'provider_fallback') {
+    // Paging spec D10 PF=A / seams Q4: a saved provider-fallback note is a
+    // completed system information row carrying the existing display marker,
+    // its text verbatim. The hint flag only for a recorded model_retired code;
+    // facts the archive did not record stay absent (unknown), never invented.
+    const content = raw.content ?? ''
+    return {
+      id: raw.id,
+      session_id: undefined,
+      role: 'system',
+      type: raw.type,
+      content,
+      timestamp: raw.timestamp,
+      status: 'done',
+      agentId: raw.agent_id || undefined,
+      turnId: raw.turn_id,
+      providerFallbackNote: {
+        message: content,
+        ...(raw.unavailable_code === 'model_retired' ? { pickNewModelHint: true } : {}),
+        ...(raw.model ? { answeredModel: raw.model } : {}),
+        ...(raw.unavailable_model ? { unavailableModel: raw.unavailable_model } : {}),
+      },
+    } satisfies SystemMessage
+  }
   const role = raw.role ?? 'assistant'
   const baseStatus = raw.status === 'ok' ? ('done' as const) : raw.status
   // #3: construct the correct discriminated variant based on role.

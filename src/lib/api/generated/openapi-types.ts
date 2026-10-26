@@ -770,7 +770,7 @@ export interface paths {
         get: operations["getGlobalToolPolicies"];
         /**
          * Update global tool policies
-         * @description Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15).
+         * @description Persists new global tool policies to config.json under the sandbox key and waits until the running-agent reload has finished. Changes are audit-logged (SEC-15). HTTP 200 means the policies were saved and the reload completed and was confirmed, so running agents are enforcing the saved policies. A reload that fails, or that does not confirm, does not roll the save back and is not HTTP 200: the response is 503 with ErrorResponse. This operation is not the dev_mode_bypass guard.
          */
         put: operations["updateGlobalToolPolicies"];
         post?: never;
@@ -1155,7 +1155,7 @@ export interface paths {
         get?: never;
         /**
          * Enable a channel
-         * @description Sets the channel's enabled flag to true in config.
+         * @description Sets the channel's enabled flag to true in config. An absent body or {} is an ordinary enable that grants no chat ownership. A pairing_retry body is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the caller must own the session and the request/session pair must be the channel's recorded pairing owner; the next pairing attempt is claimed for that chat before the channel is enabled. A refused Retry enables nothing and changes no ownership; a disable that already succeeded is not rolled back, so the channel stays disabled.
          */
         put: operations["enableChannel"];
         post?: never;
@@ -3942,7 +3942,7 @@ export interface paths {
         put?: never;
         /**
          * Submit (or cancel) a secret card
-         * @description Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of `values` or `cancel: true`. All checks run before any write; any failure writes nothing. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
+         * @description Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of `values` or `cancel: true`. All trust and payload checks run before the atomic store publication; a refusal or failed save writes no values. After publication, a metadata or continuation-dispatch failure returns 503 with state submitted and the committed references. The submission IS saved; boot or chat attach retries an undelivered continuation. If the request service or its saved state is unavailable before this attempt reaches publication, 503 instead carries an ErrorResponse: this attempt stored no values and returns no authoritative state. It does not prove that no request or earlier submission exists; read the state, or retry the same request id once available, and never resend values automatically. A repeated submit is idempotent and returns 409 with the same committed state, without storing another version. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
          */
         post: operations["submitSecretRequest"];
         delete?: never;
@@ -4895,11 +4895,11 @@ export interface components {
                 reason: "stopped_before_delivery";
             };
             /**
-             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
+             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
              * @example message
              * @enum {string}
              */
-            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict" | "context_window_notice";
+            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict" | "context_window_notice" | "provider_fallback";
             /**
              * @description C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
              * @example both
@@ -5011,10 +5011,17 @@ export interface components {
              */
             descendants_canceled?: string[];
             /**
-             * @description Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
+             * @description Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries, and on a provider_fallback note it is the fallback model that actually answered (ProviderFallbackNote's answered_model). Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
              * @example z-ai/glm-5.2
              */
             model?: string;
+            /** @description Recorded unavailable primary model on a provider_fallback note; omitted when unknown. */
+            readonly unavailable_model?: string;
+            /**
+             * @description Recorded fallback condition; model_retired controls the existing model-settings hint.
+             * @enum {string}
+             */
+            readonly unavailable_code?: "rate_limited" | "model_retired";
             verdict?: components["schemas"]["JudgeVerdict"];
             context_window_notice?: components["schemas"]["ContextWindowNotice"];
             /**
@@ -12585,6 +12592,25 @@ export interface components {
             cli_version?: string;
         };
         /**
+         * ChannelEnableRequest
+         * @description Optional body of PUT /api/v1/channels/{id}/enable. An absent body or {} is an ordinary enable and grants no chat ownership of a pairing. pairing_retry is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the gateway proves the caller owns session_id and that the request/session pair is the channel's recorded pairing owner, then claims the next pairing attempt for that chat before enabling. A WebSocket subscription never grants this ownership.
+         */
+        ChannelEnableRequest: {
+            /** @description The original connect call and chat of the pairing being retried (not newly minted identifiers). Compared verbatim. A mismatch, a stale owner or a competing attempt is refused with 409 pairing_retry_conflict and nothing is enabled. */
+            pairing_retry?: {
+                /**
+                 * @description The connect_channel tool-call ID that started the pairing.
+                 * @example original-connect-call-id
+                 */
+                request_id: string;
+                /**
+                 * @description The chat session that started the pairing.
+                 * @example requesting-chat-id
+                 */
+                session_id: string;
+            };
+        };
+        /**
          * ChannelEnabledResponse
          * @description Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
          */
@@ -14149,6 +14175,11 @@ export interface components {
              */
             text: string;
             /**
+             * @description Optional phrasing for the item while it is in progress.
+             * @example Drafting the summary section
+             */
+            active_form?: string;
+            /**
              * @description Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
              * @example pending
              * @enum {string}
@@ -14975,7 +15006,7 @@ export interface components {
         };
         /**
          * Notification
-         * @description A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+         * @description A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures, knowledge-base drift repair (ADR-067 FR-038a), and operational Stop outcomes; the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
          */
         Notification: {
             id: string;
@@ -14983,9 +15014,10 @@ export interface components {
              * @description The event class. Extensible; consumers must tolerate unknown values.
              *
              *     "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+             *     "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
              * @enum {string}
              */
-            type: "schedule_failed" | "knowledge_drift";
+            type: "schedule_failed" | "knowledge_drift" | "stop_notice";
             title: string;
             /** @description Optional detail (e.g. the failure reason). */
             body?: string;
@@ -17948,7 +17980,7 @@ export interface components {
         } & (unknown | unknown);
         /**
          * SecretRequestState
-         * @description Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Absence is never read as success.
+         * @description Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
          */
         SecretRequestState: {
             request_id: string;
@@ -17966,8 +17998,11 @@ export interface components {
         SecretNameEntry: {
             /** @description Reference name of this version. */
             reference: string;
-            /** @enum {string} */
-            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+            /**
+             * @description Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
+             * @enum {string}
+             */
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
             /** Format: int64 */
             version: number;
             recipient: components["schemas"]["SecretRecipientDisplay"];
@@ -18203,7 +18238,7 @@ export interface components {
             child_session_id?: string;
             /**
              * Format: int64
-             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
              */
             seq?: number;
         };
@@ -18310,7 +18345,7 @@ export interface components {
             created_at: string;
             /**
              * Format: int64
-             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
              */
             seq?: number;
         };
@@ -18376,7 +18411,7 @@ export interface components {
             created_at: string;
             /**
              * Format: int64
-             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
              */
             seq?: number;
         };
@@ -18414,7 +18449,7 @@ export interface components {
             message?: string;
             /**
              * Format: int64
-             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
              */
             seq?: number;
         };
@@ -18542,14 +18577,14 @@ export interface components {
         };
         /**
          * SecretRecipientDisplay
-         * @description Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+         * @description Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
          */
         SecretRecipientDisplay: {
             /**
              * @description Recipient kind.
              * @enum {string}
              */
-            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
             /** @description Display lines, in order. Never null, never empty. */
             lines: string[];
         };
@@ -20210,7 +20245,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated global tool policies. */
+            /** @description The policies were saved and the in-memory reload completed and was confirmed. Running agents are enforcing the returned policies. This status is not used when the save succeeded but the reload failed or did not confirm. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -20229,7 +20264,20 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            503: components["responses"]["503BypassActive"];
+            /** @description The policies were saved and were not rolled back, but they could not be applied to running agents because the reload failed or did not confirm. Retrying the same update, or restarting Omnipus, is the recovery. This 503 is not 503BypassActive and does not mean dev_mode_bypass refused the write. The error field is exactly "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus." No other field is required. The response must not say the write was undone. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus."
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     getExecProxyStatus: {
@@ -21184,9 +21232,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ChannelEnableRequest"];
+            };
+        };
         responses: {
-            /** @description Channel enable state updated. */
+            /** @description Channel enable state updated. For a Retry this confirms ownership admission and enable acceptance only, not QR readiness, linking or message delivery. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -21195,7 +21247,9 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -21205,6 +21259,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description code pairing_retry_conflict: this chat can no longer retry this pairing (missing, stale or mismatched ownership, or a competing attempt). Nothing was enabled and no ownership changed. code pairing_in_progress: an ordinary enable of a WhatsApp connector while another of its pairings is starting, running or stopping. Nothing was changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The enable could not be completed. The error text says which state is saved: the configuration could not be saved or reloaded; the connection is enabled but its restart could not be confirmed yet (a Retry's pairing keeps its chat and can still start); or the connection is enabled but its reserved pairing was cancelled before it started (nothing else starts). Never a refusal before effects, which is 404 or 409. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     disableChannel: {
@@ -27287,6 +27360,15 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description Saved request state is unavailable (the service is not ready, or saved state could not be read or reconciled). This is not absence and not success; retrying this read is safe. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     submitSecretRequest: {
@@ -27335,6 +27417,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description The save failed before publication. No submitted values were stored; the request remains pending. The error is value-free. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description One of two bodies. A SecretRequestState body means the submission IS committed, but post-commit metadata or continuation dispatch is not confirmed: it has state submitted and the committed reference_names. Boot or chat attach retries an undelivered continuation; re-submitting returns 409 with the same state and never stores another version. An ErrorResponse body means the service or saved request state was unavailable before this attempt reached publication: this attempt committed no values and no authoritative state is returned. A pending or earlier submitted request may still exist; retry the same request id once available and never resend values automatically. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"] | components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     listSecrets: {
@@ -27356,6 +27456,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     updateSecretOptions: {
@@ -27387,6 +27488,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     getAgentDependencies: {
@@ -27893,6 +27995,7 @@ export type SessionScopeUpdateResponse = components["schemas"]["SessionScopeUpda
 export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResponse"];
 export type AgentToolsResponse = components["schemas"]["AgentToolsResponse"];
 export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
+export type ChannelEnableRequest = components["schemas"]["ChannelEnableRequest"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];

@@ -98,9 +98,10 @@ func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testin
 	wantSkills := map[string][]string{
 		"mia": {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
 		"jim": {"interview", "orchestrate", "plan", "define-goal"},
-		// Chief ruling 2026-10-14, FR-008: Omnipus receives the former setup
-		// skill union until WU-9 replaces it with dedicated workflows (FR-010).
-		"omnipus":        {"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team", "mcp-install", "provider-setup", "channel-setup", "doctor"},
+		// omnipus-system-agent FR-010 (WU-9): the Omnipus workflow skills,
+		// granted to Omnipus only; interview stays shared with Mia and Jim
+		// (pkg/coreagent/seed.go::coreAgentSkills).
+		"omnipus":        {"interview", "create-agent", "change-agent", "remove-agent", "write-skill", "install-skill", "team-delegation", "welcome-workspace", "add-connector", "remove-connector", "add-provider", "provider-config", "connect-channel", "disable-channel", "doctor-usage", "shell-diagnosis", "team-setup", "capability-plan", "dependency-check"},
 		"planner":        {"plan", "define-goal"},
 		"researcher":     {"deep-research"},
 		"worker":         {"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
@@ -134,9 +135,9 @@ func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testin
 func TestADR090_RolePolicyRequiredExclusionsAndOutboundAsk(t *testing.T) {
 	want := map[string]map[string]config.ToolPolicy{
 		"mia": {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
-		"jim": {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "bash": config.ToolPolicyDeny, "serve_web": config.ToolPolicyDeny, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
-		// omnipus-system-agent §6.5: add_mcp_server rides the FR-020 ask
-		// ceiling; plan control and browser tools are outside its supporting set.
+		// SPEC.md Table (2026-10-22): serve_web is Main core Allow; Jim's bash Deny stays.
+		"jim": {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "bash": config.ToolPolicyDeny, "serve_web": config.ToolPolicyAllow, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
+		// SPEC.md Founder exclusion (2026-10-22): Omnipus keeps its existing system policy inventory.
 		"omnipus":    {"add_mcp_server": config.ToolPolicyAsk, "create_plan": config.ToolPolicyDeny, "browser_evaluate": config.ToolPolicyDeny},
 		"planner":    {"send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk},
 		"researcher": {"bash": config.ToolPolicyDeny, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk},

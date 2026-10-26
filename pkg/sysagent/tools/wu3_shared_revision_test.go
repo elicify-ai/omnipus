@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
@@ -149,6 +150,9 @@ func TestWU3SharedWritesRejectStaleAndMissingRevisionsBeforeSideEffects(t *testi
 				cfg.Tools.MCP.Servers["notion"] = config.MCPServerConfig{Type: "stdio", Command: "winner-command", Enabled: false}
 				require.NoError(t, d.CredStore.Set("winner-ref", "wu3-winner-value"))
 				require.NoError(t, d.CredStore.Set("channel-ref", "wu3-channel-value"))
+				providerRef := systools.IssueProviderReferenceForTest(t, d, "openai", "https://loser.wu3.invalid/v1", "wu3-loser-key")
+				channelRef := systools.IssueCardReferencesForTest(t, d, secretrequest.Input{Instance: "telegram", Field: "token"}, "wu3-loser-key")[0]
+				mcpRef := systools.IssueCardReferencesForTest(t, d, secretrequest.Input{Server: "notion", EnvKey: "KEY"}, "wu3-loser-key")[0]
 				require.NoError(t, config.SaveConfig(d.ConfigPath, cfg))
 				configBefore := wu3ReadFile(t, d.ConfigPath)
 				credsBefore := wu3ReadFile(t, d.Home+"/credentials.json")
@@ -159,16 +163,16 @@ func TestWU3SharedWritesRejectStaleAndMissingRevisionsBeforeSideEffects(t *testi
 				switch verb {
 				case "configure_provider":
 					tool = systools.NewProviderConfigureTool(d)
-					args = map[string]any{"name": "openai", "api_key": "wu3-loser-key", "api_base": "https://loser.wu3.invalid/v1"}
+					args = map[string]any{"name": "openai", "api_key_ref": providerRef, "api_base": "https://loser.wu3.invalid/v1"}
 				case "add_mcp_server":
 					tool = systools.NewMCPAddTool(d)
-					args = map[string]any{"name": "fresh-mcp", "transport": "stdio", "command": "new-command", "env": map[string]any{"KEY": "wu3-loser-key"}}
+					args = map[string]any{"name": "notion", "env_refs": map[string]any{"KEY": mcpRef}}
 				case "remove_mcp_server":
 					tool = systools.NewMCPRemoveTool(d)
 					args = map[string]any{"name": "notion", "confirm": true}
 				case "configure_channel":
 					tool = systools.NewChannelConfigureTool(d)
-					args = map[string]any{"id": "telegram", "token": "wu3-loser-key", "bot_id": "loser-bot"}
+					args = map[string]any{"id": "telegram", "token_ref": channelRef}
 				case "enable_channel":
 					tool = systools.NewChannelEnableTool(d)
 					args = map[string]any{"id": "telegram"}

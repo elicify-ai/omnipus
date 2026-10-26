@@ -28,6 +28,10 @@ type ChatHistoryEntry struct {
 	Position HistoryPosition
 	Entry    TranscriptEntry
 	RowCount int
+	// Actual retained delegate/spawn/create_task parents of this entry's
+	// nested calls, resolved at this cut. Internal replay context only;
+	// neither their transcript bodies nor this field cross the wire.
+	NestedDelegateParents []ToolCallID
 }
 
 type ChatHistoryClear struct {
