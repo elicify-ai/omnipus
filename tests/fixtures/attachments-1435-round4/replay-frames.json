@@ -1,0 +1,70 @@
+{
+  "live_after_frames": [
+    {
+      "agent_id": "mia",
+      "content": " Still progressing.",
+      "message_id": "418fead7-f5e6-4e4b-b60d-523b6bca2d85",
+      "seq": 5,
+      "session_id": "1435-round4-session",
+      "turn_id": "1435-round4-turn",
+      "type": "token"
+    },
+    {
+      "message_id": "418fead7-f5e6-4e4b-b60d-523b6bca2d85",
+      "seq": 6,
+      "session_id": "1435-round4-session",
+      "stats": {
+        "cost": 0,
+        "duration_ms": 1,
+        "tokens": 0
+      },
+      "turn_id": "1435-round4-turn",
+      "type": "done"
+    }
+  ],
+  "replay_frames": [
+    {
+      "agent_id": "mia",
+      "content": "",
+      "id": "1435-round4-entry-a",
+      "role": "assistant",
+      "session_id": "1435-round4-session",
+      "truncated": true,
+      "truncation_reason": "cancelled",
+      "type": "replay_message"
+    },
+    {
+      "agent_id": "mia",
+      "content": "Continue processing the text even if the attachment is unavailable.",
+      "id": "1435-round4-entry-b",
+      "role": "user",
+      "session_id": "1435-round4-session",
+      "type": "replay_message"
+    },
+    {
+      "agent_id": "mia",
+      "entry_id": "1435-round4-entry-c",
+      "kind": "error",
+      "message": "That attachment is no longer available — Omnipus no longer has its stored copy. Please re-attach the file and send it again.",
+      "payload": {
+        "llm_error": {
+          "code": "media_unavailable",
+          "message": "That attachment is no longer available — Omnipus no longer has its stored copy. Please re-attach the file and send it again.",
+          "retryable": false
+        }
+      },
+      "session_id": "1435-round4-session",
+      "timestamp": "2026-10-27T00:00:00Z",
+      "type": "replay_error"
+    },
+    {
+      "boot_id": "1435-round4-boot",
+      "mode": "snapshot",
+      "seq": 4,
+      "session_id": "1435-round4-session",
+      "type": "catch_up_complete"
+    }
+  ],
+  "session_id": "1435-round4-session",
+  "turn_id": "1435-round4-turn"
+}
