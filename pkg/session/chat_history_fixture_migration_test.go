@@ -69,8 +69,8 @@ func TestChatHistoryFixture_LegacyCanonicalMigration(t *testing.T) {
 		require.Equal(t, at, entries[0].Timestamp)
 		require.Equal(t, at, entries[1].Timestamp)
 		for _, name := range []string{older.Format("2006-01-02") + ".jsonl", "transcript.jsonl"} {
-			info, err := os.Stat(filepath.Join(root, "sessions", sid, name))
-			require.NoError(t, err, "actual canonical rollover must preserve an old-day filename")
+			info, statErr := os.Stat(filepath.Join(root, "sessions", sid, name))
+			require.NoError(t, statErr, "actual canonical rollover must preserve an old-day filename")
 			require.Equal(t, at.UnixMilli(), info.ModTime().UnixMilli())
 		}
 		mark, err := os.ReadFile(filepath.Join(root, "sessions", sid, "transcript.day"))

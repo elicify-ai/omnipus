@@ -125,10 +125,6 @@ func TestStop_WhileApprovalPending_EndsTheTurnStopped(t *testing.T) {
 	events := al.SubscribeEvents(256)
 	t.Cleanup(func() { al.UnsubscribeEvents(events.ID) })
 
-	type outcome struct {
-		resp string
-		err  error
-	}
 	require.NoError(t, busRef.PublishInbound(context.Background(), bus.InboundMessage{
 		Channel:       "webchat",
 		Sender:        bus.SenderInfo{CanonicalID: "webchat_user"},
@@ -177,15 +173,15 @@ func TestStop_WhileApprovalPending_EndsTheTurnStopped(t *testing.T) {
 				assert.Equal(t, TurnEndStatusAborted, payload.Status,
 					"a Stop over a parked approval must end the turn aborted (stopped), not completed/error")
 			}
-		case <-time.After(deadline.Sub(time.Now())):
+		case <-time.After(time.Until(deadline)):
 		}
 	}
 	require.True(t, turnEnded, "the turn stayed working after Stop while an approval was pending — REPRODUCED")
 	assert.True(t, approver.ctxDoneLocked(), "the parked approval must observe the turn context cancelling")
 
 	// Foreground truth: no active foreground turn may survive the Stop.
-	_, _, _, ok := al.ActiveForegroundTurnInfo(sessionID)
-	assert.False(t, ok, "no foreground turn may remain active after Stop")
+	turnID, _, _, ok := al.ActiveForegroundTurnInfo(sessionID)
+	assert.False(t, ok, "no foreground turn may remain active after Stop (turn %q)", turnID)
 
 	// Durable lifecycle truth: the session's lifecycle record must read
 	// stopped after the Stop landed and the turn ended — this is the state

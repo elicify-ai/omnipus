@@ -94,7 +94,7 @@ func TestStop_WhilePendingApproval_RealStack_EndsAbortedAndCancelsCard(t *testin
 				assert.Equal(t, agent.TurnEndStatusAborted, payload.Status,
 					"a Stop over a pending approval must end the turn aborted")
 			}
-		case <-time.After(endDeadline.Sub(time.Now())):
+		case <-time.After(time.Until(endDeadline)):
 		}
 	}
 	require.True(t, turnEnded, "the turn stayed working after Stop while an approval was pending — REPRODUCED")
@@ -109,6 +109,6 @@ func TestStop_WhilePendingApproval_RealStack_EndsAbortedAndCancelsCard(t *testin
 	assert.Zero(t, remaining, "the pending approval card must be cancelled by the Stop")
 
 	// Foreground truth: the session must not report a running turn.
-	_, _, _, active := h.loop.ActiveForegroundTurnInfo(sid)
-	assert.False(t, active, "no foreground turn may remain after the Stop")
+	turnID, _, _, active := h.loop.ActiveForegroundTurnInfo(sid)
+	assert.False(t, active, "no foreground turn may remain after the Stop (turn %q)", turnID)
 }

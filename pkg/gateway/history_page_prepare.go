@@ -160,15 +160,6 @@ func historyProviderFallbackProfile(message *generated.Message) bool {
 	}
 	return true
 }
-func historyPendingProviderFallback(e session.ChatHistoryEntry) (generated.Message, []byte, error) {
-	// PF=A landed (chat-history paging spec D10; seams-decision section Q):
-	// a valid saved note passes generated Message validation upstream and
-	// never reaches here. This branch now only sees notes the regenerated
-	// schema rejects (unknown type value, overlength model/code facts) —
-	// genuinely malformed under D4 — so they keep the per-item placeholder
-	// while valid neighbours stay intact.
-	return historyMessagePlaceholder(e)
-}
 func historyMessagePlaceholder(e session.ChatHistoryEntry) (generated.Message, []byte, error) {
 	// Keep the owning occurrence and recorded identity, never a replacement row.
 	position := string(e.Position)

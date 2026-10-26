@@ -21,11 +21,11 @@ func appendChatHistoryFixtureEntries(t testing.TB, store *UnifiedStore, sid stri
 	require.Equal(t, ChatHistoryIndexFormatVersion, state.FormatVersion)
 	require.NotEmpty(t, state.IndexGeneration)
 	if empty {
-		paths, err := store.transcriptPartitionPaths(sid)
-		require.NoError(t, err)
+		paths, pathsErr := store.transcriptPartitionPaths(sid)
+		require.NoError(t, pathsErr)
 		for _, path := range paths {
-			info, err := os.Stat(path)
-			require.NoError(t, err)
+			info, statErr := os.Stat(path)
+			require.NoError(t, statErr)
 			require.Zero(t, info.Size(), "initial canonical seed must not overwrite existing records")
 		}
 	}
@@ -36,16 +36,16 @@ func appendChatHistoryFixtureEntries(t testing.TB, store *UnifiedStore, sid stri
 	var previous time.Time
 	var addresses []ArchiveAddress
 	for _, day := range days {
-		at, err := time.Parse("2006-01-02", day.Day)
-		require.NoError(t, err)
+		at, parseErr := time.Parse("2006-01-02", day.Day)
+		require.NoError(t, parseErr)
 		require.Equal(t, day.Day, at.Format("2006-01-02"))
 		require.True(t, previous.IsZero() || at.After(previous), "append fixture days strictly increase")
 		previous = at
 		store.archiveNow = func() time.Time { return at }
 		archive.now = store.archiveNow
 		for _, entry := range day.Entries {
-			address, err := store.AppendTranscriptAddressed(sid, entry)
-			require.NoError(t, err, "actual canonical append must maintain the existing history index")
+			address, appendErr := store.AppendTranscriptAddressed(sid, entry)
+			require.NoError(t, appendErr, "actual canonical append must maintain the existing history index")
 			require.Equal(t, day.Day, address.PartitionKey, "never substitute a different append day")
 			addresses = append(addresses, address)
 		}
