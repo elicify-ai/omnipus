@@ -319,6 +319,61 @@ func TestCreateAgent_ModelParams_Persisted_Subagent(t *testing.T) {
 	assert.InDelta(t, 0.6, *got.ModelParams.Temperature, 0.0001)
 }
 
+// TestCreateAgent_FallbackModels_Persisted pins issue #1440: POST /api/v1/agents
+// extracted and validated fallback_models (maxItems 2, provider/model pairing)
+// but never assigned the list to the new agent record — a create returned 201
+// and silently dropped the backup models (a later PUT kept them). The full
+// round trip below requires the create response, the persisted entity record
+// and a separate GET to all carry the chain. The invalid-pair refusal on this
+// same writer is guarded by TestCreateAgent_FallbackModels_RefusesUnpairedEntry
+// (rest_agents_create_paired_fallback_test.go).
+func TestCreateAgent_FallbackModels_Persisted(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	body := `{"name":"Fallback Create","type":"Main","soul":"fb-soul","fallback_models":[{"model":"claude-sonnet-4.6","provider":"anthropic"},{"model":"gpt-5.2","provider":"openai"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "create body: %s", w.Body.String())
+	created := decodeAgentResp(t, w.Body.Bytes())
+
+	require.NotNil(t, created.FallbackModels, "create response must echo fallback_models, not null")
+	require.Len(t, *created.FallbackModels, 2)
+	assert.Equal(t, "claude-sonnet-4.6", (*created.FallbackModels)[0].Model)
+	require.NotNil(t, (*created.FallbackModels)[0].Provider)
+	assert.Equal(t, "anthropic", *(*created.FallbackModels)[0].Provider)
+	assert.Equal(t, "gpt-5.2", (*created.FallbackModels)[1].Model)
+	require.NotNil(t, (*created.FallbackModels)[1].Provider)
+	assert.Equal(t, "openai", *(*created.FallbackModels)[1].Provider)
+
+	// Persisted entity record on disk (agentstore.Store, ADR-054 D2), not
+	// just the in-memory create response.
+	store := agentstore.New(api.homePath)
+	rec, err := store.Get(created.Id)
+	require.NoError(t, err)
+	assert.Equal(t, config.FallbackModelSlice{
+		{Model: "claude-sonnet-4.6", Provider: "anthropic"},
+		{Model: "gpt-5.2", Provider: "openai"},
+	}, rec.FallbackModels, "persisted entity record must carry the fallback chain")
+
+	// A completely separate GET must echo the same chain.
+	wGet := httptest.NewRecorder()
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+created.Id, nil)
+	api.HandleAgents(wGet, rGet)
+	require.Equal(t, http.StatusOK, wGet.Code, "get body: %s", wGet.Body.String())
+	got := decodeAgentResp(t, wGet.Body.Bytes())
+	require.NotNil(t, got.FallbackModels, "GET must echo fallback_models, not null")
+	require.Len(t, *got.FallbackModels, 2)
+	assert.Equal(t, "claude-sonnet-4.6", (*got.FallbackModels)[0].Model)
+	require.NotNil(t, (*got.FallbackModels)[0].Provider)
+	assert.Equal(t, "anthropic", *(*got.FallbackModels)[0].Provider)
+	assert.Equal(t, "gpt-5.2", (*got.FallbackModels)[1].Model)
+	require.NotNil(t, (*got.FallbackModels)[1].Provider)
+	assert.Equal(t, "openai", *(*got.FallbackModels)[1].Provider)
+}
+
 // TestCreateAgent_Worker_PersistsSoul writes a worker with an initial soul and
 // asserts both the response and the on-disk SOUL.md carry the value (the
 // create-time write was previously dropped on the floor).
