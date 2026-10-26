@@ -1640,6 +1640,9 @@ type PerformancePendingApply = {
     | "max_parallel_agents"
     | "tools_on_demand"
     | "goal_max_rounds"
+    | "goal_reminder_quiet_seconds"
+    | "goal_stalled_checkin_enabled"
+    | "goal_stalled_checkin_minutes"
     | "max_tool_iterations"
   >;
 };
@@ -4553,6 +4556,9 @@ export const PerformancePendingApply: z.ZodType<PerformancePendingApply> =
         "max_parallel_agents",
         "tools_on_demand",
         "goal_max_rounds",
+        "goal_reminder_quiet_seconds",
+        "goal_stalled_checkin_enabled",
+        "goal_stalled_checkin_minutes",
         "max_tool_iterations",
       ])
     ),

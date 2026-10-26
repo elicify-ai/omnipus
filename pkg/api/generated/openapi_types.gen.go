@@ -7189,16 +7189,25 @@ func (e OperationResultValidationOutcome) Valid() bool {
 
 // Defines values for PerformancePendingApplyChangedFields.
 const (
-	PerformancePendingApplyChangedFieldsGoalMaxRounds     PerformancePendingApplyChangedFields = "goal_max_rounds"
-	PerformancePendingApplyChangedFieldsMaxParallelAgents PerformancePendingApplyChangedFields = "max_parallel_agents"
-	PerformancePendingApplyChangedFieldsMaxToolIterations PerformancePendingApplyChangedFields = "max_tool_iterations"
-	PerformancePendingApplyChangedFieldsToolsOnDemand     PerformancePendingApplyChangedFields = "tools_on_demand"
+	PerformancePendingApplyChangedFieldsGoalMaxRounds             PerformancePendingApplyChangedFields = "goal_max_rounds"
+	PerformancePendingApplyChangedFieldsGoalReminderQuietSeconds  PerformancePendingApplyChangedFields = "goal_reminder_quiet_seconds"
+	PerformancePendingApplyChangedFieldsGoalStalledCheckinEnabled PerformancePendingApplyChangedFields = "goal_stalled_checkin_enabled"
+	PerformancePendingApplyChangedFieldsGoalStalledCheckinMinutes PerformancePendingApplyChangedFields = "goal_stalled_checkin_minutes"
+	PerformancePendingApplyChangedFieldsMaxParallelAgents         PerformancePendingApplyChangedFields = "max_parallel_agents"
+	PerformancePendingApplyChangedFieldsMaxToolIterations         PerformancePendingApplyChangedFields = "max_tool_iterations"
+	PerformancePendingApplyChangedFieldsToolsOnDemand             PerformancePendingApplyChangedFields = "tools_on_demand"
 )
 
 // Valid indicates whether the value is a known member of the PerformancePendingApplyChangedFields enum.
 func (e PerformancePendingApplyChangedFields) Valid() bool {
 	switch e {
 	case PerformancePendingApplyChangedFieldsGoalMaxRounds:
+		return true
+	case PerformancePendingApplyChangedFieldsGoalReminderQuietSeconds:
+		return true
+	case PerformancePendingApplyChangedFieldsGoalStalledCheckinEnabled:
+		return true
+	case PerformancePendingApplyChangedFieldsGoalStalledCheckinMinutes:
 		return true
 	case PerformancePendingApplyChangedFieldsMaxParallelAgents:
 		return true

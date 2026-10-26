@@ -10480,7 +10480,7 @@ export interface components {
              *       "max_tool_iterations"
              *     ]
              */
-            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "max_tool_iterations")[];
+            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "goal_reminder_quiet_seconds" | "goal_stalled_checkin_enabled" | "goal_stalled_checkin_minutes" | "max_tool_iterations")[];
         };
         /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
         Provider: {
