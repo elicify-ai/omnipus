@@ -136,7 +136,7 @@ type Service struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	// inflight counts the background admissions; admitting maps a delivery
-	// id in flight to a channel closed when its admission finished.
+	// id in flight to its *inFlight (closed when settled and when finished).
 	inflight  sync.WaitGroup
 	admitting sync.Map
 	// Failed allocation reads retain the incomplete mark until storage can

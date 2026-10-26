@@ -103,10 +103,12 @@ function classifyPointer(
 
 /**
  * M3: the remembered id is absent from an INCOMPLETE list — unknown, not
- * deleted. Resolve it directly (GET /sessions/{id}) before anything may
- * overwrite the pointer: found here → 'visible' (the fetched record is
- * pushed onto the list so the exact path has its owner); a 404 is the ONE
- * truthful deletion (the welcome path may then take over); any other
+ * deleted. (Also used for an explicit link absent from the roots-only list,
+ * which may name a delegated child — see loadInputs.) Resolve it directly
+ * (GET /sessions/{id}) before anything may overwrite the pointer: found
+ * here → 'visible' (the fetched record is pushed onto the list so the exact
+ * path has its owner); a 404 is the ONE truthful deletion (the welcome
+ * path may then take over); any other
  * failure is a transport failure — the pointer is kept with Retry, never a
  * silent fallback to the main.
  */
@@ -137,6 +139,7 @@ async function resolvePartialListPointer(
 async function loadInputs(
   workspaceId: string,
   remembered: string | null | undefined,
+  explicitLink = false,
 ): Promise<{
   sessions: Session[]
   transportFailed: boolean
@@ -159,7 +162,13 @@ async function loadInputs(
     sessionsFailed,
     readSessionFetchCoverage(sessions).incomplete,
   )
-  if (pointerVerdict === 'partial-list' && typeof remembered === 'string') {
+  // The default GET /sessions listing pages over ROOT sessions only
+  // (ADR-057 FR-091): a delegated child chat is never in it. Absence there is
+  // therefore not proof of deletion for an explicit link, which may name a
+  // child (train 3 hands-on row F4). Resolve it directly: 404 stays 'deleted',
+  // another workspace stays 'hidden', so a missing link is still unavailable.
+  const unlistedLink = explicitLink && pointerVerdict === 'deleted'
+  if ((pointerVerdict === 'partial-list' || unlistedLink) && typeof remembered === 'string') {
     pointerVerdict = await resolvePartialListPointer(remembered, workspaceId, sessions)
   }
   // Exact restore needs only the visible session and its immutable owner.
@@ -318,7 +327,7 @@ async function execute(workspaceId: string, linkedSessionId?: string): Promise<v
       await waitForEntryVisibility(token)
     }
     if (!navigationIntentCurrent(token)) return
-    const loaded = await loadInputs(workspaceId, remembered)
+    const loaded = await loadInputs(workspaceId, remembered, typeof linked === 'string')
     // The tab may have become hidden while the network requests were in flight.
     while (typeof document !== 'undefined' && document.hidden && navigationIntentCurrent(token)) {
       await waitForEntryVisibility(token)
