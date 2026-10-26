@@ -202,14 +202,15 @@ function carriesPayload(frame: HistorySpanFrame): boolean {
  * their start (I4/F4, D9).
  */
 export function settleHistorySpans(sessionId: string, rows: ChatMessage[], retained: ChatMessage[] = [], parked?: SessionChatState['pendingSpanUpdatesBySpanId']): { rows: ChatMessage[]; index: SessionChatState['spanBySpanId'] } {
+  // No recorded facts yet is not "no spans": a saved start alone still draws
+  // its helper (architect N1), so settlement never short-circuits here.
   const bySpan = spanFacts.get(sessionId)
   const index: NonNullable<SessionChatState['spanBySpanId']> = {}
-  if (!bySpan) return { rows, index }
   const live = new Set(rows.filter(row => !row.historyPosition).flatMap(row => row.spans?.map(span => span.spanId) ?? []))
   const settled = rows.map(row => {
     const start = row.role === 'assistant' ? row.historySpanFrame : undefined
     if (start?.type !== 'subagent_start' || live.has(start.span_id)) return row
-    const record = bySpan.get(start.span_id)
+    const record = bySpan?.get(start.span_id)
     const updates = record ? recordFacts(record).sort(laterFact) : []
     let mini: SessionChatState = { ...emptySessionState(), messagesById: { [row.id]: { ...row, spans: undefined } }, messageOrder: [row.id] }
     mini = { ...mini, ...applySpanFrame(mini, start, sessionId) }
