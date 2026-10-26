@@ -32,8 +32,8 @@ function confirmFirstSend(context: FirstSendFrameContext, pending: PendingFirstS
     && (useWorkspacesStore.getState().activeWorkspaceId || null) === pending.workspaceId
   const recovered = frame.recovered === true
   // This receipt has already been correlated to pending.clientMessageId.
-  // Save only that message's captured pair, even if its chat is now in the
-  // background. Ordinary navigation never owns this persistence handoff.
+  // Save this message's latest pending-chat preference, even in the background.
+  // It is independent of the original request and another chat's foreground pair.
   if (!pending.sessionId && pending.modelChoice) {
     warnModelChoiceStorageFailure(writeSessionModelChoice(sid, pending.modelChoice))
   }

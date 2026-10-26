@@ -116,8 +116,8 @@ export function startOrdinaryFirstSend(
     sessionId: null,
     assistantPlaceholderId,
     status: 'sending',
-    // Capture the pair with this immutable request, never read the foreground
-    // model when its receipt arrives: another chat may be selected by then.
+    // Initialize a separate message-owned preference. Later same-chat picks
+    // may update it without changing payload or borrowing another chat's pair.
     ...(choice && choice.model === payload.metadata?.model_name ? { modelChoice: { ...choice } } : {}),
   }
   const user: ChatMessage = {
