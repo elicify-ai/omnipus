@@ -34,6 +34,7 @@ import { handleMailPanelObserverFrame } from './mail-panel-observer-frames'
 import { handleSecretRequestFrame } from './secret-request-frames'
 import { handleRoomFrame } from './room-frames'
 import { applySpanFrame } from './span-frames'
+import { rememberLiveSpanFact } from '../history-merge'
 import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
@@ -2149,6 +2150,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           // lookup and one rule set (span-frames.ts::applySpanFrame), also used
           // by the paged history paths.
           if (!targetSid) break
+          rememberLiveSpanFact(targetSid, frame)
           withBucket(targetSid, (b) => applySpanFrame(b, frame, targetSid))
           break
         }

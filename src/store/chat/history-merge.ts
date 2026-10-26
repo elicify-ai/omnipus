@@ -46,6 +46,49 @@ function rememberSpanFact(sessionId: string, frame: HistorySpanFrame): void {
   facts.set(frame.history_origin?.position ?? `${frame.type}:${JSON.stringify(frame)}`, frame)
 }
 
+/**
+ * A live subagent_* frame is also a recorded span fact (final-gate I1/F2): the
+ * live reducer updates the span on its row at once, and recording the same
+ * frame here means a later history settlement (an unrelated older page, a
+ * refresh) rebuilds that row WITH the live end or state instead of restoring
+ * the older cached running state.
+ */
+export function rememberLiveSpanFact(sessionId: string, frame: HistorySpanFrame): void {
+  rememberSpanFact(sessionId, frame)
+}
+
+/** Counts of the span-fact memory for one session; see historySpanFactStats. */
+export interface HistorySpanFactStats {
+  /** Spans the session's fact memory currently retains. */
+  spans: number
+  /** Retained facts per span id. */
+  factsBySpan: Record<string, number>
+  /** Retained facts per span id that carry a free-text body. */
+  payloadFactsBySpan: Record<string, number>
+}
+
+/**
+ * Read-only diagnostic of the private span-fact memory, for tests only (#1266
+ * I4/F4 bound): COUNTS, never a fact body, never logged, no wire or UI surface.
+ * A payload-bearing fact carries a free-text body: a message's `text`, or an
+ * end's `final_result` or `message`. An unknown session reports zero spans.
+ */
+export function historySpanFactStats(sessionId: string): HistorySpanFactStats {
+  const stats: HistorySpanFactStats = { spans: 0, factsBySpan: {}, payloadFactsBySpan: {} }
+  for (const [spanId, facts] of spanFacts.get(sessionId) ?? []) {
+    stats.spans += 1
+    stats.factsBySpan[spanId] = facts.size
+    stats.payloadFactsBySpan[spanId] = [...facts.values()].filter(carriesPayload).length
+  }
+  return stats
+}
+
+function carriesPayload(frame: HistorySpanFrame): boolean {
+  if (frame.type === 'subagent_message') return frame.text !== undefined
+  if (frame.type === 'subagent_end') return frame.final_result !== undefined || frame.message !== undefined
+  return false
+}
+
 const FACT_ORDER: Record<HistorySpanFrame['type'], number> = { subagent_start: 0, subagent_state: 1, subagent_message: 2, subagent_end: 3 }
 
 /**
