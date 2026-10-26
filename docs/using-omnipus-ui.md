@@ -149,6 +149,8 @@ Activity follows the helper's recorded state. While that state still says queued
 
 If a helper started further back than the part of the chat that is loaded, it has no row yet: it appears, once and rebuilt from the saved facts available for it, when you load that earlier part by scrolling or with **Show earlier messages**.
 
+If one saved message cannot be read, the chat shows **This saved message could not be displayed.** in its place. Only that message is affected: the messages around it and the rest of the history still load, and you can keep reading and continue the conversation.
+
 While you are at the recent end, the chat follows new messages as they arrive. Following pauses as soon as you actually move away from the recent end — by mouse wheel, trackpad, scrollbar, keyboard, touch, or the browser's find — and when you select **Show earlier messages**. Messages growing or arriving below you never pause following on their own, and Omnipus's own repositioning does not count as moving away. While following is paused, new messages, loaded pages and reconnects keep your reading position; nothing pulls you back down until you ask.
 
 While following is paused, a **Return to latest** button with a down arrow floats at the bottom of the chat, just above the message box. It appears without moving what you are reading, and focusing it does not scroll the chat. Select it, or reach it with **Tab** and press **Enter** or **Space**, to load the newest messages and resume following. While that load runs, **Loading latest messages…** appears just above the button and pressing it again starts nothing new; if the load fails, **Could not load latest messages.** appears there with its own **Retry**, and your place in older history stays as it was.

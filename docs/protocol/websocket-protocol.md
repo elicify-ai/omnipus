@@ -434,7 +434,7 @@ A confirmed cancelled native call retains its original call identity, parameters
 
 For a cancelled call, required `result` can be null when no result is available; it is not fake successful output. The original call ID, tool and owning source remain intact through REST paging and snapshots. Replaying those facts does not execute the tool again or cancel an unrelated call.
 
-A call still recorded as `pending` or `running` in saved history replays only its `tool_call_start`; no `tool_call_result` is invented for it. On attach, a historical start and its terminal result are covered independently: when history replayed only the start (the call was still pending at the history cut), the active projection still delivers that call's terminal `tool_call_result` once, without a second start. A result is never delivered without its start.
+A call still recorded as `pending` or `running` in saved history replays only its `tool_call_start`; no `tool_call_result` is invented for it from that status alone. This covers ordinary calls and delegation calls whose span carries no saved closing evidence; a delegation call whose span already has a saved end is reconstructed from that span evidence, and a contradictory record (a `pending` call whose span evidence says closed) can then surface a result mapped to `error`. On attach, a historical start and its terminal result are covered independently: when history replayed only the start (the call was still pending at the history cut), the active projection still delivers that call's terminal `tool_call_result` once, without a second start. A result is never delivered without its start.
 
 
 ---
