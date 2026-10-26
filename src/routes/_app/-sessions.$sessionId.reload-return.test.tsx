@@ -56,6 +56,7 @@ async function loadPageModules(includeSidebar = false) {
 let page: Awaited<ReturnType<typeof loadPageModules>>
 let unexpectedRequests: string[]
 let restoreBrowser: () => void
+let originalElementScrollTo: PropertyDescriptor | undefined
 const clients: QueryClient[] = []
 const histories: ReturnType<typeof createHashHistory>[] = []
 const originalUrl = window.location.href
@@ -65,6 +66,10 @@ beforeEach(async () => {
   sessionStorage.clear()
   vi.resetModules()
   restoreBrowser = installSessionReturnBrowser()
+  // AssistantUI scrolls the thread element from requestAnimationFrame;
+  // jsdom has no element scrollTo. Keep this shim local to this file.
+  originalElementScrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo')
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, writable: true, value: vi.fn() })
   unexpectedRequests = installSessionReturnNetwork()
   page = await loadPageModules()
 })
@@ -76,6 +81,10 @@ afterEach(() => {
   Reflect.deleteProperty(window, '__TSR_ROUTER__')
   window.history.replaceState(null, '', originalUrl)
   restoreBrowser()
+  // Unmount first so the viewport cancels its scheduled animation frame,
+  // then restore the exact own descriptor (or the inherited/missing state).
+  if (originalElementScrollTo) Object.defineProperty(HTMLElement.prototype, 'scrollTo', originalElementScrollTo)
+  else Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo')
   vi.unstubAllGlobals()
   expect(unexpectedRequests, 'all route HTTP calls must use declared contract fixtures').toEqual([])
   localStorage.clear()
@@ -90,7 +99,7 @@ async function mountAddress(address: string) {
   await client.fetchQuery({ queryKey: page.api.workspacesQueryKeys.list({ status: 'active' }), queryFn: () => page.api.fetchWorkspaces({ status: 'active' }) })
   await client.fetchQuery({ queryKey: ['agents'], queryFn: page.api.fetchAgents })
   await client.fetchQuery({ queryKey: ['providers'], queryFn: page.api.fetchProviders })
-  const send = vi.fn((_frame: ClientFrame) => true)
+  const send = vi.fn<(frame: ClientFrame) => boolean>(() => true)
   // Socket transport boundary only: production attach and selection run.
   page.useConnectionStore.setState({ connection: { send, close: vi.fn(), isConnected: true } as unknown as WsConnection, isConnected: true })
   window.history.replaceState(null, '', address)
