@@ -91,8 +91,12 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	// Seed the default agent's session store with an orphaned history.
 	// An orphaned history = assistant message with tool_calls but NO subsequent
 	// tool result message (simulates a gateway SIGKILL while awaiting approval).
+	// DESIGN 2 reconciliation: the orphan names a REGISTERED READ-ONLY tool, so
+	// recovery resolves it without an uncertainty hold and the turn proceeds —
+	// this test proves the V2.D wiring, while the reconciliation_required fence
+	// for unresolvable effects is covered by the dedicated hold tests.
 	const orphanToolCallID = "tc-orphan-v2d"
-	const orphanToolName = "exec"
+	const orphanToolName = "read_file"
 
 	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "default agent must be registered")
@@ -155,24 +159,26 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	auditEntries, readErr := readAuditEntries(auditPath)
 	require.NoError(t, readErr, "audit.jsonl must be parseable")
 
-	// DESIGN 5: Unknown carries the typed recovery-interrupted event with
-	// decision=error. A missing result is never a policy Deny.
-	var foundRecoveryUnknown bool
+	// DESIGN 5: a read-only orphan resolves to effect_absent — the truthful
+	// observation event, never a policy Deny and never an invented return.
+	var foundRecoveryObservation bool
 	for _, entry := range auditEntries {
-		if entry["event"] == string(audit.EventToolRecoveryInterrupted) && entry["decision"] == string(audit.DecisionError) {
+		assert.NotEqual(t, string(audit.DecisionDeny), entry["decision"],
+			"DESIGN 5: a missing result is never a policy denial")
+		if entry["event"] == string(audit.EventToolRecoveryObservation) {
 			if details, ok := entry["details"].(map[string]any); ok {
-				if disposition, _ := details["disposition"].(string); disposition == "unknown" {
-					foundRecoveryUnknown = true
-					tc, _ := details["tool_call_id"].(string)
-					assert.Equal(t, orphanToolCallID, tc,
-						"audit entry must name the orphaned tool_call_id")
+				disposition, _ := details["disposition"].(string)
+				tc, _ := details["tool_call_id"].(string)
+				recovered, _ := details["original_result_recovered"].(bool)
+				if tc == orphanToolCallID && disposition == "effect_absent" && !recovered {
+					foundRecoveryObservation = true
 				}
 			}
 		}
 	}
-	assert.True(t, foundRecoveryUnknown,
-		"audit log must contain the typed recovery-interrupted event with decision=error "+
-			"(DESIGN 5: missing result is Unknown, never ask.denied); entries: %v", auditEntries)
+	assert.True(t, foundRecoveryObservation,
+		"audit log must contain the typed recovery observation (effect_absent, not recovered) "+
+			"for the exact occurrence (DESIGN 2/5); entries: %v", auditEntries)
 
 	// -------------------------------------------------------------------
 	// Assert (c): on-disk transcript contains BOTH the original orphaned
