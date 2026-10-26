@@ -99,6 +99,52 @@ The Go test/build suite is run on a dedicated Fly worker cluster, **never in the
   only the lane's targeted tests/regression after its local pre-flight. Machine
   pressure alone does not authorize a full feature/lane run or a new hotfix branch.
 
+**`fly-targeted.sh` — one targeted command on a SPARE machine (founder 2026-10-24).** For
+a lane's single narrow command (one tagged Go test, one vitest spec) when the local
+heavy-command slots are the bottleneck:
+
+```bash
+deploy/ci-worker/fly-targeted.sh <git-ref> <machine-id|auto> -- <command...>
+deploy/ci-worker/fly-targeted.sh origin/release/v0.1.1 auto -- \
+  go test -tags goolm,stdjson -run '^TestX$' -p 1 ./pkg/foo/
+```
+
+Guarantees (each enforced, and each covered by `fly-targeted_test.bats`): **spares only**
+(default `48ee71eb1e9768`; `d8d3977c946558` is EXCLUDED — dedicated to #1266, chief
+2026-10-25; the performance machine and every tier machine
+are refused — the 2026-10-11 shared-machine starvation was a placement error, and this
+makes that placement impossible); **never beside a gate** (a held `/tmp/runci.lock`, a
+running `runci.sh`, or another targeted payload refuses the run — an unknowable probe
+state refuses too, it never "assumes free"); **pushed refs only** (`git ls-remote`
+membership, checked before any machine is touched); **per-run detached worktree** from
+the machine's own `/cache/omnipus` clone — the clone is never reset, so runci state is
+untouched, and the payload's `FLY_TARGETED_HEAD=` line is asserted against the requested
+sha (stale-checkout trap 1); **real exit code from the log marker** (`FLY_TARGETED_EXIT=`,
+never the ssh wrapper's — trap 2); **command as `ci`, CGO_ENABLED=0**, runci's cache env;
+**always stopped** (chief contract, 2026-10-25) — a machine this run STARTED is
+stopped on every exit path without exception: success, command failure, refusal,
+abort (Ctrl-C), start-then-unreachable, AND a missing verdict. The payload keeps
+its own log on the persistent volume; on a missing verdict the local side first
+copies that log back, then stops, printing a loud `FLY_TARGETED_NO_VERDICT`
+warning with the saved log path. An ALREADY-STARTED machine is refused, never
+used — this script only runs on machines it started itself; the only stop-time
+declines are for runs that are not ours to kill (a foreign gate or another
+dispatcher's marker active on the machine — loud warning naming it);
+**one lane, one machine** via a local per-machine lock (`${TMPDIR:-/tmp}/fly-targeted-locks`).
+The
+payload is `fly ssh sftp put`-ed and **md5-verified before execution** (sftp put has
+produced empty files here before). Exit codes: the command's real code, `1` = evidence
+incomplete/untrusted, `2` = refusal. First use on a spare needs its clone to exist
+(`run_gates` there once, or the payload refuses with `no-repo`).
+
+**flyctl auth wrapper.** flyctl v0.4.104 on the founder's Mac reports "no access token
+available" although `~/.fly/config.yml` holds a valid token (its own lookup fails, not
+the credential). When you see that error, run Fly commands through
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/nav-bundle/provision/flyauth.sh`,
+which exports the config token as `FLY_ACCESS_TOKEN` and execs your command — e.g.
+`flyauth.sh deploy/ci-worker/fly-targeted.sh origin/release/v0.1.1 auto -- <command>`.
+The token is never printed.
+
 **`all-no-e2e` gate (setup once, three parallel groups).** `all` minus `go-race` and `e2e`,
 restructured so the shared setup is paid once per run instead of once per gate. Measured
 2026-09-15: driving gates one SSH call at a time ran `fetch + checkout` 5× and `npm ci` 4×
