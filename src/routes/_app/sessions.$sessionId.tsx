@@ -14,6 +14,7 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatStore } from '@/store/chat'
+import { logDiagnostic } from '@/lib/telemetry'
 
 // A just-deleted session (confirmed 404, not merely still loading) previously
 // fell through to a bare <ChatScreen /> — the loader caught the 404 and
@@ -192,24 +193,18 @@ function SessionRoute() {
         setAttachedContext('task', session.title)
       }
 
-      void navigate({
+      // ONE replace commits the whole destination: the workspace chat AND the
+      // linked session in its declared `open` search key (#1437), so a reload
+      // of the resulting address returns to exactly this chat even if another
+      // tab moved the workspace's remembered-chat pointer. A single navigation
+      // also leaves no half-applied address and no second promise to drop.
+      void Promise.resolve(navigate({
         to: '/workspaces/$workspaceId/chat',
         params: { workspaceId: wsId },
+        search: { open: session.id },
         replace: true,
-      })
-      // #1437: the replace-redirect above is the redirect contract its tests
-      // pin, but by itself it drops the session from the address — a reload
-      // of the resulting address then re-enters the workspace through the
-      // remembered-chat pointer, which another tab may have moved to a
-      // different chat. Writing the linked session into the chat address's
-      // declared `open` search key (second replace, immediately after) keeps
-      // the address naming exactly this chat: WorkspaceTabContainer's entry
-      // reads it as the chat pointer for the page, so reloading the address
-      // always returns HERE. Without this write a session link loses its
-      // identity on the very first reload.
-      void navigate({
-        search: ((prev: Record<string, unknown>) => ({ ...prev, open: session.id })) as never,
-        replace: true,
+      })).catch((error: unknown) => {
+        logDiagnostic('sessionRouteRedirectFailed', { sessionId: session.id, workspaceId: wsId, error: error instanceof Error ? error.name : 'unknown' })
       })
       return
     }
