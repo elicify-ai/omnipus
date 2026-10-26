@@ -7,14 +7,14 @@ import { useConnectionStore } from '@/store/connection'
 import { mergeRecordedSessionTokens } from './session-usage'
 import { isPendingTailMessage } from './cursor'
 import { emptyHistoryState, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
-import { applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, rememberHistoryReadFacts, settleHistorySpans } from './history-merge'
+import { applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, rememberHistoryReadFacts, settleHistorySpans, beginHistoryReadTick } from './history-merge'
 export { emptyHistoryState } from './history-state'
 export type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing, SessionHistoryState, SessionHistoryRange, HistoryRequestState } from './types'
 
 const missingHistory = emptyHistoryState()
 export function selectSessionHistory(state: ChatStore, sessionId: string) { return state.sessionsById[sessionId]?.history ?? missingHistory }
 
-type ReadOwner = { generation: number; controller: AbortController; promise: Promise<void>; query: SessionHistoryQuery; baseline: Record<string, ChatMessage>; staged: SessionHistoryPage['entries'] } // not-wire-format
+type ReadOwner = { generation: number; controller: AbortController; promise: Promise<void>; query: SessionHistoryQuery; baseline: Record<string, ChatMessage>; staged: SessionHistoryPage['entries']; readTick: number } // not-wire-format
 const owners = new Map<string, Map<HistoryActionKind, ReadOwner>>()
 const failed = new Map<string, Map<HistoryActionKind, SessionHistoryQuery>>()
 const releaseHooks = new Set<(sessionId: string | null) => void>()
@@ -46,7 +46,7 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
     const generation = bucket?.history.viewGeneration ?? 0
     const previous = bucket?.history.requests[kind]
     withBucket(sid, b => ({ history: { ...b.history, requests: { ...b.history.requests, [kind]: { status: 'loading', error: previous?.error ?? null, attempt: (previous?.attempt ?? 0) + 1 } } } }))
-    const owner: ReadOwner = { generation, controller, query: { ...query }, promise: Promise.resolve(), baseline: { ...bucket?.messagesById }, staged: [] }
+    const owner: ReadOwner = { generation, controller, query: { ...query }, promise: Promise.resolve(), baseline: { ...bucket?.messagesById }, staged: [], readTick: beginHistoryReadTick() }
     if (!owners.has(sid)) owners.set(sid, new Map())
     owners.get(sid)!.set(kind, owner)
     const valid = () => !controller.signal.aborted && state(sid)?.history.viewGeneration === generation && owners.get(sid)?.get(kind) === owner
@@ -57,7 +57,7 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
           const page = await fetchSessionMessages(sid, { ...query, signal: controller.signal })
           if (!valid()) return
           validateReadDomain(page, query, kind)
-          withBucket(sid, b => applyHistoryPageToBucket(b, page, kind, owner.baseline))
+          withBucket(sid, b => applyHistoryPageToBucket(b, page, kind, owner.baseline, owner.readTick))
         }
         if (!valid()) return
         failed.get(sid)?.delete(kind)
@@ -127,7 +127,7 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
       const live = liveOrder.flatMap(id => b.messagesById[id] ? [b.messagesById[id]] : [])
       // Refreshed saved rows re-settle their spans exactly as a page commit
       // does, or a reconstructed helper row would lose its span (I3).
-      rememberHistoryReadFacts(sid, rows, contexts)
+      rememberHistoryReadFacts(sid, rows, contexts, owner.readTick)
       const spans = settleHistorySpans(sid, [...rows, ...pending], live, b.pendingSpanUpdatesBySpanId)
       const patch = historyRowsPatch(b, [...spans.rows, ...live], ordered)
       return { ...patch, messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: liveOrder,

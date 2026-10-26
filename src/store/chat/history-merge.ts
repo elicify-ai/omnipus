@@ -121,11 +121,20 @@ function releaseDetachedSpanFacts(sessionId: string, rows: Iterable<ChatMessage>
 }
 
 /**
- * Remember one read's span facts: its entries in page order, then each page
- * context in fetch order, above the entries.
+ * The chronology tick of a read that starts now (architect N2). A read ranks
+ * its facts by when it STARTED, so a live frame recorded while its response
+ * was pending outranks that older response at commit time.
  */
-export function rememberHistoryReadFacts(sessionId: string, entries: ChatMessage[], contexts: ReadonlyArray<HistoryContext>): void {
-  const tick = ++factTick
+export function beginHistoryReadTick(): number {
+  return ++factTick
+}
+
+/**
+ * Remember one read's span facts: its entries in page order, then each page
+ * context in fetch order, above the entries. `tick` is the read's start tick
+ * (beginHistoryReadTick); a read without one ranks as starting now.
+ */
+export function rememberHistoryReadFacts(sessionId: string, entries: ChatMessage[], contexts: ReadonlyArray<HistoryContext>, tick = ++factTick): void {
   entries.forEach((row, rank) => {
     if (row.role === 'assistant' && row.historySpanFrame) rememberSpanFact(sessionId, { frame: row.historySpanFrame, tick, rank })
   })
@@ -245,7 +254,7 @@ function coalescedOwner(bucket: SessionChatState, entry: SessionHistoryEntry): C
   return owners.length === 1 ? owners[0] : undefined
 }
 
-export function applyHistoryPageToBucket(bucket: SessionChatState, page: SessionHistoryPage, action: HistoryActionKind, baseline: Record<string, ChatMessage> = bucket.messagesById): Partial<SessionChatState> {
+export function applyHistoryPageToBucket(bucket: SessionChatState, page: SessionHistoryPage, action: HistoryActionKind, baseline: Record<string, ChatMessage> = bucket.messagesById, readTick?: number): Partial<SessionChatState> {
   const history = bucket.history
   const old = currentHistoryEntries(bucket)
   const pagePositions = page.entries.map(entry => entry.historyPosition)
@@ -306,7 +315,7 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
     }
   }
   const hidden = hiddenIds.flatMap(id => bucket.messagesById[id] ? [bucket.messagesById[id]] : [])
-  rememberHistoryReadFacts(page.session_id, incoming, [page.page_info.context])
+  rememberHistoryReadFacts(page.session_id, incoming, [page.page_info.context], readTick)
   const spans = settleHistorySpans(page.session_id, finalRows, hidden, bucket.pendingSpanUpdatesBySpanId)
   const patch = { ...historyRowsPatch(bucket, [...spans.rows, ...hidden], positions), messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: hiddenIds }
   patch.spanBySpanId = { ...patch.spanBySpanId, ...spans.index }
