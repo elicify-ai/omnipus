@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-const goalStalledWorkCheckInAfter = 30 * time.Minute
 const goalBusyLabelLimit = 10
 
 // A reservation is process-local, and tied to the server's existing wake ID and

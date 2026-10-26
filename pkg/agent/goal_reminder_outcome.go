@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 )
 
@@ -174,7 +175,7 @@ func (al *AgentLoop) reportGoalReminderAssessment(sessionID string, rec *goal.Go
 // prepareGoalReminderDispatch observes work before reserving the existing idle
 // marker. It never increments the streak. A write/read failure retains the
 // current assessment window and prevents an unaccountable extra reminder.
-func (al *AgentLoop) prepareGoalReminderDispatch(sessionID string, rec *goal.Goal, observedAt time.Time, quietWindow time.Duration) (bool, *goalBusyCheckIn) {
+func (al *AgentLoop) prepareGoalReminderDispatch(sessionID string, rec *goal.Goal, observedAt time.Time, quietWindow time.Duration, cfg config.PlanningConfig) (bool, *goalBusyCheckIn) {
 	work := goalReminderWorkFor(rec.GoalID)
 	work.mu.Lock()
 	current, err := activeGoalForSession(sessionID)
@@ -195,8 +196,8 @@ func (al *AgentLoop) prepareGoalReminderDispatch(sessionID string, rec *goal.Goa
 	var checkIn *goalBusyCheckIn
 	if busy {
 		current, err = resetBusyGoalReminderProgress(sessionID, current, work, progress, observedAt)
-		if err != nil || work.checkInSent || work.checkIn != nil || work.stallSince.IsZero() ||
-			observedAt.Sub(work.stallSince) < goalStalledWorkCheckInAfter || len(work.busyLabels) == 0 {
+		if err != nil || !cfg.EffectiveGoalStalledCheckinEnabled() || work.checkInSent || work.checkIn != nil || work.stallSince.IsZero() ||
+			observedAt.Sub(work.stallSince) < time.Duration(cfg.EffectiveGoalStalledCheckinMinutes())*time.Minute || len(work.busyLabels) == 0 {
 			work.mu.Unlock()
 			al.reportGoalReminderAssessment(sessionID, current, err)
 			return false, nil
@@ -230,7 +231,12 @@ func (al *AgentLoop) prepareGoalReminderDispatch(sessionID string, rec *goal.Goa
 			work.checkIn, work.checkInSent = checkIn, true
 		}
 		consumeGoalReminderProgress(rec.GoalID, work, observedAt)
-		al.markGoalIdleFired(rec.GoalID, observedAt)
+		if checkIn == nil {
+			al.markGoalIdleFired(rec.GoalID, observedAt)
+		}
+		// A busy check-in reservation is not real activity. Its actual admitted
+		// turn uses the normal activity rules; a failed publish must not restart
+		// the separate idle quiet clock.
 	}
 	work.mu.Unlock()
 	return reserved, checkIn

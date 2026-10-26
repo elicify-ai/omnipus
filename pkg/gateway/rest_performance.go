@@ -150,7 +150,7 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var req gen.PerformanceSettingsUpdate
-	if !decodeAndValidate(w, r, "PerformanceSettingsUpdate", &req, validateEnabled) {
+	if !decodePerformanceUpdate(w, r, &req, validateEnabled) {
 		return
 	}
 

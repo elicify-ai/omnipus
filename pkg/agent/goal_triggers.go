@@ -98,13 +98,10 @@ const (
 	goalPillBlocked = "blocked"
 )
 
-// goalIdleQuietWindow is the ~60 s idle quiet window (FR-102). A goal-bearing
-// session with no genuine activity for this long — and not waiting-on-user,
-// not already adjudicating — fires ONE idle adjudication. The PlanEngine tick
-// (defaultPlanEngineTickInterval = 30 s) drives the sweep, so this fires on
-// the first tick after the window elapses. A var so tests substitute a short
-// window without a real 60 s wait.
-var goalIdleQuietWindow = 60 * time.Second //nolint:gochecknoglobals
+// DefaultGoalReminderQuietWindow is the shipped idle-only duration. Live
+// eligibility always uses PlanningConfig's effective value, never a mutable
+// process-global test timer. Reference-only fixtures can use this constant.
+const DefaultGoalReminderQuietWindow = time.Duration(config.DefaultGoalReminderQuietSeconds) * time.Second
 
 // goalBareClaimCostThreshold is N in G-4's "the Nth consecutive bare claim
 // costs a round" (= 2). The 1st bare claim (streak < threshold) is free — a teaching steer
@@ -379,8 +376,8 @@ type goalLiveTurnWork struct {
 
 // goalTriggers returns the package-wide goalTriggerState singleton. The idle
 // quiet-window's clock is NOT read here — it flows from the PlanEngine tick
-// (pe.clock) through goalIdleExpirySweep(now) → goalQuietWindowSettle(now), so
-// tests pin the window by swapping goalIdleQuietWindow + passing a fake now,
+// (pe.clock) through goalIdleExpirySweep → goalQuietWindowSettle; the current
+// planning configuration supplies the idle and busy durations independently,
 // not by overriding a trigger-local clock.
 func goalTriggers() *goalTriggerState {
 	goalTriggersMu.RLock()
@@ -1314,7 +1311,8 @@ func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudica
 // claimless adjudication per goal-id whose quiet window has elapsed. now is
 // caller-supplied (the PlanEngine clock) so tests pin the window without a
 // sleep. A no-op when no session store is available.
-func (al *AgentLoop) goalQuietWindowSettle(now time.Time) {
+func (al *AgentLoop) goalQuietWindowSettle(now time.Time, planning ...config.PlanningConfig) {
+	cfg := al.goalReminderPlanningConfig(planning)
 	store := al.GetSessionStore()
 	if store == nil {
 		return
@@ -1380,14 +1378,16 @@ func (al *AgentLoop) goalQuietWindowSettle(now time.Time) {
 				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": errString(merr)})
 			continue
 		}
-		al.maybeSettleGoalIdle(now, meta, rec)
+		al.maybeSettleGoalIdle(now, meta, rec, cfg)
 	}
 }
 
 // maybeSettleGoalIdle evaluates ONE session's idle preconditions and fires a
 // claimless adjudication if all hold. Split out so the per-goal logic is
 // independently testable.
-func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, s *session.UnifiedMeta, rec *goal.Goal) {
+func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, s *session.UnifiedMeta, rec *goal.Goal, planning ...config.PlanningConfig) {
+	cfg := al.goalReminderPlanningConfig(planning)
+	quietWindow := time.Duration(cfg.EffectiveGoalReminderQuietSeconds()) * time.Second
 	sessionID := s.ID
 	if !al.retryGoalReminderOutcome(sessionID, rec, now) {
 		return
@@ -1480,9 +1480,8 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, s *session.UnifiedMeta, 
 	// "a quiet goal is never judged without a claim" is untouched, and this
 	// branch's `return` is the same one it always had.
 	if live, fp := al.goalLiveTurnWorkFingerprint(sessionID); live {
-		if now.Sub(last) < goalIdleQuietWindow {
-			return
-		}
+		// A live turn is not idle: the configurable idle window must not
+		// gate this existing live-work suppression/grace observation.
 		frozenFor := al.observeGoalLiveTurnWork(rec.GoalID, fp, now)
 		if frozenFor < goalLiveTurnStallGrace {
 			logger.InfoCF("agent", "goal idle settle: suppressed, turn in flight",
@@ -1534,7 +1533,7 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, s *session.UnifiedMeta, 
 		// ADR-088 D3/FR-014/D6c: a RECORDLESS goal (active ∧ empty record) is
 		// NEVER judged at idle — there is nothing to adjudicate. The keeper's
 		// only action is the nudge ladder.
-		al.settleRecordlessGoal(sessionID, rec, now, goalIdleQuietWindow)
+		al.settleRecordlessGoal(sessionID, rec, now, quietWindow, cfg)
 		return
 	}
 
@@ -1548,13 +1547,15 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, s *session.UnifiedMeta, 
 	// to the SAME action (a bounded continue-push) — this is that
 	// unification, not a behavior change to which recorded goals get
 	// pushed. settleGoalNormally is unconditional now.
-	al.settleGoalNormally(sessionID, rec, now)
+	al.settleGoalNormally(sessionID, rec, now, cfg)
 }
 
 // settleGoalNormally dispatches one accounted reminder after real work is
 // quiet. Only the completed turn's assessment can advance the shared streak.
-func (al *AgentLoop) settleGoalNormally(sessionID string, rec *goal.Goal, now time.Time) {
-	ready, checkIn := al.prepareGoalReminderDispatch(sessionID, rec, now, goalIdleQuietWindow)
+func (al *AgentLoop) settleGoalNormally(sessionID string, rec *goal.Goal, now time.Time, planning ...config.PlanningConfig) {
+	cfg := al.goalReminderPlanningConfig(planning)
+	quietWindow := time.Duration(cfg.EffectiveGoalReminderQuietSeconds()) * time.Second
+	ready, checkIn := al.prepareGoalReminderDispatch(sessionID, rec, now, quietWindow, cfg)
 	if !ready {
 		return
 	}
@@ -1567,8 +1568,9 @@ func (al *AgentLoop) settleGoalNormally(sessionID string, rec *goal.Goal, now ti
 
 // settleRecordlessGoal uses the same observation, reservation and brake as a
 // recorded goal. Registration stays the working agent's job.
-func (al *AgentLoop) settleRecordlessGoal(sessionID string, rec *goal.Goal, now time.Time, quietWindow time.Duration) {
-	ready, checkIn := al.prepareGoalReminderDispatch(sessionID, rec, now, quietWindow)
+func (al *AgentLoop) settleRecordlessGoal(sessionID string, rec *goal.Goal, now time.Time, quietWindow time.Duration, planning ...config.PlanningConfig) {
+	cfg := al.goalReminderPlanningConfig(planning)
+	ready, checkIn := al.prepareGoalReminderDispatch(sessionID, rec, now, quietWindow, cfg)
 	if !ready {
 		return
 	}

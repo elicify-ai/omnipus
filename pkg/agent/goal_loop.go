@@ -1328,11 +1328,11 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 		}
 	}
 
-	// ADR-053 Phase-2 §1 (FR-102/G-2/G-3): the ~60 s quiet-window idle
-	// settlement — distinct from the multi-DAY calendar brake above — fires
-	// ONE claimless adjudication per goal-id whose quiet window elapsed.
+	// The live idle quiet window and independent busy check-in threshold are
+	// distinct from the multi-DAY calendar brake above. Both use this same
+	// sweep's current planning configuration and clock.
 	// Same tick driver (DoD-11: one periodic driver for all goal sweeps).
-	al.goalQuietWindowSettle(now)
+	al.goalQuietWindowSettle(now, cfg)
 }
 
 // effectiveGoalActivity returns the best available "last real activity"
