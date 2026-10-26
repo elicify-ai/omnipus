@@ -234,6 +234,11 @@ func round2AwaitGoalState(t *testing.T, taskID string, want generated.GoalState)
 	return nil
 }
 
+// round2RestartEvidence is the restarted run's own completion claim: distinct
+// from round 1's tryLimitEvidence so the stored result identifies WHICH run
+// adjudicated it (CR C1: a restart stores a NEW adjudicated result).
+const round2RestartEvidence = "reconciled the restarted ledger export against the archive"
+
 // TestRunTask_RestartsDoneTask_ContinuesBoundConversationWithNewResult is R1
 // through the public agent route (CR C1 / ARCH A1 / PRT F1 / SFH SF-4). A
 // task completes run 1 with an adjudicated result; an agent then restarts it
@@ -243,7 +248,10 @@ func round2AwaitGoalState(t *testing.T, taskID string, want generated.GoalState)
 // OLD: run_task refused the Done task outright ("already done"), so the
 // restart was unreachable through the front door at all.
 func TestRunTask_RestartsDoneTask_ContinuesBoundConversationWithNewResult(t *testing.T) {
-	worker := newClaimingWorker(turnClaimMet(tryLimitEvidence))
+	// Run 1 claims the shared round-1 evidence; the RESTARTED run claims its
+	// own distinct evidence (turn script: second turn repeats), so the stored
+	// result says which run adjudicated it.
+	worker := newClaimingWorker(turnClaimMet(tryLimitEvidence), turnClaimMet(round2RestartEvidence))
 	al, judgeInst := newGoalLoopTestLoop(t, worker, func(cfg *config.Config) {
 		cfg.Planning.GoalMaxRounds = 2
 		cfg.Planning.TaskMaxAttempts = 3
@@ -287,7 +295,8 @@ func TestRunTask_RestartsDoneTask_ContinuesBoundConversationWithNewResult(t *tes
 	require.NoError(t, gerr)
 	require.Equal(t, sid1, final.SessionID, "the restart must continue the SAME bound conversation")
 	require.NotEqual(t, result1, final.Result, "the restarted run must store a NEW adjudicated result, not the previous one")
-	require.NotEmpty(t, final.Result)
+	require.Contains(t, final.Result, round2RestartEvidence,
+		"the stored result must be the SECOND run's own adjudicated claim, got %q", final.Result)
 	rec2 := adr093Load(t, al, sid1)
 	require.Equal(t, rec1.Generation+1, rec2.Generation, "the continuation mints the next generation on the bound session")
 	require.Equal(t, sid1, rec2.ResumedFrom, "the continuation revives via resumed_from (transcript continuity)")

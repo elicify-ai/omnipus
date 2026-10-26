@@ -107,17 +107,23 @@ func TestRestStartTask_DoneBoundTask_ContinuesTheBoundConversation(t *testing.T)
 			},
 		},
 	}
+	// Production seeds goal_claim "allow" for every agent; without it the
+	// task loop's pre-flight fails the run before its first turn ("isn't
+	// allowed to report tasks as done"), and the dispatched continuation
+	// never reaches the model.
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), worker)
 
-	// The API's task store must be the loop's own store, so the seeded task is
-	// visible to the executor the route dispatches into.
-	home := config.OmnipusHomeDir()
+	// The API gets the loop's OWN task store — production wires exactly that
+	// (gateway_boot.go passes the loop's store), and the executor reads
+	// dir(AgentHomeBasePath())/tasks (loop_construct.go), NOT the isolated
+	// OMNIPUS_HOME. A split store made StartTaskNow fail "task not found".
 	api := &restAPI{
 		agentLoop:     al,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     task.New(filepath.Join(home, "tasks")),
+		taskStore:     agent.GetTaskStore(al),
 		taskLock:      task.TaskFileLock,
 		taskExecutor:  agent.GetTaskExecutor(al),
 	}
