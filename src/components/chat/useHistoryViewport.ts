@@ -34,7 +34,11 @@ type FillDirection = 'older' | 'newer'
 type FillOwner = { frame: number | null; finishLayout: (() => void) | null } // not-wire-format
 type Anchor = { position: string; offset: number; alternatives: { position: string; screenTop: number }[] } // not-wire-format
 
-function bindReaderIntent(scroller: HTMLElement, enter: () => void, dragging: { current: boolean }): () => void {
+function bindReaderIntent(scroller: HTMLElement, enterReading: () => void, dragging: { current: boolean }): () => void {
+  // Intent to read earlier content means something only when there is earlier
+  // content to scroll to: a conversation that fits never leaves the live end,
+  // so it must not show Return to latest (final-gate architect item A).
+  const enter = () => { if (scroller.scrollHeight > scroller.clientHeight) enterReading() }
   let touchY: number | null = null
   const wheel = (event: WheelEvent) => { if (event.deltaY < 0 && !event.ctrlKey) enter() }
   const key = (event: KeyboardEvent) => {
