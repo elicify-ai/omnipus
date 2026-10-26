@@ -55,10 +55,17 @@ func TestSeatbelt_RealChild_PlatformCertificateVerification(t *testing.T) {
 		os.Exit(seatbeltTrustdHelperMain(os.Args[i+1:]))
 	}
 
+	// No skip path. This test deliberately does NOT consult Available(): that
+	// honours the operator kill-switch (OMNIPUS_SEATBELT_DISABLE=1), and a
+	// regression test that turns into a green SKIP whenever that variable is
+	// exported would stop guarding anything. ApplyToCmd renders and wraps
+	// regardless of the switch, so the child below always runs under the real
+	// rendered profile. A macOS host without sandbox-exec cannot judge this
+	// regression at all, so that is a failure, not a skip.
+	fi, statErr := os.Stat(seatbeltExecPath)
+	require.NoError(t, statErr, "%s is required to run a child under the rendered profile", seatbeltExecPath)
+	require.False(t, fi.IsDir(), "%s is a directory, not the sandbox-exec binary", seatbeltExecPath)
 	backend := NewSeatbeltBackend()
-	if !backend.Available() {
-		t.Skip("sandbox-exec unavailable on this host")
-	}
 
 	exe, err := os.Executable()
 	require.NoError(t, err)
