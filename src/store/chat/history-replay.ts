@@ -12,7 +12,7 @@ import { applyToolCallResultFrame } from './slices/frames'
 import { refreshRosterAfterAgentMutation } from './agentMutationRefresh'
 import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
 import { useSessionStore } from '@/store/session'
-import { cursorFromTerminalFrame, isPendingTailMessage } from './cursor'
+import { cursorFromTerminalFrame, fenceCursorAcrossBoots, isPendingTailMessage } from './cursor'
 import { findFirstSendMessage } from './first-send'
 import { abortHistoryReads, registerHistoryRelease } from './history'
 import { applyHistoryPageToBucket, HistoryPageProtocolError, releaseHistorySpanFacts } from './history-merge'
@@ -204,10 +204,18 @@ function stageSpanFact(stage: Stage, frame: ServerFrame, entryId: string | undef
 /** D7: only a complete, applied snapshot may claim its cut. A rejected page
  * keeps the prior cursor, so the next live frame re-attaches from the position
  * this reader actually holds; a skipped page (a newer view owns the bucket)
- * still takes the frame's cursor. Current controls complete either way. */
+ * still takes the frame's cursor. Current controls complete either way.
+ * F2: when the rejected page came from ANOTHER boot, the kept cursor is fenced
+ * so the new boot's first sequenced frame re-attaches instead of comparing its
+ * new-boot seq with the old boot's number and being dropped. */
 function completeUncommittedSnapshot(context: HistorySliceContext, sid: string, frame: Extract<ServerFrame, { type: 'catch_up_complete' }>, outcome: 'rejected' | 'skipped'): void {
-  context.withBucket(sid, b => ({ ...(outcome === 'skipped' ? { cursor: cursorFromTerminalFrame(frame, b.cursor?.bootId) } : {}),
-    awaitingCatchUp: false, isReplaying: false, history: { ...b.history, liveControlsReady: true } }))
+  context.withBucket(sid, b => {
+    // Cross-boot only when BOTH boots are known: an empty bootId (a cursor
+    // minted from boot-less live frames) is an unknown boot, not a different one.
+    const crossBoot = outcome === 'rejected' && b.cursor != null && !!b.cursor.bootId && !!frame.boot_id && frame.boot_id !== b.cursor.bootId
+    return { ...(outcome === 'skipped' ? { cursor: cursorFromTerminalFrame(frame, b.cursor?.bootId) } : crossBoot && b.cursor ? { cursor: fenceCursorAcrossBoots(b.cursor) } : {}),
+      awaitingCatchUp: false, isReplaying: false, history: { ...b.history, liveControlsReady: true } }
+  })
 }
 
 export function createHistoryFrameOwner(context: HistorySliceContext) {

@@ -87,6 +87,12 @@ export function gateFrameBySeq(cursor: SessionCursor | null, frame: SeqFrameLike
   if (cursor === null) {
     return { kind: 'apply', cursor: { bootId, seq: frame.seq } }
   }
+  // F2 / D7: a fenced cursor is a prior-boot position whose new-boot snapshot
+  // was rejected. Live frames carry no boot_id, so their numbers cannot be
+  // compared with it: the first sequenced frame re-attaches instead.
+  if (fencedCursors.has(cursor)) {
+    return { kind: 'gap', cursor }
+  }
   if (frame.seq <= cursor.seq) {
     return { kind: 'drop' }
   }
@@ -94,6 +100,24 @@ export function gateFrameBySeq(cursor: SessionCursor | null, frame: SeqFrameLike
     return { kind: 'apply', cursor: { bootId, seq: frame.seq } }
   }
   return { kind: 'gap', cursor }
+}
+
+/** Cursor objects fenced by a rejected cross-boot snapshot. Membership is by
+ * object identity: any cursor-minting frame stores a new cursor object, which
+ * lifts the fence, and a released bucket takes its fence with it. */
+const fencedCursors = new WeakSet<SessionCursor>()
+
+/**
+ * F2 / spec D7: keep the prior cursor after a rejected snapshot from ANOTHER
+ * boot, but fence it. Its seq belongs to the old boot, so the new boot's live
+ * frames (which carry no boot_id) would compare as already applied and be
+ * dropped. The fence makes the next sequenced frame a gap, so the existing
+ * guarded, backed-off re-attach recovers from the retained position.
+ */
+export function fenceCursorAcrossBoots(cursor: SessionCursor): SessionCursor {
+  const fenced = { ...cursor }
+  fencedCursors.add(fenced)
+  return fenced
 }
 
 /**
