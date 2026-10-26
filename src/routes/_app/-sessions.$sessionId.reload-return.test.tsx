@@ -413,6 +413,41 @@ describe('F4 — a delegated child chat link retains its identity on reload', ()
     expect(reloaded.send.mock.calls.map(([frame]) => frame), 'the parent main is not a substitute for its child').not.toContainEqual(expect.objectContaining({ type: 'attach_session', session_id: MAIN_SESSION }))
   })
 
+  it('keeps a helper link with Retry when its detail check fails, then opens it on Retry', async () => {
+    const all = [...reviewScenario().sessions, delegateChild()]
+    unexpectedRequests = installSessionReturnNetwork({ ...reviewScenario(), sessions: all })
+    serveContractSessionList(all)
+    // The helper's own detail check (GET /sessions/{id}) fails at the HTTP
+    // boundary until recovered; every other request uses the contract fixture.
+    let detailRecovered = false
+    const listFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://localhost')
+      if (!detailRecovered && url.pathname === `/api/v1/sessions/${CHILD_SESSION}`) {
+        return Response.json({ message: 'Session store temporarily unavailable' }, { status: 503 })
+      }
+      return listFetch(input, init)
+    }))
+    act(() => rememberChat(WORKSPACE_ID, SESSION_B))
+    const mounted = await mountAddress(`#/workspaces/${WORKSPACE_ID}/chat?open=${CHILD_SESSION}`)
+    await waitFor(() => expect(page.useSessionStore.getState().workspaceEntry?.status).toBe('failed-attempt'))
+    const notice = await screen.findByTestId('unavailable-chat-notice')
+    expect(notice).toHaveTextContent('Could not restore your last conversation. Retry to try again.')
+    expect(screen.queryByText(/This linked conversation is unavailable/), 'a failed check is not proof the helper is gone').toBeNull()
+    expect(page.useSessionStore.getState().workspaceEntry).toMatchObject({ linkedSessionId: CHILD_SESSION, attempted: { sessionId: CHILD_SESSION } })
+    expect(mounted.router.state.location.search.open, 'the link keeps its target').toBe(CHILD_SESSION)
+    const frames = () => mounted.send.mock.calls.map(([frame]) => frame)
+    expect(frames(), 'the main chat is not a fallback').not.toContainEqual(expect.objectContaining({ type: 'attach_session', session_id: MAIN_SESSION }))
+    expect(frames(), 'the remembered chat is not a fallback').not.toContainEqual(expect.objectContaining({ type: 'attach_session', session_id: SESSION_B }))
+
+    detailRecovered = true
+    fireEvent.click(within(notice).getByRole('button', { name: 'Retry' }))
+    await expectChatInWorkspace(WORKSPACE_ID, CHILD_SESSION)
+    expect(mounted.router.state.location.search.open).toBe(CHILD_SESSION)
+    expect(mounted.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'attach_session', session_id: CHILD_SESSION }))
+    expect(frames()).not.toContainEqual(expect.objectContaining({ type: 'attach_session', session_id: MAIN_SESSION }))
+  })
+
   it('still reports a child chat from another workspace as unavailable', async () => {
     const all = [...reviewScenario().sessions, delegateChild(OTHER_WORKSPACE)]
     unexpectedRequests = installSessionReturnNetwork({ ...reviewScenario(), sessions: all })
