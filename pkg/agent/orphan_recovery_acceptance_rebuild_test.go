@@ -96,16 +96,23 @@ func orphanACLaterTurn(t *testing.T) {
 		orphanACGroup("new in-flight step is not canceled", "new-inflight-id"),
 	}
 	h.append(t, raw[:4]...)
+	issuer := r2Issuer(t, orphanACSnapshot(t, h), 1)
 	initial := orphanACAssemble(t, h, h.turn(""), h.agent.Sessions.GetHistory(h.key))
-	assert.Equal(t, orphanACPick(raw, 0, 3), initial[1:], "R3: canceled group is already absent before later appends")
+	// DESIGN 2/5 reconciliation: the assembly view retains the marker-bound
+	// declaration and shows one truthful observation; only the marker record
+	// itself is excluded from the model view.
+	require.Len(t, initial, 5, "envelope, user, retained declaration, observation, control")
+	r2CheckedObservation(t, initial[3], "old-id", issuer)
+	assert.Equal(t, orphanACPick(raw, 0, 1), initial[1:3], "R3: the canceled declaration stays in the view (DESIGN 5)")
+	assert.Equal(t, raw[3], initial[4], "R3: the unrelated control is preserved")
 	h.append(t, raw[4:]...)
 	before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
-	want := orphanACPick(raw, 0, 3, 4, 5, 6, 7)
 	out := orphanACAssemble(t, h, h.turn(""), h.agent.Sessions.GetHistory(h.key))
+	want := append(orphanACPick(raw, 0, 1), initial[3], orphanACPick(raw, 3, 4, 5, 6, 7)...)
 	assert.Equal(t, want, out[1:], "R3: later assembly neither resurrects the old orphan nor erases a genuinely live incomplete group")
 	candidate := append([]providers.Message{{Role: "system", Content: "independent pinned envelope"}}, want...)
-	require.Equal(t, []int{-1, 0, 3, 4, 5, 6, 7}, mapWindowMessages(before, candidate, -1, 0), "R3: every later archived slot has its own original address, including in-flight declarations")
-	orphanACAssertRejectedBeforeSend(t, h, h.turn(""), candidate, "context request: incomplete or invalid tool-result group at message 6")
+	require.Equal(t, []int{-1, 0, 1, -1, 3, 4, 5, 6, 7}, mapWindowMessages(before, candidate, -1, 0), "R3: every archived slot keeps its original address; the inserted observation is ephemeral")
+	orphanACAssertRejectedBeforeSend(t, h, h.turn(""), candidate, "context request: incomplete or invalid tool-result group at message 8")
 	orphanACAssertUnchanged(t, h, before, bytes)
 }
 
