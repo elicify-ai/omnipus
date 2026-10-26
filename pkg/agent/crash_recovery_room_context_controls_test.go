@@ -40,7 +40,7 @@ type crashRoomContext struct {
 	done              <-chan error
 }
 
-func crashConsumedRoomContext(t *testing.T, hold bool) *crashRoomContext {
+func crashConsumedRoomContext(t *testing.T, hold bool, configure ...func(*crashHarness, *crashScript)) *crashRoomContext {
 	t.Helper()
 	crashRequireRoomCausality(t)
 	p := &crashScript{}
@@ -68,6 +68,9 @@ func crashConsumedRoomContext(t *testing.T, hold bool) *crashRoomContext {
 			<-release
 		}
 		return &providers.LLMResponse{Content: closureRoomPlan + " unfinished room answer", FinishReason: "stop"}, nil
+	}
+	for _, apply := range configure {
+		apply(h, p)
 	}
 	_, err = h.al.AdmitRoomRequest(context.Background(), RoomRequestAdmission{Receiver: addressing.Pair{WorkspaceID: testHarnessWorkspaceMembershipID, AgentID: testDefaultAgentID}, DeliveryID: f.request, RoomID: "context-room", RoomName: "Context", Sender: addressing.Sender{Principal: "owner"}, SenderLabel: "the user", DisplayText: closureRoomDemand, ModelText: closureRoomDemand})
 	require.NoError(t, err)

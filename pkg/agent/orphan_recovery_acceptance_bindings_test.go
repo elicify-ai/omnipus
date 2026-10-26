@@ -3,7 +3,6 @@
 package agent
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -120,19 +119,20 @@ func orphanACRecoveryIdempotence(t *testing.T) {
 	}
 	h.append(t, raw...)
 	before := orphanACSnapshot(t, h)
-	want := orphanACPick(raw, 0, 3, 4, 6)
+	issuer := r2Issuer(t, before, 5)
 	cleaned := RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil)
 	after := orphanACSnapshot(t, h)
-	require.Len(t, viewArchived(after), 8, "I2: earlier call_0 record cannot suppress cancellation of the later assistant position")
+	require.Len(t, viewArchived(after), 8, "I2: the earlier call_0 marker cannot suppress the later unresolved occurrence's own record")
 	require.Equal(t, viewArchived(before), viewArchived(after)[:7], "positional recovery appends only, preserving both original orphan declarations")
-	require.Equal(t, "system", viewArchived(after)[7].Role)
-	var marker map[string]any
-	require.NoError(t, json.Unmarshal([]byte(viewArchived(after)[7].Content), &marker))
-	require.Equal(t, map[string]any{"type": "turn_canceled_restart", "tool_call_id": "call_0", "reason": "ungraceful_shutdown_recovery"}, marker, "second record binds to the later declaration without a new persisted shape")
+	require.Equal(t, "tool", viewArchived(after)[7].Role, "DESIGN 5: the new record is an engine observation, not another cancellation")
+	observation := viewArchived(after)[7].Message
+	r2CheckedObservation(t, observation, "call_0", issuer)
 	require.Equal(t, 8, after.State.Count)
 	require.Equal(t, before.State.Skip, after.State.Skip)
 	require.Equal(t, before.State.AnchorLine, after.State.AnchorLine)
-	require.Equal(t, want, cleaned, "recovery removes both bound abandoned occurrences but no user/control/narration")
+	want := append(orphanACPick(raw, 0, 3, 4, 5), observation, raw[6])
+	require.Equal(t, want, cleaned, "the marker-bound earlier group stays excluded, the later declaration is retained with one truthful observation and no user/control/narration moves")
+	require.NoError(t, validateWindowGroups(cleaned), "retained declaration pairs with its own observation")
 	bytes := orphanACArchiveBytes(t, h)
 	require.Equal(t, want, RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil), "second recovery yields the same exact view")
 	orphanACAssertUnchanged(t, h, after, bytes)

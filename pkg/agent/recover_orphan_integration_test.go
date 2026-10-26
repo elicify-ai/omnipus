@@ -9,8 +9,8 @@
 //
 //  (a) The LLM does NOT see the orphaned tool_call_id in its history payload
 //      (verified via ScenarioProvider.LastMessages() captured on the first Chat call).
-//  (b) An audit event tool.policy.ask.denied with decision=deny and
-//      details.reason="restart" was emitted.
+//  (b) The typed tool.recovery.interrupted Unknown audit entry (decision=error)
+//      naming the orphaned call was emitted (DESIGN 5 supersedes ask.denied).
 //  (c) The on-disk transcript (via store.GetHistory) contains BOTH the original
 //      orphaned assistant entry AND a new role=system turn_canceled_restart entry.
 //
@@ -37,6 +37,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // TestRecoverOrphan_Wired_In_SessionLoadPath drives the full session-load →
@@ -50,8 +51,8 @@ import (
 //   - Call ProcessDirect which routes through runTurn (same path as production).
 //
 // The session-load path in runTurn calls RecoverOrphanedToolCalls (V2.D wiring),
-// which strips the orphaned assistant turn from the LLM context and writes the
-// synthetic turn_canceled_restart system message.
+// which now retains the declaration and appends a durable engine observation
+// for the missing result (DESIGN 2/5), so the reconciled group stays sendable.
 func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	tmpHome := t.TempDir()
 	workspaceDir := filepath.Join(tmpHome, "workspace")
@@ -82,6 +83,19 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
+	// DESIGN 2: recovery needs the real lifecycle/execution identity. The
+	// legacy V2.D fixture predated the shared messaging stores; wire the same
+	// real stores every other fixture uses (no lifecycle store means the
+	// pre-model fence refuses any turn with orphans, by design).
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(workspaceDir, "session_messages")),
+		session.NewLifecycleStore(filepath.Join(workspaceDir, "session_lifecycle")))
+	epochDir := filepath.Join(workspaceDir, "boot_epoch")
+	require.NoError(t, os.MkdirAll(epochDir, 0o700))
+	boot := session.NewBootEpochStore(epochDir)
+	_, err := boot.Mint()
+	require.NoError(t, err, "fixture: mint a genuine boot epoch for ordinary admission")
+	al.SetBootEpochStore(boot)
 
 	// Resolve the session key the direct turn will use: the explicit-agent
 	// route's key for channel "cli", chat "direct" ("mia" is the only agent
@@ -91,8 +105,12 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	// Seed the default agent's session store with an orphaned history.
 	// An orphaned history = assistant message with tool_calls but NO subsequent
 	// tool result message (simulates a gateway SIGKILL while awaiting approval).
+	// DESIGN 2 reconciliation: the orphan names a REGISTERED READ-ONLY tool, so
+	// recovery resolves it without an uncertainty hold and the turn proceeds —
+	// this test proves the V2.D wiring, while the reconciliation_required fence
+	// for unresolvable effects is covered by the dedicated hold tests.
 	const orphanToolCallID = "tc-orphan-v2d"
-	const orphanToolName = "exec"
+	const orphanToolName = "read_file"
 
 	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "default agent must be registered")
@@ -125,21 +143,24 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	lastMsgs := provider.LastMessages()
 	require.NotNil(t, lastMsgs, "ScenarioProvider must have been called at least once")
 
+	// DESIGN 2/5 supersedes FR-088's omission: the provider receives the
+	// original declaration plus one engine observation for its missing result,
+	// so the group is provider-valid without inventing a historical return.
+	sawDeclaration, sawObservation := false, false
 	for _, msg := range lastMsgs {
 		if msg.Role == "assistant" {
 			for _, tc := range msg.ToolCalls {
-				assert.NotEqual(t, orphanToolCallID, tc.ID,
-					"LLM prompt must NOT contain the orphaned tool_call_id %q (FR-088)", orphanToolCallID)
+				if tc.ID == orphanToolCallID {
+					sawDeclaration = true
+				}
 			}
 		}
-	}
-
-	// Verify no orphaned assistant message at all in the prompt.
-	for _, msg := range lastMsgs {
-		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			t.Errorf("LLM prompt must NOT contain any assistant message with tool_calls (FR-088); got: %+v", msg)
+		if msg.Role == "tool" && msg.ToolCallID == orphanToolCallID && strings.Contains(msg.Content, "tool_recovery_observation") {
+			sawObservation = true
 		}
 	}
+	assert.True(t, sawDeclaration, "provider input retains the original orphaned declaration (DESIGN 5)")
+	assert.True(t, sawObservation, "provider input carries the engine observation for the missing result (DESIGN 5)")
 
 	// -------------------------------------------------------------------
 	// Assert (b): audit event tool.policy.ask.denied with reason="restart"
@@ -152,23 +173,26 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	auditEntries, readErr := readAuditEntries(auditPath)
 	require.NoError(t, readErr, "audit.jsonl must be parseable")
 
-	var foundRestartDeny bool
+	// DESIGN 5: a read-only orphan resolves to effect_absent — the truthful
+	// observation event, never a policy Deny and never an invented return.
+	var foundRecoveryObservation bool
 	for _, entry := range auditEntries {
-		if entry["event"] == string(audit.EventToolPolicyAskDenied) &&
-			entry["decision"] == string(audit.DecisionDeny) {
+		assert.NotEqual(t, string(audit.DecisionDeny), entry["decision"],
+			"DESIGN 5: a missing result is never a policy denial")
+		if entry["event"] == string(audit.EventToolRecoveryObservation) {
 			if details, ok := entry["details"].(map[string]any); ok {
-				if reason, _ := details["reason"].(string); reason == "restart" {
-					foundRestartDeny = true
-					tc, _ := details["tool_call_id"].(string)
-					assert.Equal(t, orphanToolCallID, tc,
-						"audit entry must name the orphaned tool_call_id")
+				disposition, _ := details["disposition"].(string)
+				tc, _ := details["tool_call_id"].(string)
+				recovered, _ := details["original_result_recovered"].(bool)
+				if tc == orphanToolCallID && disposition == "effect_absent" && !recovered {
+					foundRecoveryObservation = true
 				}
 			}
 		}
 	}
-	assert.True(t, foundRestartDeny,
-		"audit log must contain tool.policy.ask.denied with reason=restart "+
-			"(emitted by RecoverOrphanedToolCalls at session-load time); entries: %v", auditEntries)
+	assert.True(t, foundRecoveryObservation,
+		"audit log must contain the typed recovery observation (effect_absent, not recovered) "+
+			"for the exact occurrence (DESIGN 2/5); entries: %v", auditEntries)
 
 	// -------------------------------------------------------------------
 	// Assert (c): on-disk transcript contains BOTH the original orphaned
@@ -176,8 +200,7 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	// -------------------------------------------------------------------
 	fullHistory := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
 
-	var hasOrphanedAssistant bool
-	var hasSyntheticSystem bool
+	var hasOrphanedAssistant, hasRecoveryObservation bool
 	for _, msg := range fullHistory {
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
@@ -186,19 +209,18 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 				}
 			}
 		}
-		if msg.Role == "system" &&
-			strings.Contains(msg.Content, "turn_canceled_restart") &&
-			strings.Contains(msg.Content, orphanToolCallID) {
-			hasSyntheticSystem = true
+		if msg.Role == "tool" && msg.ToolCallID == orphanToolCallID &&
+			strings.Contains(msg.Content, "tool_recovery_observation") {
+			hasRecoveryObservation = true
 		}
 	}
 
 	assert.True(t, hasOrphanedAssistant,
-		"on-disk transcript must PRESERVE the original orphaned assistant entry (audit trail, FR-069); "+
+		"on-disk transcript must PRESERVE the original orphaned assistant entry (DESIGN 5); "+
 			"full history: %v", fullHistory)
-	assert.True(t, hasSyntheticSystem,
-		"on-disk transcript must contain the synthetic turn_canceled_restart system entry "+
-			"(FR-069); full history: %v", fullHistory)
+	assert.True(t, hasRecoveryObservation,
+		"on-disk transcript must contain the durable engine observation for the missing result "+
+			"(DESIGN 2/5), not a synthetic cancellation; full history: %v", fullHistory)
 
 	// -------------------------------------------------------------------
 	// Differentiation: if RecoverOrphanedToolCalls had NOT been wired, the
