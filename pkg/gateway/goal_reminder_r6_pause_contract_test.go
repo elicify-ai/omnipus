@@ -186,3 +186,116 @@ func r6PauseHistoryMessages(t *testing.T, f *r6PublicFixture, detail generated.S
 		page, mode = older, "older"
 	}
 }
+
+// TestR6PauseHistoryMessagesRetainsOlderPageDuplicate makes the whole-history
+// count oracle depend on a real older page, not just the default latest tail.
+func TestR6PauseHistoryMessagesRetainsOlderPageDuplicate(t *testing.T) {
+	f := r6NewPublicFixture(t)
+	store := f.al.GetSessionStore()
+	meta, err := store.GetMeta(f.root)
+	require.NoError(t, err, "BLOCKED: real session ownership is required for the paging premise.")
+	require.NotEmpty(t, meta.AgentID)
+	// A page holds at most 100 source groups; these 102 distinct whole entries
+	// force a boundary independently of logical-row weighting or byte budgets.
+	const seedCount = 102
+	expectedIDs := make(map[string]bool, seedCount)
+	var pauseIDs []string
+	at := time.Now().UTC().Add(-time.Second)
+	for i := 0; i < seedCount; i++ {
+		entry := session.TranscriptEntry{
+			ID: "r6-paged-seed-" + time.Duration(i).String(), Type: session.EntryTypeMessage,
+			Role: "user", AgentID: meta.AgentID, Content: "Benign whole-history paging filler.",
+			Timestamp: at.Add(time.Duration(i) * time.Millisecond),
+		}
+		if i == 0 || i == seedCount-1 {
+			entry.Role, entry.Status, entry.Content, entry.GoalID = "system", "notice", r6GatewayPause, f.goalID
+			pauseIDs = append(pauseIDs, entry.ID)
+		}
+		expectedIDs[entry.ID] = true
+		require.NoError(t, store.AppendTranscriptStrict(f.root, entry), "BLOCKED: seed must use the real canonical append/index pipeline.")
+	}
+	require.Equal(t, seedCount, len(expectedIDs))
+	require.Equal(t, 2, len(pauseIDs))
+	require.True(t, pauseIDs[0] != pauseIDs[1], "The two saved pause notices must have distinct identities.")
+	w := httptest.NewRecorder()
+	f.api.HandleSessions(w, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+url.PathEscape(f.root), nil))
+	require.Equal(t, http.StatusOK, w.Code, "BLOCKED: actual authorized latest history must be readable.")
+	validationMessage, schemaError := validateBodyAgainstSchema("SessionDetail", w.Body.Bytes())
+	require.False(t, schemaError, "BLOCKED: actual detail schema must be available.")
+	require.True(t, validationMessage == "", "BLOCKED: actual detail must satisfy its contract.")
+	var detail generated.SessionDetail
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
+	require.Equal(t, "available", detail.HistoryState.Status, "BLOCKED: unavailable history is not an empty successful premise.")
+	require.NotNil(t, detail.Messages)
+	require.NotNil(t, detail.PageInfo)
+	require.NotNil(t, detail.HasEarlier)
+	require.NotNil(t, detail.HasLater)
+	require.True(t, *detail.HasEarlier, "BLOCKED: latest carrier must prove a real older-page boundary.")
+	require.False(t, *detail.HasLater)
+	require.NotNil(t, detail.NextBefore)
+	require.Equal(t, "latest", detail.PageInfo.Mode)
+	require.Equal(t, 40, detail.PageInfo.Limit, "SessionDetail uses the contract's unmodified default row target.")
+	require.Equal(t, 20, detail.PageInfo.MinRows, "SessionDetail uses the contract's unmodified default floor.")
+	latestPauseCount, olderInLatest, recentInLatest := 0, false, false
+	for _, row := range *detail.Messages {
+		olderInLatest = olderInLatest || row.Id == pauseIDs[0]
+		recentInLatest = recentInLatest || row.Id == pauseIDs[1]
+		if row.Content != nil && *row.Content == r6GatewayPause {
+			latestPauseCount++
+		}
+	}
+	require.False(t, olderInLatest, "BLOCKED: the older seed notice must be outside the initial page.")
+	require.True(t, recentInLatest, "BLOCKED: the recent seed notice must be inside the initial page.")
+	require.Equal(t, 1, latestPauseCount)
+	// Independently follow the actual generated cursor chain to establish the
+	// physical multipage premise before invoking the reader under test.
+	cursor, pageCount, olderPauseCount := detail.NextBefore, 1, 0
+	seenCursors := map[string]bool{}
+	for cursor != nil {
+		require.False(t, seenCursors[*cursor], "BLOCKED: the independent history premise must not cycle.")
+		seenCursors[*cursor] = true
+		olderW := httptest.NewRecorder()
+		f.api.HandleSessions(olderW, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+url.PathEscape(f.root)+"/messages?before="+url.QueryEscape(*cursor), nil))
+		require.Equal(t, http.StatusOK, olderW.Code, "BLOCKED: real older history must remain readable.")
+		validationMessage, schemaError = validateBodyAgainstSchema("SessionHistoryResponse", olderW.Body.Bytes())
+		require.False(t, schemaError, "BLOCKED: actual older schema must be available.")
+		require.True(t, validationMessage == "", "BLOCKED: actual older carrier must satisfy its contract.")
+		var older generated.SessionHistoryResponse
+		require.NoError(t, json.Unmarshal(olderW.Body.Bytes(), &older))
+		require.True(t, older.SessionId == f.root, "BLOCKED: older pages must retain addressed session identity.")
+		require.Equal(t, "older", older.PageInfo.Mode)
+		require.NotEmpty(t, older.Entries, "BLOCKED: the independent older-page chain must make progress.")
+		require.Equal(t, older.HasEarlier, older.NextBefore != nil)
+		pageCount++
+		for _, row := range older.Entries {
+			if row.Id == pauseIDs[0] {
+				require.NotNil(t, row.Content)
+				require.True(t, *row.Content == r6GatewayPause)
+				olderPauseCount++
+			}
+		}
+		cursor = older.NextBefore
+	}
+	require.GreaterOrEqual(t, pageCount, 2)
+	require.Equal(t, 1, olderPauseCount, "The specific older saved notice must be witnessed through the actual older carrier chain.")
+	t.Logf("R6_MULTIPAGE_PREMISE pages=%d latest_entries=%d older_pause=%d latest_pause=%d seeded_entries=%d", pageCount, len(*detail.Messages), olderPauseCount, latestPauseCount, seedCount)
+	all := r6PauseHistoryMessages(t, f, detail, w.Body.Bytes())
+	seenIDs, pauseCount := map[string]int{}, 0
+	for _, row := range all {
+		if expectedIDs[row.Id] {
+			seenIDs[row.Id]++
+		}
+		if row.Content != nil && *row.Content == r6GatewayPause {
+			pauseCount++
+		}
+	}
+	require.Equal(t, 2, pauseCount, "The whole-history reader must retain both distinct saved pause notices, including the older-page duplicate.")
+	for _, id := range pauseIDs {
+		require.Equal(t, 1, seenIDs[id], "Each specifically arranged pause identity must survive exactly once.")
+	}
+	require.Equal(t, seedCount, len(seenIDs), "The whole-history reader must retain the full independently arranged seed set.")
+	for id := range expectedIDs {
+		require.Equal(t, 1, seenIDs[id], "Every independently arranged source entry must survive exactly once.")
+	}
+	t.Logf("R6_MULTIPAGE_RESULT retained_seed_entries=%d retained_pause_entries=%d", len(seenIDs), pauseCount)
+}
