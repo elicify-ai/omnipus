@@ -159,7 +159,6 @@
  * thing it is testing proves nothing about what ships.
  */
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
-import { softSkip } from './fixtures/skip-tracking';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -943,11 +942,6 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
   // UAT 2026-09-13 D-106 — the top-level tab is refused, and still contained
   // ───────────────────────────────────────────────────────────────────────────
   test('D-106 — the same token URL opened as its own tab is refused, carries the isolation policy, and never renders the page', async ({ page }) => {
-    // Temporary isolation-webkit-only quarantine: current CI top-level refusal failure.
-    // https://github.com/elicify-ai/omnipus/issues/1181 — expires 2026-10-17.
-    if (test.info().project.name === 'isolation-webkit') {
-      softSkip(test, 'D-106 isolation-webkit CI failure; security verification gap: https://github.com/elicify-ai/omnipus/issues/1181; expires 2026-10-17');
-    }
     // The witness for what replaced the old top-level measurements (founder
     // ruling 2026-09-14). A preview token URL exists to feed the framed view;
     // opened as a page of its own, a hostile file would own the tab title and
@@ -968,7 +962,18 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     expect(servedPolicy, 'FR-005a: every token-path response carries the §10.3 policy').toBeTruthy();
     expect(await served.text(), 'the served bytes must be the hostile fixture').toContain('<title>hostile-preview</title>');
 
-    const nav = await page.goto(tokenURL);
+    // #1181 race fix (was quarantined on isolation-webkit): this top-level
+    // goto must not be issued from the SPA page above. That document fires
+    // its own hash-history navigations right after load, and WebKit's driver
+    // fails a cross-document goto issued while the old document is still
+    // navigating ("interrupted by another navigation") — a test race, not a
+    // product one. Navigate from a neutral page instead, the same second-page
+    // pattern the positive control in the isolation suite uses: the shared
+    // context means the same cookie jar and the same request log, so every
+    // assertion below keeps its strength, and the refusal itself stays
+    // asserted exactly as before.
+    const topPage = await page.context().newPage();
+    const nav = await topPage.goto(tokenURL);
     expect(nav, 'navigation produced no response').not.toBeNull();
     expect(nav!.status(), 'D-106: a top-level document request for a file that renders is refused').toBe(403);
     expect(nav!.headers()['content-security-policy'], 'the refusal page carries the same isolation policy, byte for byte')
@@ -979,17 +984,18 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     // The file did not render and its script did not run, measured three ways:
     // its DOM is absent, its same-origin pings never left, and nothing reached
     // the second origin.
-    await page.waitForTimeout(EGRESS_SETTLE_MS);
+    await topPage.waitForTimeout(EGRESS_SETTLE_MS);
     await log.settle();
-    expect(await page.title(), 'the tab title belongs to the file').not.toMatch(/^(hostile-preview|RESULT:)/);
-    expect(await page.locator('#gesture').count(), 'the fixture DOM rendered top-level').toBe(0);
-    expect(await page.locator('#result').count(), 'the fixture script ran top-level').toBe(0);
+    expect(await topPage.title(), 'the tab title belongs to the file').not.toMatch(/^(hostile-preview|RESULT:)/);
+    expect(await topPage.locator('#gesture').count(), 'the fixture DOM rendered top-level').toBe(0);
+    expect(await topPage.locator('#result').count(), 'the fixture script ran top-level').toBe(0);
     expect(
       log.matching((r) => r.url.includes('phase=pre-form') || r.url.includes('probe=same-')).length,
       'the fixture script issued its probes top-level',
     ).toBe(0);
     assertNoEgress(ext.hits, 'the refused top-level tab');
     expect(vectorsReaching(ext.hits)).toEqual([]);
+    await topPage.close();
   });
 });
 
