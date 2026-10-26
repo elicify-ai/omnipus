@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import type { ChatMessage } from '@/store/chat'
 import { emptyHistoryState, useChatStore } from '@/store/chat'
@@ -64,6 +64,210 @@ function bindReaderIntent(scroller: HTMLElement, enter: () => void, dragging: { 
   }
 }
 
+type AnchorRefs = { // not-wire-format: the viewport's anchor bookkeeping refs
+  anchor: RefObject<Anchor | null>; settledTop: RefObject<number | null>; compensating: RefObject<boolean>; priorFocus: RefObject<Element | null>
+}
+type ViewportState = { // not-wire-format: the latest rendered inputs, read by async fill/settle work
+  sid: string | null; history: ReturnType<typeof emptyHistoryState>; messages: ChatMessage[]; verbose: boolean; anchorOffset?: (position: string) => number | undefined
+}
+type FillEnv = { // not-wire-format
+  scroller: HTMLElement; current: RefObject<ViewportState>; fills: RefObject<Record<FillDirection, FillOwner | null>>
+  heights: RefObject<Map<string, number>>; samples: RefObject<HistoryRowMeasurements>; opening: RefObject<boolean>
+  evaluateFill: RefObject<(direction: FillDirection) => void>; measure: () => void
+}
+
+/** Hold the first row really inside the viewport as the reader's anchor. */
+function captureAnchor(scroller: HTMLElement, rows: HTMLElement[], offset: (element: Element) => number, refs: AnchorRefs, sid: string | null): void {
+  const top = scroller.getBoundingClientRect().top
+  const mounted = rows.filter(row => row.getBoundingClientRect().height > 0)
+  // Only a row actually inside the viewport can anchor the reader. Right
+  // after a jump the virtualizer may still show rows far below it.
+  const visible = mounted.filter(row => row.getBoundingClientRect().bottom > top && row.getBoundingClientRect().top < top + scroller.clientHeight)
+  const first = visible[0]
+  if (!first) return
+  const alternatives = [...visible, ...mounted.filter(row => row.getBoundingClientRect().bottom <= top).reverse()]
+  refs.settledTop.current = scroller.scrollTop
+  refs.anchor.current = { position: first.dataset.historyAnchor!, offset: offset(first), alternatives: alternatives.map(row => ({ position: row.dataset.historyAnchor!, screenTop: row.getBoundingClientRect().top - top })) }
+  const protectedPositions = new Set(visible.filter(row => row.dataset.historyPosition && row.getBoundingClientRect().top < top + 2 * scroller.clientHeight).map(row => row.dataset.historyPosition!))
+  const focused = document.activeElement?.closest<HTMLElement>('[data-history-position]')
+  if (focused?.dataset.historyPosition) protectedPositions.add(focused.dataset.historyPosition)
+  if (sid) protectHistoryPositions(sid, protectedPositions)
+  refs.priorFocus.current = scroller.contains(document.activeElement) ? document.activeElement : null
+}
+
+/** Signed compensation: put the held anchor back where the reader saw it. */
+function correctAnchor(scroller: HTMLElement, rows: () => HTMLElement[], offset: (element: Element) => number, refs: AnchorRefs,
+  anchorOffset: ((position: string) => number | undefined) | undefined, capture: () => void): void {
+  const held = refs.anchor.current
+  // A genuine reader move dropped the old anchor; adopt the first row that
+  // is now really visible as soon as the virtualizer has drawn one.
+  if (!held) { capture(); return }
+  // Content shrinking at the scroll end makes the browser clamp scrollTop.
+  // That is not reader movement: count it as not yet applied, so the anchor
+  // is restored as soon as the content allows (and a shrink above the reader
+  // that the clamp already compensated is not corrected a second time).
+  if (refs.settledTop.current !== null) {
+    const moved = scroller.scrollTop - refs.settledTop.current
+    if (moved < 0 && scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight - 1) held.offset += moved
+  }
+  refs.settledTop.current = scroller.scrollTop
+  const mounted = rows()
+  let row = mounted.find(item => item.dataset.historyAnchor === held.position)
+  let delta = 0
+  let estimatedOnly = false
+  if (row) delta = offset(row) - held.offset
+  else {
+    // A prepend can move the retained anchor outside the mounted range before
+    // this layout effect. Use the real virtualizer's current measured/estimated
+    // item offset, not total scrollHeight or a guessed source rank.
+    const estimated = anchorOffset?.(held.position)
+    if (estimated !== undefined && Number.isFinite(estimated)) { delta = estimated - held.offset; estimatedOnly = true }
+    else {
+      const fallback = held.alternatives.find(item => mounted.some(element => element.dataset.historyAnchor === item.position))
+      row = fallback ? mounted.find(item => item.dataset.historyAnchor === fallback.position) : undefined
+      if (row && fallback) delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - fallback.screenTop
+    }
+  }
+  const exact = row !== undefined && row.dataset.historyAnchor === held.position
+  let residual = delta
+  if (Number.isFinite(delta) && delta !== 0) {
+    refs.compensating.current = true
+    const before = scroller.scrollTop
+    const top = before + delta
+    if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: 'instant' })
+    else scroller.scrollTop = top
+    // Consume only what the browser actually applied, so the next layout
+    // pass neither applies this delta twice nor forgets the part a scroll
+    // edge clamp or device-pixel snapping held back.
+    const applied = scroller.scrollTop - before
+    held.offset += applied
+    residual = delta - applied
+    refs.settledTop.current = scroller.scrollTop
+    queueMicrotask(() => { refs.compensating.current = false })
+  }
+  if (refs.priorFocus.current && !refs.priorFocus.current.isConnected) scroller.focus({ preventScroll: true })
+  // Re-anchor only once the held row sits where it belongs. Re-capturing the
+  // first visible row at an estimated or clamped position would turn that
+  // error into permanent drift.
+  // At the top edge a negative remainder can never be applied (content
+  // above shrank while the reader sits at scrollTop 0): accept the position
+  // rather than letting that stale remainder distort the next correction.
+  const unreachable = residual < 0 && scroller.scrollTop <= 0
+  if (!estimatedOnly && (!exact || !Number.isFinite(residual) || Math.abs(residual) < 1 || unreachable)) capture()
+}
+
+/** Sample drawn-row heights (D5 running average). Returns true on a width change. */
+function sampleHistoryRows(scroller: HTMLElement, rows: HTMLElement[], messages: ChatMessage[], verbose: boolean,
+  samples: HistoryRowMeasurements, heights: Map<string, number>, priorWidth: RefObject<number>): boolean {
+  const stablePositions = new Set(messages.filter(message => message.historyPosition && !message.isStreaming && message.status !== 'streaming').map(message => message.historyPosition!))
+  for (const position of heights.keys()) if (!stablePositions.has(position)) heights.delete(position)
+  const width = scroller.getBoundingClientRect().width
+  const widthChanged = !!priorWidth.current && Math.abs(width - priorWidth.current) > 1
+  if (widthChanged) { samples.reset(); heights.clear() }
+  priorWidth.current = width
+  for (const element of rows) {
+    const position = element.dataset.historyPosition
+    if (!position) continue // Live DOM anchors are not public page selectors or history samples.
+    const message = messages.find(item => item.historyPosition === position)
+    if (!message || message.isStreaming || message.status === 'streaming' || element.hidden || element.getAttribute('aria-hidden') === 'true') {
+      stablePositions.delete(position); heights.delete(position); continue
+    }
+    // Sample the transform-independent layout size the virtualizer itself
+    // measures. A translated row's DOMRect height shifts by float rounding
+    // with its offset (685.234375 vs 685.23388671875 near 10,000px), so an
+    // unchanged row changed A -> virtualizer.measure() -> new translateY ->
+    // new A, until React's update-depth limit (#185) unmounted the list.
+    const height = historyLayoutHeight(element)
+    if (!Number.isFinite(height) || height < 0) { stablePositions.delete(position); heights.delete(position); continue }
+    heights.set(position, height)
+    if (height === 0) { stablePositions.delete(position); continue }
+    // One complete tool row includes its expanded body, not only a toggle.
+    const tools = [...element.querySelectorAll<HTMLElement>('[data-history-tool-row]')].map(node => ({ key: node.dataset.historyToolRow!, height: historyLayoutHeight(node) })).filter(row => Number.isFinite(row.height) && row.height > 0)
+    const toolHeight = tools.reduce((sum, tool) => sum + tool.height, 0)
+    const overhead = !message.content && tools.length ? Math.max(0, height - toolHeight) / tools.length : 0
+    for (const tool of tools) samples.observe(`${position}:tool:${tool.key}`, tool.height + overhead)
+    if (message.content) samples.observe(`${position}:text`, height - toolHeight)
+    else if (tools.length === 0 && drawnHistoryRows(message, verbose) > 0) samples.observe(position, height)
+  }
+  samples.retainPositions(stablePositions)
+  return widthChanged
+}
+
+/** One direction's fill owner (D5): fetch contiguous pages until the goal is covered. */
+async function runHistoryFill(env: FillEnv, direction: FillDirection, initial: boolean): Promise<void> {
+  const { scroller, current, fills, heights, samples, opening, evaluateFill, measure } = env
+  const sessionId = current.current.sid
+  if (!sessionId || fills.current[direction] || document.hidden || scroller.clientHeight <= 0) return
+  const generation = current.current.history.viewGeneration
+  const starting = new Set(current.current.history.readerPositions)
+  const owner: FillOwner = { frame: null, finishLayout: null }
+  fills.current[direction] = owner
+  let committed = false
+  try {
+    for (;;) {
+      const state = useChatStore.getState()
+      const kept = state.sessionsById[sessionId]
+      if (fills.current[direction] !== owner || current.current.sid !== sessionId || document.hidden || scroller.clientHeight <= 0 || !kept || kept.isReplaying || kept.awaitingCatchUp || kept.history.viewGeneration !== generation || kept.history.requests.refresh.status !== 'idle' || kept.history.requests[direction].status === 'error') break
+      const selected = current.current.messages.filter(message => message.historyPosition && (!starting.has(message.historyPosition) || initial))
+      const added = selected.reduce((sum, message) => sum + (heights.current.get(message.historyPosition!) ?? drawnHistoryRows(message, current.current.verbose) * samples.current.average), 0)
+      const remaining = Math.max(0, (initial ? 4 : 2) * scroller.clientHeight - added)
+      if (remaining <= 0) break
+      const before = direction === 'older' ? kept.history.olderBoundary : kept.history.newerBoundary
+      const previousPositions = new Set(kept.history.readerPositions)
+      const size = historyPageSizing(scroller.clientHeight, samples.current.average)
+      size.limit = Math.min(100, Math.max(20, Math.ceil(remaining / samples.current.average)))
+      size.min_rows = Math.min(size.limit, size.min_rows)
+      await (direction === 'older' ? state.loadOlderHistory(sessionId, size) : state.loadNewerHistory(sessionId, size))
+      if (fills.current[direction] !== owner || document.hidden) break
+      // External-store commits must reach layout before newly drawn heights
+      // can decide whether this same fill owner needs a contiguous top-up.
+      await new Promise<void>(resolve => {
+        owner.finishLayout = resolve
+        owner.frame = requestAnimationFrame(() => { owner.frame = null; owner.finishLayout = null; resolve() })
+      })
+      if (fills.current[direction] !== owner || current.current.sid !== sessionId || document.hidden) break
+      const after = useChatStore.getState().sessionsById[sessionId]
+      if (!after || after.history.viewGeneration !== generation || after.history.requests[direction].status !== 'idle' || before === (direction === 'older' ? after.history.olderBoundary : after.history.newerBoundary)) break
+      committed = true
+      measure()
+      const newRows = current.current.messages.filter(message => message.historyPosition && !previousPositions.has(message.historyPosition))
+      if (!newRows.some(message => (heights.current.get(message.historyPosition!) ?? drawnHistoryRows(message, current.current.verbose) * samples.current.average) > 0) || previousPositions.size === 500) break
+    }
+  } finally {
+    if (fills.current[direction] === owner) {
+      fills.current[direction] = null
+      if (initial) opening.current = false
+      // New content moved the geometry: ask the OTHER direction again, once,
+      // in case the reader reached its edge meanwhile. Only after a real
+      // commit, so two edges that both cannot load never ping-pong.
+      if (committed) requestAnimationFrame(() => { if (current.current.sid === sessionId) evaluateFill.current(direction === 'older' ? 'newer' : 'older') })
+    }
+  }
+}
+
+/** Re-settle on every layout-changing event of the conversation area. */
+function observeHistoryLayout(scroller: HTMLElement, rows: () => HTMLElement[], settle: () => void): () => void {
+  scroller.addEventListener('load', settle, true); scroller.addEventListener('error', settle, true)
+  window.addEventListener('resize', settle); document.fonts?.addEventListener('loadingdone', settle)
+  let observer: ResizeObserver | MutationObserver | undefined
+  if (typeof ResizeObserver !== 'undefined') {
+    const resize = new ResizeObserver(settle)
+    resize.observe(scroller)
+    for (const row of rows()) resize.observe(row)
+    const content = scroller.querySelector('[data-history-content]')
+    if (content) resize.observe(content)
+    observer = resize
+  } else if (typeof MutationObserver !== 'undefined') {
+    const mutations = new MutationObserver(settle)
+    mutations.observe(scroller, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'open'] })
+    observer = mutations
+  }
+  return () => {
+    observer?.disconnect(); scroller.removeEventListener('load', settle, true); scroller.removeEventListener('error', settle, true)
+    window.removeEventListener('resize', settle); document.fonts?.removeEventListener('loadingdone', settle)
+  }
+}
+
 /** One signed compensation/fill owner for virtual and plain layouts. */
 export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, messages: ChatMessage[], anchorOffset?: (position: string) => number | undefined) {
   const sid = useSessionStore(s => s.activeSessionId)
@@ -84,6 +288,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   // virtualizer adjustment). Such movement never ends follow-latest.
   const ownedTop = useRef<number | null>(null)
   const opening = useRef(true)
+  const anchorRefs = useMemo<AnchorRefs>(() => ({ anchor, settledTop, compensating, priorFocus }), [])
   // D5: one fill owner per view AND per direction. A single shared owner let
   // an in-flight older fill refuse the newer fill of a reader who jumped to the
   // newer edge, and nothing asked again once the older fill settled (T16 B12).
@@ -102,117 +307,18 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   }, [scrollRef])
   const capture = useCallback(() => {
     const scroller = scrollRef.current
-    if (!scroller) return
-    const top = scroller.getBoundingClientRect().top
-    const mounted = rows().filter(row => row.getBoundingClientRect().height > 0)
-    // Only a row actually inside the viewport can anchor the reader. Right
-    // after a jump the virtualizer may still show rows far below it.
-    const visible = mounted.filter(row => row.getBoundingClientRect().bottom > top && row.getBoundingClientRect().top < top + scroller.clientHeight)
-    const first = visible[0]
-    if (!first) return
-    const alternatives = [...visible, ...mounted.filter(row => row.getBoundingClientRect().bottom <= top).reverse()]
-    settledTop.current = scroller.scrollTop
-    anchor.current = { position: first.dataset.historyAnchor!, offset: offset(first), alternatives: alternatives.map(row => ({ position: row.dataset.historyAnchor!, screenTop: row.getBoundingClientRect().top - top })) }
-    const protectedPositions = new Set(visible.filter(row => row.dataset.historyPosition && row.getBoundingClientRect().top < top + 2 * scroller.clientHeight).map(row => row.dataset.historyPosition!))
-    const focused = document.activeElement?.closest<HTMLElement>('[data-history-position]')
-    if (focused?.dataset.historyPosition) protectedPositions.add(focused.dataset.historyPosition)
-    if (current.current.sid) protectHistoryPositions(current.current.sid, protectedPositions)
-    priorFocus.current = scroller.contains(document.activeElement) ? document.activeElement : null
-  }, [offset, rows, scrollRef])
+    if (scroller) captureAnchor(scroller, rows(), offset, anchorRefs, current.current.sid)
+  }, [anchorRefs, offset, rows, scrollRef])
   const correct = useCallback(() => {
     const scroller = scrollRef.current
-    const held = anchor.current
     if (!scroller || current.current.history.viewMode !== 'historical') return
-    // A genuine reader move dropped the old anchor; adopt the first row that
-    // is now really visible as soon as the virtualizer has drawn one.
-    if (!held) { capture(); return }
-    // Content shrinking at the scroll end makes the browser clamp scrollTop.
-    // That is not reader movement: count it as not yet applied, so the anchor
-    // is restored as soon as the content allows (and a shrink above the reader
-    // that the clamp already compensated is not corrected a second time).
-    if (settledTop.current !== null) {
-      const moved = scroller.scrollTop - settledTop.current
-      if (moved < 0 && scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight - 1) held.offset += moved
-    }
-    settledTop.current = scroller.scrollTop
-    const mounted = rows()
-    let row = mounted.find(item => item.dataset.historyAnchor === held.position)
-    let delta = 0
-    let estimatedOnly = false
-    if (row) delta = offset(row) - held.offset
-    else {
-      // A prepend can move the retained anchor outside the mounted range before
-      // this layout effect. Use the real virtualizer's current measured/estimated
-      // item offset, not total scrollHeight or a guessed source rank.
-      const estimated = current.current.anchorOffset?.(held.position)
-      if (estimated !== undefined && Number.isFinite(estimated)) { delta = estimated - held.offset; estimatedOnly = true }
-      else {
-        const fallback = held.alternatives.find(item => mounted.some(element => element.dataset.historyAnchor === item.position))
-        row = fallback ? mounted.find(item => item.dataset.historyAnchor === fallback.position) : undefined
-        if (row && fallback) delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - fallback.screenTop
-      }
-    }
-    const exact = row !== undefined && row.dataset.historyAnchor === held.position
-    let residual = delta
-    if (Number.isFinite(delta) && delta !== 0) {
-      compensating.current = true
-      const before = scroller.scrollTop
-      const top = before + delta
-      if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: 'instant' })
-      else scroller.scrollTop = top
-      // Consume only what the browser actually applied, so the next layout
-      // pass neither applies this delta twice nor forgets the part a scroll
-      // edge clamp or device-pixel snapping held back.
-      const applied = scroller.scrollTop - before
-      held.offset += applied
-      residual = delta - applied
-      settledTop.current = scroller.scrollTop
-      queueMicrotask(() => { compensating.current = false })
-    }
-    if (priorFocus.current && !priorFocus.current.isConnected) scroller.focus({ preventScroll: true })
-    // Re-anchor only once the held row sits where it belongs. Re-capturing the
-    // first visible row at an estimated or clamped position would turn that
-    // error into permanent drift.
-    // At the top edge a negative remainder can never be applied (content
-    // above shrank while the reader sits at scrollTop 0): accept the position
-    // rather than letting that stale remainder distort the next correction.
-    const unreachable = residual < 0 && scroller.scrollTop <= 0
-    if (!estimatedOnly && (!exact || !Number.isFinite(residual) || Math.abs(residual) < 1 || unreachable)) capture()
-  }, [capture, offset, rows, scrollRef])
+    correctAnchor(scroller, rows, offset, anchorRefs, current.current.anchorOffset, capture)
+  }, [anchorRefs, capture, offset, rows, scrollRef])
   const measure = useCallback(() => {
     const scroller = scrollRef.current
     const state = current.current
     if (!scroller || !state.sid) return
-    const stablePositions = new Set(state.messages.filter(message => message.historyPosition && !message.isStreaming && message.status !== 'streaming').map(message => message.historyPosition!))
-    for (const position of heights.current.keys()) if (!stablePositions.has(position)) heights.current.delete(position)
-    const width = scroller.getBoundingClientRect().width
-    if (priorWidth.current && Math.abs(width - priorWidth.current) > 1) { samples.current.reset(); heights.current.clear(); bumpWidthGeneration(value => value + 1) }
-    priorWidth.current = width
-    for (const element of rows()) {
-      const position = element.dataset.historyPosition
-      if (!position) continue // Live DOM anchors are not public page selectors or history samples.
-      const message = state.messages.find(item => item.historyPosition === position)
-      if (!message || message.isStreaming || message.status === 'streaming' || element.hidden || element.getAttribute('aria-hidden') === 'true') {
-        stablePositions.delete(position); heights.current.delete(position); continue
-      }
-      // Sample the transform-independent layout size the virtualizer itself
-      // measures. A translated row's DOMRect height shifts by float rounding
-      // with its offset (685.234375 vs 685.23388671875 near 10,000px), so an
-      // unchanged row changed A -> virtualizer.measure() -> new translateY ->
-      // new A, until React's update-depth limit (#185) unmounted the list.
-      const height = historyLayoutHeight(element)
-      if (!Number.isFinite(height) || height < 0) { stablePositions.delete(position); heights.current.delete(position); continue }
-      heights.current.set(position, height)
-      if (height === 0) { stablePositions.delete(position); continue }
-      // One complete tool row includes its expanded body, not only a toggle.
-      const tools = [...element.querySelectorAll<HTMLElement>('[data-history-tool-row]')].map(node => ({ key: node.dataset.historyToolRow!, height: historyLayoutHeight(node) })).filter(row => Number.isFinite(row.height) && row.height > 0)
-      const toolHeight = tools.reduce((sum, tool) => sum + tool.height, 0)
-      const overhead = !message.content && tools.length ? Math.max(0, height - toolHeight) / tools.length : 0
-      for (const tool of tools) samples.current.observe(`${position}:tool:${tool.key}`, tool.height + overhead)
-      if (message.content) samples.current.observe(`${position}:text`, height - toolHeight)
-      else if (tools.length === 0 && drawnHistoryRows(message, state.verbose) > 0) samples.current.observe(position, height)
-    }
-    samples.current.retainPositions(stablePositions)
+    if (sampleHistoryRows(scroller, rows(), state.messages, state.verbose, samples.current, heights.current, priorWidth)) bumpWidthGeneration(value => value + 1)
     const next = samples.current.average
     setAverage(value => value === next ? value : next)
     const content = scroller.querySelector('[data-history-content]')
@@ -220,55 +326,9 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     recordHistoryGeometry(state.sid, scroller.clientHeight, next)
   }, [offset, rows, scrollRef])
 
-  const requestFill = useCallback(async (direction: 'older' | 'newer', initial = false) => {
+  const requestFill = useCallback(async (direction: FillDirection, initial = false) => {
     const scroller = scrollRef.current
-    const sessionId = current.current.sid
-    if (!scroller || !sessionId || fills.current[direction] || document.hidden || scroller.clientHeight <= 0) return
-    const generation = current.current.history.viewGeneration
-    const starting = new Set(current.current.history.readerPositions)
-    const owner: FillOwner = { frame: null, finishLayout: null }
-    fills.current[direction] = owner
-    let committed = false
-    try {
-      for (;;) {
-        const state = useChatStore.getState()
-        const kept = state.sessionsById[sessionId]
-        if (fills.current[direction] !== owner || current.current.sid !== sessionId || document.hidden || scroller.clientHeight <= 0 || !kept || kept.isReplaying || kept.awaitingCatchUp || kept.history.viewGeneration !== generation || kept.history.requests.refresh.status !== 'idle' || kept.history.requests[direction].status === 'error') break
-        const selected = current.current.messages.filter(message => message.historyPosition && (!starting.has(message.historyPosition) || initial))
-        const added = selected.reduce((sum, message) => sum + (heights.current.get(message.historyPosition!) ?? drawnHistoryRows(message, current.current.verbose) * samples.current.average), 0)
-        const remaining = Math.max(0, (initial ? 4 : 2) * scroller.clientHeight - added)
-        if (remaining <= 0) break
-        const before = direction === 'older' ? kept.history.olderBoundary : kept.history.newerBoundary
-        const previousPositions = new Set(kept.history.readerPositions)
-        const size = historyPageSizing(scroller.clientHeight, samples.current.average)
-        size.limit = Math.min(100, Math.max(20, Math.ceil(remaining / samples.current.average)))
-        size.min_rows = Math.min(size.limit, size.min_rows)
-        await (direction === 'older' ? state.loadOlderHistory(sessionId, size) : state.loadNewerHistory(sessionId, size))
-        if (fills.current[direction] !== owner || document.hidden) break
-        // External-store commits must reach layout before newly drawn heights
-        // can decide whether this same fill owner needs a contiguous top-up.
-        await new Promise<void>(resolve => {
-          owner.finishLayout = resolve
-          owner.frame = requestAnimationFrame(() => { owner.frame = null; owner.finishLayout = null; resolve() })
-        })
-        if (fills.current[direction] !== owner || current.current.sid !== sessionId || document.hidden) break
-        const after = useChatStore.getState().sessionsById[sessionId]
-        if (!after || after.history.viewGeneration !== generation || after.history.requests[direction].status !== 'idle' || before === (direction === 'older' ? after.history.olderBoundary : after.history.newerBoundary)) break
-        committed = true
-        measure()
-        const newRows = current.current.messages.filter(message => message.historyPosition && !previousPositions.has(message.historyPosition))
-        if (!newRows.some(message => (heights.current.get(message.historyPosition!) ?? drawnHistoryRows(message, current.current.verbose) * samples.current.average) > 0) || previousPositions.size === 500) break
-      }
-    } finally {
-      if (fills.current[direction] === owner) {
-        fills.current[direction] = null
-        if (initial) opening.current = false
-        // New content moved the geometry: ask the OTHER direction again, once,
-        // in case the reader reached its edge meanwhile. Only after a real
-        // commit, so two edges that both cannot load never ping-pong.
-        if (committed) requestAnimationFrame(() => { if (current.current.sid === sessionId) evaluateFill.current(direction === 'older' ? 'newer' : 'older') })
-      }
-    }
+    if (scroller) await runHistoryFill({ scroller, current, fills, heights, samples, opening, evaluateFill, measure }, direction, initial)
   }, [measure, scrollRef])
 
   const cancelFill = useCallback(() => {
@@ -363,26 +423,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   useLayoutEffect(() => {
     const scroller = scrollRef.current
     if (!scroller) return
-    const settle = () => { correct(); measure() }
-    scroller.addEventListener('load', settle, true); scroller.addEventListener('error', settle, true)
-    window.addEventListener('resize', settle); document.fonts?.addEventListener('loadingdone', settle)
-    let observer: ResizeObserver | MutationObserver | undefined
-    if (typeof ResizeObserver !== 'undefined') {
-      const resize = new ResizeObserver(settle)
-      resize.observe(scroller)
-      for (const row of rows()) resize.observe(row)
-      const content = scroller.querySelector('[data-history-content]')
-      if (content) resize.observe(content)
-      observer = resize
-    } else if (typeof MutationObserver !== 'undefined') {
-      const mutations = new MutationObserver(settle)
-      mutations.observe(scroller, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'open'] })
-      observer = mutations
-    }
-    return () => {
-      observer?.disconnect(); scroller.removeEventListener('load', settle, true); scroller.removeEventListener('error', settle, true)
-      window.removeEventListener('resize', settle); document.fonts?.removeEventListener('loadingdone', settle)
-    }
+    return observeHistoryLayout(scroller, rows, () => { correct(); measure() })
   }, [messages, correct, measure, rows, scrollRef])
   const busy = Object.values(history.requests).some(request => request.status === 'loading')
   /** Record a placement the list itself made (e.g. a virtualizer size adjustment). */
