@@ -99,10 +99,12 @@ const FACT_ORDER: Record<HistorySpanFrame['type'], number> = { subagent_start: 0
  * silent; a span whose start is not on the reader draws nothing until that
  * page loads. One rule set with the live path (applySpanFrame), so no fact
  * misses its span. A span a live row already holds is left to the live row.
+ * Every commit of saved rows runs it: page loads and the loaded-window
+ * refresh (history.ts::refresh, final-gate I3), with each read page's context.
  */
-function settleHistorySpans(sessionId: string, rows: ChatMessage[], positions: string[], context: SessionHistoryPage['page_info']['context'] | undefined): { rows: ChatMessage[]; index: SessionChatState['spanBySpanId'] } {
+export function settleHistorySpans(sessionId: string, rows: ChatMessage[], positions: string[], contexts: ReadonlyArray<SessionHistoryPage['page_info']['context'] | undefined>): { rows: ChatMessage[]; index: SessionChatState['spanBySpanId'] } {
   for (const row of rows) if (row.role === 'assistant' && row.historySpanFrame) rememberSpanFact(sessionId, row.historySpanFrame)
-  for (const span of context?.spans ?? []) for (const fact of [span.start, span.state, span.message, span.end]) if (fact) rememberSpanFact(sessionId, fact)
+  for (const context of contexts) for (const span of context?.spans ?? []) for (const fact of [span.start, span.state, span.message, span.end]) if (fact) rememberSpanFact(sessionId, fact)
   const bySpan = spanFacts.get(sessionId)
   const index: NonNullable<SessionChatState['spanBySpanId']> = {}
   if (!bySpan) return { rows, index }
@@ -195,7 +197,7 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
     }
   }
   const hidden = hiddenIds.flatMap(id => bucket.messagesById[id] ? [bucket.messagesById[id]] : [])
-  const spans = settleHistorySpans(page.session_id, finalRows, positions, page.page_info.context)
+  const spans = settleHistorySpans(page.session_id, finalRows, positions, [page.page_info.context])
   const patch = { ...historyRowsPatch(bucket, [...spans.rows, ...hidden], positions), messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: hiddenIds }
   patch.spanBySpanId = { ...patch.spanBySpanId, ...spans.index }
   patch.historySourceAliases = Object.fromEntries(positions.flatMap(position => {

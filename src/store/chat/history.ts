@@ -7,7 +7,7 @@ import { useConnectionStore } from '@/store/connection'
 import { mergeRecordedSessionTokens } from './session-usage'
 import { isPendingTailMessage } from './cursor'
 import { emptyHistoryState, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
-import { applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection } from './history-merge'
+import { applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, settleHistorySpans } from './history-merge'
 export { emptyHistoryState } from './history-state'
 export type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing, SessionHistoryState, SessionHistoryRange, HistoryRequestState } from './types'
 
@@ -82,6 +82,7 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
     let before: string | undefined
     let retention: string | undefined
     let recordedTokens: number | undefined
+    const contexts: SessionHistoryPage['page_info']['context'][] = []
     for (;;) {
       const page = await fetchSessionMessages(sid, { ...query, ...(before ? { before } : {}), signal: owner.controller.signal })
       if (!valid()) return
@@ -89,6 +90,7 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
       if (retention !== undefined && retention !== page.page_info.retention_generation) throw new Error('History retention changed during refresh.')
       retention = page.page_info.retention_generation
       recordedTokens = mergeRecordedSessionTokens(recordedTokens, page.session_tokens_total)
+      contexts.push(page.page_info.context)
       for (const entry of page.entries) {
         if (seen.has(entry.historyPosition) || !old.includes(entry.historyPosition)) throw new Error('Contradictory refresh interval.')
         seen.add(entry.historyPosition)
@@ -113,8 +115,12 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
       const pending = needed.filter(isPendingTailMessage)
       const liveOrder = [...new Set([...(b.historyLiveOrder ?? []), ...needed.map(row => row.id)])].filter(id => !rowIds.has(id) && !confirmed.has(b.messagesById[id]?.clientMessageId ?? id)).slice(-100)
       const live = liveOrder.flatMap(id => b.messagesById[id] ? [b.messagesById[id]] : [])
-      const patch = historyRowsPatch(b, [...rows, ...pending, ...live], ordered)
-      return { ...patch, messageOrder: [...new Set([...rows, ...pending].map(row => row.id))], historyLiveOrder: liveOrder,
+      // Refreshed saved rows re-settle their spans exactly as a page commit
+      // does, or a reconstructed helper row would lose its span (I3).
+      const spans = settleHistorySpans(sid, [...rows, ...pending], ordered, contexts)
+      const patch = historyRowsPatch(b, [...spans.rows, ...live], ordered)
+      return { ...patch, messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: liveOrder,
+        spanBySpanId: { ...patch.spanBySpanId, ...spans.index },
         sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, recordedTokens),
         historyNotice: ordered.length < old.length ? (ordered.length ? 'Some loaded messages have expired.' : 'These loaded messages have expired.') : undefined,
         history: { ...patch.history!, serverState: { status: 'available' }, historyLoaded: true,
