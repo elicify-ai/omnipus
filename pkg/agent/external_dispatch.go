@@ -739,13 +739,22 @@ func drainExternalRun(
 						// curatedTurnError: the CLI's own output has already been
 						// replaced by the plain message for its code, so a task
 						// run may show this text as written (turnErrorUserText).
-						runErr = &curatedTurnError{text: "external-cli run failed: " + sanitized.AssistantText}
+						// A4 (DESIGN 1): a driver-detected turn cap is a typed,
+						// code-owned ceiling, not a generic failure — it is
+						// carried as externalTurnLimitError so the steered body
+						// can end the child Interrupted/tool_limit nonfatally.
+						if ev.Err.LimitExceeded {
+							runErr = &externalTurnLimitError{text: sanitized.AssistantText}
+						} else {
+							runErr = &curatedTurnError{text: "external-cli run failed: " + sanitized.AssistantText}
+						}
 						slog.Warn("external-cli dispatch: fatal runner error",
 							"run_id", runID, "cli", cli,
 							"assistant_text", sanitized.AssistantText,
 							"raw_log_text", sanitized.LogText,
 							"code", string(sanitized.Code),
-							"retryable", sanitized.Retryable)
+							"retryable", sanitized.Retryable,
+							"limit_exceeded", ev.Err.LimitExceeded)
 					}
 				}
 			}

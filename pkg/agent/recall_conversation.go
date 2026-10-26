@@ -208,18 +208,24 @@ func (t *RecallConversationTool) Parameters() map[string]any {
 
 // recallConversationToolExecute carries the shared state of Execute across its stages.
 type recallConversationToolExecute struct {
-	t                      *RecallConversationTool
-	ctx                    context.Context
-	args                   map[string]any
-	sessionKey             string
-	queryVal               string
-	hasQuery               bool
-	rangeVal               string
-	hasRange               bool
-	timeRaw                any
-	hasTime                bool
-	maxResults             int
-	archived               []memory.ArchivedMessage
+	t          *RecallConversationTool
+	ctx        context.Context
+	args       map[string]any
+	sessionKey string
+	queryVal   string
+	hasQuery   bool
+	rangeVal   string
+	hasRange   bool
+	timeRaw    any
+	hasTime    bool
+	maxResults int
+	archived   []memory.ArchivedMessage
+	// lines holds each archived entry's ORIGINAL archive ordinal (A3): the
+	// projected read omits retired entries, so a dense index renumbers
+	// addresses and a recall mark would cite a line that no longer resolves.
+	lines []int
+	// turnFor resolves an original archive line to its containing turn index.
+	turnFor                func(int) int
 	turns                  []archiveTurn
 	selectedIdxs           []int
 	isRangeMode            bool
@@ -347,6 +353,18 @@ func (rct *recallConversationToolExecute) loadTurns() (*tools.ToolResult, bool) 
 			"session_key", rct.sessionKey, "error", err)
 		incRecallCounter("error")
 		return tools.ErrorResult(fmt.Sprintf("recall_conversation: could not read archive: %v", err)), true
+	}
+	// A3 (DESIGN 3/5): retirement omits entries from the projected read, so a
+	// dense position is NOT an archive address. Capture each visible entry's
+	// ORIGINAL archive ordinal — through the same store, same order, same
+	// omit filter — so recall marks keep citing stable addresses. Stores
+	// without an ordinal scan fall back to identity numbering.
+	rct.lines = archiveOriginalLines(rct.t.archive, rct.ctx, rct.t.archiveKey(rct.ctx, rct.sessionKey), len(rct.archived))
+	if len(rct.lines) != len(rct.archived) {
+		rct.lines = nil
+		rct.turnFor = nil
+	} else {
+		rct.turnFor = originalTurnFor(rct.t.archive, rct.ctx, rct.t.archiveKey(rct.ctx, rct.sessionKey))
 	}
 	if len(rct.archived) == 0 {
 		incRecallCounter("empty")
@@ -524,7 +542,7 @@ func (rct *recallConversationToolExecute) buildAndStoreSpan() *tools.ToolResult 
 		ordinals[i] = idx + 1
 	}
 
-	spanMsgs := buildRecallSpanMessages(rct.keptIdxs, rct.turns, ordinals, rct.t.recallCapPolicy(), rct.archived)
+	spanMsgs := buildRecallSpanMessagesResolved(rct.keptIdxs, rct.turns, ordinals, rct.t.recallCapPolicy(), rct.archived, rct.lines, rct.turnFor)
 	// M7: use newRecallSpan so Tokens is always Σ estimateMessageTokens(Msgs).
 	span := newRecallSpan(fromTurnNum, toTurnNum, spanMsgs, ordinals)
 	if err := rct.bindRoomProjectionRead(span); err != nil {
@@ -600,12 +618,85 @@ type archiveTurn struct {
 // A–B" range form. When the set is sparse (non-adjacent ordinals, as in
 // query/time mode), the marker lists the actual ordinals so the model is not
 // misled into thinking a contiguous range was retrieved.
+// archiveOriginalLines captures each VISIBLE entry's original archive ordinal
+// through the same store ScanArchive the projected read uses (same order, same
+// omit filter). A store without an ordinal scan yields nil, and the caller
+// falls back to identity numbering — dense test fixtures keep their old
+// behaviour, real stores keep stable addresses (A3).
+func archiveOriginalLines(archive ConversationArchiveReader, ctx context.Context, key string, count int) []int {
+	scanner, ok := archive.(interface {
+		ScanArchive(ctx context.Context, sessionKey string, fn func(idx int, msg memory.ArchivedMessage) bool) error
+	})
+	if !ok {
+		return nil
+	}
+	lines := make([]int, 0, count)
+	err := scanner.ScanArchive(ctx, key, func(idx int, _ memory.ArchivedMessage) bool {
+		lines = append(lines, idx)
+		return true
+	})
+	if err != nil {
+		return nil
+	}
+	return lines
+}
+
+// originalTurnFor resolves an ORIGINAL archive line to its containing turn
+// index — the count of user lines strictly before it in the raw archive,
+// retirement included (A3). It reads the slot's own stored UserTurn (the
+// FR-018 1-based turn at that ordinal) and converts to the 0-based index the
+// recall mark cites. Stores without slot reads yield nil and the caller falls
+// back to its dense count.
+func originalTurnFor(archive ConversationArchiveReader, ctx context.Context, key string) func(int) int {
+	reader, ok := archive.(interface {
+		ReadModelSlots(ctx context.Context, key string, from, to int, fn func(slot session.ModelSlot, raw []byte) error) error
+	})
+	if !ok {
+		return nil
+	}
+	return func(line int) int {
+		if line < 0 {
+			return 0
+		}
+		// slot.UserTurn counts the user messages at ordinals <= line in the
+		// RAW archive (retirement included), which is exactly the containing
+		// turn's index the mark must cite — stable across retirement.
+		turn := 0
+		err := reader.ReadModelSlots(ctx, key, line, line, func(slot session.ModelSlot, _ []byte) error {
+			turn = slot.UserTurn
+			return nil
+		})
+		if err != nil {
+			return 0
+		}
+		return turn
+	}
+}
+
+// buildRecallSpanMessages is the dense-archive form: without original
+// ordinals the mark cites dense positions (legacy stores/fixtures, A3 fallback).
 func buildRecallSpanMessages(
 	keptIdxs []int,
 	turns []archiveTurn,
 	ordinals []int,
 	policy resultCapPolicy,
 	archive []memory.ArchivedMessage,
+) []providers.Message {
+	return buildRecallSpanMessagesResolved(keptIdxs, turns, ordinals, policy, archive, nil, nil)
+}
+
+// buildRecallSpanMessagesResolved is the address-resolved form (A3): lines
+// carries each archived entry's ORIGINAL archive ordinal and turnFor resolves
+// an original line to its containing turn index, so retirement never
+// renumbers the address a recall mark cites.
+func buildRecallSpanMessagesResolved(
+	keptIdxs []int,
+	turns []archiveTurn,
+	ordinals []int,
+	policy resultCapPolicy,
+	archive []memory.ArchivedMessage,
+	lines []int,
+	turnFor func(int) int,
 ) []providers.Message {
 	// demarcation marker (FR-019): honest about contiguous vs sparse coverage.
 	var markerText string
@@ -690,12 +781,39 @@ func buildRecallSpanMessages(
 				// surface result and passes the choke point's cap (FR-009,
 				// B-11 row "recall page"; T066-14 sizes the page to
 				// cap − framing so this cut is the backstop, not the page
-				// size). The mark cites the real archive line (startIdx + j)
-				// and the ORIGINAL id — the one recall_conversation resolves
-				// — so the model can page the full content.
+				// size). The mark cites the message's ORIGINAL archive line
+				// (A3: the projected read omits retired entries, so a dense
+				// startIdx + j position renumbers addresses) and the ORIGINAL
+				// id — the one recall_conversation resolves — so the model can
+				// page the full content.
 				archiveLine := trn.startIdx + j
+				if lineSlice := lines; lineSlice != nil && archiveLine < len(lineSlice) {
+					archiveLine = lineSlice[archiveLine]
+				}
 				toolName, _ := owningToolCall(out, len(out), m.ToolCallID)
-				turnNum := turnNumberForArchiveLine(denseArchive(archive), archiveLine)
+				// The mark's turn is the containing turn's index in the SAME
+				// visible archive the mark's line was derived from — counted
+				// here, not renumbered by retirement.
+				turnNum := 0
+				if turnFor != nil {
+					turnNum = turnFor(archiveLine)
+				} else {
+					for _, seen := range archive[:trn.startIdx] {
+						if seen.Role == "user" {
+							turnNum++
+						}
+					}
+					for _, idx := range keptIdxs {
+						if idx >= turnIdx {
+							break
+						}
+						for _, seen := range turns[idx].msgs {
+							if seen.Role == "user" {
+								turnNum++
+							}
+						}
+					}
+				}
 				m.Content, _ = projectToolResult(m.Content, policy.effectiveCap(surfaceBuiltinSuccess, 1),
 					func(full string) string {
 						return capMarkOrEmpty(toolName, originalID, archiveLine, full, turnNum)
@@ -1078,6 +1196,11 @@ func (t *RecallConversationTool) executeToolCallID(
 	} else {
 		resultStr += "; end of result reached"
 	}
+	// A3 (DESIGN 3 effects / DESIGN 5 addresses): the page the model can act
+	// on is THIS tool result — it must carry the actual archived bytes, not
+	// only a pointer into the span. Payload is capped by the same effective
+	// cap as the injected span (pageContent above), so the result stays bound.
+	resultStr += "\n" + payload
 	resultStr += "; this page is now in your context"
 	return tools.NewToolResult(resultStr)
 }

@@ -213,11 +213,26 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// then dispatch; on admission failure, revert so the task is never
 	// stranded in in_progress with no agent actually running. Preserve a Failed
 	// disposition the executor already persisted for the dispatch error.
+	//
+	// SF3 (DESIGN 4 locked-prior ownership): the delegation/eligibility
+	// verdicts above were made against the stale `existing` snapshot. The
+	// transition write therefore goes through UpdateWithPrior so ownership is
+	// decided under the same per-task lock that applies it: when the locked
+	// prior no longer matches the snapshot this caller validated, another
+	// writer owns the transition and this loser must neither launch nor roll
+	// back the winner's in_progress state or StartedAt.
 	priorStatus := existing.Status
 	inProgress := task.StatusInProgress
-	if _, uerr := t.store.Update(taskID, task.Patch{Status: &inProgress, RetryInterrupted: true}); uerr != nil {
+	updated, prior, uerr := t.store.UpdateWithPrior(taskID, task.Patch{Status: &inProgress, RetryInterrupted: true})
+	if uerr != nil {
 		return ErrorResult(fmt.Sprintf("run_task failed: could not mark task in_progress: %v", uerr))
 	}
+	if prior.Status != priorStatus {
+		return ErrorResult(fmt.Sprintf(
+			"run_task: task %q was transitioned to %q by another request while this one was being admitted; "+
+				"the duplicate run was not started and the other attempt is authoritative", taskID, prior.Status))
+	}
+	ownStartedAt := updated.StartedAt
 
 	sessionID, startErr := t.startTaskNow(ctx, taskID)
 	if startErr != nil {
@@ -230,7 +245,13 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		// A successful executor failure write stores the same cause it returns.
 		// Do not erase that disposition, or mistake an unrelated failure for it.
 		failedDisposition := fresh.Status == task.StatusFailed && fresh.Result != "" && fresh.Result == startErr.Error()
-		if !failedDisposition {
+		// Ownership still holds at revert time only while the stored state is
+		// exactly the stranded transition this caller produced: its own
+		// in_progress with the StartedAt this transition stamped, and no bound
+		// session. A later Failed→in_progress transition by another caller
+		// re-stamps StartedAt, so its state is never rolled back here.
+		ownsTransition := fresh.Status == task.StatusInProgress && fresh.StartedAt == ownStartedAt && fresh.SessionID == ""
+		if !failedDisposition && ownsTransition {
 			revert := priorStatus
 			emptyStarted := ""
 			if _, rErr := t.store.Update(taskID, task.Patch{Status: &revert, StartedAt: &emptyStarted}); rErr != nil {

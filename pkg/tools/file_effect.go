@@ -124,10 +124,43 @@ func ReadFileEffectWitness(home, sessionID string, assistant session.ArchiveAddr
 	if err := json.Unmarshal(data, &w); err != nil {
 		return w, err
 	}
+	if err := fileEffectWitnessImagesPresent(data); err != nil {
+		return w, err
+	}
 	if w.SessionID != sessionID || w.Assistant != assistant || w.ToolCallID != callID || w.Execution.RunID == "" || w.Execution.BootSeq == 0 || !filepath.IsAbs(w.Target) {
 		return w, fmt.Errorf("file recovery: witness identity is invalid")
 	}
 	return w, nil
+}
+
+// fileEffectWitnessImagesPresent rejects a witness whose before/after images
+// are absent, null, or structurally incomplete (no exists flag). JSON decoding
+// alone cannot distinguish a missing image from recorded nonexistence — a
+// missing/null/empty image unmarshals to the zero FileImage, which is exactly
+// what proven nonexistence looks like — and DESIGN 2 forbids treating absent
+// evidence as proof of an absent effect. Such a witness is corrupt evidence
+// and must reconcile to Unknown, never to effect_absent.
+func fileEffectWitnessImagesPresent(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for _, field := range []string{"before", "after"} {
+		value, ok := raw[field]
+		if !ok || string(value) == "null" {
+			return fmt.Errorf("file recovery: witness %s image is missing or null", field)
+		}
+		var image struct {
+			Exists *bool `json:"exists"`
+		}
+		if err := json.Unmarshal(value, &image); err != nil {
+			return fmt.Errorf("file recovery: witness %s image is malformed and fails to decode: %w", field, err)
+		}
+		if image.Exists == nil {
+			return fmt.Errorf("file recovery: witness %s image has no exists flag", field)
+		}
+	}
+	return nil
 }
 
 func saveFileEffectWitness(home string, w FileEffectWitness) error {
