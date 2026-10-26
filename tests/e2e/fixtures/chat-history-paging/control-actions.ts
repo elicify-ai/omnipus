@@ -1,17 +1,22 @@
 import { expect, type Page } from '@playwright/test';
-import { SessionDetail } from '../../../../src/lib/api/generated/schemas';
+import { SecretRequestState, SessionDetail } from '../../../../src/lib/api/generated/schemas';
 import { WsFrame } from '../../../../src/lib/api/generated/ws-schemas';
 import type { ClientFrame } from '../../../../src/lib/api/generated/asyncapi-types';
 import { chatInput, waitForConnected } from '../selectors';
 import { terminalLogRows } from '../terminal-outcome-acceptance';
 import { dropSocket } from './actions';
 import { HistoryHarness, type Traffic, UNAVAILABLE } from './harness';
-import { CONTROL_COMMAND, CONTROL_QUESTION, CONTROL_RUNNING, type HistoryControlProvider } from './control-provider';
+import { CONTROL_COMMAND, CONTROL_QUESTION, CONTROL_RUNNING, CONTROL_SECRET_PURPOSE, CONTROL_SECRET_VARIABLE, type HistoryControlProvider } from './control-provider';
 
 // not-wire-format: fixture state referencing generated, actually received frames.
 export type PendingHistoryControl =
   | { kind: 'approval'; frame: Extract<WsFrame, { type: 'tool_approval_required' }> }
-  | { kind: 'question'; frame: Extract<WsFrame, { type: 'ask_user_question' }> };
+  | { kind: 'question'; frame: Extract<WsFrame, { type: 'ask_user_question' }> }
+  | { kind: 'secret'; frame: Extract<WsFrame, { type: 'secret_request' }> };
+
+// Harmless test input, never a real credential. FR-075: this may travel only in
+// the authenticated card submit, never chat frames or model/tool arguments.
+const SECRET_FIXTURE_VALUE = 'history-card-fixture-9af2-not-a-real-secret';
 
 export function controlProvider(history: HistoryHarness): HistoryControlProvider {
   if (!('kind' in history.provider)) throw new Error('historyControlKind fixture option is required');
@@ -28,6 +33,7 @@ export async function waitForPendingControl(history: HistoryHarness): Promise<Pe
     if (provider.failures().length) throw new Error(provider.failures().join('\n'));
     return history.traffic.frames.some((f) => provider.kind === 'approval'
       ? f.type === 'tool_approval_required' && f.session_id === history.sessionId
+      : provider.kind === 'secret' ? f.type === 'secret_request' && f.session_id === history.sessionId
       : f.type === 'ask_user_question' && f.card.session_id === history.sessionId);
   }, { message: 'real engine/tool registry must produce the actual pending control, not a scripted gateway frame' }).toBe(true);
   if (provider.kind === 'approval') {
@@ -38,6 +44,22 @@ export async function waitForPendingControl(history: HistoryHarness): Promise<Pe
     expect(frame.args).toMatchObject({ command: CONTROL_COMMAND });
     return { kind: 'approval', frame };
   }
+  if (provider.kind === 'secret') {
+    const frame = history.traffic.frames.find((f) => f.type === 'secret_request' && f.session_id === history.sessionId);
+    if (!frame || frame.type !== 'secret_request') throw new Error('real pending secret frame missing');
+    expect(frame.acting_agent_id).toBe(history.ids.agent.id);
+    expect(frame.purpose).toBe(CONTROL_SECRET_PURPOSE);
+    expect(frame.recipient.kind).toBe('agent_private');
+    expect(frame.owner, 'FR-065/FR-076: server derives the requesting agent and workspace').toEqual({
+      workspace_id: history.ids.session.workspace_id, agent_id: history.ids.agent.id,
+    });
+    expect(frame.fields.map(field => field.label), 'one requested private variable, not a fabricated generic card').toEqual([CONTROL_SECRET_VARIABLE]);
+    const pending = { kind: 'secret', frame } as const;
+    const state = await readSecretState(history, pending);
+    expect(state.state, 'the real registry still owns the pending request').toBe('pending');
+    expect(state.reference_names, 'nothing stored before consent').toBeUndefined();
+    return pending;
+  }
   const frame = history.traffic.frames.find((f) => f.type === 'ask_user_question' && f.card.session_id === history.sessionId);
   if (!frame || frame.type !== 'ask_user_question') throw new Error('real pending question frame missing');
   expect(frame.card.status).toBe('pending');
@@ -47,9 +69,21 @@ export async function waitForPendingControl(history: HistoryHarness): Promise<Pe
   return { kind: 'question', frame };
 }
 export function pendingAction(page: Page, pending: PendingHistoryControl) {
+  if (pending.kind === 'secret') return secretCard(page, pending).getByTestId(`secret-request-field-${pending.frame.fields[0].key}`);
   return pending.kind === 'approval'
     ? page.getByRole('region', { name: 'Tool Approval Required', exact: true }).getByRole('button', { name: 'Approve Once', exact: true })
     : page.getByRole('group', { name: `Questions from ${pending.frame.card.agent_id}`, exact: true }).getByRole('button', { name: /^Plain text/ });
+}
+function secretCard(page: Page, pending: Extract<PendingHistoryControl, { kind: 'secret' }>) {
+  return page.getByRole('region', { name: `Secret requested by ${pending.frame.acting_agent_name}`, exact: true })
+    .filter({ hasText: CONTROL_SECRET_PURPOSE });
+}
+export async function readSecretState(history: HistoryHarness, pending: Extract<PendingHistoryControl, { kind: 'secret' }>) {
+  const response = await history.page.request.get(`${history.gateway.baseURL}/api/v1/secret-requests/${pending.frame.request_id}`);
+  expect(response.status(), 'genuine accessible secret request REST state').toBe(200);
+  const state = SecretRequestState.parse(await response.json());
+  expect(state.request_id, 'REST state belongs to the exact observed request').toBe(pending.frame.request_id);
+  return state;
 }
 export async function assertRestoredControl(history: HistoryHarness, pending: PendingHistoryControl, start: number, unavailable: boolean) {
   const state = [...history.traffic.frames.slice(start)].reverse().find((f) => f.type === 'session_state' && f.session_id === history.sessionId);
@@ -60,10 +94,17 @@ export async function assertRestoredControl(history: HistoryHarness, pending: Pe
     expect(restored.map((p) => p.approval_id)).toEqual([pending.frame.approval_id]);
     expect(restored[0].args).toEqual(pending.frame.args);
     expect(restored[0].turn_id).toBe(pending.frame.turn_id);
-  } else {
+  } else if (pending.kind === 'question') {
     expect(state.pending_asks, 'pending questions remain a current-control owner, not lost with history').toBeDefined();
     if (!state.pending_asks) throw new Error('current pending_asks missing');
     expect(state.pending_asks.filter((q) => q.session_id === history.sessionId).map((q) => q.card_id)).toEqual([pending.frame.card.card_id]);
+  } else {
+    expect(state.secret_requests, 'K4/FR-074: pending secret remains current state despite unavailable history').toBeDefined();
+    if (!state.secret_requests) throw new Error('current secret_requests missing');
+    expect(state.secret_requests.filter(card => card.session_id === history.sessionId).map(card => ({
+      request_id: card.request_id, state: card.state, fields: card.fields, owner: card.owner,
+    }))).toEqual([{ request_id: pending.frame.request_id, state: 'pending', fields: pending.frame.fields, owner: pending.frame.owner }]);
+    await expect(secretCard(history.page, pending)).toHaveAttribute('data-state', 'pending');
   }
   await expect(pendingAction(history.page, pending)).toBeVisible();
 }
@@ -93,6 +134,28 @@ export async function activatePendingControl(history: HistoryHarness, pending: P
     await expect.poll(() => terminalLogRows(history.logPath).filter((row) => row.event_kind === 'tool_exec_end' &&
       row.turn_id === pending.frame.turn_id && row.tool === 'bash' && row.is_error === false).length,
     { message: 'Approve Once actually executed the real harmless command successfully' }).toBe(1);
+  } else if (pending.kind === 'secret') {
+    // US-6 / FR-075: only the genuine secure-card REST submit carries the
+    // test value. It is never sent as a chat message or tool argument.
+    await pendingAction(history.page, pending).fill(SECRET_FIXTURE_VALUE);
+    const submitted = history.page.waitForResponse(response => response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === `/api/v1/secret-requests/${pending.frame.request_id}/submit`);
+    await secretCard(history.page, pending).getByTestId('secret-request-submit').click();
+    const response = await submitted;
+    expect(response.status(), 'the actual destination-bound secure-card submit succeeds').toBe(200);
+    expect(response.request().postDataJSON()).toEqual({ values: { [pending.frame.fields[0].key]: SECRET_FIXTURE_VALUE } });
+    const state = SecretRequestState.parse(await response.json());
+    expect(state.request_id).toBe(pending.frame.request_id);
+    expect(state.state).toBe('submitted');
+    expect(state.reference_names, 'one actual stored private variable reference, never the value').toHaveLength(1);
+    expect(JSON.stringify(state), 'value-free submit response').not.toContain(SECRET_FIXTURE_VALUE);
+    await expect.poll(() => history.traffic.frames.filter(frame => frame.type === 'secret_request_resolved' &&
+      frame.request_id === pending.frame.request_id && frame.state === 'submitted').length).toBe(1);
+    await expect(secretCard(history.page, pending)).toHaveAttribute('data-state', 'submitted');
+    await expect(secretCard(history.page, pending).getByTestId('secret-request-result')).toContainText('Saved');
+    await expect(pendingAction(history.page, pending), 'terminal card clears the input').toHaveCount(0);
+    expect(JSON.stringify(history.traffic.frames), 'the card value never enters the chat socket').not.toContain(SECRET_FIXTURE_VALUE);
+    expect(JSON.stringify(history.traffic.sends), 'secret consent is not a new chat instruction').not.toContain(SECRET_FIXTURE_VALUE);
   } else {
     // Existing #1066 keyboard contract: Enter chooses/confirms the last
     // question immediately. No sleep/autosubmit deadline is the action oracle.
@@ -122,21 +185,29 @@ export async function stopRunningControlTurn(history: HistoryHarness) {
   expect(provider.failures()).toEqual([]);
 }
 async function startRunningTurnWithPendingQuestion(history: HistoryHarness, pending: Extract<PendingHistoryControl, { kind: 'question' }>) {
+  return startRunningTurnWithParkedControl(history, pending);
+}
+async function startRunningTurnWithParkedControl(history: HistoryHarness, pending: Exclude<PendingHistoryControl, { kind: 'approval' }>) {
+  // Both tools park their original turn. B49 requires a genuinely RUNNING
+  // turn while that same decision remains pending, not a fake Stop button.
   const provider = controlProvider(history);
-  const questionEnds = () => terminalLogRows(history.logPath).filter(row => row.event_kind === 'tool_exec_end' && row.tool === 'AskUserQuestion');
-  await expect.poll(questionEnds, { message: 'PREREQUISITE: actual question tool execution is recorded exactly once' }).toHaveLength(1);
-  const questionTurnId = questionEnds()[0].turn_id;
-  if (typeof questionTurnId !== 'string' || !questionTurnId) throw new Error('PREREQUISITE: genuine question audit turn identity missing');
-  await expect.poll(() => terminalLogRows(history.logPath).filter(row => row.event_kind === 'turn_end' && row.turn_id === questionTurnId).length,
-    { message: 'PREREQUISITE: the question turn has actually parked before the independent producer input' }).toBe(1);
+  const tool = pending.kind === 'question' ? 'AskUserQuestion' : 'request_secret';
+  const parkedEnds = () => terminalLogRows(history.logPath).filter(row => row.event_kind === 'tool_exec_end' && row.tool === tool);
+  await expect.poll(parkedEnds, { message: `PREREQUISITE: actual ${pending.kind} tool execution is recorded exactly once` }).toHaveLength(1);
+  const parkedTurnId = parkedEnds()[0].turn_id;
+  if (typeof parkedTurnId !== 'string' || !parkedTurnId) throw new Error(`PREREQUISITE: genuine ${pending.kind} audit turn identity missing`);
+  await expect.poll(() => terminalLogRows(history.logPath).filter(row => row.event_kind === 'turn_end' && row.turn_id === parkedTurnId).length,
+    { message: `PREREQUISITE: the ${pending.kind} turn has actually parked before the independent producer input` }).toBe(1);
   const producer = await history.page.context().newPage(); // Reuse the same current cookie; never log in again.
   try {
   const viewer = new HistoryHarness(producer, history.gateway, history.ids, history.provider, history.info, history.logPath);
   await viewer.open(history.sessionId, { currentControlMayLockComposer: true });
   const callsBefore = provider.calls();
   const input = { type: 'message', session_id: history.sessionId, agent_id: history.ids.agent.id,
-    client_message_id: 'history-keep-question-running',
-    content: 'HISTORY_KEEP_QUESTION_PENDING: continue the draft without choosing an output format until I press Stop.' } satisfies ClientFrame;
+    client_message_id: `history-keep-${pending.kind}-running`,
+    content: pending.kind === 'question'
+      ? 'HISTORY_KEEP_QUESTION_PENDING: continue the draft without choosing an output format until I press Stop.'
+      : 'HISTORY_KEEP_SECRET_PENDING: continue the draft without filling or cancelling the secret request until I press Stop.' } satisfies ClientFrame;
   const send = async (frame: ClientFrame) => {
     WsFrame.parse(frame);
     await producer.evaluate(payload => {
@@ -162,16 +233,23 @@ async function startRunningTurnWithPendingQuestion(history: HistoryHarness, pend
     { message: 'PREREQUISITE: fresh authoritative state must expose the genuinely running turn' }).toBe(true);
   const state = [...viewer.traffic.frames.slice(stateStart)].reverse().find(frame => frame.type === 'session_state' && frame.session_id === history.sessionId);
   if (state?.type !== 'session_state' || !state.active_turn) throw new Error('PREREQUISITE: active turn missing from authoritative current state');
-  expect(state.active_turn.turn_id, 'the running input is not the already parked question turn').not.toBe(questionTurnId);
-  expect(state.pending_asks?.filter(card => card.card_id === pending.frame.card.card_id).map(card => ({ id: card.card_id, status: card.status })),
-    'the original real question stays pending, not implicitly answered or cancelled by fixture setup')
-    .toEqual([{ id: pending.frame.card.card_id, status: 'pending' }]);
+  expect(state.active_turn.turn_id, 'the running input is not the already parked decision turn').not.toBe(parkedTurnId);
+  if (pending.kind === 'question') {
+    expect(state.pending_asks?.filter(card => card.card_id === pending.frame.card.card_id).map(card => ({ id: card.card_id, status: card.status })),
+      'the original real question stays pending, not implicitly answered or cancelled by fixture setup')
+      .toEqual([{ id: pending.frame.card.card_id, status: 'pending' }]);
+  } else {
+    expect(state.secret_requests?.filter(card => card.request_id === pending.frame.request_id).map(card => ({ id: card.request_id, state: card.state })),
+      'the original real secret request remains pending while an actual independent engine turn runs')
+      .toEqual([{ id: pending.frame.request_id, state: 'pending' }]);
+  }
   expect(terminalLogRows(history.logPath).filter(row => row.event_kind === 'turn_end' && row.turn_id === state.active_turn!.turn_id),
     'the independently running turn has not already ended or parked').toEqual([]);
   await expect(pendingAction(history.page, pending)).toBeEnabled();
-  await expect(history.page.getByTestId('stop-btn'), 'PREREQUISITE: real running engine exposes Stop while the old question remains pending').toBeVisible();
-  await history.record('pending-question-with-independent-running-turn', {
-    auxiliaryInput: input, auxiliarySends: viewer.traffic.sends, activeTurn: state.active_turn, pendingCard: pending.frame.card.card_id,
+  await expect(history.page.getByTestId('stop-btn'), 'PREREQUISITE: real running engine exposes Stop while the old decision remains pending').toBeVisible();
+  await history.record(`pending-${pending.kind}-with-independent-running-turn`, {
+    auxiliaryInput: input, auxiliarySends: viewer.traffic.sends, activeTurn: state.active_turn,
+    pendingCard: pending.kind === 'question' ? pending.frame.card.card_id : pending.frame.request_id,
   });
   return producer;
   } catch (error) {
@@ -181,16 +259,35 @@ async function startRunningTurnWithPendingQuestion(history: HistoryHarness, pend
 }
 
 export async function stopPendingControl(history: HistoryHarness, pending: PendingHistoryControl) {
-  const producer = pending.kind === 'question' ? await startRunningTurnWithPendingQuestion(history, pending) : undefined;
+  const producer = pending.kind === 'question' ? await startRunningTurnWithPendingQuestion(history, pending)
+    : pending.kind === 'secret' ? await startRunningTurnWithParkedControl(history, pending) : undefined;
   const before = controlProvider(history).calls();
   try {
     if (pending.kind === 'approval') {
-      // The current inline approval region exposes the same cancel_turn path.
-      await history.page.getByRole('region', { name: 'Tool Approval Required', exact: true }).getByRole('button', { name: 'Cancel', exact: true }).click();
+      // Inline Cancel refuses only this tool; B49 is the actual current-turn Stop.
+      if (!pending.frame.turn_id) throw new Error('PREREQUISITE: genuine approval has no observed owning turn identity');
+      expect(terminalLogRows(history.logPath).filter(row => row.event_kind === 'turn_end' && row.turn_id === pending.frame.turn_id),
+        'PREREQUISITE: the genuine approval is still holding this exact turn open').toEqual([]);
+      const stop = history.page.getByTestId('stop-btn');
+      await expect(stop).toBeEnabled();
+      await stop.click();
       await expect.poll(() => history.traffic.frames.some((f) => f.type === 'tool_approval_resolved' && f.approval_id === pending.frame.approval_id && f.state === 'denied_cancel')).toBe(true);
+      await expect.poll(() => terminalLogRows(history.logPath).filter(row => row.event_kind === 'turn_end' && row.turn_id === pending.frame.turn_id).length,
+        { message: 'Stop ends the exact turn that owned the genuine pending approval' }).toBe(1);
     } else {
       await stopRunningControlTurn(history);
-      await expect.poll(() => history.traffic.frames.some((f) => f.type === 'ask_user_question' && f.card.card_id === pending.frame.card.card_id && f.card.status === 'cancelled')).toBe(true);
+      if (pending.kind === 'question') {
+        await expect.poll(() => history.traffic.frames.some((f) => f.type === 'ask_user_question' && f.card.card_id === pending.frame.card.card_id && f.card.status === 'cancelled')).toBe(true);
+      } else {
+        await expect.poll(() => history.traffic.frames.filter(frame => frame.type === 'secret_request_resolved' &&
+          frame.request_id === pending.frame.request_id && frame.state === 'stopped').length).toBe(1);
+        const state = await readSecretState(history, pending);
+        expect(state.state, 'BDD-6.5: Stop terminates the exact unsubmitted card').toBe('stopped');
+        expect(state.reference_names, 'nothing was stored by Stop').toBeUndefined();
+        await expect(secretCard(history.page, pending)).toHaveAttribute('data-state', 'stopped');
+        await expect(secretCard(history.page, pending).getByTestId('secret-request-result')).toHaveText('Stopped — nothing was stored.');
+        await expect(pendingAction(history.page, pending)).toHaveCount(0);
+      }
     }
     await assertSessionStopped(history);
     expect(controlProvider(history).calls(), 'Stop does not approve/answer/resume another model turn').toBe(before);
