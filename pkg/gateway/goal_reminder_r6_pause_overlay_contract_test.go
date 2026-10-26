@@ -133,7 +133,7 @@ func r6SignalGapAssertDurablePause(t *testing.T, f *r6PublicFixture) {
 	var detail generated.SessionDetail
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
 	n := 0
-	for _, row := range detail.Messages {
+	for _, row := range r6PauseHistoryMessages(t, f, detail, w.Body.Bytes()) {
 		if row.Content != nil && *row.Content == r6GatewayPause {
 			n++
 			fields := r6MessageFields(t, row)
