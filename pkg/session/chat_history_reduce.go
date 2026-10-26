@@ -361,7 +361,11 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 		t.positions = make(map[HistoryPosition]uint64)
 	}
 	t.positions[position] = r.Rank
-	out := ChatHistoryEntry{Position: r.Position, Entry: entry, RowCount: rows}
+	parents, err := historyNestedDelegateParents(t, dir, cut, entry)
+	if err != nil {
+		return ChatHistoryEntry{}, err
+	}
+	out := ChatHistoryEntry{Position: r.Position, Entry: entry, RowCount: rows, NestedDelegateParents: parents}
 	cache[r.Rank] = out
 	return out, nil
 }

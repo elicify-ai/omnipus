@@ -694,6 +694,10 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 				if nativeTurn {
 					rc.al.reportSessionSaveFailure(native, &messageNotSavedError{role: "system", cause: appendErr})
 				} else {
+					// Unreachable today: *turnState is the only TurnCancelHook
+					// implementor (turn.go; both cancel resolution paths refuse
+					// anything else), so any new implementor must surface its
+					// own marker-append failure — never log-only.
 					slog.Warn("agent: RequestCancel: could not append turn_canceled transcript entry",
 						"session_id", rc.sessionID, "error", appendErr)
 				}
