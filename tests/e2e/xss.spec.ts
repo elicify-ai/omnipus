@@ -67,6 +67,8 @@ for (const { name, payload } of xssPayloads) {
       // We must NOT count those. Instead, assert that no <script> appears inside
       // the main content area where the agent description is rendered.
       const descriptionArea = page.locator('main, [role="main"], .agent-profile, [data-testid="agent-description"]').first();
+      await expect(descriptionArea.getByText(payload, { exact: true }),
+        `POSITIVE CONTROL: description-XSS payload "${name}" itself renders visibly as exact escaped text before safety checks`).toBeVisible();
       const scriptInContent = await descriptionArea.locator('script').count();
       expect(
         scriptInContent,
