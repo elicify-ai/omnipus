@@ -342,6 +342,76 @@ describe('#1436 round 2 — a pending chat owns only its own model choice', () =
   })
 })
 
+describe('#1436 round 3 — latest choice wins within the pending chat', () => {
+  it('keeps first request X immutable but preserves later choice Y through confirmation, reload and next send', async () => {
+    const { useConnectionStore } = await import('@/store/connection')
+    const { useOmnipusRuntime } = await import('@/lib/omnipus-runtime')
+    const frames: ClientFrame[] = []
+    const transport = { send: (frame: ClientFrame) => { frames.push(frame); return true }, close: vi.fn(), isConnected: true }
+    useConnectionStore.setState({ connection: transport as unknown as WsConnection, isConnected: true })
+    act(() => page.useSessionStore.getState().setActiveSession(SESSION_B, agent.id))
+    const mounted = await renderPicker()
+    await choose(DEFAULT_MODEL)
+    const otherChoice = { model: DEFAULT_MODEL, provider: 'openrouter' }
+    const latestChoice = { model: LATEST_CHOICE, provider: 'openrouter' }
+    expect(JSON.parse(localStorage.getItem('omnipus.sessionModelChoice.v1')!)).toEqual({ [SESSION_B]: otherChoice })
+    act(() => { expect(page.useSessionStore.getState().startNewSession(agent.id)).toBe('started') })
+    await choose(FIRST_CHOICE)
+    const runtime = renderHook(() => useOmnipusRuntime())
+    await act(async () => {
+      runtime.result.current.thread.composer.setText('First request must remain on X')
+      await runtime.result.current.thread.composer.send()
+    })
+    expect(page.useSessionStore.getState().activeSessionId).toBe('__pending')
+    const firstRequest = frames.find((frame) => frame.type === 'message')
+    expect(firstRequest).toMatchObject({ type: 'message', metadata: { model_name: FIRST_CHOICE } })
+    if (!firstRequest || firstRequest.type !== 'message') throw new Error('The real composer did not send the first X request')
+    const immutableRequest = structuredClone(firstRequest)
+    await choose(LATEST_CHOICE)
+    expect(page.useSessionStore.getState().activeSessionId, 'Y was chosen in the same unconfirmed chat').toBe('__pending')
+    expect(page.useChatStore.getState().pendingFirstSend?.payload.metadata?.model_name, 'changing the next preference must not rewrite the pending request').toBe(FIRST_CHOICE)
+    expect(firstRequest).toEqual(immutableRequest)
+    expect(JSON.parse(localStorage.getItem('omnipus.sessionModelChoice.v1')!), 'another chat must keep its separate choice').toEqual({ [SESSION_B]: otherChoice })
+    act(() => page.useChatStore.getState().handleFrame({
+      type: 'session_started', session_id: SESSION_A, agent_id: agent.id, client_message_id: firstRequest.client_message_id,
+    }))
+    expect(page.useSessionStore.getState().activeSessionId).toBe(SESSION_A)
+    expect.soft({ model: page.useChatStore.getState().nextModel, provider: page.useChatStore.getState().nextModelProvider }, 'confirmation must preserve the latest Y pair, not the older X request snapshot').toEqual(latestChoice)
+    expect.soft(screen.getByTestId('composer-model-selector')).toHaveTextContent(LATEST_CHOICE)
+    expect.soft(JSON.parse(localStorage.getItem('omnipus.sessionModelChoice.v1')!), 'the materialized chat saves Y while B keeps its own choice').toEqual({ [SESSION_B]: otherChoice, [SESSION_A]: latestChoice })
+    expect(firstRequest, 'confirmation must not mutate the original outbound request').toEqual(immutableRequest)
+    mounted.unmount()
+    runtime.unmount()
+    for (const client of clients.splice(0)) client.clear()
+    const oldStore = page.useChatStore
+    vi.resetModules()
+    page = await loadPageModules()
+    expect(page.useChatStore).not.toBe(oldStore)
+    const reloadedConnection = await import('@/store/connection')
+    reloadedConnection.useConnectionStore.setState({ connection: transport as unknown as WsConnection, isConnected: true })
+    act(() => {
+      page.useWorkspacesStore.getState().setActiveWorkspaceId(WORKSPACE_ID)
+      page.useSessionStore.getState().setActiveSession(SESSION_A, agent.id)
+    })
+    await renderPicker()
+    expect.soft({ model: page.useChatStore.getState().nextModel, provider: page.useChatStore.getState().nextModelProvider }, 'reload must restore Y without another user selection').toEqual(latestChoice)
+    expect.soft(screen.getByTestId('composer-model-selector')).toHaveTextContent(LATEST_CHOICE)
+    expect.soft(JSON.parse(localStorage.getItem('omnipus.sessionModelChoice.v1')!)).toEqual({ [SESSION_B]: otherChoice, [SESSION_A]: latestChoice })
+    const reloadedRuntimeModule = await import('@/lib/omnipus-runtime')
+    const nextRuntime = renderHook(() => reloadedRuntimeModule.useOmnipusRuntime())
+    await act(async () => {
+      nextRuntime.result.current.thread.composer.setText('Next request must use the latest Y preference')
+      await nextRuntime.result.current.thread.composer.send()
+    })
+    const requests = frames.filter((frame) => frame.type === 'message')
+    expect(requests).toHaveLength(2)
+    expect(requests[0]).toEqual(immutableRequest)
+    expect.soft(requests[1], 'next send uses Y, while the first send remains X').toMatchObject({
+      type: 'message', session_id: SESSION_A, metadata: { model_name: LATEST_CHOICE },
+    })
+  })
+})
+
 describe('#1436 — visible agent default is independent of current selection', () => {
   it('marks only the agent\'s default provider/model row while another model is chosen', async () => {
     await renderPicker()

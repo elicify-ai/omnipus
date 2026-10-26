@@ -7,6 +7,7 @@ import type {
   ErrorFrame,
   MessageFrame,
   SessionStartedFrame,
+  ServerFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import type { WsConnection } from '@/lib/ws'
 import { getMessages, useChatStore } from './chat'
@@ -14,8 +15,10 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { makeSnapshotHistory } from '@/test/factories'
 import { queryClient } from '@/lib/queryClient'
 import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
+import { expectValidFrame } from '../../tests/chat-history-paging/fixtures'
 
 // Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // D7, FOUNDER DECISION "middle way", and Team-lead ruling (frontend scope).
@@ -47,6 +50,11 @@ const ORIGINAL_FRAME: MessageFrame = {
   media: [...MEDIA_REFS],
   metadata: { model_name: '1090-original-model', workspace_id: '1090-origin-workspace' },
   auto_approve: false,
+}
+
+function applyDeclaredRecoveryFrame(frame: ServerFrame) {
+  expectValidFrame(frame)
+  useChatStore.getState().handleFrame(frame)
 }
 
 function resetRecovery1090Stores() {
@@ -258,31 +266,41 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
       .not.toBeInTheDocument()
 
     act(() => {
-      // Zero is a valid fixture cursor; unknown_position is deliberately NOT
-      // boot_mismatch. D7 carries an explicit recovered-first-send flag.
-      useChatStore.getState().handleFrame({
-        type: 'session_snapshot', session_id: SESSION_ID, reason: 'unknown_position', seq: 0, boot_id: '1090-boot',
+      // The generated snapshot/complete schemas require a positive cut.
+      // unknown_position is deliberately NOT boot_mismatch; D7 carries an
+      // explicit recovered-first-send flag.
+      applyDeclaredRecoveryFrame({
+        ...makeSnapshotHistory(1),
+        type: 'session_snapshot', session_id: SESSION_ID, reason: 'unknown_position', seq: 1, boot_id: '1090-boot',
       })
-      useChatStore.getState().handleFrame({
+      applyDeclaredRecoveryFrame({
         type: 'session_state', session_id: SESSION_ID, user_id: '1090-user',
-        pending_approvals: [], emitted_at: '2026-09-30T12:00:00Z', auto_approve_modifier: true,
+        pending_approvals: [], emitted_at: '2026-09-30T12:00:00Z', auto_approve_modifier: true, history_state: { status: 'available' },
       })
       const replay = {
         type: 'replay_message' as const, session_id: SESSION_ID, role: 'user' as const,
         id: SERVER_ENTRY_ID, client_message_id: CLIENT_ID, content: CONTENT,
+        history_origin: { position: makeSnapshotHistory(1).page_info.first_position!, entry_id: SERVER_ENTRY_ID },
       }
-      useChatStore.getState().handleFrame(replay)
+      applyDeclaredRecoveryFrame(replay)
       // Replaying the same entry is idempotent even after local ID re-keying.
-      useChatStore.getState().handleFrame(replay)
+      applyDeclaredRecoveryFrame(replay)
+      applyDeclaredRecoveryFrame({ type: 'done', session_id: SESSION_ID })
     })
-    expect.soft(recovery1090Users(), 'T10: replay reconciles by client ID to exactly one server entry')
-      .toStrictEqual([{ id: SERVER_ENTRY_ID, content: CONTENT }])
+    expect.soft(recovery1090Users(), 'D7: before COMPLETE the original client-ID input remains, not a partially rekeyed page')
+      .toStrictEqual([{ id: CLIENT_ID, content: CONTENT }])
+    expect.soft(useChatStore.getState().sessionsById[SESSION_ID].history.readerPositions, 'D7: no partial selected page is committed')
+      .toStrictEqual([])
+    expect.soft(useChatStore.getState().sessionsById[SESSION_ID].history.historyLoaded, 'D7: historical readiness waits for COMPLETE')
+      .toBe(false)
     expect.soft(screen.queryByRole('button', { name: /Generate again/ }), 'T10: session_state alone is not completed catch-up')
       .not.toBeInTheDocument()
-    act(() => useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SESSION_ID, seq: 0, boot_id: '1090-boot', mode: 'snapshot',
+    act(() => applyDeclaredRecoveryFrame({
+      type: 'catch_up_complete', session_id: SESSION_ID, seq: 1, boot_id: '1090-boot', mode: 'snapshot',
     }))
 
+    expect.soft(recovery1090Users(), 'T10: replay reconciles by client ID to exactly one server entry')
+      .toStrictEqual([{ id: SERVER_ENTRY_ID, content: CONTENT }])
     expect.soft(recovery1090Users(), 'T10: completion must not duplicate the original bubble')
       .toStrictEqual([{ id: SERVER_ENTRY_ID, content: CONTENT }])
     expect.soft(useChatStore.getState().sessionsById.__pending, 'T10: pending bucket migrated to the real session')
@@ -381,19 +399,22 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
     }
     act(() => {
       useChatStore.getState().handleFrame(ack)
-      useChatStore.getState().handleFrame({
-        type: 'session_snapshot', session_id: SESSION_ID, reason: 'unknown_position', seq: 0, boot_id: '1090-boot',
+      applyDeclaredRecoveryFrame({
+        ...makeSnapshotHistory(1),
+        type: 'session_snapshot', session_id: SESSION_ID, reason: 'unknown_position', seq: 1, boot_id: '1090-boot',
       })
-      useChatStore.getState().handleFrame({
+      applyDeclaredRecoveryFrame({
         type: 'session_state', session_id: SESSION_ID, user_id: '1090-user',
-        pending_approvals: [], emitted_at: '2026-09-30T12:00:00Z', auto_approve_modifier: true,
+        pending_approvals: [], emitted_at: '2026-09-30T12:00:00Z', auto_approve_modifier: true, history_state: { status: 'available' },
       })
-      useChatStore.getState().handleFrame({
+      applyDeclaredRecoveryFrame({
         type: 'replay_message', session_id: SESSION_ID, role: 'user',
         id: SERVER_ENTRY_ID, client_message_id: CLIENT_ID, content: CONTENT,
+        history_origin: { position: makeSnapshotHistory(1).page_info.first_position!, entry_id: SERVER_ENTRY_ID },
       })
-      useChatStore.getState().handleFrame({
-        type: 'catch_up_complete', session_id: SESSION_ID, seq: 0, boot_id: '1090-boot', mode: 'snapshot',
+      applyDeclaredRecoveryFrame({ type: 'done', session_id: SESSION_ID })
+      applyDeclaredRecoveryFrame({
+        type: 'catch_up_complete', session_id: SESSION_ID, seq: 1, boot_id: '1090-boot', mode: 'snapshot',
       })
     })
     expect(recovery1090Users(), 'T12 recovered fixture: replay has genuinely re-keyed the original bubble')

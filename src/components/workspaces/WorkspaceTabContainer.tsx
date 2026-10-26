@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { SidebarShowButton } from '@/components/layout/SidebarShowButton'
 import { Card } from '@/components/ui/card'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 // React context carrying the resolved workspace to every tab.
 const WorkspaceContext = createContext<Workspace | null>(null)
@@ -75,8 +76,7 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     isLoading: workspacesLoading,
     refetch: refetchWorkspaces,
   } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
 
@@ -305,8 +305,7 @@ function WorkspaceTabContainerView({
 function WorkspaceNotFoundState() {
   const navigate = useNavigate()
   const { data: workspaces = [] } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
 

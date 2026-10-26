@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, renderHook } from '@testing-library/react'
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import type { ToolCallStartFrame } from '@/lib/api/generated/asyncapi-types'
@@ -13,22 +13,30 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { __resetFinishedTurnIdsForTests } from '@/store/chat/frames'
 import { useCurrentTodo } from './useCurrentTodo'
-
-vi.mock('@/lib/api', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/lib/api')>(),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
-}))
+import { expectValidPage, page } from '../../../tests/chat-history-paging/fixtures'
+import { json, Network } from '../../../tests/l1-room-ui/harness'
 
 // not-wire-format: independent local test expectations, not gateway data types.
 type Q10Case = { name: string; input: string; expected: string; reject: boolean }
 const fixture: { source: string; cases: Q10Case[] } = JSON.parse(readFileSync(resolve('tests/fixtures/q10-active-form-normalization.json'), 'utf8'))
 const SID = 'q10-normalization-selector'
+let network: Network
 
 function Wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }
 
 beforeEach(() => {
+  // D3 / seam J: "Return the envelope with normalized `entries`, not
+  // `Message[]`." Put generated data at HTTP so the real adapter stays real.
+  network = new Network()
+  network.respond('GET', `/api/v1/sessions/${SID}/messages`, request => {
+    expect(Object.fromEntries(new URLSearchParams(request.query)),
+      'normalization recovery uses the declared bounded history page').toStrictEqual({ limit: '100' })
+    const empty = page([], { sessionId: SID, info: { limit: 100 } })
+    expectValidPage(empty, [], 0)
+    return json(empty)
+  })
   __resetFinishedTurnIdsForTests()
   queryClient.clear()
   useChatStore.setState(useChatStore.getInitialState(), true)
@@ -51,6 +59,8 @@ afterEach(() => {
   useChatStore.setState(useChatStore.getInitialState(), true)
   useSessionStore.setState(useSessionStore.getInitialState(), true)
   useConnectionStore.setState(useConnectionStore.getInitialState(), true)
+  vi.unstubAllGlobals()
+  expect(network.unexpected, 'optional recovery must not hide undeclared requests').toEqual([])
 })
 
 describe('Q10 checklistDisplay normalization through the real public hook', () => {
@@ -63,6 +73,9 @@ describe('Q10 checklistDisplay normalization through the real public hook', () =
   it.each(fixture.cases)('$name', async (tc) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { result } = renderHook(() => useCurrentTodo(true), { wrapper: Wrapper })
+    // Positive control: the previously passing array mock silently failed
+    // optional recovery. A successful real page must now settle that query.
+    await waitFor(() => expect(queryClient.getQueryState(['current-todo-history', SID, 'q10-turn'])?.status).toBe('success'))
     expect(result.current).toEqual({ activeForm: null })
     const todos: ToolCallStartFrame['params']['todos'] = [{ text: 'Draft the summary', status: 'in_progress', active_form: tc.input }]
     const original = structuredClone(todos)

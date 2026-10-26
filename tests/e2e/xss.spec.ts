@@ -1,5 +1,12 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
+import type { AgentCreateRequestMain, Message, SessionCreateRequest, WorkspaceCreateRequest } from '../../src/lib/api/generated/openapi-types';
+import { Agent, Session, Workspace } from '../../src/lib/api/generated/schemas';
+import { test as canonicalTest } from './fixtures/canonical-history';
+import { seedCanonicalLegacyTranscript } from './fixtures/chat-history';
+import { observeTraffic } from './fixtures/chat-history-paging/harness';
+import { openSessionByDeepLink } from './fixtures/session-setup';
+import { newAdminApiContext } from './fixtures/admin-api';
 
 // XSS DOM-rendering coverage for the chat markdown render path.
 //
@@ -29,47 +36,59 @@ const xssPayloads = [
 ];
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/agents');
+  await page.goto('/#/workspaces');
 });
 
 for (const { name, payload } of xssPayloads) {
-  test(`XSS payload does not execute in agent description DOM: ${name}`, async ({ page, request }) => {
-    // Create an agent with the XSS payload as its description via REST API.
-    // The test uses the API directly (authenticated via storageState cookie/token)
-    // rather than the UI to avoid driving the modal for every payload.
-    const agentName = `xss-dom-test-${name}-${Date.now()}`;
-    const createResp = await request.post('/api/v1/agents', {
-      data: { name: agentName, description: payload, model: 'scripted-model' },
-    });
-
-    // If the agent was rejected by the server (validation error) that is acceptable
-    // defense-in-depth. Skip DOM rendering for that payload.
-    if (!createResp.ok()) {
-      test.info().annotations.push({
-        type: 'skip-reason',
-        description: `Server rejected payload ${name} with ${createResp.status()} — server-side defense active`,
-      });
-      return;
-    }
-
-    const created = await createResp.json() as { id?: string };
-    const agentId = created.id;
-    if (!agentId) {
-      // No id in response — treat as rejection.
-      return;
-    }
-
+  test(`XSS payload does not execute in agent description DOM: ${name}`, async ({ page }) => {
+    // Reuse the shared session and echo its CSRF cookie in the setup/cleanup
+    // header, exactly as other cookie-authenticated E2E API callers do.
+    const request = await newAdminApiContext();
+    let agentId: string | undefined;
+    let workspaceId: string | undefined;
     try {
-      // Navigate to the agent profile page where description is rendered.
-      await page.goto(`/agents/${agentId}`);
-      // Wait for the page to settle (network idle ensures JS has rendered content).
-      await page.waitForLoadState('networkidle');
+      // Create an agent with the XSS payload as its description via REST API.
+      // The test uses the API directly (authenticated via storageState cookie/token)
+      // rather than the UI to avoid driving the modal for every payload.
+      const agentName = `xss-dom-test-${name}-${Date.now()}`;
+      const createResp = await request.post('/api/v1/agents', {
+        data: { type: 'Main', name: agentName, soul: 'Assist with the requested task.',
+          description: payload, model: 'scripted-model' } satisfies AgentCreateRequestMain,
+      });
+
+      // A rejected or malformed setup is not evidence of safe DOM rendering.
+      // Both prerequisites must fail loudly before any escaping claim is made.
+      expect(createResp.ok(),
+        `PREREQUISITE: create description-XSS agent ${name}; HTTP ${createResp.status()}: ${await createResp.text()}`).toBe(true);
+      const created = Agent.parse(await createResp.json());
+      agentId = created.id;
+      expect(agentId.trim().length, `PREREQUISITE: created description-XSS agent ${name} has a nonempty id`).toBeGreaterThan(0);
+
+      const workspaceResp = await request.post('/api/v1/workspaces', {
+        data: { name: agentName, core_team: [agentId] } satisfies WorkspaceCreateRequest,
+      });
+      expect(workspaceResp.ok(), `PREREQUISITE: create description-XSS workspace; HTTP ${workspaceResp.status()}: ${await workspaceResp.text()}`).toBe(true);
+      workspaceId = Workspace.parse(await workspaceResp.json()).id;
+      // The old /agents/{id} screen is retired. Drive the real Team surface's
+      // Edit action to the shell's single AgentProfile sheet, which displays
+      // the stored description as literal text beside the agent's type.
+      await page.goto(`/#/workspaces/${workspaceId}/chat?panel=team`);
+      const team = page.getByTestId('workspace-team-tab');
+      await expect(team).toBeVisible();
+      await team.getByTestId(`team-card-actions-${agentId}`).click();
+      await page.getByRole('button', { name: `Edit ${agentName}`, exact: true }).click();
+      await expect(page.getByTestId('agent-profile-sheet')).toBeVisible();
 
       // --- Assert: no <script> elements in the agent description content area ---
       // Note: the page will have legitimate <script> elements from the SPA bundle.
       // We must NOT count those. Instead, assert that no <script> appears inside
       // the main content area where the agent description is rendered.
-      const descriptionArea = page.locator('main, [role="main"], .agent-profile, [data-testid="agent-description"]').first();
+      // The read-only description beside the type badge, not the editable
+      // textarea's value (which would not prove safe text-node rendering).
+      const descriptionArea = page.getByTestId('agent-profile-sheet').locator(':scope > div')
+        .filter({ has: page.locator('span').filter({ hasText: payload }) });
+      await expect(descriptionArea.getByText(payload, { exact: true }),
+        `POSITIVE CONTROL: description-XSS payload "${name}" itself renders visibly as exact escaped text before safety checks`).toBeVisible();
       const scriptInContent = await descriptionArea.locator('script').count();
       expect(
         scriptInContent,
@@ -79,7 +98,8 @@ for (const { name, payload } of xssPayloads) {
       // --- Assert: no on* event handlers in the description area ---
       // Evaluate in page context to detect any on* attributes on rendered elements.
       const hasOnHandlers = await page.evaluate(() => {
-        const content = document.querySelector('main') ?? document.body;
+        const content = document.querySelector('[data-testid="agent-profile-sheet"]');
+        if (!content) throw new Error('PREREQUISITE: actual agent description sheet is missing');
         const all = Array.from(content.querySelectorAll('*'));
         for (const el of all) {
           for (const attr of Array.from(el.attributes)) {
@@ -97,7 +117,8 @@ for (const { name, payload } of xssPayloads) {
 
       // --- Assert: no javascript: URIs in href or src attributes in content area ---
       const hasJavascriptURI = await page.evaluate(() => {
-        const content = document.querySelector('main') ?? document.body;
+        const content = document.querySelector('[data-testid="agent-profile-sheet"]');
+        if (!content) throw new Error('PREREQUISITE: actual agent description sheet is missing');
         const all = Array.from(content.querySelectorAll('[href],[src]'));
         for (const el of all) {
           const href = el.getAttribute('href') ?? '';
@@ -114,80 +135,66 @@ for (const { name, payload } of xssPayloads) {
       ).toBe(false);
 
     } finally {
-      // Clean up: delete the test agent regardless of pass/fail.
-      await request.delete(`/api/v1/agents/${agentId}`).catch(() => {
+      // Clean up the owned workspace, then its test agent, regardless of pass/fail.
+      if (workspaceId) await request.delete(`/api/v1/workspaces/${workspaceId}`);
+      if (agentId) await request.delete(`/api/v1/agents/${agentId}`).catch(() => {
         // Non-fatal — the agent may have already been cleaned up.
       });
+      await request.dispose();
     }
   });
 }
 
-test('chat message with XSS payload renders as escaped text, not live HTML', async ({ page }) => {
-  // This test verifies the chat rendering path (not just the agent description field).
-  // It uses page.route to intercept a WS message and inject an XSS payload as
-  // an assistant response, then asserts the payload appears as escaped text in the DOM.
-  //
-  // NOTE: This test intercepts only the API responses, not the real WS stream.
-  // It uses page.route to mock the sessions API so we get a predictable transcript
-  // without needing a live LLM connection.
-
+canonicalTest.describe('persisted chat payload', () => {
+canonicalTest.describe.configure({ retries: 0 });
+canonicalTest('chat message with XSS payload renders as escaped text, not live HTML', async ({ page, canonicalGateway }, info) => {
+  // A real REST identity and canonical archive back the real WS attach. No
+  // HTTP history projection or socket is mocked: absence cannot prove safety.
   const xssContent = '<script>window.__xss_fired = true;</script><img src=x onerror="window.__xss_fired=true">';
-
-  // Navigate to chat screen.
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
-
-  // Intercept the sessions list and transcript endpoint to inject an XSS assistant
-  // message into the DOM via the chat store's rendering path.
-  // This simulates what happens when the gateway streams a malicious assistant message.
-  const sessionId = `xss-test-session-${Date.now()}`;
-  await page.route('**/api/v1/sessions', async (route) => {
-    if (route.request().method() === 'GET') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([{
-          id: sessionId,
-          agent_id: 'omnipus-system',
-          title: 'XSS Test Session',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }]),
-      });
-    } else {
-      await route.continue();
-    }
+  await page.addInitScript(() => {
+    // Mutable execution monitor only; nothing prevents injected code setting it.
+    (window as unknown as { __xss_fired: boolean }).__xss_fired = false;
   });
+  const created = await canonicalGateway.apiFetch('POST', '/api/v1/sessions', {
+    agent_id: 'mia', type: 'chat',
+  } satisfies SessionCreateRequest);
+  expect(created.status, `PREREQUISITE: real XSS session creation: ${created.raw}`).toBe(201);
+  const session = Session.parse(created.body);
+  const sessionId = session.id;
+  const timestamp = new Date().toISOString();
+  const assistantId = 'xss-retained-assistant';
+  const entries: Message[] = [
+    { id: 'xss-retained-user', type: 'message', role: 'user', content: 'hi', agent_id: session.agent_id, timestamp },
+    { id: assistantId, type: 'message', role: 'assistant', content: xssContent, agent_id: session.agent_id, timestamp },
+  ];
+  await seedCanonicalLegacyTranscript(sessionId, entries);
+  const traffic = observeTraffic(page); // Seed left this actual page at about:blank.
+  await openSessionByDeepLink(page, sessionId, canonicalGateway.baseURL);
+  await expect.poll(() => traffic.frames.some(frame => frame.type === 'catch_up_complete' && frame.session_id === sessionId),
+    { message: 'PREREQUISITE: the real addressed WS attach completes, not mocked HTTP hydration' }).toBe(true);
+  expect(traffic.attaches.map(frame => frame.session_id), 'PREREQUISITE: actual native WS attach names the real session').toContain(sessionId);
+  expect(traffic.failures, 'generated contract validation on actual native WS traffic').toEqual([]);
 
-  await page.route(`**/api/v1/sessions/${sessionId}/transcript`, async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify([
-        { role: 'user', content: 'hi', timestamp: new Date().toISOString() },
-        { role: 'assistant', content: xssContent, timestamp: new Date().toISOString() },
-      ]),
-    });
-  });
-
-  // Navigate to the injected session's URL so the chat store loads the transcript.
-  await page.goto(`/#/sessions/${sessionId}`);
-  await page.waitForLoadState('networkidle');
-
-  // Give React a moment to render the intercepted transcript.
-  await page.waitForTimeout(1000);
-
-  // Assert: the XSS did NOT execute (window.__xss_fired should be undefined/false).
+  const retainedAssistant = page.locator(`[data-message-id="${assistantId}"]`);
+  await expect(retainedAssistant).toBeVisible();
+  await expect(retainedAssistant.getByText(xssContent, { exact: true }),
+    'POSITIVE CONTROL: the hostile assistant payload itself renders visibly as escaped text').toBeVisible();
   const xssFired = await page.evaluate(() => (window as unknown as Record<string, unknown>)['__xss_fired']);
   expect(
     xssFired,
     'XSS payload executed in the chat transcript DOM — the SPA must escape assistant message content',
-  ).toBeFalsy();
+  ).toBe(false);
 
-  // Assert: no <script> element inside the messages area.
-  const msgArea = page.locator('[data-message-role="assistant"], .assistant-message, [class*="message"]').first();
-  if (await msgArea.count() > 0) {
-    const scriptInMsg = await msgArea.locator('script').count();
-    expect(scriptInMsg, 'Rendered assistant message must not contain live <script> elements').toBe(0);
-  }
+  const scriptInMsg = await retainedAssistant.locator('script').count();
+  expect(scriptInMsg, 'Rendered assistant message must not contain live <script> elements').toBe(0);
+  await expect(retainedAssistant.locator('img'), 'raw hostile HTML is escaped text, not a live image').toHaveCount(0);
+  const eventHandlers = await retainedAssistant.evaluate(element => [...element.querySelectorAll('*')].flatMap(node =>
+    [...node.attributes].filter(attribute => /^on[a-z]/i.test(attribute.name)).map(attribute => attribute.name)));
+  expect(eventHandlers, 'escaped payload cannot install live on* handler attributes').toEqual([]);
+  await info.attach('xss-real-rendered-payload', { contentType: 'application/json', body: JSON.stringify({
+    sessionId, assistantId, renderedText: await retainedAssistant.innerText(), xssFired,
+    scriptInMsg, eventHandlers, attaches: traffic.attaches, failures: traffic.failures,
+  }, null, 2) });
+  await info.attach('xss-real-rendered-payload-screenshot', { contentType: 'image/png', body: await page.screenshot({ fullPage: true }) });
+});
 });

@@ -22,7 +22,6 @@ import {
   fetchChannelRouting,
   setChannelRouting,
   fetchAgents,
-  fetchWorkspaces,
   fetchWorkspace,
   isWorker,
   isApiError,
@@ -33,6 +32,7 @@ import { useUiStore } from '@/store/ui'
 import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
 import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 // CONFIGURED_SENTINEL is the backend's redaction placeholder for stored secrets
 // (pkg/gateway/rest.go redactChannelConfig). GET responses carry it instead of
@@ -488,8 +488,7 @@ export function ChannelConfigPanel({
 
   // workspace list — always loaded when panel is open (non-webchat)
   const { data: workspaces = [] } = useQuery({
-    queryKey: ['workspaces', { status: 'active' }],
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     enabled: open && !isWebchat,
   })
 

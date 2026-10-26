@@ -57,6 +57,8 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
 // doesn't exercise mentions. The workspaces query stays disabled (no
 // activeWorkspaceId set here), so `fetchWorkspaces` is never actually
 // invoked — this just needs to exist so the module loads.
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
@@ -64,7 +66,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAgents: vi.fn().mockResolvedValue([
       { figure: 'Omnipus', role: 'general', id: 'agent-1', name: 'Mia', color: '#8E9196', icon: null },
     ]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     uploadFiles: vi.fn(),

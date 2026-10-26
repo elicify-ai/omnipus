@@ -75,6 +75,10 @@ type streamReplayState struct {
 	childSessionBySpan map[string]string
 	// lifecycleCache memoizes Load for one replay, including misses.
 	lifecycleCache map[string]*session.LifecycleRecord
+	// Set only by bounded read-only preparation. Ordinary full replay keeps its
+	// existing result publication behavior and has no historical source origin.
+	historyOrigin   *generated.HistoryEntryOrigin
+	preparedResults map[session.ToolCallID]any
 }
 
 // streamReplayStateFlow reports how a block stage of streamReplayState wants the conductor to proceed.
@@ -155,75 +159,13 @@ func streamReplay(
 		return nil
 	}
 
-	// buildStart returns a generated.ToolCallStartFrame for tc.
-	// Nil params are coerced to an empty map to satisfy the schema contract
-	// (ToolCallStartFrame.yaml: params is required and must be an object, never null).
-	buildStart := func(tc session.ToolCall, agentID, parentCallID string) generated.ToolCallStartFrame {
-		return sr.buildStartFrame(tc, agentID, parentCallID)
-	}
-
-	// buildResult returns a generated.ToolCallResultFrame for tc.
-	buildResult := func(tc session.ToolCall, agentID, parentCallID string) generated.ToolCallResultFrame {
-		return sr.buildResultFrame(tc, agentID, parentCallID)
-	}
-
 	// lastSeenAgentID tracks the most recent non-empty AgentID across entries.
 	// Used as fallback when a spawn entry has an empty AgentID.
 	sr.lastSeenAgentID = ""
 
 	for ei, entry := range sr.entries {
-		switch flow, err2 := sr.dispatchSpecialEntry(entry, emitFrame); flow {
-		case streamReplayStateContinue:
-			continue
-		case streamReplayStateReturn:
+		if err2 := sr.replayEntry(ctx, ei, entry, mediaStore, emitFrame); err2 != nil {
 			return framesEmitted, err2
-		}
-
-		// ADR-087 D2/Codex C8: a truncated assistant entry can have EMPTY
-		// content — D4a persists a zero-content entry stamped
-		// truncated/max_output_tokens when the answer was cut off before any
-		// text was produced. That entry must still replay (with no body) so
-		// the SPA can render the "(cut off at the output limit)" suffix on
-		// reattach/reload; a non-truncated empty entry is unaffected and
-		// continues to be skipped entirely below.
-		truncatedEmptyAssistant := entry.Content == "" && entry.Truncated && entry.Role == "assistant"
-
-		// FR-I-002: emit replay_message for non-empty content (or a
-		// truncated-empty assistant entry, per ADR-087 above).
-		if entry.Content != "" || truncatedEmptyAssistant {
-			// Phase 1B (FR-014): system-error entries (Type=system + Status="error")
-			// are emitted as ReplayErrorFrame so the SPA can render the typed
-			// rate-limit-denial or generic error component. Without this, the
-			// empty Role would fall through to the assistant render path and the
-			// rate-limit text would render as a regular assistant bubble.
-			if entry.Type == session.EntryTypeSystem && entry.Status == "error" {
-				if err2 := emitFrame(buildReplayErrorFrame(sr.sessionID, entry)); err2 != nil {
-					return framesEmitted, err2
-				}
-				continue
-			}
-
-			sr.buildEntryMessage(entry)
-
-			if err2 := emitFrame(sr.msgFrame); err2 != nil {
-				return framesEmitted, err2
-			}
-		}
-
-		// FR-I-001: emit tool_call_start + tool_call_result for each ToolCall.
-	streamReplayStateLoop1:
-		for ti, tc := range entry.ToolCalls {
-			switch sr.classifyToolCall(ei, entry, ti, tc) {
-			case streamReplayStateContinue:
-				continue streamReplayStateLoop1
-			}
-
-			switch flow, err2 := sr.emitToolCallFrames(tc, mediaStore, buildStart, buildResult, emitFrame); flow {
-			case streamReplayStateContinue:
-				continue streamReplayStateLoop1
-			case streamReplayStateReturn:
-				return framesEmitted, err2
-			}
 		}
 	}
 
@@ -371,6 +313,12 @@ func (sr *streamReplayState) emitSpawnParentToolCall(
 	// The end is emitted before the still-active return so a stopped
 	// generation 1 is closed even while a newer generation is still running.
 	term := sr.spanReplayTerminal(sr.tcID, 1)
+	if term == spanReplayUseToolCall && (tc.Status == "pending" || tc.Status == "running") {
+		// A legacy launch without persisted brackets has only its tool-call
+		// status as evidence. Keep its start, but do not invent a terminal
+		// span or result from a call that has not completed (paging D4).
+		return streamReplayStateContinue, nil
+	}
 	if err2 := sr.emitReplaySpanEnd(tc, term, emitFrame); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
@@ -414,13 +362,16 @@ func (sr *streamReplayState) emitFlatToolCall(
 	if err2 := emitFrame(buildStart(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
-	if sr.stillActive {
+	if sr.stillActive || tc.Status == "pending" || tc.Status == "running" {
 		// A spawn/delegate call whose real sub-turn is still running but
 		// has made no (recorded) nested tool calls yet — e.g. a background
 		// delegate reloaded before its first step landed (symptom:
 		// "0 steps working" live, "done 0ms" on reload). Withhold the
 		// result frame; the client sees only tool_call_start, i.e.
 		// genuinely in progress.
+		// D4 likewise: any ordinary call still recorded "pending" or "running" has no
+		// completion yet. A result frame would invent one, and
+		// toolCallResultStatus would even present it as a terminal error.
 		return streamReplayStateContinue, nil
 	}
 	if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
@@ -909,7 +860,12 @@ func (sr *streamReplayState) buildStartFrame(tc session.ToolCall, agentID string
 
 // buildResultFrame builds a persisted tool-call result frame.
 func (sr *streamReplayState) buildResultFrame(tc session.ToolCall, agentID string, parentCallID string) generated.ToolCallResultFrame {
-	resultPayload := truncateResult(sr.sessionID, tc, sr.toolStore)
+	var resultPayload any
+	if sr.preparedResults != nil {
+		resultPayload = sr.preparedResults[tc.ID]
+	} else {
+		resultPayload = truncateResult(sr.sessionID, tc, sr.toolStore)
+	}
 	durationMs := int(tc.DurationMS)
 	f := generated.ToolCallResultFrame{
 		Type:       string(generated.WsFrameTypeToolCallResult),
@@ -1588,24 +1544,12 @@ func resolveStatus(s string) string {
 	return s
 }
 
-// toolCallResultStatus normalises a persisted session.ToolCall.Status onto
-// ToolCallResultFrame's strict wire enum (success/error only —
-// ToolCallResultFrame.yaml has no "interrupted" value; only the richer
-// SubagentEndFrame.status enum does). pkg/agent/loop.go's tcStatus
-// derivation can now persist "interrupted" for a synchronous delegate call
-// canceled by its parent (Finding F / A-I4 round 5, ToolResult.Interrupted),
-// so tc.Status is no longer guaranteed to be one of ToolCallResultFrame's
-// two allowed values — passing it through resolveStatus verbatim, as this
-// function replaces at every ToolCallResultFrame call site, would emit a
-// contract-invalid frame the SPA's isValidFrame() drops. Any non-empty,
-// non-"success" value (error, interrupted, canceled, timeout, ...) reads as
-// "error" here, exactly matching what the LIVE EventKindToolExecEnd handler
-// already does for the same outer call — IsError is a plain bool there too,
-// with no room for a third state — so this clamp changes nothing about the
-// OUTER tool_call_result badge's live/reload parity; only the SPAN's own
-// subagent_end frame (built via resolveStatus, unclamped) is meant to ever
-// show "interrupted".
+// toolCallResultStatus preserves the contracted terminal cancellation. Other
+// richer span-only outcomes still map to error, never an invalid wire value.
 func toolCallResultStatus(s string) string {
+	if s == "cancelled" {
+		return "cancelled"
+	}
 	if s == "" || s == "success" {
 		return resolveStatus(s)
 	}
@@ -1892,9 +1836,11 @@ func parseRetryAfterSeconds(content string) *float64 {
 
 // resolveTaskLabel extracts the task label from a spawn tool call's parameters.
 // Prefers Parameters["label"]; falls back to Parameters["task"] truncated at 60 chars.
+// A legacy call without either uses its recorded tool name as a display label,
+// not invented task text; generated span starts require a nonempty label.
 func resolveTaskLabel(tc session.ToolCall) string {
 	if tc.Parameters == nil {
-		return ""
+		return tc.Tool
 	}
 	if label, ok := tc.Parameters["label"].(string); ok && label != "" {
 		return label
@@ -1904,9 +1850,11 @@ func resolveTaskLabel(tc session.ToolCall) string {
 		if len(runes) > 60 {
 			return string(runes[:60])
 		}
-		return task
+		if task != "" {
+			return task
+		}
 	}
-	return ""
+	return tc.Tool
 }
 
 // replayStats aggregates metrics from a set of transcript entries for slog.Info.

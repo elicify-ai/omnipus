@@ -84,6 +84,10 @@ jobs:
         shell: bash
         run: go build -tags goolm,stdjson ./...
 
+      - name: Prepare native history fixture tools
+        shell: bash
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
+
       - name: Test
         # Platform-gated tests skip cleanly via pkg/testutil.SkipIfNotLinux et al.
         # The suite runs on all combinations to catch build-time breakage.

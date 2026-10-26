@@ -28,17 +28,35 @@ interface ProviderFrameContext {
 }
 
 /**
- * §6 exact template — "Answered by the Fallback model ({X}) because {Y} was
- * unavailable." (never "backup"). Both model names are required by the
- * template; a frame missing either is a contract violation the SPA renders
- * nothing for (no invented copy, no "undefined" text) — logged and dropped.
+ * §6 fallback-note sentence. The wording source for BOTH frame paths — the
+ * live `provider_fallback` note and a replay carrier that arrives without a
+ * `message` — so live and reloaded sessions read identically (spec US-6/2,
+ * FB-2; Q70 live/replay consistency).
+ *
+ * Two wordings, keyed to the frame's generated `unavailable_code`:
+ * - `model_not_found` (the bad_model hop, pkg/agent/fallback_note.go::
+ *   fallbackUnavailableCode): the sentence says plainly that the model was
+ *   not found or is not offered by its provider — the same sentence the
+ *   backend saves (fallbackNoteText's bad-model branch). The live
+ *   `provider_fallback` frame carries the code but no `message` field, so
+ *   the sentence necessarily exists in both Go and TS.
+ * - every other code (and older frames without the code): the plain §6
+ *   "was unavailable" line.
+ *
+ * Both model names are required by the template; a frame missing either is a
+ * contract violation the SPA renders nothing for (no invented copy, no
+ * "undefined" text) — logged and dropped.
  */
 export function assembleFallbackNoteMessage(
   answeredModel: string | undefined,
   unavailableModel: string | undefined,
+  unavailableCode?: ProviderFallbackFrame['unavailable_code'],
 ): string | null {
   if (typeof answeredModel !== 'string' || answeredModel.length === 0) return null
   if (typeof unavailableModel !== 'string' || unavailableModel.length === 0) return null
+  if (unavailableCode === 'model_not_found') {
+    return `Answered by the Fallback model (${answeredModel}) because ${unavailableModel} was not found or is not offered by its provider.`
+  }
   return `Answered by the Fallback model (${answeredModel}) because ${unavailableModel} was unavailable.`
 }
 
@@ -131,7 +149,11 @@ export function handleProviderFrame({ frame, targetSid, get, withBucket }: Provi
     case 'provider_fallback': {
       if (!targetSid) return true
       const fallbackFrame = frame as ProviderFallbackFrame
-      const message = assembleFallbackNoteMessage(fallbackFrame.answered_model, fallbackFrame.unavailable_model)
+      const message = assembleFallbackNoteMessage(
+        fallbackFrame.answered_model,
+        fallbackFrame.unavailable_model,
+        fallbackFrame.unavailable_code,
+      )
       if (message == null) {
         // Contract violation (both model names are required by the §6
         // template). Render nothing rather than invented copy.
@@ -171,7 +193,7 @@ export function handleProviderFrame({ frame, targetSid, get, withBucket }: Provi
       // live and reloaded sessions read identically (spec US-6/2, FB-2).
       const message = typeof noteFrame.message === 'string' && noteFrame.message.length > 0
         ? noteFrame.message
-        : assembleFallbackNoteMessage(noteFrame.answered_model, noteFrame.unavailable_model)
+        : assembleFallbackNoteMessage(noteFrame.answered_model, noteFrame.unavailable_model, noteFrame.unavailable_code)
       if (message == null) {
         logDiagnostic('chatProviderFallbackNoteSkipped', { sessionId: targetSid, entryId: noteFrame.entry_id })
         return true

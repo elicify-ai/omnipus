@@ -6,6 +6,9 @@ import { ChatThread } from '@/components/chat/ChatThread'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import type { Message } from '@/lib/api'
+import { emptyHistoryPage, narrationHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
+const { historyRead } = vi.hoisted(() => ({ historyRead: vi.fn<HistoryReadPort>() }))
 
 // test_message_history_load (test #25)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Previous messages load on session navigation
@@ -14,10 +17,8 @@ import type { Message } from '@/lib/api'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchSessionMessages: vi.fn() }
+  return { ...actual, fetchSessionMessages: historyRead }
 })
-
-import { fetchSessionMessages } from '@/lib/api'
 
 const mockMessages: Message[] = [
   { id: 'm1', session_id: 'sess_aws', role: 'user', content: 'What are AWS m5 instance prices?', timestamp: '2026-03-28T10:00:00Z', status: 'done' },
@@ -47,7 +48,7 @@ beforeEach(() => {
     // each test below sets the session it renders as active before rendering.
     useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
   })
-  vi.mocked(fetchSessionMessages).mockResolvedValue(mockMessages)
+  historyRead.mockResolvedValue(narrationHistoryPage('sess_aws', mockMessages))
 })
 
 describe('message history integration (test #25)', () => {
@@ -85,7 +86,7 @@ describe('message history integration (test #25)', () => {
 
   it('renders empty chat when session has no messages', async () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Empty session shows no messages
-    vi.mocked(fetchSessionMessages).mockResolvedValue([])
+    historyRead.mockResolvedValue(emptyHistoryPage('sess_empty'))
     useSessionStore.setState({ activeSessionId: 'sess_empty' })
     const { container } = render(<ChatThread sessionId="sess_empty" />, { wrapper })
 

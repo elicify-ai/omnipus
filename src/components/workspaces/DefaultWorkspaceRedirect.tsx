@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
-import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import type { WorkspaceSegment } from './WorkspaceTabBar'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 /** Route that is allowed to send the user into a workspace tab. Accepts the
  * full WorkspaceSegment — 'chat' (the default landing tab) has no legacy
@@ -74,8 +74,7 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
   }, [])
 
   const { data: workspaces, isError, isLoading, isFetching, refetch } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
 

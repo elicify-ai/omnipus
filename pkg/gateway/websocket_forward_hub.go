@@ -243,7 +243,9 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 		return
 	}
 	status := "success"
-	if p.IsError {
+	if p.Cancelled {
+		status = "cancelled"
+	} else if p.IsError {
 		status = "error"
 	}
 	evtSID := p.SessionID
@@ -254,6 +256,9 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 		return
 	}
 	var liveResult any = p.Result
+	if p.Cancelled && p.Result == "" {
+		liveResult = nil // No admitted output is an explicit null, not fake text.
+	}
 	var structuredErr string
 	if status == "error" {
 		if obj, reason, isStructured := parseStructuredToolFailure(p.Result); isStructured {

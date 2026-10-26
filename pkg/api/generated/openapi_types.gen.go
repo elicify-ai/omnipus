@@ -6752,6 +6752,7 @@ const (
 	MessageTypeContextWindowNotice MessageType = "context_window_notice"
 	MessageTypeJudgeVerdict        MessageType = "judge_verdict"
 	MessageTypeMessage             MessageType = "message"
+	MessageTypeProviderFallback    MessageType = "provider_fallback"
 	MessageTypeSystem              MessageType = "system"
 	MessageTypeToolCall            MessageType = "tool_call"
 	MessageTypeTurnCanceled        MessageType = "turn_canceled"
@@ -6768,11 +6769,31 @@ func (e MessageType) Valid() bool {
 		return true
 	case MessageTypeMessage:
 		return true
+	case MessageTypeProviderFallback:
+		return true
 	case MessageTypeSystem:
 		return true
 	case MessageTypeToolCall:
 		return true
 	case MessageTypeTurnCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageUnavailableCode.
+const (
+	MessageUnavailableCodeModelRetired MessageUnavailableCode = "model_retired"
+	MessageUnavailableCodeRateLimited  MessageUnavailableCode = "rate_limited"
+)
+
+// Valid indicates whether the value is a known member of the MessageUnavailableCode enum.
+func (e MessageUnavailableCode) Valid() bool {
+	switch e {
+	case MessageUnavailableCodeModelRetired:
+		return true
+	case MessageUnavailableCodeRateLimited:
 		return true
 	default:
 		return false
@@ -10073,747 +10094,6 @@ func (e SessionCreateRequestType) Valid() bool {
 	case SessionCreateRequestTypeChat:
 		return true
 	case SessionCreateRequestTypeTask:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesAttachmentsType.
-const (
-	SessionDetailMessagesAttachmentsTypeAudio SessionDetailMessagesAttachmentsType = "audio"
-	SessionDetailMessagesAttachmentsTypeFile  SessionDetailMessagesAttachmentsType = "file"
-	SessionDetailMessagesAttachmentsTypeImage SessionDetailMessagesAttachmentsType = "image"
-	SessionDetailMessagesAttachmentsTypeVideo SessionDetailMessagesAttachmentsType = "video"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesAttachmentsType enum.
-func (e SessionDetailMessagesAttachmentsType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesAttachmentsTypeAudio:
-		return true
-	case SessionDetailMessagesAttachmentsTypeFile:
-		return true
-	case SessionDetailMessagesAttachmentsTypeImage:
-		return true
-	case SessionDetailMessagesAttachmentsTypeVideo:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesCancelMethod.
-const (
-	SessionDetailMessagesCancelMethodGraceful SessionDetailMessagesCancelMethod = "graceful"
-	SessionDetailMessagesCancelMethodHard     SessionDetailMessagesCancelMethod = "hard"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesCancelMethod enum.
-func (e SessionDetailMessagesCancelMethod) Valid() bool {
-	switch e {
-	case SessionDetailMessagesCancelMethodGraceful:
-		return true
-	case SessionDetailMessagesCancelMethodHard:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesContextWindowNoticeKind.
-const (
-	SessionDetailMessagesContextWindowNoticeKindMidTurn       SessionDetailMessagesContextWindowNoticeKind = "mid_turn"
-	SessionDetailMessagesContextWindowNoticeKindProviderRetry SessionDetailMessagesContextWindowNoticeKind = "provider_retry"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesContextWindowNoticeKind enum.
-func (e SessionDetailMessagesContextWindowNoticeKind) Valid() bool {
-	switch e {
-	case SessionDetailMessagesContextWindowNoticeKindMidTurn:
-		return true
-	case SessionDetailMessagesContextWindowNoticeKindProviderRetry:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesGoalOutcomeEnding.
-const (
-	SessionDetailMessagesGoalOutcomeEndingMet             SessionDetailMessagesGoalOutcomeEnding = "met"
-	SessionDetailMessagesGoalOutcomeEndingOther           SessionDetailMessagesGoalOutcomeEnding = "other"
-	SessionDetailMessagesGoalOutcomeEndingRoundsExhausted SessionDetailMessagesGoalOutcomeEnding = "rounds_exhausted"
-	SessionDetailMessagesGoalOutcomeEndingStoppedByUser   SessionDetailMessagesGoalOutcomeEnding = "stopped_by_user"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesGoalOutcomeEnding enum.
-func (e SessionDetailMessagesGoalOutcomeEnding) Valid() bool {
-	switch e {
-	case SessionDetailMessagesGoalOutcomeEndingMet:
-		return true
-	case SessionDetailMessagesGoalOutcomeEndingOther:
-		return true
-	case SessionDetailMessagesGoalOutcomeEndingRoundsExhausted:
-		return true
-	case SessionDetailMessagesGoalOutcomeEndingStoppedByUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesHelperEventKind.
-const (
-	SessionDetailMessagesHelperEventKindBlocker       SessionDetailMessagesHelperEventKind = "blocker"
-	SessionDetailMessagesHelperEventKindFailed        SessionDetailMessagesHelperEventKind = "failed"
-	SessionDetailMessagesHelperEventKindFinished      SessionDetailMessagesHelperEventKind = "finished"
-	SessionDetailMessagesHelperEventKindNotVerified   SessionDetailMessagesHelperEventKind = "not_verified"
-	SessionDetailMessagesHelperEventKindQuestion      SessionDetailMessagesHelperEventKind = "question"
-	SessionDetailMessagesHelperEventKindRestarted     SessionDetailMessagesHelperEventKind = "restarted"
-	SessionDetailMessagesHelperEventKindResumeRefused SessionDetailMessagesHelperEventKind = "resume_refused"
-	SessionDetailMessagesHelperEventKindStopped       SessionDetailMessagesHelperEventKind = "stopped"
-	SessionDetailMessagesHelperEventKindTimedOut      SessionDetailMessagesHelperEventKind = "timed_out"
-	SessionDetailMessagesHelperEventKindVerdictUnmet  SessionDetailMessagesHelperEventKind = "verdict_unmet"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesHelperEventKind enum.
-func (e SessionDetailMessagesHelperEventKind) Valid() bool {
-	switch e {
-	case SessionDetailMessagesHelperEventKindBlocker:
-		return true
-	case SessionDetailMessagesHelperEventKindFailed:
-		return true
-	case SessionDetailMessagesHelperEventKindFinished:
-		return true
-	case SessionDetailMessagesHelperEventKindNotVerified:
-		return true
-	case SessionDetailMessagesHelperEventKindQuestion:
-		return true
-	case SessionDetailMessagesHelperEventKindRestarted:
-		return true
-	case SessionDetailMessagesHelperEventKindResumeRefused:
-		return true
-	case SessionDetailMessagesHelperEventKindStopped:
-		return true
-	case SessionDetailMessagesHelperEventKindTimedOut:
-		return true
-	case SessionDetailMessagesHelperEventKindVerdictUnmet:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesInputDispositionReason.
-const (
-	SessionDetailMessagesInputDispositionReasonStoppedBeforeDelivery SessionDetailMessagesInputDispositionReason = "stopped_before_delivery"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesInputDispositionReason enum.
-func (e SessionDetailMessagesInputDispositionReason) Valid() bool {
-	switch e {
-	case SessionDetailMessagesInputDispositionReasonStoppedBeforeDelivery:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesInputDispositionState.
-const (
-	SessionDetailMessagesInputDispositionStateDiscarded SessionDetailMessagesInputDispositionState = "discarded"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesInputDispositionState enum.
-func (e SessionDetailMessagesInputDispositionState) Valid() bool {
-	switch e {
-	case SessionDetailMessagesInputDispositionStateDiscarded:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesParticipantKind.
-const (
-	SessionDetailMessagesParticipantKindAgent SessionDetailMessagesParticipantKind = "agent"
-	SessionDetailMessagesParticipantKindHuman SessionDetailMessagesParticipantKind = "human"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesParticipantKind enum.
-func (e SessionDetailMessagesParticipantKind) Valid() bool {
-	switch e {
-	case SessionDetailMessagesParticipantKindAgent:
-		return true
-	case SessionDetailMessagesParticipantKindHuman:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesReplyToParticipantKind.
-const (
-	SessionDetailMessagesReplyToParticipantKindAgent SessionDetailMessagesReplyToParticipantKind = "agent"
-	SessionDetailMessagesReplyToParticipantKindHuman SessionDetailMessagesReplyToParticipantKind = "human"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesReplyToParticipantKind enum.
-func (e SessionDetailMessagesReplyToParticipantKind) Valid() bool {
-	switch e {
-	case SessionDetailMessagesReplyToParticipantKindAgent:
-		return true
-	case SessionDetailMessagesReplyToParticipantKindHuman:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesRole.
-const (
-	SessionDetailMessagesRoleAssistant SessionDetailMessagesRole = "assistant"
-	SessionDetailMessagesRoleSystem    SessionDetailMessagesRole = "system"
-	SessionDetailMessagesRoleUser      SessionDetailMessagesRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesRole enum.
-func (e SessionDetailMessagesRole) Valid() bool {
-	switch e {
-	case SessionDetailMessagesRoleAssistant:
-		return true
-	case SessionDetailMessagesRoleSystem:
-		return true
-	case SessionDetailMessagesRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesRoomRefRole.
-const (
-	SessionDetailMessagesRoomRefRoleAnswer  SessionDetailMessagesRoomRefRole = "answer"
-	SessionDetailMessagesRoomRefRoleRequest SessionDetailMessagesRoomRefRole = "request"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesRoomRefRole enum.
-func (e SessionDetailMessagesRoomRefRole) Valid() bool {
-	switch e {
-	case SessionDetailMessagesRoomRefRoleAnswer:
-		return true
-	case SessionDetailMessagesRoomRefRoleRequest:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesStatus.
-const (
-	SessionDetailMessagesStatusError       SessionDetailMessagesStatus = "error"
-	SessionDetailMessagesStatusInterrupted SessionDetailMessagesStatus = "interrupted"
-	SessionDetailMessagesStatusOk          SessionDetailMessagesStatus = "ok"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesStatus enum.
-func (e SessionDetailMessagesStatus) Valid() bool {
-	switch e {
-	case SessionDetailMessagesStatusError:
-		return true
-	case SessionDetailMessagesStatusInterrupted:
-		return true
-	case SessionDetailMessagesStatusOk:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentEndReason.
-const (
-	SessionDetailMessagesSubagentEndReasonParentCancelled SessionDetailMessagesSubagentEndReason = "parent_cancelled"
-	SessionDetailMessagesSubagentEndReasonParentDoneEarly SessionDetailMessagesSubagentEndReason = "parent_done_early"
-	SessionDetailMessagesSubagentEndReasonParentTimeout   SessionDetailMessagesSubagentEndReason = "parent_timeout"
-	SessionDetailMessagesSubagentEndReasonUnknown         SessionDetailMessagesSubagentEndReason = "unknown"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndReason enum.
-func (e SessionDetailMessagesSubagentEndReason) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentEndReasonParentCancelled:
-		return true
-	case SessionDetailMessagesSubagentEndReasonParentDoneEarly:
-		return true
-	case SessionDetailMessagesSubagentEndReasonParentTimeout:
-		return true
-	case SessionDetailMessagesSubagentEndReasonUnknown:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentEndStatus.
-const (
-	SessionDetailMessagesSubagentEndStatusCancelled   SessionDetailMessagesSubagentEndStatus = "cancelled"
-	SessionDetailMessagesSubagentEndStatusError       SessionDetailMessagesSubagentEndStatus = "error"
-	SessionDetailMessagesSubagentEndStatusInterrupted SessionDetailMessagesSubagentEndStatus = "interrupted"
-	SessionDetailMessagesSubagentEndStatusParked      SessionDetailMessagesSubagentEndStatus = "parked"
-	SessionDetailMessagesSubagentEndStatusSuccess     SessionDetailMessagesSubagentEndStatus = "success"
-	SessionDetailMessagesSubagentEndStatusTimeout     SessionDetailMessagesSubagentEndStatus = "timeout"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndStatus enum.
-func (e SessionDetailMessagesSubagentEndStatus) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentEndStatusCancelled:
-		return true
-	case SessionDetailMessagesSubagentEndStatusError:
-		return true
-	case SessionDetailMessagesSubagentEndStatusInterrupted:
-		return true
-	case SessionDetailMessagesSubagentEndStatusParked:
-		return true
-	case SessionDetailMessagesSubagentEndStatusSuccess:
-		return true
-	case SessionDetailMessagesSubagentEndStatusTimeout:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentEndType.
-const (
-	SessionDetailMessagesSubagentEndTypeSubagentEnd SessionDetailMessagesSubagentEndType = "subagent_end"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndType enum.
-func (e SessionDetailMessagesSubagentEndType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentEndTypeSubagentEnd:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentMessageKind.
-const (
-	SessionDetailMessagesSubagentMessageKindArtifact     SessionDetailMessagesSubagentMessageKind = "artifact"
-	SessionDetailMessagesSubagentMessageKindBlocker      SessionDetailMessagesSubagentMessageKind = "blocker"
-	SessionDetailMessagesSubagentMessageKindCheckpoint   SessionDetailMessagesSubagentMessageKind = "checkpoint"
-	SessionDetailMessagesSubagentMessageKindError        SessionDetailMessagesSubagentMessageKind = "error"
-	SessionDetailMessagesSubagentMessageKindGoalStatus   SessionDetailMessagesSubagentMessageKind = "goal_status"
-	SessionDetailMessagesSubagentMessageKindHandback     SessionDetailMessagesSubagentMessageKind = "handback"
-	SessionDetailMessagesSubagentMessageKindNotDelivered SessionDetailMessagesSubagentMessageKind = "not_delivered"
-	SessionDetailMessagesSubagentMessageKindProgress     SessionDetailMessagesSubagentMessageKind = "progress"
-	SessionDetailMessagesSubagentMessageKindQuestion     SessionDetailMessagesSubagentMessageKind = "question"
-	SessionDetailMessagesSubagentMessageKindRespond      SessionDetailMessagesSubagentMessageKind = "respond"
-	SessionDetailMessagesSubagentMessageKindSteer        SessionDetailMessagesSubagentMessageKind = "steer"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentMessageKind enum.
-func (e SessionDetailMessagesSubagentMessageKind) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentMessageKindArtifact:
-		return true
-	case SessionDetailMessagesSubagentMessageKindBlocker:
-		return true
-	case SessionDetailMessagesSubagentMessageKindCheckpoint:
-		return true
-	case SessionDetailMessagesSubagentMessageKindError:
-		return true
-	case SessionDetailMessagesSubagentMessageKindGoalStatus:
-		return true
-	case SessionDetailMessagesSubagentMessageKindHandback:
-		return true
-	case SessionDetailMessagesSubagentMessageKindNotDelivered:
-		return true
-	case SessionDetailMessagesSubagentMessageKindProgress:
-		return true
-	case SessionDetailMessagesSubagentMessageKindQuestion:
-		return true
-	case SessionDetailMessagesSubagentMessageKindRespond:
-		return true
-	case SessionDetailMessagesSubagentMessageKindSteer:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentMessageType.
-const (
-	SessionDetailMessagesSubagentMessageTypeSubagentMessage SessionDetailMessagesSubagentMessageType = "subagent_message"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentMessageType enum.
-func (e SessionDetailMessagesSubagentMessageType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentMessageTypeSubagentMessage:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentStartType.
-const (
-	SessionDetailMessagesSubagentStartTypeSubagentStart SessionDetailMessagesSubagentStartType = "subagent_start"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStartType enum.
-func (e SessionDetailMessagesSubagentStartType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentStartTypeSubagentStart:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentStateControlReceiptState.
-const (
-	SessionDetailMessagesSubagentStateControlReceiptStateApplied    SessionDetailMessagesSubagentStateControlReceiptState = "applied"
-	SessionDetailMessagesSubagentStateControlReceiptStateDelivered  SessionDetailMessagesSubagentStateControlReceiptState = "delivered"
-	SessionDetailMessagesSubagentStateControlReceiptStateQueued     SessionDetailMessagesSubagentStateControlReceiptState = "queued"
-	SessionDetailMessagesSubagentStateControlReceiptStateSuperseded SessionDetailMessagesSubagentStateControlReceiptState = "superseded"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateControlReceiptState enum.
-func (e SessionDetailMessagesSubagentStateControlReceiptState) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentStateControlReceiptStateApplied:
-		return true
-	case SessionDetailMessagesSubagentStateControlReceiptStateDelivered:
-		return true
-	case SessionDetailMessagesSubagentStateControlReceiptStateQueued:
-		return true
-	case SessionDetailMessagesSubagentStateControlReceiptStateSuperseded:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentStateControlReceiptVerb.
-const (
-	SessionDetailMessagesSubagentStateControlReceiptVerbClearGoal SessionDetailMessagesSubagentStateControlReceiptVerb = "clear_goal"
-	SessionDetailMessagesSubagentStateControlReceiptVerbRedirect  SessionDetailMessagesSubagentStateControlReceiptVerb = "redirect"
-	SessionDetailMessagesSubagentStateControlReceiptVerbRespond   SessionDetailMessagesSubagentStateControlReceiptVerb = "respond"
-	SessionDetailMessagesSubagentStateControlReceiptVerbResume    SessionDetailMessagesSubagentStateControlReceiptVerb = "resume"
-	SessionDetailMessagesSubagentStateControlReceiptVerbSteer     SessionDetailMessagesSubagentStateControlReceiptVerb = "steer"
-	SessionDetailMessagesSubagentStateControlReceiptVerbStop      SessionDetailMessagesSubagentStateControlReceiptVerb = "stop"
-	SessionDetailMessagesSubagentStateControlReceiptVerbStopAll   SessionDetailMessagesSubagentStateControlReceiptVerb = "stop_all"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateControlReceiptVerb enum.
-func (e SessionDetailMessagesSubagentStateControlReceiptVerb) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentStateControlReceiptVerbClearGoal:
-		return true
-	case SessionDetailMessagesSubagentStateControlReceiptVerbRedirect:
-		return true
-	case SessionDetailMessagesSubagentStateControlReceiptVerbRespond:
-		return true
-	case SessionDetailMessagesSubagentStateControlReceiptVerbResume:
-		return true
-	case SessionDetailMessagesSubagentStateControlReceiptVerbSteer:
-		return true
-	case SessionDetailMessagesSubagentStateControlReceiptVerbStop:
-		return true
-	case SessionDetailMessagesSubagentStateControlReceiptVerbStopAll:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentStateState.
-const (
-	SessionDetailMessagesSubagentStateStateCompleted  SessionDetailMessagesSubagentStateState = "completed"
-	SessionDetailMessagesSubagentStateStateFailed     SessionDetailMessagesSubagentStateState = "failed"
-	SessionDetailMessagesSubagentStateStateNeedsInput SessionDetailMessagesSubagentStateState = "needs_input"
-	SessionDetailMessagesSubagentStateStateQueued     SessionDetailMessagesSubagentStateState = "queued"
-	SessionDetailMessagesSubagentStateStateRunning    SessionDetailMessagesSubagentStateState = "running"
-	SessionDetailMessagesSubagentStateStateStopped    SessionDetailMessagesSubagentStateState = "stopped"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateState enum.
-func (e SessionDetailMessagesSubagentStateState) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentStateStateCompleted:
-		return true
-	case SessionDetailMessagesSubagentStateStateFailed:
-		return true
-	case SessionDetailMessagesSubagentStateStateNeedsInput:
-		return true
-	case SessionDetailMessagesSubagentStateStateQueued:
-		return true
-	case SessionDetailMessagesSubagentStateStateRunning:
-		return true
-	case SessionDetailMessagesSubagentStateStateStopped:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentStateType.
-const (
-	SessionDetailMessagesSubagentStateTypeSubagentState SessionDetailMessagesSubagentStateType = "subagent_state"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateType enum.
-func (e SessionDetailMessagesSubagentStateType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentStateTypeSubagentState:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSystemSubtype.
-const (
-	SessionDetailMessagesSystemSubtypeBrowserHandoverNotice SessionDetailMessagesSystemSubtype = "browser_handover_notice"
-	SessionDetailMessagesSystemSubtypeExpiryNotice          SessionDetailMessagesSystemSubtype = "expiry_notice"
-	SessionDetailMessagesSystemSubtypeGoalOutcome           SessionDetailMessagesSystemSubtype = "goal_outcome"
-	SessionDetailMessagesSystemSubtypeHelperEvent           SessionDetailMessagesSystemSubtype = "helper_event"
-	SessionDetailMessagesSystemSubtypeSubagentEnd           SessionDetailMessagesSystemSubtype = "subagent_end"
-	SessionDetailMessagesSystemSubtypeSubagentMessage       SessionDetailMessagesSystemSubtype = "subagent_message"
-	SessionDetailMessagesSystemSubtypeSubagentStart         SessionDetailMessagesSystemSubtype = "subagent_start"
-	SessionDetailMessagesSystemSubtypeSubagentState         SessionDetailMessagesSystemSubtype = "subagent_state"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSystemSubtype enum.
-func (e SessionDetailMessagesSystemSubtype) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSystemSubtypeBrowserHandoverNotice:
-		return true
-	case SessionDetailMessagesSystemSubtypeExpiryNotice:
-		return true
-	case SessionDetailMessagesSystemSubtypeGoalOutcome:
-		return true
-	case SessionDetailMessagesSystemSubtypeHelperEvent:
-		return true
-	case SessionDetailMessagesSystemSubtypeSubagentEnd:
-		return true
-	case SessionDetailMessagesSystemSubtypeSubagentMessage:
-		return true
-	case SessionDetailMessagesSystemSubtypeSubagentStart:
-		return true
-	case SessionDetailMessagesSystemSubtypeSubagentState:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesToolCallsContentState.
-const (
-	SessionDetailMessagesToolCallsContentStateCapped  SessionDetailMessagesToolCallsContentState = "capped"
-	SessionDetailMessagesToolCallsContentStateEmptied SessionDetailMessagesToolCallsContentState = "emptied"
-	SessionDetailMessagesToolCallsContentStateFull    SessionDetailMessagesToolCallsContentState = "full"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesToolCallsContentState enum.
-func (e SessionDetailMessagesToolCallsContentState) Valid() bool {
-	switch e {
-	case SessionDetailMessagesToolCallsContentStateCapped:
-		return true
-	case SessionDetailMessagesToolCallsContentStateEmptied:
-		return true
-	case SessionDetailMessagesToolCallsContentStateFull:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesToolCallsStatus.
-const (
-	SessionDetailMessagesToolCallsStatusCancelled   SessionDetailMessagesToolCallsStatus = "cancelled"
-	SessionDetailMessagesToolCallsStatusDenied      SessionDetailMessagesToolCallsStatus = "denied"
-	SessionDetailMessagesToolCallsStatusError       SessionDetailMessagesToolCallsStatus = "error"
-	SessionDetailMessagesToolCallsStatusInterrupted SessionDetailMessagesToolCallsStatus = "interrupted"
-	SessionDetailMessagesToolCallsStatusParked      SessionDetailMessagesToolCallsStatus = "parked"
-	SessionDetailMessagesToolCallsStatusPending     SessionDetailMessagesToolCallsStatus = "pending"
-	SessionDetailMessagesToolCallsStatusRunning     SessionDetailMessagesToolCallsStatus = "running"
-	SessionDetailMessagesToolCallsStatusSuccess     SessionDetailMessagesToolCallsStatus = "success"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesToolCallsStatus enum.
-func (e SessionDetailMessagesToolCallsStatus) Valid() bool {
-	switch e {
-	case SessionDetailMessagesToolCallsStatusCancelled:
-		return true
-	case SessionDetailMessagesToolCallsStatusDenied:
-		return true
-	case SessionDetailMessagesToolCallsStatusError:
-		return true
-	case SessionDetailMessagesToolCallsStatusInterrupted:
-		return true
-	case SessionDetailMessagesToolCallsStatusParked:
-		return true
-	case SessionDetailMessagesToolCallsStatusPending:
-		return true
-	case SessionDetailMessagesToolCallsStatusRunning:
-		return true
-	case SessionDetailMessagesToolCallsStatusSuccess:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesTruncationReason.
-const (
-	SessionDetailMessagesTruncationReasonCancelled       SessionDetailMessagesTruncationReason = "cancelled"
-	SessionDetailMessagesTruncationReasonMaxOutputTokens SessionDetailMessagesTruncationReason = "max_output_tokens"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesTruncationReason enum.
-func (e SessionDetailMessagesTruncationReason) Valid() bool {
-	switch e {
-	case SessionDetailMessagesTruncationReasonCancelled:
-		return true
-	case SessionDetailMessagesTruncationReasonMaxOutputTokens:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesType.
-const (
-	SessionDetailMessagesTypeCompaction          SessionDetailMessagesType = "compaction"
-	SessionDetailMessagesTypeContextWindowNotice SessionDetailMessagesType = "context_window_notice"
-	SessionDetailMessagesTypeJudgeVerdict        SessionDetailMessagesType = "judge_verdict"
-	SessionDetailMessagesTypeMessage             SessionDetailMessagesType = "message"
-	SessionDetailMessagesTypeSystem              SessionDetailMessagesType = "system"
-	SessionDetailMessagesTypeToolCall            SessionDetailMessagesType = "tool_call"
-	SessionDetailMessagesTypeTurnCanceled        SessionDetailMessagesType = "turn_canceled"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesType enum.
-func (e SessionDetailMessagesType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesTypeCompaction:
-		return true
-	case SessionDetailMessagesTypeContextWindowNotice:
-		return true
-	case SessionDetailMessagesTypeJudgeVerdict:
-		return true
-	case SessionDetailMessagesTypeMessage:
-		return true
-	case SessionDetailMessagesTypeSystem:
-		return true
-	case SessionDetailMessagesTypeToolCall:
-		return true
-	case SessionDetailMessagesTypeTurnCanceled:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesVerdictPerCriterionEvidenceSource.
-const (
-	SessionDetailMessagesVerdictPerCriterionEvidenceSourceDiff         SessionDetailMessagesVerdictPerCriterionEvidenceSource = "diff"
-	SessionDetailMessagesVerdictPerCriterionEvidenceSourceFileRead     SessionDetailMessagesVerdictPerCriterionEvidenceSource = "file_read"
-	SessionDetailMessagesVerdictPerCriterionEvidenceSourceMachineCheck SessionDetailMessagesVerdictPerCriterionEvidenceSource = "machine_check"
-	SessionDetailMessagesVerdictPerCriterionEvidenceSourceSessionRead  SessionDetailMessagesVerdictPerCriterionEvidenceSource = "session_read"
-	SessionDetailMessagesVerdictPerCriterionEvidenceSourceTranscript   SessionDetailMessagesVerdictPerCriterionEvidenceSource = "transcript"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesVerdictPerCriterionEvidenceSource enum.
-func (e SessionDetailMessagesVerdictPerCriterionEvidenceSource) Valid() bool {
-	switch e {
-	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceDiff:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceFileRead:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceMachineCheck:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceSessionRead:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceTranscript:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesVerdictPerCriterionProvenance.
-const (
-	SessionDetailMessagesVerdictPerCriterionProvenanceDeterministicCheck SessionDetailMessagesVerdictPerCriterionProvenance = "deterministic_check"
-	SessionDetailMessagesVerdictPerCriterionProvenanceDiff               SessionDetailMessagesVerdictPerCriterionProvenance = "diff"
-	SessionDetailMessagesVerdictPerCriterionProvenanceJudgeRead          SessionDetailMessagesVerdictPerCriterionProvenance = "judge_read"
-	SessionDetailMessagesVerdictPerCriterionProvenanceNone               SessionDetailMessagesVerdictPerCriterionProvenance = "none"
-	SessionDetailMessagesVerdictPerCriterionProvenanceSessionRead        SessionDetailMessagesVerdictPerCriterionProvenance = "session_read"
-	SessionDetailMessagesVerdictPerCriterionProvenanceTranscript         SessionDetailMessagesVerdictPerCriterionProvenance = "transcript"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesVerdictPerCriterionProvenance enum.
-func (e SessionDetailMessagesVerdictPerCriterionProvenance) Valid() bool {
-	switch e {
-	case SessionDetailMessagesVerdictPerCriterionProvenanceDeterministicCheck:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionProvenanceDiff:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionProvenanceJudgeRead:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionProvenanceNone:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionProvenanceSessionRead:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionProvenanceTranscript:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesVerdictScope.
-const (
-	SessionDetailMessagesVerdictScopeGoal SessionDetailMessagesVerdictScope = "goal"
-	SessionDetailMessagesVerdictScopePlan SessionDetailMessagesVerdictScope = "plan"
-	SessionDetailMessagesVerdictScopeTask SessionDetailMessagesVerdictScope = "task"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesVerdictScope enum.
-func (e SessionDetailMessagesVerdictScope) Valid() bool {
-	switch e {
-	case SessionDetailMessagesVerdictScopeGoal:
-		return true
-	case SessionDetailMessagesVerdictScopePlan:
-		return true
-	case SessionDetailMessagesVerdictScopeTask:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesViewMembership.
-const (
-	SessionDetailMessagesViewMembershipBoth  SessionDetailMessagesViewMembership = "both"
-	SessionDetailMessagesViewMembershipChat  SessionDetailMessagesViewMembership = "chat"
-	SessionDetailMessagesViewMembershipModel SessionDetailMessagesViewMembership = "model"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesViewMembership enum.
-func (e SessionDetailMessagesViewMembership) Valid() bool {
-	switch e {
-	case SessionDetailMessagesViewMembershipBoth:
-		return true
-	case SessionDetailMessagesViewMembershipChat:
-		return true
-	case SessionDetailMessagesViewMembershipModel:
 		return true
 	default:
 		return false
@@ -21288,6 +20568,9 @@ type Message struct {
 		Text string `json:"text"`
 	} `json:"helper_event,omitempty"`
 
+	// HistoryPosition Same-session occurrence fingerprint (chat history paging D2), present on every paged entry. Preserves the original recorded id separately. Stable across appends/restarts and reconstruction of unchanged final canonical bytes; opaque, not a live sequence, model ordinal, authorization grant or disk address.
+	HistoryPosition *string `json:"history_position,omitempty"`
+
 	// Id Unique message identifier.
 	Id string `json:"id"`
 
@@ -21305,7 +20588,7 @@ type Message struct {
 	// MessagesCompacted Number of messages compacted (present only on compaction entries).
 	MessagesCompacted *int `json:"messages_compacted,omitempty"`
 
-	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
+	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries, and on a provider_fallback note it is the fallback model that actually answered (ProviderFallbackNote's answered_model). Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
 	Model *string `json:"model,omitempty"`
 
 	// Participant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
@@ -21383,6 +20666,9 @@ type Message struct {
 		// FinalResult Optional textual summary of the sub-turn's output.
 		FinalResult *string `json:"final_result,omitempty"`
 
+		// HistoryOrigin Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
+		HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+
 		// Message Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI.
 		Message *string `json:"message,omitempty"`
 
@@ -21392,7 +20678,7 @@ type Message struct {
 		// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
 		Reason *MessageSubagentEndReason `json:"reason,omitempty"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which this sub-turn ran.
@@ -21418,6 +20704,9 @@ type Message struct {
 		// CreatedAt RFC3339 timestamp the underlying message was created.
 		CreatedAt time.Time `json:"created_at"`
 
+		// HistoryOrigin Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
+		HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+
 		// Kind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 		Kind MessageSubagentMessageKind `json:"kind"`
 
@@ -21430,7 +20719,7 @@ type Message struct {
 		// SenderIdentity Agent ID (or "human") that authored the underlying message.
 		SenderIdentity string `json:"sender_identity"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which the parent's span is running.
@@ -21455,10 +20744,13 @@ type Message struct {
 		// ChildSessionId Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
 		ChildSessionId *string `json:"child_session_id,omitempty"`
 
+		// HistoryOrigin Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
+		HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+
 		// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
 		ParentCallId string `json:"parent_call_id"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which this sub-turn is running.
@@ -21517,7 +20809,10 @@ type Message struct {
 		// CreatedAt RFC3339 timestamp this state ping was emitted.
 		CreatedAt time.Time `json:"created_at"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// HistoryOrigin Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
+		HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which the parent's span is running.
@@ -21536,6 +20831,9 @@ type Message struct {
 
 	// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 	SystemSubtype *MessageSystemSubtype `json:"system_subtype,omitempty"`
+
+	// TerminalOutcome Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence, separate from its preceding narration. Same value as ReplayMessageFrame.terminal_outcome; historical hydration must not merge this entry into the preceding same-turn assistant message. Absent on other entries, including older entries without this recorded field.
+	TerminalOutcome *bool `json:"terminal_outcome,omitempty"`
 
 	// Timestamp RFC3339 timestamp when this entry was recorded.
 	Timestamp time.Time `json:"timestamp"`
@@ -21583,8 +20881,14 @@ type Message struct {
 	// TurnId Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
 	TurnId *string `json:"turn_id,omitempty"`
 
-	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
+	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
 	Type *MessageType `json:"type,omitempty"`
+
+	// UnavailableCode Recorded fallback condition; model_retired controls the existing model-settings hint.
+	UnavailableCode *MessageUnavailableCode `json:"unavailable_code,omitempty"`
+
+	// UnavailableModel Recorded unavailable primary model on a provider_fallback note; omitted when unknown.
+	UnavailableModel *string `json:"unavailable_model,omitempty"`
 
 	// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
 	Verdict *struct {
@@ -21737,8 +21041,11 @@ type MessageToolCallsStatus string
 // MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means the reason is not recorded: readers do not default it to "cancelled" or to anything else (ADR-087 D2; session-core DEL-F36).
 type MessageTruncationReason string
 
-// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
+// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
 type MessageType string
+
+// MessageUnavailableCode Recorded fallback condition; model_retired controls the existing model-settings hint.
+type MessageUnavailableCode string
 
 // MessageVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
 type MessageVerdictPerCriterionEvidenceSource string
@@ -25046,473 +24353,31 @@ type SessionCreateRequest struct {
 // SessionCreateRequestType Session type. Defaults to "chat" when omitted. "main" is absent.
 type SessionCreateRequestType string
 
-// SessionDetail Full session detail as returned by GET /sessions/{id}. Contains the session metadata plus the complete ordered transcript.
+// SessionDetail Authorized session metadata and explicit history readiness (chat history paging D7a/D10). No paging selectors: available history is the same bounded latest page as GET /sessions/{id}/messages with defaults 40/20. When history_state.status is available, messages, page_info, has_earlier and has_later are required; cursor presence follows the same iff/first/last rules as SessionHistoryResponse. When unavailable, omit messages, page_info, both flags and both cursors, never synthesize messages:[]. session and optional agent_removed remain usable for routing/attach. Generated shape plus producer/consumer semantic checks enforce these mutually exclusive field sets. Absence is not successful empty history; no optional nulls.
 type SessionDetail struct {
 	// AgentRemoved True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
 	AgentRemoved *bool `json:"agent_removed,omitempty"`
 
-	// HasEarlierMessages True when messages starts at the session's last /clear marker and earlier transcript entries exist before it (cleared context). Absent (or false) when messages is the whole transcript. The earlier entries are kept in the archive and remain reachable by recall; they are simply not part of the chat view.
-	HasEarlierMessages *bool `json:"has_earlier_messages,omitempty"`
+	// HasEarlier Required iff available; actual retained earlier groups, including across a closed clear.
+	HasEarlier *bool `json:"has_earlier,omitempty"`
 
-	// Messages Ordered list of transcript entries for this session. Capped at 100000 messages to bound response payload size.
-	Messages []struct {
-		// AgentId ID of the agent that produced this entry (FR-002). Always present.
-		AgentId string `json:"agent_id"`
+	// HasLater Required iff available; actual eligible retained later groups.
+	HasLater *bool `json:"has_later,omitempty"`
 
-		// Attachments File attachments associated with this message.
-		Attachments *[]struct {
-			// MimeType MIME type of the attachment.
-			MimeType string `json:"mime_type"`
+	// HistoryState Server history readiness, not proof that this client loaded a page (chat history paging D7a/D10). status=available omits reason and message. status=unavailable requires both reason and a fixed sanitized message. Producers and consumers must reject any other combination. No preparing state or successful empty-history fallback. Current authorized live controls and canonical sends remain independent.
+	HistoryState SessionHistoryState `json:"history_state"`
 
-			// Path Relative path within the session workspace.
-			Path string `json:"path"`
+	// Messages Required non-null bounded latest entries iff history is available; omitted when unavailable. Every paged occurrence carries history_position.
+	Messages *[]Message `json:"messages,omitempty"`
 
-			// Size File size in bytes.
-			Size int64 `json:"size"`
+	// NextAfter Present iff available and has_later; equals the last selected history_position.
+	NextAfter *string `json:"next_after,omitempty"`
 
-			// Type Attachment category. Aligned with MediaPart.type enum.
-			Type SessionDetailMessagesAttachmentsType `json:"type"`
-		} `json:"attachments,omitempty"`
+	// NextBefore Present iff available and has_earlier; equals the first selected history_position.
+	NextBefore *string `json:"next_before,omitempty"`
 
-		// CancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
-		CancelMethod *SessionDetailMessagesCancelMethod `json:"cancel_method,omitempty"`
-
-		// CanceledByChannel Channel that originated the cancel request — present only on type="turn_canceled" entries (FR-15).
-		CanceledByChannel *string `json:"canceled_by_channel,omitempty"`
-
-		// CanceledByUser Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
-		CanceledByUser *string `json:"canceled_by_user,omitempty"`
-
-		// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
-		ClientMessageId *string `json:"client_message_id,omitempty"`
-
-		// Content Raw markdown/text content of the message.
-		Content *string `json:"content,omitempty"`
-
-		// ContextWindowNotice Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
-		ContextWindowNotice *struct {
-			Kind    SessionDetailMessagesContextWindowNoticeKind `json:"kind"`
-			Message string                                       `json:"message"`
-		} `json:"context_window_notice,omitempty"`
-
-		// Cost USD cost for this entry. Absent when zero.
-		Cost *float64 `json:"cost,omitempty"`
-
-		// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
-		DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
-
-		// GoalId session-core FR-039 / C-GOAL. The goal the entry's producing turn was dispatched under (from session.TranscriptEntry.GoalID). REST history, live delivery and replay retain the SAME association so the SPA joins each message to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier message.
-		GoalId *string `json:"goal_id,omitempty"`
-
-		// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written once per goal ending on the helper transcript and, when a parent exists, once on the parent transcript, with different message ids but the same goal id, ending, rounds and Judge reason. Written by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
-		GoalOutcome *struct {
-			// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
-			CriteriaTotal *int `json:"criteria_total,omitempty"`
-
-			// EndedAt RFC 3339 UTC timestamp of the terminal transition.
-			EndedAt time.Time `json:"ended_at"`
-
-			// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
-			Ending SessionDetailMessagesGoalOutcomeEnding `json:"ending"`
-
-			// GoalId The goal that ended (`Goal.goal_id`).
-			GoalId string `json:"goal_id"`
-
-			// GoalText The goal's own text, verbatim (`Goal.prompt`) — what the user asked for. Rendered after the outcome headline.
-			GoalText string `json:"goal_text"`
-
-			// JudgeReason The Judge's most recent reason — for a not-met ending, the last UNMET reason fed back to the worker; for `met`, the deciding verdict's reasoning. OPTIONAL: absent when no Judge round ever ran or no reason was recorded. The writer MUST omit the field rather than send a placeholder (e.g. the internal "(no reason recorded)" sentinel).
-			JudgeReason *string `json:"judge_reason,omitempty"`
-
-			// MaxRounds The goal's round limit at the time it ended (`Goal.max_rounds`).
-			MaxRounds int `json:"max_rounds"`
-
-			// RoundsUsed Adjudication rounds consumed when the goal ended (shown to the user as "tries"). For `rounds_exhausted` this is the round that hit the limit (normally equal to `max_rounds`); for every other ending it is the number of rounds actually completed. Always the real persisted count — never defaulted to `max_rounds`.
-			RoundsUsed int `json:"rounds_used"`
-		} `json:"goal_outcome,omitempty"`
-
-		// HelperEvent An immutable helper event shown in the addressed chat independently of the model's reply. Source-event identity plus destination transcript determines the message id. Live, replay and cold load carry the same filtered payload.
-		HelperEvent *struct {
-			CreatedAt       time.Time                            `json:"created_at"`
-			GoalId          *string                              `json:"goal_id,omitempty"`
-			HelperSessionId string                               `json:"helper_session_id"`
-			HelperTitle     *string                              `json:"helper_title,omitempty"`
-			Kind            SessionDetailMessagesHelperEventKind `json:"kind"`
-
-			// Text Sensitive-data-filtered sentence saved before live publication.
-			Text string `json:"text"`
-		} `json:"helper_event,omitempty"`
-
-		// Id Unique message identifier.
-		Id string `json:"id"`
-
-		// InputDisposition Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them.
-		InputDisposition *struct {
-			// ClientMessageId The sender's client_message_id, when the input carried one.
-			ClientMessageId *string `json:"client_message_id,omitempty"`
-
-			// MessageId The original input message id (this entry's id).
-			MessageId string                                      `json:"message_id"`
-			Reason    SessionDetailMessagesInputDispositionReason `json:"reason"`
-			State     SessionDetailMessagesInputDispositionState  `json:"state"`
-		} `json:"input_disposition,omitempty"`
-
-		// MessagesCompacted Number of messages compacted (present only on compaction entries).
-		MessagesCompacted *int `json:"messages_compacted,omitempty"`
-
-		// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
-		Model *string `json:"model,omitempty"`
-
-		// Participant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
-		// Field rule (one flat schema; the server enforces it, the wire type does not): `source` and `agent` are mutually exclusive and keyed on `kind`. kind=human carries `source` and never `agent`; kind=agent carries `agent` and never `source`. A sender that names an agent is always kind=agent, even if it also carries a platform or principal. Readers must treat any other combination as invalid and ignore the unexpected field. `agent` (an AgentAddress) is present iff kind=agent.
-		Participant *struct {
-			// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
-			Agent *struct {
-				// AgentId The addressed (recipient) agent. Never the author.
-				AgentId string `json:"agent_id"`
-
-				// WorkspaceId Workspace of the addressed agent.
-				WorkspaceId string `json:"workspace_id"`
-			} `json:"agent,omitempty"`
-
-			// DisplayName Plain text. The server strips control characters before stamping.
-			DisplayName string                               `json:"display_name"`
-			Kind        SessionDetailMessagesParticipantKind `json:"kind"`
-
-			// Source Present iff kind=human; absent when kind=agent. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
-			Source *string `json:"source,omitempty"`
-		} `json:"participant,omitempty"`
-
-		// ReplyToMessageId Present only on a guest reply (session-core FR-027): the message_id of the admitted request this entry answers. The guest author is the existing agent_id. Same value live and on replay.
-		ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
-
-		// ReplyToParticipant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
-		// Field rule (one flat schema; the server enforces it, the wire type does not): `source` and `agent` are mutually exclusive and keyed on `kind`. kind=human carries `source` and never `agent`; kind=agent carries `agent` and never `source`. A sender that names an agent is always kind=agent, even if it also carries a platform or principal. Readers must treat any other combination as invalid and ignore the unexpected field. `agent` (an AgentAddress) is present iff kind=agent.
-		ReplyToParticipant *struct {
-			// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
-			Agent *struct {
-				// AgentId The addressed (recipient) agent. Never the author.
-				AgentId string `json:"agent_id"`
-
-				// WorkspaceId Workspace of the addressed agent.
-				WorkspaceId string `json:"workspace_id"`
-			} `json:"agent,omitempty"`
-
-			// DisplayName Plain text. The server strips control characters before stamping.
-			DisplayName string                                      `json:"display_name"`
-			Kind        SessionDetailMessagesReplyToParticipantKind `json:"kind"`
-
-			// Source Present iff kind=human; absent when kind=agent. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
-			Source *string `json:"source,omitempty"`
-		} `json:"reply_to_participant,omitempty"`
-
-		// Role Author role. Absent on compaction entries.
-		Role *SessionDetailMessagesRole `json:"role,omitempty"`
-
-		// RoomRef Reference from a main-session entry (or an approval) to the room (group chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215, FR-251). Display and navigation data only: it never grants access to the room. `role` says whether the entry is the room's request to this agent or this agent's answer into the room; a room pre-admission approval card (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomRef) — keep both copies in sync by hand.
-		RoomRef *struct {
-			// RequestId The room delivery id, which is also the receiver's request id (spec §6.11, FR-216).
-			RequestId string `json:"request_id"`
-
-			// Role `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
-			Role SessionDetailMessagesRoomRefRole `json:"role"`
-
-			// RoomId Id of the room.
-			RoomId string `json:"room_id"`
-
-			// RoomName Display name of the room at the time the entry was written.
-			RoomName string `json:"room_name"`
-		} `json:"room_ref,omitempty"`
-
-		// Status Completion status of this message turn.
-		Status *SessionDetailMessagesStatus `json:"status,omitempty"`
-
-		// SubagentEnd Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when the sub-turn finishes. The SPA transitions the span from "running" to a terminal status and records duration and optional result. NOTE: status MUST be validated — the SPA's generated Zod schema (src/lib/api/generated/schemas.ts, built from this enum) rejects any status string not in this set; such frames are dropped.
-		SubagentEnd *struct {
-			// AgentId Agent that ran the sub-turn.
-			AgentId *string `json:"agent_id,omitempty"`
-
-			// DurationMs Wall-clock duration of the sub-turn in milliseconds.
-			DurationMs *int `json:"duration_ms,omitempty"`
-
-			// FinalResult Optional textual summary of the sub-turn's output.
-			FinalResult *string `json:"final_result,omitempty"`
-
-			// Message Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI.
-			Message *string `json:"message,omitempty"`
-
-			// ParentCallId The spawn ToolCall.ID that triggered this sub-turn.
-			ParentCallId *string `json:"parent_call_id,omitempty"`
-
-			// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
-			Reason *SessionDetailMessagesSubagentEndReason `json:"reason,omitempty"`
-
-			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
-			Seq *int64 `json:"seq,omitempty"`
-
-			// SessionId Session in which this sub-turn ran.
-			SessionId string `json:"session_id"`
-
-			// SpanId Matches the span_id from the preceding subagent_start frame.
-			SpanId string `json:"span_id"`
-
-			// Status Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
-			Status SessionDetailMessagesSubagentEndStatus `json:"status"`
-			Type   SessionDetailMessagesSubagentEndType   `json:"type"`
-		} `json:"subagent_end,omitempty"`
-
-		// SubagentMessage Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span event riding between the existing `subagent_start`/`subagent_end` brackets, feeding pill/panel/board live as a child pushes typed messages / the parent steers it. Rides the existing since-cursor WS replay (same pattern as `ReplayMessageFrame`).
-		// SHAPE DECISION (flagged for review): this is a FLAT, UI-facing PROJECTION of the underlying `SessionMessage` — it does not embed the full 12-variant `SessionMessage` discriminated union. Reasons: (1) the full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically because oapi-codegen needs internal component refs inside a `oneOf` — embedding it inside an asyncapi frame would require a second, hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which does not resolve cross-file `$ref` for its own codegen, per the existing `GoalStatusFrame.yaml` note), multiplying maintenance burden for a live UI ping that only ever needs a handful of display fields; (2) this mirrors the established precedent of `GoalStatusFrame` itself being a flat projection of goal state rather than embedding a full Goal record. Full-fidelity SessionMessage data (every typed field, for every kind) is available via `delegate.inbox`/`delegate.peek` (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a live nudge, not the source of truth.
-		SubagentMessage *struct {
-			// ChildSessionId Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
-			ChildSessionId *string `json:"child_session_id,omitempty"`
-
-			// CorrelationId Present for `question`/`steer`/`respond` — lets the SPA thread a live reply.
-			CorrelationId *string `json:"correlation_id,omitempty"`
-
-			// CreatedAt RFC3339 timestamp the underlying message was created.
-			CreatedAt time.Time `json:"created_at"`
-
-			// Kind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
-			Kind SessionDetailMessagesSubagentMessageKind `json:"kind"`
-
-			// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
-			MessageId string `json:"message_id"`
-
-			// Pct Present for `kind: progress` when a percentage estimate was given.
-			Pct *int `json:"pct,omitempty"`
-
-			// SenderIdentity Agent ID (or "human") that authored the underlying message.
-			SenderIdentity string `json:"sender_identity"`
-
-			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
-			Seq *int64 `json:"seq,omitempty"`
-
-			// SessionId Session in which the parent's span is running.
-			SessionId string `json:"session_id"`
-
-			// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
-			SpanId string `json:"span_id"`
-
-			// Text Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
-			Text *string                                  `json:"text,omitempty"`
-			Type SessionDetailMessagesSubagentMessageType `json:"type"`
-
-			// UntrustedOrigin True when the underlying message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12).
-			UntrustedOrigin bool `json:"untrusted_origin"`
-		} `json:"subagent_message,omitempty"`
-
-		// SubagentStart Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
-		SubagentStart *struct {
-			// AgentId Agent running the sub-turn.
-			AgentId *string `json:"agent_id,omitempty"`
-
-			// ChildSessionId Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
-			ChildSessionId *string `json:"child_session_id,omitempty"`
-
-			// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
-			ParentCallId string `json:"parent_call_id"`
-
-			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
-			Seq *int64 `json:"seq,omitempty"`
-
-			// SessionId Session in which this sub-turn is running.
-			SessionId string `json:"session_id"`
-
-			// SpanId Unique identifier for this span. Opaque on the wire. The server builds it with pkg/agent.SubagentSpanID from the parent spawn ToolCall.ID (parent_call_id) and the child's generation. Generation 1, and any generation below 2, is "span_" plus that id. Generation N of 2 or above is that same string plus "_g" plus N, so a follow-up does not reuse generation 1's id. This frame has no generation field. Replay recovers N from the transcript entry id ("<call id>:g<N>:start" or ":end").
-			SpanId string `json:"span_id"`
-
-			// TaskLabel Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases).
-			TaskLabel string                                 `json:"task_label"`
-			Type      SessionDetailMessagesSubagentStartType `json:"type"`
-		} `json:"subagent_start,omitempty"`
-
-		// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional control-receipt acknowledgement (sub-agent control plane ADR D4/MIN-003; `control_receipt` replaces the former `steering_receipt`, see `ControlReceipt.yaml`). A dev install replaying an old persisted frame that still carries `steering_receipt` drops that unknown field rather than failing validation (ADR OBS-003) — the field is gone from this schema and Go's default lenient JSON decode on the replay path (`pkg/gateway/replay.go`) already does not reject it.
-		SubagentState *struct {
-			// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
-			ChildSessionId *string `json:"child_session_id,omitempty"`
-
-			// ControlReceipt Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering commands: no person question") withdrew the `escalate` relay verb with the person-question pause. Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
-			// Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
-			ControlReceipt *struct {
-				// AcceptedAt When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
-				AcceptedAt time.Time `json:"accepted_at"`
-
-				// AppliedAt When a non-steer control reached `applied` (runtime-enforced effect).
-				AppliedAt *time.Time `json:"applied_at,omitempty"`
-
-				// ControlId The accepted control's identifier — caller-supplied correlation id, or server-assigned when blank.
-				ControlId string `json:"control_id"`
-
-				// DeliveredAt When a `steer` reached `delivered` (durable transcript injection).
-				DeliveredAt *time.Time `json:"delivered_at,omitempty"`
-
-				// Reason Free-text reason, set for a `superseded` state or a notable transition.
-				Reason *string `json:"reason,omitempty"`
-
-				// ReleasedControlIds Control ids released together with this receipt (e.g. a RESUME that releases preserved restart-pending controls in sequence, ADR D4 boot reconciliation).
-				ReleasedControlIds *[]string `json:"released_control_ids,omitempty"`
-
-				// Seq Monotonic per-child control sequence (ADR D4). Stand-in value today — see the schema description above.
-				Seq int64 `json:"seq"`
-
-				// State ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
-				State SessionDetailMessagesSubagentStateControlReceiptState `json:"state"`
-
-				// SupersededAt When this control was superseded.
-				SupersededAt *time.Time `json:"superseded_at,omitempty"`
-
-				// SupersededBySeq The superseding control's own `seq`, when `state == superseded`.
-				SupersededBySeq *int64 `json:"superseded_by_seq,omitempty"`
-
-				// Verb Which control this receipt reports on.
-				Verb SessionDetailMessagesSubagentStateControlReceiptVerb `json:"verb"`
-			} `json:"control_receipt,omitempty"`
-
-			// CreatedAt RFC3339 timestamp this state ping was emitted.
-			CreatedAt time.Time `json:"created_at"`
-
-			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
-			Seq *int64 `json:"seq,omitempty"`
-
-			// SessionId Session in which the parent's span is running.
-			SessionId string `json:"session_id"`
-
-			// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
-			SpanId string `json:"span_id"`
-
-			// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
-			State SessionDetailMessagesSubagentStateState `json:"state"`
-			Type  SessionDetailMessagesSubagentStateType  `json:"type"`
-		} `json:"subagent_state,omitempty"`
-
-		// Summary Compaction summary text (present only on type=compaction entries).
-		Summary *string `json:"summary,omitempty"`
-
-		// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
-		SystemSubtype *SessionDetailMessagesSystemSubtype `json:"system_subtype,omitempty"`
-
-		// Timestamp RFC3339 timestamp when this entry was recorded.
-		Timestamp time.Time `json:"timestamp"`
-
-		// Tokens Token count for this entry (input + output). Absent when zero.
-		Tokens *int `json:"tokens,omitempty"`
-
-		// ToolCalls Tool invocations made during this message turn.
-		ToolCalls *[]struct {
-			// ContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
-			ContentState *SessionDetailMessagesToolCallsContentState `json:"content_state,omitempty"`
-
-			// DurationMs Elapsed time in milliseconds. Absent when still running.
-			DurationMs *int64 `json:"duration_ms,omitempty"`
-
-			// Error Human-readable failure reason when status is "error". Mirrors the equivalent field on ToolCallResultFrame so a reloaded transcript carries the same explanation the live WS frame did.
-			// Previously this did not exist: the reason was computed in the agent loop and logged at ERROR level, but the persisted record kept only {tool, status, duration_ms, parameters} with a null result. Nothing — not the UI, not post-hoc analysis, and critically not the agent itself — could see WHY a call failed, so an orchestrating agent retried blindly against failures it had no way to understand.
-			Error *string `json:"error,omitempty"`
-
-			// Id Unique tool call identifier (ToolCallID type on the Go side).
-			Id string `json:"id"`
-
-			// Parameters Input parameters passed to the tool.
-			Parameters *map[string]interface{} `json:"parameters,omitempty"`
-
-			// ParentToolCallId Parent tool call ID for nested subagent tool invocations.
-			ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
-
-			// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
-			Result *map[string]interface{} `json:"result,omitempty"`
-
-			// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
-			Status SessionDetailMessagesToolCallsStatus `json:"status"`
-
-			// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
-			Tool string `json:"tool"`
-		} `json:"tool_calls,omitempty"`
-
-		// Truncated Set to true on the last assistant entry when the entry is incomplete — see `truncation_reason` for why. Only present when true.
-		Truncated *bool `json:"truncated,omitempty"`
-
-		// TruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means the reason is not recorded: readers do not default it to "cancelled" or to anything else (ADR-087 D2; session-core DEL-F36).
-		TruncationReason *SessionDetailMessagesTruncationReason `json:"truncation_reason,omitempty"`
-
-		// TurnId Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
-		TurnId *string `json:"turn_id,omitempty"`
-
-		// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
-		Type *SessionDetailMessagesType `json:"type,omitempty"`
-
-		// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
-		Verdict *struct {
-			// Id Server-set verdict identifier (UUID).
-			Id string `json:"id"`
-
-			// JudgeAgentId ID of the Judge System Agent that produced this verdict (NFR-5 correlation — usage metering is attributed to this `agent_id` alongside the plan/task/goal correlation IDs).
-			JudgeAgentId string `json:"judge_agent_id"`
-
-			// JudgedAt RFC 3339 UTC timestamp when the verdict was produced.
-			JudgedAt time.Time `json:"judged_at"`
-
-			// Met Overall PASS/FAIL verdict across all criteria. Fail-closed default `false` — absence of a verdict never defaults to `true` (NFR-2).
-			Met bool `json:"met"`
-
-			// Model Judge model used to produce this verdict (transparency / NFR-5 metering).
-			Model string `json:"model"`
-
-			// PerCriterion Per-criterion outcomes making up the overall verdict.
-			PerCriterion []struct {
-				// CriterionId ID of the AcceptanceCriterion this verdict judges.
-				CriterionId string `json:"criterion_id"`
-
-				// Evidence JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`.
-				Evidence *[]struct {
-					// Part The clause text (a substring of the criterion's own `text`) this entry answers.
-					Part string `json:"part"`
-
-					// Quote The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
-					Quote string `json:"quote"`
-
-					// Source Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
-					Source *string `json:"source,omitempty"`
-
-					// Target The specific artifact this clause's excerpt was read from.
-					Target *string `json:"target,omitempty"`
-				} `json:"evidence,omitempty"`
-
-				// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
-				EvidenceQuote *string `json:"evidence_quote,omitempty"`
-
-				// EvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
-				EvidenceSource *SessionDetailMessagesVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
-
-				// EvidenceTarget JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
-				EvidenceTarget *string `json:"evidence_target,omitempty"`
-
-				// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
-				Met bool `json:"met"`
-
-				// Provenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
-				Provenance *SessionDetailMessagesVerdictPerCriterionProvenance `json:"provenance,omitempty"`
-
-				// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
-				Reason string `json:"reason"`
-			} `json:"per_criterion"`
-
-			// PlanId Plan being judged. Present when `scope == plan`.
-			PlanId *string `json:"plan_id,omitempty"`
-
-			// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
-			Round int `json:"round"`
-
-			// Scope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
-			Scope SessionDetailMessagesVerdictScope `json:"scope"`
-
-			// TaskId Task being judged. Present when `scope == task`.
-			TaskId *string `json:"task_id,omitempty"`
-		} `json:"verdict,omitempty"`
-
-		// ViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
-		ViewMembership *SessionDetailMessagesViewMembership `json:"view_membership,omitempty"`
-	} `json:"messages"`
+	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+	PageInfo *SessionHistoryPageInfo `json:"page_info,omitempty"`
 
 	// Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
 	Session struct {
@@ -25680,99 +24545,6 @@ type SessionDetail struct {
 	} `json:"session"`
 }
 
-// SessionDetailMessagesAttachmentsType Attachment category. Aligned with MediaPart.type enum.
-type SessionDetailMessagesAttachmentsType string
-
-// SessionDetailMessagesCancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
-type SessionDetailMessagesCancelMethod string
-
-// SessionDetailMessagesContextWindowNoticeKind defines model for SessionDetail.Messages.ContextWindowNotice.Kind.
-type SessionDetailMessagesContextWindowNoticeKind string
-
-// SessionDetailMessagesGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
-type SessionDetailMessagesGoalOutcomeEnding string
-
-// SessionDetailMessagesHelperEventKind defines model for SessionDetail.Messages.HelperEvent.Kind.
-type SessionDetailMessagesHelperEventKind string
-
-// SessionDetailMessagesInputDispositionReason defines model for SessionDetail.Messages.InputDisposition.Reason.
-type SessionDetailMessagesInputDispositionReason string
-
-// SessionDetailMessagesInputDispositionState defines model for SessionDetail.Messages.InputDisposition.State.
-type SessionDetailMessagesInputDispositionState string
-
-// SessionDetailMessagesParticipantKind defines model for SessionDetail.Messages.Participant.Kind.
-type SessionDetailMessagesParticipantKind string
-
-// SessionDetailMessagesReplyToParticipantKind defines model for SessionDetail.Messages.ReplyToParticipant.Kind.
-type SessionDetailMessagesReplyToParticipantKind string
-
-// SessionDetailMessagesRole Author role. Absent on compaction entries.
-type SessionDetailMessagesRole string
-
-// SessionDetailMessagesRoomRefRole `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
-type SessionDetailMessagesRoomRefRole string
-
-// SessionDetailMessagesStatus Completion status of this message turn.
-type SessionDetailMessagesStatus string
-
-// SessionDetailMessagesSubagentEndReason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
-type SessionDetailMessagesSubagentEndReason string
-
-// SessionDetailMessagesSubagentEndStatus Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
-type SessionDetailMessagesSubagentEndStatus string
-
-// SessionDetailMessagesSubagentEndType defines model for SessionDetail.Messages.SubagentEnd.Type.
-type SessionDetailMessagesSubagentEndType string
-
-// SessionDetailMessagesSubagentMessageKind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
-type SessionDetailMessagesSubagentMessageKind string
-
-// SessionDetailMessagesSubagentMessageType defines model for SessionDetail.Messages.SubagentMessage.Type.
-type SessionDetailMessagesSubagentMessageType string
-
-// SessionDetailMessagesSubagentStartType defines model for SessionDetail.Messages.SubagentStart.Type.
-type SessionDetailMessagesSubagentStartType string
-
-// SessionDetailMessagesSubagentStateControlReceiptState ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
-type SessionDetailMessagesSubagentStateControlReceiptState string
-
-// SessionDetailMessagesSubagentStateControlReceiptVerb Which control this receipt reports on.
-type SessionDetailMessagesSubagentStateControlReceiptVerb string
-
-// SessionDetailMessagesSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
-type SessionDetailMessagesSubagentStateState string
-
-// SessionDetailMessagesSubagentStateType defines model for SessionDetail.Messages.SubagentState.Type.
-type SessionDetailMessagesSubagentStateType string
-
-// SessionDetailMessagesSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
-type SessionDetailMessagesSystemSubtype string
-
-// SessionDetailMessagesToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
-type SessionDetailMessagesToolCallsContentState string
-
-// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
-type SessionDetailMessagesToolCallsStatus string
-
-// SessionDetailMessagesTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means the reason is not recorded: readers do not default it to "cancelled" or to anything else (ADR-087 D2; session-core DEL-F36).
-type SessionDetailMessagesTruncationReason string
-
-// SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
-type SessionDetailMessagesType string
-
-// SessionDetailMessagesVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
-type SessionDetailMessagesVerdictPerCriterionEvidenceSource string
-
-// SessionDetailMessagesVerdictPerCriterionProvenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
-type SessionDetailMessagesVerdictPerCriterionProvenance string
-
-// SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
-type SessionDetailMessagesVerdictScope string
-
-// SessionDetailMessagesViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
-type SessionDetailMessagesViewMembership string
-
 // SessionDetailSessionExecution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
 type SessionDetailSessionExecution string
 
@@ -25787,6 +24559,27 @@ type SessionDetailSessionStopNoteCause string
 
 // SessionDetailSessionType Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
 type SessionDetailSessionType string
+
+// SessionHistoryResponse Bounded public session-history page (chat history paging D3/D10), selected nearest the requested boundary and returned in ascending acceptance order. has_earlier and has_later mean actual eligible retained groups in the read domain: the closed window for window_refresh, otherwise the retained archive. They are not inferred from fullness, sequence gaps or a detached live tail. next_before/next_after exist iff the respective flag is true and equal the first/last selected position. An empty page has both flags false and no cursors; an exactly-full terminal page also has no continuation. Producers/consumers validate these cross-field rules. No manifest, header side channel or duplicate entry-reference list.
+type SessionHistoryResponse struct {
+	// Entries Non-null public entries, one per whole selected source group. Every paged occurrence has history_position and preserves its recorded id. An individual group's drawn-row weight can exceed 100; its start/result are never split.
+	Entries    []Message `json:"entries"`
+	HasEarlier bool      `json:"has_earlier"`
+	HasLater   bool      `json:"has_later"`
+
+	// NextAfter Present iff has_later, equal to the last selected history_position.
+	NextAfter *string `json:"next_after,omitempty"`
+
+	// NextBefore Present iff has_earlier, equal to the first selected history_position.
+	NextBefore *string `json:"next_before,omitempty"`
+
+	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+	PageInfo  SessionHistoryPageInfo `json:"page_info"`
+	SessionId string                 `json:"session_id"`
+
+	// SessionTokensTotal Authoritative absolute session-wide consumed-token total, with the same meaning as SessionStats.tokens_total, independent of the selected history range. Present when authoritative usage is available; omitted means unknown, never zero. Not a sum of this page's entries or a per-turn delta.
+	SessionTokensTotal *int `json:"session_tokens_total,omitempty"`
+}
 
 // SessionLifecycleRecord The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
 type SessionLifecycleRecord struct {
@@ -29798,6 +28591,27 @@ type ListSessionsParams struct {
 
 // ListSessionsParamsType defines parameters for ListSessions.
 type ListSessionsParamsType string
+
+// GetSessionMessagesParams defines parameters for GetSessionMessages.
+type GetSessionMessagesParams struct {
+	// Limit Drawn-row target. Exactly one digits-only decimal value from 20 to 100; leading zeroes allowed. Omitted means 40, never unlimited. Invalid or duplicate values return 400 with "limit must be an integer from 20 to 100".
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// MinRows Advisory estimated two-screen row floor, one digits-only decimal value from 1 to the effective limit. Omitted means 20. Validate only after a valid limit; invalid/duplicate values return 400 with "min_rows must be an integer from 1 to limit". Not proof of geometry or a hard byte defense.
+	MinRows *int `form:"min_rows,omitempty" json:"min_rows,omitempty"`
+
+	// Before Exclusive older boundary. Mutually exclusive with after. In window_refresh, must resolve inside or at the interval's upper boundary, and remains exclusive.
+	Before *string `form:"before,omitempty" json:"before,omitempty"`
+
+	// After Exclusive newer boundary; forbidden with before or any window-refresh range.
+	After *string `form:"after,omitempty" json:"after,omitempty"`
+
+	// WindowStart Inclusive lower occurrence boundary of an already-displayed closed range; requires window_end from the same authorized session in acceptance order.
+	WindowStart *string `form:"window_start,omitempty" json:"window_start,omitempty"`
+
+	// WindowEnd Inclusive upper boundary; requires window_start. Known expired bounds remain usable.
+	WindowEnd *string `form:"window_end,omitempty" json:"window_end,omitempty"`
+}
 
 // SearchSkillsParams defines parameters for SearchSkills.
 type SearchSkillsParams struct {

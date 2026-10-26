@@ -1,7 +1,7 @@
 import * as fs from 'fs'
-import * as path from 'path'
 import { expect, type Locator, type Page } from '@playwright/test';
-import { test } from './fixtures/console-errors';
+import { test, canonicalHistoryAuthFile } from './fixtures/canonical-history';
+import { seedCanonicalLegacyTranscript } from './fixtures/chat-history';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, selectAgent, waitForConnected } from './fixtures/selectors';
 
@@ -16,11 +16,8 @@ import { chatInput, selectAgent, waitForConnected } from './fixtures/selectors';
 
 // ── Transcript helpers (mirrored from replay-fidelity.spec.ts) ─────────────────
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-
-const OMNIPUS_HOME =
-  process.env.OMNIPUS_HOME ||
-  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test')
+let BASE_URL: string
+test.beforeEach(async ({ canonicalGateway }) => { BASE_URL = canonicalGateway.baseURL })
 
 interface TranscriptEntry {
   id: string
@@ -31,28 +28,14 @@ interface TranscriptEntry {
   agent_id?: string
 }
 
-function seedTranscript(sessionId: string, entries: TranscriptEntry[]): void {
-  const sessionDir = path.join(OMNIPUS_HOME, 'sessions', sessionId)
-  if (!fs.existsSync(sessionDir)) {
-    throw new Error(
-      `Session directory does not exist: ${sessionDir}. ` +
-        'Create the session via REST API before seeding the transcript.',
-    )
-  }
-  const transcriptPath = path.join(sessionDir, 'transcript.jsonl')
-  const lines = entries.map((e) => JSON.stringify({ view_membership: 'chat', ...e })).join('\n') + '\n'
-  fs.writeFileSync(transcriptPath, lines, { encoding: 'utf-8' })
+async function seedTranscript(sessionId: string, entries: TranscriptEntry[]): Promise<void> {
+  await seedCanonicalLegacyTranscript(sessionId, entries)
 }
 
 function getStoredAuthToken(): string | null {
   // Respect OMNIPUS_AUTH_FILE env var set by isolated test runs (e.g. port 6062)
   // to avoid using a token minted for a different gateway instance.
-  const authFile = process.env.OMNIPUS_AUTH_FILE
-    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-    : path.join(
-        path.dirname(new URL(import.meta.url).pathname),
-        'fixtures/.auth/admin.json',
-      )
+  const authFile = canonicalHistoryAuthFile()
   if (!fs.existsSync(authFile)) return null
   try {
     const raw = fs.readFileSync(authFile, 'utf-8')
@@ -230,7 +213,7 @@ test(
     const sessionTitle = `handoff-a-labels-${Date.now()}`
     await renameSession(page, sessionId, sessionTitle)
 
-    seedTranscript(sessionId, [
+    await seedTranscript(sessionId, [
       {
         id: 'entry-user-1',
         role: 'user',

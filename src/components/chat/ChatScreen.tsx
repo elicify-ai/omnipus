@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { VirtualizedMessageList } from './ChatMessageList'
 import { useQuery } from '@tanstack/react-query'
 import {
   ThreadPrimitive,
@@ -27,6 +27,7 @@ import {
 import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
+import { resolvedToolPartStatus } from '@/lib/assistant-tool-status'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { renderHistoricalToolCall } from './tools/HistoricalToolCallBlock'
 import { classifySetGoalCall } from './tools/SetGoalToolUI'
@@ -39,7 +40,6 @@ import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
 import { SecretRequestThreadTail } from './SecretRequestCard'
 import { ToolApprovalThreadTail } from '@/components/agents/ToolApprovalPanel'
-import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { ModelPicker } from './composer/ModelPicker'
 import { AutoApprovePicker } from './composer/AutoApprovePicker'
@@ -52,11 +52,9 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { isClearCommandText } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
 import { AgentReplyLabel, ParticipantMessageRow, useParticipantLabelParts } from './ParticipantLabels'
-import { collectPairedReplyToIds, isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
+import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
-import { recordSessionHasEarlier } from '@/store/chat/has-earlier'
-import { sessionMessagesHasEarlier } from '@/lib/api'
-import { pendingClearRefetches, pendingRedirectSids } from '@/store/chat/runtime-state'
+import { pendingRedirectSids } from '@/store/chat/runtime-state'
 import { stampToolCallOffset } from '@/store/chat/session'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
@@ -68,26 +66,22 @@ import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread, shouldRenderContextWindowNoticeInThread } from '@/lib/toolVisibility'
+import { shouldRenderToolCall, shouldRenderContextWindowNoticeInThread } from '@/lib/toolVisibility'
 import {
-  delegationEventsAtEnd,
   liveSnapshotIds,
   splitAnchoredDelegationEvents,
   type DelegationPlacementMessage,
 } from '@/lib/delegationEventPlacement'
 import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, useClaimedCallIds } from './DelegationEventLine'
-import { useChatDelegationEvents } from './useChatDelegationEvents'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { isGoalRunning } from '@/lib/goalActivity'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
-import { SystemMessage, VirtualSystemMessageRow } from './SystemMessageRows'
-import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
+import { fetchAgents, fetchCommands, fetchSkills } from '@/lib/api'
 import { MainChatAddParticipant } from './AddParticipant'
 import { INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
-import { RoomTrafficMessage } from './RoomTrafficEntry'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
@@ -114,19 +108,13 @@ import {
   RestartInterruptedNotice,
 } from './ConnectionStatus'
 import { RowDeliveryStatus } from './RowDeliveryStatus'
+import { useChatHistory, HistoryOpenState } from './useChatHistory'
 
-function placementOf(message: ChatMessage): DelegationPlacementMessage {
+export function placementOf(message: ChatMessage): DelegationPlacementMessage {
   return {
     spans: message.spans,
     toolCalls: message.tool_calls as DelegationPlacementMessage['toolCalls'],
   }
-}
-
-function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
-  // The assistant row owns both inline and trailing events using its live-call
-  // projection. Splitting again from the unbaked message would draw them twice.
-  if (message.role === 'assistant' && message.type !== 'judge_verdict' && !(ROOMS_ENABLED && message.roomRef)) return []
-  return splitAnchoredDelegationEvents(events, message.id, placementOf(message)).trailing
 }
 
 // ── Skill-aware message content renderer (R2/F1/F7/F9) ───────────────────────
@@ -628,6 +616,7 @@ function FallbackToolUI(props: {
   args: unknown
   result: unknown
   status: import('@assistant-ui/react').MessagePartStatus
+  artifact?: unknown
   isError?: boolean
 }) {
   const storeToolCalls = useChatStore((s) => s.toolCalls)
@@ -672,7 +661,7 @@ function FallbackToolUI(props: {
       toolName={props.toolName}
       args={props.args}
       result={liveCall?.result ?? props.result}
-      status={props.status}
+      status={resolvedToolPartStatus(props.status, props.artifact)}
       isError={isError}
       error={liveCall?.error}
       durationMs={liveCall?.duration_ms}
@@ -880,7 +869,7 @@ function wouldToolCallBeVisible(
 /** Standalone user message row for the virtualizer. */
 // useSkillChipData fetches the skills + web commands ONCE per message list (not
 // per row) for the R2 skill-chip detection. Cache hits are free (staleTime 60s).
-function useSkillChipData(): { skills: Skill[]; commandLabels: string[] } {
+export function useSkillChipData(): { skills: Skill[]; commandLabels: string[] } {
   const { data: skills = [] } = useQuery<Skill[]>({
     queryKey: ['skills'],
     queryFn: () => fetchSkills(),
@@ -1041,7 +1030,7 @@ function StaticCopyButton({ text }: { text: string }) {
  * chat.ts's `produce`/`withBucket`/`applyMessageArray`/`getMessages`, not
  * assumed.
  */
-const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRow({
+export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRow({
   message,
   liteMode,
   delegationEvents,
@@ -1294,7 +1283,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             }
             const callId = part.call.id
             const tc = toolCalls[callId] ?? part.call
-            return renderHistoricalToolCall({
+            return <div key={callId} data-history-tool-row={callId}>{renderHistoricalToolCall({
               tc,
               callId,
               inlineEvents: delegationSplit.byCall.get(callId),
@@ -1302,7 +1291,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               verboseChatEnabled,
               goalRecordEmpty,
               liteMode,
-            })
+            })}</div>
           })}
           {/* Inline indicator — 1b (founder UI feedback 2026-10-11): rendered
               AFTER the parts, pinned at the bottom of the running reply, in
@@ -1360,99 +1349,6 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   )
 })
 
-/** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
-function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMessage[]; liteMode: boolean; agentName: string }) {
-  const { skills, commandLabels } = useSkillChipData()
-  // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default,
-  // verbose-only inline) — same store read as every other verbose-gated row.
-  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
-  const sessionId = useSessionStore((s) => s.activeSessionId)
-  const delegationEvents = useChatDelegationEvents(sessionId)
-  const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
-  const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
-  // F17 (1): the reply_to ids that have a reply bubble in the thread —
-  // memoized on a pairing key so the Set's identity (and therefore the rows'
-  // React.memo) only changes when a pairing actually appears or disappears.
-  const replyPairKey = messages.map((m) => (m.replyToMessageId ? '1' : '0')).join('')
-  const pairedReplyToIds = useMemo(() => collectPairedReplyToIds(messages), [replyPairKey])
-  return (
-    <div
-      data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain pt-[var(--space-3)] pb-[var(--space-2)]"
-    >
-      <div className="max-w-4xl mx-auto w-full">
-        {messages.map((msg) => {
-          // ADR-049 D2/SD-C10: a persisted `Message.type: judge_verdict`
-          // entry never renders via the normal role-based rows — it is
-          // panel-only by default (ActivityPanel's judge row, fed live by
-          // the judge_verdict WS frame — see chat.ts), inline in the thread
-          // ONLY under verbose chat.
-          let row: React.ReactNode
-          if (msg.type === 'judge_verdict') {
-            row = shouldRenderJudgeVerdictInThread(verboseChatEnabled) && msg.verdict
-              ? <JudgeVerdictThreadCard verdict={msg.verdict} />
-              : null
-          } else if (ROOMS_ENABLED && msg.roomRef) {
-            // FR-202: collapsed group-chat traffic — hidden until WU-15 (stage 3), #1314.
-            row = <RoomTrafficMessage message={msg} />
-          } else if (msg.role === 'user') {
-            row = (
-              <VirtualUserMessageRow
-                message={msg}
-                skills={skills}
-                commandLabels={commandLabels}
-                agentName={agentName}
-                latest={msg.id === latestUserMessageId}
-              />
-            )
-          } else if (msg.role === 'system') {
-            row = <VirtualSystemMessageRow message={msg} />
-          } else {
-            row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
-          }
-          const trailing = delegationEventsOutsideRow(delegationEvents, msg)
-          return (
-            <React.Fragment key={msg.id}>
-              {row}
-              <DelegationEventLineList events={trailing} />
-            </React.Fragment>
-          )
-        })}
-        <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
-      </div>
-    </div>
-  )
-}
-
-let _resizeObserverWarnEmitted = false
-
-/**
- * Virtualized historical message list (AssistantUI constraint: the live
- * streaming message stays in ThreadPrimitive.Messages below for full context).
- */
-function VirtualizedMessageList({
-  messages,
-  liteMode,
-  agentName,
-}: {
-  messages: ChatMessage[]
-  liteMode: boolean
-  agentName: string
-}) {
-  // Feature-detect ResizeObserver at render time (not module load) so test
-  // environments that stub it in beforeEach are detected correctly.
-  // iOS < 13.4 and some enterprise Android WebViews lack it — use the plain
-  // fallback to avoid a white-screen crash.
-  if (typeof ResizeObserver === 'undefined') {
-    if (!_resizeObserverWarnEmitted) {
-      _resizeObserverWarnEmitted = true
-      console.warn('[chat] ResizeObserver unavailable — rendering full message list without virtualization')
-    }
-    return <PlainMessageList messages={messages} liteMode={liteMode} agentName={agentName} />
-  }
-  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} agentName={agentName} />
-}
-
 /**
  * Re-pins the scroll container to the bottom when the VIRTUALIZER grows the
  * transcript via the spacer's inline `style` height — row measurement, the
@@ -1467,7 +1363,7 @@ function VirtualizedMessageList({
  * bottom (reused via the Viewport store), so a user who scrolled up to read is
  * never yanked down. MUST render inside ThreadPrimitive.Viewport to read its store.
  */
-function VirtualizerAutoFollow({
+export function VirtualizerAutoFollow({
   scrollRef,
   contentRef,
 }: {
@@ -1494,7 +1390,7 @@ function VirtualizerAutoFollow({
     }
     const onPointerDown = () => { pointerActive = isReplaying }
     const onPointerUp = () => { pointerActive = false }
-    const canFollow = () => !userScrolledUp.current && (viewportStore.getState().isAtBottom || el.scrollTop === pin.current)
+    const canFollow = () => useChatStore.getState().history.viewMode !== 'historical' && !userScrolledUp.current && (viewportStore.getState().isAtBottom || el.scrollTop === pin.current)
     // Keep explicit upward intent across the replay-completion effect. Row
     // measurement can move scrollTop too, so position changes alone are not
     // evidence of a user scroll. Never prevent any native input here.
@@ -1536,160 +1432,8 @@ function VirtualizerAutoFollow({
   return null
 }
 
-function VirtualizedMessageListInner({
-  messages,
-  liteMode,
-  agentName,
-}: {
-  messages: ChatMessage[]
-  liteMode: boolean
-  agentName: string
-}) {
-  const isStreaming = useChatStore((s) => s.isStreaming)
-  const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-  const { skills, commandLabels } = useSkillChipData()
-  // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
-  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
-  const sessionId = useSessionStore((s) => s.activeSessionId)
-  const delegationEvents = useChatDelegationEvents(sessionId)
-  const textAtToolCallStart = useChatStore((s) => s.textAtToolCallStart)
-  const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
-  const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
-  const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
-  // F17 (1): the reply_to ids that have a reply bubble in the thread —
-  // memoized on a pairing key so the Set's identity (and therefore the rows'
-  // React.memo) only changes when a pairing actually appears or disappears.
-  const replyPairKey = messages.map((m) => (m.replyToMessageId ? '1' : '0')).join('')
-  const pairedReplyToIds = useMemo(() => collectPairedReplyToIds(messages), [replyPairKey])
 
-  // Separate the live streaming message from completed history.
-  const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
-  const historicalMessages = hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages
-
-  const virtualizer = useVirtualizer({
-    count: historicalMessages.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => 80,
-    overscan: 5,
-    // measureElement default (getBoundingClientRect().height) is correct; no override needed.
-  })
-
-  const virtualItems = virtualizer.getVirtualItems()
-
-  const rowForMessage = (msg: ChatMessage) => {
-    // ADR-049 D2/SD-C10: see PlainMessageList's identical branch above.
-    if (msg.type === 'judge_verdict') {
-      if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
-      return <JudgeVerdictThreadCard verdict={msg.verdict} />
-    }
-    // FR-202: collapsed group-chat traffic — hidden until WU-15 (stage 3), #1314.
-    if (ROOMS_ENABLED && msg.roomRef) return <RoomTrafficMessage message={msg} />
-    if (msg.role === 'user')
-      return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
-    if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
-    return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
-  }
-
-  // Stick-to-bottom is delegated to assistant-ui's Viewport engine
-  // (useThreadViewportAutoScroll + useOnResizeContent, via ThreadPrimitive
-  // .Viewport). It attaches a ResizeObserver + a subtree MutationObserver to THIS
-  // scroll container, so it follows ALL content growth — streamed tokens,
-  // tool-call blocks, inline images/mermaid that render late, our virtualizer's
-  // row add/remove, AND the live→virtualized finalize hand-off — and scrolls to
-  // the bottom only while the user is already at the bottom. isAtBottom is keyed
-  // off real scrollTop movement (not a touch-gesture heuristic), so a user
-  // scroll-up correctly suspends auto-follow on touch/momentum — the failure mode
-  // of the previous hand-rolled engine. We keep our custom virtualizer for row
-  // rendering and only let Viewport own the scroll element + autoscroll. The
-  // Viewport self-provides its viewport context; it runs within the chat's
-  // AssistantRuntimeProvider + ThreadPrimitive.Root (the live ThreadPrimitive
-  // .Messages below needs the runtime). The parent feature-detects ResizeObserver
-  // and falls back to PlainMessageList where it is unavailable.
-  //
-  // VirtualizerAutoFollow (rendered inside the Viewport) covers the one growth the
-  // engine can't see: the virtualizer grows the transcript by setting the spacer's
-  // inline `style` height (row measurement, the live→virtualized finalize, and
-  // late mermaid/image render), and the engine's MutationObserver deliberately
-  // ignores style-only mutations (to avoid a translateY feedback loop). Without
-  // this, the tail of a finalized/diagram message sits below the fold on slower
-  // devices (iPad). It re-pins only when the engine still reports isAtBottom.
-  return (
-    <ThreadPrimitive.Viewport
-      ref={scrollContainerRef}
-      autoScroll
-      data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain pt-[var(--space-3)] pb-[var(--space-2)]"
-      style={{ position: 'relative' }}
-    >
-      <VirtualizerAutoFollow scrollRef={scrollContainerRef} contentRef={contentRef} />
-      <div ref={contentRef} className="max-w-4xl mx-auto w-full">
-        <div
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            position: 'relative',
-          }}
-        >
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              transform: `translateY(${virtualItems[0]?.start ?? 0}px)`,
-            }}
-          >
-            {virtualItems.map((virtualRow) => {
-              const msg = historicalMessages[virtualRow.index]
-              if (!msg) return null
-              return (
-                <div
-                  key={virtualRow.key}
-                  data-index={virtualRow.index}
-                  ref={virtualizer.measureElement}
-                >
-                  {rowForMessage(msg)}
-                  <DelegationEventLineList
-                    events={delegationEventsOutsideRow(delegationEvents, msg)}
-                  />
-                </div>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Live streaming message — kept in ThreadPrimitive.Messages for full
-            AssistantUI context (streaming primitives, registered tool UIs). */}
-        {hasStreamingMessage && messages[messages.length - 1] && (
-          <StreamingDelegation
-            message={messages[messages.length - 1]}
-            events={delegationEvents}
-            snapshots={textAtToolCallStart}
-            owners={toolCallOwners}
-          >
-            <div data-testid="streaming-message-anchor">
-              <ThreadPrimitive.Messages>
-                {({ message }) => {
-                  const isLast = message.id === messages[messages.length - 1]?.id
-                  if (!isLast) return null
-                  const last = messages[messages.length - 1]
-                  // FR-202 group-chat traffic — hidden until WU-15 (stage 3), #1314.
-                  if (ROOMS_ENABLED && last?.roomRef) return <RoomTrafficMessage message={last} />
-                  if (message.role === 'user') return <UserMessage />
-                  if (message.role === 'system') return <SystemMessage />
-                  return <AssistantMessage />
-                }}
-              </ThreadPrimitive.Messages>
-            </div>
-          </StreamingDelegation>
-        )}
-        <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
-      </div>
-    </ThreadPrimitive.Viewport>
-  )
-}
-
-function StreamingDelegation({
+export function StreamingDelegation({
   message,
   events,
   snapshots,
@@ -1719,7 +1463,7 @@ function StreamingDelegation({
   )
 }
 
-function AssistantMessage() {
+export function AssistantMessage() {
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const message = useMessage()
@@ -2034,6 +1778,32 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     if (prevSearchOpenRef.current && !searchModalOpenForFocus) focusChatInput()
     prevSearchOpenRef.current = searchModalOpenForFocus
   }, [searchModalOpenForFocus, focusChatInput])
+  // D8 / T24 B26: a reconnect replay (or another temporary lock) disables the
+  // composer, through our inputEnabled prop OR assistant-ui's own thread
+  // isDisabled. A real browser drops focus to <body> the moment a focused
+  // control becomes disabled and never returns it. Remember a blur caused by
+  // that lock and, when the textarea's own disabled attribute clears, give
+  // focus back only if nothing else took it meanwhile; preventScroll keeps the
+  // reader in place. Watching the element covers every lock source.
+  const restoreFocusAfterLockRef = useRef(false)
+  const releaseLockWatchRef = useRef<(() => void) | null>(null)
+  const setChatInput = useCallback((node: HTMLTextAreaElement | null) => {
+    chatInputRef.current = node
+    releaseLockWatchRef.current?.()
+    releaseLockWatchRef.current = null
+    if (!node || typeof MutationObserver === 'undefined') return
+    // Native listener: the browser's blur on disable is what drops focus.
+    const blur = () => { restoreFocusAfterLockRef.current = node.disabled }
+    node.addEventListener('blur', blur)
+    const observer = new MutationObserver(() => {
+      if (node.disabled || !restoreFocusAfterLockRef.current) return
+      restoreFocusAfterLockRef.current = false
+      const active = document.activeElement
+      if (!active || active === document.body) node.focus({ preventScroll: true })
+    })
+    observer.observe(node, { attributes: true, attributeFilter: ['disabled'] })
+    releaseLockWatchRef.current = () => { observer.disconnect(); node.removeEventListener('blur', blur) }
+  }, [])
 
   const cancelState = useCancelState(isStreaming, cancelStream)
   // G1: Stop stays reachable in the idle gap between goal turns (see goalActivity.ts).
@@ -2573,7 +2343,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           {/* Ghost text wrapper — positioned overlay approach */}
           <div className="relative flex-1 min-w-0">
             <ComposerPrimitive.Input
-              ref={chatInputRef}
+              ref={setChatInput}
               data-testid="chat-input"
               data-no-focus-ring
               // Composer tab ring — see the full map in ChatControls.tsx.
@@ -2964,8 +2734,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   // foreground field as rateLimitEvent above. (Goal pill state is read
   // directly by GoalPillTray via its own useChatStore subscription — FE-1.)
   const loopStatus = useChatStore((s) => s.loopStatus ?? null)
-  const setMessages = useChatStore((s) => s.setMessages)
-  const mergeJudgeVerdictHistory = useChatStore((s) => s.mergeJudgeVerdictHistory)
   // For the ARIA live region: track the last assistant message id for screen reader announcements.
   // Select the pre-derived single id from the store (companion to `messagesById`)
   // rather than subscribing to the whole `messages` array + reversing/scanning it per
@@ -3018,111 +2786,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const { data: agentsForAria = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentName = agentsForAria.find((a) => a.id === activeAgentId)?.name ?? 'Omnipus'
 
-  // Load message history when session changes
-  const isConnected = useConnectionStore((s) => s.isConnected)
-
-  const {
-    data: historyData,
-    isError: historyError,
-    error: historyFetchError,
-    refetch: refetchHistory,
-  } = useQuery({
-    queryKey: ['messages', activeSessionId],
-    queryFn: () => fetchSessionMessages(activeSessionId!),
-    // '__pending' is the optimistic-send sentinel (store/chat.ts) used before the
-    // real session_id arrives over WS — it has no server-side history, so fetching
-    // it 404s (spurious console errors + a historyError that tears down the composer).
-    // Mirror the same guard used in attachment-adapter.ts.
-    enabled: !!activeSessionId && activeSessionId !== '__pending',
-    gcTime: 0,
-    // Never re-fetch on window focus — the WebSocket delivers live updates
-    refetchOnWindowFocus: false,
-    // Skip re-fetch on mount when the WebSocket is already connected and delivering messages
-    refetchOnMount: !isConnected,
-  })
-
-  // D5 (audit joint-merge 2026-10-09): a 404 from the history read is the
-  // ONE truthful "this session is gone" signal — a deleted agent's cascade
-  // deletes its solely-owned main chat, and the workspace Chat tab attaches
-  // it with no route-level guard (unlike the deep-link route's
-  // SessionNotFound). On that confirmed 404 the existing agent-removed
-  // banner explains the dead surface; the composer is already unreachable
-  // here (the history-error branch replaces the whole thread+composer with
-  // the Retry screen), so no send can fail as a turn error against a
-  // nonexistent session. A transport failure (status 0 / 5xx) is NOT
-  // deletion and gets no banner.
-  const sessionGone = historyError && (historyFetchError as { status?: number } | null | undefined)?.status === 404
-
-  // WS attach_session + streamReplay is the authoritative history loader.
-  // Skip the REST-based setMessages overwrite when WS replay is active OR has already
-  // populated the store — otherwise the filter below strips tool_call frames already
-  // attached by the reducer and historical tool-call-badge elements disappear.
-  const isReplaying = useChatStore((s) => s.isReplaying)
-  const storeMessageCount = useChatStore((s) => s.messages.length)
-  // replayCompletedForSession tracks whether WS replay finished for the active session.
-  // When set, the REST fallback is skipped even if the store has 0 messages (empty session).
-  const replayCompletedForSession = useChatStore((s) => s.replayCompletedForSession)
-  useEffect(() => {
-    if (!historyData) return
-    // Founder ruling 2026-10-11: the messages read's X-Has-Earlier-Messages
-    // header (carried by fetchSessionMessages) feeds the quiet
-    // "Earlier messages are saved." line above the clear divider.
-    recordSessionHasEarlier(activeSessionId, sessionMessagesHasEarlier[activeSessionId ?? ''] === true)
-    // Don't overwrite during replay — WS frames are the source of truth.
-    if (isReplaying) return
-    // Don't overwrite if WS replay already completed for this session.
-    // This gates the fallback more precisely than storeMessageCount > 0 alone —
-    // an empty session would pass the count check but still had a successful replay.
-    if (replayCompletedForSession === activeSessionId) return
-    // Don't overwrite if the store already has messages for this session (replay done).
-    if (storeMessageCount > 0) return
-    // Fallback: REST fetched history before WS replay fired (e.g., WS unavailable).
-    // Filter out tool_call entries that have no role — they crash AssistantUI's convertMessages.
-    const validMessages = historyData.filter(
-      (m: { role?: string }) => m.role === 'user' || m.role === 'assistant' || m.role === 'system',
-    )
-    setMessages(validMessages)
-  }, [historyData, isReplaying, storeMessageCount, replayCompletedForSession, activeSessionId, setMessages])
-
-  // ADR-049 D2/D4/SD-C10 (verdict-card fix): backfill any `judge_verdict`
-  // entries from the REST-fetched transcript, independent of the OVERWRITE
-  // condition above (isReplaying/replayCompletedForSession/storeMessageCount
-  // gate whether `setMessages` replaces the whole bucket) but NOT
-  // independent of timing. WS replay never inserts a judge_verdict entry
-  // into the thread at all (it is a GLOBAL frame routed to the
-  // ActivityPanel only, see chat.ts's `case 'judge_verdict'`), so without
-  // this second, narrower effect a verdict card could never appear in the
-  // thread, reload or not, even though `historyData` carries it
-  // (rawToMessage forwards it).
-  //
-  // The `!isReplaying && storeMessageCount > 0` gate is load-bearing, not
-  // cosmetic — reproduced live against a real gateway: `historyData` (REST)
-  // routinely resolves BEFORE WS attach_session + replay has delivered this
-  // session's own messages. Running the timestamp-positioned merge
-  // (chat.ts's `mergeJudgeVerdictHistory`) against an empty or PARTIAL
-  // bucket has nothing (or too little) to position the verdict against, so
-  // it lands at index 0 (or 1, 2, ... for each subsequent round in the same
-  // pass) — and because the merge dedupes by id, a later re-run once the
-  // rest of replay lands can never CORRECT that first, premature placement.
-  // `!isReplaying` alone is not enough (replay's isReplaying flag is only
-  // raised when the FIRST replay frame arrives — an early-arriving
-  // historyData can slip in before it), and neither is
-  // `replayCompletedForSession` (chat.ts only sets it when a live turn was
-  // announced or at a real turn's done — a completed session's
-  // replay-terminator done NEVER sets it, live-verified). So: wait until
-  // replay is not in flight AND the bucket actually has messages. The
-  // effect re-runs whenever either flips, so the normal sequence
-  // (historyData → isReplaying=true → replay_message* → terminator
-  // isReplaying=false) always lands one run of this with the full bucket.
-  // In the WS-unavailable REST-fallback path, `setMessages` above already
-  // includes verdict entries correctly ordered via its own
-  // `role: 'system'` filter — this effect then finds them already present
-  // and no-ops (mergeJudgeVerdictHistory is id-deduped).
-  useEffect(() => {
-    if (!historyData || !activeSessionId || activeSessionId === '__pending') return
-    if (isReplaying || storeMessageCount === 0) return
-    mergeJudgeVerdictHistory(activeSessionId, historyData)
-  }, [historyData, activeSessionId, isReplaying, storeMessageCount, mergeJudgeVerdictHistory])
+  const historyRead = useChatHistory()
+  const sessionGone = historyRead.sessionGone
 
   const liteMode = useConnectionStore((s) => s.liteMode)
 
@@ -3165,48 +2830,18 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
       {/* Above-feed kind. FeedKindLabel also keeps the old Task: line when no descriptor matches. */}
       <FeedKindLabel />
 
-      {/* History fetch error */}
-      {historyError ? (
-        <div className="flex flex-col items-center justify-center flex-1 gap-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
-          <p>Could not load messages.</p>
-          {/* C10: a confirmed 404 is deletion — the refetch 404s again, so no
-              Retry is offered (the dead-session banner above carries the
-              truthful copy). Every other failure keeps Retry. */}
-          {!sessionGone && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                // V3 (FR-030/031): when a /clear operation still owes this
-                // session its view, Retry runs ONLY that operation's own
-                // read+apply — it publishes into the history cache on success,
-                // and a competing ordinary refetch could fail afterwards and
-                // undo the recovery (round-3 review N5). No-op when no clear
-                // operation is pending.
-                const sid = activeSessionId
-                if (sid && sid !== '__pending' && pendingClearRefetches[sid]) {
-                  useChatStore.getState().retryClearTranscript(sid)
-                  return
-                }
-                refetchHistory()
-              }}
-            >
-              <ArrowCounterClockwise size={14} /> Retry
-            </Button>
-          )}
-        </div>
-      ) : (
         <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">
           {/* ARIA live region: announces new assistant messages to screen readers.
               Only fires when a genuinely new message ID arrives and is complete. */}
           <div aria-live="polite" aria-atomic="true" className="sr-only">
-            {shouldAnnounce && lastAssistantMessage?.status === 'done' && (
+            {shouldAnnounce && lastAssistantMessage?.status === 'done' && !lastAssistantMessage.historyPosition && (
               <span>New response from {activeAgentName}</span>
             )}
           </div>
 
+          <HistoryOpenState read={historyRead} />
           {/* Virtualized message list — only visible rows (+ 5-message overscan) are mounted as DOM nodes. */}
-          {displayMessages.length === 0 ? (
+          {displayMessages.length === 0 && historyRead.showWelcome ? (
             <div className="flex-1 overflow-y-auto pt-[var(--space-3)] pb-[var(--space-2)]">
               <WelcomeState hasAgent={!!activeAgentId} />
             </div>
@@ -3311,11 +2946,10 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             <GoalPillTray />
             {/* No gradient fade here: it painted the container's top edge (founder feedback 2026-10-11 p5; ChatScreen.composer-topedge.test.tsx). */}
             <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[max(var(--space-2),env(safe-area-inset-bottom,var(--space-0)))]">
-              <OmnipusComposer agentRemoved={agentRemoved} />
+              <OmnipusComposer agentRemoved={agentRemoved || sessionGone} />
             </div>
           </div>
         </ThreadPrimitive.Root>
-      )}
     </div>
     </ReplyStatusFallbackProvider>
   )

@@ -44,6 +44,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { seedCanonicalAgedTranscript } from './chat-history';
+import { requireCanonicalHistoryContext } from './canonical-history-context';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -54,33 +56,6 @@ export interface AgedTranscriptOptions {
    * Must be >= 1.
    */
   messageCount?: number;
-}
-
-/**
- * A minimal UnifiedMeta shape compatible with what pkg/session writes.
- * Only fields required by the SPA session-list API response are populated;
- * the rest are omitted and the gateway will tolerate their absence.
- */
-interface SyntheticMeta {
-  id: string;
-  agent_id: string;
-  agent_ids: string[];
-  active_agent_id: string;
-  status: 'active' | 'archived' | 'interrupted';
-  created_at: string;
-  updated_at: string;
-  channel: string;
-  type: 'chat' | 'task' | 'channel';
-  title: string;
-  stats: {
-    tokens_in: number;
-    tokens_out: number;
-    tokens_total: number;
-    cost: number;
-    tool_calls: number;
-    message_count: number;
-  };
-  partitions: string[];
 }
 
 interface SyntheticTranscriptEntry {
@@ -195,100 +170,29 @@ function buildEntries(
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-/**
- * agedTranscript — Write a synthetic session directory backdated to `daysAgo` days.
- *
- * The function:
- *   1. Computes target timestamp = now - (daysAgo * 24h).
- *   2. Creates (or overwrites) the session directory under `$omnipusHome/sessions/<sessionId>/`.
- *   3. Writes `meta.json` with the session metadata at the target timestamp.
- *   4. Writes `transcript.jsonl` with synthetic entries (user+assistant+toolcall+toolresult).
- *   5. Back-dates ALL files in the session directory via `fs.utimesSync()`.
- *
- * The caller must ensure the directory `$omnipusHome/sessions/` is writable.
- * This function is synchronous and returns only after fsync (via Node's
- * default synchronous write behavior — JS file APIs flush on close).
- *
- * @param omnipusHome - absolute path to the Omnipus home directory (e.g. `/tmp/omnipus-e2e-test`)
- * @param sessionId   - session ID string. Will be prefixed with `session_` if not already.
- * @param daysAgo     - how many days in the past the transcript should appear to be
- * @param opts        - optional overrides (messageCount)
- */
-export function agedTranscript(
+/** Create a real identity, then seed its original bodies and timestamps through
+ * the guarded canonical writer on historical append days. Returns the actual
+ * opaque session id; the requested label still authors the stable source ids.
+ * The owned gateway stays stopped until the caller has checked fixture existence
+ * and explicitly calls resumeCanonicalHistory, so startup sweep cannot erase the
+ * aged source before that prerequisite is observed. */
+export async function agedTranscript(
   omnipusHome: string,
   sessionId: string,
   daysAgo: number,
   opts?: AgedTranscriptOptions,
-): void {
+): Promise<string> {
+  const context = requireCanonicalHistoryContext();
+  if (context.gateway.homeDir !== omnipusHome) throw new Error('Aged fixture must use its actual owned gateway home');
   const normalizedId = syntheticSessionID(sessionId);
-  // 'mia' — the seeded default of the 4-base roster. The historical 'main'
-  // id no longer resolves to any agent, which flips the session to
-  // agent_removed/read-only instead of a normal replay-able session.
   const agentId = 'mia';
   const messageCount = opts?.messageCount ?? 4;
-
   const targetDate = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
-  const targetISO = targetDate.toISOString();
-
-  const sessionsBase = path.join(omnipusHome, 'sessions');
-  const sessionDir = path.join(sessionsBase, normalizedId);
-
-  // Create directories.
-  fs.mkdirSync(sessionDir, { recursive: true });
-
-  // Write meta.json
-  const meta: SyntheticMeta = {
-    id: normalizedId,
-    agent_id: agentId,
-    agent_ids: [agentId],
-    active_agent_id: agentId,
-    status: 'active',
-    created_at: targetISO,
-    updated_at: targetISO,
-    channel: 'web',
-    type: 'chat',
-    title: `Aged session (${daysAgo}d ago)`,
-    stats: {
-      tokens_in: 50,
-      tokens_out: 120,
-      tokens_total: 170,
-      cost: 0.0001,
-      tool_calls: 1,
-      message_count: messageCount,
-    },
-    partitions: [`${targetDate.toISOString().slice(0, 10)}.jsonl`],
-  };
-  const metaPath = path.join(sessionDir, 'meta.json');
-  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), { encoding: 'utf-8' });
-
-  // Write transcript.jsonl
   const entries = buildEntries(normalizedId, agentId, targetDate, messageCount);
-  const transcriptPath = path.join(sessionDir, 'transcript.jsonl');
-  const lines = entries.map((e) => JSON.stringify({ view_membership: 'chat', ...e })).join('\n') + '\n';
-  fs.writeFileSync(transcriptPath, lines, { encoding: 'utf-8' });
-
-  // Write the day-partition .jsonl file (matches the filename listed in meta.partitions).
-  // The retention sweep uses WalkDir and deletes .jsonl files by mtime, so this
-  // file must exist and be backdated.
-  const partitionName = `${targetDate.toISOString().slice(0, 10)}.jsonl`;
-  const partitionPath = path.join(sessionDir, partitionName);
-  // Partition contains the same entries as transcript.jsonl for simplicity.
-  fs.writeFileSync(partitionPath, lines, { encoding: 'utf-8' });
-
-  // Backdate ALL files in the session directory to the target timestamp.
-  // `utimes(2)` sets both atime and mtime. The retention sweep reads mtime.
-  const filesInDir = fs.readdirSync(sessionDir);
-  for (const fname of filesInDir) {
-    const fpath = path.join(sessionDir, fname);
-    const stat = fs.statSync(fpath);
-    if (!stat.isDirectory()) {
-      fs.utimesSync(fpath, targetDate, targetDate);
-    }
-  }
-
-  // Also backdate the session directory itself (some OS retention tooling
-  // checks directory mtime, and it keeps the fixture self-consistent).
-  fs.utimesSync(sessionDir, targetDate, targetDate);
+  // The identity is REST-created; original source IDs/bodies/timestamps stay
+  // authored above. Canonical past-day appends and real rollover replace raw
+  // meta/transcript/duplicated-partition writes. Return the real opaque id.
+  return seedCanonicalAgedTranscript(entries, targetDate, `Aged session (${daysAgo}d ago)`);
 }
 
 /**

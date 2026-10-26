@@ -62,6 +62,37 @@ import (
 //     like "the port filter syntax is wrong" and sends you chasing the wrong
 //     bug. Both the mach-lookup and the network-outbound literal are required.
 //
+//  5. Certificate trust. Go's crypto/x509 on darwin verifies against the
+//     system roots by calling Security.framework (SecTrustEvaluateWithError),
+//     which hands the evaluation to the trust daemon over a Mach service. It
+//     does NOT read /private/etc/ssl/cert.pem, so the file allow below does
+//     not help it. Without the lookup every Go TLS client (gh, and any other
+//     Go binary an agent runs) fails with "x509: OSStatus -26276"
+//     (errSecInternalComponent) while curl and Python, which read cert.pem,
+//     work — which reads like a broken network or certificate store.
+//     Measured (macOS 26.5.2, user session): com.apple.trustd.agent ALONE
+//     fixes it; com.apple.trustd alone does not.
+//     Security.framework picks the per-user agent for a process in a user
+//     session (the shipped LaunchAgent deployment) and the system daemon
+//     com.apple.trustd only for root or the launchd System/LoginWindow
+//     session, which no supported deployment uses, so that one is NOT
+//     granted.
+//
+//     What the lookup is for: TLS certificate verification by Go-built tools.
+//     What else it opens: a mach-lookup grants the WHOLE service, not one
+//     call. Per Apple's open-source trustd (trustd.c::trustd_ops,
+//     SecTrustSettingsServer.c), a child can also, without any entitlement,
+//     read trust settings and certificate/trust data (it is NOT shut out of
+//     certificate information), and reset trustd's OCSP and issuer caches
+//     and its revocation database — a performance impact only (re-fetch,
+//     possibly a daemon restart), not a trust change. What stays out of
+//     reach: keychain secrets — com.apple.SecurityServer and secd are not
+//     allowed, and no general keychain-item retrieval was found in trustd's
+//     dispatcher; and persistent trust-settings changes, whose write route
+//     requires an Authorization token carrying the trust-settings right,
+//     which this sandbox grants no way to obtain. These source readings are
+//     NOT verified against the macOS 26 binaries.
+//
 // Everything here is read-only or a well-known sink. The preamble grants no
 // write access outside /dev/null and no execute outside the system binary
 // directories, so it cannot widen a policy's reach over user data.
@@ -88,6 +119,8 @@ const seatbeltSystemPreamble = `;; --- macOS system preamble (empirically derive
 ;; DNS via mDNSResponder. Required for ANY name resolution; see finding 4 above.
 (allow mach-lookup (global-name "com.apple.mDNSResponder"))
 (allow network-outbound (literal "/private/var/run/mDNSResponder"))
+;; Certificate trust evaluation for Security.framework clients (Go's crypto/x509). See finding 5 above.
+(allow mach-lookup (global-name "com.apple.trustd.agent"))
 `
 
 // renderSeatbeltProfileState carries the shared state of renderSeatbeltProfile across its stages.

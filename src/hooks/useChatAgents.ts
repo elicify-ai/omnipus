@@ -21,7 +21,7 @@ import { useQuery } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { fetchAgents, fetchWorkspaces, isWorker, workspacesQueryKeys } from '@/lib/api'
+import { fetchAgents, isWorker, workspacesQueryKeys } from '@/lib/api'
 import type { Agent, Workspace } from '@/lib/api'
 
 // Item I (bugfixes3 sign-off): module-level (not per-render) empty-array
@@ -40,6 +40,7 @@ const EMPTY_WORKSPACES: Workspace[] = []
 // derivation can reuse the ONE predicate without a hooks-module import;
 // re-exported here so this module's existing callers are unchanged.
 import { isChatEligibleAgent } from '@/lib/agentKind'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 export { isChatEligibleAgent }
 
 export interface UseChatAgentsResult {
@@ -69,8 +70,7 @@ export function useChatAgents(): UseChatAgentsResult {
   // indistinguishable from a fresh one. `teamRefreshFailed` is the signal
   // AgentPicker renders so the last known team never reads as current.
   const { data: workspaces = EMPTY_WORKSPACES, isError: teamRefreshFailed } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
     enabled: !!activeWorkspaceId,
   })

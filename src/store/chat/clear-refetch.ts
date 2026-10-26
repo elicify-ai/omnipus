@@ -67,10 +67,11 @@
 
 import { queryClient } from '@/lib/queryClient'
 import { fetchSessionMessages } from '@/lib/api'
-import type { Message } from '@/lib/api'
+import type { Message, SessionHistoryPage } from '@/lib/api'
+import { applyHistoryPageToBucket } from './history-merge'
+import { abortHistoryReads } from './history'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
-import { isClearContextMarker } from '@/lib/clearMarker'
 import type { ChatMessage, SessionChatState } from './types'
 import { isPendingTailMessage } from './cursor'
 import { pendingClearRefetches, type PendingClearRefresh } from './runtime-state'
@@ -283,7 +284,7 @@ async function runClearRefetch(sid: string, withBucket: WithBucket, userInitiate
   }
 }
 
-function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[], withBucket: WithBucket, userInitiated = false, joinedInFlight = false): void {
+function applyProjection(sid: string, op: PendingClearRefresh, fresh: SessionHistoryPage, withBucket: WithBucket, userInitiated = false, joinedInFlight = false): void {
   // D2, re-keyed ON THE MARKER (founder ruling 2026-10-11): the server's
   // chat-view read starts at the session's LAST /clear marker and
   // deliberately keeps no link between a /clear row and the marker it
@@ -315,8 +316,11 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
         op.heldProjection = fresh
         return {}
       }
-      const merged = mergeServerProjection(b, fresh, op)
-      return { messagesById: merged.messagesById, messageOrder: merged.messageOrder }
+      const merged = mergeServerProjection(b, fresh.entries, op)
+      abortHistoryReads(sid)
+      const patch = applyHistoryPageToBucket(b, fresh, 'latest')
+      return { ...patch, messagesById: merged.messagesById, messageOrder: merged.messageOrder,
+        history: { ...patch.history!, viewGeneration: b.history.viewGeneration + 1, openedClearPositions: [] } }
     })
   } catch (error) {
     // D5: an APPLICATION failure is its own phase — the read succeeded, the
@@ -349,9 +353,11 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
  * check); every marker known at arm belongs to an earlier clear, and a
  * projection holding only those predates this operation.
  */
-function projectionCarriesFreshMarker(fresh: Message[], op: PendingClearRefresh): boolean {
+function projectionCarriesFreshMarker(fresh: SessionHistoryPage, op: PendingClearRefresh): boolean {
+  if (fresh.page_info.mode !== 'latest') return false
   const known = new Set(op.knownMarkerIds ?? [])
-  return fresh.some((row) => isClearContextMarker(row) && !known.has(row.id))
+  const marker = fresh.page_info.latest_clear
+  return !!marker && !known.has(marker.entry_id)
 }
 
 

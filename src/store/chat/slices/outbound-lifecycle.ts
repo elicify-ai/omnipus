@@ -28,6 +28,15 @@ import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
 import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
+import { discardHistoryStaging } from '../history'
+
+/** Accepted sends request a fresh current window; failures never move a reader. */
+function followAcceptedHistorySend(get: () => ChatStore, sid: string): void {
+  if (get().sessionsById[sid]?.history.viewMode !== 'historical') return
+  queueMicrotask(() => {
+    if (useSessionStore.getState().activeSessionId === sid && get().sessionsById[sid]?.history.viewMode === 'historical') void get().returnToLatestHistory(sid)
+  })
+}
 
 // ── #823 message-status helpers ──────────────────────────────────────────────
 // Kept at module scope (not nested inside createOutboundLifecycleSlice/
@@ -143,6 +152,8 @@ function armClearRefreshForSend(sessionId: string, clientMessageId: string, get:
   const knownMarkerIds = bucket
     ? bucket.messageOrder.filter((id) => isClearContextMarker(bucket.messagesById[id] ?? {}))
     : []
+  const latestKnown = bucket?.history.pageMetadata?.page_info.latest_clear?.entry_id
+  if (latestKnown && !knownMarkerIds.includes(latestKnown)) knownMarkerIds.push(latestKnown)
   armClearRefresh(sessionId, clientMessageId, bucket?.activeTurnId ?? null, knownMarkerIds)
 }
 
@@ -356,6 +367,7 @@ interface OutboundLifecycleContext {
 //     keep escalating across a flapping connection, not reset on every
 //     disconnect.
 function clearCatchUpSideChannelsOnDisconnect(): void {
+  discardHistoryStaging()
   inFlightReattachSids.clear()
   for (const sid of Object.keys(replayErrorRetryTimers)) {
     clearTimeout(replayErrorRetryTimers[sid])
@@ -662,11 +674,9 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             return
           }
 
-          // FR-030/031 (U10b): an outgoing /clear arms the transcript
-          // re-read the command owes the view (the server's marker entry is
-          // never pushed live), bound to THIS send so another turn's done
-          // cannot consume it.
+          // Only this send owns its clear confirmation or explicit follow request.
           if (isClearCommandText(content)) armClearRefreshForSend(activeSessionId, clientMessageId, get)
+          else followAcceptedHistorySend(get, activeSessionId)
 
           // ADR-070 §2.1: only NOW, once the steer has genuinely reached the
           // gateway, close the assistant bubble that was open at send-time —
@@ -825,11 +835,9 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           // drained message to send, if any.
           maybeDrainNext()
         } else {
-          // FR-030/031 (U10b): an outgoing /clear arms the transcript
-          // re-read the command owes the view (the server's marker entry is
-          // never pushed live), bound to THIS send so another turn's done
-          // cannot consume it.
+          // Only this send owns its clear confirmation or explicit follow request.
           if (isClearCommandText(content)) armClearRefreshForSend(activeSessionId, clientMessageId, get)
+          else followAcceptedHistorySend(get, activeSessionId)
         }
       } else {
         if (refuseAgentlessNewChat(activeAgentId, 'send')) return

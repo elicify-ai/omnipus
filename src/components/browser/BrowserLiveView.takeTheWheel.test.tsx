@@ -6,6 +6,7 @@ import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useChatStore, type SessionChatState } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
+import { emptyHistoryFixture } from '../../../tests/chat-history-paging/empty-history'
 
 const { mockSocketSendInput, mockSendControl, mockDedicatedSendInput, mockSendTabAction, mockSendViewport, callbacksRef } = vi.hoisted(() => ({
   mockSocketSendInput: vi.fn(() => true),
@@ -116,6 +117,7 @@ function setAgentWorking(sessionId: string, isStreaming: boolean) {
       const bucket: SessionChatState = existing
         ? { ...existing, isStreaming }
         : {
+            ...emptyHistoryFixture(),
             messagesById: {},
             messageOrder: [],
             trimmedCount: 0,

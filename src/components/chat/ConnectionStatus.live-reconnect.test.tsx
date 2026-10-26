@@ -11,6 +11,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { OmnipusRuntimeProvider } from './OmnipusRuntimeProvider'
 import { ChatConnectionNotice } from './ConnectionStatus'
+import { fixtureHistoryPosition, wireHistoryPage, wireHistorySnapshot } from '../../../tests/chat-history-paging/legacy-wire'
 
 // Founder decision 2026-10-06 (keeps issue #823): connection drops shorter
 // than 15 s stay quiet - no status line; the earlier U4 requirement of an
@@ -23,6 +24,18 @@ vi.mock('@assistant-ui/react', async () => ({
   AssistantRuntimeProvider: ({ children }: { children: ReactNode }) => children,
 }))
 const SID = 'uat-reconnect-session'
+// Both reconnect snapshots select one saved narration source; controls and the
+// pre-drop live token do not become additional historical groups (D3/D4).
+function reconnectHistory(id: string, content: string, seq: number, turnId?: string) {
+  const position = fixtureHistoryPosition(SID, id)
+  const source = { id, type: 'message', role: 'assistant', agent_id: 'jim', content,
+    timestamp: '2026-10-06T00:00:00Z', history_position: position, ...(turnId ? { turn_id: turnId } : {}) }
+  const replay: ServerFrame = { type: 'replay_message', session_id: SID, id, role: 'assistant', content,
+    ...(turnId ? { turn_id: turnId } : {}), history_origin: { position, entry_id: id } }
+  return { replay, snapshot: wireHistorySnapshot(wireHistoryPage(SID, [source], 1), {
+    seq, boot_id: 'uat-after', reason: 'boot_mismatch',
+  }, [replay]) }
+}
 let sockets: Socket[]
 class Socket {
   static OPEN = 1
@@ -104,10 +117,11 @@ describe('U4 — reconnect behaviour through real runtime/socket callbacks', () 
     expect(sockets).toHaveLength(2)
     act(() => latest().open())
     expect(screen.queryByTestId('connection-status-line')).not.toBeInTheDocument()
+    const history = reconnectHistory('replayed-active-reply', 'Partial reply', 1, 'uat-active-turn')
     act(() => {
-      latest().frame({ type: 'session_snapshot', session_id: SID, seq: 1, boot_id: 'uat-after', reason: 'boot_mismatch' })
-      latest().frame({ type: 'session_state', session_id: SID, user_id: 'uat-user', pending_approvals: [], emitted_at: '2026-10-06T00:00:01Z', boot_id: 'uat-after', active_turn: { turn_id: 'uat-active-turn', agent_id: 'jim', started_at: '2026-10-06T00:00:00Z' } })
-      latest().frame({ type: 'replay_message', session_id: SID, id: 'replayed-active-reply', role: 'assistant', turn_id: 'uat-active-turn', content: 'Partial reply' })
+      latest().frame(history.snapshot)
+      latest().frame({ type: 'session_state', session_id: SID, user_id: 'uat-user', pending_approvals: [], emitted_at: '2026-10-06T00:00:01Z', boot_id: 'uat-after', history_state: { status: 'available' }, active_turn: { turn_id: 'uat-active-turn', agent_id: 'jim', started_at: '2026-10-06T00:00:00Z' } })
+      latest().frame(history.replay)
     })
     await flushFrames()
     expect(useConnectionStore.getState().isConnected).toBe(true)
@@ -146,9 +160,10 @@ describe('U4 — reconnect behaviour through real runtime/socket callbacks', () 
       act(() => latest().drop(1006))
       await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
       act(() => latest().open())
+      const history = reconnectHistory('held-history', 'Saved partial answer', 2)
       act(() => {
-        latest().frame({ type: 'session_snapshot', session_id: SID, seq: 2, boot_id: 'uat-after', reason: 'boot_mismatch' })
-        latest().frame({ type: 'replay_message', session_id: SID, id: 'held-history', role: 'assistant', content: 'Saved partial answer' })
+        latest().frame(history.snapshot)
+        latest().frame(history.replay)
         latest().frame({ type: 'done', session_id: SID, stats: { frames_emitted: 1 } })
       })
       await flushFrames()

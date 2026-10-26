@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { makeAssistantToolUI } from '@assistant-ui/react'
+import { makeAssistantToolUI } from '@/lib/assistant-tool-status'
 import { ArrowSquareOut } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { DisclosureRow } from '@/components/ui/disclosure-row'

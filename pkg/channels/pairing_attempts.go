@@ -138,6 +138,13 @@ type pairingConnector struct {
 	order             []string
 	deleting          bool
 	retired           bool
+	// interruptNoticeAttemptID records the stale-ready attempt an accepted
+	// admission just closed (chief ruling C+D, security review F3): its
+	// notice is stamped against the successor's generation and delivers even
+	// though the successor is already latest. It self-expires — the next
+	// stamped progress moves the sequence, so the notice's metadata equality
+	// in AcceptsProgress fails — and any newer non-notice progress clears it.
+	interruptNoticeAttemptID string
 }
 
 // pairingAttemptHistory bounds how many past attempts a connector keeps for
@@ -223,13 +230,40 @@ func (s *PairingAttempts) Admit(instance string, kind PairingAdmission, owner *P
 	return order.Admit(kind, owner)
 }
 
-func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context, kind PairingAdmission, owner *PairingOwner) (PairingAttempt, error) {
+// admitOrdered decides and reserves under one ordering boundary (M2). The
+// caller holds the channel order; the caller-supplied servedContains, when
+// non-nil, is read HERE — under that same guard, never from an earlier
+// snapshot — so the stale-ready decision always reflects the currently served
+// configuration (security review F1, chief ruling C+D). A granted admission
+// applies the stale-ready close in the same critical section; a refused one
+// applies nothing, so a foreign Retry whose own ownership check would refuse
+// interrupts nothing. The closed attempt's interruption envelope is stamped
+// after the successor's reservation, against the successor's generation, and
+// RETURNED; the caller publishes it after releasing the order — the event
+// bus's synchronous gateway tap re-enters this same order (security review
+// F3), so nothing may publish while it is held.
+func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context, kind PairingAdmission, owner *PairingOwner, servedContains func() bool) (PairingAttempt, *PairingProgress, error) {
 	instance := order.instance
 	if err := ctx.Err(); err != nil {
-		return PairingAttempt{}, err
+		return PairingAttempt{}, nil, err
 	}
 	if instance == "" || (kind != PairingAdmissionEnable && (owner == nil || owner.SessionID == "" || owner.RequestID == "")) {
-		return PairingAttempt{}, ErrPairingConflict
+		return PairingAttempt{}, nil, ErrPairingConflict
+	}
+	// gate r5 R5-A05/r6; security review F1 round 3 (chief ruling C+D): the
+	// admission-time close fires ONLY when the served configuration no longer
+	// contains the connector — the attempt commits against a configuration
+	// that no longer exists, so it can provably never start. When the
+	// instance is present but its served revision differs, the served
+	// snapshot may simply be behind a durable commit (the skew
+	// CheckConfigSnapshot guards on the write side): the direction is
+	// unknowable, so the conservative choice is to refuse and leave the
+	// ready attempt untouched. The presence read happens while the channel
+	// order is held and before the state mutex: config writers that could
+	// change the served set all take the same channel order first.
+	stale := false
+	if servedContains != nil && order.connector.latest != nil && order.connector.latest.Phase == PairingPhaseReady {
+		stale = !servedContains()
 	}
 	s.mu.Lock()
 	c := order.connector
@@ -237,21 +271,40 @@ func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context,
 	switch {
 	case c.deleting:
 		err = ErrPairingDeleting
-	case c.hasStopping(), c.latest != nil && inFlight(c.latest.Phase):
+	case c.hasStopping():
 		err = ErrPairingConflict
-	case kind == PairingAdmissionRetry && !retryEligible(c.latest, *owner):
+	case c.latest != nil && inFlight(c.latest.Phase) && !stale:
 		err = ErrPairingConflict
+	case kind == PairingAdmissionRetry:
+		if stale {
+			// The close would leave latest terminal and interrupted: this
+			// Retry must own that exact attempt, or nothing is interrupted.
+			post := *c.latest
+			post.Phase, post.Outcome = PairingPhaseTerminal, PairingOutcomeInterrupted
+			if !retryEligible(&post, *owner) {
+				err = ErrPairingConflict
+			}
+		} else if !retryEligible(c.latest, *owner) {
+			err = ErrPairingConflict
+		}
+	}
+	var closed *PairingAttempt
+	if err == nil && stale {
+		c.latest.Phase, c.latest.Outcome = PairingPhaseTerminal, PairingOutcomeInterrupted
+		committed := copyAttempt(c.latest)
+		closed = &committed
+	}
+	if err != nil {
+		s.mu.Unlock()
+		return PairingAttempt{}, nil, err
 	}
 	hook := s.afterCheck
 	s.mu.Unlock()
-	if err != nil {
-		return PairingAttempt{}, err
-	}
 	if hook != nil {
 		hook() // ordering guard held; short state mutex is not held
 	}
 	if err := ctx.Err(); err != nil {
-		return PairingAttempt{}, err
+		return PairingAttempt{}, nil, err
 	}
 	id := newAttemptID()
 	s.mu.Lock()
@@ -265,7 +318,17 @@ func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context,
 	}
 	c.retired = false // an accepted explicit create/connect may recreate an id
 	c.publish(rec)
-	return copyAttempt(rec), nil
+	var interrupted *PairingProgress
+	if closed != nil {
+		// The notice is stamped AFTER the successor's reservation, against
+		// the successor's generation, and recorded on the connector: this is
+		// the one predecessor notice that still delivers (security review F3
+		// round 3, chief ruling C+D) — see progressLockedAdmissionInterrupt
+		// and the matching AcceptsProgress exception.
+		p := order.progressLockedAdmissionInterrupt(*closed)
+		interrupted = &p
+	}
+	return copyAttempt(rec), interrupted, nil
 }
 
 func retryEligible(latest *pairingAttemptRecord, owner PairingOwner) bool {

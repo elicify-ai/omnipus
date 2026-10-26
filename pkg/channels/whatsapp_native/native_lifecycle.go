@@ -144,6 +144,17 @@ func (c *WhatsAppNativeChannel) disposeNative(resource *nativeLifecycle, store *
 			c.client, c.container = nil, nil
 		}
 		c.SetRunning(false)
+		// gate r4 R4-T2: an attempt-scoped teardown that completed cleanly
+		// leaves the connector idle but alive — its successor attempt must be
+		// able to activate, and a later disable/reload stop must still capture
+		// and tear down the CURRENT attempt, so the consumed lifecycle is
+		// cleared and the stopping latch released. A teardown that failed, or
+		// a channel-level stop (interrupt), keeps the latch and the captured
+		// resource; the next Start owns recovery.
+		if !interrupt && resource.err == nil {
+			c.stopping.Store(false)
+			c.lifecycle = nil
+		}
 	}
 	c.mu.Unlock()
 	var completed channels.PairingAttempt
@@ -151,10 +162,14 @@ func (c *WhatsAppNativeChannel) disposeNative(resource *nativeLifecycle, store *
 	if replacement.AttemptID != "" {
 		completed, finished = store.FinishReplacement(instance, replacement.AttemptID, replacement.StopGeneration, resource.err)
 	}
-	close(resource.done) // cancellation + known work + final disposal, never just a timeout
+	// The interrupted notice is published BEFORE done releases the Stop caller:
+	// a caller that moves on (Retry, restart) must never overtake it and leave
+	// the chat on the stopping notice. The stopping notice above already runs
+	// on this goroutine before done, so this adds no new lock dependency.
 	if finished {
 		c.emitAttempt(completed.AttemptID, channels.PairingStatusError, "", channels.PairingInterruptedMessage)
 	}
+	close(resource.done) // cancellation + known work + final disposal, never just a timeout
 }
 
 // connectNative is shared by initial pairing, linked starts, reconnect and

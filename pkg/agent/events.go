@@ -455,7 +455,9 @@ type ToolExecEndPayload struct {
 	ForLLMLen  int
 	ForUserLen int
 	IsError    bool
-	Async      bool
+	// Cancelled is a confirmed terminal cancellation, distinct from an error.
+	Cancelled bool
+	Async     bool
 	// Result is the tool's ForLLM content, forwarded to the browser via WebSocket
 	// so rich tool UIs (e.g., browser screenshot preview) can render the result.
 	Result string

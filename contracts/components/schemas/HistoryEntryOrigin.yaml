@@ -1,0 +1,22 @@
+title: HistoryEntryOrigin
+type: object
+description: >
+  Local ownership of an entry-derived historical replay frame (chat history paging
+  D2/D4). Required by the producer for every frame derived from a selected persisted
+  entry; optional on general frame schemas because live, unsequenced non-history and
+  session-only rehydration copies can have no persisted source. Not a transport cursor,
+  authorization grant or reversible archive address. No frame ordinals or manifest.
+required:
+  - position
+additionalProperties: false
+properties:
+  position:
+    type: string
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: Same-session occurrence fingerprint; canonical unpadded base64url SHA-256.
+  entry_id:
+    type: string
+    minLength: 1
+    description: Original recorded entry ID when nonempty and valid; otherwise omitted.

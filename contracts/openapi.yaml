@@ -242,6 +242,11 @@ components:
       $ref: ./components/schemas/SessionStats.yaml
     SessionDetail:
       $ref: ./components/schemas/SessionDetail.yaml
+    SessionHistoryResponse:
+      $ref: ./components/schemas/SessionHistoryResponse.yaml
+    # Shared page/context/origin/readiness schemas live in component files and
+    # are generated as named Go/WS types by their inline AsyncAPI mirrors.
+    # Cross-file x-go-type refs reuse those types without duplicate declarations.
     # SessionPage is the paged envelope for GET /sessions (ADR-057 FR-091,
     # grill2 M2-10). It REPLACES the historic two-variant oneOf (a bare
     # Session array, or {sessions, partial_errors}) with one shape. Hosted
@@ -3024,10 +3029,18 @@ paths:
   /sessions/{id}:
     get:
       operationId: getSession
-      summary: Get session detail including full transcript
-      description: 'Returns the session metadata and complete ordered transcript. Used by the SPA to render the chat history.
-
-        '
+      summary: Get session metadata and bounded latest history
+      description: >
+        Returns authorized session metadata and required history_state. When history
+        is available, messages and canonical page_info/continuation describe the
+        bounded latest page (limit 40, min_rows 20), never the complete lifetime.
+        This endpoint accepts no paging selectors. When history is unavailable
+        after the bounded known-prefix recovery attempt, return metadata-only
+        SessionDetail with history_state.status=unavailable, omitting messages,
+        page_info and every continuation field. This is not successful empty history
+        or a missing session; routing and authorized live attach remain usable.
+        Authentication, session-ID syntax and addressed-session eligibility/existence
+        precede history access. No lifetime rebuild, preparation state or 503 path.
       tags:
       - sessions
       security:
@@ -3042,7 +3055,7 @@ paths:
         example: 550e8400-e29b-41d4-a716-446655440000
       responses:
         '200':
-          description: Session detail with transcript.
+          description: Session metadata with bounded available history, or explicit metadata-only unavailable history.
           content:
             application/json:
               schema:
@@ -3180,10 +3193,38 @@ paths:
   /sessions/{id}/messages:
     get:
       operationId: getSessionMessages
-      summary: Get session transcript messages
-      description: 'Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed. The list starts at the session''s last /clear marker (the marker itself is the first entry); the X-Has-Earlier-Messages response header says whether earlier entries exist before that point.
-
-        '
+      summary: Get a bounded session-history page
+      description: >
+        Returns SessionHistoryResponse, not a bare array. Select nearest whole source
+        groups and emit ascending acceptance order. With no selectors, read the latest
+        segment since the newest exact /clear marker. before/after are exclusive
+        same-session history positions, not message IDs or live sequence cursors.
+        Older reads stop at the first clear marker; before that marker explicitly
+        crosses into one preceding segment without changing model context. Paired
+        window_start/window_end delimit a closed already-displayed interval for
+        window_refresh; optional before continues backward inside it, never from the
+        current live tail. No message-neighborhood or ID-based lookup is provided.
+        Authenticate, validate session-ID syntax and resolve addressed-session
+        eligibility/existence/access first; then validate limit, min_rows, selector
+        syntax/combinations; then resolve positions/range in that same session; then
+        read the index/page. Unknown/foreign well-formed positions return 404 before
+        range order checks. Known expired positions remain valid order boundaries.
+        Parse raw query encoding and multiplicity: malformed percent escapes, repeated
+        values, blanks and null-like values are errors, never silently dropped or
+        trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes
+        permitted), never clamped; signs, whitespace, fractions, exponents and overflow
+        reject. Unknown keys enable no additional mode.
+        has_earlier/has_later and next_before/next_after reflect actual eligible retained
+        lookahead in the read domain (only the closed interval for window_refresh).
+        Cursors exist iff the respective flag is true and equal the first/last selected
+        position. Empty and exactly-full terminal pages have no phantom continuation.
+        Page metadata replaces X-Has-Earlier-Messages as the paging authority.
+        The shared projector meters the larger prepared REST/history-WS encoding under
+        a server-owned 4194304-byte soft budget; whole groups and advisory min_rows
+        take precedence. At least one whole eligible group remains. True end, clear,
+        range or 100-source-group cap can underfill; bytes alone cannot underfill the
+        floor. An individual group's drawn weight may exceed the row target or 100.
+        No lifetime read/rebuild, 503/preparing state or full-history fallback.
       tags:
       - sessions
       security:
@@ -3194,32 +3235,112 @@ paths:
         required: true
         schema:
           type: string
-        description: Session ID.
+        description: Addressed session ID; access refusal precedes paging validation or lookup.
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 20
+          maximum: 100
+          default: 40
+        description: >
+          Drawn-row target. Exactly one digits-only decimal value from 20 to 100;
+          leading zeroes allowed. Omitted means 40, never unlimited. Invalid or
+          duplicate values return 400 with "limit must be an integer from 20 to 100".
+      - name: min_rows
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+        description: >
+          Advisory estimated two-screen row floor, one digits-only decimal value
+          from 1 to the effective limit. Omitted means 20. Validate only after a
+          valid limit; invalid/duplicate values return 400 with "min_rows must be
+          an integer from 1 to limit". Not proof of geometry or a hard byte defense.
+      - name: before
+        in: query
+        schema:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+        description: >
+          Exclusive older boundary. Mutually exclusive with after. In window_refresh,
+          must resolve inside or at the interval's upper boundary, and remains exclusive.
+      - name: after
+        in: query
+        schema:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+        description: Exclusive newer boundary; forbidden with before or any window-refresh range.
+      - name: window_start
+        in: query
+        schema:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+        description: >
+          Inclusive lower occurrence boundary of an already-displayed closed range;
+          requires window_end from the same authorized session in acceptance order.
+      - name: window_end
+        in: query
+        schema:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+        description: Inclusive upper boundary; requires window_start. Known expired bounds remain usable.
       responses:
         '200':
-          description: Ordered list of transcript entries.
-          headers:
-            X-Has-Earlier-Messages:
-              description: '"true" when the list starts at the last /clear marker and earlier entries exist before it; "false" when the list is the whole transcript.'
-              schema:
-                type: string
-                enum:
-                - 'true'
-                - 'false'
+          description: Bounded public entries with atomic canonical page metadata and retained-domain continuation.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Message'
+                $ref: '#/components/schemas/SessionHistoryResponse'
         '400':
-          $ref: '#/components/responses/400BadRequest'
+          description: >
+            Invalid paging input after session access. ErrorResponse.error is exactly
+            "limit must be an integer from 20 to 100", "min_rows must be an integer
+            from 1 to limit", "invalid history position" (malformed, duplicate, blank,
+            badly encoded, wrong-version or non-47-character selector), or "invalid
+            history page range" (before+after, unpaired/reversed endpoints, after
+            with a range, or before outside it). Unknown/foreign well-formed positions
+            resolve to 404 before range order checks. No latest-page substitution.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
-          $ref: '#/components/responses/404NotFound'
+          description: >
+            Existing access/missing-session refusal "session not found" precedes
+            paging. Otherwise an unknown/foreign well-formed position gives exactly
+            "history position not found"; no foreign lookup, parent fallback or reset.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: >
+            Required index unavailable after the bounded reconciliation check:
+            ErrorResponse.error is exactly "Session history is unavailable. Retry
+            after the operator restores its index." A valid known prefix with at
+            most 64 combined pending archive/disposition/confirmed rolled-expiry
+            mutations can reconcile once; a missing/incompatible baseline,
+            inconsistency or 65+ gap cannot seed a partial index or batch-walk history.
+            Other required storage/projection failures retain the fixed redacted
+            session-storage error. Prior view and authorized live controls remain
+            usable; no success/empty partial history, 503 or preparing progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /sessions/{session_id}/tool-results/{ref}:
     get:
       operationId: getToolResult
