@@ -127,6 +127,17 @@ func issue1435R3CanonicalizeFrameInput(value any, sessionID, turnID, messageID s
 			issue1435R3CanonicalizeFrameInput(child, sessionID, turnID, messageID)
 		}
 	case map[string]any:
+		// A user_message frame's `id` is minted by the gateway per run (the
+		// echoed user row, NOT the streamed reply's message_id, which the
+		// session/turn/reply renames above already cover). Normalise it like
+		// every other generated identifier so a non-recording run compares
+		// stable; only this frame type is affected — every other `id` field
+		// is still compared exactly.
+		if object["type"] == "user_message" {
+			if _, ok := object["id"].(string); ok {
+				object["id"] = "1435-round3-user-message"
+			}
+		}
 		for key, child := range object {
 			if text, ok := child.(string); ok {
 				switch text {

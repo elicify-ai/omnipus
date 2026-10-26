@@ -9,6 +9,12 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { parseFrameSafe } from '@/lib/ws'
+import {
+  ClientFrameTypes,
+  type ClientFrame,
+  type ServerFrame,
+  type WsFrame,
+} from '@/lib/api/generated/asyncapi-types'
 
 // not-wire-format: producer INPUT container, not a new cross-boundary type.
 // Go's paired producer test records these actual gateway frames while the
@@ -66,10 +72,32 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function feed(raw: unknown): void {
+// Type predicate over the generated ClientFrameTypes constant — the SAME
+// generated source src/lib/ws.ts builds its CLIENT_FRAME_TYPES direction
+// filter from. Claiming ClientFrame for a frame whose discriminator is in
+// that list mirrors the generated unions exactly (ClientFrame's members are
+// precisely the ClientFrameTypes discriminants).
+function isClientDirection(frame: WsFrame): frame is ClientFrame {
+  return (ClientFrameTypes as readonly string[]).includes(frame.type)
+}
+
+// Parse an inbound frame the way the real client path does before the store
+// consumes it: full generated-schema validation (parseFrameSafe) plus the
+// client→server direction filter that src/lib/ws.ts::_parseServerFrame
+// applies on the live WebSocket path. A client-direction frame reaching
+// handleFrame is a real defect, so the filter THROWS; the surviving type is
+// ServerFrame by exhaustive subtraction — no cast, nothing masked.
+function parseServerFrame(raw: unknown): ServerFrame {
   const frame = parseFrameSafe(raw)
-  expect(frame, 'instrument: use the actual generated SPA wire validation').not.toBeNull()
-  act(() => { useChatStore.getState().handleFrame(frame!) })
+  if (frame === null) throw new Error('instrument: frame failed the generated SPA wire schema')
+  if (isClientDirection(frame)) {
+    throw new TypeError(`instrument: client-direction frame "${frame.type}" must never reach handleFrame`)
+  }
+  return frame
+}
+
+function feed(raw: unknown): void {
+  act(() => { useChatStore.getState().handleFrame(parseServerFrame(raw)) })
 }
 const bucket = () => useChatStore.getState().sessionsById[inputs.session_id]
 
@@ -109,13 +137,12 @@ describe('#1435 Round 3 item 1 — actual informational media notice is nontermi
     expect.soft(notices[0]?.id, 'the notice must be separate from the ongoing reply').not.toBe(inputs.message_id)
     let doneSeen = false
     for (const raw of inputs.frames.slice(inputs.notice_index + 1)) {
-      const frame = parseFrameSafe(raw)
-      expect(frame).not.toBeNull()
-      if (frame!.type === 'done') {
+      const frame = parseServerFrame(raw)
+      if (frame.type === 'done') {
         expect.soft(bucket().isStreaming, 'only the genuine done may finish this turn').toBe(true)
         doneSeen = true
       }
-      feed(raw)
+      act(() => { useChatStore.getState().handleFrame(frame) })
     }
     expect(doneSeen, 'instrument: actual producer completion frame was consumed').toBe(true)
     expect(bucket().isStreaming, 'genuine done control must finish the turn').toBe(false)
