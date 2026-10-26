@@ -125,7 +125,7 @@ func orphanACRecoveryIdempotence(t *testing.T) {
 	require.Len(t, viewArchived(after), 8, "I2: the earlier call_0 marker cannot suppress the later unresolved occurrence's own record")
 	require.Equal(t, viewArchived(before), viewArchived(after)[:7], "positional recovery appends only, preserving both original orphan declarations")
 	require.Equal(t, "tool", viewArchived(after)[7].Role, "DESIGN 5: the new record is an engine observation, not another cancellation")
-	observation := viewArchived(after)[7]
+	observation := viewArchived(after)[7].Message
 	r2CheckedObservation(t, observation, "call_0", issuer)
 	require.Equal(t, 8, after.State.Count)
 	require.Equal(t, before.State.Skip, after.State.Skip)

@@ -35,7 +35,7 @@ func orphanACFirstRecovery(t *testing.T) {
 	require.Len(t, viewArchived(after), 4, "one durable missing-occurrence observation, no invented original result")
 	require.Equal(t, viewArchived(before), viewArchived(after)[:3], "all original records remain byte-for-field intact")
 	require.Equal(t, "tool", viewArchived(after)[3].Role, "DESIGN 5: the appended record is an engine observation, not a system cancellation")
-	observation := viewArchived(after)[3]
+	observation := viewArchived(after)[3].Message
 	r2CheckedObservation(t, observation, "first-orphan", issuer)
 	want := append(orphanACPick(raw, 0, 1), observation, raw[2])
 	assert.Equal(t, want, cleaned, "R1: DESIGN 2/5 retains the declaration, preserves the unrelated control and appends one truthful observation")
