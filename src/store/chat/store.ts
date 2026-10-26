@@ -4,6 +4,7 @@ import { create } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { recipientAddressHoldsQueue, setRosterReleaseDrain } from './recipientSend'
 import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
@@ -16,12 +17,31 @@ import { flushHeldClearProjection, retryClearTranscriptRead } from './clear-refe
 import type { ChatMessage, ChatStore, OutboundQueueItem, RateLimitEventData, SessionChatState } from './types'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
-import { createFirstSendActions, firstSendBlocksQueue } from './first-send'
+import { createFirstSendActions, firstSendBlocksQueue, getPendingFirstSend } from './first-send'
 import { createFrameSlice } from './slices/frames'
 
 // HIGH-2: consecutive unknown frame counter. Reset on any known-good frame.
 // On threshold (5), promotes to a user-visible warning toast.
 const chatRuntime = { unknownFrameCount: 0, agentIdAtLastMintSend: null as string | null }
+
+/** Update only the foreground pending message's preference, never its request.
+ *  A choice made in another chat/workspace must not affect this message. */
+function pendingModelChoicePatch(
+  state: ChatStore,
+  model: string | null,
+  provider: string | null | undefined,
+): Partial<Pick<ChatStore, 'pendingFirstSend'>> {
+  const pending = getPendingFirstSend(state)
+  if (!pending || pending.sessionId !== null
+    || useSessionStore.getState().activeSessionId !== '__pending'
+    || (useWorkspacesStore.getState().activeWorkspaceId || null) !== pending.workspaceId) return {}
+  return {
+    pendingFirstSend: {
+      ...pending,
+      modelChoice: model ? { model, provider: provider ?? null } : undefined,
+    },
+  }
+}
 
 /** Sends one drained queue item, forwarding its #823 correlation id/timestamp
  * for a QueuedOutboundMessage (a legacy plain-string entry has neither).
@@ -279,16 +299,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // init. See ChatStore.pendingAutoApproveChoice's doc comment.
     pendingAutoApproveChoice: null,
     setPendingAutoApproveChoice: (choice) => set({ pendingAutoApproveChoice: choice }),
-    // The runtime reads this pair for sends. Only a selector action records
-    // an explicit choice to snapshot with a pending first message; restoring
-    // another session's pair releases that foreground choice, not its snapshot.
+    // Explicit picks update the same pending chat's latest preference;
+    // restored/derived seeds never change that message-owned preference.
     nextModel: null,
     nextModelProvider: null,
     explicitNextModelChoice: null,
-    setNextModel: (model, provider, source) => set({
+    setNextModel: (model, provider, source) => set((state) => ({
       nextModel: model, nextModelProvider: provider ?? null,
       explicitNextModelChoice: source === 'user' && model ? { model, provider: provider ?? null } : null,
-    }),
+      ...(source === 'user' ? pendingModelChoicePatch(state, model, provider) : {}),
+    })),
 
     setReplaying: (value) => {
       const sid = getActiveSid()
