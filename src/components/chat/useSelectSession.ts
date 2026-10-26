@@ -19,8 +19,9 @@ export interface UseSelectSessionOptions {
   /**
    * Called only when this selection will attach the session: after a successful
    * attach, or when navigating to an unfiled session whose route attaches it.
-   * A failed attach does not call this. Sessions uses it to request that
-   * session's Activity panel.
+   * A failed attach does not call this. Sessions and History no longer pass
+   * it: Open goes straight to the chat and requests no Activity panel
+   * (founder ruling "Straight to the chat").
    */
   onSelected?: (session: Session) => void
   /**
