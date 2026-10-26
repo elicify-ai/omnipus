@@ -16,6 +16,7 @@ import type {
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 import type { UserDeliveryState } from '@/lib/userDeliveryState'
+import type { SessionModelChoice } from './model-choice'
 
 /**
  * #823 catch-up redesign (BE-DESIGN.md §6.1) — the SPA's per-session
@@ -173,6 +174,8 @@ export interface PendingFirstSend {
   sessionId: string | null
   assistantPlaceholderId: string
   status: FirstSendStatus
+  /** Browser-local explicit draft choice; only this message's receipt may save it. */
+  modelChoice?: SessionModelChoice
 }
 
 export type ChatMessage = Message & {
@@ -964,13 +967,14 @@ export interface ChatStore {
    * (`metadata.provider`), this is the value to send with it.
    */
   nextModelProvider: string | null
+  /** The current user pick, not a restored/derived seed. Snapshotted into an ordinary first send. */
+  explicitNextModelChoice: SessionModelChoice | null
   /**
-   * Set the next-turn model override (called by the composer). `provider`
-   * records which provider row the pick was made under (H6 pair identity);
-   * omitted → null — the seed path (transcript/agent default) carries no
-   * provider.
+   * Set the next-turn pair. source='user' records an explicit selector action;
+   * restored choices and transcript/agent seeds omit it. Only the explicit
+   * choice is eligible to travel with a new chat's pending first message.
    */
-  setNextModel: (model: string | null, provider?: string | null) => void
+  setNextModel: (model: string | null, provider?: string | null, source?: 'user') => void
 
   // ── Actions that operate on the foreground session ───────────────────────────
   setReplaying: (value: boolean) => void

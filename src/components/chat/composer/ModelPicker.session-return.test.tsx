@@ -284,6 +284,64 @@ describe('#1436 review gaps — draft choices and storage failure', () => {
   })
 })
 
+describe('#1436 round 2 — a pending chat owns only its own model choice', () => {
+  it('N1 preserves B across pending navigation, its delayed receipt and reload; saves X only under the new real id', async () => {
+    const { useConnectionStore } = await import('@/store/connection')
+    const { useOmnipusRuntime } = await import('@/lib/omnipus-runtime')
+    const frames: ClientFrame[] = []
+    const transport = { send: (frame: ClientFrame) => { frames.push(frame); return true }, close: vi.fn(), isConnected: true }
+    useConnectionStore.setState({ connection: transport as unknown as WsConnection, isConnected: true })
+    act(() => page.useSessionStore.getState().setActiveSession(SESSION_B, agent.id))
+    const mounted = await renderPicker()
+    await choose(LATEST_CHOICE)
+    const y = { model: LATEST_CHOICE, provider: 'openrouter' }
+    const x = { model: FIRST_CHOICE, provider: 'openrouter' }
+    expect(JSON.parse(localStorage.getItem('omnipus.sessionModelChoice.v1')!)).toEqual({ [SESSION_B]: y })
+    act(() => { expect(page.useSessionStore.getState().startNewSession(agent.id)).toBe('started') })
+    await choose(FIRST_CHOICE)
+    const runtime = renderHook(() => useOmnipusRuntime())
+    await act(async () => {
+      runtime.result.current.thread.composer.setText('New chat must keep its own chosen model')
+      await runtime.result.current.thread.composer.send()
+    })
+    expect(page.useSessionStore.getState().activeSessionId).toBe('__pending')
+    const firstSend = frames.find((frame) => frame.type === 'message')
+    expect(firstSend).toMatchObject({ type: 'message', metadata: { model_name: FIRST_CHOICE } })
+    if (!firstSend || firstSend.type !== 'message') throw new Error('The real composer did not send the pending first message')
+    act(() => {
+      expect(page.useSessionStore.getState().attachToSession(SESSION_B, 'chat', 'Saved B', agent.id)).toBe(true)
+    })
+    expect(page.useSessionStore.getState().activeSessionId).toBe(SESSION_B)
+    expect.soft({ model: page.useChatStore.getState().nextModel, provider: page.useChatStore.getState().nextModelProvider }, 'opening B must restore Y, never promote the unrelated draft X').toEqual(y)
+    expect.soft(screen.getByTestId('composer-model-selector')).toHaveTextContent(LATEST_CHOICE)
+    expect.soft(JSON.parse(localStorage.getItem('omnipus.sessionModelChoice.v1')!), 'before the receipt only B:Y may be saved').toEqual({ [SESSION_B]: y })
+    act(() => page.useChatStore.getState().handleFrame({
+      type: 'session_started', session_id: SESSION_A, agent_id: agent.id, client_message_id: firstSend.client_message_id,
+    }))
+    expect.soft(page.useSessionStore.getState().activeSessionId, 'a late background receipt must not reopen its chat').toBe(SESSION_B)
+    expect.soft({ model: page.useChatStore.getState().nextModel, provider: page.useChatStore.getState().nextModelProvider }).toEqual(y)
+    expect.soft(JSON.parse(localStorage.getItem('omnipus.sessionModelChoice.v1')!), 'only A owns X after its correlated receipt; B remains Y').toEqual({ [SESSION_B]: y, [SESSION_A]: x })
+    mounted.unmount()
+    runtime.unmount()
+    for (const client of clients.splice(0)) client.clear()
+    const oldStore = page.useChatStore
+    vi.resetModules()
+    page = await loadPageModules()
+    expect(page.useChatStore).not.toBe(oldStore)
+    act(() => {
+      page.useWorkspacesStore.getState().setActiveWorkspaceId(WORKSPACE_ID)
+      page.useSessionStore.getState().setActiveSession(SESSION_B, agent.id)
+    })
+    await renderPicker()
+    expect.soft({ model: page.useChatStore.getState().nextModel, provider: page.useChatStore.getState().nextModelProvider }, 'B must still restore its unchanged saved Y after a full module reload').toEqual(y)
+    expect.soft(screen.getByTestId('composer-model-selector')).toHaveTextContent(LATEST_CHOICE)
+    expect.soft(JSON.parse(localStorage.getItem('omnipus.sessionModelChoice.v1')!)).toEqual({ [SESSION_B]: y, [SESSION_A]: x })
+    await visit(SESSION_A)
+    expect.soft({ model: page.useChatStore.getState().nextModel, provider: page.useChatStore.getState().nextModelProvider }, 'the new chat alone must restore X').toEqual(x)
+    expect.soft(screen.getByTestId('composer-model-selector')).toHaveTextContent(FIRST_CHOICE)
+  })
+})
+
 describe('#1436 — visible agent default is independent of current selection', () => {
   it('marks only the agent\'s default provider/model row while another model is chosen', async () => {
     await renderPicker()

@@ -278,3 +278,78 @@ describe('#1437 review gaps — linked targets survive navigation and recovery',
     expect(mounted.send.mock.calls.map(([frame]) => frame)).not.toContainEqual(expect.objectContaining({ type: 'attach_session', session_id: MAIN_SESSION }))
   })
 })
+
+
+function heldSessionListResponse() {
+  let release!: () => void
+  const ready = new Promise<void>((resolve) => { release = resolve })
+  return { ready, release }
+}
+
+describe('#1437 round 2 — overlapping explicit targets own their loading gate', () => {
+  it.each(['A-first', 'B-first'] as const)('N2 only adopts B when linked A then B complete %s', async (order) => {
+    const scenario = reviewScenario()
+    const a = heldSessionListResponse()
+    const b = heldSessionListResponse()
+    const requested = new Set<string>()
+    let holding = false
+    unexpectedRequests = installSessionReturnNetwork({
+      ...scenario,
+      sessionListResponse: () => {
+        const target = new URLSearchParams(window.location.hash.split('?')[1]).get('open')
+        if (!holding || (target !== SESSION_A && target !== SESSION_B)) return Promise.resolve(Response.json({ sessions: scenario.sessions }))
+        requested.add(target)
+        // Each fetch gets a fresh Response; the shared latch controls only
+        // network completion, never a production selection/entry function.
+        return (target === SESSION_A ? a.ready : b.ready).then(() => Response.json({ sessions: scenario.sessions }))
+      },
+    })
+    act(() => rememberChat(WORKSPACE_ID, MAIN_SESSION))
+    const mounted = await mountAddress(`#/workspaces/${WORKSPACE_ID}/chat`)
+    await expectChatInWorkspace(WORKSPACE_ID, MAIN_SESSION)
+    const beforeIntents = mounted.send.mock.calls.length
+    const { runWorkspaceEntry } = await import('@/store/session/workspaceEntryFlow')
+    let entryA: Promise<void> | undefined
+    let entryB: Promise<void> | undefined
+    holding = true
+    try {
+      await act(async () => {
+        await mounted.router.navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: WORKSPACE_ID }, search: { open: SESSION_A } })
+      })
+      await waitFor(() => expect(requested.has(SESSION_A), 'A must really be waiting at the HTTP boundary').toBe(true))
+      // Retrieve the real same-target job while it is the current in-flight
+      // request. This waits for completion below; it never mocks the flow.
+      entryA = runWorkspaceEntry(WORKSPACE_ID, SESSION_A)
+      await act(async () => {
+        await mounted.router.navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: WORKSPACE_ID }, search: { open: SESSION_B } })
+      })
+      await waitFor(() => expect(requested, 'both explicit target requests must be in flight').toEqual(new Set([SESSION_A, SESSION_B])))
+      entryB = runWorkspaceEntry(WORKSPACE_ID, SESSION_B)
+      expect(page.useSessionStore.getState().resolvingSessionForWorkspace[WORKSPACE_ID]).toBe(true)
+      const lateFrames = () => mounted.send.mock.calls.slice(beforeIntents).map(([frame]) => frame)
+      if (order === 'A-first') {
+        await act(async () => { a.release(); await entryA })
+        expect(page.useSessionStore.getState().resolvingSessionForWorkspace[WORKSPACE_ID], "stale A cannot clear B's unresolved send gate").toBe(true)
+        expect(lateFrames()).not.toContainEqual(expect.objectContaining({ type: 'attach_session', session_id: SESSION_A }))
+        act(() => page.useChatStore.getState().sendMessage('Must stay blocked until linked B resolves'))
+        expect(lateFrames().filter((frame) => frame.type === 'message'), 'actual send remains blocked while B is unresolved').toEqual([])
+        await act(async () => { b.release(); await entryB })
+        await expectChatInWorkspace(WORKSPACE_ID, SESSION_B)
+      } else {
+        await act(async () => { b.release(); await entryB })
+        await expectChatInWorkspace(WORKSPACE_ID, SESSION_B)
+        await act(async () => { a.release(); await entryA })
+      }
+      await waitFor(() => expect(page.useSessionStore.getState().resolvingSessionForWorkspace[WORKSPACE_ID]).toBeUndefined())
+      await expectChatInWorkspace(WORKSPACE_ID, SESSION_B)
+      expect(lateFrames().filter((frame) => frame.type === 'attach_session').map((frame) => frame.session_id), 'only the latest requested chat may attach').toEqual([SESSION_B])
+      expect(mounted.router.state.location.search.open).toBe(SESSION_B)
+      act(() => page.useChatStore.getState().sendMessage('B is the only final destination'))
+      expect(lateFrames().filter((frame) => frame.type === 'message').map((frame) => frame.session_id)).toEqual([SESSION_B])
+    } finally {
+      // Always release both network latches so a failed assertion cannot leave
+      // a background request or workspace-entry gate alive for another test.
+      await act(async () => { a.release(); b.release(); await Promise.all([a.ready, b.ready, entryA, entryB]) })
+    }
+  })
+})

@@ -15,6 +15,9 @@
 // per message (metadata.model_name); no contract change is involved here.
 // not-wire-format: browser-local UI preference; never sent to the gateway.
 
+import { useUiStore } from '@/store/ui'
+import { logDiagnostic } from '@/lib/telemetry'
+
 const STORAGE_KEY = 'omnipus.sessionModelChoice.v1'
 
 /** An explicit user pick: the (provider, model) pair the row was chosen under.
@@ -31,6 +34,22 @@ export interface ModelChoiceStorageFailure { // not-wire-format: browser persist
   operation: 'read' | 'write'
   reason: 'unavailable' | 'invalid'
   errorName: string
+}
+
+/** Shared by picker actions and background first-message receipts. */
+export function warnModelChoiceStorageFailure(failure: ModelChoiceStorageFailure | null | undefined): void {
+  if (!failure) return
+  console.warn('[chat] model choice storage failed', failure)
+  logDiagnostic('sessionModelChoiceStorageFailed', { ...failure })
+  const ui = useUiStore.getState()
+  const message = failure.operation === 'write'
+    ? 'Could not save your model choice. It is kept in this page, but may be lost on reload. Check browser storage space and permissions.'
+    : failure.reason === 'invalid'
+      ? 'Saved model choices could not be read because browser storage is invalid. Choices made in this page are kept until reload. Select a model to save it again.'
+      : 'Could not read saved model choices. Choices made in this page are kept until reload. Check browser storage permissions.'
+  if (!ui.toasts.some((toast) => toast.testId === 'model-choice-storage-warning')) {
+    ui.addToast({ message, variant: 'warning', testId: 'model-choice-storage-warning', duration: 0 })
+  }
 }
 
 // Saved choices are cached for failed reads; unsaved choices also outrank stale
@@ -86,7 +105,7 @@ export function readSessionModelChoice(sessionId: string | null | undefined): {
 }
 
 /** Cache before saving so a failed write cannot discard the choice on A→B→A.
- *  Pending/absent ids are handed off by the picker when the chat materializes. */
+ *  A new chat's choice is saved by its correlated first-message receipt. */
 export function writeSessionModelChoice(
   sessionId: string | null | undefined,
   choice: SessionModelChoice | null,
