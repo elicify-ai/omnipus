@@ -9,16 +9,19 @@ import { chatInput } from '../selectors';
 import { E2E_MODEL } from '../e2e-model';
 import { observeTraffic, settled, historyScroller } from './harness';
 import { assertNativeBashPolicy } from './agent-tool-policy';
+import { observeAddressedAttachReadiness } from '../addressed-attach-readiness';
 import { startReloadProvider, type ReloadProvider, BASELINE_INPUT, COMPLETED_ID, COMPLETED_MARKER,
   CANCELLED_MARKER, RUNNING_MARKER, EARLIER_TOKENS } from './reload-provider';
 
 export class ReloadHarness {
   readonly traffic;
+  readonly attachReadiness;
   readonly apiReads: { url: string; status: number; body: unknown }[] = [];
   phase = 'PREREQUISITE: fresh real gateway and session';
   constructor(readonly page: Page, readonly gateway: GatewayProcess, readonly provider: ReloadProvider,
     readonly sessionId: string, readonly otherSessionId: string, readonly info: TestInfo, readonly logPath: string) {
     this.traffic = observeTraffic(page);
+    this.attachReadiness = observeAddressedAttachReadiness(page);
   }
   assertion(stage: string) { this.phase = `ASSERTION: ${stage}`; }
   async authenticate() {
@@ -30,22 +33,30 @@ export class ReloadHarness {
     const attachStart = this.traffic.attaches.length;
     const alreadyActive = await this.page.locator(`[data-active-session-id="${sessionId}"]`).isVisible();
     const completedBefore = this.traffic.frames.some(frame => frame.type === 'catch_up_complete' && frame.session_id === sessionId);
-    const navigation = reload ? await this.page.reload() : await this.page.goto(`${this.gateway.baseURL}/#/sessions/${sessionId}`);
-    await expect(this.page.locator(`[data-active-session-id="${sessionId}"]`), this.phase).toBeVisible();
-    await settled(this.page);
-    const newAttach = this.traffic.attaches.slice(attachStart).some(frame => frame.session_id === sessionId);
-    // Playwright returns null for a same-document hash navigation. Reuse only
-    // this already-active session's actual prior completion, never on reload.
-    if (!reload && navigation === null && alreadyActive && !newAttach) {
-      expect(completedBefore, `${this.phase}: same-session no-op must have a proven prior native completion`).toBe(true);
-    } else {
-      await expect.poll(() => this.traffic.frames.slice(start).filter(frame =>
-        frame.type === 'catch_up_complete' && frame.session_id === sessionId).length,
-      { message: `${this.phase}: actual attach finishes, not replay done alone` }).toBeGreaterThan(0);
-    }
-    await expect(chatInput(this.page), this.phase).toBeEnabled();
-    expect(this.traffic.failures, `${this.phase}: generated network shapes`).toEqual([]);
-    await settled(this.page);
+    const readiness = this.attachReadiness.arm(sessionId); // Before navigation can emit the real attach.
+    try {
+      const navigation = reload ? await this.page.reload() : await this.page.goto(`${this.gateway.baseURL}/#/sessions/${sessionId}`);
+      await settled(this.page);
+      const newAttach = this.traffic.attaches.slice(attachStart).some(frame => frame.session_id === sessionId);
+      // Playwright returns null for a same-document hash navigation. Reuse only
+      // this already-active session's actual prior completion, never on reload.
+      if (!reload && navigation === null && alreadyActive && !newAttach) {
+        expect(completedBefore, `${this.phase}: same-session no-op must have a proven prior native completion`).toBe(true);
+      } else {
+        // Native completion is the readiness barrier, under the unchanged test
+        // deadline. A short DOM poll must not measure unrelated cold app boot.
+        const proof = await readiness.wait();
+        expect(proof.request.session_id, `${this.phase}: real outbound attach addresses this session`).toBe(sessionId);
+        expect(proof.completion.session_id, `${this.phase}: real completion answers that addressed attach`).toBe(sessionId);
+        await expect.poll(() => this.traffic.frames.slice(start).filter(frame =>
+          frame.type === 'catch_up_complete' && frame.session_id === sessionId).length,
+        { message: `${this.phase}: actual attach finishes, not replay done alone` }).toBeGreaterThan(0);
+      }
+      await expect(this.page.locator(`[data-active-session-id="${sessionId}"]`), this.phase).toBeVisible();
+      await expect(chatInput(this.page), this.phase).toBeEnabled();
+      expect(this.traffic.failures, `${this.phase}: generated network shapes`).toEqual([]);
+      await settled(this.page);
+    } finally { readiness.cancel(); }
   }
   async send(input: string) {
     expect(this.provider.failures, this.phase).toEqual([]);
