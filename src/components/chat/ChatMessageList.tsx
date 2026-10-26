@@ -207,7 +207,20 @@ function VirtualizedMessageListInner({
   })
 
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => !viewport.historical
-  useLayoutEffect(() => { virtualizer.measure() }, [virtualizer, viewport.average, viewport.widthGeneration, verboseChatEnabled])
+  useLayoutEffect(() => {
+    virtualizer.measure()
+    // measure() drops EVERY cached size, including mounted rows whose size did
+    // not change: their ResizeObserver never reports again, so they would fall
+    // back to a full-row estimate. A silent saved row (helper lifecycle) draws
+    // nothing, so that estimate became blank canvas and the live-end pin showed
+    // empty space (final-campaign blank history). Re-measure what is mounted,
+    // after recomputing the (now estimated) offsets resizeItem compares against.
+    virtualizer.getTotalSize()
+    for (const element of scrollContainerRef.current?.querySelectorAll<HTMLElement>('[data-index]') ?? []) {
+      const index = Number(element.dataset.index)
+      if (Number.isInteger(index)) virtualizer.resizeItem(index, historyLayoutHeight(element))
+    }
+  }, [virtualizer, viewport.average, viewport.widthGeneration, verboseChatEnabled])
   useLayoutEffect(() => {
     const kept = new Set(historicalMessages.map(message => message.historyPosition ?? message.id))
     for (const key of virtualizer.itemSizeCache.keys()) if (!kept.has(String(key))) virtualizer.itemSizeCache.delete(key)
