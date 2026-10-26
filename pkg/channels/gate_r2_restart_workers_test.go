@@ -397,6 +397,10 @@ func TestManager_RevokedAdmissionNeverRestarts(t *testing.T) {
 	// count pins ONE rebuild and nothing more. The revoked admission's restart
 	// is dropped at the token: the rebuilt worker starts cancelled-idle, never
 	// with the revoked attempt's token — no new start, no fallback pairing.
+	// Chief-accepted oracle change 2026-10-26: the pre-ac1c24fdf "no new
+	// instance" count is unsatisfiable once the accepted snapshot itself
+	// restarts the channel; the authoritative clause stays at the live token
+	// seam (CHECK to re-audit).
 	all := built()
 	require.Len(t, all, before+1,
 		"exactly the accepted snapshot's restart runs — the revoked admission adds no second one")
