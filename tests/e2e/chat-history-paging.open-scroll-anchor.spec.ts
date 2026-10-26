@@ -137,17 +137,36 @@ test('T16 B09: a real delayed image growing above the reader preserves the visib
   const ready = new Promise<void>((resolve) => { release = resolve; });
   let requested!: () => void;
   const seen = new Promise<void>((resolve) => { requested = resolve; });
-  // Only the external image server is controlled. Production layout/rendering
-  // decides the before/after height; no CSS or ResizeObserver stub is involved.
-  await page.route('https://history-image.invalid/growth.svg', async (route) => {
+  // The deferred image is served SAME-ORIGIN through the Playwright route: the
+  // product CSP (embed.go img-src 'self' data: blob:) admits the gateway
+  // origin and refuses foreign hosts by name, so the former cross-origin
+  // fixture host could never load and the case only ever timed out. The CSP
+  // stays unchanged — only the fixture's delivery moves inside the origin the
+  // product already trusts. Production layout/rendering alone decides the
+  // before/after height; no CSS or ResizeObserver stub is involved.
+  const imageURL = `${history.gateway.baseURL}/history-fixture-images/growth.svg`;
+  await page.route(imageURL, async (route) => {
     requested(); await ready;
     await route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="640"><rect width="800" height="640" fill="navy"/></svg>' });
   });
   try {
-    await history.seed({ label: 'image', start: 0, count: 40, imageURL: 'https://history-image.invalid/growth.svg' });
+    await history.seed({ label: 'image', start: 0, count: 40, imageURL });
     await history.authenticate();
     await history.open();
-    await scrollToDistance(page, 0);
+    // Reach the oldest end by real upward wheel: the virtualized list pins the
+    // reader at latest, so the former instant scrollTop=0 jump was corrected
+    // back within a frame (timeout snapshot still showed the latest rows) and
+    // the lazy deferred image never entered the viewport. Arrival is the real
+    // scrollTop===0 signal, not a fixed number of wheel events.
+    await historyScroller(page).hover();
+    for (let wheel = 0; wheel < 60; wheel += 1) {
+      const top = await historyScroller(page).evaluate((el) => el.scrollTop);
+      if (top <= 0) break;
+      await page.mouse.wheel(0, -800);
+      await settled(page);
+    }
+    await expect.poll(() => historyScroller(page).evaluate((el) => el.scrollTop),
+      { message: 'the reader actually reached the oldest end where the deferred image row lives' }).toBeLessThanOrEqual(0);
     await seen;
     await historyScroller(page).hover();
     await page.mouse.wheel(0, 160);
