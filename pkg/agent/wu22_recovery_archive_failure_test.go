@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -186,33 +188,74 @@ func TestWU22RecoveryArchiveFailureIsTruthfulAndSiblingsContinue(t *testing.T) {
 	cleanedSibling := RecoverOrphanedToolCalls(h.store, sibling.ID, nil)
 	restore()
 	wu22AssertTruthfulFailure(t, wu22LogRows(t, buffer.String()), h.sid)
-	assert.Equal(t, seeded, failedHistory, "attempted marker is not a committed cancellation")
-	assert.Equal(t, seeded, h.store.GetHistory(h.sid), "failed recovery did not persist the marker")
-	assert.Equal(t, seeded[:1], cleanedSibling, "healthy sibling is recovered normally")
+	assert.Equal(t, seeded, failedHistory, "the failed recovery committed nothing: the attempted record is not a committed observation")
+	assert.Equal(t, seeded, h.store.GetHistory(h.sid), "failed recovery did not persist the observation")
+	// DESIGN 5: the healthy sibling's recovery RETAINS the declaration that
+	// issued the call and completes the unresolved occurrence with ONE engine
+	// observation. The whole group is no longer omitted, and no synthetic
+	// cancellation marker is written any more.
+	require.Len(t, cleanedSibling, len(seeded)+1, "DESIGN 5: the declaration is retained and the orphan occurrence gains exactly one observation")
+	assert.Equal(t, seeded[0], cleanedSibling[0], "the original user input survives field-for-field")
+	assert.Equal(t, seeded[1], cleanedSibling[1], "DESIGN 5: the declaration that issued the call is retained")
+	require.Equal(t, "tool", cleanedSibling[2].Role, "DESIGN 5: the missing occurrence is completed by an engine observation, never by a cancellation record")
+	require.Equal(t, "wu22-orphan", cleanedSibling[2].ToolCallID, "the observation answers the exact call the declaration issued")
 	siblingHistory := h.store.GetHistory(sibling.ID)
-	require.Len(t, siblingHistory, 3)
-	assert.Equal(t, providers.Message{Role: "system", Content: `{"type":"turn_canceled_restart","tool_call_id":"wu22-orphan","reason":"ungraceful_shutdown_recovery"}`}, siblingHistory[2])
+	require.Len(t, siblingHistory, 3, "one durable recovery record is written for the sibling")
+	require.Equal(t, "tool", siblingHistory[2].Role, "DESIGN 5: the durable record is an engine observation, not a synthetic cancellation marker")
+	assert.NotContains(t, siblingHistory[2].Content, "turn_canceled_restart", "DESIGN 5: no synthetic cancellation marker is written any more")
+	siblingSnap, err := h.store.WindowView(context.Background(), sibling.ID)
+	require.NoError(t, err)
+	assert.Equal(t, r2ExpectedObservation("wu22-orphan"), r2CheckedObservation(t, siblingHistory[2], "wu22-orphan", r2Issuer(t, siblingSnap, 1)),
+		"DESIGN 5: the durable observation completes the exact occurrence the declaration issued")
+	require.NoError(t, validateWindowGroups(cleanedSibling), "the retained declaration and its observation form a provider-valid group")
 }
 
+// The legacy test name is kept so the existing exact regression selectors keep
+// running. DESIGN 5 replaced the synthetic cancellation marker with an
+// engine-authored recovery observation, so "the marker" is now "the recovery
+// record": the declaration stays, the unresolved occurrence gains one durable
+// observation, and the append is reported exactly once.
 func TestWU22RecoveryHealthyStoreWritesMarkerOnce(t *testing.T) {
 	h := wu22NewHarness(t, wu22HealthyProvider())
 	seeded := wu22SeedOrphan(t, h, h.sid)
-	buffer := wu22RecoveryLog(t)
+	auditLogger, auditPath := newTestAuditLoggerRecovery(t)
 	for i := 0; i < 2; i++ { // second recovery is the idempotency control
-		assert.Equal(t, seeded[:1], RecoverOrphanedToolCalls(h.store, h.sid, nil))
+		view := RecoverOrphanedToolCalls(h.store, h.sid, auditLogger)
+		// DESIGN 5: the declaration that issued the call stays visible and the
+		// unresolved occurrence gains ONE durable engine observation; the whole
+		// group is no longer omitted and no cancellation marker is written.
+		require.Len(t, view, len(seeded)+1, "DESIGN 5: the declaration is retained and the orphan occurrence gains exactly one observation")
+		assert.Equal(t, seeded[0], view[0], "the original user input survives field-for-field")
+		assert.Equal(t, seeded[1], view[1], "DESIGN 5: the declaration that issued the call is retained")
+		require.Equal(t, "tool", view[2].Role, "DESIGN 5: the missing occurrence is completed by an engine observation, never by a cancellation record")
+		require.Equal(t, "wu22-orphan", view[2].ToolCallID, "the observation answers the exact call the declaration issued")
 	}
 	history := h.store.GetHistory(h.sid)
-	require.Len(t, history, 3)
-	assert.Equal(t, providers.Message{Role: "system", Content: `{"type":"turn_canceled_restart","tool_call_id":"wu22-orphan","reason":"ungraceful_shutdown_recovery"}`}, history[2])
-	appended := 0
-	for _, row := range wu22LogRows(t, buffer.String()) {
-		if row["session_key"] == h.sid {
-			message, _ := row["msg"].(string)
-			if strings.Contains(message, "synthetic deny appended") {
-				appended++
+	require.Len(t, history, 3, "exactly one durable recovery record is written")
+	require.Equal(t, "tool", history[2].Role, "DESIGN 5: the durable record is an engine observation, not a synthetic cancellation marker")
+	assert.NotContains(t, history[2].Content, "turn_canceled_restart", "DESIGN 5: no synthetic cancellation marker is written any more")
+	snap, err := h.store.WindowView(context.Background(), h.sid)
+	require.NoError(t, err)
+	assert.Equal(t, r2ExpectedObservation("wu22-orphan"), r2CheckedObservation(t, history[2], "wu22-orphan", r2Issuer(t, snap, 1)),
+		"DESIGN 5: the durable observation completes the exact occurrence the declaration issued")
+	// instrument: the successful recovery append is actually reported, once.
+	// DESIGN 5 replaced the synthetic deny with the typed recovery event, so
+	// the report is the audit trail: exactly one typed Unknown for this
+	// occurrence, and the idempotent second recovery reports nothing new.
+	require.NoError(t, auditLogger.Close())
+	auditData, err := readAuditFileRecovery(auditPath)
+	require.NoError(t, err, "audit file must be readable")
+	reported := 0
+	for _, entry := range auditData {
+		assert.NotEqual(t, "tool.policy.ask.denied", entry["event"], "DESIGN 5: a missing result is never a policy denial")
+		if entry["event"] == string(audit.EventToolRecoveryInterrupted) && entry["decision"] == string(audit.DecisionError) {
+			if details, ok := entry["details"].(map[string]any); ok {
+				if id, _ := details["tool_call_id"].(string); id == "wu22-orphan" {
+					reported++
+				}
 			}
 		}
 	}
-	assert.Equal(t, 1, appended, "instrument: successful recovery append is actually reported, once")
+	assert.Equal(t, 1, reported, "instrument: the successful recovery append is reported exactly once; the idempotent second recovery reports nothing new")
 	h.assertSiblingWritable(t)
 }
