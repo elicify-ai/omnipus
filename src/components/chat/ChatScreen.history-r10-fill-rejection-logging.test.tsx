@@ -95,9 +95,16 @@ it('Q-T2: a rejected history fill is caught by the hook, logged locally, and nev
     // The HOOK half — the missing piece. The rejection is recorded locally.
     await waitFor(() => expect(diagnostic.mock.calls.length,
       'the hook must record the escaped fill rejection through logDiagnostic').toBeGreaterThan(0))
+    expect(diagnostic.mock.calls.length, 'the rejected fill is recorded exactly once, not per call site').toBe(1)
+    // The event name and field shape are the repo's own convention for a
+    // rejected history read (src/store/chat/history-replay.ts records
+    // 'chatHistorySnapshotRejected' / 'chatHistorySnapshotRestoreFailed' the
+    // same way), and the FE lane landed this one as
+    // 'chatHistoryReadRejected' with { action, error }.
     const [event, fields] = diagnostic.mock.calls[0] as [string, Record<string, unknown>]
-    expect(event, 'the diagnostic names the rejected history fill').toBe('chatHistoryFillRejected')
-    expect(fields, 'the record classifies which direction failed').toMatchObject({ direction: 'older' })
+    expect(event, 'the diagnostic names the rejected history read').toBe('chatHistoryReadRejected')
+    expect(fields, 'the record classifies which read failed').toMatchObject({ action: 'older' })
+    expect(fields, 'the record classifies the failure kind, not the cause').toMatchObject({ error: 'TypeError' })
 
     // The record classifies the failure; it never carries content, a position
     // or the raw cause (spec:203, spec:252, spec:484).
