@@ -175,10 +175,22 @@ func (p *windowCheckpoint) canTrimPrefix(end int) bool {
 		if end < len(p.lines) && p.lines[i] >= p.lines[end] {
 			return false // A late repaired result must be evicted with its declaration, never alone.
 		}
-		if p.lines[i] == p.anchor {
+		// The anchor is a real archive address; the unset sentinel (-1) is not.
+		// Only a set anchor can match, so an inserted observation (ordinal -1)
+		// never borrows the sentinel's keep/skip meaning.
+		if p.anchor >= 0 && p.lines[i] == p.anchor {
 			continue
 		}
-		if m.Role == "system" || p.lines[i] < 0 || p.ts.protectedWindowMessage(m) {
+		if p.lines[i] < 0 {
+			// An inserted recovery observation is evicted with the declaration it
+			// completes. That declaration precedes the observation, so it is
+			// inside this prefix too and the observation vetoes nothing here.
+			if d := p.observationDeclarationIndex(i); d >= 0 && d < end {
+				continue
+			}
+			return false
+		}
+		if m.Role == "system" || p.ts.protectedWindowMessage(m) {
 			return false
 		}
 	}
@@ -190,14 +202,55 @@ func (p *windowCheckpoint) canTrimPrefix(end int) bool {
 	return true
 }
 
+// observationDeclarationIndex returns the index of the assistant message that
+// declared the tool call an inserted recovery observation at index i completes,
+// or -1 when that declaration is not in the view. The projection always inserts
+// an observation right after the declaring assistant's group, so the nearest
+// preceding assistant IS the declaration; the scan stops there and never
+// reaches across a later assistant (a reused tool-call id belongs to neither).
+func (p *windowCheckpoint) observationDeclarationIndex(i int) int {
+	m := p.messages[i]
+	if m.Role != "tool" || m.ToolCallID == "" {
+		return -1
+	}
+	for j := i - 1; j >= 0; j-- {
+		d := p.messages[j]
+		if d.Role != "assistant" {
+			continue
+		}
+		for _, tc := range d.ToolCalls {
+			if tc.ID == m.ToolCallID {
+				return j
+			}
+		}
+		return -1
+	}
+	return -1
+}
+
 func (p *windowCheckpoint) trimmedSuffix(cut int) ([]providers.Message, []int) {
 	out := make([]providers.Message, 0, len(p.messages))
 	lines := make([]int, 0, len(p.lines))
 	for i, m := range p.messages {
-		if p.lines[i] >= cut || p.lines[i] == p.anchor {
-			out = append(out, m)
-			lines = append(lines, p.lines[i])
+		switch {
+		case p.lines[i] >= cut:
+			// Survives the cut by its own archive address.
+		case p.anchor >= 0 && p.lines[i] == p.anchor:
+			// The protected current user message always stays.
+		case p.lines[i] < 0:
+			// An inserted recovery observation goes with its declaration: it is
+			// dropped when the declaration is cut and kept when the declaration
+			// survives. Its own ordinal is -1, so the address comparison above
+			// never decides it.
+			d := p.observationDeclarationIndex(i)
+			if d < 0 || p.lines[d] < cut {
+				continue
+			}
+		default:
+			continue
 		}
+		out = append(out, m)
+		lines = append(lines, p.lines[i])
 	}
 	return out, lines
 }

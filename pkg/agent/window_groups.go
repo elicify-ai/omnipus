@@ -102,6 +102,14 @@ func mapWindowMessages(snap session.WindowView, msgs []providers.Message, recall
 		if i >= recallAt && i < recallAt+recallLen {
 			continue
 		}
+		// An inserted recovery observation is engine-authored and ephemeral: it
+		// owns no archive address. When the request does not carry it, it must
+		// not stall the walk — skip it and keep the real records behind it
+		// aligned. Real records keep the strict next-owned-slot rule and are
+		// never searched globally.
+		for next < len(history) && sourceLines[next] < 0 && !sameArchiveIdentity(m, history[next]) && !reflect.DeepEqual(m, history[next]) {
+			next++
+		}
 		// An unchanged malformed archive entry still owns its original address.
 		// Mapping it does not authorize recovery or bypass group validation.
 		if next < len(history) && (sameArchiveIdentity(m, history[next]) || reflect.DeepEqual(m, history[next])) {
