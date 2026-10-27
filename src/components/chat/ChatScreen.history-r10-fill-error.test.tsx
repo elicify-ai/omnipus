@@ -2,7 +2,6 @@
 // permanent loading guard. Drive the REAL automatic fill/hook/store/adapter.
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/store/chat'
 import { deferred } from '../../../tests/chat-history-paging/fixtures'
 import { resetScrollCase, stopScrollCase, settleScrollLayout, mountRetained, loadAndRender, establishLatest, MAIN_ID, entry, page, pos, expectValidPage, json } from '../../../tests/chat-history-paging/scroll-regression-harness'

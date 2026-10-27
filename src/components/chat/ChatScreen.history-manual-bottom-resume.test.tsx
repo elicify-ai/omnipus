@@ -27,7 +27,7 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { useChatStore } from '@/store/chat'
 import {
   resetScrollCase, stopScrollCase, settleScrollLayout, mountRetained, loadAndRender,
-  establishLatest, MAIN_ID,
+  establishLatest,
 } from '../../../tests/chat-history-paging/scroll-regression-harness'
 
 let env: ReturnType<typeof resetScrollCase>
@@ -50,6 +50,11 @@ async function scrollBy(region: HTMLElement, deltaY: number, to: number) {
   })
 }
 
+// The 60s budget covers THIS case's real work, not a relaxed assertion: it
+// renders a 40-row real list, drives a real upward scroll into history and a
+// real downward scroll back to the live end, each re-rendering every row. It
+// measures 17-21s locally and exceeded the 30s default under contention. No
+// assertion, oracle or scenario was changed to fit.
 it('Q-T4: scrolling manually to the very bottom re-enters follow-latest and hides the Return arrow', async () => {
   const { selected } = await mountRetained(40, false)
   const region = await loadAndRender(env.network, selected)
@@ -78,7 +83,7 @@ it('Q-T4: scrolling manually to the very bottom re-enters follow-latest and hide
     'reaching the live end by scrolling re-enters follow-latest').toBe('latest')
   expect(region.scrollHeight - region.scrollTop - region.clientHeight,
     'the reader is at the live end, inside the viewport\'s own at-bottom threshold').toBeLessThanOrEqual(1)
-})
+}, 60_000)
 
 it('Q-T4: the Return arrow stays visible while the reader is above the bottom', async () => {
   const { selected } = await mountRetained(40, false)
