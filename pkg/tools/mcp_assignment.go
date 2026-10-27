@@ -30,6 +30,13 @@ func CloneMCPBindings(bindings []config.AgentMCPServerBinding) []config.AgentMCP
 	return out
 }
 
+// MCPAssignmentAllows exposes the runtime assignment check for read-only tool
+// inventories that must list assigned MCP tools even when their policy is Deny.
+// It grants nothing and uses the same predicate as FilterToolsByPolicy.
+func MCPAssignmentAllows(tool Tool, cfg *ToolPolicyCfg) bool {
+	return mcpAssignmentAllows(tool, cfg)
+}
+
 func mcpAssignmentAllows(tool Tool, cfg *ToolPolicyCfg) bool {
 	if _, builtin := tool.(MCPManagementBuiltin); builtin {
 		// The MCP-management builtins share CategoryMCP for the tool picker

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { historyAttachSizing } from '@/lib/chat-history-sizing'
 import type { AgentKind, Session } from '@/lib/api'
 import { isMainSession } from '@/lib/nav/sessionCoreSeam'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
@@ -120,6 +121,14 @@ function persistSessionByWorkspaceEntry(
  */
 export interface AttachOptions { // not-wire-format: in-browser attach behaviour flag; never sent over the gateway boundary
   recordForWorkspace?: boolean
+}
+
+/** #1437: a chat address that names its session (`/sessions/{id}` deep links
+ *  redirect here with the id in the address). Present, it overrides the
+ *  workspace's remembered pointer for that entry — the linked chat wins even
+ *  after another tab changed what this browser last remembered. */
+export interface EnterWorkspaceChatOptions { // not-wire-format: in-browser entry directive; never sent to the gateway
+  linkedSessionId?: string
 }
 
 interface SessionStore {
@@ -253,7 +262,7 @@ interface SessionStore {
    * callers/tests can await the server round-trip in that last branch; every
    * other branch resolves immediately.
    */
-  enterWorkspaceChat: (workspaceId: string) => Promise<void>
+  enterWorkspaceChat: (workspaceId: string, options?: EnterWorkspaceChatOptions) => Promise<void>
   /**
    * Workspaces currently mid-flight verifying a remembered session against
    * the server (see `enterWorkspaceChat` / `resolveRememberedSessionFromServer`
@@ -394,9 +403,9 @@ export function registerGetSessionCursor(fn: (sessionId: string) => { bootId: st
  * server's own §3.3 rule decides whether a sent cursor is still servable;
  * this function's only job is "send what we have, or nothing."
  */
-export function attachSessionCursorFields(sessionId: string): { since_seq?: number; boot_id?: string } {
+export function attachSessionCursorFields(sessionId: string): Pick<import('@/lib/api/generated/asyncapi-types').AttachSessionFrame, 'since_seq' | 'boot_id' | 'history_limit' | 'history_min_rows'> {
   const cursor = _getSessionCursor?.(sessionId) ?? null
-  return cursor ? { since_seq: cursor.seq, boot_id: cursor.bootId } : {}
+  return { ...historyAttachSizing(sessionId), ...(cursor ? { since_seq: cursor.seq, boot_id: cursor.bootId } : {}) }
 }
 
 /**
@@ -535,7 +544,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const entryWasBlocked = workspaceEntryBlocksSend(get(), useWorkspacesStore.getState().activeWorkspaceId)
 
     if (connection) {
-      // #823 §6.1: send the bucket's cursor; only session_snapshot wipes now (Q3).
+      // Send the live cursor and sizing already committed for this session.
+      // Snapshot history is staged separately; it does not wipe a detached reader.
       const alreadyInFlight = attachAlreadyInFlight(sessionId, connection)
       const sent = alreadyInFlight || connection.send({ type: 'attach_session', session_id: sessionId, ...attachSessionCursorFields(sessionId) })
       if (!sent) {
@@ -675,5 +685,5 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   sessionByWorkspace: {},
   resolvingSessionForWorkspace: {},
 
-  enterWorkspaceChat: (workspaceId: string) => runWorkspaceEntry(workspaceId),
+  enterWorkspaceChat: (workspaceId, options) => runWorkspaceEntry(workspaceId, options?.linkedSessionId),
 }))

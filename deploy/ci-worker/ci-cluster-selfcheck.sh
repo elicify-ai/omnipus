@@ -167,11 +167,13 @@ GO_ID=080d74db170408; NODE_ID=d8d0d90a1e9648; XPLAT_ID=78113d4f329908
 new_case c6a; for m in $GO_ID $NODE_ID $XPLAT_ID; do echo stopped > "$FAKE_DIR/state-$m"; done
 run_default
 [ "$RC" -eq 0 ] || fail "(6a) default map: expected exit 0, got $RC: $(grep -m1 'ERROR' "$OUT")"
-for g in gofmt go-build go-vet lint go-test go-race spa; do ran_gate $GO_ID $g || fail "(6a) go tier: gate $g did not run on $GO_ID"; done
+for g in gofmt go-build go-vet lint go-test go-race history-index-repair spa; do ran_gate $GO_ID $g || fail "(6a) go tier: gate $g did not run on $GO_ID"; done
 ran_gate $NODE_ID contracts || fail "(6a) node tier: contracts did not run on $NODE_ID"
 ran_gate $NODE_ID spa && fail "(6a) spa ran on the shared node machine"
 GO_GATES=$(grep -- "--machine $GO_ID -C /cache/runci.sh $FULL " "$FAKE_DIR/calls.log" | sed 's/.* //')
-[ "$GO_GATES" = $'gofmt\ngo-build\ngo-vet\nlint\ngo-test\ngo-race\nspa' ] || fail "(6a) performance gates out of order: $GO_GATES"
+# Release placement plus spec D13: the standalone Go repair check precedes SPA.
+# Keep this independent exact oracle: omissions, extras and reorderings all fail.
+[ "$GO_GATES" = $'gofmt\ngo-build\ngo-vet\nlint\ngo-test\ngo-race\nhistory-index-repair\nspa' ] || fail "(6a) performance gates out of order: $GO_GATES"
 for g in embed-build records-no-sqlite cli-verb-guard; do ran_gate $XPLAT_ID $g || fail "(6a) xplat tier: gate $g did not run on $XPLAT_ID"; done
 [ "$(grep -c 'machine start' "$FAKE_DIR/calls.log")" -eq 3 ] || fail "(6a) the default map did not start exactly its three machines"
 [ "$FAIL" -eq 0 ] && ok "(6a) default tier map accepted: spa follows all Go gates on $GO_ID; contracts stays on $NODE_ID"

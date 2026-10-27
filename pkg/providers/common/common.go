@@ -591,10 +591,12 @@ func normalizeFinishReason(reason string) string {
 // with different advice. Say "output cap" instead.
 var ErrToolArgumentsUndecodable = errors.New("invalid tool arguments: payload is not decodable JSON")
 
-// maxUndecodableArgumentsQuoted bounds how many bytes of an offending payload
-// an error quotes. The fragment is the diagnostic — it is what tells an
-// operator "this was cut off" rather than "this was malformed" — but a
-// hostile or runaway payload must not flood a log line.
+// maxUndecodableArgumentsQuoted bounds the length of an undecodable-arguments
+// error message. The message is value-free: it never quotes the payload,
+// which can carry a plaintext secret the model put in a credential field and
+// is logged on refusal (Train 2 gate r1 M24, founder ruling 2026-10-20). The
+// "cut off" versus "malformed" diagnostic the quote used to carry is stated
+// instead, from the payload's shape (ToolArgumentsError.Truncated).
 const maxUndecodableArgumentsQuoted = 256
 
 // DecodeToolCallArguments decodes one tool call's `arguments` payload into the
@@ -649,23 +651,43 @@ func DecodeToolCallArguments(raw json.RawMessage, name string) (map[string]any, 
 		// have been cut off; only finish-reason evidence attached later
 		// (AttachToolArgumentsEvidence) can mark it Truncated (ADR-087 D5).
 		return nil, NewToolArgumentsError(name, fmt.Errorf(
-			"%w: tool %q: arguments decoded to %T, want a JSON object: %s",
-			ErrToolArgumentsUndecodable, name, decoded, quoteUndecodableArguments(string(raw)),
+			"%w: tool %q: arguments decoded to %T, want a JSON object (%d bytes)",
+			ErrToolArgumentsUndecodable, name, decoded, len(raw),
 		), false)
 	}
 }
 
 // undecodableArgumentsError builds the error for a payload that would not
-// parse, quoting the fragment so the truncation is visible in the message.
+// parse. Its message is value-free (gate r1 M24): it states the payload's
+// size, where parsing stopped and whether the payload was cut off, never any
+// of its bytes — not even the JSON error's own text, which can quote a
+// character of the payload.
 func undecodableArgumentsError(name, payload string, cause error) error {
-	// Both the sentinel and the underlying JSON cause are wrapped with %w, so
-	// errors.Is matches ErrToolArgumentsUndecodable AND a caller that cares
-	// can still reach the *json.SyntaxError underneath.
-	return NewToolArgumentsError(name, fmt.Errorf(
-		"%w: tool %q: %w: %s",
-		ErrToolArgumentsUndecodable, name, cause, quoteUndecodableArguments(payload),
-	), isEOFShapedToolArgumentsFragment(payload))
+	truncated := isEOFShapedToolArgumentsFragment(payload)
+	where := ""
+	var syntax *json.SyntaxError
+	if errors.As(cause, &syntax) {
+		where = fmt.Sprintf(", parsing stopped at byte %d", syntax.Offset)
+	}
+	shape := "not valid JSON"
+	if truncated {
+		shape = "cut off before the end"
+	}
+	return NewToolArgumentsError(name, &valueFreeArgumentsError{
+		msg:  fmt.Sprintf("%s: tool %q: %s (%d bytes%s)", ErrToolArgumentsUndecodable.Error(), name, shape, len(payload), where),
+		errs: []error{ErrToolArgumentsUndecodable, cause},
+	}, truncated)
 }
+
+// valueFreeArgumentsError keeps the sentinel and the JSON cause reachable
+// through errors.Is/As while its message carries none of the payload.
+type valueFreeArgumentsError struct {
+	msg  string
+	errs []error
+}
+
+func (e *valueFreeArgumentsError) Error() string   { return e.msg }
+func (e *valueFreeArgumentsError) Unwrap() []error { return e.errs }
 
 // ToolArgumentsError reports a tool call whose `arguments` payload was
 // refused by DecodeToolCallArguments, distinguishing genuine truncation
@@ -837,20 +859,6 @@ func AttachToolArgumentsEvidence(err error, finishReason string, usage *UsageInf
 		tae.Truncated = true
 	}
 	return err
-}
-
-// quoteUndecodableArguments renders a payload for an error message, capped at
-// maxUndecodableArgumentsQuoted bytes and reporting the true length when it
-// had to cut. Quoting via %q escapes the partial UTF-8 sequence a byte-offset
-// cut can leave behind, so the result is always printable.
-func quoteUndecodableArguments(payload string) string {
-	if len(payload) > maxUndecodableArgumentsQuoted {
-		return fmt.Sprintf(
-			"%q…[%d bytes total]",
-			payload[:maxUndecodableArgumentsQuoted], len(payload),
-		)
-	}
-	return fmt.Sprintf("%q", payload)
 }
 
 // --- HTTP response helpers ---

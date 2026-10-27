@@ -120,10 +120,14 @@ func (e *FailoverError) Unwrap() error {
 }
 
 // IsRetriable returns true if this error should trigger fallback to next candidate.
-// Non-retriable: request format, context overflow, and a model unavailable on
-// the selected provider. A wrong model is a configuration fault, not an outage.
+// Non-retriable: request format and context overflow. A bad_model — the
+// provider says the model was not found or not offered (founder decision
+// 2026-10-24, Q70) — falls back to the next candidate like any other
+// retriable failure: with a backup configured the backup answers, and with
+// no backup, or when every candidate is rejected this way, the chain stays
+// terminal bad_model.
 func (e *FailoverError) IsRetriable() bool {
-	return e.Reason != FailoverFormat && e.Reason != FailoverContextOverflow && e.Reason != FailoverBadModel
+	return e.Reason != FailoverFormat && e.Reason != FailoverContextOverflow
 }
 
 // ModelConfig holds primary model and fallback list.

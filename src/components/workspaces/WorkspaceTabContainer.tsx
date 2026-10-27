@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { SidebarShowButton } from '@/components/layout/SidebarShowButton'
 import { Card } from '@/components/ui/card'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 // React context carrying the resolved workspace to every tab.
 const WorkspaceContext = createContext<Workspace | null>(null)
@@ -75,8 +76,7 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     isLoading: workspacesLoading,
     refetch: refetchWorkspaces,
   } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
 
@@ -164,16 +164,51 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     setActivePlanId(null)
   }, [workspaceId, setActivePlanId])
 
-  // Bug 1 fix: manage session lifecycle at the workspace level.
-  // Fires only on workspaceId change — tab switches don't re-run this.
+  // ADR-051 Rev 4 (Slice H): drop any staged library attachments when the
+  // active workspace changes — their media://workspace/<ws>/<id> refs are
+  // scoped to the previous workspace and must not leak into the new one.
+  // Keyed on the workspace only: a session directive appearing in the address
+  // (#1437) re-runs the entry effect below but must NOT drop staged
+  // attachments — the workspace has not changed.
   useEffect(() => {
     if (!workspaceId || workspaceId === 'inbox') return
-    // ADR-051 Rev 4 (Slice H): drop any staged library attachments when the
-    // active workspace changes — their media://workspace/<ws>/<id> refs are
-    // scoped to the previous workspace and must not leak into the new one.
     clearLibraryAttachments()
+  }, [workspaceId])
+
+  // Bug 1 fix: manage session lifecycle at the workspace level.
+  // Fires only on workspaceId change — tab switches don't re-run this.
+  //
+  // #1437: a chat address that names its session (`?open=<id>`, written by
+  // the /sessions/{id} deep-link redirect) drives the entry — the linked chat
+  // wins over the workspace's remembered pointer, so a reload of the address
+  // lands back in exactly that chat even when another tab has since changed
+  // what this browser last remembered here. The directive is acted on only
+  // while it is present: when the address drops it (New chat clears the
+  // active session and the chat route's address sync follows), this effect
+  // must NOT re-resolve — that would yank the fresh composer back to the
+  // remembered chat. The ref below makes that disappearance a no-op while
+  // keeping plain workspace entry (and a later workspace change) untouched.
+  const linkedSessionId =
+    typeof location.search.open === 'string' ? location.search.open : undefined
+  const prevRunHadDirectiveRef = useRef(false)
+  useEffect(() => {
+    if (!workspaceId || workspaceId === 'inbox') return
+    if (linkedSessionId && linkedSessionId !== '__pending') {
+      prevRunHadDirectiveRef.current = true
+      enterWorkspaceChat(workspaceId, { linkedSessionId })
+      return
+    }
+    if (prevRunHadDirectiveRef.current) {
+      // The directive just left the address (New chat) — the fresh composer
+      // is the state the user chose; do not re-resolve over it. (A no-op
+      // re-entry against an already-attached chat is harmless — execute()
+      // early-returns — but a New chat's fresh composer must not be
+      // re-resolved back to the remembered chat.)
+      prevRunHadDirectiveRef.current = false
+      return
+    }
     enterWorkspaceChat(workspaceId)
-  }, [workspaceId, enterWorkspaceChat])
+  }, [workspaceId, linkedSessionId, enterWorkspaceChat])
 
   // Fall back to archived workspace list for direct-URL access.
   const { data: archivedWorkspaces = [], isLoading: archivedLoading } = useQuery({
@@ -270,8 +305,7 @@ function WorkspaceTabContainerView({
 function WorkspaceNotFoundState() {
   const navigate = useNavigate()
   const { data: workspaces = [] } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
 

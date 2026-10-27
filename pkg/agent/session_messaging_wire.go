@@ -62,7 +62,9 @@ import (
 func (al *AgentLoop) SetSessionMessagingStores(inbox *session.MessageInboxStore, lifecycle *session.LifecycleStore) {
 	al.mu.Lock()
 	al.messageInboxStore = inbox
+	al.sessionLifecycleMu.Lock()
 	al.sessionLifecycleStoreForTools = lifecycle
+	al.sessionLifecycleMu.Unlock()
 	al.mu.Unlock()
 
 	if inbox == nil {
@@ -104,8 +106,10 @@ func (al *AgentLoop) GetMessageInboxStore() *session.MessageInboxStore {
 // Distinct from the plan engine's own lifecycleStore accessor — both point at
 // the same gateway-constructed instance.
 func (al *AgentLoop) GetSessionLifecycleStore() *session.LifecycleStore {
-	al.mu.RLock()
-	defer al.mu.RUnlock()
+	// This stable service reference is not configuration. Stop must reach its
+	// durable fence and live cancellation while MutateConfig still holds mu.
+	al.sessionLifecycleMu.RLock()
+	defer al.sessionLifecycleMu.RUnlock()
 	return al.sessionLifecycleStoreForTools
 }
 

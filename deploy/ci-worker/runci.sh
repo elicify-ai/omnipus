@@ -231,6 +231,16 @@ ensure_spa_stub() {
 }
 run_spaembed() { npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa; }
 
+# Checkout cleanup removes ignored build/tools on every gate invocation. Rebuild
+# the real native prerequisites in the consuming gate, before any gateway test.
+# The helper pins CGO_ENABLED=0/tags for these fixture-only binaries; race test
+# consumers keep their own CGO_ENABLED=1 and -race settings unchanged.
+prepare_chat_history_fixture_tools() {
+  python3 -I deploy/ci-worker/chat-history-ci.py fixtures || return 1
+  export OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY="$REPO_DIR/build/tools/chat-history-fixture.test"
+  export OMNIPUS_CHAT_HISTORY_SEED_BINARY="$REPO_DIR/build/tools/chat-history-seed"
+}
+
 # gofmt's OWN exit code is read before anything counts lines.
 #
 # The old form was `n=$(gofmt -l . 2>/dev/null | grep -v '^$' | wc -l)`, which
@@ -272,7 +282,7 @@ run_govet()    { ensure_spa_stub; CGO_ENABLED=0 go vet -tags "$TAGS" ./...; }
 # golangci-lint with CGO_ENABLED=0 (so //go:build !cgo test helpers compile) and the
 # canonical build tags. Pinned to the version pr.yml uses. Installed once to the
 # persistent /cache/go/bin (already on PATH) so it survives stop/start.
-GOLANGCI_VERSION=v2.10.1
+GOLANGCI_VERSION=v2.15.0
 run_lint() {
   ensure_spa_stub
   # The size-budget guards discovered by scripts/guards.sh below need the
@@ -361,6 +371,7 @@ run_lint() {
 # is proved by the CGO_ENABLED=0 build/test gates, not by this one.
 run_gorace() {
   ensure_spa_stub
+  prepare_chat_history_fixture_tools || return 1
   local out
   # CI=true is REQUIRED here, and is the single thing that makes this gate
   # predict GitHub's. GitHub Actions always sets CI, so pkg/tools/browser's
@@ -542,6 +553,7 @@ run_gorace() {
 
 run_gotest() {
   ensure_spa_stub
+  prepare_chat_history_fixture_tools || return 1
   # CI=true for the same reason run_gorace sets it: this gate exists to predict
   # GitHub's "Tests" job, and GitHub always sets CI. After #615 converted
   # pkg/tools/browser's real-Chrome tests to the package's own skipIfNoBrowser(t)
@@ -893,6 +905,12 @@ _e2e_build() {
   # CGO=0 matches the runtime build path. /tmp/omnipus-ci is hardcoded by tests/e2e/setup.ts.
   log "e2e: build gateway binary"
   CGO_ENABLED=0 go build -tags "$TAGS" -o /tmp/omnipus-ci ./cmd/omnipus/ || return 1
+
+  # Once per candidate, before any shard fan-out. The official fixture driver
+  # is a session test executable, never a product test endpoint or copied engine.
+  prepare_chat_history_fixture_tools || return 1
+  export OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT="$REPO_DIR/build/tools/chat-history-measurements.log"
+  python3 -I deploy/ci-worker/chat-history-ci.py measurement --receipt "$OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT" || return 1
 
   # Force the chromium revision the installed @playwright/test expects (the caret range in
   # package.json may resolve past the image-baked revision). Cached after the first run;
@@ -1502,7 +1520,14 @@ run_all_no_e2e() {
   return 0
 }
 
+# Standalone command/native evidence gates stay sequential within the Go tier.
+# Keep this additive seam separate from the worker lifecycle/locking code.
+run_history_index_repair() {
+  python3 -I deploy/ci-worker/chat-history-ci.py repair
+}
+
 case "$GATE" in
+  history-index-repair) step history-index-repair run_history_index_repair ;;
   gofmt)           step gofmt run_gofmt ;;
   go-build)        step go-build run_gobuild ;;
   go-vet)          step go-vet run_govet ;;

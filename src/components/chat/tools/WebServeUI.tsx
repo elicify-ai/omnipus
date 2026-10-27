@@ -27,7 +27,7 @@
  *   run_in_workspace (back-compat replay alias)
  */
 
-import { makeAssistantToolUI } from '@assistant-ui/react'
+import { makeAssistantToolUI } from '@/lib/assistant-tool-status'
 import { Globe, Terminal } from '@phosphor-icons/react'
 import { type ServeWorkspaceResult as ServeWorkspaceIframeResult, type RunInWorkspaceResult as RunInWorkspaceIframeResult } from '@/lib/api'
 import { hasPreviewShape } from '@/lib/preview-url'

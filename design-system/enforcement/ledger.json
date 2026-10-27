@@ -5159,9 +5159,38 @@
       "syntax": "MessageItem#svg-attribute.color<-agent?.color",
       "reason": "Identity ink on the standalone/embed reply mark (founder UI feedback 2026-10-11: MessageItem joins the shared AgentStatusIndicator). MessageItem reads the responding agent's own color field and passes it unmodified into AgentStatusIndicator, which validates it against its published palette before AgentIcon paints it as currentColor — the same boundary already registered for ChatScreen.tsx's ResolvedAgentMark#svg-attribute.color<-agent?.color and VirtualAssistantMessageRow#svg-attribute.color<-agent?.color. Governed identity data (ADR-20261007, design-system rule 6), not a design-system chrome colour; the component does not choose a colour.",
       "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.active-form.test.tsx",
+      "syntax": "Fixture#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Governed identity data, not chrome: the named Fixture passes the literal final generated AgentColor option unchanged to the real AgentStatusIndicator and AgentIcon. This exact palette source and sink exercise the published identity mark alongside status-copy and motion assertions; no raw colour or arbitrary fixture flow is allowed.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.stories.tsx",
+      "syntax": "StatusMotionFixture#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Governed identity data, not chrome: the named StatusMotionFixture passes the literal final generated AgentColor option unchanged to the real AgentStatusIndicator and AgentIcon. This exact app-story palette source and sink allow actual icon/text timing verification without introducing a second colour palette or a raw colour.",
+      "owner": "user-authored colours exception registry"
     }
   ],
   "reviewedBoundaries": [
+    {
+      "path": "src/components/chat/composer/ModelPicker.session-return.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1436: mounts the existing application-classified ToastContainer to assert real visible storage-failure warnings alongside the real picker and stores. This host depends on application state and has no public library export; no production import, scanner rule, or QA assertion is changed."
+    },
+    {
+      "path": "src/routes/_app/-sessions.$sessionId.reload-return.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1437: mounts the existing application-classified ToastContainer with the real router/runtime to exercise the user-visible Retry action. This is the application host, not a new primitive; no production import, public export, scanner rule, or QA assertion is changed."
+    },
+    {
+      "path": "src/components/skills/WhatsAppNativeNotice.serverStates.test.tsx",
+      "kind": "test",
+      "reason": "real chat/Connectors error alerts via catalogued ToastContainer; test-only, no public export"
+    },
     {
       "path": "src/components/chat/AgentStatusIndicator.monogram.wave1.test.tsx",
       "kind": "test",
@@ -5753,6 +5782,11 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
+      "path": "src/components/chat/useSelectSession.sidebarOverlay.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test suffix) for founder Q81. Its framer-motion and router Link stand-ins forward the real Sidebar's className unchanged so the click-catcher keeps its production markup; the test renders no control or color of its own and is not imported by any non-test source."
+    },
+    {
       "path": "src/components/connectors/EmailMailboxPanel.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -5791,6 +5825,11 @@
       "path": "src/components/layout/Sidebar.focus-trap.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/layout/Sidebar.workspace-lookup-abort.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Its router, dropdown-menu and framer-motion stand-ins (raw button/aside, test-only class names) are copied from Sidebar.kb5.test.tsx to mount the real Sidebar; test-only, never imported by non-test source."
     },
     {
       "path": "src/components/layout/Sidebar.kb5.test.tsx",

@@ -48,10 +48,16 @@ func (ts *turnState) persistResultTranscriptAddr(store session.ContextWindowStor
 
 func (ex *agentLoopRunTurnToolsExecute) recordAdmittedTranscript() error {
 	ts := ex.rx.rr.rq.ri.rf.rt.ts
-	if ts.opts.NoHistory || ex.admitted.ArchiveLine < 0 {
-		return ts.appendToolCallTranscript(ex.tcRecord)
+	write := func() error {
+		if ts.opts.NoHistory || ex.admitted.ArchiveLine < 0 {
+			return ts.appendToolCallTranscript(ex.tcRecord)
+		}
+		return ts.appendToolCallTranscript(ex.tcRecord, ex.admitted.ArchiveLine)
 	}
-	return ts.appendToolCallTranscript(ex.tcRecord, ex.admitted.ArchiveLine)
+	if ex.started != nil {
+		return ex.started.complete(write)
+	}
+	return write()
 }
 
 func (ex *agentLoopRunTurnToolsExecute) recordedProjection() (*windowProjectionChange, error) {

@@ -23,6 +23,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { DEFAULT, MIA, OMNIPUS, OMNIPUS_MAIN, SALES, SALES_MAIN, session } from '../../../tests/omnipus-l1-ui-red/fixtures'
+import { expectValidFrame, expectValidPage, page, pos, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 
 // Module namespaces / props are test-only, not wire formats. This QA branch
 // predates these modules. An absent module fails the named case loudly, never
@@ -41,11 +42,11 @@ const SESSIONS: Session[] = [
 const PRIOR_SALES = { id: SALES_MAIN, type: 'main' as const, title: 'Mia main', agentId: 'mia' }
 const BEFORE: Message = {
   id: 'before-clear', timestamp: '2026-10-14T00:00:00Z', agent_id: 'omnipus',
-  type: 'message', role: 'user', view_membership: 'both', content: 'Existing Omnipus conversation',
+  type: 'message', role: 'user', view_membership: 'both', content: 'Existing Omnipus conversation', history_position: pos(1),
 }
 const MARKER: Message = {
   id: 'clear-marker', timestamp: '2026-10-14T00:01:00Z', agent_id: 'omnipus',
-  type: 'system', role: 'system', view_membership: 'chat', content: 'Conversation context cleared',
+  type: 'system', role: 'system', view_membership: 'chat', content: 'Conversation context cleared', history_position: pos(2),
 }
 const COMMANDS: SlashCommand[] = [{ name: 'clear', label: '/clear', description: 'Clear this chat context', delivery: 'agent', available_while_streaming: true }]
 const SANDBOX: SandboxStatus = { backend: 'fallback', available: true, kernel_level: false,
@@ -62,10 +63,8 @@ let sessionIds: (string | null)[]
 let unsubscribe: () => void
 let history: Message[]
 
-function jsonResponse(body: unknown, hasEarlier = false) {
-  return new Response(JSON.stringify(body), { status: 200, headers: {
-    'Content-Type': 'application/json', 'X-Has-Earlier-Messages': String(hasEarlier),
-  } })
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }
 function isSessionCreate(request: { method: string; path: string }) {
   return request.method === 'POST' && request.path.split('?')[0] === '/api/v1/sessions'
@@ -108,7 +107,14 @@ beforeEach(() => {
       if (url.pathname === '/api/v1/agents') return jsonResponse(AGENTS)
       if (url.pathname === '/api/v1/agents/omnipus/activity-runs') return jsonResponse([])
       if (url.pathname === '/api/v1/sessions') return jsonResponse({ sessions: SESSIONS.map(wireSession) } satisfies SessionPage)
-      if (url.pathname === `/api/v1/sessions/${OMNIPUS_MAIN}/messages`) return jsonResponse(history, history[0]?.id === MARKER.id)
+      if (url.pathname === `/api/v1/sessions/${OMNIPUS_MAIN}/messages`) {
+        const atClear = history[0]?.id === MARKER.id
+        const fixture = page(history, { sessionId: OMNIPUS_MAIN, earlier: atClear, info: atClear ? {
+          stopped_at_clear: true, stop_reason: 'clear', latest_clear: { entry_id: MARKER.id, history_position: pos(2) },
+        } : {} })
+        expectValidPage(fixture, atClear ? [pos(2)] : [pos(1)], 1)
+        return jsonResponse(fixture)
+      }
       if (url.pathname === '/api/v1/commands') return jsonResponse(COMMANDS)
       if (url.pathname === '/api/v1/skills' || url.pathname === '/api/v1/providers') return jsonResponse([])
       if (url.pathname === '/api/v1/security/sandbox-status') return jsonResponse(SANDBOX)
@@ -158,6 +164,25 @@ async function mountEntry() {
   render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>)
   return { router, onOpened, group: await screen.findByRole('group', { name: 'Omnipus' }) }
 }
+function completeConnectedHistory() {
+  const selected = page([BEFORE], { sessionId: OMNIPUS_MAIN })
+  expectValidPage(selected, [pos(1)], 1)
+  const incoming: ServerFrame[] = [
+    { ...snapshot(selected), seq: 1, boot_id: 'omnipus-single-boot' },
+    { type: 'session_state', session_id: OMNIPUS_MAIN, user_id: 'single-conversation-reader', pending_approvals: [],
+      emitted_at: BEFORE.timestamp, history_state: { status: 'available' } },
+    replay(BEFORE, OMNIPUS_MAIN),
+    { type: 'done', session_id: OMNIPUS_MAIN },
+    { type: 'catch_up_complete', session_id: OMNIPUS_MAIN, seq: 1, boot_id: 'omnipus-single-boot', mode: 'snapshot' },
+  ]
+  incoming.forEach(expectValidFrame)
+  act(() => incoming.forEach(frame => useChatStore.getState().handleFrame(frame)))
+  expect(useChatStore.getState().sessionsById[OMNIPUS_MAIN].history.historyLoaded,
+    'D6/D7: the connected first page really committed through snapshot ownership').toBe(true)
+}
+function messagesReads() {
+  return requests.filter(request => request.method === 'GET' && request.path.split('?')[0] === `/api/v1/sessions/${OMNIPUS_MAIN}/messages`)
+}
 async function mountScreen() {
   const load = screenModules['./OmnipusChatScreen.tsx']
   if (!load) expect.fail('BLOCKED: OmnipusChatScreen not implemented — spec FR-005/100 and chief /omnipus ruling')
@@ -168,7 +193,9 @@ async function mountScreen() {
   render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>)
   const composer = await screen.findByTestId('chat-input')
   expect(composer).toBeEnabled()
+  completeConnectedHistory()
   expect(await screen.findByText(BEFORE.content!)).toBeVisible()
+  expect(messagesReads(), 'D6: connected opening never starts a parallel initial REST history read').toStrictEqual([])
   await waitFor(() => expect(queryClient.isFetching()).toBe(0))
   expect(router.state.location.pathname).toBe('/omnipus')
   return { router, composer }
@@ -286,7 +313,7 @@ describe('Omnipus one-conversation guarantee at its reachable UI', () => {
     act(() => { useChatStore.getState().handleFrame(receipt); useChatStore.getState().handleFrame(done) })
     expect(await screen.findByTestId('clear-context-divider')).toHaveTextContent('Conversation context cleared')
     expect(screen.queryByText(BEFORE.content!)).not.toBeInTheDocument()
-    expect(requests.filter((request) => request.path === `/api/v1/sessions/${OMNIPUS_MAIN}/messages`).length).toBeGreaterThanOrEqual(2)
+    expect(messagesReads(), 'D6: only the explicit clear refresh reads a page; connected opening used its snapshot').toHaveLength(1)
     expect(router.state.location.pathname).toBe('/omnipus')
     expectSameSessionNoCreation()
     expect(frames.filter((frame) => frame.type === 'message')).toEqual([sent])

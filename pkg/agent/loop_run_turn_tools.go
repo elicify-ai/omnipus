@@ -56,6 +56,7 @@ type agentLoopRunTurnToolsExecute struct {
 	admitted          admittedToolResult
 	toolResultMsg     providers.Message
 	tcRecord          session.ToolCall
+	started           *startedToolOutcome
 	ret0              agentLoopRunTurnToolsFlow
 }
 
@@ -112,6 +113,7 @@ func (rx *agentLoopRunTurnTools) executeToolCalls() agentLoopRunTurnToolsFlow {
 	ex.setGoalSucceededThisRound = false
 agentLoopRunTurnToolsExecuteLoop1:
 	for i, tc := range ex.rx.rr.normalizedToolCalls {
+		ex.started = nil
 		switch ex.validateCall(i, tc) {
 		case agentLoopRunTurnToolsExecuteReturn:
 			return ex.ret0
@@ -407,6 +409,10 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 		return agentLoopRunTurnToolsExecuteContinue
 	}
 
+	if i < len(ex.rx.rr.argumentRefusals) && ex.rx.rr.argumentRefusals[i] != nil {
+		return ex.admitPlaintextRefusal(tc, ex.rx.rr.argumentRefusals[i])
+	}
+
 	// UAT B-9 run 4: an AskUserQuestion trailing a SUCCESSFUL set_goal
 	// from the SAME model response never runs. The rubric note already
 	// says the two narrowed doors are alternatives ("Call exactly ONE
@@ -446,7 +452,7 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 		)
 		return agentLoopRunTurnToolsExecuteContinue
 	}
-	return agentLoopRunTurnToolsExecuteNext
+	return ex.refusePlaintextToolCall(tc)
 }
 
 // applyQuarantineAndHooks applies denial quarantine, control gates, hooks, and the argument bound.
@@ -634,7 +640,9 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 		)
 		return agentLoopRunTurnToolsExecuteContinue
 	}
-	return agentLoopRunTurnToolsExecuteNext
+	// A hook may have rewritten the tool name/arguments. Recheck the same
+	// opt-in refusal before any approval or argument-bearing event.
+	return ex.refusePlaintextToolCall(tc)
 }
 
 // applyApprovalHook applies the optional approval hook.
@@ -869,6 +877,14 @@ func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall
 	if ruleAsk {
 		requestArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
 		decisionKind = "rule_ask"
+	}
+	// A tool may show server-derived facts on its approval card (e.g.
+	// remove_secret's consumers, FR-077); the call still executes with
+	// ex.toolArgs unchanged.
+	if rt.ts.agent != nil && rt.ts.agent.Tools != nil {
+		if tool, ok := rt.ts.agent.Tools.Get(ex.toolName); ok {
+			requestArgs = tools.WithApprovalContext(rt.turnCtx, tool, requestArgs)
+		}
 	}
 	// §5.7 fix: re-check the standing grant, with the SAME args
 	// CheckGrantOrRequestApproval below would, BEFORE writing the pending
@@ -1393,11 +1409,21 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		execCtx = tools.WithAutoApproved(execCtx, tools.AutoPinForVerdict(ex.toolName, ex.autoPin))
 		ex.rx.rr.rq.ri.rf.rt.al.emitToolAutoApprovedAudit(execCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.autoPin)
 	}
+	// The recovery fence decides whether the call is dispatched at all: a
+	// refused call never starts, so it owns no started-tool receipt. The
+	// started-tool receipt (#1266) is therefore installed only for a call
+	// that is really dispatched, and the abort check stays closest to it.
 	if err := ex.rx.rr.rq.ri.rf.rt.al.enforceRecoveryWriteFence(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName); err != nil {
 		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.recoveryInterruptedResult(ex.rx.rr.rq.ri.rf.rt.ts, err)
 		return agentLoopRunTurnToolsExecuteReturn
 	}
 	execCtx = ex.rx.rr.rq.ri.rf.rt.ts.fileEffectExecutionContext(execCtx, ex.toolCallID)
+	if !ex.beginStartedTool(tc, toolStart) {
+		ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
+		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurn(ex.rx.rr.rq.ri.rf.rt.ts, "before_tool_exec", hardInterruptAbortReason)
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
+	}
 	ex.toolResult = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.ExecuteWithContext(
 		execCtx,
 		ex.toolName,

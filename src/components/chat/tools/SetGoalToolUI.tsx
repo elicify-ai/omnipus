@@ -77,11 +77,8 @@
 // and "what renders" can never disagree.
 
 import { useMemo } from 'react'
-import {
-  makeAssistantToolUI,
-  type MessagePartStatus,
-  type ToolCallMessagePartStatus,
-} from '@assistant-ui/react'
+import { makeAssistantToolUI } from '@/lib/assistant-tool-status'
+import type { MessagePartStatus, ToolCallMessagePartStatus } from '@assistant-ui/react'
 import { Target, Warning } from '@phosphor-icons/react'
 import { useChatStore } from '@/store/chat'
 import { useChatPreferencesStore } from '@/store/chatPreferences'

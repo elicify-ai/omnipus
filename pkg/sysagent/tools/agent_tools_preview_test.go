@@ -2,7 +2,6 @@ package systools_test
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"testing"
 
@@ -13,54 +12,28 @@ import (
 // ADR-090 FR-004: a proposal can inspect native creation defaults without
 // creating a temporary agent. Overrides remain bounded by the global ceiling.
 func TestAgentToolsCreationPreviewIsReadOnlyAndHonorsCeiling(t *testing.T) {
-	for _, kind := range []string{"Main", "Subagent"} {
+	// SPEC.md compact output: all three creation kinds use the same compact, read-only shape.
+	for _, kind := range []string{"Main", "Subagent", "subagent_3p"} {
 		t.Run(kind, func(t *testing.T) {
 			home := t.TempDir()
 			cfg := config.DefaultConfig()
 			cfg.Sandbox.ToolPolicies["read_file"] = "ask"
 			cfg.Sandbox.ToolPolicies["ToolSearch"] = "deny"
-			tool := systools.NewAgentGetToolsTool(&systools.Deps{Home: home, GetCfg: func() *config.Config { return cfg }})
-			result := tool.Execute(context.Background(), map[string]any{"new_agent_type": kind})
+			deps := &systools.Deps{Home: home, GetCfg: func() *config.Config { return cfg }}
+			names := defaultToolsWirePreviewCatalog(t, deps)
+			result := systools.NewAgentGetToolsTool(deps).Execute(context.Background(), map[string]any{"new_agent_type": kind})
 			if result.IsError {
-				t.Fatalf("read-only native preview failed: %s", result.ForLLM)
+				t.Fatalf("read-only preview failed: %s", result.ForLLM)
 			}
-			var got map[string]any
-			if err := json.Unmarshal([]byte(result.ForLLM), &got); err != nil {
-				t.Fatal(err)
-			}
-			if got["preview"] != true || got["new_agent_type"] != kind {
-				t.Fatalf("preview identity=%v", got)
-			}
-			if _, exists := got["id"]; exists {
-				t.Fatal("preview must not invent a persisted id")
-			}
-			if _, exists := got["revision"]; exists {
-				t.Fatal("preview must not invent a persisted revision")
-			}
-			policies, policiesOK := got["effective_policies"].(map[string]any)
-			if !policiesOK {
-				t.Fatalf("effective_policies=%T %v, want object", got["effective_policies"], got["effective_policies"])
-			}
-			for name, want := range map[string]string{"read_file": "ask", "bash": "deny", "write_file": "deny", "ToolSearch": "allow"} {
+			policies := defaultToolsParsePreview(t, result.ForLLM, kind, names)
+			// SPEC.md compact effective-policy contract / CR-03: discovery's runtime floor is Allow; ordinary tools still merge strictest-wins.
+			for name, want := range map[string]string{"read_file": "ask", "bash": "deny", "write_file": "allow", "ToolSearch": "allow", "browser_handover": "allow"} {
 				if policies[name] != want {
 					t.Errorf("%s=%v want %s", name, policies[name], want)
 				}
 			}
-			stored, storedOK := got["stored_tool_overrides"].(map[string]any)
-			if !storedOK {
-				t.Fatalf("stored_tool_overrides=%T %v, want object", got["stored_tool_overrides"], got["stored_tool_overrides"])
-			}
-			for name, want := range map[string]string{"read_file": "allow", "AskUserQuestion": "allow", "browser_handover": "deny", "bash": "deny"} {
-				if stored[name] != want {
-					t.Errorf("stored creation default %s=%v want %s", name, stored[name], want)
-				}
-			}
-			if _, ok := got["connector_catalog"].(map[string]any); !ok {
-				t.Fatalf("preview lacks connector catalog: %v", got["connector_catalog"])
-			}
-			if bindings, ok := got["mcp_servers"].([]any); !ok || len(bindings) != 0 {
-				t.Errorf("preview connector assignments=%v", got["mcp_servers"])
-			}
+			// SPEC.md compact output drops stored_tool_overrides and connector metadata;
+			// exact row count/shape above replaces those now-obsolete response assertions.
 			entries, err := os.ReadDir(home)
 			if err != nil {
 				t.Fatal(err)
@@ -76,7 +49,8 @@ func TestAgentToolsCreationPreviewRejectsAmbiguousOrUnsupportedTargets(t *testin
 	for _, args := range []map[string]any{
 		{"id": "writer", "new_agent_type": "Main"},
 		{"id": "", "new_agent_type": "Main"},
-		{"new_agent_type": "subagent_3p"}, {"new_agent_type": "core"},
+		// Chief's SPEC.md preview ruling (2026-10-22): subagent_3p moved to the positive table above; hidden kinds remain invalid.
+		{"new_agent_type": "core"},
 		{"new_agent_type": "system"}, {"new_agent_type": ""}, {"new_agent_type": true},
 	} {
 		result := systools.NewAgentGetToolsTool(&systools.Deps{Home: t.TempDir()}).Execute(context.Background(), args)

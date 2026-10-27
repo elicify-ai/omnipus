@@ -11,6 +11,9 @@ required:
   - message_id
   - helper_event
 properties:
+  history_origin:
+    $ref: './HistoryEntryOrigin.yaml'
+    x-go-type: HistoryEntryOrigin
   type:
     type: string
     const: helper_event

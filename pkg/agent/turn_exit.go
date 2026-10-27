@@ -21,6 +21,10 @@ func (ts *turnState) ClaimCancel() bool {
 // turn goroutine that ignored hard abort. Callers include the gateway cancel
 // watchdog and the delegated-turn timeout detach path.
 func (ts *turnState) MarkAbandoned() {
+	// The controller, not the abandoned goroutine, preserves the started
+	// call's terminal display evidence before the late-write fence closes.
+	ts.cancelStartedTool()
+	ts.persistCancelOutcome("hard")
 	ts.abandoned.Store(true)
 }
 
@@ -109,6 +113,7 @@ func (ts *turnState) requestHardAbort() bool {
 	providerCancel := ts.providerCancel
 	ts.mu.Unlock()
 
+	ts.cancelStartedTool()
 	if providerCancel != nil {
 		providerCancel()
 	}
@@ -241,10 +246,8 @@ func (ts *turnState) Finish(isHardAbort bool) {
 	// one releases it explicitly, at the site that claimed it — the delegate
 	// front in steer_launcher.go::dispatchSteeredSessionWithReservation's
 	// dispatch goroutine, the task front through the callback handed to
-	// task_executor.go::dispatchLaunchedTask. Finish has no reliable
-	// back-reference to release through (ts.al is unset for every steered
-	// turn), so a drain here reads as the release mechanism while freeing
-	// nothing.
+	// task_executor.go::dispatchLaunchedTask. The loop back-reference is not
+	// an admission reservation: release stays with the site that claimed it.
 	ts.closeOnce.Do(func() {
 		if ch != nil {
 			close(ch)

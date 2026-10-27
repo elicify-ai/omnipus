@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -144,6 +145,9 @@ type MetaPatch struct {
 type UnifiedMeta struct {
 	SessionMeta
 	Type UnifiedSessionType `json:"type"`
+	// Private aggregate provenance, never a generated/public wire property.
+	// Numeric counters and later activity cannot establish a lost baseline.
+	usageBaselineKnown bool
 }
 
 // Clone returns a deep, independent copy of m. Nil-safe (returns nil for a
@@ -229,6 +233,11 @@ type UnifiedStore struct {
 	archiveMu  sync.Mutex
 	archives   map[string]*ArchiveDayStore
 	archiveNow func() time.Time
+
+	// historyMu protects only owner lookup; no filesystem I/O is done under it.
+	historyMu           sync.Mutex
+	historyOwners       map[string]*chatHistoryOwner
+	historyStartupError error
 
 	// cacheMu is the FR-048(b) narrow lock guarding metaCache,
 	// cacheLoadFailures and the FR-097 parent index ONLY — see this struct's
@@ -453,6 +462,9 @@ func newUnifiedStore(baseDir, homePath string) (*UnifiedStore, error) {
 
 	backend.provider = us.archiveStore
 	us.loadMetaCacheLocked()
+	// Readiness errors are retained independently of session/control identity.
+	// Only existing indexes are reconciled; this never builds an old baseline.
+	us.historyStartupError = us.reconcileExistingChatHistory(context.Background())
 	// ADR-057 U6 W24 (FR-063): every store gets a running periodic flusher
 	// from construction — a fresh install with no operator override still
 	// converges stats.json every DefaultSessionStatsFlushInterval (5s, see
@@ -657,7 +669,17 @@ func (us *UnifiedStore) persistNewSessionLocked(sessionID string, meta *UnifiedM
 	// stats.json/loop.json are created lazily by their own targeted writers
 	// the first time something actually touches that group (dataset row 2:
 	// meta.json only).
+	if err := us.initEmptyChatHistoryIndexLocked(sessionID); err != nil {
+		return nil, err
+	}
+	meta.usageBaselineKnown = true // Verified new/empty identity, not historical backfill.
+	if err := historyPublication(chatHistoryPublicationEvent{SessionID: sessionID, Operation: "create", Point: "before_identity_publish"}); err != nil {
+		return nil, err
+	}
 	if err := us.u5WriteIdentityLocked(sessionID, meta); err != nil {
+		return nil, err
+	}
+	if err := historyPublication(chatHistoryPublicationEvent{SessionID: sessionID, Operation: "create", Point: "identity_published"}); err != nil {
 		return nil, err
 	}
 	// Create empty transcript so readers don't error on first access.
@@ -988,6 +1010,9 @@ func readUnifiedMeta(sessionDir string) (*UnifiedMeta, error) {
 	}
 
 	meta := u5ComposeUnifiedMeta(identity, stats, loop, pendingAsk)
+	if !stats.present {
+		meta.usageBaselineKnown = historyEmptyUsageBaseline(sessionDir, meta.ID, len(meta.Partitions))
+	}
 	// If Type is not set (legacy PartitionStore session), default to chat.
 	if meta.Type == "" {
 		meta.Type = SessionTypeChat
@@ -1011,6 +1036,7 @@ func (us *UnifiedStore) archiveStore(sessionID string) (*ArchiveDayStore, error)
 	if us.archiveNow != nil {
 		s.now = us.archiveNow
 	}
+	s.historyAccepted = func(addr ArchiveAddress, rec ArchiveRecord) { us.historyAccepted(sessionID, addr, rec) }
 	us.archives[sessionID] = s
 	return s, nil
 }

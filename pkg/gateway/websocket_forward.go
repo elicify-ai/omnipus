@@ -8,7 +8,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/channels"
 )
 
 // ADR-091 UAT defect 2: the orphan watchdog (formerly orphanWatchdogTimeout /
@@ -257,6 +256,40 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 	if !ok {
 		return
 	}
+	pairF := pairingFrameFromPayload(p)
+	// The sync tap already cached this event once (hubWhatsAppPairing);
+	// the sequence guard makes this write a no-op unless it is the newest.
+	f.h.updatePairingCache(p, pairF)
+	if !f.wc.wantsPairing(p.ChannelID) {
+		return
+	}
+	// A lagging forwarder never sends an event older than the channel's newest
+	// published one: that newer state may already have reached this page
+	// through the cache replay, and the newer event itself still follows in
+	// this forwarder's own queue (gate r5 R5-A01, M8).
+	if f.h.pairingEventSuperseded(p) {
+		return
+	}
+	runPairingDeliveryAfterCheckHook("live", f.wc, p.ChannelID)
+	frame, err := json.Marshal(pairF)
+	if err != nil {
+		slog.Error("ws: marshal whatsapp_pairing failed", "channel_id", p.ChannelID, "error", err)
+		return
+	}
+	f.h.enqueuePairing(f.wc, p, frame)
+}
+
+// pairingEventSuperseded reports whether a newer pairing event of p's channel
+// was already published (the sync tap records every event's sequence at
+// emission).
+func (h *WSHandler) pairingEventSuperseded(p agent.WhatsAppPairingPayload) bool {
+	order, unlock, known := h.lockPairingDelivery(p.ChannelID)
+	defer unlock()
+	return !known || !h.pairingFreshLocked(order, p.ChannelID, pairingStamp(p))
+}
+
+// pairingFrameFromPayload builds the K10 whatsapp_pairing frame for p.
+func pairingFrameFromPayload(p agent.WhatsAppPairingPayload) generated.WhatsAppPairingFrame {
 	pairF := generated.WhatsAppPairingFrame{
 		Type:      string(generated.WsFrameTypeWhatsappPairing),
 		ChannelId: p.ChannelID,
@@ -270,35 +303,35 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 		msg := p.Message
 		pairF.Message = &msg
 	}
-	// #368: maintain the per-channel QR cache so late subscribers (e.g.
-	// a tab that opens the pairing UI after the first QR fires) receive
-	// the last-seen code immediately on subscribe rather than waiting for
-	// the next QR rotation.  Only "code" (QR available) is cached;
-	// terminal states are evicted so stale QRs are not re-emitted.
-	switch p.Status {
-	case channels.PairingStatusCode:
-		if frameBytes, merr := json.Marshal(pairF); merr == nil {
-			f.h.lastPairingState.Store(p.ChannelID, frameBytes)
-		} else {
-			slog.Error("ws: failed to marshal whatsapp_pairing frame for cache",
-				"channel_id", p.ChannelID, "error", merr)
-		}
-	case channels.PairingStatusLinked, channels.PairingStatusTimeout, channels.PairingStatusError,
-		channels.PairingStatusWaiting:
-		// PairingStatusWaiting and any other status that is not
-		// "code" must not leave a stale QR in the cache — evict so a
-		// late subscriber is not shown an outdated code.
-		f.h.lastPairingState.Delete(p.ChannelID)
-	default:
-		// Any future status not yet in this switch: same fail-safe
-		// eviction as above, so an unrecognized status never leaves
-		// a stale QR behind.
-		f.h.lastPairingState.Delete(p.ChannelID)
+	// K10 / FR-081: a chat-started pairing correlates to its request and chat.
+	if p.RequestID != "" {
+		rid := p.RequestID
+		pairF.RequestId = &rid
 	}
-	if !f.wc.wantsPairing(p.ChannelID) {
+	if p.SessionID != "" {
+		sid := p.SessionID
+		pairF.SessionId = &sid
+	}
+	return pairF
+}
+
+// hubWhatsAppPairing keeps the reconnect cache current from the sync tap,
+// which sees every pairing event exactly once even when no connection is
+// open (gate r1 SFH T2-SF-06). Delivery stays per connection.
+func (h *WSHandler) hubWhatsAppPairing(evt agent.Event) {
+	p, ok := evt.Payload.(agent.WhatsAppPairingPayload)
+	if !ok {
 		return
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
+	h.updatePairingCache(p, pairingFrameFromPayload(p))
+}
+
+// updatePairingCache maintains the per-channel reconnect cache (#368) from
+// one pairing event, ignoring an event older than the one already cached.
+// "code" (QR available) is cached; terminal states are evicted so stale QRs
+// are not re-emitted, except a chat-started pairing's final status.
+func (h *WSHandler) updatePairingCache(p agent.WhatsAppPairingPayload, pairF generated.WhatsAppPairingFrame) {
+	h.cachePairing(p, pairF)
 }
 
 // onNotification forwards agent.EventKindNotification to this connection.

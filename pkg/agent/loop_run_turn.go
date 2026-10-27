@@ -237,6 +237,16 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = withTurnState(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts)
 	// SEC-15: Inject agent ID so audit entries carry the agent identity.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithAgentID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.agent.ID)
+	// §6.18 / FR-240: the turn's origin starts with its triggering input;
+	// steering inputs consumed later are added (recordConsumedInputOrigins).
+	if rc.rx.rr.rq.ri.rf.rt.ts.origin == nil {
+		rc.rx.rr.rq.ri.rf.rt.ts.origin = tools.NewTurnOrigin()
+	}
+	rc.rx.rr.rq.ri.rf.rt.ts.opts.InputOrigin.recordInto(rc.rx.rr.rq.ri.rf.rt.al, rc.rx.rr.rq.ri.rf.rt.ts.origin)
+	for _, consumed := range rc.rx.rr.rq.ri.rf.rt.ts.opts.ConsumedInputOrigins {
+		consumed.recordInto(rc.rx.rr.rq.ri.rf.rt.al, rc.rx.rr.rq.ri.rf.rt.ts.origin)
+	}
+	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTurnOrigin(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.origin)
 	// Inject the session key so tools can address the session.
 	if rc.rx.rr.rq.ri.rf.rt.ts.sessionKey == "" {
 		logger.WarnCF("agent", "runTurn: sessionKey is empty — session-addressed tools will not work",

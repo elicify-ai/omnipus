@@ -22,6 +22,7 @@ import { makeBucketMessages, useChatStore } from './chat'
 import type { ChatMessage, SessionChatState } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import { useWorkspacesStore } from './workspacesStore'
 import { useUiStore } from './ui'
 import { checkAddressedAgent, recipientAddressBlocked } from './chat/recipientSend'
@@ -97,6 +98,7 @@ function connectWithSendSpy() {
 /** A complete bucket (the chat.test.ts `bucketFor` shape) for one scenario. */
 function bucketFor(msgs: ChatMessage[]): SessionChatState {
   return {
+    ...emptyHistoryFixture(),
     ...makeBucketMessages(msgs),
     toolCalls: {},
     toolCallOrder: [],

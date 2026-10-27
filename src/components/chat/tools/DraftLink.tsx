@@ -8,7 +8,7 @@
 // lands on chat. When no link was derivable (no derivable public_url), the
 // card shows the stated reason instead — never a dead button.
 import { useState } from 'react'
-import { makeAssistantToolUI } from '@assistant-ui/react'
+import { makeAssistantToolUI } from '@/lib/assistant-tool-status'
 import { Button } from '@/components/ui/button'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'

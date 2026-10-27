@@ -60,6 +60,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"golang.org/x/crypto/argon2"
@@ -128,6 +129,21 @@ func (e *EntryAuthError) Error() string {
 // that behaviour without having to know this type exists.
 func (e *EntryAuthError) Unwrap() error { return ErrWrongKey }
 
+// EntryEncodingError identifies malformed encoding in one stored entry, not an
+// unreadable store document. Its cause contains only the encoding fault, never
+// the nonce, ciphertext or plaintext. Gateway callers scope it only after the
+// store health check finds another decryptable entry.
+type EntryEncodingError struct {
+	Name string
+	Err  error
+}
+
+func (e *EntryEncodingError) Error() string {
+	return fmt.Sprintf("credentials: entry %q is malformed: %v", e.Name, e.Err)
+}
+
+func (e *EntryEncodingError) Unwrap() error { return e.Err }
+
 // NotFoundError is returned when a credential name is not in the store.
 type NotFoundError struct{ Name string }
 
@@ -137,9 +153,23 @@ func (e *NotFoundError) Error() string {
 
 // storeFile is the on-disk JSON structure.
 type storeFile struct {
-	Version     int                 `json:"version"`
-	Salt        string              `json:"salt"`
-	Credentials map[string]encEntry `json:"credentials"`
+	Version      int                    `json:"version"`
+	Salt         string                 `json:"salt"`
+	Credentials  map[string]encEntry    `json:"credentials"`
+	CardSecrets  map[string]CardSecret  `json:"card_secrets,omitempty"`
+	CardReceipts map[string]CardReceipt `json:"card_receipts,omitempty"`
+	// CardHighWater records, per reference family (CardValue.BaseName), the
+	// highest version ever issued. Deleting a version never lowers it, so a
+	// deleted reference name is never issued again: a consumer still naming
+	// it stays unresolved until a new approved selection (gate r1 M1).
+	CardHighWater map[string]int `json:"card_high_water,omitempty"`
+	// PrivateSelected maps one agent-private variable (privateKey) to the
+	// reference of its selected version. Only the selected version is
+	// injected into that pair's children (FR-076, FR-086).
+	PrivateSelected map[string]string `json:"private_selected,omitempty"`
+	// PrivateOptions holds per-variable options (FR-241), keyed like
+	// PrivateSelected.
+	PrivateOptions map[string]PrivateOptions `json:"private_options,omitempty"`
 }
 
 type encEntry struct {
@@ -414,12 +444,40 @@ func (s *Store) List() ([]string, error) {
 	return names, nil
 }
 
+// DamagedEntriesError reports unreadable entries while at least one other entry
+// decrypts under the master key: the failure is real and visible, but scoped to
+// the named entries — the store itself is readable. HealthCheck reports encoding
+// damage; SensitiveValues also includes authentication failures in its partial
+// scan. A locked, unreadable or wholly undecryptable store never returns this type.
+type DamagedEntriesError struct {
+	Names []string
+	Errs  []error
+}
+
+func (e *DamagedEntriesError) Error() string {
+	return fmt.Sprintf("credentials: %d damaged store entr%s cannot be read (%s); the other entries are readable — re-enter the named credentials: %v",
+		len(e.Names), pluralY(len(e.Names)), strings.Join(e.Names, ", "), errors.Join(e.Errs...))
+}
+
+// Unwrap exposes each entry's own error.
+func (e *DamagedEntriesError) Unwrap() []error { return e.Errs }
+
+func pluralY(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
 // HealthCheck checks the store independently of configured credential refs.
 // A locked, unreadable or undecodable store is unhealthy. A nonempty store must
 // have at least one decryptable entry (referenced or not); otherwise its entry
-// errors are returned, preserving ErrWrongKey and any decoding causes. A
-// readable witness leaves individual missing/unreadable refs to their consumers.
-// An absent file or an empty current-format store is healthy and is not written.
+// errors are returned, preserving ErrWrongKey and any decoding causes. With a
+// readable witness, entries whose encoding is damaged (malformed Base64, wrong
+// nonce length) are reported as a *DamagedEntriesError naming them — a
+// visible, scoped failure; entries that fail authentication are still left to
+// their consumers. An absent file or an empty current-format store is healthy
+// and is not written.
 func (s *Store) HealthCheck() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -444,24 +502,29 @@ func (s *Store) HealthCheck() error {
 	}
 	sort.Strings(names)
 	entryErrs := make([]error, 0, len(names))
+	damaged := &DamagedEntriesError{}
+	witness := false
 	for _, name := range names {
-		entry := sf.Credentials[name]
-		// GCM.Open panics on the wrong nonce length. A malformed envelope is
-		// unreadable evidence, not a reason for the health probe to panic.
-		nonce, decodeErr := base64.StdEncoding.DecodeString(entry.Nonce)
-		if decodeErr == nil && len(nonce) != nonceLen {
-			entryErrs = append(entryErrs, fmt.Errorf(
-				"credentials: entry %q is malformed: nonce must be %d bytes, got %d", name, nonceLen, len(nonce)))
+		_, decryptErr := decrypt(s.key, name, sf.Credentials[name])
+		if decryptErr == nil {
+			witness = true
 			continue
 		}
-		if _, decryptErr := decrypt(s.key, name, entry); decryptErr != nil {
-			entryErrs = append(entryErrs, decryptErr)
-		} else {
-			return nil
+		entryErrs = append(entryErrs, decryptErr)
+		var authErr *EntryAuthError
+		if !errors.As(decryptErr, &authErr) {
+			damaged.Names = append(damaged.Names, name)
+			damaged.Errs = append(damaged.Errs, decryptErr)
 		}
 	}
-	return fmt.Errorf("credentials: no store entry could be decrypted (wrong master key or corrupted entries): %w",
-		errors.Join(entryErrs...))
+	if !witness {
+		return fmt.Errorf("credentials: no store entry could be decrypted (wrong master key or corrupted entries): %w",
+			errors.Join(entryErrs...))
+	}
+	if len(damaged.Names) > 0 {
+		return damaged
+	}
+	return nil
 }
 
 // Delete removes the credential named name from the store atomically.
@@ -482,6 +545,18 @@ func (s *Store) Delete(name string) error {
 		return &NotFoundError{Name: name}
 	}
 	delete(sf.Credentials, name)
+	// A card-stored version also carries a recipient metadata row (and, for
+	// a private variable, possibly its selection). Remove them in the same
+	// publication so no valueless "ghost" stays listed (architect WU-6 ruling).
+	if secret, card := sf.CardSecrets[name]; card {
+		delete(sf.CardSecrets, name)
+		if secret.Recipient.Kind == KindAgentPrivate {
+			key := privateKey(secret.Recipient)
+			if sf.PrivateSelected[key] == name {
+				delete(sf.PrivateSelected, key)
+			}
+		}
+	}
 
 	return s.saveFileNoLock(sf)
 }
@@ -722,16 +797,17 @@ func encrypt(key []byte, name string, plaintext []byte) (encEntry, error) {
 // decrypt opens an AES-256-GCM ciphertext, requiring the AAD that binds it to
 // name. A ciphertext sealed under a different name, edited in place, or sealed
 // under a different master key fails authentication and yields a
-// *EntryAuthError naming the entry; malformed base64 yields an error naming it
-// too. The entry name is in every error this function returns.
+// *EntryAuthError naming the entry. Malformed base64 or nonce length yields
+// *EntryEncodingError so callers can distinguish entry damage from a file,
+// lock or cipher-initialization failure without parsing an error message.
 func decrypt(key []byte, name string, entry encEntry) (string, error) {
 	nonce, err := base64.StdEncoding.DecodeString(entry.Nonce)
 	if err != nil {
-		return "", fmt.Errorf("credentials: entry %q is malformed: nonce is not valid base64: %w", name, err)
+		return "", &EntryEncodingError{Name: name, Err: fmt.Errorf("nonce is not valid base64: %w", err)}
 	}
 	ct, err := base64.StdEncoding.DecodeString(entry.Ciphertext)
 	if err != nil {
-		return "", fmt.Errorf("credentials: entry %q is malformed: ciphertext is not valid base64: %w", name, err)
+		return "", &EntryEncodingError{Name: name, Err: fmt.Errorf("ciphertext is not valid base64: %w", err)}
 	}
 
 	block, err := aes.NewCipher(key)
@@ -741,6 +817,11 @@ func decrypt(key []byte, name string, entry encEntry) (string, error) {
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return "", fmt.Errorf("credentials: gcm init: %w", err)
+	}
+	// GCM.Open panics on a nonce of the wrong length; a damaged entry is a
+	// clear, named error for that entry, never a crash (founder 2026-10-15).
+	if len(nonce) != gcm.NonceSize() {
+		return "", &EntryEncodingError{Name: name, Err: fmt.Errorf("nonce must be %d bytes, got %d", gcm.NonceSize(), len(nonce))}
 	}
 	plain, err := gcm.Open(nil, nonce, ct, aadFor(name))
 	if err != nil {

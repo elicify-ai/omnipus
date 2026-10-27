@@ -37,6 +37,15 @@ const (
 	issue1277BrokenAccessRef = "QA1277_LINE_ACCESS"
 	issue1277HealthyAccess   = "qa1277-healthy-access"
 	issue1277ProviderValue   = "qa1277-provider-value"
+	// issue1277UnauthorizedAccess is a credential the fixture recognises and
+	// cleanly rejects with 401 — no fixture error, no t.Error: the
+	// controlled rejection the connect journey's saved-but-not-working
+	// oracle needs (the platform refused the credential, the fixture did
+	// not stumble).
+	issue1277UnauthorizedAccess = "qa1277-unauthorized-access"
+	// Distinct from the pre-existing healthy channel's bearer, so its boot
+	// probe cannot satisfy a new connect journey's platform-call assertion.
+	issue1277ConnectAccess = "qa1277-connect-access"
 )
 
 type issue1277Fixture struct {
@@ -45,6 +54,13 @@ type issue1277Fixture struct {
 	store            *credentials.Store
 	providerCalls    atomic.Int64
 	healthyPushes    atomic.Int64
+	// authorizedProbes counts bot-info probes that presented the accepted
+	// healthy credential — the counted credential-bearing platform request
+	// the successful connect journey must show. unauthorizedProbes counts
+	// the clean-401 rejections.
+	authorizedProbes   atomic.Int64
+	unauthorizedProbes atomic.Int64
+	connectProbes      atomic.Int64
 }
 
 // issue1277Transport redirects LINE's fixed API URL to a loopback protocol
@@ -87,8 +103,20 @@ func newIssue1277Fixture(t *testing.T) *issue1277Fixture {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/v2/bot/info":
-			if r.Header.Get("Authorization") != "Bearer "+issue1277HealthyAccess &&
-				r.Header.Get("Authorization") != "Bearer qa1277-broken-access" {
+			switch r.Header.Get("Authorization") {
+			case "Bearer " + issue1277HealthyAccess, "Bearer qa1277-broken-access":
+				f.authorizedProbes.Add(1)
+			case "Bearer " + issue1277ConnectAccess:
+				f.connectProbes.Add(1)
+			case "Bearer " + issue1277UnauthorizedAccess:
+				// The controlled rejection: a known test credential the
+				// platform refuses, cleanly, with no fixture error.
+				f.unauthorizedProbes.Add(1)
+				w.WriteHeader(http.StatusUnauthorized)
+				_, writeErr := io.WriteString(w, `{"message":"invalid bearer"}`)
+				assert.NoError(t, writeErr)
+				return
+			default:
 				t.Error("LINE bot-info probe did not use the resolved fixture credential")
 				w.WriteHeader(http.StatusUnauthorized)
 				return
@@ -147,6 +175,16 @@ func newIssue1277Fixture(t *testing.T) *issue1277Fixture {
 	f.cfg.Agents.Defaults.Home = filepath.Join(f.home, "agents")
 	f.cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Provider: "qa1277", Model: "health-probe"}
 	f.cfg.Tools.Browser.Enabled = false
+	// The fixture's model must have a context length: the qa1277 row is a
+	// loopback custom endpoint, and ADR-066 D3's pre-turn gate
+	// (pkg/agent/loop_run_turn.go) refuses ANY turn against a local endpoint
+	// with no reported window and no override (context_window_unknown) — a
+	// turn-running test would die before reaching its tool call. 128000 is
+	// the repo's documented window size (resolve_window.go cloudWindowFloor,
+	// SC-009); any positive value admits the turn, the scripted provider is
+	// what actually answers it.
+	f.cfg.Context.ModelOverrides = append(f.cfg.Context.ModelOverrides,
+		config.ContextModelOverride{Provider: "qa1277", Model: "health-probe", ContextWindow: 128000})
 	f.cfg.Providers = []*config.ModelConfig{{
 		Provider: "qa1277", Model: "health-probe", Models: []string{"health-probe"}, Custom: true,
 		Protocol: "openai-compatible", APIBase: server.URL + "/v1", APIKeyRef: issue1277ProviderRef,

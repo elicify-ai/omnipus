@@ -20,6 +20,7 @@ import { useChatStore, makeBucketMessages } from './chat'
 import type { SessionChatState, ChatMessage } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import type { WsConnection } from '@/lib/ws'
 import { queryClient } from '@/lib/queryClient'
 import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
@@ -64,6 +65,7 @@ beforeEach(resetStore)
 
 function bucketFor(msgs: ChatMessage[]): SessionChatState {
   return {
+    ...emptyHistoryFixture(),
     ...makeBucketMessages(msgs),
     toolCalls: {},
     toolCallOrder: [],

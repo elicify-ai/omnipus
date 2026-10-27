@@ -323,13 +323,12 @@ var allStaticToolNames = []string{
 	// implementation. Shipped at the
 	// global ceiling as "ask": the existing tool-approval mechanism IS the
 	// approval. Founder ruling (2026-09-18): setup permission is set at BOTH
-	// levels — the ceiling asks, AND every agent permitted to set up
-	// environments carries an explicit stored "ask" of its own (Mia, General
-	// Purpose, Admin via the deliberate-posture list in
-	// adr090SparseRolePolicies; new custom native agents via the constructor
-	// below), so a later ceiling raise loosens none of them. Jim, Ava,
-	// Planner and Researcher persist an explicit deny; Judge and Plan
-	// Supervisor stay locked deny via systemAgentSeed. Same one-commit rule
+	// levels — the ceiling asks, AND the Main/Worker defaults carry a stored
+	// "ask" of their own, so a later ceiling raise does not remove that
+	// posture. The 2026-10-22 default table extends Ask to every ordinary
+	// Main/Worker role; Omnipus keeps its no-per-agent-Ask exception and
+	// rides the ceiling. Judge and Plan Supervisor stay locked deny via
+	// systemAgentSeed. Same one-commit rule
 	// as every block above — the ceiling entry (pkg/config/defaults.go's
 	// defaultToolPoliciesGeneral), the per-agent seeds and this literal land
 	// together.
@@ -424,7 +423,13 @@ func coreAgentSkills(id CoreAgentID) []string {
 	case IDJim:
 		return []string{"interview", "orchestrate", "plan", "define-goal"}
 	case IDOmnipus:
-		return []string{"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team", "mcp-install", "provider-setup", "channel-setup", "doctor"}
+		// omnipus-system-agent FR-010/WU-9: the Omnipus workflow skills,
+		// granted to Omnipus only; interview stays shared with Mia and Jim.
+		return []string{"interview",
+			"create-agent", "change-agent", "remove-agent", "write-skill", "install-skill",
+			"team-delegation", "welcome-workspace", "add-connector", "remove-connector",
+			"add-provider", "provider-config", "connect-channel", "disable-channel",
+			"doctor-usage", "shell-diagnosis", "team-setup", "capability-plan", "dependency-check"}
 	case IDPlanner:
 		return []string{"plan", "define-goal"}
 	case IDResearcher:
@@ -862,160 +867,132 @@ const SkillsMigrationDefineDone = "adr074-define-done"
 // marker sits outside those two scanned roots regardless.
 const SkillsMigrationDefineGoalRename = "adr080-define-goal-rename"
 
-// NewCustomAgentToolsCfg returns the default AgentToolsCfg for a newly created
-// custom/subagent/subagent_3p agent (FR-008, FR-022). Every new agent starts
-// fully-enumerated and deny-by-default (via denyAllThenOverride) — there is
-// no DefaultPolicy field and no allow-by-default fallback. Only a narrow,
-// conservative read-only surface is allowed out of the box (plus the
-// structural ToolSearch floor every agent gets — CLAUDE.md constraint 6, see
-// the "ToolSearch" entry below); the operator opts in explicitly (via the
-// tool picker or tools.builtin.policies) for anything else, including bash
-// and every system-management tool (create_agent, set_config,
-// add_mcp_server, …), which all stay denied.
+// NewCustomAgentToolsCfg returns the Main-agent creation defaults (founder
+// ruling, 2026-10-22). denyAllThenOverride still enumerates EVERY static tool
+// explicitly (R-12): only the named workflow tools below are granted; other
+// tools, including administration and bash, stay denied. These are editable
+// per-agent policies, not a runtime fallback or an extra permission layer.
+// The global ceiling still bounds every grant under strictest-wins.
 //
-// Callers should embed this into config.AgentConfig.Tools when constructing a
-// new agent via the REST API or create_agent tool.
+// REST create, create_agent and get_agent_tools preview share this constructor.
+// Worker callers apply RestrictForWorkerTier before any operator overrides.
+// Each call returns independent maps so one agent cannot change another's seed.
 //
-// bash:deny rationale (CRIT-001/FR-B12): pkg/tools/compositor.go's
-// passesScopeGate does NOT hard-deny ScopeCore tools (which "bash" is) for
-// custom agents — it defers to the merged policy. Denying it here explicitly
-// (rather than relying on an absent map entry) is what keeps a fresh agent
-// from getting shell access with zero configuration. This is the SINGLE
-// shared seed location for both agent-creation paths (the REST
-// POST /api/v1/agents handler in pkg/gateway/rest.go's createAgent, and the
-// LLM-driven system.agent.create tool in
-// pkg/sysagent/tools/agent.go's AgentCreateTool.Execute) — both call this
-// constructor rather than seeding independently, so the two paths cannot
-// drift out of sync again. Renamed from "exec" to "bash" by ADR-036 (the
-// tool-consolidation work this seed anticipated — see the migration in
-// pkg/config/shell_tool_policy_migration.go for existing persisted "exec"
-// policy entries).
+// bash:deny remains unchanged (CRIT-001/FR-B12): the scope gate defers to the
+// merged policy for custom agents. An explicit deny keeps a fresh agent from
+// gaining shell access just because the global ceiling permits it.
 func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
-	allow := config.ToolPolicyAllow
-	ask := config.ToolPolicyAsk
-	policies := &config.AgentToolsCfg{
+	allow, ask := config.ToolPolicyAllow, config.ToolPolicyAsk
+	return &config.AgentToolsCfg{
 		Builtin: config.AgentBuiltinToolsCfg{
 			Policies: denyAllThenOverride(map[string]config.ToolPolicy{
-				// AskUserQuestion (spec US-7 S1): customs' default allowlist
-				// carries it — every human-facing agent may ask the user
-				// structured clarification questions; never `ask`-gate asking.
-				"AskUserQuestion": allow,
-				// set_goal (ADR-088 D2): customs' default allowlist carries
-				// it too — every human-facing agent may author its own
-				// session's goal record, seeded alongside AskUserQuestion.
-				"set_goal": allow,
-				// goal_claim (ADR-084 D12, JUDGE-FR-089): customs' default
-				// allowlist carries it too, seeded alongside set_goal — see
-				// that entry's comment above. R-12: this is the SEVENTH
-				// per-agent policy map, and every new tool name in this
-				// delivery gets an explicit, intended entry here too — an
-				// absent key is not an unknown key, so validateOverrideKeys
-				// does not panic, but a fresh custom agent would silently
-				// resolve the tool to the denyAllThenOverride floor (deny)
-				// with no test noticing.
-				"goal_claim": allow,
-				// browser_handover (ADR-085 BROWSER-FR-051, C-70): EXPLICIT
-				// deny, not absence, for the same R-12 reason directly
-				// above. Customs' default allowlist grants no browser_*
-				// tool at all (see the conservative initial allow-list
-				// below), so it holds no browser action set to stand down
-				// from — an operator who wants a custom agent driving the
-				// browser changes this entry on their own install.
-				"browser_handover": config.ToolPolicyDeny,
-				// Conservative initial allow-list: read-only filesystem +
-				// persistent memory. Everything else — bash included — stays
-				// denied until the operator opts in.
-				"read_file":      allow,
-				"list_directory": allow,
-				// library_list/library_read (D3, library-spec) are part of
-				// the same read-only filesystem surface as read_file/
-				// list_directory above — a fresh agent can find and read
-				// whatever the operator uploaded to this workspace's chat.
-				"library_list":  allow,
-				"library_read":  allow,
-				"request_mount": ask,
-				// environment_setup (ADR-090 ES-FR-01, founder ruling
-				// 2026-09-18: setup permission is set at BOTH levels):
-				// new custom native agents stamp an explicit per-agent
-				// "ask", the same deliberate-posture data Mia, General
-				// Purpose and Admin carry — NOT an omission riding the
-				// ceiling — so a later ceiling raise loosens no one.
-				// Precedent: request_mount above (ceiling ask, per-agent
-				// ask; strictest-wins keeps ask+ask → ask). Both creation
-				// routes (REST create, create_agent) and the
-				// get_agent_tools preview read this ONE constructor, so
-				// creation default and preview cannot drift. A saved
-				// operator override (deny included) always wins over this
-				// default.
-				"environment_setup":   ask,
-				"list_mounts":         allow,
+				// Asking a question is itself allowed, never approval-gated.
+				"AskUserQuestion":     allow,
+				"send_message":        allow,
+				"message_parent":      allow,
+				"answer_request":      allow,
+				"read_conversation":   allow,
+				"set_todos":           allow,
+				"goal_claim":          allow,
+				"set_goal":            allow,
 				"remember":            allow,
 				"recall_memory":       allow,
-				"run_retrospective":   allow,
 				"recall_conversation": allow,
-				// Spec §6.5 (FR-007): a new custom MAIN agent may ask for its
-				// own secrets on the card, list them and read its own
-				// conversations. The worker tier gets deny instead —
-				// RestrictForWorkerTier applies that at creation time.
-				"request_secret":    allow,
-				"list_secrets":      allow,
-				"read_conversation": allow,
-				// Founder decision #1294 (2026-10-14): new custom agents can
-				// talk to each other by default — send_message is both the
-				// sending tool and the RECEIVER's admission policy
-				// (address_router.go::receiverSendPolicy), and answer_request
-				// is how a request is answered. Membership checks are
-				// unchanged, and an explicit per-agent deny still refuses.
-				"send_message":   allow,
-				"answer_request": allow,
-				// Structural floor (CLAUDE.md constraint 6): every agent needs
-				// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
-				// seeded here as real data rather than the retired compositor.go
-				// hardcoded force-allow.
-				"ToolSearch": allow,
-				// Structural floor (ADR-072 D1, mirroring the ToolSearch
-				// structural floor immediately above): every agent needs the
-				// Skill tool to load ANY skill's content at all — the "# Skills"
-				// menu advertises skills but nothing else can ever load one.
-				"Skill": allow,
-				// ADR-081 D11 (FR-009), FOUNDER RULING (2026-09-07, updated
-				// after this constructor originally shipped grep as a
-				// hardcoded deny like every other unopted-in tool): "There
-				// must not be any tool default to deny — the global policy
-				// sets the default, not any hardcoded default." grep is
-				// EXPLICIT "allow" here, not merely omitted: this map is
-				// built via denyAllThenOverride, which fully enumerates
-				// every static builtin name with a literal value (no sparse
-				// variant exists for this constructor — see
-				// TestAgentConstructor_CustomAgent_DenyByDefaultFullCoverage's ElementsMatch pin and
-				// pkg/gateway/rest.go's createAgent, which validates a
-				// CALLER-submitted map for completeness via
-				// ValidateSubmittedToolPolicyMap under the same
-				// fully-enumerated contract), so an explicit "allow" is the
-				// only way to make a brand-new custom agent's grep resolve
-				// to the global ceiling's "allow" instead of a hardcoded
-				// per-agent deny that would otherwise BEAT the ceiling under
-				// strictest-wins. This closes the one gap the original
-				// ADR-081 D11 governance change deliberately left open (a
-				// fresh custom agent still denied grep by default,
-				// unlike every pre-existing agent's upgrade-path backfill,
-				// which already resolves allow — see
-				// tool_policy_catalog_drift.go's matching MV-8 exception).
-				"grep": allow,
+				"run_retrospective":   allow,
+				"delegate":            allow,
+				"list_agents":         allow,
+				"get_agent":           allow,
+				"get_agent_tools":     allow,
+				"inspect_session":     allow,
+				"list_jobs":           allow,
+				"create_plan":         allow,
+				"execute_plan":        allow,
+				"stop_plan":           allow,
+				"plan_correct":        allow,
+				"list_tasks":          allow,
+				"update_task":         allow,
+				"create_task":         allow,
+				"delete_task":         ask,
+				// Discovery and skill loading are seeded data, not forced
+				// grants in the compositor. Skill authoring keeps Ask.
+				"Skill":        allow,
+				"ToolSearch":   allow,
+				"find_skills":  allow,
+				"list_skills":  allow,
+				"create_skill": ask,
+				"edit_skill":   ask,
+				"search_web":   allow,
+				"fetch_url":    allow,
+				// A browsing agent can also recover dialogs and hand over
+				// the browser. Upload alone keeps its consent gate.
+				"browser_navigate":      allow,
+				"browser_click":         allow,
+				"browser_type":          allow,
+				"browser_screenshot":    allow,
+				"browser_get_text":      allow,
+				"browser_wait":          allow,
+				"browser_evaluate":      allow,
+				"browser_list_tabs":     allow,
+				"browser_switch_tab":    allow,
+				"browser_close_tab":     allow,
+				"browser_open_tab":      allow,
+				"browser_select_option": allow,
+				"browser_press_key":     allow,
+				"browser_hover":         allow,
+				"browser_snapshot":      allow,
+				"browser_handle_dialog": allow,
+				"browser_handover":      allow,
+				"browser_upload_file":   ask,
+				"read_file":             allow,
+				"list_directory":        allow,
+				"grep":                  allow,
+				"list_mounts":           allow,
+				// Library reads reach files uploaded to this workspace;
+				// writes remain subject to the normal filesystem checks.
+				"library_list":  allow,
+				"library_read":  allow,
+				"write_file":    allow,
+				"edit_file":     allow,
+				"append_file":   allow,
+				"send_file":     allow,
+				"request_mount": ask,
+				"serve_web":     allow,
+				// Drafting and received attachments do not send mail.
+				"read_inbox":                allow,
+				"search_email":              allow,
+				"read_message":              allow,
+				"create_email_draft":        allow,
+				"list_email_attachments":    allow,
+				"read_email_attachment":     allow,
+				"download_email_attachment": allow,
+				"send_email":                ask,
+				"reply":                     ask,
+				"list_secrets":              allow,
+				"request_secret":            allow,
+				"list_workspaces":           allow,
+				"get_workspace":             allow,
+				// Setup approval is explicit at both levels so a later
+				// ceiling raise does not remove the agent's Ask posture.
+				"environment_setup": ask,
+				"bash":              config.ToolPolicyDeny,
 			}),
 		},
 	}
-	return policies
 }
 
-// workerTierDeniedTools are the §6.5 tools a new custom MAIN agent is
-// granted but the worker tier (wire Subagent / subagent_3p) is not
-// (OR-MIN-002): workers never see the secret card or other conversations.
-var workerTierDeniedTools = []string{"request_secret", "list_secrets", "read_conversation"}
+// workerTierDeniedTools is the Main-only set from the 2026-10-22 default
+// tool table. Workers may list secrets but ask their main agent to request
+// one; they do not author goals, plans, new tasks or retrospectives.
+var workerTierDeniedTools = []string{
+	"answer_request", "read_conversation", "set_goal", "run_retrospective",
+	"create_plan", "execute_plan", "stop_plan", "plan_correct", "create_task",
+	"request_secret",
+}
 
-// RestrictForWorkerTier tightens a NewCustomAgentToolsCfg map for a new
-// worker-tier agent: the §6.5 main-only tools become explicit deny. A nil
-// cfg is left alone.
+// RestrictForWorkerTier turns Main creation defaults into Worker defaults
+// (native Subagent or external subagent_3p). This seeds explicit denies, not
+// an immutable restriction: callers apply operator overrides afterwards.
+// A nil cfg or policy map is left alone.
 func RestrictForWorkerTier(cfg *config.AgentToolsCfg) {
 	if cfg == nil || cfg.Builtin.Policies == nil {
 		return

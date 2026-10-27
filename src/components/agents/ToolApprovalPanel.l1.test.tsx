@@ -1,7 +1,7 @@
 // U3-C01–C05. Binding L1 amendment §1.2 R2/R6, §1.5; K7,
 // FR-092/240/251; BDD-11.2/11.3. B3 completeness/stub removal excluded.
 import { it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
 import { useToolApprovalStore } from '@/store/toolApproval'
@@ -94,6 +94,21 @@ it.each([
   enqueue({ ...request, root_session_id: 'receiver-main', origin_label: origin, room_ref: room })
   expect(screen.getByTestId('tool-approval-panel')).toHaveTextContent(origin)
   expect(screen.getByTestId('tool-approval-panel')).toHaveTextContent('Setup helper')
+  // K7 element-level pin (Train 3 CI cause F re-aim): the origin renders in its
+  // own labelled element — exact text, not merely a substring somewhere in
+  // the card.
+  const panel = screen.getByTestId('tool-approval-panel')
+  expect(within(panel).getByTestId('tool-approval-origin').textContent).toBe(origin)
+  expect(approvalPosts()).toEqual([])
+})
+
+it('K7: an omitted origin renders no origin element — no empty label, no guessed origin', () => {
+  act(() => useSessionStore.setState({ activeSessionId: 'receiver-main' }))
+  mount()
+  enqueue({ ...request, root_session_id: 'receiver-main', origin_label: undefined })
+  const panel = screen.getByTestId('tool-approval-panel')
+  expect(within(panel).queryByTestId('tool-approval-origin')).not.toBeInTheDocument()
+  expect(within(panel).getByRole('button', { name: /^Approve Once$/i })).toBeEnabled()
   expect(approvalPosts()).toEqual([])
 })
 

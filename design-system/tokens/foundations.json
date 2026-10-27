@@ -1208,6 +1208,38 @@
       "description": "Preserved sheet and onboarding entrance duration."
     },
     {
+      "id": "motion.agentIcon.thinking.duration",
+      "css": "--motion-agent-icon-thinking-duration",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "2600ms",
+      "description": "Commissioned Thinking breath/glow cycle, shared with inline status text."
+    },
+    {
+      "id": "motion.agentIcon.working.duration",
+      "css": "--motion-agent-icon-working-duration",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "1600ms",
+      "description": "Commissioned Working pump/glow cycle, shared with inline status text."
+    },
+    {
+      "id": "motion.agentIcon.waiting.duration",
+      "css": "--motion-agent-icon-waiting-duration",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "3400ms",
+      "description": "Commissioned Waiting pop/flash cycle, shared with inline status text."
+    },
+    {
+      "id": "motion.agentStatus.text.minimumOpacity",
+      "css": "--motion-agent-status-text-minimum-opacity",
+      "layer": "primitive",
+      "kind": "number",
+      "value": 0.9,
+      "description": "Subtle inline status pulse floor; muted text retains normal-text contrast on dark surfaces."
+    },
+    {
       "id": "motion.loading.delay",
       "css": "--motion-loading-delay",
       "layer": "primitive",

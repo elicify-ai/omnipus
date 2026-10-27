@@ -779,7 +779,7 @@ func copyTaskCreateOrderingFields(t *task.Task, req *gen.TaskCreateRequest) {
 func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var req gen.TaskCreateRequest
-	if !decodeAndValidate(w, r, "TaskCreateRequest", &req, validateEnabled) {
+	if !decodeTaskTodoBody(w, r, "TaskCreateRequest", &req, validateEnabled) {
 		return
 	}
 
@@ -917,7 +917,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Todos != nil {
 		for _, td := range *req.Todos {
-			t.Todos = append(t.Todos, task.Todo{Text: td.Text, Status: task.TodoStatus(td.Status)})
+			t.Todos = append(t.Todos, todoFromWire(td.Text, string(td.Status), td.ActiveForm))
 		}
 	}
 	if req.Trigger != nil {
@@ -1040,7 +1040,7 @@ func (tp *taskPatch) validate() bool {
 	}
 	validateEnabled := tp.a.agentLoop.GetConfig().Gateway.ValidateInbound
 
-	if !decodeAndValidate(tp.w, tp.r, "TaskUpdateRequest", &tp.req, validateEnabled) {
+	if !decodeTaskTodoBody(tp.w, tp.r, "TaskUpdateRequest", &tp.req, validateEnabled) {
 		return true
 	}
 
@@ -1200,7 +1200,7 @@ func (tp *taskPatch) buildPatch() bool {
 	if tp.req.Todos != nil {
 		todos := make([]task.Todo, 0, len(*tp.req.Todos))
 		for _, td := range *tp.req.Todos {
-			todos = append(todos, task.Todo{Text: td.Text, Status: task.TodoStatus(td.Status)})
+			todos = append(todos, todoFromWire(td.Text, string(td.Status), td.ActiveForm))
 		}
 		tp.patch.Todos = &todos
 	}
@@ -1805,12 +1805,12 @@ func (a *restAPI) handleTaskTodos(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	var body gen.SetTaskTodosJSONRequestBody
-	if !decodeTaskJSONBody(w, r, &body) {
+	if !decodeTaskTodoBody(w, r, "", &body, false) {
 		return
 	}
 	todos := make([]task.Todo, 0, len(body))
 	for _, td := range body {
-		todos = append(todos, task.Todo{Text: td.Text, Status: task.TodoStatus(td.Status)})
+		todos = append(todos, todoFromWire(td.Text, string(td.Status), td.ActiveForm))
 	}
 	a.applyTaskFieldUpdate(w, id, task.Patch{Todos: &todos}, "todos")
 }

@@ -6506,7 +6506,27 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/useCurrentTodo.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ChatScreen.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ChatMessageList.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/HistoryBoundary.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useChatHistory.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useHistoryViewport.ts",
       "lane": 3
     },
     {
@@ -6695,6 +6715,14 @@
     },
     {
       "source": "src/components/chat/tools/BrowserTool.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/ConnectChannelTool.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/ConnectChannelToolUI.tsx",
       "lane": 3
     },
     {
@@ -7555,6 +7583,10 @@
     },
     {
       "source": "src/components/skills/WhatsAppPairingBody.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/useWhatsAppPairingInterest.ts",
       "lane": 5
     },
     {

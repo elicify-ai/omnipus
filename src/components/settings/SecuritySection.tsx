@@ -52,6 +52,7 @@ import {
   fetchBuiltinTools,
   fetchGlobalToolPolicies,
   updateGlobalToolPolicies,
+  isPersistedPolicyActivationError,
   fetchSandboxConfig,
   updateSandboxConfig,
   fetchSandboxStatus,
@@ -109,7 +110,7 @@ function GlobalToolPoliciesSection() {
       await updateGlobalToolPolicies(cfg)
       queryClient.invalidateQueries({ queryKey: ['global-tool-policies'] })
     },
-    { disabled: !isDraftReady },
+    { disabled: !isDraftReady, isPersistedError: isPersistedPolicyActivationError },
   )
 
   const isLoading = toolsLoading || policiesLoading

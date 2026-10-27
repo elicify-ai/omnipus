@@ -20,6 +20,7 @@ import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import * as React from 'react'
 import { useChatStore, makeBucketMessages, type ChatMessage } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -31,7 +32,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
     ...actual,
-    useQuery: () => ({ data: [], isError: false, refetch: vi.fn() }),
+    useQuery: (opts: { queryKey?: readonly unknown[] }) => ({ data: queryDataWithEmptyHistory(opts?.queryKey), isError: false, refetch: vi.fn() }),
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
   }
@@ -44,12 +45,14 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchAboutInfo: vi.fn().mockResolvedValue({}),
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
@@ -100,12 +103,11 @@ function frame(): ServerFrame {
 }
 
 function seedBucket(messages: ChatMessage[]): void {
-  const bucket = makeBucketMessages(messages)
+  const bucket = { ...emptySessionState(), ...makeBucketMessages(messages) }
   useChatStore.setState((s) => ({
     ...s,
     sessionsById: {
       [SID]: {
-        ...((s.sessionsById ?? {})[SID] ?? {}),
         ...bucket,
         isStreaming: false,
         isReplaying: false,
@@ -123,6 +125,7 @@ function seedBucket(messages: ChatMessage[]): void {
       },
     },
     messages,
+    history: bucket.history,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,

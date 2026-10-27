@@ -22,7 +22,11 @@ import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
 import type { Session } from '@/lib/api'
 import type { ServerFrame, WsConnection } from '@/lib/ws'
+import type { SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
 import { noteForegroundAttach } from './foregroundAck'
+import { availableHistoryDetail } from '../../../tests/chat-history-paging/legacy-fixtures'
+import { expectValidFrame, expectValidPage, page, snapshot } from '../../../tests/chat-history-paging/fixtures'
+import { loadFixtureHistory } from '../../../tests/chat-history-paging/load-fixture-history'
 
 /** Real loaded session metadata as the sidebar's ['sessions'] query holds it. */
 function mainSession(id: string, overrides: Partial<Session> = {}): Session {
@@ -53,15 +57,16 @@ function chatSession(id: string): Session {
 }
 
 /** Generated SessionStateFrame attach answer; the bound is optional per the contract. */
-function stateFrame(sid: string, attentionBound?: number): ServerFrame {
+function stateFrame(sid: string, attentionBound?: number): SessionStateFrame {
   return {
     type: 'session_state',
     user_id: '',
     pending_approvals: [],
     emitted_at: '2026-10-10T00:00:00Z',
     session_id: sid,
+    history_state: { status: 'available' },
     ...(attentionBound === undefined ? {} : { attention_bound: attentionBound }),
-  } as unknown as ServerFrame
+  }
 }
 
 function catchUpComplete(sid: string): ServerFrame {
@@ -87,7 +92,7 @@ function connectionThat(delivers: boolean): WsConnection {
 }
 
 /** Production setup: active session, chat store, connection, loaded roster metadata, visible tab, foreground attach. */
-function shownForeground(sid: string, loaded: Session[]): void {
+async function shownForeground(sid: string, loaded: Session[]): Promise<void> {
   useSessionStore.setState({ activeSessionId: sid })
   useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)
   useConnectionStore.setState({ connection: connectionThat(true) } as never)
@@ -95,17 +100,18 @@ function shownForeground(sid: string, loaded: Session[]): void {
   // the cold-cache / deferred-acknowledgement scenarios start honest.
   if (loaded.length > 0) queryClient.setQueryData(['sessions'], loaded)
   hiddenSpy.mockReturnValue(false)
+  // A prior validated page permits incremental catch-up. REST does not add
+  // a fabricated attention answer to this NEW shown-open record.
+  await loadFixtureHistory(useChatStore, sid)
   noteForegroundAttach(sid)
 }
 
 function snapshotFrame(sid: string): ServerFrame {
-  return {
-    type: 'session_snapshot',
-    session_id: sid,
-    seq: 3,
-    boot_id: 'boot-s',
-    reason: 'unknown_position',
-  } as unknown as ServerFrame
+  const history = page([], { sessionId: sid })
+  expectValidPage(history, [], 0)
+  const frame: ServerFrame = { ...snapshot(history), seq: 4, boot_id: 'boot-s' }
+  expectValidFrame(frame)
+  return frame
 }
 
 beforeEach(() => {
@@ -118,12 +124,13 @@ afterEach(() => {
   queryClient.removeQueries({ queryKey: ['sessions'] })
   useConnectionStore.setState({ connection: null } as never)
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('shown-commit acknowledgement through the production path (seam unmocked)', () => {
-  it('a shown main acknowledges with exactly { ack_attention: true, attention_bound: 7 } from the attach response SessionStateFrame', () => {
+  it('a shown main acknowledges with exactly { ack_attention: true, attention_bound: 7 } from the attach response SessionStateFrame', async () => {
     const sid = 'main-ack-positive'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -133,9 +140,9 @@ describe('shown-commit acknowledgement through the production path (seam unmocke
     ])
   })
 
-  it('no bound on the attach response ⇒ nothing is sent (no ack fields, never a substituted number)', () => {
+  it('no bound on the attach response ⇒ nothing is sent (no ack fields, never a substituted number)', async () => {
     const sid = 'main-ack-no-bound'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
 
     useChatStore.getState().handleFrame(stateFrame(sid))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -143,9 +150,9 @@ describe('shown-commit acknowledgement through the production path (seam unmocke
     expect(sent).toEqual([])
   })
 
-  it('a bound of 9 arriving before the retry never changes the captured bound of 7 (never recapture)', () => {
+  it('a bound of 9 arriving before the retry never changes the captured bound of 7 (never recapture)', async () => {
     const sid = 'main-ack-retry'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
     // First attempt fails to deliver: the fields are captured, not acked.
     useConnectionStore.setState({ connection: connectionThat(false) } as never)
 
@@ -163,9 +170,9 @@ describe('shown-commit acknowledgement through the production path (seam unmocke
     ])
   })
 
-  it('a non-main session is never acknowledged', () => {
+  it('a non-main session is never acknowledged', async () => {
     const sid = 'extra-chat-no-ack'
-    shownForeground(sid, [chatSession(sid)])
+    await shownForeground(sid, [chatSession(sid)])
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -173,9 +180,9 @@ describe('shown-commit acknowledgement through the production path (seam unmocke
     expect(sent).toEqual([])
   })
 
-  it('a background (hidden-tab) attach is a prefetch and never acknowledges', () => {
+  it('a background (hidden-tab) attach is a prefetch and never acknowledges', async () => {
     const sid = 'main-ack-background'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
     hiddenSpy.mockReturnValue(true)
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
@@ -184,9 +191,9 @@ describe('shown-commit acknowledgement through the production path (seam unmocke
     expect(sent).toEqual([])
   })
 
-  it('an attach overtaken by another active session (reconnect) never acknowledges', () => {
+  it('an attach overtaken by another active session (reconnect) never acknowledges', async () => {
     const sid = 'main-ack-overtaken'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
     useSessionStore.setState({ activeSessionId: 'some-other-session' })
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
@@ -197,10 +204,10 @@ describe('shown-commit acknowledgement through the production path (seam unmocke
 })
 
 describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the ack must not be lost)', () => {
-  it('a direct open whose validated session-detail is loaded acknowledges exactly once with the captured bound', () => {
+  it('a direct open whose validated session-detail is loaded acknowledges exactly once with the captured bound', async () => {
     const sid = 'main-ack-cold-detail'
-    shownForeground(sid, []) // the sidebar roster has NOT resolved
-    queryClient.setQueryData(['session-detail', sid], { session: mainSession(sid), messages: [] })
+    await shownForeground(sid, []) // the sidebar roster has NOT resolved
+    queryClient.setQueryData(['session-detail', sid], availableHistoryDetail(mainSession(sid)))
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -210,9 +217,9 @@ describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the
     ])
   })
 
-  it('metadata still unknown at completion defers: the ack sends when the roster resolves, with the ORIGINAL bound — a newer frame never replaces it', () => {
+  it('metadata still unknown at completion defers: the ack sends when the roster resolves, with the ORIGINAL bound — a newer frame never replaces it', async () => {
     const sid = 'main-ack-defer'
-    shownForeground(sid, []) // nothing loaded at attach time
+    await shownForeground(sid, []) // nothing loaded at attach time
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -227,9 +234,9 @@ describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the
     ])
   })
 
-  it('a deferred ack is dropped when the session is no longer the active foreground chat when the metadata resolves', () => {
+  it('a deferred ack is dropped when the session is no longer the active foreground chat when the metadata resolves', async () => {
     const sid = 'main-ack-defer-moved-on'
-    shownForeground(sid, [])
+    await shownForeground(sid, [])
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
 
@@ -239,9 +246,9 @@ describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the
     expect(sent).toEqual([])
   })
 
-  it('a deferred ack is dropped when another attach has replaced the shown foreground commit', () => {
+  it('a deferred ack is dropped when another attach has replaced the shown foreground commit', async () => {
     const sid = 'main-ack-defer-replaced'
-    shownForeground(sid, [])
+    await shownForeground(sid, [])
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
 
@@ -251,9 +258,9 @@ describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the
     expect(sent).toEqual([])
   })
 
-  it('metadata that resolves with UNKNOWN attention never produces ack fields (R2-T2)', () => {
+  it('metadata that resolves with UNKNOWN attention never produces ack fields (R2-T2)', async () => {
     const sid = 'main-ack-unknown-attention'
-    shownForeground(sid, [mainSession(sid, { needs_attention: undefined })])
+    await shownForeground(sid, [mainSession(sid, { needs_attention: undefined })])
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -264,12 +271,17 @@ describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the
     expect(sent).toEqual([])
   })
 
-  it('full-snapshot attach answer: snapshot without a bound, then session_state with 7, then snapshot-mode completion ⇒ exactly one ack with 7 (R2-T1)', () => {
+  it('full-snapshot attach answer: snapshot without a bound, then session_state with 7, then snapshot-mode completion ⇒ exactly one ack with 7 (R2-T1)', async () => {
     const sid = 'main-ack-full-snapshot'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
 
     useChatStore.getState().handleFrame(snapshotFrame(sid))
-    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    const current: ServerFrame = { ...stateFrame(sid, 7), history_state: { status: 'available' } }
+    expectValidFrame(current)
+    useChatStore.getState().handleFrame(current)
+    const replayDone: ServerFrame = { type: 'done', session_id: sid }
+    expectValidFrame(replayDone)
+    useChatStore.getState().handleFrame(replayDone)
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete',
       session_id: sid,
@@ -285,9 +297,9 @@ describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the
 })
 
 describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no-write row ~L191)', () => {
-  it('I2: a reconnect completion carrying bound 9 never replaces the deferred 7 — resolution acks the original 7', () => {
+  it('I2: a reconnect completion carrying bound 9 never replaces the deferred 7 — resolution acks the original 7', async () => {
     const sid = 'main-ack-i2-reconnect'
-    shownForeground(sid, []) // metadata unknown at the shown commit
+    await shownForeground(sid, []) // metadata unknown at the shown commit
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -301,9 +313,9 @@ describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no
     ])
   })
 
-  it('I4: a failed deferred send keeps the record — after recovery and a newer completion, exactly one ack carries the original 7', () => {
+  it('I4: a failed deferred send keeps the record — after recovery and a newer completion, exactly one ack carries the original 7', async () => {
     const sid = 'main-ack-i4-failed-deferred-send'
-    shownForeground(sid, [])
+    await shownForeground(sid, [])
     useConnectionStore.setState({ connection: connectionThat(false) } as never)
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
@@ -321,9 +333,9 @@ describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no
     ])
   })
 
-  it('I3: a retry after the user opened a different chat sends nothing', () => {
+  it('I3: a retry after the user opened a different chat sends nothing', async () => {
     const sid = 'main-ack-i3-retry-after-switch'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
     useConnectionStore.setState({ connection: connectionThat(false) } as never)
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
@@ -337,9 +349,9 @@ describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no
     expect(sent).toEqual([])
   })
 
-  it('I3: a retry while still the foreground chat sends the original 7 exactly once', () => {
+  it('I3: a retry while still the foreground chat sends the original 7 exactly once', async () => {
     const sid = 'main-ack-i3-retry-in-front'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
     useConnectionStore.setState({ connection: connectionThat(false) } as never)
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
@@ -358,9 +370,9 @@ describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no
   // reconnect completion while the tab is hidden is a prefetch and sends
   // nothing; the SAME record still sends its original bound once the tab is
   // visible again — the guard waits, it does not cancel.
-  it('I3: a reconnect completion while hidden sends nothing; the same record sends its original 7 once visible', () => {
+  it('I3: a reconnect completion while hidden sends nothing; the same record sends its original 7 once visible', async () => {
     const sid = 'main-ack-i3-hidden-reconnect'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
     useConnectionStore.setState({ connection: connectionThat(false) } as never)
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
@@ -379,9 +391,9 @@ describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no
     ])
   })
 
-  it('I5: a populated roster that omits the target session is not borrowed — no ack fields', () => {
+  it('I5: a populated roster that omits the target session is not borrowed — no ack fields', async () => {
     const sid = 'main-ack-i5-not-listed'
-    shownForeground(sid, [mainSession('another-main-entirely')])
+    await shownForeground(sid, [mainSession('another-main-entirely')])
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -392,9 +404,9 @@ describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no
     expect(sent).toEqual([])
   })
 
-  it('I5: unknown attention arriving through the deferred resolver sends no ack fields', () => {
+  it('I5: unknown attention arriving through the deferred resolver sends no ack fields', async () => {
     const sid = 'main-ack-i5-deferred-unknown-attention'
-    shownForeground(sid, []) // defer first: metadata unknown
+    await shownForeground(sid, []) // defer first: metadata unknown
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -410,9 +422,9 @@ describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no
 })
 
 describe('final round (R1–R3): the record belongs to exactly one shown open', () => {
-  it('R1: a completion without a number closes the record — a later reconnect never fills it; a fresh open acks its own number', () => {
+  it('R1: a completion without a number closes the record — a later reconnect never fills it; a fresh open acks its own number', async () => {
     const sid = 'main-ack-r1-boundless'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
 
     // The shown open completes without any bound on its attach answer.
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -432,9 +444,9 @@ describe('final round (R1–R3): the record belongs to exactly one shown open', 
     ])
   })
 
-  it('R2: metadata resolving after the user moved on drops the record — returning to the chat does not resurrect it without a new open', () => {
+  it('R2: metadata resolving after the user moved on drops the record — returning to the chat does not resurrect it without a new open', async () => {
     const sid = 'main-ack-r2-dropped'
-    shownForeground(sid, [])
+    await shownForeground(sid, [])
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -450,9 +462,9 @@ describe('final round (R1–R3): the record belongs to exactly one shown open', 
     expect(sent).toEqual([])
   })
 
-  it('R3: a stale completion from an older open never touches the current record — the reopened open acks its own 9 exactly once', () => {
+  it('R3: a stale completion from an older open never touches the current record — the reopened open acks its own 9 exactly once', async () => {
     const sid = 'main-ack-r3-stale-completion'
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
 
     // Open 1: its answer carries 7 and it completes — acknowledged once.
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
@@ -492,10 +504,10 @@ describe('the acknowledging attach is cheap: it carries the bucket cursor', () =
   // store module directly, so register the same shape here and undo it after.
   afterEach(() => registerGetSessionCursor(() => null))
 
-  it('a shown main with a cursor acknowledges with { ack_attention, attention_bound } PLUS since_seq and boot_id', () => {
+  it('a shown main with a cursor acknowledges with { ack_attention, attention_bound } PLUS since_seq and boot_id', async () => {
     const sid = 'main-ack-cursor'
     registerGetSessionCursor((id) => (id === sid ? { bootId: 'boot-c', seq: 4 } : null))
-    shownForeground(sid, [mainSession(sid)])
+    await shownForeground(sid, [mainSession(sid)])
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))
@@ -509,5 +521,131 @@ describe('the acknowledging attach is cheap: it carries the bucket cursor', () =
       since_seq: 4,
       boot_id: 'boot-c',
     })
+  })
+})
+
+// r19 a/b/d negative controls. D7a: server history availability is not proof
+// of a loaded client page. D10/D11: contradictory page metadata is an error,
+// not successful empty history. All pre-existing cases/helpers stay intact.
+function c2OpenWithoutHistory(sid: string, isMain = true): void {
+  useSessionStore.setState({ ...useSessionStore.getInitialState(), activeSessionId: sid }, true)
+  useChatStore.setState(useChatStore.getInitialState(), true)
+  useConnectionStore.setState({ ...useConnectionStore.getInitialState(), connection: connectionThat(true), isConnected: true }, true)
+  queryClient.setQueryData(['sessions'], [isMain ? mainSession(sid) : chatSession(sid)])
+  hiddenSpy.mockReturnValue(false)
+  useChatStore.getState().resetSessionForReplay(sid)
+  noteForegroundAttach(sid)
+  expect(useChatStore.getState().sessionsById[sid].history.historyLoaded,
+    'instrument: no page was preloaded for this negative control').toBe(false)
+  expect(useChatStore.getState().sessionsById[sid].replayCompletedForSession).toBeNull()
+}
+
+function c2FeedAvailable(sid: string): void {
+  const frame = stateFrame(sid, 7)
+  expectValidFrame(frame)
+  useChatStore.getState().handleFrame(frame)
+}
+
+function c2CompleteLive(sid: string, cut: number): void {
+  const frame: ServerFrame = { type: 'catch_up_complete', session_id: sid, seq: cut, boot_id: 'c2-negative-boot', mode: 'incremental' }
+  expectValidFrame(frame)
+  useChatStore.getState().handleFrame(frame)
+}
+
+function c2CaptureHistoryReads(sid: string, body: ReturnType<typeof page>): string[] {
+  const reads: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost')
+    const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+    reads.push(`${method} ${url.pathname}${url.search}`)
+    if (method !== 'GET' || url.pathname !== `/api/v1/sessions/${sid}/messages`) {
+      throw new Error(`Undeclared C2 HTTP request: ${method} ${url.pathname}`)
+    }
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }))
+  return reads
+}
+
+// Each named case is the exact selector handed to the independent a/b/d
+// probes. These current-implementation controls are not self-CHECK kills.
+describe('C2 r19 missing-scenario negative controls through real history and acknowledgement owners', () => {
+  it('r19-a: an available incremental completion never acknowledges an unloaded main; the real page permits exactly bound 7', async () => {
+    const sid = 'c2-r19-a-unloaded-main'
+    c2OpenWithoutHistory(sid)
+    c2FeedAvailable(sid)
+    expect(useChatStore.getState().sessionsById[sid].history.serverState).toStrictEqual({ status: 'available' })
+    c2CompleteLive(sid, 8)
+
+    expect(sent, 'D7/D7a: server availability plus COMPLETE is not a shown history page, so no seen write').toStrictEqual([])
+    const valid = page([], { sessionId: sid })
+    expectValidPage(valid, [], 0)
+    const reads = c2CaptureHistoryReads(sid, valid)
+    await useChatStore.getState().loadLatestHistory(sid)
+    expect(reads).toStrictEqual([`GET /api/v1/sessions/${sid}/messages?limit=40&min_rows=20`])
+    expect(useChatStore.getState().sessionsById[sid].history.historyLoaded).toBe(true)
+    c2CompleteLive(sid, 9)
+
+    expect(sent, 'positive control: an actual loaded page permits the same foreground open to acknowledge exactly its server bound').toStrictEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+  })
+
+  it('r19-b: incremental COMPLETE commits live controls and cursor but cannot invent historyLoaded or replay completion', () => {
+    const sid = 'c2-r19-b-unloaded-chat'
+    c2OpenWithoutHistory(sid, false)
+    c2FeedAvailable(sid)
+    expect(useChatStore.getState().sessionsById[sid].isReplaying).toBe(true)
+    c2CompleteLive(sid, 8)
+
+    const state = useChatStore.getState().sessionsById[sid]
+    expect(state.cursor, 'D7: successful live/control catch-up commits its exact W independently of historical proof').toStrictEqual({ bootId: 'c2-negative-boot', seq: 8 })
+    expect(state.awaitingCatchUp).toBe(false)
+    expect(state.isReplaying).toBe(false)
+    expect(state.history.liveControlsReady).toBe(true)
+    expect(state.history.serverState).toStrictEqual({ status: 'available' })
+    expect(state.history.historyLoaded, 'D7a: COMPLETE cannot manufacture a page that was never delivered').toBe(false)
+    expect(state.replayCompletedForSession, 'D7a: live readiness is not successful history reconstruction').toBeNull()
+    expect(state.history.readerPositions).toStrictEqual([])
+    expect(state.messageOrder).toStrictEqual([])
+  })
+
+  it('r19-d: contradictory HTTP page source count fails visibly without history or ack; valid explicit Retry recovers', async () => {
+    const sid = 'c2-r19-d-bad-page-count'
+    c2OpenWithoutHistory(sid)
+    c2FeedAvailable(sid)
+    const valid = page([], { sessionId: sid })
+    expectValidPage(valid, [], 0)
+    const contradictory = { ...valid, page_info: { ...valid.page_info, source_group_count: 1 } }
+    const { SessionHistoryResponse: GeneratedPage } = await import('@/lib/api/generated/schemas')
+    expect(GeneratedPage.safeParse(contradictory).success,
+      'instrument: generated structure accepts this deliberate semantic contradiction; real production validation must still reject it').toBe(true)
+    expect(contradictory.entries).toStrictEqual([])
+    expect(contradictory.page_info.source_group_count).toBe(1)
+    const rejectedReads = c2CaptureHistoryReads(sid, contradictory)
+
+    await useChatStore.getState().loadLatestHistory(sid)
+    const rejected = useChatStore.getState().sessionsById[sid]
+    expect(rejectedReads).toStrictEqual([`GET /api/v1/sessions/${sid}/messages?limit=40&min_rows=20`])
+    expect(rejected.history.requests.latest, 'D8/D10/D11: impossible page metadata is an action-owned visible latest failure').toStrictEqual({
+      status: 'error', error: 'Could not load latest messages.', attempt: 1,
+    })
+    expect(rejected.history.historyLoaded).toBe(false)
+    expect(rejected.history.readerPositions).toStrictEqual([])
+    expect(rejected.messageOrder).toStrictEqual([])
+    expect(rejected.replayCompletedForSession).toBeNull()
+    c2CompleteLive(sid, 8)
+    expect(sent, 'invalid history plus a valid live COMPLETE still cannot write the seen mark').toStrictEqual([])
+    expect(useChatStore.getState().sessionsById[sid].history.requests.latest.error).toBe('Could not load latest messages.')
+
+    const retryReads = c2CaptureHistoryReads(sid, valid)
+    await useChatStore.getState().retryHistory(sid, 'latest')
+    const recovered = useChatStore.getState().sessionsById[sid]
+    expect(retryReads, 'Retry repeats only the bounded latest read').toStrictEqual([`GET /api/v1/sessions/${sid}/messages?limit=40&min_rows=20`])
+    expect(recovered.history.requests.latest).toStrictEqual({ status: 'idle', error: null, attempt: 2 })
+    expect(recovered.history.historyLoaded).toBe(true)
+    c2CompleteLive(sid, 9)
+    expect(sent).toStrictEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
   })
 })

@@ -468,13 +468,16 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	// background-kill cascade above and for the same reason — this must NOT
 	// be gated on wasFired/ClaimCancel. Fires whenever sessionID resolved,
 	// unconditionally; a session with no pending set is a cheap no-op. ---
-	rc.al.cancelPendingAskForScope(rc.sessionID)
+	if err := rc.al.cancelPendingAskForScope(rc.sessionID); err != nil {
+		return CancelOutcome{}, err, true
+	}
 	if rc.scope.TurnOnly {
 		if err := rc.removeSelectedStopAdmission(); err != nil {
 			return CancelOutcome{}, err, true
 		}
 		// Parked/queued sessions have no live turn, but their approvals still
-		// belong to this Stop. The gateway hook matches only this exact ID.
+		// belong to this Stop. The gateway also withdraws pending helper
+		// approvals owned by this chat; already-running helpers stay untouched.
 		if rc.hooks.CancelPendingApprovals != nil {
 			rc.hooks.CancelPendingApprovals(rc.sessionID, "session canceled")
 		}
@@ -645,7 +648,8 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	// goroutine (via Finish() called from the turn-processing goroutine), so
 	// atomic access is required for correct cross-goroutine visibility even
 	// though there is no write/write or write-after-read race to resolve.
-	rc.activeTurn.SetOnCancelFinish(func(cancelMethod string) {
+	native, nativeTurn := rc.activeTurn.(*turnState)
+	persist := func(cancelMethod string) {
 		// [Chain-reaction supersession of ADR-057 FR-024 — NOT a fresh
 		// recompute here, deliberately] This callback reports the PHASE-A
 		// snapshot (`descendants`), captured once, above, at the moment this
@@ -687,9 +691,27 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 				Timestamp:            time.Now().UTC(),
 			})
 			if appendErr != nil {
-				slog.Warn("agent: RequestCancel: could not append turn_canceled transcript entry",
-					"session_id", rc.sessionID, "error", appendErr)
+				if nativeTurn {
+					rc.al.reportSessionSaveFailure(native, &messageNotSavedError{role: "system", cause: appendErr})
+				} else {
+					// Unreachable today: *turnState is the only TurnCancelHook
+					// implementor (turn.go; both cancel resolution paths refuse
+					// anything else), so any new implementor must surface its
+					// own marker-append failure — never log-only.
+					slog.Warn("agent: RequestCancel: could not append turn_canceled transcript entry",
+						"session_id", rc.sessionID, "error", appendErr)
+				}
 			}
+		}
+	}
+	if nativeTurn {
+		native.setOnCancelPersist(persist)
+	}
+	rc.activeTurn.SetOnCancelFinish(func(cancelMethod string) {
+		if nativeTurn {
+			native.persistCancelOutcome(cancelMethod)
+		} else {
+			persist(cancelMethod)
 		}
 		// Audit: turn_canceled (fired once when the turn exits).
 		audit.Emit(rc.ctx, rc.auditLogger, audit.EventTurnCancelled, audit.SeverityInfo, map[string]any{

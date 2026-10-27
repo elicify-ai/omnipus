@@ -19,12 +19,14 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { ChatScreen } from './ChatScreen'
 
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchProviders: vi.fn().mockResolvedValue([]),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),

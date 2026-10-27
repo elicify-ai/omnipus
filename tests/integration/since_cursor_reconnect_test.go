@@ -223,7 +223,8 @@ func TestSinceCursor_IncrementalReplay(t *testing.T) {
 }
 
 // TestSinceCursor_FullReplayWithoutSince verifies that attach_session WITHOUT a
-// since parameter performs a full replay (backward-compatible behavior).
+// since parameter reconstructs a bounded latest page (D10/D15). This four-entry
+// fixture fits in that page, so all four original content assertions remain.
 //
 // BDD:
 //
@@ -269,7 +270,7 @@ func TestSinceCursor_FullReplayWithoutSince(t *testing.T) {
 	writeTranscriptEntries(t, gw, sessionID, entries)
 
 	conn := wsConnect(t, gw)
-	// No "since" field — triggers full replay.
+	// No live cursor: select the real latest page, containing all four sources.
 	attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(attachFrame)); err != nil {
 		t.Fatalf("attach_session (no since) send: %v", err)

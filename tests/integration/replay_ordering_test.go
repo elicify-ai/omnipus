@@ -10,7 +10,7 @@
 //
 // Invariants tested:
 //   - tool_call_start[i] precedes tool_call_result[i] for the same call_id
-//   - done is the last frame in the replay stream
+//   - replay done follows historical content; catch_up_complete completes attach
 //   - earlier turns precede later turns (entry order is preserved)
 //
 // Traces to: Bug-5 (replay frame ordering preserved when leaving + returning to chat)
@@ -36,7 +36,7 @@ import (
 // tool_call_start + tool_call_result entry, attaches via WebSocket, and
 // verifies:
 //  1. tool_call_start comes before tool_call_result for the same call_id
-//  2. "done" is the last frame
+//  2. replay done follows the result, then catch_up_complete finishes attach
 //
 // BDD: Given a session with a saved tool_call_start + tool_call_result
 //
@@ -54,7 +54,7 @@ func TestReplayOrdering_ToolCallStartBeforeResult(t *testing.T) {
 	// Seed a transcript with one tool_call entry.
 	seedToolCallTranscript(t, gw, sessionID)
 
-	// Attach via WebSocket and collect all frames until "done".
+	// Attach via WebSocket through the actual catch_up_complete boundary (D10).
 	conn := wsConnect(t, gw)
 
 	attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
@@ -69,10 +69,27 @@ func TestReplayOrdering_ToolCallStartBeforeResult(t *testing.T) {
 
 	logFrameTypes(t, frames)
 
-	// Invariant 1: done is the last frame.
+	// D7/D10 changes only attach completion, not historical causal ordering.
 	lastFrame := frames[len(frames)-1]
-	if tp, _ := lastFrame["type"].(string); tp != "done" {
-		t.Errorf("BUG-5: last frame must be 'done', got %q", tp)
+	if tp, _ := lastFrame["type"].(string); tp != "catch_up_complete" {
+		t.Errorf("BUG-5/D10: last attach frame must be 'catch_up_complete', got %q", tp)
+	}
+	var doneIdx, resultIdx = -1, -1
+	var starts, results, dones int
+	for i, frame := range frames {
+		switch frame["type"] {
+		case "tool_call_start":
+			starts++
+		case "tool_call_result":
+			results++
+			resultIdx = i
+		case "done":
+			dones++
+			doneIdx = i
+		}
+	}
+	if starts != 1 || results != 1 || dones != 1 || resultIdx >= doneIdx || doneIdx >= len(frames)-1 {
+		t.Fatalf("BUG-5: require the real seeded start/result, then replay done, then attach complete; starts=%d results=%d dones=%d result_index=%d done_index=%d", starts, results, dones, resultIdx, doneIdx)
 	}
 
 	// Invariant 2: for every tool_call_start, the matching tool_call_result
@@ -648,59 +665,11 @@ func seedTwoTurnTranscript(t *testing.T, gw *testutil.TestGateway, sessionID str
 	writeTranscriptEntries(t, gw, sessionID, entries)
 }
 
-// writeTranscriptEntries writes JSONL transcript entries to the session directory.
-// Path: <SessionsBaseDir>/sessions/<sessionID>/transcript.jsonl
-//
-// The agent loop derives its session store root from
-// filepath.Dir(cfg.AgentHomeBasePath()), NOT from cfg.AgentHomeBasePath() itself.
-// In the test harness, cfg.Agents.Defaults.Home = gw.HomeDir(), so:
-//   - cfg.AgentHomeBasePath() = gw.HomeDir()
-//   - sharedSessionDir   = filepath.Dir(gw.HomeDir()) + "/sessions"
-//
-// This means sessions live one level ABOVE gw.HomeDir(), in the parent of
-// the test temp dir that was used as Workspace. Using filepath.Dir here
-// mirrors the actual loop.go:340 logic.
+// writeTranscriptEntries keeps the original fixture inputs and callers while
+// publishing them with the real canonical writer/index engine (D1/D10/D15).
 func writeTranscriptEntries(t *testing.T, gw *testutil.TestGateway, sessionID string, entries []map[string]any) {
 	t.Helper()
-
-	// Sessions are stored at parent(workspace)/sessions/, matching loop.go:340:
-	//   homePath := filepath.Dir(cfg.AgentHomeBasePath())
-	//   sharedDir := filepath.Join(homePath, "sessions")
-	sessionsBase := filepath.Join(filepath.Dir(gw.HomeDir()), "sessions")
-	sessionDir := filepath.Join(sessionsBase, sessionID)
-
-	// Wait up to 1 second for the gateway to create the session directory.
-	deadline := time.Now().Add(time.Second)
-	for {
-		if _, err := os.Stat(sessionDir); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("writeTranscriptEntries: session dir %s did not appear within 1s", sessionDir)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	transcriptPath := filepath.Join(sessionDir, "transcript.jsonl")
-	var sb strings.Builder
-	for _, e := range entries {
-		// session-core U2 (effects design D4/D11): the archive carries no reader
-		// default for view_membership, so a raw fixture line must state it. These
-		// are chat-replay fixtures, so an unspecified record is a chat record.
-		if _, ok := e["view_membership"]; !ok {
-			e["view_membership"] = "chat"
-		}
-		line, err := json.Marshal(e)
-		if err != nil {
-			t.Fatalf("writeTranscriptEntries: marshal entry: %v", err)
-		}
-		sb.Write(line)
-		sb.WriteByte('\n')
-	}
-	if err := os.WriteFile(transcriptPath, []byte(sb.String()), 0o600); err != nil {
-		t.Fatalf("writeTranscriptEntries: write %s: %v", transcriptPath, err)
-	}
-	t.Logf("seeded %d entries to %s", len(entries), transcriptPath)
+	appendIndexedIntegrationTranscript(t, gw, sessionID, entries)
 }
 
 // ─── REST / WS helpers ────────────────────────────────────────────────────────
@@ -746,27 +715,13 @@ func createSession(t *testing.T, gw *testutil.TestGateway) string {
 // wsConnectForAttach was an exact duplicate of wsConnect in helpers_test.go;
 // removed. All call sites in this file now use wsConnect directly.
 
-// collectFramesUntilDone reads WS frames until a "done" frame is received
-// or timeout elapses. Returns all collected frames including done.
+// collectFramesUntilDone retains the historical helper name for existing
+// callers, but D7/D10 attach completion is catch_up_complete, not replay done.
+// The actual generated-carrier helper fails on missing/invalid/unavailable
+// history rather than returning an empty, supposedly successful replay.
 func collectFramesUntilDone(t *testing.T, conn *websocket.Conn, timeout time.Duration) []map[string]any {
 	t.Helper()
-	var frames []map[string]any
-	deadline := time.Now().Add(timeout)
-	for {
-		_ = conn.SetReadDeadline(deadline)
-		_, msg, err := conn.ReadMessage()
-		if err != nil {
-			break
-		}
-		var f map[string]any
-		if jsonErr := json.Unmarshal(msg, &f); jsonErr == nil {
-			frames = append(frames, f)
-			if tp, _ := f["type"].(string); tp == "done" {
-				break
-			}
-		}
-	}
-	return frames
+	return collectIntegrationHistoryCatchUp(t, conn, timeout)
 }
 
 func logFrameTypes(t *testing.T, frames []map[string]any) {

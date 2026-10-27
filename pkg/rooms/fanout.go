@@ -16,6 +16,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 )
 
+// inFlight is one delivery's admission while it runs: settled closes when it
+// settled (see admitAll), done when the admission finished.
+type inFlight struct {
+	settled, done chan struct{}
+}
+
 // admitAll admits each delivery on its own goroutine, so an approval wait for
 // one member never holds up another (§6.11), and returns once every delivery
 // has SETTLED: its admission finished (admitted, held, refused, unavailable,
@@ -24,28 +30,42 @@ import (
 // with each member's state already decided, except for a pending approval.
 func (s *Service) admitAll(r *room, ws WorkspaceInfo, ids []string) {
 	var settled sync.WaitGroup
+	var overlapped []chan struct{}
 	for _, id := range ids {
-		done := make(chan struct{})
-		if _, inFlight := s.admitting.LoadOrStore(id, done); inFlight {
+		flight := &inFlight{settled: make(chan struct{}), done: make(chan struct{})}
+		if prior, running := s.admitting.LoadOrStore(id, flight); running {
 			// One admission per delivery at a time: an overlapping Retry of
-			// the same message never admits (or asks to approve) it twice.
+			// the same message never admits (or asks to approve) it twice. It
+			// waits for that admission to settle instead, so it too returns
+			// with the member's state decided (FR-216).
+			if other, ok := prior.(*inFlight); ok {
+				overlapped = append(overlapped, other.settled)
+			}
 			continue
 		}
 		s.inflight.Add(1)
 		settled.Add(1)
 		var once sync.Once
-		settle := func() { once.Do(settled.Done) }
+		settle := func() {
+			once.Do(func() {
+				close(flight.settled)
+				settled.Done()
+			})
+		}
 		go func(id string) {
 			defer s.inflight.Done()
 			defer settle()
 			defer func() {
 				s.admitting.Delete(id)
-				close(done)
+				close(flight.done)
 			}()
 			s.admitDelivery(r, ws, id, settle)
 		}(id)
 	}
 	settled.Wait()
+	for _, ch := range overlapped {
+		<-ch
+	}
 }
 
 // AwaitAdmission waits, at most limit, until the admission of a delivery
@@ -57,12 +77,12 @@ func (s *Service) AwaitAdmission(requestID string, limit time.Duration) {
 	if !ok {
 		return
 	}
-	done, isChan := v.(chan struct{})
-	if !isChan {
+	flight, isFlight := v.(*inFlight)
+	if !isFlight {
 		return
 	}
 	select {
-	case <-done:
+	case <-flight.done:
 	case <-time.After(limit):
 	}
 }

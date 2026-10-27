@@ -48,6 +48,13 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 	if rec.Terminal() {
 		return false, nil
 	}
+	// A successful park ends this turn, not the helper's work. The pending
+	// interaction owns the wait; existing NeedsInput records stay untouched.
+	// Never turn its intentionally empty answer into an empty-answer failure.
+	// An actual failure or an accepted Stop still takes the normal disposition.
+	if result.status == TurnEndStatusParked && runErr == nil && !result.turnFailed && !result.stopped && !rec.Stopped() {
+		return false, nil
+	}
 	al.setSteeredCompletionWrite(rec.SessionID, true)
 	defer al.setSteeredCompletionWrite(rec.SessionID, false)
 

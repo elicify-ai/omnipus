@@ -29,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/pairing"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -228,6 +229,10 @@ type WSHandler struct {
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
 
+	// notifStore is the same per-user store used by the header notification
+	// REST endpoint. Injected at boot; Stop notices persist before live push.
+	notifStore *notifications.Store
+
 	// askUserReg is the AskUserQuestion pending registry (askuserquestion-
 	// tool-spec v3; pkg/askuser). Injected at boot alongside approvalRegV2.
 	// Nil until then — handleAskUserAnswer and emitSessionState's
@@ -265,6 +270,10 @@ type WSHandler struct {
 	// have to wait up to ~60 s before seeing any code.  The cache delivers the
 	// last-seen code immediately on subscribe via subscribePairingInterest.
 	lastPairingState sync.Map
+	// Cache metadata is protected inside the manager-owned channel order.
+	// Never hold this mutex while entering that order.
+	pairingCacheMu    sync.Mutex
+	pairingCacheStamp map[string]pairingDeliveryStamp
 
 	// streamOwners tracks, per sessionID, which turn currently "owns" live
 	// TokenFrame delivery to that session's bound connections. Keys are
@@ -347,12 +356,15 @@ type WSHandler struct {
 }
 
 type wsConn struct {
-	conn           *websocket.Conn
-	sendCh         chan []byte // writePump's hot window; see ws_conn_queue.go
-	doneCh         chan struct{}
-	closeOnce      sync.Once
-	inboundDropped atomic.Int32 // inbound items dropped: schema validation failures + invalid/oversized media refs
-	userID         string       // username resolved at auth time; used for session_state scoping (FR-073)
+	conn                *websocket.Conn
+	sendCh              chan []byte // writePump's hot window; see ws_conn_queue.go
+	doneCh              chan struct{}
+	closeOnce           sync.Once
+	inboundDropped      atomic.Int32 // inbound items dropped: schema validation failures + invalid/oversized media refs
+	userID              string       // username resolved at auth time; used for session_state scoping (FR-073)
+	historyStateMu      sync.Mutex
+	historyStateSession string
+	historyReadiness    *generated.SessionHistoryState
 
 	// Per-connection ordered outbound queue (#823 BE-DESIGN.md §2.1,
 	// ws_conn_queue.go). Guarded by qmu. q holds frames that did not fit in
@@ -438,22 +450,7 @@ func (c *wsConn) setPairingInterest(channelID string, active bool) {
 // between rotations would otherwise wait up to ~60 s before seeing a code.
 // The cache lets us deliver the last-seen code immediately on subscribe.
 func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, active bool) {
-	wc.setPairingInterest(channelID, active)
-	if !active {
-		return
-	}
-	// Re-emit the last-seen QR frame for this channel, if one is cached and the
-	// QR is still "live" (terminal states are deleted from the map by the
-	// eventForwarder). Delivered through the connection's own ordered queue
-	// like every other frame (#823 ws_conn_queue.go).
-	if cached, ok := h.lastPairingState.Load(channelID); ok {
-		frameBytes, ok := cached.([]byte)
-		if ok && len(frameBytes) > 0 {
-			sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frameBytes)
-		} else if !ok {
-			slog.Error("ws: lastPairingState held non-[]byte value, skipping re-emit", "channel_id", channelID)
-		}
-	}
+	h.replayPairing(wc, channelID, active)
 }
 
 // wantsPairing reports whether this connection has subscribed to channelID's
@@ -561,6 +558,7 @@ func newWSHandler(
 		agentLoop.SetClearHeldHook(h.announceClearHeld)
 		agentLoop.SetClearReleasedHook(h.releaseClearHeld)
 		agentLoop.SetRequestDeliveredHook(h.announceHeldRequestDelivered)
+		h.wireSecretRequests()
 	}
 	// Per-session state kept outside the hub is released with the hub
 	// (final-review N7).
@@ -1229,7 +1227,7 @@ wsHandlerReadLoopLoop1:
 		// Per-frame JSON Schema validation (mirrors REST decodeAndValidate).
 		// Gated by gateway.validate_inbound; when false the check is a no-op.
 		validateEnabled := wh.h.agentLoop.GetConfig().Gateway.ValidateInbound
-		if validateEnabled {
+		if validateEnabled && peek.Type != string(generated.WsFrameTypeAttachSession) {
 			schemaName := wsFrameSchemaName(peek.Type)
 			if schemaName != "" {
 				if errMsg, serverErr := ValidateInboundFrameJSON(schemaName, data); errMsg != "" {
@@ -1363,24 +1361,7 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 	case string(generated.WsFrameTypeCancel), string(generated.WsFrameTypeRedirect):
 		return wh.handleTurnControlFrame(data, peek.Type)
 	case string(generated.WsFrameTypeAttachSession):
-		var f generated.AttachSessionFrame
-		if err := json.Unmarshal(data, &f); err != nil {
-			slog.Warn("ws: malformed attach_session frame", "error", err)
-			return wsHandlerReadLoopContinue
-		}
-		slog.Info("ws: attach_session frame received",
-			"chat_id", wh.chatID,
-			"requested_session_id", f.SessionId,
-		)
-		if f.SessionId != "" {
-			// #823: the client's cursor for this session ({since_seq, boot_id})
-			// decides incremental catch-up vs snapshot (BE-DESIGN.md §3.3/§4).
-			wh.h.handleAttachSessionWithAck(wh.ctx, wh.chatID, f.SessionId,
-				&attachCursor{SinceSeq: f.SinceSeq, BootID: f.BootId},
-				&attachAck{Ack: f.AckAttention != nil && *f.AckAttention, Bound: f.AttentionBound}, wh.wc)
-		} else {
-			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
-		}
+		return wh.handleHistoryAttachFrame(data)
 	case string(generated.WsFrameTypeSessionModeUpdate):
 		return wh.handleSessionModeUpdateFrame(data)
 	case string(generated.WsFrameTypeAttachRoom):
@@ -1427,6 +1408,9 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			})
 			return wsHandlerReadLoopContinue
 		}
+		// Subscribing only observes pairing frames; it never restores chat
+		// ownership (Train 2 gate r2 T2-R2-S1 / R2-A02). A chat Retry claims
+		// ownership through PUT /channels/{id}/enable with pairing_retry.
 		wh.h.subscribePairingInterest(wh.wc, f.ChannelId, f.Active)
 	case string(generated.WsFrameTypeMailPanelObserver):
 		// w5-integration (US-2/MC-4): Mail panel presence open/close. No

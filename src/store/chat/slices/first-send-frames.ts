@@ -6,6 +6,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useConnectionStore } from '@/store/connection'
 import { cursorFromTerminalFrame } from '../cursor'
 import { emptySessionState } from '../session'
+import { warnModelChoiceStorageFailure, writeSessionModelChoice } from '../model-choice'
 import {
   attachRecoveredFirstSend,
   findFirstSendMessage,
@@ -30,6 +31,12 @@ function confirmFirstSend(context: FirstSendFrameContext, pending: PendingFirstS
   const foreground = useSessionStore.getState().activeSessionId === (pending.sessionId ?? '__pending')
     && (useWorkspacesStore.getState().activeWorkspaceId || null) === pending.workspaceId
   const recovered = frame.recovered === true
+  // This receipt has already been correlated to pending.clientMessageId.
+  // Save this message's latest pending-chat preference, even in the background.
+  // It is independent of the original request and another chat's foreground pair.
+  if (!pending.sessionId && pending.modelChoice) {
+    warnModelChoiceStorageFailure(writeSessionModelChoice(sid, pending.modelChoice))
+  }
   const sourceSid = pending.sessionId ?? '__pending'
   const source = get().sessionsById[sourceSid] ?? emptySessionState()
   const bucket = produce(source, (draft) => {

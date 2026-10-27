@@ -11,6 +11,7 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { entry, expectValidFrame, expectValidPage, page, pos, replay, snapshot } from '../../tests/chat-history-paging/fixtures'
 
 // Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // D7/D8, as retained by the founder's "middle way" ruling.
@@ -171,24 +172,30 @@ const ANSWER_ENTRY = '1090-red5-answer-entry'
 const ANSWER_CONTENT = 'This answer was already completed before recovery.'
 const ACTIVE_TURN = '1090-red5-active-turn'
 
-function replayOriginal() {
-  act(() => {
-    // Zero is a valid fixture cursor. D7 explicitly distinguishes this
-    // recovered unknown_position snapshot from a boot-mismatch snapshot.
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: OLD_SESSION, reason: 'unknown_position', seq: 0, boot_id: '1090-red5-boot',
-    })
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: OLD_SESSION, user_id: '1090-red5-user',
+function recoveryHistory(rowCount: 1 | 2, withClientId = true) {
+  const sources = [entry(1, { id: SERVER_ENTRY, role: 'user', content: OLD_CONTENT,
+    ...(withClientId ? { client_message_id: OLD_ID } : {}) })]
+  if (rowCount === 2) sources.push(entry(2, { id: ANSWER_ENTRY, role: 'assistant', content: ANSWER_CONTENT }))
+  const history = page(sources, { sessionId: OLD_SESSION })
+  expectValidPage(history, [pos(1), pos(2)].slice(0, rowCount), rowCount)
+  return history
+}
+
+function replayOriginal(rowCount: 1 | 2 = 1) {
+  const history = recoveryHistory(rowCount)
+  const frames: InboundFrame[] = [
+    // Current generated snapshot/COMPLETE cuts are positive (minimum1).
+    // Preserve unknown_position: it is NOT a boot-mismatch witness.
+    { ...snapshot(history), seq: 1, boot_id: '1090-red5-boot' },
+    { type: 'session_state', session_id: OLD_SESSION, user_id: '1090-red5-user',
       pending_approvals: [], emitted_at: '2026-10-01T12:00:00Z', auto_approve_modifier: true,
-    })
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: OLD_SESSION, role: 'user',
-      id: SERVER_ENTRY, client_message_id: OLD_ID, content: OLD_CONTENT,
-    })
-  })
-  expect(users(), 'fixture: replay reconciled exactly one authoritative original entry')
-    .toStrictEqual([{ id: SERVER_ENTRY, content: OLD_CONTENT }])
+      history_state: { status: 'available' } },
+    replay(history.entries[0], OLD_SESSION),
+  ]
+  frames.forEach(expectValidFrame)
+  act(() => frames.forEach(frame => useChatStore.getState().handleFrame(frame)))
+  expect(users(), 'D7: selected history is staged; the pending original remains until COMPLETE')
+    .toStrictEqual([{ id: OLD_ID, content: OLD_CONTENT }])
 }
 
 function seedExistingActiveTurn() {
@@ -197,6 +204,7 @@ function seedExistingActiveTurn() {
   act(() => useChatStore.getState().handleFrame({
     type: 'session_state', session_id: OLD_SESSION, user_id: '1090-red5-user',
     pending_approvals: [], emitted_at: '2026-10-01T12:00:00Z', auto_approve_modifier: true,
+    history_state: { status: 'available' },
     active_turn: { turn_id: ACTIVE_TURN, agent_id: 'mia', started_at: '2026-10-01T11:59:00Z' },
   }))
   expect(useChatStore.getState().sessionsById[OLD_SESSION].activeTurnId,
@@ -204,15 +212,21 @@ function seedExistingActiveTurn() {
 }
 
 function replayExistingAnswer() {
-  act(() => useChatStore.getState().handleFrame({
-    type: 'replay_message', session_id: OLD_SESSION, role: 'assistant', id: ANSWER_ENTRY, content: ANSWER_CONTENT,
-  }))
+  const source = entry(2, { id: ANSWER_ENTRY, role: 'assistant', content: ANSWER_CONTENT })
+  const frame = replay(source, OLD_SESSION)
+  expectValidFrame(frame)
+  act(() => useChatStore.getState().handleFrame(frame))
 }
 
 function finishRecovery() {
-  act(() => useChatStore.getState().handleFrame({
-    type: 'catch_up_complete', session_id: OLD_SESSION, seq: 0, boot_id: '1090-red5-boot', mode: 'snapshot',
-  }))
+  const frames: InboundFrame[] = [
+    { type: 'done', session_id: OLD_SESSION },
+    { type: 'catch_up_complete', session_id: OLD_SESSION, seq: 1, boot_id: '1090-red5-boot', mode: 'snapshot' },
+  ]
+  frames.forEach(expectValidFrame)
+  act(() => frames.forEach(frame => useChatStore.getState().handleFrame(frame)))
+  expect(users(), 'fixture: replay reconciled exactly one authoritative original entry')
+    .toStrictEqual([{ id: SERVER_ENTRY, content: OLD_CONTENT }])
 }
 
 const LATE_FRAMES: { label: string; frame: InboundFrame; discoversSavedChat: boolean }[] = [
@@ -466,7 +480,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     sendFirst(sender)
     render(createElement(GapRows))
     recoverFirst()
-    replayOriginal()
+    replayOriginal(2)
     replayExistingAnswer()
 
     finishRecovery()
@@ -495,7 +509,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
       sendFirst(sender)
       render(createElement(GapRows))
       recoverFirst()
-      replayOriginal()
+      replayOriginal(outcome === 'completed answer' ? 2 : 1)
       if (outcome === 'active turn') seedExistingActiveTurn()
       else replayExistingAnswer()
       finishRecovery()
@@ -551,18 +565,16 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     act(() => useSessionStore.getState().setActiveSession(OLD_SESSION, 'mia'))
     expect(useChatStore.getState().pendingFirstSend, 'control fixture: this is not an ordinary pending first send').toBeNull()
     render(createElement(GapRows))
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'session_snapshot', session_id: OLD_SESSION, reason: 'unknown_position', seq: 0, boot_id: '1090-red5-boot',
-      })
-      useChatStore.getState().handleFrame({
-        type: 'session_state', session_id: OLD_SESSION, user_id: '1090-red5-user',
+    const history = recoveryHistory(1, false)
+    const frames: InboundFrame[] = [
+      { ...snapshot(history), seq: 1, boot_id: '1090-red5-boot' },
+      { type: 'session_state', session_id: OLD_SESSION, user_id: '1090-red5-user',
         pending_approvals: [], emitted_at: '2026-10-01T12:00:00Z', auto_approve_modifier: true,
-      })
-      useChatStore.getState().handleFrame({
-        type: 'replay_message', session_id: OLD_SESSION, role: 'user', id: SERVER_ENTRY, content: OLD_CONTENT,
-      })
-    })
+        history_state: { status: 'available' } },
+      replay(history.entries[0], OLD_SESSION),
+    ]
+    frames.forEach(expectValidFrame)
+    act(() => frames.forEach(frame => useChatStore.getState().handleFrame(frame)))
 
     finishRecovery()
 

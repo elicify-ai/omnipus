@@ -18,6 +18,7 @@ import { useToolApprovalStore } from '@/store/toolApproval'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { ChatScreen } from './ChatScreen'
+import { emptyHistoryPage } from '../../../tests/chat-history-paging/legacy-fixtures'
 import { queryClient as storeQueryClient } from '@/lib/queryClient'
 import { seedCanonicalSession } from '../../../tests/unit/fixtures/canonical-session'
 
@@ -77,9 +78,10 @@ beforeEach(() => {
   client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: Infinity } },
   })
-  for (const key of [['commands', 'web'], ['agents'], ['skills'], ['providers'], ['workspaces'], ['messages', PARENT]]) {
+  for (const key of [['commands', 'web'], ['agents'], ['skills'], ['providers'], ['workspaces']]) {
     client.setQueryData(key, [])
   }
+  client.setQueryData(['messages', PARENT], emptyHistoryPage(PARENT))
   // Optional picker HTTP requests are outside D3; fail only at fetch so their
   // real query/error handling stays intact. No API module/hook is mocked.
   vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new Error('D3 fixture: optional HTTP is offline.')))
@@ -100,13 +102,15 @@ afterEach(() => {
 })
 
 function seedParentAndHelper() {
-  seedCanonicalSession(PARENT, 'jim', WORKSPACE)
   act(() => {
     // A helper already visited by this browser has its own real bucket. Its
     // scoped frames must never become the foreground parent's transcript.
     useSessionStore.getState().setActiveSession(CHILD, 'worker')
     useChatStore.getState().handleFrame({ type: 'token', session_id: CHILD, agent_id: 'worker', content: CHILD_TEXT })
     useSessionStore.getState().setActiveSession(PARENT, 'jim')
+    // D9 releases the outgoing session's cached detail. Establish this
+    // selected parent's canonical owner/workspace after that real switch.
+    seedCanonicalSession(PARENT, 'jim', WORKSPACE)
     useChatStore.getState().sendMessage(INITIAL_TEXT, { clientMessageId: INITIAL_ID })
     useChatStore.getState().handleFrame({ type: 'token', session_id: PARENT, agent_id: 'jim', content: PARTIAL_TEXT })
     useChatStore.getState().handleFrame({

@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // openPolicy builds an open-model policy over home, matching what the gateway
@@ -120,29 +122,307 @@ func TestSeatbelt_DenyEmittedForNonExistentPath(t *testing.T) {
 	}
 }
 
-// TestSeatbelt_OpenProfileKeepsIPCDefaultDeny is spec FR-10.1/FR-10.2.
+// TestSeatbelt_OpenProfileKeepsIPCDefaultDeny is spec FR-10.1/FR-10.2 (FR-10.1
+// amended 2026-10-26 by founder ruling Q125).
 //
 // A path deny does not stop a daemon-mediated read: securityd will service a
 // keychain query for a sandboxed client, and launchctl outside the sandbox
 // exfiltrates cleanly. Both are blocked ONLY by the preamble's (deny default)
 // over mach-lookup. This test exists so a future "make the toolchain work" edit
 // cannot widen mach-lookup and silently delete that protection.
+//
+// FR-10.1 allows exactly the mDNSResponder and com.apple.trustd.agent entries.
+// Q126 / security F2 requires whole-expression comparison: a line-based scan
+// misses an extra allowance when allow and mach-lookup are on separate lines.
+// Parse balanced top-level expressions, ignoring comments but preserving string
+// literals. Exact equality still rejects combined services, duplicate or missing
+// entries, and every other service, regardless of whitespace layout.
 func TestSeatbelt_OpenProfileKeepsIPCDefaultDeny(t *testing.T) {
+	// Expected allow-set derived from the amended spec text (FR-10.1,
+	// docs/internal/specs/filesystem-model-inversion-spec.md), not from the
+	// implementation.
+	want := []string{
+		// The mDNSResponder entry named by FR-10.1; spelling per the shipped
+		// system preamble (finding 4), where it is the sole DNS mach-lookup.
+		`(allow mach-lookup (global-name "com.apple.mDNSResponder"))`,
+		// Quoted verbatim in FR-10.1: per-user certificate trust only.
+		`(allow mach-lookup (global-name "com.apple.trustd.agent"))`,
+	}
+	slices.Sort(want)
+
 	profile, err := renderSeatbeltProfile(openPolicy(t.TempDir()))
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	for _, line := range strings.Split(profile, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "(allow mach-lookup") {
+
+	got, err := seatbeltMachLookupAllowsForTest(profile)
+	if err != nil {
+		t.Fatalf("parse rendered profile: %v", err)
+	}
+	slices.Sort(got)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("open profile mach-lookup allow-set = %#v, want exactly %#v — "+
+			"FR-10.1 permits ONLY the mDNSResponder and com.apple.trustd.agent "+
+			"entries, each on its own line; a combined line, an extra global-name "+
+			"or any third service (com.apple.SecurityServer, secd, system "+
+			"com.apple.trustd) re-opens the securityd and launchctl paths that "+
+			"no file deny can close", got, want)
+	}
+}
+
+// seatbeltProfileExpressionsForTest tokenizes complete top-level expressions.
+// Semicolon comments end at a newline; strings retain whitespace and escaped
+// characters verbatim, so parentheses or comments inside them are not syntax.
+func seatbeltProfileExpressionsForTest(profile string) ([][]string, error) {
+	input := []rune(profile)
+	var expressions [][]string
+	var tokens []string
+	depth := 0
+	for i := 0; i < len(input); {
+		ch := input[i]
+		if unicode.IsSpace(ch) {
+			i++
 			continue
 		}
-		if strings.Contains(trimmed, "com.apple.mDNSResponder") {
-			continue // the one sanctioned entry; without it name resolution dies
+		if ch == ';' {
+			for i < len(input) && input[i] != '\n' && input[i] != '\r' {
+				i++
+			}
+			continue
 		}
-		t.Errorf("open profile widens mach-lookup beyond mDNSResponder: %q — "+
-			"this re-opens the securityd and launchctl paths that no file deny can close", trimmed)
+
+		start := i
+		switch ch {
+		case '(':
+			depth++
+			i++
+		case ')':
+			if depth == 0 {
+				return nil, errors.New("unexpected closing parenthesis")
+			}
+			depth--
+			i++
+		case '"':
+			i++
+			closed := false
+			for i < len(input) {
+				if input[i] == '\\' {
+					i += 2 // an escaped quote or backslash does not close the string
+					continue
+				}
+				if input[i] == '"' {
+					i++
+					closed = true
+					break
+				}
+				i++
+			}
+			if !closed {
+				return nil, errors.New("unterminated string literal")
+			}
+		default:
+			for i < len(input) && !unicode.IsSpace(input[i]) && !strings.ContainsRune("();\"", input[i]) {
+				i++
+			}
+		}
+		if ch != '(' && ch != ')' && depth == 0 {
+			return nil, errors.New("token outside top-level expression")
+		}
+		tokens = append(tokens, string(input[start:i]))
+		if depth == 0 {
+			expressions = append(expressions, tokens)
+			tokens = nil
+		}
 	}
+	if depth != 0 {
+		return nil, errors.New("unclosed top-level expression")
+	}
+	return expressions, nil
+}
+
+// Only token boundaries are normalized; quoted service/path bytes never change.
+func seatbeltExpressionForTest(tokens []string) string {
+	var normalized strings.Builder
+	for i, token := range tokens {
+		if i > 0 && token != ")" && tokens[i-1] != "(" {
+			normalized.WriteByte(' ')
+		}
+		normalized.WriteString(token)
+	}
+	return normalized.String()
+}
+
+func seatbeltMachLookupAllowsForTest(profile string) ([]string, error) {
+	expressions, err := seatbeltProfileExpressionsForTest(profile)
+	if err != nil {
+		return nil, err
+	}
+	var allows []string
+	for _, tokens := range expressions {
+		for start := 0; start+2 < len(tokens); start++ {
+			if tokens[start] != "(" || tokens[start+1] != "allow" {
+				continue
+			}
+			// Inspect operation atoms, not strings or filter contents. Include
+			// multi-operation allows and allows nested inside a top-level form.
+			lookup := false
+			for op := start + 2; op < len(tokens) && tokens[op] != "(" && tokens[op] != ")"; op++ {
+				lookup = lookup || tokens[op] == "mach-lookup"
+			}
+			if !lookup {
+				continue
+			}
+			depth := 0
+			for end := start; end < len(tokens); end++ {
+				switch tokens[end] {
+				case "(":
+					depth++
+				case ")":
+					depth--
+				}
+				if depth == 0 {
+					allows = append(allows, seatbeltExpressionForTest(tokens[start:end+1]))
+					break
+				}
+			}
+		}
+	}
+	return allows, nil
+}
+
+// Q126 / F2 lexical cases: expectations are handwritten from the required
+// comment, string and balanced-expression rules, not from rendered output.
+func TestSeatbeltProfileExpressionsForTest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile string
+		want    []string
+		wantErr string
+	}{
+		{
+			name:    "multiline and adjacent expressions",
+			profile: "( \tallow\n mach-lookup ( global-name\t\"com.apple.SecurityServer\" ) )(deny default)",
+			want:    []string{`(allow mach-lookup (global-name "com.apple.SecurityServer"))`, `(deny default)`},
+		},
+		{
+			name:    "comments separate tokens and ignore syntax",
+			profile: "(allow; ignored \" ) (\n mach-lookup (global-name \"service\")) ; ignored )\n",
+			want:    []string{`(allow mach-lookup (global-name "service"))`},
+		},
+		{
+			name:    "quoted whitespace and metacharacters are preserved",
+			profile: `(literal "a  b; ( ) (allow mach-lookup)")`,
+			want:    []string{`(literal "a  b; ( ) (allow mach-lookup)")`},
+		},
+		{
+			name:    "escaped quotes and backslashes stay inside strings",
+			profile: `(literal "a\"; (  b\\) c") (deny default)`,
+			want:    []string{`(literal "a\"; (  b\\) c")`, `(deny default)`},
+		},
+		{
+			name:    "unicode whitespace and carriage return comments",
+			profile: "(allow mach-lookup; ignored )\r(global-name\v\"service\"))",
+			want:    []string{`(allow mach-lookup (global-name "service"))`},
+		},
+		{name: "empty input"},
+		{name: "comment only", profile: "; ignored \" ( )"},
+		{name: "unexpected closing parenthesis", profile: "(deny default))", wantErr: "unexpected closing parenthesis"},
+		{name: "unclosed expression", profile: "(allow mach-lookup (global-name \"service\")", wantErr: "unclosed top-level expression"},
+		{name: "unterminated string", profile: `(literal "service)`, wantErr: "unterminated string literal"},
+		{name: "escaped final quote", profile: `(literal "service\")`, wantErr: "unterminated string literal"},
+		{name: "trailing string escape", profile: "(literal \"service\\", wantErr: "unterminated string literal"},
+		{name: "top-level atom after expression", profile: "(deny default) allow", wantErr: "token outside top-level expression"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expressions, err := seatbeltProfileExpressionsForTest(tc.profile)
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("parse error = %v, want exactly %q", err, tc.wantErr)
+				}
+				if expressions != nil {
+					t.Fatalf("malformed profile returned partial expressions: %#v", expressions)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			var got []string
+			for _, tokens := range expressions {
+				got = append(got, seatbeltExpressionForTest(tokens))
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("expressions = %#v, want exactly %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSeatbeltMachLookupAllowsForTest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile string
+		want    []string
+	}{
+		{
+			name:    "split-line extra allowance",
+			profile: "(allow\n mach-lookup\n (global-name \"com.apple.SecurityServer\"))",
+			want:    []string{`(allow mach-lookup (global-name "com.apple.SecurityServer"))`},
+		},
+		{
+			name:    "both sanctioned entries on the same line",
+			profile: `(allow mach-lookup (global-name "com.apple.mDNSResponder"))(allow mach-lookup (global-name "com.apple.trustd.agent"))`,
+			want:    []string{`(allow mach-lookup (global-name "com.apple.mDNSResponder"))`, `(allow mach-lookup (global-name "com.apple.trustd.agent"))`},
+		},
+		{
+			name:    "combined services remain one differing allowance",
+			profile: `(allow mach-lookup (global-name "com.apple.mDNSResponder") (global-name "com.apple.SecurityServer"))`,
+			want:    []string{`(allow mach-lookup (global-name "com.apple.mDNSResponder") (global-name "com.apple.SecurityServer"))`},
+		},
+		{
+			name:    "mach-lookup in a multi-operation allow",
+			profile: "(allow file-read*\n mach-lookup (global-name \"service\"))",
+			want:    []string{`(allow file-read* mach-lookup (global-name "service"))`},
+		},
+		{
+			name:    "nested allowance is not overlooked",
+			profile: "(begin (allow\n mach-lookup (global-name \"service\")))",
+			want:    []string{`(allow mach-lookup (global-name "service"))`},
+		},
+		{
+			name:    "comments and strings cannot invent allowances",
+			profile: `(allow file-read* (literal "(allow mach-lookup (global-name \"service\")) ; )")) ; (allow mach-lookup (global-name "comment"))`,
+		},
+		{
+			name:    "quoted operation is not an operation atom",
+			profile: `(allow "mach-lookup" (literal "mach-lookup"))`,
+		},
+		{
+			name:    "duplicate permissions remain visible to exact equality",
+			profile: `(allow mach-lookup (global-name "service"))(allow mach-lookup (global-name "service"))`,
+			want:    []string{`(allow mach-lookup (global-name "service"))`, `(allow mach-lookup (global-name "service"))`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := seatbeltMachLookupAllowsForTest(tc.profile)
+			if err != nil {
+				t.Fatalf("collect allowances: %v", err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("allowances = %#v, want exactly %#v", got, tc.want)
+			}
+		})
+	}
+	t.Run("malformed profile never becomes an empty allow-set", func(t *testing.T) {
+		got, err := seatbeltMachLookupAllowsForTest("(allow mach-lookup")
+		if err == nil || err.Error() != "unclosed top-level expression" {
+			t.Fatalf("collect error = %v, want unclosed top-level expression", err)
+		}
+		if got != nil {
+			t.Errorf("malformed profile returned allowances: %#v", got)
+		}
+	})
 }
 
 // TestSeatbelt_RealChildCannotReachSecrets executes the policy rather than

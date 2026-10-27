@@ -778,9 +778,10 @@ func (wsf *wsStreamerFinalize) publishDone() {
 		h.flushPendingMessageStatusesAsWorking(wsf.s.sessionID)
 
 		stats := &generated.DoneStats{
-			Tokens:     &wsf.tokensF,
-			Cost:       &wsf.costF,
-			DurationMs: &wsf.durF,
+			Tokens:             &wsf.tokensF,
+			Cost:               &wsf.costF,
+			DurationMs:         &wsf.durF,
+			SessionTokensTotal: h.sessionTokensTotal(wsf.s.sessionID),
 		}
 		// #1178 (amendment §4.1): a late streamed-transcript write failure is
 		// a failed turn even though the turn was healthy before it — the done

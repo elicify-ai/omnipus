@@ -131,6 +131,9 @@ test.describe('terminal outcome agrees across real surfaces', () => {
         }
         const detail = await terminalTranscript(page, gw.baseURL, session.id);
         expect.soft(detail.session.id, 'read the SAME durable session').toBe(session.id);
+        if (detail.messages === undefined) {
+          throw new Error('Terminal transcript messages are missing; cannot verify durable terminal outcome');
+        }
         expect.soft(detail.session.lifecycle_state, 'the durable ceiling is Interrupted, not Failed').toBe('interrupted');
         expect.soft(detail.session.interruption_reason, 'reload retains the typed incomplete cause').toBe('tool_limit');
         // Approved Notice mandate: narration is model-authored; the distinct cap notice is system-authored.

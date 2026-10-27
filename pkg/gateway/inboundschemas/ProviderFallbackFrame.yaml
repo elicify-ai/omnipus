@@ -44,7 +44,8 @@ properties:
     enum:
       - rate_limited
       - model_retired
-    description: The classified provider condition that made the unavailable candidate miss the turn. Gates the D12 pick-a-new-model hint in the persisted note (§6).
+      - model_not_found
+    description: The classified provider condition that made the unavailable candidate miss the turn. Gates the D12 pick-a-new-model hint in the persisted note (§6) — the hint still fires only for model_retired. model_not_found (founder decision 2026-10-24, Q70) means the provider reported the model as not found or not offered; the hop falls back to the next candidate instead of stopping the turn.
   seq:
     type: integer
     format: int64
@@ -54,7 +55,8 @@ properties:
       increasing and gap-free within the session, assigned by the gateway's per-session
       hub as the single chokepoint through which every session-scoped frame is published.
       Optional: absent on an unsequenced copy of this frame (for example a broadcast
-      delivered to a tab that is not bound to this session) — the client only advances its
-      per-session cursor for frames that carry seq. The client stores the highest seq it
-      has applied per session and sends it back as since_seq on attach_session; frames at
+      delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is
+      committed only by a completed catch-up (catch_up_complete) and is sent back as
+      since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier
+      sentence here described per-frame cursor advance, which was stale). Frames at
       or below that cursor are ignored, which makes re-delivery idempotent.

@@ -538,7 +538,7 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 		enabledRefs := buildEnabledRefMap(newCfg)
 		newBundle, bundleErrs := credentials.ResolveBundle(newCfg, cs)
 		bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
-		if healthErr := cs.HealthCheck(); healthErr != nil {
+		if healthErr := storeHealthFailure("reload", cs.HealthCheck()); healthErr != nil {
 			return fmt.Errorf("reload rejected: %w", fatalStoreWideAuthFailure(healthErr,
 				append(append([]error{}, deferredAuth...), bundleAuth...)))
 		}
@@ -750,6 +750,15 @@ func reloadConfigForSwap(runningServices *services, loaded *config.Config) (*con
 	}
 	if prepErr := prepareReloadConfig(fresh, runningServices); prepErr != nil {
 		return nil, prepErr
+	}
+	if a := runningServices.restAPIRef; a != nil {
+		if store := a.pairingOrderStore(); store != nil {
+			progress, bindErr := store.BindSavedConfigRead(fresh)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			a.publishPairingAfterConfigUnlock(progress)
+		}
 	}
 	runningServices.lastAppliedConfigReadSeq = runningServices.reloadOutcome.markConfigRead()
 	return fresh, nil

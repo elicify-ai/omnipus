@@ -69,8 +69,11 @@ func TestWU3Dev_SharedWrite_StaleRevisionRefusedNothingSaved(t *testing.T) {
 	cfg.Providers[0].APIBase = "https://proxy.example.com/v1"
 	require.NotEqual(t, planned, providerRevision(cfg, "openai"), "the endpoint change must change the token")
 
+	ref := IssueProviderReferenceForTest(t, deps, "openai", "", "sk-new-value")
+	before, err := store.List()
+	require.NoError(t, err)
 	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
-		"name": "openai", "api_key": "sk-new-value", expectedRevisionParam: planned,
+		"name": "openai", "api_key_ref": ref, expectedRevisionParam: planned,
 	})
 	require.True(t, res.IsError, "a stale revision must be refused: %s", res.ForLLM)
 	m := unmarshalProviderResult(t, res.ForLLM)
@@ -79,14 +82,18 @@ func TestWU3Dev_SharedWrite_StaleRevisionRefusedNothingSaved(t *testing.T) {
 	require.Equal(t, "CONFLICT", errBlock["code"])
 	require.Equal(t, "failed: nothing saved", m["outcome"])
 	require.Contains(t, errBlock["message"], `provider "openai"`)
-	_, err := store.Get("openai_API_KEY")
-	require.Error(t, err, "a refused write must not store the credential")
+	after, err := store.List()
+	require.NoError(t, err)
+	require.Equal(t, before, after, "a refused selection must not add credential versions")
+	value, err := store.Get(ref)
+	require.NoError(t, err)
+	require.Equal(t, "sk-new-value", value, "the prior card submission remains unused")
 	require.Equal(t, "https://proxy.example.com/v1", cfg.Providers[0].APIBase, "the other writer's change stays")
 	require.Empty(t, cfg.Providers[0].APIKeyRef)
 
 	// Control: the current revision is accepted.
 	res = NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
-		"name": "openai", "api_key": "sk-new-value", expectedRevisionParam: providerRevision(cfg, "openai"),
+		"name": "openai", "api_key_ref": ref, expectedRevisionParam: providerRevision(cfg, "openai"),
 	})
 	require.False(t, res.IsError, "%s", res.ForLLM)
 }

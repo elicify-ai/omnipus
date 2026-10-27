@@ -95,6 +95,8 @@ type turnState struct {
 	approvalOrigin   approvalOrigin
 
 	mu sync.RWMutex
+	// startedTool is installed only at actual dispatch; guarded by mu.
+	startedTool *startedToolOutcome
 
 	// userInputInWindow is set by assembleMessages when this turn's re-read
 	// instruction is already the newest line of the model window.
@@ -103,6 +105,11 @@ type turnState struct {
 	agent *AgentInstance
 	opts  processOptions
 	scope turnEventScope
+
+	// origin is the set of inputs this turn has consumed (§6.18, FR-240);
+	// steering inputs consumed mid-turn are added to it. Never nil for a
+	// turn built by newTurnState.
+	origin *tools.TurnOrigin
 
 	turnID     string
 	agentID    string
@@ -180,11 +187,12 @@ type turnState struct {
 
 	// Cancel dedup / callback fields (FR-10, FR-11, FR-15).
 	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
-	cancelMu       sync.Mutex
-	cancelFired    atomic.Bool               // true once handleCancel has claimed this turn
-	stopRequested  atomic.Bool               // non-terminal Stop: preserve session and goal on disposal
-	abandoned      atomic.Bool               // true once a controller detaches a stuck turn goroutine
-	onCancelFinish func(cancelMethod string) // called exactly once by Finish when cancelFired
+	cancelMu        sync.Mutex
+	cancelFired     atomic.Bool               // true once handleCancel has claimed this turn
+	stopRequested   atomic.Bool               // non-terminal Stop: preserve session and goal on disposal
+	abandoned       atomic.Bool               // true once a controller detaches a stuck turn goroutine
+	onCancelFinish  func(cancelMethod string) // called exactly once by Finish when cancelFired
+	onCancelPersist *cancelDisplayOutcome     // durable display metadata, before abandonment or Finish
 
 	// cancelling was the GATE half of the chain-reaction cancellation fix
 	// (ADR-057 FR-024, superseded 2026-08-04): set true by markTurnsCancelling
@@ -435,16 +443,11 @@ type turnState struct {
 	// budget instead. Never cleared once set.
 	goalNarrowEscaped bool
 
-	// Back-reference to the owning AgentLoop, used by Finish's hard-abort
-	// cascade over childTurnIDs. Set on exactly ONE path today — the task
-	// executor's external-CLI turn
-	// (task_executor_run.go::processTaskDirectExternalCLI); the
-	// sub-turn path that used to set it is deleted (ADR-091), and a steered
-	// session's turn (steer_reconstruct.go::reconstructSteeredTurn) is a
-	// standalone turn with no child turns and leaves it nil. Nothing may
-	// depend on this field being set: it is nil for every steered turn, which
-	// is why the admission slot is released at the dispatch site rather than
-	// through here (see turn_exit.go::Finish).
+	// Back-reference to the owning AgentLoop, supplied by the loop's event
+	// scope in newTurnState before any production turn is registered or run.
+	// Used by fallback-note event publication and Finish's hard-abort cascade
+	// over childTurnIDs. Admission slots are still released at the dispatch
+	// site, not through Finish.
 	al *AgentLoop
 
 	// Last streamer used during this turn. Finalized once at turn end
@@ -882,9 +885,11 @@ func (ts *turnState) setOutcomeRelabel(code LLMErrorCode) {
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	ts := &turnState{
 		approvalOrigin: opts.approvalOrigin,
+		al:             scope.loop,
 		agent:          agent,
 		opts:           opts,
 		scope:          scope,
+		origin:         tools.NewTurnOrigin(),
 		turnID:         scope.turnID,
 		sessionKey:     opts.SessionKey,
 		channel:        opts.Channel,

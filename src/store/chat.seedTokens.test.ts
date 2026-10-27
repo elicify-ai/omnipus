@@ -2,9 +2,10 @@
  * chat.seedSessionTokens tests
  *
  * Verifies:
- *   1. Seeds sessionTokens when bucket is at 0 (fresh attach).
- *   2. Does NOT overwrite when sessionTokens is already > 0 (live accumulation).
- *   3. updateSessionStats still accumulates on top of seeded value.
+ *   1. Missing aggregate stays unknown; authoritative zero is a known value.
+ *   2. D16 merges newer absolute observations without lowering a known total.
+ *   3. The explicit legacy updateSessionStats helper remains compatible;
+ *      addressed live done frames use absolute observations, tested separately.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -53,18 +54,18 @@ import { useChatStore } from './chat'
 describe('useChatStore.seedSessionTokens', () => {
   beforeEach(() => {
     // Reset store to empty state
-    useChatStore.setState({ sessionsById: {}, sessionTokens: 0 })
+    useChatStore.setState({ sessionsById: {}, sessionTokens: undefined })
   })
 
-  it('seeds sessionTokens for a fresh session bucket (starts at 0)', () => {
+  it('seeds sessionTokens for a fresh session bucket whose aggregate was unknown', () => {
     // Set active session via session store mock side-channel
     // We patch the active session id directly on the store for the test.
     // The store reads activeSessionId from useSessionStore.getState()
     // which is mocked to return 'sess-1'.
 
-    // Ensure the bucket starts at 0
+    // D16: a fresh bucket without aggregate evidence is exactly unknown.
     const { seedSessionTokens, sessionsById } = useChatStore.getState()
-    expect(sessionsById['sess-1']?.sessionTokens ?? 0).toBe(0)
+    expect(sessionsById['sess-1']?.sessionTokens).toBeUndefined()
 
     seedSessionTokens(44000)
 
@@ -74,15 +75,23 @@ describe('useChatStore.seedSessionTokens', () => {
     expect(updated.sessionsById['sess-1']?.sessionTokens).toBe(44000)
   })
 
-  it('does NOT overwrite sessionTokens when bucket already has accumulated tokens', () => {
-    // First seed
+  it('merges a newer absolute total and never lowers it for a stale observation', () => {
+    // First authoritative absolute observation.
     useChatStore.getState().seedSessionTokens(44000)
     expect(useChatStore.getState().sessionTokens).toBe(44000)
 
-    // Try to seed again — should be a no-op because bucket is no longer at 0
+    // D16: later authoritative usage is nondecreasing, not first-seed-wins.
     useChatStore.getState().seedSessionTokens(99000)
-    // Still 44000, not 99000
-    expect(useChatStore.getState().sessionTokens).toBe(44000)
+    expect(useChatStore.getState().sessionTokens).toBe(99000)
+    useChatStore.getState().seedSessionTokens(44000)
+    expect(useChatStore.getState().sessionTokens, 'stale lower evidence cannot erase the newer total').toBe(99000)
+  })
+
+  it('a verified recorded zero is distinct from the fresh unknown observation', () => {
+    expect(useChatStore.getState().sessionTokens).toBeUndefined()
+    useChatStore.getState().seedSessionTokens(0)
+    expect(useChatStore.getState().sessionTokens).toBe(0)
+    expect(useChatStore.getState().sessionsById['sess-1'].sessionTokens).toBe(0)
   })
 
   it('accumulates live delta on top of seeded value via updateSessionStats', () => {

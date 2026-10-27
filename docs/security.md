@@ -26,8 +26,18 @@ For example: `write_file` is set to Ask. With Auto-approve off, every file write
 ### Set tool policies
 
 1. Open **Settings**, then select **Security**. You see the security health summary and the main protection settings.
-2. Open **Advanced / technical details**, then **Tool Access — Global Policies**. Choose Allow, Ask or Deny for each tool. This applies to every agent. Saving asks you to re-type your password.
+2. Open **Advanced / technical details**, then **Tool Access — Global Policies**. Choose Allow, Ask or Deny for each tool. Changes save immediately using your signed-in session, with no second password prompt. Changing a tool to **Allow** can enable it for every agent that follows the global setting; stricter per-agent **Ask** or **Deny** settings still apply. This exception does not remove the existing confirmation checks on Integrations, Providers, Sandbox, Credentials or Performance saves.
 3. To tighten one agent, open that agent's **Tools & Permissions** panel. An agent's setting can only be stricter than the global one, never looser. See [tools](tools.md) for how the two combine.
+
+A global policy change must also be applied to running agents. If the save result
+says the settings were saved but could not be applied, the saved change has not
+been undone, but running agents may still use the previous permissions. Retry
+applying the change, or restart Omnipus before relying on it. The global-policy
+API returns HTTP 503 for this result, rather than reporting a successful update.
+
+The global policy auto-save indicator shows the server's recovery message for
+this result, not just a generic server-unavailable message. It remains an error,
+not a successful-save confirmation.
 
 On a new installation the shell tool, `bash`, is set to **Ask**.
 
@@ -48,7 +58,7 @@ Below the switch, **Always asks when set to Ask** is a collapsed list — click 
 
 > Sending email · Deleting tasks, agents or workspaces · Installing skills, setting up an environment or publishing a web preview · Changing or testing settings, providers, channels, agents or skills · Running diagnostics · Adding or removing connected (MCP) servers, and MCP tools not marked safe · Browser scripts and uploads · Mounting a folder, or files outside your workspace
 
-And a small note underneath *(2026-09-24: the note's wording changed twice — see "Auto-approve and the kernel sandbox" below)*:
+The note underneath says:
 
 > Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and commands an operator rule allows.
 <!-- verify-ui-string -->
@@ -59,14 +69,14 @@ The chat switch is the one place that can turn Auto-approve **on** when the glob
 
 **Exception: external command-line workers.** A worker that runs on Claude Code, Codex or OpenCode does not use Omnipus's tool approval dialog at all. Omnipus automatically approves the permission requests the external tool reports, so turning Auto-approve off is not a way to make an external worker ask you before each action. Omnipus Allow/Ask/Deny rules govern Omnipus tools only and do not reach inside the external tool. Treat delegating to an external command-line worker as its own trust decision.
 
-### Auto-approve and the kernel sandbox (changed 2026-09-24)
+### Auto-approve and the kernel sandbox
 
-**Auto-approve no longer needs a kernel sandbox to work.** A kernel sandbox is protection enforced by the operating system itself: Landlock on Linux, Seatbelt on macOS, with the Process Sandbox set to **Enforce**. Until 2026-09-24, Auto-approve had no effect at all without one — every Ask tool prompted, the same as if Auto-approve were off, and there was no Auto-approve on Windows at all, because Windows has no kernel sandbox in Omnipus. That turned out to make Auto-approve effectively useless on Windows and on any machine where the sandbox failed to start or was deliberately left in Permissive or Off mode, so it was changed.
+**Auto-approve does not need a kernel sandbox to work.** A kernel sandbox is protection enforced by the operating system itself: Landlock on Linux, Seatbelt on macOS, with the Process Sandbox set to **Enforce**. Auto-approve also works on Windows, which has no Omnipus kernel sandbox, and when the sandbox is unavailable or set to Permissive or Off. Without an enforcing kernel sandbox, shell commands face the stricter approval checks below.
 
-**What Auto-approve does now, with and without a kernel sandbox:**
+**What Auto-approve does, with and without a kernel sandbox:**
 
-- **Every tool except the shell (`bash`)** is unaffected by whether a kernel sandbox is active. The kernel sandbox was never what kept `write_file`, `edit_file` and the other writing tools inside your workspace — an application-level check inside Omnipus itself always did that (see "What Auto-approve runs and what still asks" below), and that check runs the same way with or without a kernel sandbox.
-- **The shell (`bash`) is different.** With a kernel sandbox active (Linux or macOS, Process Sandbox set to Enforce), a shell command that tries to reach outside the workspace or the network is caught two ways: Omnipus checks the command's text before running it, **and** the operating system itself blocks anything that check missed. Without a kernel sandbox — on Windows, or with the Process Sandbox set to Permissive or Off — only the first, text-based check exists, so *(changed again 2026-09-24, "like a coding assistant's own default")* Omnipus is stricter about what it will run without asking: a command runs without a prompt only if it is one of a short list of commands that can only read (listing files, printing a file's contents, `git status`/`log`/`diff`/`show`, and a few more — see the list under "What Auto-approve runs and what still asks" below), or an operator has explicitly written a rule allowing it. Every other shell command asks first, even one that only touches files already inside your workspace — the approval card explains why: *"No kernel sandbox is enforcing, so shell commands that could change files or reach the network ask first."*
+- **Every tool except the shell (`bash`)** is unaffected by whether a kernel sandbox is active. An application-level check inside Omnipus keeps `write_file`, `edit_file` and the other writing tools inside your workspace (see "What Auto-approve runs and what still asks" below), and that check runs the same way with or without a kernel sandbox.
+- **The shell (`bash`) is different.** With a kernel sandbox active (Linux or macOS, Process Sandbox set to Enforce), a shell command that tries to reach outside the workspace or the network is caught two ways: Omnipus checks the command's text before running it, **and** the operating system itself blocks anything that check missed. Without a kernel sandbox — on Windows, or with the Process Sandbox set to Permissive or Off — only the first, text-based check exists, so Omnipus is stricter about what it will run without asking: a command runs without a prompt only if it is one of a short list of commands that can only read (listing files, printing a file's contents, `git status`/`log`/`diff`/`show`, and a few more — see the list under "What Auto-approve runs and what still asks" below), or an operator has explicitly written a rule allowing it. Every other shell command asks first, even one that only touches files already inside your workspace — the approval card explains why: *"No kernel sandbox is enforcing, so shell commands that could change files or reach the network ask first."*
 <!-- verify-ui-string -->
   - **Concrete risk this still leaves open:** a command that has been deliberately disguised so its text does not look like what it actually does — for example, splitting a program name across quotes, or using shell substitution to build the real command at run time — can slip past a text-based check, INCLUDING the read-only allowlist above (which only recognizes a command by its literal, un-disguised name). With a kernel sandbox, the operating system still blocks it regardless of how the text was disguised. Without one, asking first for every non-read-only command is the remaining protection — there is no second, operating-system-level check behind it, and an unattended/scheduled run has nobody to answer, so it refuses rather than guessing.
 
@@ -82,9 +92,7 @@ There is no mode badge in the chat header. The composer has one labelled **Auto*
 | **Auto** not pressed | Auto-approve is off for this chat. Every tool set to Ask prompts. |
 | **Auto** pressed | Auto-approve is on. Safe calls run; the rest ask. |
 | **Auto** pressed, tooltip adds the no-sandbox caution | Auto-approve is on, but there is no active kernel sandbox. Every other tool's safe calls still run as usual; the shell only auto-runs a read-only command or one an operator's rule explicitly allows — everything else asks first (see above). The caution is in that same tooltip, not a second label. |
-<!-- verify-ui-string: composer Auto button tooltip, including the no-sandbox caution (the old chat-header badge "Auto — no sandbox" is gone) -->
-
-*(Before 2026-09-24 a chat-header badge read "Auto → Ask" and Auto-approve had no effect at all in that state. That badge is gone. See "Auto-approve and the kernel sandbox" above.)*
+<!-- verify-ui-string: composer Auto button tooltip, including the no-sandbox caution -->
 
 ### God Mode
 
@@ -112,7 +120,7 @@ The first time you turn God Mode on through this screen, on an installation that
 | Kernel filesystem confinement | Widened for shell and environment-setup children. A protected-file floor remains on Linux and macOS only while an enforcing kernel sandbox is active; Off, Permissive and degraded/unavailable operation install no floor. Application path checks still apply. |
 | Kernel network-port controls | Off for the shell's own commands: they can bind or connect to any port, not just an allowed list. |
 | Outbound network filtering | The shell's commands are not filtered against the address block list that otherwise stops them reaching your internal network or cloud-metadata services. |
-| Programs the shell starts | Commands run by `bash` (foreground or background) and the runs of the `environment_setup` tool receive your full gateway environment — including saved provider API keys and mailbox passwords — instead of the usual child allowlist. The three gateway boot values (master key, key file, web token) are still withheld. Accepted risk (2026-10-14); see ["What child programs can see"](#what-child-programs-can-see). |
+| Programs the shell starts | Commands run by `bash` (foreground or background) and the runs of the `environment_setup` tool receive your full gateway environment — including saved provider API keys and mailbox passwords — instead of the usual child allowlist. The three gateway boot values (master key, key file, web token) are still withheld. Accepted risk; see ["What child programs can see"](#what-child-programs-can-see). |
 | Per-command process limits | The extra process-count and memory limits normally placed on a shell command (and the platform equivalents on macOS and Windows) are not applied. |
 | After-run link check | Skipped. Normally, after each shell command, Omnipus looks for links the command left inside the workspace that point outside it, tells the agent, and writes the finding to the audit log. Under God Mode that check does not run. |
 | Auto-approve | Switched off outright, everywhere — there is nothing left for it to add. |
@@ -134,8 +142,6 @@ The first time you turn God Mode on through this screen, on an installation that
 | Connected-server (MCP) tool assignment | A tool from a server your agent is not assigned to is still hidden, God Mode or not. |
 | The block on agents changing sandbox settings | An agent can never grant itself God Mode, or widen it, by editing its own configuration — see "Agents cannot change these rules," below. |
 
-*(Corrected 2026-09-25 — an earlier version of this page said God Mode disables the "shell guard," the outside-workspace write refusal, along with the sandbox. It does not: that refusal is the one filesystem check God Mode never turns off. Only the prompt that would otherwise offer to widen it is gone.)*
-
 God Mode is one flag for the whole gateway process, so a delegated or steered sub-agent inherits it automatically — there is no separate delegation setting. A scheduled or unattended run behaves the same way a live chat does: a tool call that would still ask, because that agent itself set it to Ask, has nobody present to answer it, so it is refused outright rather than left waiting on an approval card no one will see.
 
 #### Turning it on or off
@@ -145,7 +151,7 @@ Changing God Mode always asks you to re-type your password. After that:
 - Turning it on shows a warning-styled "God-mode enabled" message — or, on a boot not yet authorized, "God-mode authorized — restart the gateway to activate it."
 - Turning it off shows "God-mode disabled."
 
-While God Mode is on, the sidebar shows a small red "God Mode" pill next to the omnipus.ai wordmark — and when the sidebar is hidden, a small red dot sits at the left edge of the screen instead, just below the header bar (clear of the sidebar-open button, and above full-screen panels on phones). Clicking either opens **Settings**, **Gateway**, scrolled to and focused on the God Mode control — switching to the Gateway tab even if Settings is already open. The chat header does not repeat God Mode; the composer **Auto** button stays pressed and disabled while God Mode is on, and its tooltip says so. In every other state — off, still loading, unknown, fetch error, or development-mode bypass — neither indicator shows anything at all: there is no amber "God Mode ?" unknown variant (founder decision 2026-09-25). (Changed 2026-09-25 — an app-wide "God-mode is active" banner with its own "Turn off" button used to show on every screen; the Settings → Gateway control's toggle behavior is unchanged, though it gained the click-through focus targeting.)
+While God Mode is on, the sidebar shows a small red "God Mode" pill next to the omnipus.ai wordmark — and when the sidebar is hidden, a small red dot sits at the left edge of the screen instead, just below the header bar (clear of the sidebar-open button, and above full-screen panels on phones). Clicking either opens **Settings**, **Gateway**, scrolled to and focused on the God Mode control — switching to the Gateway tab even if Settings is already open. The chat header does not repeat God Mode; the composer **Auto** button stays pressed and disabled while God Mode is on, and its tooltip says so. In every other state — off, still loading, unknown, fetch error, or development-mode bypass — neither indicator shows anything at all: there is no amber "God Mode ?" unknown variant.
 
 The Security screen's health summary also raises a high-severity "God-mode is armed" warning whenever it is switched on, or authorized and waiting for a restart, with a link back to **Settings**, **Security**, **Danger zone**.
 
@@ -163,13 +169,13 @@ Tools set to Allow or Deny show no marker, because Auto-approve does not affect 
 
 Auto-approve only matters for a tool set to **Ask**. Omnipus judges each call on its own, not the tool as a whole.
 
-**Most tools run without a prompt.** That includes reading, listing and searching files (below), web search and opening web pages, the browser (clicking, typing, navigating, screenshots), memory and the knowledge base, tasks, plans and goals, handing work to another agent, and read-only listings of settings, agents and workspaces. For example, with Auto-approve on, Mia editing a knowledge-base note set to Ask no longer shows an approval card.
+**Most tools run without a prompt.** That includes reading, listing and searching files (below), web search and opening web pages, the browser (clicking, typing, navigating, screenshots), memory and the knowledge base, tasks, plans and goals, handing work to another agent, and read-only listings of settings, agents and workspaces. For example, with Auto-approve on, Mia editing a knowledge-base note set to Ask does not show an approval card.
 
-**Reading, listing and searching run anywhere outside Omnipus's protected files.** *(Changed 2026-09-27 — before, `read_file` and `list_directory` asked for anything outside the workspace and its mounted folders.)* `read_file`, `list_directory` and `grep` run without a prompt inside the workspace, inside a mounted folder, and outside both. For example, `read_file` of `/etc/hosts` runs. What they can never reach is described under "What reading, searching and listing can reach" below.
+**Reading, listing and searching run anywhere outside Omnipus's protected files.** `read_file`, `list_directory` and `grep` run without a prompt inside the workspace, inside a mounted folder, and outside both. For example, `read_file` of `/etc/hosts` runs. What they can never reach is described under "What reading, searching and listing can reach" below.
 
 **Writing and sending run only inside the workspace or a mounted folder.** `write_file`, `edit_file` and `append_file` run without a prompt when the path they touch is inside the agent's workspace or a folder you mounted into it. Anything outside asks. For example, `write_file` to `notes/plan.md` runs; `write_file` to your Desktop asks. The same rule applies to the file `send_file` sends. `browser_screenshot` saves its picture into the workspace under a name Omnipus picks, so it normally runs. Omnipus secret files, such as the master key, are never covered.
 
-For reading, this now matches the shell. Under Auto-approve, the shell command `cat /etc/hosts` runs, because the sandbox lets commands read outside the workspace, and `read_file` of `/etc/hosts` runs too. Only writing and sending keep the workspace rule above.
+For reading, this matches the shell. Under Auto-approve, the shell command `cat /etc/hosts` runs, because the sandbox lets commands read outside the workspace, and `read_file` of `/etc/hosts` runs too. Only writing and sending keep the workspace rule above.
 
 **Messages and files sent to chat channels go out with no prompt.** `send_message` runs under Auto-approve, and so does `send_file` for a file inside the workspace or a mounted folder. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, turn Auto-approve off, or set those two tools to Deny for that agent. Email is different: `send_email` and `reply` keep asking whenever they're set to Ask, even with Auto-approve on.
 
@@ -184,7 +190,7 @@ For reading, this now matches the shell. Under Auto-approve, the shell command `
 | Browser scripts and uploads | `browser_evaluate`, `browser_upload_file` |
 | Settings and diagnostics | `set_config`, `run_doctor` |
 | Providers | `configure_provider`, `test_provider` |
-| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `test_channel` |
+| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `test_channel` |
 | Connected servers | `add_mcp_server`, `remove_mcp_server` |
 | Agents and workspaces | `create_agent`, `update_agent`, `set_agent_permissions`, `update_workspace` |
 | Skills | `create_skill`, `edit_skill`, `remove_skill` |
@@ -199,7 +205,7 @@ For reading, this now matches the shell. Under Auto-approve, the shell command `
 
 Under Auto-approve, a shell pre-flight that identifies a protected internal path, such as the master key, refuses it rather than offering a path grant. Other call paths can ask for general tool approval before checking the path; that approval still cannot open it. For the ordinary workspace-access prompts described above, **Approve Once** lets that one command through. **Always Allow** on a file prompt opens that one path, for the access the command needed, for the rest of that chat. Denying either prompt refuses the command; it never runs with less access instead.
 
-**A network prompt names the address(es) it needs, and approving covers exactly those.** *(Changed 2026-09-24 — before this date, the card only ever said the command "needs outbound network access," and Always Allow opened the network to any address for the rest of the chat; it now behaves as described here.)* When Omnipus can read the address from the command (for example the `https://example.com` in a `curl` command, or the `example.com` in `scp file.txt user@example.com:`), the card says *"Allows network access to: example.com"* and lists it. **Approve Once** lets the command reach exactly that address, this one time. **Always Allow** lets any shell command in the rest of that chat reach that address without asking again — a *different* address still asks, even in the same chat; it is not "network access in general." When Omnipus cannot read an address from the command at all (for example `npm install`, which reaches whatever registry it is configured for), the card says so — *"no specific host could be identified from the command text"* — and approving only opens the usual web and name-lookup ports (80, 443, 53) to any address, the original, narrower behaviour, because there is no specific address to restrict to.
+**A network prompt names the address(es) it needs, and approving covers exactly those.** When Omnipus can read the address from the command (for example the `https://example.com` in a `curl` command, or the `example.com` in `scp file.txt user@example.com:`), the card says *"Allows network access to: example.com"* and lists it. **Approve Once** lets the command reach exactly that address, this one time. **Always Allow** lets any shell command in the rest of that chat reach that address without asking again — a *different* address still asks, even in the same chat; it is not "network access in general." When Omnipus cannot read an address from the command at all (for example `npm install`, which reaches whatever registry it is configured for), the card says so — *"no specific host could be identified from the command text"* — and approving only opens the usual web and name-lookup ports (80, 443, 53) to any address, because there is no specific address to restrict to.
 <!-- verify-ui-string -->
 
 **How this is enforced, briefly.** Every shell command runs through a loopback proxy Omnipus starts for it; approving a network prompt is what tells that proxy which address(es) this chat's commands may reach. The approval is remembered for the rest of the chat only, never written to your `config.json` — that file's own `sandbox.egress_allow_list` field (a separate, permanent, operator-set list of addresses every chat can reach without ever asking) is untouched by an approval; the two lists are additive, not one replacing the other.
@@ -239,12 +245,12 @@ A refusal carrying `protected_internal_file` is displayed as **Protected Omnipus
 - **Shell commands can disclose the NAMES of entries directly inside the data directory on macOS.** A shell command running inside Seatbelt, macOS's kernel sandbox, can list those names. Protected contents remain inaccessible. This is an accepted disclosure of names **under the kernel sandbox**, not a command running outside it. `list_directory` of the data-directory root is still refused, and Omnipus's command-text check may also refuse a shell command that names that root directly.
 - **Installed runtimes receive read/execute-only kernel grants.** With a kernel policy active, published shared toolchain generations and the document runtime are readable and executable, not writable, including under the God Mode floor. This is not a write guarantee for children running without a kernel policy.
 
-**Where `grep` searches.** With no folder given, `grep` searches the agent's workspace and every folder mounted into it. Given a folder, it searches there instead: a path inside the workspace, a mounted folder's name, or an absolute path such as `/var/log` or `C:\Logs`. A path containing `..` works too, and reaches the same place it would for `read_file`. Matches inside the workspace are shown relative to it; everything else is shown as a full path that `read_file` can open. The search limits are unchanged, so a search of a whole disk stops at them and says it was cut short.
+**Where `grep` searches.** With no folder given, `grep` searches the agent's workspace and every folder mounted into it. Given a folder, it searches there instead: a path inside the workspace, a mounted folder's name, or an absolute path such as `/var/log` or `C:\Logs`. A path containing `..` works too, and reaches the same place it would for `read_file`. Matches inside the workspace are shown relative to it; everything else is shown as a full path that `read_file` can open. A search of a whole disk stops at the search limits and says it was cut short.
 
 **What `grep` skips or hides while it searches:**
 
 - Links (symlinks) it meets inside a folder are not followed. A link you name directly as the folder to search is followed, as `read_file` would.
-- The Linux system folders `/proc`, `/sys` and `/dev` are skipped, and device files, pipes and sockets are never read. They hold no user content, and some of them can hang a search. `read_file` of a file you name in those folders works as before.
+- The Linux system folders `/proc`, `/sys` and `/dev` are skipped, and device files, pipes and sockets are never read. They hold no user content, and some of them can hang a search. You can use `read_file` to open a file you name in those folders.
 - Agent notes files such as `SOUL.md`, `HEARTBEAT.md`, `AGENT.md` and `MEMORY.md`, and the instruction files of installed skills (`SKILL.md`, `AGENT.md`, `AGENTS.md` in Omnipus's own skills folder), never show up in results, by name or by content. `read_file` refuses their contents. An agent working from its own home can still list its ordinary working files and folders, but `list_directory` hides protected definitions, memory, sessions, installed-skill folders and internal state from that listing. Those hidden entries do not count toward listing pages. Ordinary nested folders with the same names remain visible when they are not protected paths. Listing the installed skill registry is still refused. A skill's other files, such as its helper scripts, can be read and found.
 
 **Denying `read_file` alone does not stop an agent reading.** The policies for `read_file` and `grep` are separate, and `grep` returns the matching lines of any file it can reach (up to the usual limits and surrounding lines). A custom agent with `grep` allowed and `read_file` denied can still read that way. To confine what an agent reads, deny `read_file`, `grep` and `bash` for it.
@@ -281,7 +287,7 @@ A shell command that would need a prompt (for example one that needs the network
 
 For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. An unattended call must either clear Auto-approve, match an operator rule or grant, or have an effective Allow policy. An explicit Deny always stays a deny. Setting one agent to Allow cannot override a global Ask or Deny. If a required tool still resolves to Ask, review both policy layers. Changing the global ceiling affects every agent; use per-agent restrictions to retain tighter access elsewhere.
 
-**What counts as unattended (changed 2026-10-13).** Who answers an approval is decided by where the work started — the first conversation of the chain, not the helper doing the work and not whoever wrote last:
+**What counts as unattended.** Who answers an approval is decided by where the work started — the first conversation of the chain, not the helper doing the work and not whoever wrote last:
 
 | Where the chain started | Approvals |
 |---|---|
@@ -307,11 +313,13 @@ When a tool needs your decision, an approval card appears in the chat the reques
 | **Deny** | Refuses the call. |
 | **Cancel** | Closes the request without running it. |
 
-The card never takes focus, and pressing Enter in the message box or Escape never answers it: a request is answered only when you select one of its buttons. A request nobody answers in time expires; the card then says so (a timeout, not a denial by you) and offers **Dismiss**. After a page reload or a reconnect, a request that is still pending comes back as a complete card you can approve, deny or always allow.
+The card never takes focus. Typing in the message box or pressing Escape does not count as approving or denying a request. Selecting **Stop** in the owning chat cancels that chat's pending approvals, including requests from its helpers and their helpers. The cards resolve as cancelled, the waiting helper executions stop, and the unapproved actions do not run. Another chat's pending approvals stay pending. This does not turn an ordinary Stop into Stop all for helpers that are already working without a pending approval. Work already performed is not undone. Cleanup selects requests present when Stop is received; a fresh request raised by a later resumed execution is not withdrawn by that older Stop. If Approve wins before a selected request is cancelled, its action is not revoked, and Stop reports the already-approved request. If saved helper data cannot be read, Stop reports incomplete cleanup instead of claiming that every request was cancelled. These operational Stop outcomes appear in **Notifications**. In the sidebar, select your username at the bottom, then choose **Notifications**. These notices are not failed replies and do not end or replace a reply that is still running.
+
+An unanswered request expires without running the action. Expiry is a timeout, not a denial by you. When the server confirms that a request has resolved, its card closes. If an expiry notice remains visible, select **Dismiss**. After a page reload or reconnect, a request that is still pending returns as a complete card you can approve, deny or always allow.
 
 **Where a request came from.** When the work being approved was triggered by someone other than you in the web app, the card names it: *"while answering <person> on <connection>"* for a channel message, *"for group <name>"* for a group-chat request, *"asked by <Agent>"* for another agent's request. A conversation that has taken in several such inputs shows the most significant one — a channel person first, then a group, then another agent — and keeps the first of each kind; it never drops back to a lesser one. A request that is already waiting keeps the label it was raised with.
 
-**Which sidebar entry is marked (changed 2026-10-18).** It is the asking agent's main chat in that workspace. This also holds when the request comes from another of that agent's chats, from a per-person channel conversation, or from a helper working for one of them; a helper's request marks the main chat of the agent whose chat started the work. Known limit: when that agent has no main chat in the workspace, or the conversation belongs to no workspace, no sidebar entry is marked — the request still shows in its own chat.
+**Which sidebar entry is marked.** It is the asking agent's main chat in that workspace. This also holds when the request comes from another of that agent's chats, from a per-person channel conversation, or from a helper working for one of them; a helper's request marks the main chat of the agent whose chat started the work. Known limit: when that agent has no main chat in the workspace, or the conversation belongs to no workspace, no sidebar entry is marked — the request still shows in its own chat.
 
 What **Always Allow** remembers lasts only for that chat and ends with it. Agents that this chat hands work to inherit it. Nobody else's chats are affected, and there is no list of remembered approvals to review. For most tools it remembers the exact call, with the same arguments. For a shell command it offers a choice; see "Command rules compared with one-time approvals" below.
 
@@ -326,7 +334,7 @@ These controls answer different questions.
 | Filesystem model | What agents may read and run | You want open access or a confined list of locations |
 | Shell workspace limit | Whether a command may name paths outside the working folder | You want a command-text check that still applies even when the sandbox is off |
 
-The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox. *(Changed 2026-09-24 — see "Auto-approve and the kernel sandbox" above.)* In Permissive or Off, the composer **Auto** button stays pressed and its tooltip adds the no-sandbox caution: Auto-approve still runs for every other tool, but the shell only auto-runs a read-only command or one an operator's rule explicitly allows — every other shell command asks first, with no operating-system check behind the text-based one.
+The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox. In Permissive or Off, the composer **Auto** button stays pressed and its tooltip adds the no-sandbox caution: Auto-approve still runs for every other tool, but the shell only auto-runs a read-only command or one an operator's rule explicitly allows — every other shell command asks first, with no operating-system check behind the text-based one.
 
 The **Confined** filesystem model limits reads and execution to listed locations. The **Open** model lets agents read and run anything your account can reach, apart from Omnipus secret files. Writes remain limited to the workspace and mounted folders. Changes to the filesystem model take effect after a gateway restart.
 
@@ -393,8 +401,7 @@ Worked example: with the `ask`-before-`npm publish` rule above and no rule at al
 
 ### How a rule interacts with Auto-approve and God Mode
 
-The columns below match the composer **Auto** button. **Auto** includes the case with no kernel sandbox: a command rule's `allow`/`ask`/`deny` decision applies the same whether or not a kernel sandbox is active — it is a check on the command's text, not something the kernel sandbox does or does not add. *(Before 2026-09-24, this row said "Ask also covers Auto → Ask" — Auto-approve had no effect without a sandbox back then, so that state behaved like Ask. It no longer does. What the no-sandbox case means changed again later the same day — see "Auto-approve and the kernel sandbox" above — when Auto-approve with no sandbox became stricter about which shell commands still skip the prompt.)*
-
+The columns below match the composer **Auto** button. **Auto** includes the case with no kernel sandbox: a command rule's `allow`/`ask`/`deny` decision applies the same whether or not a kernel sandbox is active — it is a check on the command's text, not something the kernel sandbox does or does not add.
 | Rule action | Ask | Auto | God Mode |
 |---|---|---|---|
 | `deny` | Refuses the command. Nobody is asked to approve something that cannot run. | Refuses the command. | Refuses the command. This is the one check God Mode does not turn off. |
@@ -424,9 +431,9 @@ A part Omnipus cannot read reliably, such as a program name built from a variabl
 
 Rules match the program by where it really is on disk, not by the word typed. A rule for `rm` also catches `/bin/rm -rf build` for `deny` and `ask`. An `allow` rule for `git` does not approve a different program that happens to be named `git` earlier on the agent's path.
 
-**A deny or ask rule also catches the program run through a wrapper.** *(Changed 2026-09-24 — before this date, a rule for `rm` did not catch `env rm -rf x`, `sudo rm -rf x`, `nice -n 10 rm -rf x`, `command rm -rf x`, `timeout 5 rm -rf x` or `xargs rm`, because Omnipus only looked at the very first word.)* Omnipus now looks through `env`, `sudo`, `doas`, `nice`, `ionice`, `nohup`, `setsid`, `timeout`, `stdbuf`, `time`, `command`, `builtin`, `exec` and `xargs` to the program they go on to run, including one wrapper inside another (`env sudo rm -rf x`). A rule for `rm` catches every one of the examples above the same as it catches plain `rm -rf x`.
+**A deny or ask rule also catches the program run through a wrapper.** Omnipus looks through `env`, `sudo`, `doas`, `nice`, `ionice`, `nohup`, `setsid`, `timeout`, `stdbuf`, `time`, `command`, `builtin`, `exec` and `xargs` to the program they go on to run, including one wrapper inside another (`env sudo rm -rf x`). A rule for `rm` catches every one of the examples above the same as it catches plain `rm -rf x`.
 
-**A command that runs another program through an interpreter is treated with extra caution**, because Omnipus cannot see inside the text it hands that interpreter: `bash -c "…"`, `sh -c "…"`, `zsh -c "…"`, `eval …`, `source …`, `python -c "…"` (and `python3`, and other Python versions), `perl -e "…"`, `ruby -e "…"`, and `node -e "…"`. When any of your deny rules names a program whose name appears as a whole word inside that text — for example a `deny` rule for `rm` and a command `bash -c "rm -rf x"` — Omnipus refuses it, the same as it would refuse plain `rm -rf x`. If none of your deny rules' names appear that way, but you have written **any** `ask` or `deny` rule at all, Omnipus asks before running the interpreter command rather than silently letting it through — an interpreter is exactly the shape that could be hiding something a rule would otherwise have caught. With no rules written at all, an interpreter command is treated exactly as before: the shell's own Ask/Auto/God Mode handling decides.
+**A command that runs another program through an interpreter is treated with extra caution**, because Omnipus cannot see inside the text it hands that interpreter: `bash -c "…"`, `sh -c "…"`, `zsh -c "…"`, `eval …`, `source …`, `python -c "…"` (and `python3`, and other Python versions), `perl -e "…"`, `ruby -e "…"`, and `node -e "…"`. When any of your deny rules names a program whose name appears as a whole word inside that text — for example a `deny` rule for `rm` and a command `bash -c "rm -rf x"` — Omnipus refuses it, the same as it would refuse plain `rm -rf x`. If none of your deny rules' names appear that way, but you have written **any** `ask` or `deny` rule at all, Omnipus asks before running the interpreter command rather than silently letting it through — an interpreter is exactly the shape that could be hiding something a rule would otherwise have caught. With no rules written at all, the shell's own Ask/Auto/God Mode handling decides whether an interpreter command runs.
 
 **What this still cannot catch.** A wrapper Omnipus does not recognize (something other than the list above) is not looked through — if your denied program's name later appears as one of that unrecognized command's own words, Omnipus asks rather than silently allowing it (so you still see it), but it cannot always tell you that word is really about to run as a command. And inside an interpreter's text, only a whole-word name match is checked — a program built at run time from pieces, or referred to indirectly, can still slip past. The kernel sandbox (Enforce mode), not this text-based check, is what actually stops a command from reaching outside your workspace or the network regardless of how its text was written.
 
@@ -496,7 +503,7 @@ The application's default-deny rule also covers new internal locations before th
 | Platform | What enforces it |
 |---|---|
 | Linux | With Landlock available and the Process Sandbox enforcing, shell and environment-setup children receive kernel protection for internal files, including the God Mode floor. File tools and the shell command-text check also apply. Basic Landlock file rights are available from Linux 5.13; later rights depend on the detected kernel interface. |
-| macOS | With Seatbelt available and the Process Sandbox enforcing, shell and environment-setup children receive a profile denying protected internal files, including in God Mode. File tools and the shell command-text check also apply. |
+| macOS | With Seatbelt available and the Process Sandbox enforcing, shell and environment-setup children receive a profile denying protected internal files, including in God Mode. File tools and the shell command-text check also apply. Programs that check website certificates through macOS itself, such as `gh` and other Go-built tools, can do so inside the profile, because it allows macOS's certificate-checking service. That access also lets a command read your certificate trust settings and clear that service's caches, which costs only performance. It does not reach the secrets stored in your keychain, and it cannot permanently change which certificates your Mac trusts, because that needs an authorization this sandbox does not grant. These limits come from Apple's published source code and were not checked against macOS 26 itself. |
 | Windows | There is no kernel sandbox. File tools refuse protected paths, and the command-text check refuses a shell command whose protected path it identifies. A command that builds its path at runtime can evade that text check. |
 
 On Linux and macOS with the sandbox Off, Permissive or degraded/unavailable, the same no-kernel limitation applies: file-tool checks remain, but the command-text check alone does not contain arbitrary shell programs. Check the Security screen's actual enforcement and capabilities, not just the operating-system name or version.
@@ -510,6 +517,83 @@ An authorized `environment_setup` run can create and read new files directly ins
 - **Runtime paths are trusted.** The sandbox trusts toolchain and runtime folders by the path supplied to it. If that path is a shortcut (symbolic link), it does not recheck where the shortcut leads against the protected-file inventory, so only use locations you trust.
 - **External command-line workers are not covered.** A worker delegated to Claude Code, Codex or OpenCode runs outside Omnipus's sandbox and file policy entirely (see the God Mode section's external-worker note). Delegating to one is a decision to trust that tool with your account — Omnipus's internal-file protection does not follow it.
 
+## Entering a secret from a chat
+
+When an agent needs a provider key, an MCP server environment secret, or a channel credential, it can open a **secure secret card** in the web app. Type the value into that card, not into the chat. The card names the acting agent, explains why the secret is needed, and shows its destination. An Omnipus helper's card appears in Omnipus's main chat; other helpers must ask their parent.
+
+Each value must contain 4–16,384 bytes of UTF-8 text and no NUL character, and the complete submission is limited to 65,536 bytes. A card holds at most eight fields; the server chooses them, including Slack's required bot-token and app-token pair. Only one secret request may be pending in a chat session, and at most 64 may be pending across the installation; finish or cancel an existing request before asking for another when a limit is reached.
+
+While a secure card is waiting, the sidebar marks a main chat as needing attention: the chat where the card was raised when that is a main chat, otherwise the main chat above the helper that raised it, otherwise the asking agent's main chat in that workspace. Known limit: when that agent has no main chat in the workspace, no sidebar entry is marked; the card still shows in its own chat. When the server cannot read the waiting cards, the entry shows attention as unknown, not "nothing pending". Once the card is no longer waiting, it no longer counts toward the cue.
+
+| Action or state | What happens |
+|---|---|
+| Submit | All requested fields are saved together in the encrypted vault, under new versioned reference names. The agent continues with those names, never the values. |
+| Replace an integration secret | The replacement is saved as a new version. Saving the card alone does not switch the integration to it. |
+| Cancel the card, or Stop before submitting | Nothing is stored. |
+| Stop after submitting | The saved version remains in the vault. The stopped continuation does not restart on a later reload, explicit chat revival or gateway restart. This also applies when you press Stop after a restart has already interrupted the session. Stop does not undo an integration change already completed. |
+| Gateway restarts before submission | The request becomes unavailable. Ask the agent for a new card. |
+| The destination changes while the card is open | Submission is refused. Ask for a new card showing the current destination. |
+| Saving fails before anything is stored | The card says the request is still pending and what to check: that the credential store is unlocked, readable and writable, and that there is free disk space. Fix that, then submit again. The gateway log records the request, the failed step and a safe cause, never the value. |
+| Saving succeeds but the follow-up is not confirmed | The card says the secret is saved. Do not enter it again; reopen the chat to retry the continuation. |
+
+Each card transition is recorded in the audit log without the values. If the gateway stopped after saving a submission but before recording it, the restart finds the saved submission and records it as `secret.request.recovered_submitted`.
+
+The card does **not** ask you to re-type your account password: submitting that exact destination-bound card is consent for that write only. It cannot choose an arbitrary vault entry or delete one. Raw Credential Vault changes in Settings still require password confirmation where applicable.
+
+A turn that consumed a message from a channel person cannot open this card, even when that message arrived in an agent's main chat. The agent instead asks you to open the web app and ask it there. Unattended runs cannot open a card either.
+
+Submitted values are not included in card frames, the conversation, or the continuation message. Stored versions also join the sensitive-value filtering set, including versions an integration has not selected. A damaged, unrelated vault entry does not prevent a continuation from using its readable submitted references: readable versions remain in the filtering set, and previously registered values are retained when the complete scan reports damage. If the submitted references themselves cannot be read, the continuation waits for repair; do not submit their values again. Filtering remains best-effort and can be switched off; do not treat it as protection against a command you deliberately allow to reveal a secret.
+
+### Saving is separate from selecting
+
+The card saves a new version; it does not itself change a provider, connector or channel. The agent must use that integration's configuration tool, with the stored **reference name** and your approval. Those tools refuse secret values in their inputs. Plaintext entry remains available in Settings.
+
+| Integration | What the agent selects | What is checked before saving the change |
+|---|---|---|
+| Model provider | `configure_provider` with `api_key_ref` | The provider, effective endpoint, protocol and API-key field match the card's destination. An endpoint-only card is restricted to that exact endpoint. Every affected provider row is checked. |
+| MCP server | `add_mcp_server` with an `env_refs` map | The server name, transport, executable, ordered arguments, URL and specific environment-variable name match the card's destination. Only the named reference entries are attached. |
+| Channel connection | `configure_channel` or `connect_channel` with fields such as `token_ref`, `bot_token_ref` or `app_secret_ref` | The exact connection instance, its platform account and settings, and the credential field match the card's destination, checked against the connection as it will be saved. Which workspace and agent the connection answers for, and whether it is enabled, are not part of the card's destination: they are routing, which you approve on the `connect_channel` step itself. A change of account or settings that would redirect a retained credential is refused too. |
+
+A reference name alone is not permission to use a secret elsewhere. An unknown, unavailable, unbound or mismatched reference is refused without changing the integration or the stored value. If the destination changed, establish the new destination in Settings, then ask for a new card. Selecting a replacement leaves the earlier stored version intact.
+
+These are shared installation settings. The agent first reads the current entry and confirms the proposed change with you. If Settings or another agent changes that entry before the write, the tool refuses the stale revision. Re-read, review and confirm the new plan before retrying; do not replay the earlier approval blindly. Saving the card is not approval for this later configuration change.
+
+### Adding a new MCP server that needs a secret
+
+For a new stdio MCP server that needs an environment-variable secret, the non-secret server description must exist before it can be shown on a card. This environment-secret flow does not support HTTP or SSE servers:
+
+| Step | What you should expect |
+|---|---|
+| 1. Save the non-secret server description | Approve the stdio server's executable and arguments. The server entry is saved and a connection is attempted. A server that needs a secret may not connect yet: the entry remains saved, but credential setup is unfinished. |
+| 2. Submit the secure card | The agent requests the environment-variable secret for that saved server. Submit saves a version and returns only its reference name to the continuation. |
+| 3. Approve reference attachment | The agent re-reads the server's revision, confirms the attachment and calls `add_mcp_server` with the reference map. This attaches references to the unchanged server; it is not a general update command. |
+| 4. Read the connection result | Omnipus attempts live reconciliation and reports the connection status. A saved reference is not proof that the server connected or that its tools work. If live reconciliation fails, the result is **saved but not working** with the failure reason, even when the server is still connected with its previous configuration. Tools still require their normal assignments and policies. |
+
+Attaching references does not enable a disabled server, change the global MCP switch, replace omitted references, or alter its executable, arguments, URL or policies. Omitted description fields mean unchanged; supplied description fields must match the saved destination. A changed server revision requires a new confirmation, and a changed destination requires a new card.
+
+Cancelling the card leaves the non-secret server entry in place and stores no secret. Stopping after submission leaves the new version stored but does not attach it automatically. You can continue the setup later with a fresh confirmation or remove the server deliberately; Omnipus does not silently roll it back or remove and recreate it.
+
+### Private variables for one agent
+
+An agent can also ask for a **private variable**: a named secret, such as `WEATHER_TOKEN`, that only that agent's own commands receive. It belongs to one agent in one workspace. Mia's `WEATHER_TOKEN` in Sales is not visible to Ray in Sales, and not to Mia in Marketing (Marketing can have its own value).
+
+The card shows the owner as "Mia in Sales" and the variable name. Omnipus can request a private variable for another agent, but only for an agent that is a member of that workspace.
+
+| What you should know | Details |
+|---|---|
+| Promise | Never typed into the chat, never in tool arguments, hidden in output where possible; **a command you let the agent run can still reveal it**. Output filtering hides the exact value only: a transformed copy (for example base64) is not guaranteed to be hidden. |
+| Where it is available | Only as an environment variable in that agent's own commands in that workspace: `bash` (foreground and background) and `environment_setup`. It is added after Omnipus's own environment settings, so the document toolchain does not remove it. It is never placed in the gateway's own environment, and external-program workers do not receive it. |
+| Names | Uppercase letters, digits and `_`, 1 to 64 characters, starting with a letter. Names Omnipus sets for commands are refused, with the reason: for example `PATH`, `HOME`, `TMPDIR`, `HTTP_PROXY`, `PIP_CACHE_DIR`, `PYTHONPATH`, `NODE_PATH`, and any name starting with `LC_`, `XDG_`, `OMNIPUS_`, `LD_` or `DYLD_`. |
+| Replacing it | Submitting a new value on the owner's card takes effect at once for the next command, with no second approval. The previous version stays stored and listed as superseded. Only Omnipus can switch an agent's variable back to an older version (`select_secret_version`), and it asks for your approval first. |
+| Turns started by a channel person | Private variables are **not** added to commands in a turn that read a message from someone on a connected channel, unless you marked that variable "available in channel conversations". This is off by default; only a signed-in web user can change it, and each change is recorded in the audit log. |
+| If it cannot be read | The command still runs without it, and the result says which private variable could not be read. Replace it on a new card. |
+
+### Listing and removing secrets in chat
+
+Agents see stored secrets by **reference name**, never by value. `list_secrets` shows each entry's reference name, kind, version, destination, the integrations that use it, and whether it is in use; an ordinary agent sees only its own private variables in the current workspace, while Omnipus sees every stored reference. Entries saved through Settings (or by boot configuration) are listed too, with the kind **unbound** and the destination **Stored in Settings; no recipient recorded**: no recipient was recorded for them, which says nothing about whether they are used. Their consumer list shows which integrations use them; one with no consumers is shown as stored, not in use. Omnipus sees their names, never their values, and can remove them by name.
+
+Only Omnipus can remove a secret, with `remove_secret`, and you approve it first. The approval card lists every integration that uses the reference before anything is deleted. Removing a reference that is still in use is allowed: after removal the configuration is reloaded, the integrations that used it stop using it and show as degraded, and the next start keeps running with them degraded until you give them a new secret. The result reports three separate facts — whether the value was durably deleted, what changed for running connections, and whether the configuration still starts. Removing an older version that a replacement superseded leaves the current version working. Each removal is recorded in the audit log as `secret.removed`, without the value.
+
 ## How to manage saved secrets
 
 1. Open **Settings**, then select **Security**.
@@ -522,6 +606,8 @@ An authorized `environment_setup` run can create and read new files directly ins
 Omnipus stores credential values in an encrypted file. Settings refer to credentials by name instead of storing their plain values. On a fresh installation, Omnipus creates a master key and warns you to back it up. If you lose that key, existing credentials cannot be recovered.
 
 Rotation re-encrypts the whole vault with the new passphrase. Back up the new passphrase because Omnipus needs it to unlock the vault later.
+
+If one saved entry is damaged but another entry can still be decrypted, the gateway keeps running. This also applies when the damaged entry is used by a provider, mailbox or channel, during startup, configuration reload or a Settings update. The affected integration cannot use that entry; the server log names its reference at error level so you can repair or re-enter it. Other readable entries remain usable, and detecting damage does not rewrite the vault. A locked vault, an unreadable vault file, or a nonempty vault with no decryptable entry still stops startup or rejects the update. If the master key may be wrong, restore the correct key before re-entering secrets.
 
 Each stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open.
 
@@ -563,7 +649,7 @@ When you add an [email mailbox](connectors.md#how-to-add-an-email-mailbox), Omni
 
 The application establishes its own protections on every install: its backups and restores never copy the mail cache or the new-mail watching state, and it refuses to write the cache if it cannot prove that exclusion — including when the data directory has been placed under version control in a way that could capture it. Deleting a mailbox (or disabling it) erases that cache and the watching state; if a delete step fails, the removal reports **cleanup pending** with a retry key rather than claiming success, and the cleanup operation can finish the job afterwards. Removing the cache never deletes mail on your mail server, and it never touches files you saved from mail into a workspace — those are ordinary workspace files. Cache loss does not delete server mail; losing the credential master key can still make credentials unrecoverable, per ["How to manage saved secrets"](#how-to-manage-saved-secrets).
 
-Message previews are metadata-only: opening a preview issues a permission token that stores no message content. Every time a preview renders — the message view, each inline image — Omnipus fetches that piece fresh from your mail server within that one request, through the same shared connection pool and rate budget as the rest of the panel; nothing is kept after the request, the response is marked no-store, and remote images load only from the addresses that fetch recorded, only when you chose **Load images**. Attachments you open are fetched piece-by-piece rather than as whole messages, previews are capped at 25 MiB (use **Download** for larger files), and every preview control — session limits, logout revocation, identical "not found" answers — is unchanged. Files you explicitly **Save** from mail become ordinary workspace files under the normal workspace rules; the temporary-preview restrictions end at the save.
+Message previews are metadata-only: opening a preview issues a permission token that stores no message content. Every time a preview renders — the message view, each inline image — Omnipus fetches that piece fresh from your mail server within that one request, through the same shared connection pool and rate budget as the rest of the panel; nothing is kept after the request, the response is marked no-store, and remote images load only from the addresses that fetch recorded, only when you chose **Load images**. Attachments you open are fetched piece-by-piece rather than as whole messages, previews are capped at 25 MiB (use **Download** for larger files), and the preview controls — session limits, logout revocation, identical "not found" answers — apply throughout. Files you explicitly **Save** from mail become ordinary workspace files under the normal workspace rules; the temporary-preview restrictions end at the save.
 
 ## What child programs can see
 
@@ -573,7 +659,7 @@ Three named exceptions:
 
 - **Gateway restart.** When the command line (`omnipus start`) or the desktop launcher starts the gateway in the background, the new gateway receives its own data-directory location and, if you started the current process with them, the master-key or key-file value and the web token — those are its own unlock and login values, and without them a headless restart could not open your saved credentials. No other value is forwarded.
 - **External CLI workers.** The external command-line workers (Claude Code, Codex, opencode runs inside an isolated workspace) also receive the provider login values their CLI needs — for example `ANTHROPIC_API_KEY` or `CODEX_HOME` — because their job is to authenticate to your model provider. This is the documented runner credential path; the general gateway secrets stay excluded there too.
-- **God Mode.** While God Mode is on (Settings → Gateway → Danger zone), the programs your agent's `bash` commands start — foreground or background — and the runs of the `environment_setup` tool receive your **full gateway environment** instead of the allowlist. That includes your saved provider API keys and mailbox passwords. This is an accepted risk (founder decision, 2026-10-14): God Mode means full trust, and its documentation says that God Mode programs see your keys. One limit survives even here: the three gateway boot values — the master-key and key-file variables and the web token — are still withheld from these programs. When God Mode is off, and for every other starter (browser, hooks, git, MCP servers, transcoders, the launcher), the allowlist is all a child ever gets.
+- **God Mode.** While God Mode is on (Settings → Gateway → Danger zone), the programs your agent's `bash` commands start — foreground or background — and the runs of the `environment_setup` tool receive your **full gateway environment** instead of the allowlist. That includes your saved provider API keys and mailbox passwords. This is an accepted risk: God Mode means full trust, and its documentation says that God Mode programs see your keys. One limit survives even here: the three gateway boot values — the master-key and key-file variables and the web token — are still withheld from these programs. When God Mode is off, and for every other starter (browser, hooks, git, MCP servers, transcoders, the launcher), the allowlist is all a child ever gets.
 
 ## Limits and things to watch
 

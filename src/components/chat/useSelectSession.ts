@@ -3,6 +3,7 @@ import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
+import { isSidebarOverlayOpen, useSidebarStore } from '@/store/sidebar'
 import { supersedeNavigationIntent } from '@/store/session/workspaceEntryFlow'
 import type { Agent, Session, Workspace } from '@/lib/api'
 
@@ -18,8 +19,9 @@ export interface UseSelectSessionOptions {
   /**
    * Called only when this selection will attach the session: after a successful
    * attach, or when navigating to an unfiled session whose route attaches it.
-   * A failed attach does not call this. Sessions uses it to request that
-   * session's Activity panel.
+   * A failed attach does not call this. Sessions and History no longer pass
+   * it: Open goes straight to the chat and requests no Activity panel
+   * (founder ruling "Straight to the chat").
    */
   onSelected?: (session: Session) => void
   /**
@@ -65,8 +67,15 @@ export interface UseSelectSessionOptions {
  *    type/title, then the route's own effect attached AGAIN on mount with a
  *    hardcoded 'chat'/undefined type/title, wiping and re-labelling the
  *    session a second time).
- * 7. Calls `onClose` to dismiss the sidebar / panel / modal — runs BEFORE
- *    `navigate` in every branch.
+ * 7. Calls `onClose` to dismiss the sidebar / panel / modal, and drops the
+ *    sidebar OVERLAY when it is open — runs BEFORE `navigate` in every
+ *    branch. A caller's `onClose` only closes its own surface: the search
+ *    modal (Sessions, and an agent row's History) opens over an unpinned
+ *    sidebar, and closing just the modal left the overlay and its
+ *    click-outside layer covering the chat (founder Q81). Choosing a session
+ *    is choosing a destination, which closes the overlay like every sidebar
+ *    row does — also for a same-workspace switch, where the route path does
+ *    not change. A docked sidebar is not an overlay and stays.
  *
  * `attachToSession` can fail even while the WS looks "connected": the
  * underlying `connection.send()` call can itself return false (e.g. mid
@@ -99,9 +108,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
   function attachAndSeed(session: Session, agentId: string | undefined): boolean {
     const attached = attachToSession(session.id, session.type, session.title, agentId)
     if (!attached) return false
-    if (session.total_tokens && session.total_tokens > 0) {
-      seedSessionTokens(session.total_tokens)
-    }
+    seedSessionTokens(session.total_tokens, session.id)
     if (session.type !== 'task') {
       const agent = agents.find((a) => a.id === agentId)
       if (agent?.type) {
@@ -109,6 +116,11 @@ export function useSelectSession(options: UseSelectSessionOptions) {
       }
     }
     return true
+  }
+
+  function closeEntrySurfaces() {
+    onClose()
+    if (isSidebarOverlayOpen()) useSidebarStore.getState().close()
   }
 
   function reportAttachFailure() {
@@ -138,7 +150,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
       }
       supersedeNavigationIntent()
       onSelected?.(session)
-      onClose()
+      closeEntrySurfaces()
       void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId }, replace })
       return
     }
@@ -155,7 +167,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
       }
       supersedeNavigationIntent()
       onSelected?.(session)
-      onClose()
+      closeEntrySurfaces()
       void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId }, replace })
       return
     }
@@ -165,7 +177,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
     // session view, which owns the single attach on mount (see the module
     // docblock, step 6).
     onSelected?.(session)
-    onClose()
+    closeEntrySurfaces()
     void navigate({ to: '/sessions/$sessionId', params: { sessionId: session.id }, replace })
   }
 }

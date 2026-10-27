@@ -142,6 +142,9 @@ export function terminalLiveEntries(frames: WsFrame[], sessionId: string, turnId
 export async function assertTerminalRendering(
   page: Page, info: TestInfo, stage: string, terminalEntries: ReturnType<typeof SessionDetail.parse>['messages'],
 ) {
+  if (terminalEntries === undefined) {
+    throw new Error(`${stage}: terminal transcript messages are missing; cannot verify durable entry identities`);
+  }
   const terminal = page.locator('[data-message-role="system"][data-message-id]').filter({ hasText: TERMINAL_CAP_NOTICE });
   // Soft product assertions preserve RED while allowing reconnect/reload to be
   // measured too. A missing notice NEVER bypasses a later observation.

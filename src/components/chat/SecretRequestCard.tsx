@@ -15,7 +15,8 @@
 // values — still editable), submission unknown (the answer was lost — the
 // card reads the request's true state, never re-sending), and the terminal
 // states submitted ("Saved" with the reference names), cancelled, stopped,
-// interrupted ("Request unavailable") and refused.
+// interrupted ("Request unavailable") and refused. A committed 503 adds a
+// persistent warning that the agent's next step is not confirmed.
 //
 // Keyboard (FR-109, BDD-12.9): focus starts on the first field; Enter in a
 // field moves to the next one and submits only from the last; keystrokes
@@ -38,6 +39,7 @@ import {
 } from '@/store/secretRequests'
 import { useSessionStore } from '@/store/session'
 import { Button } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/error-state'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 
@@ -47,6 +49,7 @@ const RECIPIENT_KIND_LABEL: Record<SessionStateSecretRequest['recipient']['kind'
   channel_credential: 'Chat channel credential',
   mailbox_password: 'Mailbox password',
   agent_private: 'Private variable',
+  unbound: 'Stored in Settings',
 }
 
 /** Promise wording A (FA:OQ-1, §6.7) for the agent-private kind. */
@@ -205,7 +208,7 @@ function usePendingSubmit(entry: SecretRequestEntry, clearValues: () => void) {
       clearValues()
       try {
         const outcome = await submitSecretRequest(requestId, body)
-        store.getState().applyState(outcome.state)
+        store.getState().applyState(outcome.state, outcome.kind)
       } catch (error) {
         if (classifyMutationFailure(error) === 'uncertain') {
           await checkState()
@@ -370,12 +373,20 @@ function TerminalRecord({ entry }: { entry: SecretRequestEntry }) {
           <span className="text-[var(--color-muted)]"> · stored as {request.reference_names.join(', ')}</span>
         )}
       </p>
-      <Button type="button" variant="ghost" size="sm" onClick={() => {
-        useSecretRequestStore.getState().dismiss(request.request_id)
-        focusComposer()
-      }}>
-        Dismiss
-      </Button>
+      {!entry.continuationUnconfirmed && (
+        <Button type="button" variant="ghost" size="sm" onClick={() => {
+          useSecretRequestStore.getState().dismiss(request.request_id)
+          focusComposer()
+        }}>
+          Dismiss
+        </Button>
+      )}
+      {entry.continuationUnconfirmed && (
+        <ErrorState
+          className="w-full items-start py-[var(--space-0)]"
+          message="Saved, but the agent's next step is not confirmed. Reopen this chat to retry. Your values will not be sent again."
+        />
+      )}
     </div>
   )
 }

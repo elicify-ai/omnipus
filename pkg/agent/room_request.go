@@ -473,7 +473,7 @@ func (al *AgentLoop) publishRoomRequestWake(ctx context.Context, c addressing.Ca
 		extra[roomRequestMetadataKey] = "1"
 	}
 	al.roomRequests.Store(c.RequestID, c.Source.RoomID)
-	return al.publishRequestWake(ctx, c.Receiver, c.RequestID, c.ReceiverSessionID, c.Text, extra)
+	return al.publishRequestWake(ctx, c.Receiver, c.Sender, c.RequestID, c.ReceiverSessionID, c.Text, extra)
 }
 
 // deliverHeldRoomRequest hands a room request that waited (its member was

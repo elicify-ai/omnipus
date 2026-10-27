@@ -65,6 +65,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { assistantMessages, dismissStaleDialogOverlay } from './selectors'
 import { freshChat } from './session-setup'
 import { stubCliExecutor, type StubCliTexts } from './stub-external-cli'
+import { sessionMessages, type RetainedHistoryMessage } from './session-history'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -577,7 +578,7 @@ export function memberSignature(members: Array<{ id: string; status: string }>):
 }
 
 /**
- * Fetch a session's message transcript (GET /api/v1/sessions/{id}). Used to
+ * Enumerate a session's complete retained paged history, including clear segments. Used to
  * inspect PlanSupervisor's adjudication session for the `plan_correct` tool
  * calls it actually committed (E.3) — the only way to observe WHICH verb and
  * WHICH real member id a correction used, since the wire contract has no
@@ -585,16 +586,11 @@ export function memberSignature(members: Array<{ id: string; status: string }>):
  * is emitted as a SessionMessage, `kind: revision_entry`/tool_call, not
  * persisted as a queryable Plan field).
  */
-export async function getSessionMessages(page: Page, sessionId: string): Promise<Array<Record<string, unknown>>> {
-  const res = await apiFetch<{ messages: Array<Record<string, unknown>> }>(
-    page,
-    'GET',
-    `/api/v1/sessions/${sessionId}`,
-  )
-  if (!res.ok) {
-    throw new Error(`getSessionMessages: GET /sessions/${sessionId} failed ${res.status}: ${res.raw}`)
-  }
-  return res.body.messages ?? []
+export async function getSessionMessages(page: Page, sessionId: string): Promise<RetainedHistoryMessage[]> {
+  // D15: bounded detail is not a whole transcript, and unavailable detail is
+  // not empty history. The shared reader validates every envelope and follows
+  // exclusive continuation across clears; malformed/error pages fail loudly.
+  return sessionMessages(page, BASE_URL, sessionId)
 }
 
 /**

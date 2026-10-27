@@ -78,14 +78,14 @@ OAPI_CODEGEN_VERSION := $(shell sed -n 's/^REQUIRED_OAPI_CODEGEN_VERSION="\(.*\)
 # installs track the same moving target rather than pinning behind it.
 GOVULNCHECK_VERSION?=latest
 # golangci-lint MUST match the version CI gates with (.github/workflows/pr.yml's
-# `golangci-lint-action` step: `version: v2.10.1`). ADR-067 §5: two different
+# `golangci-lint-action` step: `version: v2.15.0`). ADR-067 §5: two different
 # golangci-lint versions disagree on findings (measured: G115 differed between
 # 2.10.1 and 2.12.2 in both directions) — a local "0 issues" run with the wrong
 # version is not a green, it's an unmeasured claim. Bump this the moment
 # pr.yml's pin changes; `make lint`/`make fix` refuse to run on a mismatch
 # rather than silently trusting whatever is on PATH (see
 # golangci-lint-version-check below).
-GOLANGCI_LINT_VERSION := v2.10.1
+GOLANGCI_LINT_VERSION := v2.15.0
 
 # Installation
 INSTALL_PREFIX?=$(HOME)/.local
@@ -166,6 +166,14 @@ build: spa-embed generate
 	@$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./$(CMD_DIR)
 	@echo "Build complete: $(BINARY_PATH)"
 	@ln -sf $(BINARY_NAME)-$(PLATFORM)-$(ARCH) $(BUILD_DIR)/$(BINARY_NAME)
+
+# Operator-only tooling. Deliberately not a dependency of build, install,
+# release-build or any installer/package target.
+.PHONY: history-index-repair
+HISTORY_TOOL_SUFFIX=$(if $(filter Windows_NT,$(OS)),.exe,)
+history-index-repair:
+	@mkdir -p $(BUILD_DIR)/tools
+	@CGO_ENABLED=0 go build -tags goolm,stdjson -o $(BUILD_DIR)/tools/chat-history-index-repair$(HISTORY_TOOL_SUFFIX) ./cmd/chat-history-index-repair
 
 ## build-launcher: Build the omnipus-launcher (web console) binary
 build-launcher:
@@ -514,7 +522,7 @@ lint-no-removed-providers:
 	bash scripts/check-no-removed-providers.sh
 
 ## lint-budgets: Fail if a file or function is over its size budget (founder ruling, 2026-09-15)
-## File: warns over 2,000 lines, fails over 4,000. Function: warns over 120, fails over 240.
+## File: warns over 2,000 lines, fails over 3,000. Function: warns over 120, fails over 240.
 ## Grandfathered files/functions may only shrink (scripts/budgets/*.txt). Runs each gate's own
 ## self-check first so a guard that can no longer fail is itself a failure. This target is a thin
 ## delegate for muscle memory and direct invocation — scripts/guards.sh (via `lint-guards` below)

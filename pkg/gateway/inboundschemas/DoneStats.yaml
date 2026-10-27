@@ -1,7 +1,8 @@
 title: DoneStats
 description: >
-  Statistics payload included in a done frame. All numeric fields default to 0
-  when not applicable (e.g., a turn with no LLM calls). Additional diagnostic
+  Statistics payload included in a done frame. Per-turn numeric fields default
+  to 0 when not applicable (e.g., a turn with no LLM calls). The optional absolute
+  session_tokens_total is omitted when unknown, never defaulted to 0. Additional diagnostic
   keys may be present from replay (frames_emitted, orphan_count,
   duplicate_tool_call_id_count, truncated_result_count, replay_error).
   additionalProperties: true is intentional — replay extras are allowed.
@@ -12,6 +13,16 @@ properties:
     type: integer
     minimum: 0
     description: Total tokens consumed in this turn (input + output).
+  session_tokens_total:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Authoritative absolute session-wide consumed-token total, with the same
+      meaning as SessionStats.tokens_total. Present on live turn completion when
+      authoritative usage is available; omitted on replay-terminating done frames.
+      Omitted means unknown, never zero. Not a per-turn delta: tokens remains
+      per-turn usage, and frames_emitted remains replay-only diagnostics.
   cost:
     type: number
     minimum: 0

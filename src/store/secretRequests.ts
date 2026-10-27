@@ -21,6 +21,7 @@ import type {
   SessionStateSecretRequest,
 } from '@/lib/api/generated/asyncapi-types'
 import type { SecretRequestState } from '@/lib/api/generated/openapi-types'
+import type { SecretSubmitOutcome } from '@/lib/api/secrets'
 
 /** This tab's own phase of a submit (value-free). */
 export type SecretLocalPhase = 'submitting' | 'unknown' | 'rejected' // not-wire-format: in-browser submit phase, never sent
@@ -30,6 +31,8 @@ export interface SecretRequestEntry { // not-wire-format: the generated server r
   localPhase?: SecretLocalPhase
   /** Safe, value-free reason for a rejected submit. */
   localMessage?: string
+  /** Committed 503 or server snapshot: saved, but continuation is unconfirmed. */
+  continuationUnconfirmed?: boolean
   /** A pending request a newer snapshot no longer lists: read its state. */
   checkRequired?: boolean
   /** The person closed a terminal card in this tab. */
@@ -40,7 +43,7 @@ interface SecretRequestStore {
   byId: Record<string, SecretRequestEntry>
   upsertFromFrame: (frame: SecretRequestFrame) => void
   markResolved: (frame: SecretRequestResolvedFrame) => void
-  applyState: (state: SecretRequestState) => void
+  applyState: (state: SecretRequestState, submitOutcome?: SecretSubmitOutcome['kind']) => void
   reconcileSession: (sessionId: string, entries: readonly SessionStateSecretRequest[]) => void
   setLocalPhase: (requestId: string, phase: SecretLocalPhase | undefined, message?: string) => void
   dismiss: (requestId: string) => void
@@ -82,15 +85,21 @@ export const useSecretRequestStore = create<SecretRequestStore>((set) => ({
           ...s.byId,
           [frame.request_id]: {
             request: { ...existing.request, state: frame.state, updated_at: new Date().toISOString() },
+            // K3 submitted only confirms storage, not the continuation.
+            continuationUnconfirmed: frame.state === 'submitted' ? existing.continuationUnconfirmed : undefined,
           },
         },
       }
     }),
 
-  applyState: (state) =>
+  applyState: (state, submitOutcome) =>
     set((s) => {
       const existing = s.byId[state.request_id]
       if (!existing) return s
+      const resolved = isTerminalSecretState(state.state) && state.state !== 'submitted'
+      const continuationUnconfirmed = submitOutcome === 'accepted' || resolved
+        ? undefined
+        : submitOutcome === 'committed-uncertain' || existing.continuationUnconfirmed
       return {
         byId: {
           ...s.byId,
@@ -101,8 +110,9 @@ export const useSecretRequestStore = create<SecretRequestStore>((set) => ({
               updated_at: state.updated_at,
               ...(state.reference_names ? { reference_names: state.reference_names } : {}),
             },
-            // The server's answer ends this tab's phase: pending → editable again
-            // (nothing was stored), anything else → that terminal state.
+            // A state read ends the submit phase, not continuation uncertainty.
+            // Only an accepted submit or another terminal outcome resolves it.
+            continuationUnconfirmed,
             dismissed: existing.dismissed,
           },
         },
@@ -120,6 +130,14 @@ export const useSecretRequestStore = create<SecretRequestStore>((set) => ({
           ...existing,
           request,
           checkRequired: false,
+          // M13 / K4: snapshots carry the authoritative delivery fact. An
+          // absent flag on a submitted entry means confirmed (or stopped),
+          // unlike a K3 resolved frame or K5 GET, which only confirm storage.
+          continuationUnconfirmed: request.state === 'submitted'
+            ? request.continuation_unconfirmed === true || undefined
+            : isTerminalSecretState(request.state)
+              ? undefined
+              : existing?.continuationUnconfirmed,
           // The server's terminal state ends any local phase of this tab.
           ...(isTerminalSecretState(request.state) ? { localPhase: undefined, localMessage: undefined } : {}),
         }
@@ -142,7 +160,7 @@ export const useSecretRequestStore = create<SecretRequestStore>((set) => ({
   dismiss: (requestId) =>
     set((s) => {
       const existing = s.byId[requestId]
-      if (!existing) return s
+      if (!existing || existing.continuationUnconfirmed) return s
       return { byId: { ...s.byId, [requestId]: { ...existing, dismissed: true } } }
     }),
 
@@ -151,9 +169,9 @@ export const useSecretRequestStore = create<SecretRequestStore>((set) => ({
 
 /**
  * The cards for one chat: every pending request rooted there, then the most
- * recently changed terminal one unless this tab dismissed it (so "Saved",
- * "Cancelled" or "Request unavailable" stays readable after a reload,
- * BDD-6.7), newest last.
+ * recently changed terminal one unless this tab dismissed it (BDD-6.7).
+ * A saved-but-unconfirmed warning stays visible even when a newer result
+ * arrives; only confirmed success or authoritative resolution clears it.
  */
 export function cardsForSession(byId: Record<string, SecretRequestEntry>, sessionId: string | null): SecretRequestEntry[] {
   if (!sessionId) return []
@@ -162,8 +180,7 @@ export function cardsForSession(byId: Record<string, SecretRequestEntry>, sessio
   const terminal = mine
     .filter((entry) => isTerminalSecretState(entry.request.state))
     .sort((a, b) => a.request.updated_at.localeCompare(b.request.updated_at))
-  // Only the newest result, and not once dismissed — older results never resurface.
   const newest = terminal[terminal.length - 1]
-  const latestTerminal = newest && !newest.dismissed ? [newest] : []
-  return [...latestTerminal, ...pending.sort((a, b) => a.request.updated_at.localeCompare(b.request.updated_at))]
+  const visibleTerminal = terminal.filter((entry) => entry.continuationUnconfirmed || (entry === newest && !entry.dismissed))
+  return [...visibleTerminal, ...pending.sort((a, b) => a.request.updated_at.localeCompare(b.request.updated_at))]
 }

@@ -167,7 +167,7 @@ func (p *CodexProvider) Chat(
 				fields["hint"] = "verify account id header and model compatibility for codex backend"
 			}
 			if apiErr.Response != nil {
-				fields["request_id"] = apiErr.Response.Header.Get("x-request-id")
+				fields["request_id"] = apiErr.Response.Header.Get("X-Request-ID")
 			}
 		}
 		logger.ErrorCF("provider.codex", "Codex API call failed", fields)
