@@ -37,7 +37,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 })
 
 const agents = [
-  { id: 'agent-chat-1', name: 'Chat Agent', type: 'core', role: 'general', status: 'active', figure: 'Omnipus', description: 'Chat agent', color: '#8E9196', icon: null },
+  { id: 'agent-chat-1', name: 'Chat Agent', type: 'core', role: 'general', status: 'active', figure: 'Omnipus', description: 'Chat agent', color: 'var(--color-muted)', icon: null },
 ] as unknown as Agent[]
 
 const workspaces = [
