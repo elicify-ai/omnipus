@@ -136,7 +136,7 @@ func assertPolicyActivationRequestGuidance(t *testing.T, api *restAPI, provider 
 	require.Equal(t, "system", messages[0].Role)
 	// SPEC CHANGE 2026-10-24 (Q74): the approved rule-3 text now asks for the
 	// required active_form on every item (prompt text merged at 82d204711).
-	const rule = "3. For every request, including one-line answers, call set_todos with your own checklist, giving every item its required active_form (a present-participle phrase) and marking the current item in_progress, before your first reply or other tool call, then update the list as work advances."
+	const rule = "3. Use set_todos only when the request needs several steps or tool actions. Create the checklist before you start that work: give every item its required active_form (a present-participle phrase), mark the current item in_progress and the later items pending, and update the list as items finish, marking a finished item completed. A direct answer (a greeting, a question, a one-step reply) needs no checklist: answer it directly. Never call set_todos just to close a list right before your final reply; an item left in_progress at the end of the turn is fine."
 	if enabled {
 		require.Contains(t, messages[0].Content, rule, "approved Q2 guidance must be visible to the actual request")
 	} else {
