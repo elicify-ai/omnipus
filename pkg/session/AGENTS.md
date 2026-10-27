@@ -109,7 +109,7 @@ there is no guessed default weight in the session package.
 | New identity | Publish the verified empty baseline before making a new session identity readable. Never infer an empty conversation from missing or inconsistent derived state. |
 | Online recovery | Reconcile at most 64 combined archive/disposition/deletion facts from a valid checkpoint; the 65th refuses. Do not retry-walk a larger gap in batches or automatically build an index for historical unindexed data. |
 | Retention | Preserve only opaque token/rank tombstones for expired occurrences. Rich generation retirement waits for old reader pins; genuine Windows sharing-busy is not proof that a partition disappeared. |
-| Offline repair | The explicit `PrepareChatHistoryIndex` builder and shipped repair command share the reducer. They are not an application-startup or ordinary-send fallback and must not invoke the gateway/projector/model to reconstruct the index. |
+| Offline repair | The explicit `PrepareChatHistoryIndex` builder reconstructs the derived index from retained canonical bytes with the same reducer as the online path. The standalone repair command that once shipped beside it was removed by founder decision 2026-10-27 (greenfield, no upgrade path). The builder is not an application-startup or ordinary-send fallback and must not invoke the gateway/projector/model to reconstruct the index. |
 
 Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_select.go::readChatHistoryPage`
 and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::historyPublish`.

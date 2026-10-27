@@ -1737,9 +1737,13 @@ jobs:
           shards=$(python3 scripts/go-test-shards.py test matrix)
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
 
-  history-index-repair:
-    name: History index repair (${{ matrix.os }})
-    # Deliberately unfiltered: command/private-schema/CI-only changes must not
+  chat-history-core:
+    name: Chat history core (${{ matrix.os }})
+    # Product receipts for pkg/session's chat-history semantics, including the
+    # Windows-native retention/read-cut cases that no other workflow runs. The
+    # standalone history-index repair command and its CI were removed by founder
+    # decision 2026-10-27 (greenfield, no upgrade path).
+    # Deliberately unfiltered: session/private-schema/CI-only changes must not
     # disappear behind Go language filtering. This is a required aggregate gate.
     runs-on: ${{ matrix.os }}
     strategy:
@@ -1755,17 +1759,13 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Build standalone history-index repair command
-        run: python3 -I deploy/ci-worker/chat-history-ci.py build
-      - name: Test repair command and manifest
-        run: python3 -I deploy/ci-worker/chat-history-ci.py command
       - name: Test bounded recovery and retention/read-handle semantics
         run: python3 -I deploy/ci-worker/chat-history-ci.py core
-      - name: Preserve history repair named-test receipts
+      - name: Preserve chat history core named-test receipts
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: history-index-repair-${{ matrix.os }}-${{ github.run_id }}
+          name: chat-history-core-${{ matrix.os }}-${{ github.run_id }}
           path: build/tools/history-*.log
           if-no-files-found: error
           retention-days: 7
@@ -3609,7 +3609,7 @@ jobs:
       - hermetic-build
       - test
       - test-race
-      - history-index-repair
+      - chat-history-core
       - history-e2e-fixtures
       - security
       - perf-smoke
