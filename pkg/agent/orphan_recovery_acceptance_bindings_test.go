@@ -22,15 +22,23 @@ func orphanACParallel(t *testing.T) {
 		name   string
 		record providers.Message
 		lines  []int
-		// obs lists the call ids whose cancelled occurrences gain the engine
-		// observation; err is the refusal the send boundary must produce when
-		// an occurrence has neither a durable result nor a cancellation.
+		// obs lists the call ids whose UNFILLED occurrences gain the engine
+		// observation: every call the declaration issued whose result never
+		// reached the archive, whether or not a cancellation record names it.
 		obs []string
-		err string
 	}{
-		{"two_missing_ID_records", orphanACMarker("missing-two"), []int{0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15}, []string{"missing-one", "missing-two"}, ""},
-		{"repeated_valid_record_same_group", orphanACMarker("missing-one"), []int{0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15}, []string{"missing-one"}, "context request: incomplete or invalid tool-result group at message 6"},
-		{"one_record_plus_unrelated_system_record", providers.Message{Role: "system", Content: `{"type":"other_control","content":"not group-owned"}`}, []int{0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15}, []string{"missing-one"}, "context request: incomplete or invalid tool-result group at message 6"},
+		// Both missing calls are cancelled, so both occurrences are filled.
+		{"two_missing_ID_records", orphanACMarker("missing-two"), []int{0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15}, []string{"missing-one", "missing-two"}},
+		// The repeated record names the same call twice: it cancels that one
+		// occurrence only, and the OTHER occurrence is still filled — an
+		// occurrence with neither result nor cancellation is still filled: it
+		// is an orphan, not an unsupported case.
+		{"repeated_valid_record_same_group", orphanACMarker("missing-one"), []int{0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15}, []string{"missing-one", "missing-two"}},
+		// The unrelated system record cancels nothing at all, so BOTH
+		// occurrences are orphans and both are filled: an occurrence with
+		// neither result nor cancellation is still filled: it is an orphan,
+		// not an unsupported case.
+		{"one_record_plus_unrelated_system_record", providers.Message{Role: "system", Content: `{"type":"other_control","content":"not group-owned"}`}, []int{0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15}, []string{"missing-one", "missing-two"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -58,12 +66,13 @@ func orphanACParallel(t *testing.T) {
 			ts := h.turn("")
 			// DESIGN 5: the abandoned group's DECLARATION and its durable
 			// result are RETAINED; every recognised cancellation record binds
-			// to the occurrence it names and is EXCLUDED; each occurrence a
-			// bound cancellation left without a result gains the engine
-			// observation (ephemeral, ordinal -1) beside the declaration it
-			// completes. An occurrence with neither a durable result nor a
-			// cancellation is NOT invented — the group stays visible and the
-			// send boundary blocks the request instead.
+			// to the occurrence it names and is EXCLUDED; and EVERY occurrence
+			// the declaration issued and no result ever reached is an ORPHAN
+			// that is filled with its own engine observation (ephemeral,
+			// ordinal -1) beside the declaration it completes. An occurrence
+			// with neither a durable result nor a cancellation is still
+			// filled: it is an orphan, not an unsupported case — §5's resumed
+			// input must pass the group validator.
 			obs := make([]providers.Message, 0, len(tc.obs))
 			for _, id := range tc.obs {
 				o := orphanACObservation(t, h, ts, id)
@@ -73,11 +82,7 @@ func orphanACParallel(t *testing.T) {
 			want, addresses := orphanACDesign5ViewAt(t, raw, tc.lines, map[int][]providers.Message{7: obs})
 			out := orphanACAssertView(t, h, ts, want)
 			require.Equal(t, append([]int{-1}, addresses...), mapWindowMessages(before, out, -1, 0), "P1: parallel exclusions never broaden to completed groups or control addresses")
-			if tc.err == "" {
-				require.NoError(t, validateWindowGroups(out), "completed groups retain all their declared/result identities, independent of parallel completion order")
-			} else {
-				orphanACAssertRejectedBeforeSend(t, h, ts, out, tc.err)
-			}
+			require.NoError(t, validateWindowGroups(out), "P1: every unfilled occurrence is filled, so the abandoned group validates")
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})
 	}
