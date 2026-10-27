@@ -138,3 +138,186 @@ drained:
 	require.NotContains(t, string(encoded), invocation.id)
 	b3DrainInbound(mb)
 }
+
+// gate1OriginCompletedProducer reuses the real registered async producer and
+// its actual ordinary-root callback identity. No Notify call or audience mock.
+func gate1OriginCompletedProducer(t *testing.T) (*AgentLoop, *b3AsyncTool, *b3ToolInvocation, string) {
+	t.Helper()
+	const name = "gate1_origin_async_probe"
+	provider := testutil.NewScenario().WithToolCalls([]providers.ToolCall{{ID: "gate1-real-origin-async-call", Function: &providers.FunctionCall{Name: name, Arguments: "{}"}}}).WithText("gate1 origin producer completed")
+	al, mb, _ := newAsyncChildPublicationTestLoop(t, provider, false)
+	probe := &b3AsyncTool{al: al, name: name}
+	al.RegisterTool(probe)
+	setAskPolicyForAllAgents(t, al, probe.Name(), config.ToolPolicyAllow)
+	t.Cleanup(func() {
+		b3DrainInbound(mb)
+		for _, invocation := range probe.invocations() {
+			invocation.open()
+			b3DrainInbound(mb)
+			b3JoinTool(t, invocation)
+		}
+		mb.Close()
+	})
+	_, err := al.ProcessDirectWithChannelAs(context.Background(), testDefaultAgentID, "gate1 native origin callback", "agent:"+testDefaultAgentID+":telegram:gate1-origin", "telegram", "gate1-origin-conversation")
+	require.NoError(t, err)
+	calls := probe.invocations()
+	require.Len(t, calls, 1, "BLOCKED: actual loop must execute the native async producer once")
+	invocation := calls[0]
+	require.NoError(t, invocation.readErr)
+	require.NotEmpty(t, invocation.id)
+	require.NotEmpty(t, invocation.sid)
+	require.NotNil(t, invocation.owner)
+	select {
+	case <-invocation.owner.done:
+	case <-time.After(b3JoinWatchdog):
+		t.Fatal("BLOCKED: actual producing owner did not fully complete")
+	}
+	invocation.owner.mu.Lock()
+	settled := invocation.owner.result
+	invocation.owner.mu.Unlock()
+	require.NoError(t, settled)
+	require.Nil(t, al.ownLiveTurn(invocation.sid))
+	rec, err := session.NewLifecycleStore(al.GetSessionLifecycleStore().Dir()).Load(invocation.sid)
+	require.NoError(t, err)
+	require.Equal(t, session.LifecycleCompleted, rec.State)
+	allowed, err := al.asyncNotifyOriginReachesUser(context.Background(), invocation.sid)
+	require.NoError(t, err, "BLOCKED: initial native canonical origin must be readable")
+	require.True(t, allowed, "BLOCKED: actual producer must begin with a legitimate external-user origin")
+	path := filepath.Join(t.TempDir(), "native-origin-secondary.jsonl")
+	level := logger.GetLevel()
+	require.NoError(t, logger.EnableFileLogging(path))
+	logger.SetLevel(logger.WARN)
+	t.Cleanup(func() { logger.DisableFileLogging(); logger.SetLevel(level) })
+	return al, probe, invocation, path
+}
+
+// A failed canonical read is not the same as an intentional nil-error refusal.
+// The architect's existing two-stage diagnostic contract distinguishes them.
+func TestGateFix1FinishedCallbackOriginReadDiagnostics(t *testing.T) {
+	for _, failRead := range []bool{true, false} {
+		label := "MissingCanonicalOriginRefusal"
+		if failRead {
+			label = "OriginReadFailure"
+		}
+		t.Run(label, func(t *testing.T) {
+			al, probe, invocation, logPath := gate1OriginCompletedProducer(t)
+			lifecycle := al.GetSessionLifecycleStore()
+			store := al.GetSessionStore()
+			_, err := store.ReadTranscript(invocation.sid)
+			require.NoError(t, err)
+			var observed atomic.Int32
+			al.asyncNotifier.registerObserver(func(AsyncNotifyEvent) { observed.Add(1) })
+			sub := al.SubscribeEvents(32)
+			defer al.UnsubscribeEvents(sub.ID)
+			restore := func() {}
+			if failRead {
+				// Actual LifecycleStore.path suffix is .jsonl, independent of the
+				// healthy canonical transcript and session metadata directory.
+				path := filepath.Join(lifecycle.Dir(), invocation.sid+".jsonl")
+				st, statErr := os.Stat(path)
+				require.NoError(t, statErr, "BLOCKED: actual canonical lifecycle file must exist")
+				require.True(t, st.Mode().IsRegular())
+				backup := path + ".gate1-origin-owned-backup"
+				require.NoError(t, os.Rename(path, backup))
+				restored := false
+				restore = func() {
+					if restored {
+						return
+					}
+					require.NoError(t, os.Remove(path))
+					require.NoError(t, os.Rename(backup, path))
+					restored = true
+				}
+				require.NoError(t, os.Mkdir(path, 0700))
+				t.Cleanup(restore)
+				_, readErr := session.NewLifecycleStore(lifecycle.Dir()).Load(invocation.sid)
+				require.Error(t, readErr, "BLOCKED: owned canonical origin read must really fail")
+				allowed, originErr := al.asyncNotifyOriginReachesUser(context.Background(), invocation.sid)
+				require.Error(t, originErr, "BLOCKED: actual origin predicate must return the genuine read error")
+				require.False(t, allowed)
+			} else {
+				// Existing native missing-provenance negative-fixture seam: only
+				// own canonical metadata changes; resolver and guards stay real.
+				require.NoError(t, lifecycle.Mutate(invocation.sid, func(r *session.LifecycleRecord) error { r.Origin = nil; return nil }))
+				rec, loadErr := session.NewLifecycleStore(lifecycle.Dir()).Load(invocation.sid)
+				require.NoError(t, loadErr)
+				require.Nil(t, rec.Origin)
+				allowed, originErr := al.asyncNotifyOriginReachesUser(context.Background(), invocation.sid)
+				require.NoError(t, originErr, "BLOCKED: control must be a refusal without a read error")
+				require.False(t, allowed)
+			}
+			_, err = store.ReadTranscript(invocation.sid)
+			require.NoError(t, err, "BLOCKED: notice persistence must remain independently healthy")
+			b3FillInbound(t, al.bus)
+			invocation.open()
+			b3JoinTool(t, invocation)
+			restore()
+			_, err = session.NewLifecycleStore(lifecycle.Dir()).Load(invocation.sid)
+			require.NoError(t, err)
+			require.Equal(t, int32(1), observed.Load())
+			require.Len(t, probe.invocations(), 1, "notification error must not reexecute the actual native tool")
+			primary := b3Logs(t, logPath, b3AttemptMessage)
+			require.Len(t, primary, 3, "BLOCKED: actual callback must exhaust the original three handoffs")
+			b3AssertDiagnostic(t, primary, false, "asynchronous update", invocation.sid, probe.Name(), invocation.id)
+			saved := b3Rows(t, al, invocation.sid)
+			require.Len(t, saved, 1, "BLOCKED: only origin reading may fail; the warning must really be saved")
+			require.Equal(t, primary[0]["notice_id"], saved[0].ID)
+			require.Equal(t, session.EntryTypeSystem, saved[0].Type)
+			require.Equal(t, "system", saved[0].Role)
+			require.Empty(t, saved[0].Status)
+			require.NotEmpty(t, saved[0].Content)
+			require.NotContains(t, saved[0].Content, b3PrivateBody)
+			queued := 0
+			for {
+				select {
+				case event := <-sub.C:
+					if event.Kind == EventKindFollowUpQueued {
+						queued++
+					}
+				default:
+					goto drained
+				}
+			}
+		drained:
+			require.Equal(t, 0, queued)
+			require.Empty(t, b3DrainOutbound(al.bus), "an unreadable/refused canonical origin must never be guessed or rerouted")
+			records := b3Logs(t, logPath, "Async notification secondary warning failed")
+			if failRead {
+				require.Len(t, records, 1, "actual finished callback must report exactly one canonical-origin read failure")
+				gate1AssertOriginSecondaryFields(t, records[0], primary[0]["notice_id"], probe.Name(), invocation)
+			} else {
+				require.Empty(t, records, "nil-error canonical audience refusal must not manufacture a secondary failure diagnostic")
+			}
+			b3DrainInbound(al.bus)
+		})
+	}
+}
+
+func gate1AssertOriginSecondaryFields(t *testing.T, record map[string]any, noticeID any, tool string, invocation *b3ToolInvocation) {
+	t.Helper()
+	require.Equal(t, "error", record["level"])
+	require.Equal(t, "agent", record["component"])
+	require.Equal(t, "Async notification secondary warning failed", record["message"])
+	require.Equal(t, "asynchronous update", record["source"])
+	require.Equal(t, noticeID, record["notice_id"])
+	require.Equal(t, "origin_read", record["stage"])
+	require.Equal(t, "secondary_warning_failure", record["error_class"])
+	allowed := map[string]bool{"level": true, "time": true, "caller": true, "component": true, "message": true, "source": true, "notice_id": true, "stage": true, "error_class": true, "tool": true, "tool_ref": true, "session_ref": true}
+	for key := range record {
+		require.True(t, allowed[key], "secondary record must contain only the architect-approved safe fields")
+	}
+	if value, ok := record["tool"]; ok {
+		require.Equal(t, tool, value)
+	}
+	if value, ok := record["tool_ref"]; ok {
+		require.Equal(t, b3Ref(invocation.id), value)
+	}
+	if value, ok := record["session_ref"]; ok {
+		require.Equal(t, b3Ref(invocation.sid), value)
+	}
+	encoded, err := json.Marshal(record)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), b3PrivateBody)
+	require.NotContains(t, string(encoded), invocation.sid)
+	require.NotContains(t, string(encoded), invocation.id)
+}
