@@ -118,6 +118,22 @@ func resolveMediaRefsWithOffload(
 			localPath, meta, err := store.ResolveWithMetaOpts(ref, resolveOpts)
 			if err != nil {
 				name := sanitizeInjectedName(fallbackName(meta.Filename, ref))
+				// Issue #1435 R5 item 2 (silent-failure hunter R4-SF-2): a
+				// STORAGE FAULT (permission, I/O, "not a directory") is not a
+				// lost attachment. The bytes may still be there; the fault is
+				// ours/the operator's, not the person's upload. It therefore
+				// gets its own marker and NO media_unavailable notice — the
+				// notice's whole promise is "re-attach it", which is wrong
+				// advice for a temporary filesystem problem.
+				if errors.Is(err, media.ErrStoredFileUnreadable) {
+					logger.WarnCF("agent", "Media ref could not be verified — storage fault, attachment kept", map[string]any{
+						"ref":   ref,
+						"error": err.Error(),
+					})
+					contentInjections = append(contentInjections,
+						"[attachment temporarily unreadable: "+name+" (storage error; the file was not removed)]")
+					continue
+				}
 				logger.WarnCF("agent", "Failed to resolve media ref — attachment unavailable", map[string]any{
 					"ref":   ref,
 					"error": err.Error(),

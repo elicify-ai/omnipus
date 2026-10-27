@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -410,6 +411,38 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 			agent.Tools.SetMediaStore(s)
 		}
 	}
+
+	// Issue #1435 round 5 item 1: the session store releases a removed
+	// session's media mappings through THIS loop, because the loop owns both
+	// sides (the session store it shares, and the media store injected
+	// above). The release reads the CURRENT media store at call time — a
+	// store replaced by restartServices must not leave the hook pointing at
+	// the old one.
+	if shared := al.GetSessionStore(); shared != nil {
+		shared.SetMediaReleaseFn(al.releaseSessionMedia)
+	}
+}
+
+// releaseSessionMedia releases every media mapping a removed session owned:
+// the accepted uploads (SessionUploadScopePrefix) and the tool-generated
+// inline media (SessionInlineScopePrefix). Both scopes are released —
+// releasing one and leaving the other would keep half of a removed
+// conversation's media live.
+//
+// The underlying files are handled by the media store's own policy
+// (forget_only files are preserved, store-managed ones are deleted); this
+// call's job is the MAPPING. Errors are returned, never dropped: the
+// session sweep joins them into its own error so a failed release is
+// visible to the operator instead of silently leaving dead refs behind.
+func (al *AgentLoop) releaseSessionMedia(sessionID string) error {
+	store := al.GetMediaStore()
+	if store == nil {
+		return nil
+	}
+	return errors.Join(
+		store.ReleaseAll(media.SessionUploadScopePrefix+sessionID),
+		store.ReleaseAll(media.SessionInlineScopePrefix+sessionID),
+	)
 }
 
 // GetMediaStore returns the currently injected media store. Callers that serve

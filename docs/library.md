@@ -97,6 +97,7 @@ Opening an attachment from [Mail](mail.md#attachments) previews it here **tempor
 - **A mount's location is recorded once.** If you move or rename the folder on your Mac, its contents disappear from the workspace. Unmount and add the folder again at its new location.
 - **Broad grants are wide.** Mounting your home folder gives every agent on the workspace write access to everything under it. The warning and the second click exist to catch exactly this mistake.
 - **Ordinary deletes are permanent.** Removing a file from the workspace has no trash to recover from. A note inside a knowledge base moves to that knowledge base's trash instead.
+- **Deleting a file a chat attached makes that chat report it as unavailable.** A chat that attached a Library file keeps a reference to it, not a copy. Delete the file in the Library and the next turn of that chat says the attachment is no longer available, with the remedy: attach the file again and send it again. The notice is informational — it does not end the agent's turn — and it stays visible in the conversation when you reopen the chat.
 - **HTML previews run scripts in a sandbox** that cannot read your Omnipus session or call the API as you.
 
 ## Related pages

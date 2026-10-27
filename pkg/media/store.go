@@ -358,7 +358,16 @@ func (s *FileMediaStore) resolveWorkspaceRef(ref string, opts ResolveOpts) (stri
 // would otherwise leave the dead mapping live until process end (the
 // LoadRegistry boot-time drop only helps after a restart). Only a confirmed
 // absence releases (R3 item 3 discipline): a temporary stat fault keeps the
-// pin and fails this one resolution.
+// pin.
+//
+// Issue #1435 R5 item 2 (silent-failure hunter R4-SF-2): a stat failure
+// that is NOT a confirmed absence is SURFACED, not answered with a
+// successful resolution of a path the store could not verify. Such an
+// error is wrapped in ErrStoredFileUnreadable — never ErrNotFound — so the
+// caller can tell a broken filesystem apart from a lost attachment and does
+// not report the temporary fault as "please re-attach it". The mapping is
+// kept: the bytes may still be there, and only a confirmed absence may
+// release a pin.
 func (s *FileMediaStore) resolveLegacyWithMeta(ref string) (string, MediaMeta, error) {
 	s.mu.RLock()
 	entry, ok := s.refs[ref]
@@ -366,9 +375,12 @@ func (s *FileMediaStore) resolveLegacyWithMeta(ref string) (string, MediaMeta, e
 	if !ok {
 		return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
 	}
-	if _, statErr := os.Stat(entry.path); errors.Is(statErr, fs.ErrNotExist) {
-		s.releaseConfirmedDeadRef(ref, entry)
-		return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
+	if _, statErr := os.Stat(entry.path); statErr != nil {
+		if errors.Is(statErr, fs.ErrNotExist) {
+			s.releaseConfirmedDeadRef(ref, entry)
+			return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
+		}
+		return "", MediaMeta{}, fmt.Errorf("%w: %s: %w", ErrStoredFileUnreadable, entry.path, statErr)
 	}
 	return entry.path, entry.meta, nil
 }

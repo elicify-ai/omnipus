@@ -323,6 +323,13 @@ type UnifiedStore struct {
 	// its cached Stats.
 	dirtyStats map[string]struct{}
 
+	// mediaReleaseFn is the per-store hook RetentionSweep calls for every
+	// session it removes, so the owner of that session's media mappings
+	// releases them as part of the same successful removal (issue #1435
+	// round 5). Set once at boot via SetMediaReleaseFn; nil means no
+	// release is attempted (a store with no media owner).
+	mediaReleaseFn sessionMediaReleaseFn
+
 	// flushMu guards statsFlushInterval/flusherStarted/flushStopCh/
 	// flushDoneCh below. Deliberately a SEPARATE lock from cacheMu/
 	// sessionLocks — it protects the flusher's own control-plane state, not

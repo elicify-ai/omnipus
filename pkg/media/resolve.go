@@ -70,6 +70,20 @@ var ErrInvalidWorkspaceRef = errors.New("media store: malformed workspace media 
 // FileMediaStore.resolveWorkspaceRef for where the two are told apart.
 var ErrNotFound = errors.New("media store: unknown ref")
 
+// ErrStoredFileUnreadable is returned by the resolver when a mapped ref's
+// stored file could not be VERIFIED for a reason other than "it is gone":
+// a permission failure, an I/O error, a "not a directory" path fault, a
+// vanished parent directory. It is deliberately NOT wrapped in ErrNotFound
+// (issue #1435 round 5, silent-failure hunter R4-SF-2): a broken filesystem
+// is a FAULT, not the routine "this attachment never existed" case, and
+// collapsing the two makes a temporary outage look to the user like a lost
+// attachment (the "please re-attach it" notice) while the bytes are still
+// on disk. Callers can therefore tell the two apart with errors.Is.
+//
+// The mapping is NOT released when this error is returned: only a confirmed
+// fs.ErrNotExist releases a pinned ref (round 5 item 3).
+var ErrStoredFileUnreadable = errors.New("media store: stored file could not be verified")
+
 // WorkspaceLibraryResolver is the path-level read contract the media store
 // needs from a workspace media library (pkg/media/library.Library implements
 // it). It resolves a workspace-prefixed ref to its on-disk path plus

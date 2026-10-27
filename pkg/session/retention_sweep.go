@@ -42,6 +42,43 @@ import (
 // retentionToolResultSweepFn/retentionTaskRunSweepFn's own errors).
 var goalRetentionSweepFn func(retentionDays int) (removed int, err error)
 
+// sessionMediaReleaseFn is the per-store hook RetentionSweep calls for
+// EVERY session it removes, so the owner of that session's media mappings
+// can release them as part of the SAME successful-removal lifecycle (issue
+// #1435 round 5, silent-failure hunter R4-SF-1 HIGH / architect F5 /
+// pr-test-analyzer R4-T1).
+//
+// Before this hook, retention removed a conversation and cascade-deleted its
+// upload files, but the media store kept the session's pinned mappings
+// live: with the media cleaner disabled nothing ever released them, and
+// with the cleaner enabled only the next TTL pass would. The mappings
+// then survived in the running store AND were re-serialized into
+// registry.json, so a removed conversation's dead refs accumulated.
+//
+// The hook receives the removed session's id. The media SCOPE PREFIXES to
+// release are the hook owner's business (the gateway owns the media store
+// and knows its session-scoped prefixes), so this package stays free of any
+// pkg/media dependency, exactly like the goal hook above. It runs AFTER
+// RetentionSweep released its session-shard lock, never nested inside it.
+//
+// A non-nil error from the hook is logged at Error level and reported
+// through the sweep's own return value, so a failed release is never
+// silently dropped (issue #1435 round 5: "report release errors; never drop
+// them silently"). The session files are already gone at that point, so
+// the sweep's own removed count is unaffected.
+type sessionMediaReleaseFn func(sessionID string) error
+
+// SetMediaReleaseFn installs (or, passed nil, uninstalls) the media-release
+// hook RetentionSweep calls for every session THIS store removes. It is a
+// per-store field, not a package-level variable: several stores can live in
+// one process (tests, embedded hosts), and a global hook would release one
+// store's scopes on behalf of another. Intended to be called once, at boot,
+// before any concurrent sweep can run — mirroring this codebase's existing
+// SetXxx hook-injection convention.
+func (us *UnifiedStore) SetMediaReleaseFn(fn sessionMediaReleaseFn) {
+	us.mediaReleaseFn = fn
+}
+
 // SetGoalRetentionSweepFn installs (or, passed nil, uninstalls) the goal
 // retention hook RetentionSweep calls after releasing its session-shard
 // lock. Intended to be called once, at boot, before any concurrent sweep
@@ -211,6 +248,10 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// (ext4, xfs) bump the parent directory's mtime to "now" the moment a
 	// child file is removed, breaking any post-deletion mtime comparison.
 	uploadsRoot := us.uploadsRoot() // home-rooted per ADR-017 D5 / N-B fix
+	// Sessions this sweep removes outright (their transcript is gone and the
+	// directory is deleted below). Their media mappings are released after
+	// the shard lock is dropped — see sessionMediaReleaseFn.
+	removedSessions := make([]string, 0, len(touchedSessionDirs))
 	for sessDir := range touchedSessionDirs {
 		if isProtected(filepath.Base(sessDir)) {
 			continue
@@ -247,6 +288,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 			delete(us.dirtyStats, sessID) // ADR-057 U6 W24: no dangling flush target
 			us.cacheMu.Unlock()
 			us.u4IndexEvict(sessID) // FR-097
+			removedSessions = append(removedSessions, sessID)
 		}
 		if dirRmErr != nil {
 			slog.Warn("session: retention_sweep: dir remove failed", "dir", sessDir, "error", dirRmErr)
@@ -264,6 +306,28 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// released here, BEFORE the goal retention pass — never nested inside
 	// lockAllSessionShards's hold, in either direction.
 	unlock()
+
+	// Issue #1435 round 5 item 1: release the removed sessions' media
+	// mappings as part of this successful removal. The media store is owned
+	// by the gateway, so the release travels through the hook, which knows
+	// the two session-scoped media prefixes (accepted uploads and
+	// tool-generated inline media).
+	//
+	// The release runs AFTER the shard lock is released (the hook may touch
+	// the media store, which has its own locks; nesting them would invert
+	// the documented order). Errors are logged at Error level AND joined
+	// into the sweep's return value — a failed release is never dropped
+	// silently, and the session files are already gone, so the removed
+	// count is unaffected.
+	if us.mediaReleaseFn != nil && len(removedSessions) > 0 {
+		for _, sessID := range removedSessions {
+			if releaseErr := us.mediaReleaseFn(sessID); releaseErr != nil {
+				slog.Error("session: retention_sweep: media release failed",
+					"session_id", sessID, "error", releaseErr)
+				expiryErr = errors.Join(expiryErr, fmt.Errorf("session: retention_sweep: media release for %s: %w", sessID, releaseErr))
+			}
+		}
+	}
 
 	// FR-007: tell each session whose window moved. Written after the shards
 	// are released (the append takes its own shard).
