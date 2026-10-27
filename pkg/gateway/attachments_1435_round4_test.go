@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -70,6 +71,66 @@ func TestIssue1435R4_ReplayNoticeInputs(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, request))
 
+	liveTurnID := issue1435R4CaptureLiveTurn(t, conn, owner.ID)
+
+	// Second connection: attach and capture the real replay window while the
+	// provider is still held (the turn is genuinely still running).
+	replayFrames := issue1435R4CaptureReplayWindow(t, server, owner.ID)
+	replayErrorIndex := issue1435R4AssertReplayWindow(t, replayFrames)
+	open() // the turn finishes; capture the real live continuation (hybrid case 1b)
+
+	liveAfterFrames, liveReplyMessageID := issue1435R4CaptureLiveContinuation(t, conn, owner.ID)
+
+	// SPA input container. Canonicalization folds per-run generated values
+	// only; frame order, types, codes, content and entry-id relationships
+	// are preserved exactly.
+	//
+	// The gateway mints a FRESH reply message id per run, so it is folded by
+	// VALUE (like the round-3 producer does) — otherwise every bare run would
+	// compare a new UUID against the committed fixture. It is the only
+	// per-run opaque id folded this way; the notice's entry id keeps its own
+	// token, so the two stay distinguishable below.
+	sessionToken, turnToken := "1435-round4-session", "1435-round4-turn"
+	replyToken := "1435-round4-reply"
+	folder := &issue1435R4Folder{
+		ownerID:            owner.ID,
+		liveTurnID:         liveTurnID,
+		liveReplyMessageID: liveReplyMessageID,
+		sessionToken:       sessionToken,
+		turnToken:          turnToken,
+		replyToken:         replyToken,
+		entryTokens:        map[string]string{},
+	}
+	folder.canonicalize(replayFrames)
+	folder.canonicalize(liveAfterFrames)
+
+	// The notice's identity and the reply's identity must stay DISTINCT:
+	// folding the per-run reply id must not collapse the notice onto the
+	// reply it is supposed to stay separate from.
+	noticeEntryID, replyFoldedID := issue1435R4FoldedIdentities(replayFrames, liveAfterFrames)
+	require.NotEmpty(t, noticeEntryID, "instrument: the notice must carry an entry id")
+	require.Equal(t, replyToken, replyFoldedID, "the reply's per-run message id must be folded to the stable token")
+	require.NotEqual(t, noticeEntryID, replyFoldedID,
+		"the notice's entry id and the reply's message id must stay distinguishable after folding")
+
+	document := map[string]any{
+		"session_id":        sessionToken,
+		"turn_id":           turnToken,
+		"replay_frames":     replayFrames,
+		"live_after_frames": liveAfterFrames,
+	}
+	encoded, err := json.MarshalIndent(document, "", "  ")
+	require.NoError(t, err)
+	issue1435R4PairFixture(t, encoded)
+	t.Logf("real replay window: %d frames, replay_error at index %d", len(replayFrames), replayErrorIndex)
+}
+
+// issue1435R4CaptureLiveTurn reads the live turn's frames up to its first
+// token and returns the live turn id. The informational notice must not end
+// the backend turn before its reply, and the notice must have been persisted
+// before the replay capture starts.
+func issue1435R4CaptureLiveTurn(t *testing.T, conn *websocket.Conn, ownerID string) string {
+	t.Helper()
 	liveTurnID := ""
 	noticeSeen := false
 	for {
@@ -78,7 +139,7 @@ func TestIssue1435R4_ReplayNoticeInputs(t *testing.T) {
 		require.NoError(t, readErr, "real gateway must deliver the live turn")
 		var frame map[string]any
 		require.NoError(t, json.Unmarshal(raw, &frame))
-		if frame["session_id"] != owner.ID {
+		if frame["session_id"] != ownerID {
 			continue
 		}
 		if payload, ok := frame["payload"].(map[string]any); ok {
@@ -96,13 +157,18 @@ func TestIssue1435R4_ReplayNoticeInputs(t *testing.T) {
 		}
 	}
 	require.True(t, noticeSeen, "instrument: the notice must be persisted before the replay capture")
+	return liveTurnID
+}
 
-	// Second connection: attach and capture the real replay window while the
-	// provider is still held (the turn is genuinely still running).
+// issue1435R4CaptureReplayWindow attaches a second connection and captures
+// the gateway's real replay window while the first connection's provider is
+// still held (the turn is genuinely still running).
+func issue1435R4CaptureReplayWindow(t *testing.T, server *httptest.Server, ownerID string) []any {
+	t.Helper()
 	conn2 := dialTestWS(t, server)
 	t.Cleanup(func() { require.NoError(t, conn2.Close()) })
 	sendWSAuthFrameDevMode(t, conn2)
-	attach, err := json.Marshal(wsClientFrameTestHelper{Type: "attach_session", SessionID: owner.ID})
+	attach, err := json.Marshal(wsClientFrameTestHelper{Type: "attach_session", SessionID: ownerID})
 	require.NoError(t, err)
 	require.NoError(t, conn2.WriteMessage(websocket.TextMessage, attach))
 	var replayFrames []any
@@ -121,6 +187,13 @@ func TestIssue1435R4_ReplayNoticeInputs(t *testing.T) {
 		}
 	}
 replayDone:
+	return replayFrames
+}
+
+// issue1435R4AssertReplayWindow checks the shape of the captured replay
+// window and returns the index of the notice frame inside it.
+func issue1435R4AssertReplayWindow(t *testing.T, replayFrames []any) int {
+	t.Helper()
 	var replayErrorIndex = -1
 	var replayTypes []string
 	for i, value := range replayFrames {
@@ -133,8 +206,13 @@ replayDone:
 	require.Equal(t, []string{"replay_message", "replay_message", "replay_error", "catch_up_complete"}, replayTypes,
 		"instrument: the real replay window must carry the truncated assistant entry, the user entry, then the notice")
 	require.GreaterOrEqual(t, replayErrorIndex, 0)
-	open() // the turn finishes; capture the real live continuation (hybrid case 1b)
+	return replayErrorIndex
+}
 
+// issue1435R4CaptureLiveContinuation captures the real live continuation
+// (token frames and the genuine done) after the held provider resumes.
+func issue1435R4CaptureLiveContinuation(t *testing.T, conn *websocket.Conn, ownerID string) ([]any, string) {
+	t.Helper()
 	var liveAfterFrames []any
 	liveReplyMessageID := ""
 	for {
@@ -143,7 +221,7 @@ replayDone:
 		require.NoError(t, readErr, "real gateway must finish the resumed turn")
 		var frame map[string]any
 		require.NoError(t, json.Unmarshal(raw, &frame))
-		if frame["session_id"] != owner.ID {
+		if frame["session_id"] != ownerID {
 			continue
 		}
 		switch frame["type"] {
@@ -161,73 +239,76 @@ replayDone:
 	}
 liveDone:
 	require.NotEmpty(t, liveReplyMessageID, "instrument: the resumed turn must carry a gateway-minted reply message id")
+	return liveAfterFrames, liveReplyMessageID
+}
 
-	// SPA input container. Canonicalization folds per-run generated values
-	// only; frame order, types, codes, content and entry-id relationships
-	// are preserved exactly.
-	//
-	// The gateway mints a FRESH reply message id per run, so it is folded by
-	// VALUE (like the round-3 producer does) — otherwise every bare run would
-	// compare a new UUID against the committed fixture. It is the only
-	// per-run opaque id folded this way; the notice's entry id keeps its own
-	// token, so the two stay distinguishable below.
-	sessionToken, turnToken := "1435-round4-session", "1435-round4-turn"
-	replyToken := "1435-round4-reply"
-	entryTokens := map[string]string{}
-	var canonicalize func(any)
-	canonicalize = func(value any) {
-		switch object := value.(type) {
-		case []any:
-			for _, child := range object {
-				canonicalize(child)
-			}
-		case map[string]any:
-			if object["session_id"] == owner.ID {
-				object["session_id"] = sessionToken
-			}
-			if object["turn_id"] == liveTurnID {
-				object["turn_id"] = turnToken
-			}
-			for _, key := range []string{"id", "entry_id"} {
-				if text, ok := object[key].(string); ok {
-					if seen, exists := entryTokens[text]; exists {
-						object[key] = seen
-					} else {
-						token := "1435-round4-entry-" + string(rune('a'+len(entryTokens)))
-						entryTokens[text] = token
-						object[key] = token
-					}
+// issue1435R4Folder carries the per-run generated values that the
+// canonicalizer folds out of the captured frames, and the shared map that
+// keeps the folded entry ids consistent across the replay window and the
+// live continuation.
+type issue1435R4Folder struct {
+	ownerID            string
+	liveTurnID         string
+	liveReplyMessageID string
+	sessionToken       string
+	turnToken          string
+	replyToken         string
+	entryTokens        map[string]string
+}
+
+// canonicalize folds the per-run generated values only; frame order, types,
+// codes, content and entry-id relationships are preserved exactly.
+func (f *issue1435R4Folder) canonicalize(value any) {
+	switch object := value.(type) {
+	case []any:
+		for _, child := range object {
+			f.canonicalize(child)
+		}
+	case map[string]any:
+		if object["session_id"] == f.ownerID {
+			object["session_id"] = f.sessionToken
+		}
+		if object["turn_id"] == f.liveTurnID {
+			object["turn_id"] = f.turnToken
+		}
+		for _, key := range []string{"id", "entry_id"} {
+			if text, ok := object[key].(string); ok {
+				if seen, exists := f.entryTokens[text]; exists {
+					object[key] = seen
+				} else {
+					token := "1435-round4-entry-" + string(rune('a'+len(f.entryTokens)))
+					f.entryTokens[text] = token
+					object[key] = token
 				}
-			}
-			if object["boot_id"] != nil {
-				object["boot_id"] = "1435-round4-boot"
-			}
-			for key, child := range object {
-				lower := key
-				if text, ok := child.(string); ok && text == liveReplyMessageID {
-					object[key] = replyToken
-				}
-				if lower == "timestamp" || lower == "emitted_at" {
-					if _, ok := child.(string); ok {
-						object[key] = "2026-10-27T00:00:00Z"
-					}
-				}
-				// Timing-only performance metrics are opaque INPUT facts.
-				if lower == "duration_ms" || lower == "duration" || lower == "latency_ms" {
-					if _, ok := child.(float64); ok {
-						object[key] = float64(1)
-					}
-				}
-				canonicalize(child)
 			}
 		}
+		if object["boot_id"] != nil {
+			object["boot_id"] = "1435-round4-boot"
+		}
+		for key, child := range object {
+			lower := key
+			if text, ok := child.(string); ok && text == f.liveReplyMessageID {
+				object[key] = f.replyToken
+			}
+			if lower == "timestamp" || lower == "emitted_at" {
+				if _, ok := child.(string); ok {
+					object[key] = "2026-10-27T00:00:00Z"
+				}
+			}
+			// Timing-only performance metrics are opaque INPUT facts.
+			if lower == "duration_ms" || lower == "duration" || lower == "latency_ms" {
+				if _, ok := child.(float64); ok {
+					object[key] = float64(1)
+				}
+			}
+			f.canonicalize(child)
+		}
 	}
-	canonicalize(replayFrames)
-	canonicalize(liveAfterFrames)
+}
 
-	// The notice's identity and the reply's identity must stay DISTINCT:
-	// folding the per-run reply id must not collapse the notice onto the
-	// reply it is supposed to stay separate from.
+// issue1435R4FoldedIdentities returns the notice's entry id and the reply's
+// folded message id, so the two can be compared after folding.
+func issue1435R4FoldedIdentities(replayFrames, liveAfterFrames []any) (string, string) {
 	noticeEntryID, replyFoldedID := "", ""
 	for _, value := range replayFrames {
 		frame := value.(map[string]any)
@@ -241,19 +322,14 @@ liveDone:
 			replyFoldedID, _ = frame["message_id"].(string)
 		}
 	}
-	require.NotEmpty(t, noticeEntryID, "instrument: the notice must carry an entry id")
-	require.Equal(t, replyToken, replyFoldedID, "the reply's per-run message id must be folded to the stable token")
-	require.NotEqual(t, noticeEntryID, replyFoldedID,
-		"the notice's entry id and the reply's message id must stay distinguishable after folding")
+	return noticeEntryID, replyFoldedID
+}
 
-	document := map[string]any{
-		"session_id":        sessionToken,
-		"turn_id":           turnToken,
-		"replay_frames":     replayFrames,
-		"live_after_frames": liveAfterFrames,
-	}
-	encoded, err := json.MarshalIndent(document, "", "  ")
-	require.NoError(t, err)
+// issue1435R4PairFixture keeps the committed SPA input fixture paired with
+// the real gateway replay producer. The fixture is INPUT, not the state
+// oracle: it is rewritten only under UPDATE_1435_R4_INPUTS=1.
+func issue1435R4PairFixture(t *testing.T, encoded []byte) {
+	t.Helper()
 	path := filepath.Join("..", "..", "tests", "fixtures", "attachments-1435-round4", "replay-frames.json")
 	if os.Getenv("UPDATE_1435_R4_INPUTS") == "1" {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -263,7 +339,6 @@ liveDone:
 	require.NoError(t, err, "the paired SPA input fixture must be recorded before the consumer runs")
 	require.JSONEq(t, string(encoded), string(paired),
 		"the SPA input fixture must stay paired with the real gateway replay producer; it is not the state oracle")
-	t.Logf("real replay window: %d frames, replay_error at index %d", len(replayFrames), replayErrorIndex)
 }
 
 // Issue #1435 Round 4 item 4 (architect F5): with the media cleaner
