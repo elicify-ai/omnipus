@@ -17,19 +17,32 @@ func orphanACTestNegatives(t *testing.T) {
 }
 
 // Full-list preservation is the oracle: no production scanner computes the
-// expected view. The expected address property is the identity map for raw input.
-func orphanACAssertUnsupported(t *testing.T, raw []providers.Message, wantErr string) {
+// expected view. The expected address property is the identity map for raw
+// input.
+//
+// DESIGN 5 (and its 2026-10-26 addendum) changes the SHAPE of that view for a
+// fixture that contains a recognised cancellation record: the declaration and
+// its durable results are retained, the marker is excluded, and the occurrence
+// the marker left without a result gains the engine observation at ordinal -1.
+// A fixture whose records are NOT recognised cancellations keeps the identity
+// map — an unsupported record authorises no exclusion at all.
+func orphanACAssertUnsupported(t *testing.T, raw []providers.Message, wantErr string, design5 ...orphanACView5) {
 	t.Helper()
 	h := cwR1New(t, 100000)
 	h.append(t, raw...)
 	before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
 	ts := h.turn("")
-	out := orphanACAssertView(t, h, ts, raw)
+	want := raw
 	lines := make([]int, 0, 1+len(raw))
 	lines = append(lines, -1)
 	for i := range raw {
 		lines = append(lines, i)
 	}
+	if len(design5) > 0 {
+		want = design5[0].messages
+		lines = append([]int{-1}, design5[0].addresses...)
+	}
+	out := orphanACAssertView(t, h, ts, want)
 	require.Equal(t, lines, mapWindowMessages(before, out, -1, 0), "unsupported records cannot remove, reindex or de-identify any archived entry")
 	orphanACAssertRejectedBeforeSend(t, h, ts, out, wantErr)
 	orphanACAssertUnchanged(t, h, before, bytes)
@@ -88,6 +101,21 @@ func orphanACMarkerNegatives(t *testing.T) {
 					"context request: incomplete or invalid tool-result group at message 2", true)
 				return
 			}
+			if tc.name == "already_resolved_ID" {
+				// DESIGN 5: this IS a recognised cancellation record — it has the
+				// exact shape and names a call the group declares. It therefore
+				// binds to that group and is EXCLUDED from the view, while the
+				// declaration and its durable result are RETAINED. The cancelled
+				// occurrence ("done") has a result, so it needs no observation;
+				// the group's other call ("missing") was never cancelled, so it
+				// keeps no invented result either. The group therefore stays
+				// incomplete and the send boundary must still refuse it.
+				raw := append(append([]providers.Message{}, prefix...), bad)
+				orphanACAssertUnsupported(t, raw,
+					"context request: incomplete or invalid tool-result group at message 2",
+					orphanACView5{messages: []providers.Message{raw[0], raw[1], raw[2]}, addresses: []int{0, 1, 2}})
+				return
+			}
 			orphanACAssertUnsupported(t, append(prefix, bad),
 				"context request: incomplete or invalid tool-result group at message 2")
 		})
@@ -123,7 +151,20 @@ func orphanACBoundaryNegatives(t *testing.T) {
 		}, "context request: incomplete or invalid tool-result group at message 2"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) { orphanACAssertUnsupported(t, tc.raw, tc.err) })
+		t.Run(tc.name, func(t *testing.T) {
+			switch tc.name {
+			case "newer_complete_reused_ID_does_not_authorize_old_group":
+				// DESIGN 5: the marker names a call the NEWER group declares, so
+				// it binds there and is EXCLUDED. The newer group already has its
+				// result, so no observation is needed; the older occurrence was
+				// never cancelled, so it gets none either and the group stays
+				// incomplete — the send boundary must still refuse it.
+				orphanACAssertUnsupported(t, tc.raw, tc.err,
+					orphanACView5{messages: []providers.Message{tc.raw[0], tc.raw[1], tc.raw[2], tc.raw[3]}, addresses: []int{0, 1, 2, 3}})
+			default:
+				orphanACAssertUnsupported(t, tc.raw, tc.err)
+			}
+		})
 	}
 	t.Run("newer_matching_group_cancellation_does_not_erase_older_invalidity", func(t *testing.T) {
 		h := cwR1New(t, 100000)
@@ -135,8 +176,13 @@ func orphanACBoundaryNegatives(t *testing.T) {
 		h.append(t, raw...)
 		before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
 		ts := h.turn("")
-		out := orphanACAssertView(t, h, ts, orphanACPick(raw, 0, 1, 4))
-		require.Equal(t, []int{-1, 0, 1, 4}, mapWindowMessages(before, out, -1, 0))
+		// DESIGN 5: the marker binds to the newer group, so it is excluded and
+		// that group's missing result gains the engine observation at -1; the
+		// older, never-cancelled occurrence keeps no invented result.
+		obs := orphanACObservation(t, h, ts, "boundary-id")
+		out := orphanACAssertView(t, h, ts, []providers.Message{raw[0], raw[1], raw[2], obs, raw[4]})
+		require.Equal(t, []int{-1, 0, 1, 2, -1, 4}, mapWindowMessages(before, out, -1, 0),
+			"every retained record keeps its original address; the inserted observation is ephemeral")
 		orphanACAssertRejectedBeforeSend(t, h, ts, out, "context request: incomplete or invalid tool-result group at message 2")
 		orphanACAssertUnchanged(t, h, before, bytes)
 	})

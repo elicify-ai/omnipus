@@ -22,10 +22,15 @@ func orphanACParallel(t *testing.T) {
 		name   string
 		record providers.Message
 		lines  []int
+		// obs lists the call ids whose cancelled occurrences gain the engine
+		// observation; err is the refusal the send boundary must produce when
+		// an occurrence has neither a durable result nor a cancellation.
+		obs []string
+		err string
 	}{
-		{"two_missing_ID_records", orphanACMarker("missing-two"), []int{0, 1, 2, 3, 4, 8, 10, 11, 12, 13, 14, 15}},
-		{"repeated_valid_record_same_group", orphanACMarker("missing-one"), []int{0, 1, 2, 3, 4, 8, 10, 11, 12, 13, 14, 15}},
-		{"one_record_plus_unrelated_system_record", providers.Message{Role: "system", Content: `{"type":"other_control","content":"not group-owned"}`}, []int{0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 13, 14, 15}},
+		{"two_missing_ID_records", orphanACMarker("missing-two"), []int{0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15}, []string{"missing-one", "missing-two"}, ""},
+		{"repeated_valid_record_same_group", orphanACMarker("missing-one"), []int{0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15}, []string{"missing-one"}, "context request: incomplete or invalid tool-result group at message 6"},
+		{"one_record_plus_unrelated_system_record", providers.Message{Role: "system", Content: `{"type":"other_control","content":"not group-owned"}`}, []int{0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15}, []string{"missing-one"}, "context request: incomplete or invalid tool-result group at message 6"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,9 +55,29 @@ func orphanACParallel(t *testing.T) {
 			}
 			h.append(t, raw...)
 			before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
-			out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, tc.lines...))
-			require.Equal(t, append([]int{-1}, tc.lines...), mapWindowMessages(before, out, -1, 0), "P1: parallel exclusions never broaden to completed groups or control addresses")
-			require.NoError(t, validateWindowGroups(out), "completed groups retain all their declared/result identities, independent of parallel completion order")
+			ts := h.turn("")
+			// DESIGN 5: the abandoned group's DECLARATION and its durable
+			// result are RETAINED; every recognised cancellation record binds
+			// to the occurrence it names and is EXCLUDED; each occurrence a
+			// bound cancellation left without a result gains the engine
+			// observation (ephemeral, ordinal -1) beside the declaration it
+			// completes. An occurrence with neither a durable result nor a
+			// cancellation is NOT invented — the group stays visible and the
+			// send boundary blocks the request instead.
+			obs := make([]providers.Message, 0, len(tc.obs))
+			for _, id := range tc.obs {
+				o := orphanACObservation(t, h, ts, id)
+				r2CheckedObservation(t, o, id, r2Issuer(t, before, 5))
+				obs = append(obs, o)
+			}
+			want, addresses := orphanACDesign5ViewAt(t, raw, tc.lines, map[int][]providers.Message{7: obs})
+			out := orphanACAssertView(t, h, ts, want)
+			require.Equal(t, append([]int{-1}, addresses...), mapWindowMessages(before, out, -1, 0), "P1: parallel exclusions never broaden to completed groups or control addresses")
+			if tc.err == "" {
+				require.NoError(t, validateWindowGroups(out), "completed groups retain all their declared/result identities, independent of parallel completion order")
+			} else {
+				orphanACAssertRejectedBeforeSend(t, h, ts, out, tc.err)
+			}
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})
 	}
@@ -84,22 +109,34 @@ func orphanACReusedIDs(t *testing.T) {
 				{Role: "user", Content: "latest live turn"},              // 14
 				orphanACGroup("latest uncanceled call_0", "call_0"),      // 15
 			}
-			lines := []int{0, 1, 2, 3, 6, 7, 8, 9, 10, 13, 14, 15}
+			lines := []int{0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15}
 			if complete {
 				raw = append(raw, orphanACResult("call_0", "latest distinct live result"))
 				lines = append(lines, 16)
 			}
 			h.append(t, raw...)
 			before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
-			want := orphanACPick(raw, lines...)
-			out := orphanACAssemble(t, h, h.turn(""), h.agent.Sessions.GetHistory(h.key))
-			assert.Equal(t, want, out[1:], "I1: call_0 cancellation is positional, never a session-global deny set")
+			ts := h.turn("")
+			// DESIGN 5: a cancellation binds to ONE assistant occurrence, so
+			// both cancelled groups are RETAINED with their engine
+			// observations (ephemeral, ordinal -1) and their cancellation
+			// records are EXCLUDED; the complete groups, the narration and the
+			// control keep their own records and addresses. Reusing one call
+			// id across occurrences stays valid.
+			assembled := orphanACAssemble(t, h, ts, h.agent.Sessions.GetHistory(h.key))
+			observations := orphanACObservations(t, assembled[1:])
+			require.Len(t, observations, 2, "each cancelled occurrence gains exactly one engine observation")
+			r2CheckedObservation(t, observations[0], "call_0", r2Issuer(t, before, 4))
+			r2CheckedObservation(t, observations[1], "call_0", r2Issuer(t, before, 11))
+			want, addresses := orphanACDesign5ViewAt(t, raw, lines,
+				map[int][]providers.Message{5: {observations[0]}, 11: {observations[1]}})
+			assert.Equal(t, want, assembled[1:], "I1: call_0 cancellation is positional, never a session-global deny set")
 			candidate := append([]providers.Message{{Role: "system", Content: "independent pinned envelope"}}, want...)
-			require.Equal(t, append([]int{-1}, lines...), mapWindowMessages(before, candidate, -1, 0), "each surviving reused ID stays attached to its original occurrence")
+			require.Equal(t, append([]int{-1}, addresses...), mapWindowMessages(before, candidate, -1, 0), "each surviving reused ID stays attached to its original occurrence")
 			if complete {
 				require.NoError(t, validateWindowGroups(candidate), "earlier result and marker cannot invalidate later complete reuse")
 			} else {
-				orphanACAssertRejectedBeforeSend(t, h, h.turn(""), candidate, "context request: incomplete or invalid tool-result group at message 12")
+				orphanACAssertRejectedBeforeSend(t, h, ts, candidate, "context request: incomplete or invalid tool-result group at message 16")
 			}
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})
@@ -119,20 +156,29 @@ func orphanACRecoveryIdempotence(t *testing.T) {
 	}
 	h.append(t, raw...)
 	before := orphanACSnapshot(t, h)
-	issuer := r2Issuer(t, before, 5)
+	// DESIGN 5: the recovery pass fills EVERY occurrence left without a
+	// durable result — the earlier occurrence the cancellation record names
+	// and the later unmarked occurrence of the same call id — with its own
+	// engine observation bound to the exact declaration that issued it. Both
+	// declarations stay visible; the cancellation record is bookkeeping and
+	// never reaches the model.
 	cleaned := RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil)
 	after := orphanACSnapshot(t, h)
-	require.Len(t, viewArchived(after), 8, "I2: the earlier call_0 marker cannot suppress the later unresolved occurrence's own record")
+	require.Len(t, viewArchived(after), 9, "I2: each unresolved occurrence gains exactly one durable observation; the earlier call_0 marker cannot suppress the later one")
 	require.Equal(t, viewArchived(before), viewArchived(after)[:7], "positional recovery appends only, preserving both original orphan declarations")
 	require.Equal(t, "tool", viewArchived(after)[7].Role, "DESIGN 5: the new record is an engine observation, not another cancellation")
-	observation := viewArchived(after)[7].Message
-	r2CheckedObservation(t, observation, "call_0", issuer)
-	require.Equal(t, 8, after.State.Count)
+	require.Equal(t, "tool", viewArchived(after)[8].Role, "DESIGN 5: the second unresolved occurrence gains its own engine observation")
+	earlier := viewArchived(after)[7].Message
+	later := viewArchived(after)[8].Message
+	r2CheckedObservation(t, earlier, "call_0", r2Issuer(t, before, 1))
+	r2CheckedObservation(t, later, "call_0", r2Issuer(t, before, 5))
+	require.Equal(t, 9, after.State.Count)
 	require.Equal(t, before.State.Skip, after.State.Skip)
 	require.Equal(t, before.State.AnchorLine, after.State.AnchorLine)
-	want := append(orphanACPick(raw, 0, 3, 4, 5), observation, raw[6])
-	require.Equal(t, want, cleaned, "the marker-bound earlier group stays excluded, the later declaration is retained with one truthful observation and no user/control/narration moves")
-	require.NoError(t, validateWindowGroups(cleaned), "retained declaration pairs with its own observation")
+	want := make([]providers.Message, 0, 8)
+	want = append(want, raw[0], raw[1], earlier, raw[3], raw[4], raw[5], later, raw[6])
+	require.Equal(t, want, cleaned, "both declarations stay visible with their own truthful observation; no user/control/narration moves")
+	require.NoError(t, validateWindowGroups(cleaned), "each retained declaration pairs with its own observation")
 	bytes := orphanACArchiveBytes(t, h)
 	require.Equal(t, want, RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil), "second recovery yields the same exact view")
 	orphanACAssertUnchanged(t, h, after, bytes)

@@ -4,6 +4,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -41,4 +42,44 @@ func r2Issuer(t *testing.T, snapshot session.WindowView, ordinal int) session.Ar
 	require.True(t, ok, "fixture's independently specified issuer ordinal %d exists", ordinal)
 	require.Equal(t, "assistant", slot.Message.Role)
 	return slot.Addr
+}
+
+// orphanACFindObservation returns the engine-authored observation the DESIGN-5
+// projection inserts for callID. The observation is a fixture (like the archive
+// records it completes); its specified fields are checked by r2CheckedObservation
+// and its private prose is never used as an oracle.
+func orphanACFindObservation(t *testing.T, view []providers.Message, callID string) providers.Message {
+	t.Helper()
+	for _, m := range view {
+		if m.Role == "tool" && m.ToolCallID == callID && strings.Contains(m.Content, "tool_recovery_observation") {
+			return m
+		}
+	}
+	t.Fatalf("fixture: the recovered model view has no engine observation for %q", callID)
+	return providers.Message{}
+}
+
+// orphanACDesign5View builds the reconciled DESIGN-5 model view for a fixture:
+// the retained raw archive lines in order, with the engine observation
+// (ephemeral, ordinal -1) inserted at obsAt when the projection produces one.
+//
+// DESIGN 5 (and its 2026-10-26 "Trim shares the projection" addendum): retain
+// the assistant declaration and every durable sibling result, fill only the
+// missing occurrence with the engine observation, and exclude the marker. Every
+// retained record keeps its ORIGINAL archive address; the inserted observation
+// is ephemeral.
+func orphanACDesign5View(t *testing.T, h *cwR1Harness, raw []providers.Message, lines []int, obsCallID string, obsAt int) ([]providers.Message, []int) {
+	t.Helper()
+	view := make([]providers.Message, 0, len(lines)+1)
+	view = append(view, orphanACPick(raw, lines...)...)
+	addresses := make([]int, 0, len(lines)+1)
+	addresses = append(addresses, lines...)
+	if obsCallID == "" {
+		return view, addresses
+	}
+	assembled := orphanACAssemble(t, h, h.turn(""), h.agent.Sessions.GetHistory(h.key))
+	obs := orphanACFindObservation(t, assembled[1:], obsCallID)
+	view = append(view[:obsAt:obsAt], append([]providers.Message{obs}, view[obsAt:]...)...)
+	addresses = append(addresses[:obsAt:obsAt], append([]int{-1}, addresses[obsAt:]...)...)
+	return view, addresses
 }
