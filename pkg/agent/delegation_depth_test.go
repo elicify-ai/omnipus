@@ -23,10 +23,15 @@ func TestResolveEffectiveDelegationDepth_SharedByPromptAndEnforcement(t *testing
 		wantEffective int
 	}{
 		{
+			// An edge with no depth AND no global setting resolves to the
+			// shipped backstop — 10 since the founder ruling of 2026-10-27
+			// (it was 3). Pinned as a LITERAL, not as the constant, so a
+			// wrong defaultMaxSubTurnDepth fails here instead of silently
+			// redefining the expectation.
 			name:          "row1_both_unset_falls_back_to_safety_backstop",
 			edgeDepth:     nil,
 			globalMax:     0,
-			wantEffective: defaultMaxSubTurnDepth, // 3
+			wantEffective: 10,
 		},
 		{
 			name:          "row2_edge_nil_global_7_global_governs",
@@ -35,10 +40,15 @@ func TestResolveEffectiveDelegationDepth_SharedByPromptAndEnforcement(t *testing
 			wantEffective: 7,
 		},
 		{
-			name:          "row3_edge_10_global_unset_edge_governs_the_477_bug",
-			edgeDepth:     intPtr(10),
+			// Row 3 is the #477 row: an explicit per-edge depth DEEPER than
+			// the default backstop must be honoured. The per-edge value is 12
+			// — strictly above the shipped backstop (10) — so this row still
+			// discriminates "the edge governs" from "the backstop governed"
+			// (with both at 10 the row would pass either way).
+			name:          "row3_edge_12_global_unset_edge_governs_the_477_bug",
+			edgeDepth:     intPtr(12),
 			globalMax:     0,
-			wantEffective: 10,
+			wantEffective: 12,
 		},
 		{
 			name:          "row4_edge_2_global_7_edge_is_stricter",

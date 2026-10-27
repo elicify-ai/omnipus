@@ -15311,7 +15311,7 @@ export interface components {
             team?: string[];
             /**
              * @description The currently-resolved depth ceiling an edge inherits when its own `depth` is unset — the global configured default if set, otherwise the defaultMaxSubTurnDepth backstop. This is a read-only, already-computed value (no new depth logic; see delegationDepthCeiling) exposed purely so the UI can always pre-fill/display a concrete number for any edge instead of an ambiguous blank/"∞" state. It does NOT change per-edge enforcement: an edge with depth unset still dynamically tracks the live global default at enforcement time, this field is a snapshot for display purposes only.
-             * @example 3
+             * @example 10
              */
             default_depth: number;
         };
@@ -16315,7 +16315,7 @@ export interface components {
              */
             kind: "progress";
             /**
-             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 10, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
              * @example 0
              */
             depth: number;

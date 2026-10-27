@@ -24911,7 +24911,7 @@ type SessionMessageProgress struct {
 	// CreatedAt RFC3339 timestamp this message was created.
 	CreatedAt time.Time `json:"created_at"`
 
-	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 10, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
 	Depth int `json:"depth"`
 
 	// Direction M8 — the unused `human` value is dropped. `progress` is always child -> parent.

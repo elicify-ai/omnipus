@@ -224,7 +224,7 @@ How much work one agent can hand to another is bounded in two ways: a Performanc
 `performance.max_delegation_depth` caps how many levels a delegation chain may form. An agent delegates a worker, the worker delegates again, and each further hop is one more level. A chain that asks for one level more than the cap is refused with a named error — the extra work never starts, rather than starting and being cut off part-way.
 
 - A workspace **Team** edge can set a tighter depth for a particular agent pair. When both a global value and an edge value exist, the smaller one wins.
-- With nothing set, the code still caps a chain at **three** levels.
+- With nothing set, the code still caps a chain at **ten** levels.
 
 ### How many agents run at once
 

@@ -502,7 +502,7 @@ func (t *DelegateTool) SetSessionManager(sm *SessionManager) {
 // SetOwnershipWalkMaxDepth is never called. pkg/tools cannot reference
 // pkg/agent's own safety-backstop delegation-depth default directly, so this
 // is a same-valued, independently-declared constant.
-const defaultOwnershipWalkMaxDepth = 3
+const defaultOwnershipWalkMaxDepth = 10
 
 // SetOwnershipWalkMaxDepth overrides the ancestor-chain walk's depth bound
 // (FR-039). Zero/negative values fall back to defaultOwnershipWalkMaxDepth.

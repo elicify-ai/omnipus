@@ -776,7 +776,7 @@ func TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed(t *testing.T) {
 		if shippedExcluded[id] {
 			continue
 		}
-		d := 3 // FreshSelfDelegationMaxDepth, ceiling unset
+		d := 10 // FreshSelfDelegationMaxDepth, ceiling unset
 		if id == "omnipus" {
 			d = 1 // omnipus-system-agent §6.2: Omnipus's self-row depth is exactly 1
 		}
@@ -857,37 +857,37 @@ func TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed(t *testing.T) {
 	}
 }
 
-// TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOr3 is the
-// FR-006 self-edge depth pin (spec review finding F3): "Fresh self-edges
-// explicitly set max_depth 3 (or the lower configured ceiling)." A fresh
+// TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOrDefault is
+// the FR-006 self-edge depth pin (spec review finding F3): "Fresh self-edges
+// explicitly set max_depth 10 (or the lower configured ceiling)." A fresh
 // jim→jim / worker→worker seed edge must carry an EXPLICIT depth of
-// min(3, effective global ceiling) — never nil (inherit). The nil form only
-// matches the spec while the global cap is <= 3; an operator who raises
-// agents.defaults.subturn.max_depth to 5 must not also widen a fresh
-// self-edge's helper chain to 5.
+// min(10, effective global ceiling) — never nil (inherit). The nil form only
+// matches the spec while the global cap is <= 10; an operator who raises
+// performance.max_delegation_depth to 15 must not also widen a fresh
+// self-edge's helper chain to 15.
 //
 // Oracle: the expected depths below are derived from the FR-006 sentence, not
-// from the implementation — 3 by default, the lower configured ceiling when
-// the operator set one below 3, and still 3 (never the higher ceiling) when
+// from the implementation — 10 by default, the lower configured ceiling when
+// the operator set one below 10, and still 10 (never the higher ceiling) when
 // the operator raises it.
 //
 // The non-self assertions are the other half of the same FR: only SELF edges
 // are pinned. Jim's staff edges (→worker, →planner, →researcher) keep
 // inheriting the global cap (nil depth), and Planner's policy-wide seed depth
-// of 2 keeps copying verbatim — pinning the whole Jim role to 3 would violate
+// of 2 keeps copying verbatim — pinning the whole Jim role to 10 would violate
 // both (see TestSeedDelegationPolicies_SelfRolesDoNotPinRoleWideDepth in
 // pkg/coreagent for the seed-source guard).
-func TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOr3(t *testing.T) {
+func TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOrDefault(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name          string
-		configured    int // agents.defaults.subturn.max_depth; 0 = unset (effective ceiling 3)
+		configured    int // performance.max_delegation_depth; 0 = unset (effective ceiling 10)
 		wantSelfDepth int
 	}{
-		{"ceiling unset pins 3 (default fallback)", 0, 3},
-		{"ceiling 2 lower than 3 clamps to 2", 2, 2},
-		{"ceiling 3 equal to the pin pins 3", 3, 3},
-		{"ceiling 5 higher than 3 still pins 3 (F3 scenario)", 5, 3},
+		{"ceiling unset pins 10 (default fallback)", 0, 10},
+		{"ceiling 2 lower than 10 clamps to 2", 2, 2},
+		{"ceiling 10 equal to the pin pins 10", 10, 10},
+		{"ceiling 15 higher than 10 still pins 10 (F3 scenario)", 15, 10},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -913,7 +913,7 @@ func TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOr3(t *testin
 				require.NotNil(t, e.Depth,
 					"fresh self-edge %s must carry an EXPLICIT depth (FR-006), got nil (inherit)", pair)
 				assert.Equal(t, tc.wantSelfDepth, *e.Depth,
-					"fresh self-edge %s depth: want min(3, ceiling)=%d", pair, tc.wantSelfDepth)
+					"fresh self-edge %s depth: want min(10, ceiling)=%d", pair, tc.wantSelfDepth)
 				assert.ElementsMatch(t,
 					[]workspace.DelegationMode{workspace.ModeTask, workspace.ModeDirect}, e.Modes,
 					"self-edge %s must retain the seeded modes, collapsed to [task, direct]", pair)
@@ -958,13 +958,13 @@ func TestDefaultWorkspaceSeeder_SelfEdgesPersistExplicitDepth(t *testing.T) {
 		byPair[e.FromAgent+"->"+e.ToAgent] = e
 	}
 
-	// Fresh self-edges persisted with the explicit default pin of 3
-	// (ceiling unset on a fresh config → fallback 3).
+	// Fresh self-edges persisted with the explicit default pin of 10
+	// (ceiling unset on a fresh config → fallback 10).
 	for _, pair := range []string{"jim->jim", "worker->worker"} {
 		e, ok := byPair[pair]
 		require.True(t, ok, "expected seeded self-edge %s in the delegation store", pair)
 		require.NotNil(t, e.Depth, "persisted self-edge %s must carry an explicit depth (FR-006)", pair)
-		assert.Equal(t, 3, *e.Depth, "persisted self-edge %s depth with default ceiling", pair)
+		assert.Equal(t, 10, *e.Depth, "persisted self-edge %s depth with default ceiling", pair)
 	}
 
 	// Jim→Worker survives alongside the self edges, unpinned.

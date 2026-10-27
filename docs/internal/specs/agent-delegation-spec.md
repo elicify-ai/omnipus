@@ -11,6 +11,8 @@
 >
 > **7-reviewer gate verdict (2026-07-04): REVISE, now fixed below.** No CRITICAL findings. Two MAJOR findings claimed factual errors in this spec (`SubTurn.MaxDepth` default, `Inherit`'s transitivity) — both were independently re-verified against the real code during the fix pass and turned out to be **correct as originally written**; see Clarifications for the re-verification record. That re-verification surfaced one genuine, separate bug — filed as [#477](https://github.com/elicify-ai/omnipus/issues/477) — which is now **pulled into this spec's scope** (User Story 3, FR-D9) rather than left as a standalone follow-up.
 
+> **Amendment 2026-10-27 — founder ruling: default delegation depth raised 3 → 10.** The founder ruled: "increase the delegation depth to 10 for all agents and make it the default." The shipped safety backstop `defaultMaxSubTurnDepth` (`pkg/agent/delegation_runtime.go`) moves from 3 to 10, together with every same-valued mirror of it (`pkg/gateway::delegationDepthCeilingFallback`, `pkg/sysagent/tools::workspaceDelegationDepthCeilingFallback`, `pkg/coreagent::FreshSelfDelegationMaxDepth`, `pkg/tools::defaultOwnershipWalkMaxDepth`) and the SPA's `DEFAULT_DEPTH_FALLBACK`. **The resolution rule is unchanged**: the effective cap is still the tighter of the per-edge `Depth` and `performance.max_delegation_depth`, with the backstop applying only when neither source expresses an explicit value (FR-D9/FR-D10 below). Dataset row 1 of the "Effective depth cap resolution" table now reads 10. Rows 2–6 are unaffected. The 2026-07-04 Clarifications below are a dated record of that review round and are left as written.
+
 ---
 
 ## Existing Codebase Context
@@ -414,7 +416,7 @@ The following was independently traced through the actual code and cross-checked
 
 | # | Per-edge `Depth` | Global `SubTurn.MaxDepth` | Effective cap (advertised AND enforced) | Traces to | Notes |
 |---|---|---|---|---|---|
-| 1 | nil (inherit) | unset (0) | 3 | Scenario: Unset depth configuration advertises the true effective default | The common case — was "uncapped"/silently-3 mismatch before the fix |
+| 1 | nil (inherit) | unset (0) | 10 | Scenario: Unset depth configuration advertises the true effective default | The common case — was "uncapped"/silently-3 mismatch before the fix |
 | 2 | nil (inherit) | 7 | 7 | Scenario: An explicitly configured global depth is advertised and enforced identically | Already worked correctly before the fix — regression guard |
 | 3 | 10 | unset (0) | 10 | Scenario: An explicit per-edge depth deeper than the default backstop is honored | The real bug — was silently 3 before the fix |
 | 4 | 2 | 7 | 2 | (tighter-of, per-edge stricter) | Per-edge cap already correctly won here even before the fix |
@@ -528,7 +530,7 @@ All three ambiguities identified during drafting were resolved by the operator o
 - Retiring `SubagentManager` is in scope for this change (see Clarifications) — the implementation should delete it, not just route around it.
 - Fan-out (breadth) is already bounded by the existing `SubTurn.MaxConcurrent` semaphore — confirmed 2026-07-04, not a gap needing new scope (MAJ-005).
 - There is no single-grant revoke operation today, only whole-session `ClearSession` — this asymmetry (new grants aren't retroactive; neither are revocations) is an accepted, pre-existing limitation this spec doesn't fix (MIN-001).
-- The delegation graph's per-edge `Depth` field is the real, operator-facing depth-configuration mechanism; `SubTurn.MaxDepth`'s `defaultMaxSubTurnDepth` (3) is a separate safety backstop that applies only when neither the edge nor the global config expresses an explicit value — the two must compose (tighter-of), not silently override one another (#477, User Story 3).
+- The delegation graph's per-edge `Depth` field is the real, operator-facing depth-configuration mechanism; `SubTurn.MaxDepth`'s `defaultMaxSubTurnDepth` (10) is a separate safety backstop that applies only when neither the edge nor the global config expresses an explicit value — the two must compose (tighter-of), not silently override one another (#477, User Story 3).
 
 ## Clarifications
 

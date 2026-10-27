@@ -45,7 +45,7 @@ const OTHER_WORKSPACE: Workspace = {
   ...INITIAL_WORKSPACE, id: OTHER_WORKSPACE_ID, name: 'Unrelated workspace', core_team: [OTHER_MEMBER.id],
 }
 const DELEGATION: WorkspaceDelegation = {
-  workspace_id: WORKSPACE_ID, revision: INITIAL_WORKSPACE.revision, edges: [], default_depth: 3,
+  workspace_id: WORKSPACE_ID, revision: INITIAL_WORKSPACE.revision, edges: [], default_depth: 10,
   // Contract's optional informational team is absent: the actual workspace
   // roster must reach the real editor, including the later NEW member.
 }

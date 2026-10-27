@@ -11,11 +11,16 @@ import (
 
 // TestSeededEdgeDepth_SelfPinAndNonSelfCopy is the unit oracle for ADR-090
 // FR-006 as amended by session-core C-DELEGATE (E-DELEGATE-CONFIG): "Fresh
-// self-edges explicitly set max_depth 3 (or the lower configured ceiling)"
+// self-edges explicitly set max_depth 10 (or the lower configured ceiling)"
 // applies to EVERY self-edge without an ID predicate, not only Jim/Worker —
 // the settled design gives every agent a self-edge. Every non-self pair copies
 // the policy-wide depth (nil stays inherit). Expected values come from that
 // sentence, not from observed output.
+//
+// The pin value is the shipped onward-delegation default (10 as of the founder
+// ruling of 2026-10-27; it was 3). A raised configured ceiling must NOT
+// widen a fresh self-chain past the pin; a LOWERED one must clamp it (so
+// Validate cannot drop the edge).
 func TestSeededEdgeDepth_SelfPinAndNonSelfCopy(t *testing.T) {
 	policyTwo := 2
 	cases := []struct {
@@ -27,18 +32,19 @@ func TestSeededEdgeDepth_SelfPinAndNonSelfCopy(t *testing.T) {
 		want       int
 		keepPolicy bool // returned pointer must not alias policy
 	}{
-		{"jim self, unset ceiling pins 3", "jim", "jim", nil, 0, false, 3, false},
+		{"jim self, unset ceiling pins 10", "jim", "jim", nil, 0, false, 10, false},
 		{"jim self, ceiling 1 clamps to 1", "jim", "jim", nil, 1, false, 1, false},
 		{"jim self, ceiling 2 clamps to 2", "jim", "jim", nil, 2, false, 2, false},
-		{"jim self, ceiling 3 pins 3", "jim", "jim", nil, 3, false, 3, false},
-		{"jim self, ceiling 5 still pins 3 (F3)", "jim", "jim", nil, 5, false, 3, false},
+		{"jim self, ceiling 3 clamps to 3", "jim", "jim", nil, 3, false, 3, false},
+		{"jim self, ceiling 10 equal to the pin pins 10", "jim", "jim", nil, 10, false, 10, false},
+		{"jim self, ceiling 15 above the pin still pins 10 (F3)", "jim", "jim", nil, 15, false, 10, false},
 		{"worker self, ceiling 2 clamps to 2", "worker", "worker", nil, 2, false, 2, false},
-		{"worker self, ceiling 5 still pins 3", "worker", "worker", nil, 5, false, 3, false},
+		{"worker self, ceiling 15 above the pin still pins 10", "worker", "worker", nil, 15, false, 10, false},
 		{"jim→ava nil stays inherit at ceiling 5", "jim", "ava", nil, 5, true, 0, false},
 		{"jim→worker nil stays inherit at ceiling 2", "jim", "worker", nil, 2, true, 0, false},
 		{"planner policy depth copies verbatim", "planner", "researcher", &policyTwo, 5, false, 2, true},
-		{"any agent's self-edge is pinned (ava→ava)", "ava", "ava", nil, 3, false, 3, false},
-		{"custom agent self-edge is pinned too", "custom-agent", "custom-agent", nil, 5, false, 3, false},
+		{"any agent's self-edge is pinned (ava→ava)", "ava", "ava", nil, 10, false, 10, false},
+		{"custom agent self-edge is pinned too", "custom-agent", "custom-agent", nil, 15, false, 10, false},
 		{"ava→ava with lowered ceiling 1 clamps to 1", "ava", "ava", nil, 1, false, 1, false},
 		{"non-self with a policy depth is not replaced by the pin", "jim", "ava", &policyTwo, 5, false, 2, true},
 	}

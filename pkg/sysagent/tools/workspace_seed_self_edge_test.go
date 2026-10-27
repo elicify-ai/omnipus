@@ -47,7 +47,9 @@ func TestSeedDelegationEdgesForNewMembers_SeedsNewMemberSelfRow(t *testing.T) {
 
 			// U5A-FIX-R1: the final `nil` is the operator self-edge exclusion
 			// set; nil = no exclusions (the ids under test are never excluded).
-			got := seedDelegationEdgesForNewMembers(newTeam, added, nil, 3, present, nil)
+			// The ceiling argument is 15 — ABOVE the shipped self-edge pin (10),
+			// so the assertion below reads the PIN, not the ceiling.
+			got := seedDelegationEdgesForNewMembers(newTeam, added, nil, 15, present, nil)
 
 			e, ok := findSelfEdge(got, tc.id)
 			if !ok {
@@ -65,10 +67,10 @@ func TestSeedDelegationEdgesForNewMembers_SeedsNewMemberSelfRow(t *testing.T) {
 					tc.id, tc.id, e.Modes, wantModes)
 			}
 			if e.Depth == nil {
-				t.Fatalf("self-row %s→%s must carry an explicit depth of min(3, ceiling), got nil (inherit)", tc.id, tc.id)
+				t.Fatalf("self-row %s→%s must carry an explicit depth of min(10, ceiling), got nil (inherit)", tc.id, tc.id)
 			}
-			if *e.Depth != 3 {
-				t.Fatalf("fresh self-row %s→%s depth = %d, want 3 (FreshSelfDelegationMaxDepth)", tc.id, tc.id, *e.Depth)
+			if *e.Depth != 10 {
+				t.Fatalf("fresh self-row %s→%s depth = %d, want 10 (FreshSelfDelegationMaxDepth)", tc.id, tc.id, *e.Depth)
 			}
 		})
 	}
@@ -87,7 +89,7 @@ func TestSeedDelegationEdgesForNewMembers_DoesNotResurrectRemovedSelfRow(t *test
 	present := map[string]bool{"mia": true, "newbie": true}
 
 	// U5A-FIX-R1: final `nil` = the operator self-edge exclusion set (none here).
-	got := seedDelegationEdgesForNewMembers(newTeam, added, nil, 3, present, nil)
+	got := seedDelegationEdgesForNewMembers(newTeam, added, nil, 15, present, nil)
 
 	// Lifetime: removed stays removed while mia's membership continues.
 	if e, ok := findSelfEdge(got, "mia"); ok {

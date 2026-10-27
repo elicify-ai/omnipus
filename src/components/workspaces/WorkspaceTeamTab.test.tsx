@@ -83,7 +83,7 @@ const DELEGATION: WorkspaceDelegation = {
   workspace_id: 'ws-1',
   team: ['mia', 'jim', 'planner'],
   edges: [{ from_agent: 'jim', to_agent: 'planner', modes: ['direct', 'task'], depth: 2 }],
-  default_depth: 3,
+  default_depth: 10,
 }
 
 // stubCsrfCookie / restoreCsrfCookie — mirrors the pattern in api.test.ts.
@@ -268,7 +268,7 @@ describe('WorkspaceTeamTab — rendering and the add-agent picker', () => {
       workspace_id: 'ws-1',
       team: [],
       edges: [],
-      default_depth: 3,
+      default_depth: 10,
     } as WorkspaceDelegation)
     // core_team would normally seed members; for this case the workspace mock
     // already supplies core_team, so to get a truly empty graph we also clear
@@ -489,7 +489,7 @@ describe('WorkspaceTeamTab — atomic candidate save ordering (P0/F3)', () => {
         ...(DELEGATION.edges ?? []),
         { from_agent: 'jim', to_agent: 'ray', modes: ['direct', 'task'] },
       ],
-      default_depth: 3,
+      default_depth: 10,
     })
 
     // Seed the status-keyed active AND archived list caches the way
@@ -746,7 +746,7 @@ describe('WorkspaceTeamTab — implicit Judge row (ADR-049 D3)', () => {
       workspace_id: 'ws-1',
       team: [],
       edges: [],
-      default_depth: 3,
+      default_depth: 10,
     } as WorkspaceDelegation)
     await renderTab()
     await waitFor(() => {
@@ -777,7 +777,7 @@ describe('WorkspaceTeamTab — implicit Judge row (ADR-049 D3)', () => {
         ...(DELEGATION.edges ?? []),
         { from_agent: 'jim', to_agent: 'ray', modes: ['direct', 'task'] },
       ],
-      default_depth: 3,
+      default_depth: 10,
     })
 
     await renderTab()

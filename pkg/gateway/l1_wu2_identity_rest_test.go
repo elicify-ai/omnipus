@@ -133,7 +133,7 @@ func TestL1WU2DefaultWorkspace_RealSeedKeepsHiddenMemberAndDepthOneSelfRow(t *te
 	}
 	require.Len(t, self, 1, "FR-004 / OSA-8: exactly one ordinary self-row must remain in the graph")
 	require.NotNil(t, self[0].Depth)
-	assert.Equal(t, 1, *self[0].Depth, "§6.2: Omnipus self-row depth is exactly 1, not generic fresh-self depth 3")
+	assert.Equal(t, 1, *self[0].Depth, "§6.2: Omnipus self-row depth is exactly 1, not generic fresh-self depth 10")
 }
 
 func l1WU2OmnipusWriteAPI(t *testing.T) *restAPI {

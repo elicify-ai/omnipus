@@ -51,7 +51,7 @@ func delegationDepthBound(perf config.PerformanceConfig, site string) int {
 //
 // Verified against the spec's "Effective depth cap resolution" dataset table:
 //
-//	edge=nil,  global=0  -> defaultMaxSubTurnDepth (3)  (both unset: backstop)
+//	edge=nil,  global=0  -> defaultMaxSubTurnDepth (10) (both unset: backstop)
 //	edge=nil,  global=7  -> 7                           (global governs)
 //	edge=10,   global=0  -> 10                          (edge governs; the #477 bug)
 //	edge=2,    global=7  -> 2                           (edge stricter)
