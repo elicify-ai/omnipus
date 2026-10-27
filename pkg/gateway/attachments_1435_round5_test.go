@@ -11,6 +11,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -144,22 +145,24 @@ func TestIssue1435R5_RetentionReleasesSessionMediaMappings(t *testing.T) {
 		require.ErrorIs(t, statErr, os.ErrNotExist, "instrument: retention must really have deleted the upload bytes")
 
 		// THE ASSERTION — observed with a NON-MUTATING read, before any
-		// Resolve: retention itself must have released the mappings.
+		// Resolve: retention itself must have released the mappings. Both
+		// scopes are asserted non-fatally so one run reports every scope
+		// that is still live.
 		_, stillIndexed := store.RefByPath(uploadPath)
-		require.False(t, stillIndexed,
+		assert.False(t, stillIndexed,
 			"#1435 R5 item 1: retention removed the conversation and its upload bytes, but the upload mapping is still live in the running store")
 		_, stillIndexed = store.RefByPath(inlinePath)
-		require.False(t, stillIndexed,
+		assert.False(t, stillIndexed,
 			"#1435 R5 item 1: retention removed the conversation, but the inline media mapping is still live in the running store")
 
 		// SaveRegistry must not re-serialize the dead entries.
 		store.SaveRegistry()
 		entries := issue1435R5RegistryEntries(t, api.homePath)
-		require.NotContains(t, entries, uploadRef,
+		assert.NotContains(t, entries, uploadRef,
 			"#1435 R5 item 1: the dead upload mapping must not be re-serialized into the registry")
-		require.NotContains(t, entries, inlineRef,
+		assert.NotContains(t, entries, inlineRef,
 			"#1435 R5 item 1: the dead inline mapping must not be re-serialized into the registry")
-		require.Equal(t, 0, issue1435R5DeadPathEntries(entries, uploadPath, inlinePath),
+		assert.Equal(t, 0, issue1435R5DeadPathEntries(entries, uploadPath, inlinePath),
 			"#1435 R5 item 1: no registry entry may point at a removed conversation's media")
 
 		cycles = append(cycles, cycle{uploadPath: uploadPath, inlinePath: inlinePath, uploadRef: uploadRef, inlineRef: inlineRef})
@@ -172,6 +175,6 @@ func TestIssue1435R5_RetentionReleasesSessionMediaMappings(t *testing.T) {
 	for _, c := range cycles {
 		deadPaths = append(deadPaths, c.uploadPath, c.inlinePath)
 	}
-	require.Equal(t, 0, issue1435R5DeadPathEntries(entries, deadPaths...),
+	assert.Equal(t, 0, issue1435R5DeadPathEntries(entries, deadPaths...),
 		"#1435 R5 item 1: repeated retention cycles must not accumulate dead mappings")
 }
