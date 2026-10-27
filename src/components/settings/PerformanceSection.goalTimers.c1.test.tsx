@@ -177,3 +177,35 @@ describe('C1 actual PerformanceSection goal timer controls', () => {
     expect(controls.quiet).toHaveValue(60); expect(controls.stalled).toHaveAttribute('aria-checked', 'true')
   })
 })
+
+
+describe('C1 saved minutes while OFF confirmation is pending', () => {
+  it('keeps saved minutes in the live disabled field before OFF confirmation or persistence', async () => {
+    // C1 OFF preserves the visible retained value; 75 is an arranged valid
+    // nondefault saved value, not an observation of the implementation.
+    const retainedMinutes = 75
+    const view = await mount()
+    const controls = timerControls()
+    await saveEdit(controls.minutes, String(retainedMinutes), { goal_stalled_checkin_minutes: retainedMinutes })
+    await waitFor(() => expect(view.client.isFetching()).toBe(0))
+    expect(puts).toHaveLength(1)
+    expect(timerControls().minutes).toHaveValue(retainedMinutes)
+    const savedPutCount = puts.length
+    const savedReadCount = reads
+    fireEvent.click(timerControls().stalled)
+    const pendingDialog = await screen.findByRole('alertdialog')
+    expect(pendingDialog).toBeVisible()
+    expect(puts).toHaveLength(savedPutCount)
+    expect(reads).toBe(savedReadCount)
+    // The real modal hides background controls from the accessibility tree.
+    // Re-query the current DOM with the same contract bounds as timerControls.
+    const pendingMinutes = screen.getAllByRole('spinbutton', { hidden: true }).filter((input) => input.getAttribute('min') === '5' && input.getAttribute('max') === '1440')
+    expect(pendingMinutes).toHaveLength(1)
+    expect(pendingMinutes[0]).toBeInTheDocument()
+    expect(pendingMinutes[0]).toBeDisabled()
+    expect(pendingMinutes[0]).toHaveValue(retainedMinutes)
+    expect(screen.getByRole('alertdialog')).toBeVisible()
+    expect(puts).toHaveLength(savedPutCount)
+    expect(reads).toBe(savedReadCount)
+  })
+})
