@@ -37,13 +37,24 @@ function delegationEventsOutsideRow(events: readonly DelegationEvent[], message:
  * other empty row keeps its explanation.
  */
 const SILENT_STATUSES: ReadonlySet<string | undefined> = new Set([undefined, 'ok', 'done'])
-function isSilentHistoryRecord(msg: ChatMessage, owners: Record<string, string> | undefined): boolean {
+/**
+ * `ownerIds` is the set of message ids that OWN a tool call (the values of the
+ * store's toolCallOwnerMessageId record). A set, not the record: the virtual
+ * estimate asks this question for EVERY row on EVERY measurement, so the
+ * lookup has to stay O(1) per row.
+ */
+function isSilentHistoryRecord(msg: ChatMessage, ownerIds: ReadonlySet<string> | undefined): boolean {
   // Not every Message variant declares these optional fields; absent is "none".
   const extra = msg as { summary?: string; attachments?: unknown[]; truncationReason?: string; truncation_reason?: string }
   return msg.role === 'assistant' && msg.type !== 'judge_verdict' && !!msg.historyPosition && !msg.isStreaming
     && SILENT_STATUSES.has(msg.status) && !msg.confirmedUnfinished && getMessageStatusSuffix(msg) === null
     && !msg.content && !extra.summary && !msg.tool_calls?.length && !extra.attachments?.length && !msg.media?.length && !msg.spans?.length
-    && !msg.truncated && !extra.truncationReason && !extra.truncation_reason && !msg.providerFallbackNote && !Object.values(owners ?? {}).includes(msg.id)
+    && !msg.truncated && !extra.truncationReason && !extra.truncation_reason && !msg.providerFallbackNote && !ownerIds?.has(msg.id)
+}
+
+/** The message ids that own a tool call — the owner half of the store record. */
+function toolCallOwnerIds(owners: Record<string, string> | undefined): Set<string> {
+  return new Set(Object.values(owners ?? {}))
 }
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
@@ -57,6 +68,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
   const sessionId = useSessionStore((s) => s.activeSessionId)
   const delegationEvents = useChatDelegationEvents(sessionId)
   const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
+  const ownerIds = useMemo(() => toolCallOwnerIds(toolCallOwners), [toolCallOwners])
   const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
   // F17 (1): the reply_to ids that have a reply bubble in the thread —
@@ -102,7 +114,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
             )
           } else if (msg.role === 'system') {
             row = <VirtualSystemMessageRow message={msg} />
-          } else if (!isSilentHistoryRecord(msg, toolCallOwners)) {
+          } else if (!isSilentHistoryRecord(msg, ownerIds)) {
             row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
           }
           const trailing = delegationEventsOutsideRow(delegationEvents, msg)
@@ -171,6 +183,7 @@ function VirtualizedMessageListInner({
   const delegationEvents = useChatDelegationEvents(sessionId)
   const textAtToolCallStart = useChatStore((s) => s.textAtToolCallStart)
   const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
+  const ownerIds = useMemo(() => toolCallOwnerIds(toolCallOwners), [toolCallOwners])
   const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
   // F17 (1): the reply_to ids that have a reply bubble in the thread —
@@ -187,7 +200,12 @@ function VirtualizedMessageListInner({
   const virtualizer = useVirtualizer({
     count: historicalMessages.length,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: index => Math.max(1, drawnHistoryRows(historicalMessages[index], verboseChatEnabled)) * viewport.average,
+    // A positively silent saved record draws nothing (rowForMessage returns
+    // null), so before it is ever measured it reserves no canvas either:
+    // a full-row guess would be blank space the reader can land on (D8).
+    estimateSize: index => isSilentHistoryRecord(historicalMessages[index], ownerIds)
+      ? 0
+      : Math.max(1, drawnHistoryRows(historicalMessages[index], verboseChatEnabled)) * viewport.average,
     getItemKey,
     scrollMargin: viewport.prefix,
     overscan: 5,
@@ -248,7 +266,7 @@ function VirtualizedMessageListInner({
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
-    if (isSilentHistoryRecord(msg, toolCallOwners)) return null
+    if (isSilentHistoryRecord(msg, ownerIds)) return null
     return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
   }
 

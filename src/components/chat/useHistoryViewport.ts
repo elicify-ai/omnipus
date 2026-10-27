@@ -8,6 +8,7 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { HistoryRowMeasurements, historyPageSizing, historyPixelTrigger, recordHistoryGeometry, forgetHistoryGeometry } from '@/lib/chat-history-sizing'
 import { shouldRenderJudgeVerdictInThread, shouldRenderToolCall } from '@/lib/toolVisibility'
 import { protectHistoryPositions, releaseHistoryProtection } from '@/store/chat/history-merge'
+import { logDiagnostic } from '@/lib/telemetry'
 
 export function drawnHistoryRows(message: ChatMessage, verbose: boolean): number {
   if (message.type === 'judge_verdict') return Number(shouldRenderJudgeVerdictInThread(verbose) && !!message.verdict)
@@ -33,6 +34,17 @@ export function historyLayoutHeight(element: HTMLElement): number {
 type FillDirection = 'older' | 'newer'
 type FillOwner = { frame: number | null; finishLayout: (() => void) | null } // not-wire-format
 type Anchor = { position: string; offset: number; alternatives: { position: string; screenTop: number }[] } // not-wire-format
+
+/**
+ * A discarded history read must never become an unhandled rejection. The
+ * store's read shows its own action-specific error and Retry first and then
+ * re-throws a raw TypeError (an internal fault, not a transport error); the
+ * viewport discards these promises, so the fault is reported here instead of
+ * vanishing.
+ */
+function logViewportReadRejection(action: FillDirection | 'latest', error: unknown): void {
+  logDiagnostic('chatHistoryReadRejected', { action, error: error instanceof Error ? error.name : 'unknown' })
+}
 
 function bindReaderIntent(scroller: HTMLElement, enterReading: () => void, dragging: { current: boolean }): () => void {
   // Intent to read earlier content means something only when there is earlier
@@ -293,6 +305,12 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   // virtualizer adjustment). Such movement never ends follow-latest.
   const ownedTop = useRef<number | null>(null)
   const opening = useRef(true)
+  // Armed when the reader LEAVES follow-latest (the view mode changes from
+  // latest to historical) and cleared when follow-latest resumes. Only a
+  // reader who left follow-latest can come back to it by reaching the end of
+  // the loaded window: a reader who was placed into history reading without
+  // ever following the latest has no end to return to.
+  const leftFollowLatest = useRef(false)
   const anchorRefs = useMemo<AnchorRefs>(() => ({ anchor, settledTop, compensating, priorFocus }), [])
   // D5: one fill owner per view AND per direction. A single shared owner let
   // an in-flight older fill refuse the newer fill of a reader who jumped to the
@@ -304,7 +322,14 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const [prefix, setPrefix] = useState(0)
   const [widthGeneration, bumpWidthGeneration] = useState(0)
   const current = useRef({ sid, history, messages, verbose, anchorOffset })
-  useLayoutEffect(() => { current.current = { sid, history, messages, verbose, anchorOffset } })
+  useLayoutEffect(() => {
+    const previousMode = current.current.history.viewMode
+    if (previousMode !== history.viewMode) {
+      if (history.viewMode === 'latest') leftFollowLatest.current = false
+      else if (previousMode === 'latest') leftFollowLatest.current = true
+    }
+    current.current = { sid, history, messages, verbose, anchorOffset }
+  })
   const rows = useCallback(() => [...(scrollRef.current?.querySelectorAll<HTMLElement>('[data-history-anchor]') ?? [])], [scrollRef])
   const offset = useCallback((element: Element) => {
     const scroller = scrollRef.current!
@@ -336,6 +361,16 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     if (scroller) await runHistoryFill({ scroller, current, fills, heights, samples, opening, evaluateFill, measure }, direction, initial)
   }, [measure, scrollRef])
 
+  /**
+   * Every discarded fill goes through here: the promise is caught and the
+   * rejection is reported, so a read that fails after showing its error and
+   * Retry never leaves an unhandled rejection behind (D8: an action ends in a
+   * visible recoverable error, never a stranded loading state).
+   */
+  const fill = useCallback((direction: FillDirection, initial = false) => {
+    void requestFill(direction, initial).catch(error => logViewportReadRejection(direction, error))
+  }, [requestFill])
+
   const cancelFill = useCallback(() => {
     for (const direction of ['older', 'newer'] as const) {
       const owner = fills.current[direction]
@@ -351,10 +386,10 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
       const state = current.current
       if (!scroller || !state.sid || state.history.requests.refresh.status !== 'idle') return
       if (direction === 'older') {
-        if (historyPixelTrigger(scroller.scrollTop, scroller.clientHeight, !document.hidden)) void requestFill('older', opening.current)
-      } else if (state.history.hasLater && historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden)) void requestFill('newer')
+        if (historyPixelTrigger(scroller.scrollTop, scroller.clientHeight, !document.hidden)) fill('older', opening.current)
+      } else if (state.history.hasLater && historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden)) fill('newer')
     }
-  }, [requestFill, scrollRef])
+  }, [fill, scrollRef])
   const onScroll = useCallback(() => {
     const scroller = scrollRef.current
     const state = current.current
@@ -364,15 +399,31 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     // the application placed the viewport itself. Content growth leaves
     // scrollTop unchanged and fires no scroll, so it never ends following.
     const owned = ownedTop.current !== null && Math.abs(scroller.scrollTop - ownedTop.current) < 1
-    const awayFromEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 1
-    if (state.history.viewMode === 'latest' && !owned && awayFromEnd && (scroller.scrollTop < lastTop.current - 1 || dragging.current)) {
-      useChatStore.getState().enterHistoryReading(state.sid)
-    }
-    lastTop.current = scroller.scrollTop
+    // The same at-bottom threshold the viewport already uses: one pixel of
+    // slack, so a reader who reaches the real end counts as at the end. The
+    // overflow test is the one reader intent already uses (316e7f309): a
+    // conversation that does not overflow has no bottom to return from.
+    const distanceToEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+    const awayFromEnd = distanceToEnd > 1
+    const overflowing = scroller.scrollHeight > scroller.clientHeight
     // Our own correction's scroll event arrives a frame later, when a row
     // measurement may already have moved the content again: keep holding the
     // same anchor then. Any other position is genuine reader movement.
     const own = settledTop.current !== null && Math.abs(scroller.scrollTop - settledTop.current) < 0.5
+    if (state.history.viewMode === 'latest' && !owned && awayFromEnd && (scroller.scrollTop < lastTop.current - 1 || dragging.current)) {
+      useChatStore.getState().enterHistoryReading(state.sid)
+    } else if (state.history.viewMode === 'historical' && leftFollowLatest.current && overflowing && !awayFromEnd && !own && scroller.scrollTop > lastTop.current + 1) {
+      // The reader scrolled back to the END of the loaded window by hand.
+      // Re-enter follow-latest exactly as the Return-to-latest control does:
+      // a fresh latest READ. It LOADS the true latest page, so it never
+      // silently claims a window whose end is not the live end (a window with
+      // newer pages beyond it is corrected by that same read). Passive page,
+      // live and reconnect updates never reach this branch: they do not move
+      // the reader downward, and our own anchor correction is excluded.
+      const size = historyPageSizing(scroller.clientHeight, samples.current.average, 4)
+      void useChatStore.getState().returnToLatestHistory(state.sid, size).catch(error => logViewportReadRejection('latest', error))
+    }
+    lastTop.current = scroller.scrollTop
     if (own && state.history.viewMode === 'historical') correct()
     else {
       // Reader movement replaces the anchor. If no row is drawn at the new
@@ -383,12 +434,12 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     if (state.history.requests.refresh.status !== 'idle') return
     // D5 Dtop: distance from the viewport top to the earliest loaded content
     // boundary INCLUDING the prefix controls above the first row, i.e. scrollTop.
-    if (historyPixelTrigger(scroller.scrollTop, scroller.clientHeight, !document.hidden)) void requestFill('older', opening.current)
-    else if (historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden) && state.history.hasLater) void requestFill('newer')
-  }, [capture, correct, requestFill, scrollRef])
+    if (historyPixelTrigger(scroller.scrollTop, scroller.clientHeight, !document.hidden)) fill('older', opening.current)
+    else if (historyPixelTrigger(distanceToEnd, scroller.clientHeight, !document.hidden) && state.history.hasLater) fill('newer')
+  }, [capture, correct, fill, scrollRef])
   useLayoutEffect(() => {
     samples.current.reset(); heights.current.clear(); anchor.current = null; settledTop.current = null; ownedTop.current = null; opening.current = true
-    priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; setAverage(80); setPrefix(0)
+    priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; leftFollowLatest.current = false; setAverage(80); setPrefix(0)
     return () => {
       cancelFill(); samples.current.reset(); heights.current.clear(); anchor.current = null; priorFocus.current = null
       current.current = { sid: null, history: emptyHistoryState(), messages: [], verbose, anchorOffset: undefined }
@@ -403,11 +454,11 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   useLayoutEffect(() => {
     const visibility = () => {
       if (document.hidden) cancelFill()
-      else { measure(); if (opening.current && current.current.history.viewMode === 'latest' && samples.current.count > 0) void requestFill('older', true) }
+      else { measure(); if (opening.current && current.current.history.viewMode === 'latest' && samples.current.count > 0) fill('older', true) }
     }
     document.addEventListener('visibilitychange', visibility)
     return () => document.removeEventListener('visibilitychange', visibility)
-  }, [cancelFill, measure, requestFill])
+  }, [cancelFill, fill, measure])
   useLayoutEffect(() => {
     cancelFill()
     if (current.current.history.viewMode === 'latest') opening.current = true
@@ -422,7 +473,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
       capture()
       // A layoutless/plain fallback stays manually reachable rather than
       // fetching invisible content on a guessed height.
-      if (opening.current && samples.current.count > 0) void requestFill('older', true)
+      if (opening.current && samples.current.count > 0) fill('older', true)
     }
   })
   useLayoutEffect(() => {
