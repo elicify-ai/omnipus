@@ -174,6 +174,10 @@ func TestIssue1435R5_RetentionReleasesSessionMediaMappings(t *testing.T) {
 	deadPaths := make([]string, 0, 2*len(cycles))
 	for _, c := range cycles {
 		deadPaths = append(deadPaths, c.uploadPath, c.inlinePath)
+		assert.NotContains(t, entries, c.uploadRef,
+			"#1435 R5 item 1: repeated retention cycles must not re-serialize a dead upload mapping")
+		assert.NotContains(t, entries, c.inlineRef,
+			"#1435 R5 item 1: repeated retention cycles must not re-serialize a dead inline mapping")
 	}
 	assert.Equal(t, 0, issue1435R5DeadPathEntries(entries, deadPaths...),
 		"#1435 R5 item 1: repeated retention cycles must not accumulate dead mappings")
