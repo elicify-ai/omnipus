@@ -1,0 +1,27 @@
+{
+  "specName": "skills-folder-1458-requirements",
+  "timestamp": "2026-10-27",
+  "status": "requirements-complete",
+  "capturedAtCommit": "75d48f041",
+  "sourceIssue": "elicify-ai/omnipus#1458",
+  "coverageMap": {
+    "who may edit": "done",
+    "save check": "done",
+    "scripts": "done",
+    "installed vs project": "done",
+    "versions": "done",
+    "safety scan": "done",
+    "updates": "done",
+    "extras": "done"
+  },
+  "redTeamStatus": "skipped",
+  "previewUrl": null,
+  "feedbackRounds": [],
+  "driftLedger": [],
+  "baseline": {
+    "derivedFrom": "pre-analysis 2026-10-27 + skill probe + jarvis blockers report",
+    "capturedAtCommit": "75d48f041",
+    "claims": []
+  },
+  "qaLog": "see the Decisions Log in the spec (interview held in the chief session 2026-10-27)"
+}

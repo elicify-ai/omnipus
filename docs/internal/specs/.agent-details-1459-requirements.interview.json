@@ -1,0 +1,22 @@
+{
+  "specName": "agent-details-1459-requirements",
+  "timestamp": "2026-10-27",
+  "status": "requirements-complete",
+  "capturedAtCommit": "75d48f041",
+  "sourceIssue": "elicify-ai/omnipus#1459",
+  "coverageMap": {
+    "who may read": "done",
+    "model chain checks": "done",
+    "extras": "done"
+  },
+  "redTeamStatus": "skipped",
+  "previewUrl": null,
+  "feedbackRounds": [],
+  "driftLedger": [],
+  "baseline": {
+    "derivedFrom": "pre-analysis 2026-10-27 + skill probe + jarvis blockers report",
+    "capturedAtCommit": "75d48f041",
+    "claims": []
+  },
+  "qaLog": "see the Decisions Log in the spec (interview held in the chief session 2026-10-27)"
+}
