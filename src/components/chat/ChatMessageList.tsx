@@ -19,6 +19,9 @@ import { placementOf, useSkillChipData, VirtualUserMessageRow, VirtualAssistantM
 import { FloatingReturnToLatest, HistoryBoundary, HistoryReaderStatus } from './HistoryBoundary'
 import { drawnHistoryRows, historyLayoutHeight, useHistoryViewport } from './useHistoryViewport'
 import { getMessageStatusSuffix } from '@/lib/truncation'
+import { cn } from '@/lib/utils'
+import { Skeleton } from '@/components/ui/skeleton'
+import { ThreadRevealContext, useOpenReveal } from './useOpenReveal'
 
 function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
   // The assistant row owns both inline and trailing events using its live-call
@@ -57,8 +60,34 @@ function toolCallOwnerIds(owners: Record<string, string> | undefined): Set<strin
   return new Set(Object.values(owners ?? {}))
 }
 
+/**
+ * The opening cover and the chat's one "Loading messages…" status. While an
+ * opened chat is not ready the conversation is hidden (still laid out, so rows
+ * measure) and this cover shows instead; without a cover it still announces a
+ * chat that has no loaded page and nothing to show yet.
+ */
+function useOpenCover(openFailed: boolean) {
+  const sid = useSessionStore((s) => s.activeSessionId)
+  const hidden = useOpenReveal(sid, openFailed)
+  const unloaded = useChatStore((s) => !!sid && !s.history.historyLoaded && s.messages.length === 0
+    && s.history.serverState?.status !== 'unavailable' && !s.history.requests.latest.error)
+  return { covered: hidden, status: hidden || (unloaded && !openFailed) }
+}
+
+function OpenCover() {
+  return (
+    <div data-testid="chat-open-cover" className="absolute inset-0 pointer-events-none">
+      <div className="max-w-4xl mx-auto w-full p-[var(--space-3)]">
+        <Skeleton className="h-8 w-full" />
+        <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Loading messages…</p>
+      </div>
+    </div>
+  )
+}
+
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
-function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMessage[]; liteMode: boolean; agentName: string }) {
+function PlainMessageList({ messages, liteMode, agentName, openFailed }: { messages: ChatMessage[]; liteMode: boolean; agentName: string; openFailed: boolean }) {
+  const { covered, status: openStatus } = useOpenCover(openFailed)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const viewport = useHistoryViewport(scrollContainerRef, messages)
   const { skills, commandLabels } = useSkillChipData()
@@ -77,12 +106,14 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
   const replyPairKey = messages.map((m) => (m.replyToMessageId ? '1' : '0')).join('')
   const pairedReplyToIds = useMemo(() => collectPairedReplyToIds(messages), [replyPairKey])
   return (
+    <ThreadRevealContext.Provider value={!covered}>
+    <div className="relative flex flex-col flex-1 min-h-0">
     <div
       ref={scrollContainerRef}
       onScroll={viewport.onScroll}
       role="region" aria-label="Conversation history" tabIndex={-1} aria-busy={viewport.busy || undefined}
       data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] pt-[var(--space-3)] pb-[var(--space-2)]"
+      className={cn('flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] pt-[var(--space-3)] pb-[var(--space-2)]', covered ? 'invisible' : '')}
     >
       <div className="max-w-4xl mx-auto w-full">
         <HistoryReaderStatus />
@@ -131,6 +162,9 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
         <FloatingReturnToLatest />
       </div>
     </div>
+    {openStatus && <OpenCover />}
+    </div>
+    </ThreadRevealContext.Provider>
   )
 }
 
@@ -144,10 +178,13 @@ export function VirtualizedMessageList({
   messages,
   liteMode,
   agentName,
+  openFailed = false,
 }: {
   messages: ChatMessage[]
   liteMode: boolean
   agentName: string
+  /** The opening read failed outside the store (REST fallback): reveal, never cover forever. */
+  openFailed?: boolean
 }) {
   // Feature-detect ResizeObserver at render time (not module load) so test
   // environments that stub it in beforeEach are detected correctly.
@@ -158,20 +195,23 @@ export function VirtualizedMessageList({
       _resizeObserverWarnEmitted = true
       console.warn('[chat] ResizeObserver unavailable — rendering full message list without virtualization')
     }
-    return <PlainMessageList messages={messages} liteMode={liteMode} agentName={agentName} />
+    return <PlainMessageList messages={messages} liteMode={liteMode} agentName={agentName} openFailed={openFailed} />
   }
-  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} agentName={agentName} />
+  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} agentName={agentName} openFailed={openFailed} />
 }
 
 function VirtualizedMessageListInner({
   messages,
   liteMode,
   agentName,
+  openFailed,
 }: {
   messages: ChatMessage[]
   liteMode: boolean
   agentName: string
+  openFailed: boolean
 }) {
+  const { covered, status: openStatus } = useOpenCover(openFailed)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -294,6 +334,8 @@ function VirtualizedMessageListInner({
   // this, the tail of a finalized/diagram message sits below the fold on slower
   // devices (iPad). It re-pins only when the engine still reports isAtBottom.
   return (
+    <ThreadRevealContext.Provider value={!covered}>
+    <div className="relative flex flex-col flex-1 min-h-0">
     <ThreadPrimitive.Viewport
       ref={scrollContainerRef}
       autoScroll={!viewport.historical}
@@ -303,7 +345,7 @@ function VirtualizedMessageListInner({
       onScroll={viewport.onScroll}
       role="region" aria-label="Conversation history" tabIndex={-1} aria-busy={viewport.busy || undefined}
       data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] pt-[var(--space-3)] pb-[var(--space-2)]"
+      className={cn('flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] pt-[var(--space-3)] pb-[var(--space-2)]', covered ? 'invisible' : '')}
       style={{ position: 'relative' }}
     >
       <VirtualizerAutoFollow scrollRef={scrollContainerRef} contentRef={contentRef} />
@@ -376,5 +418,8 @@ function VirtualizedMessageListInner({
         <FloatingReturnToLatest />
       </div>
     </ThreadPrimitive.Viewport>
+    {openStatus && <OpenCover />}
+    </div>
+    </ThreadRevealContext.Provider>
   )
 }
