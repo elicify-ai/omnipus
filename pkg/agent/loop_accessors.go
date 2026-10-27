@@ -418,6 +418,12 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	// above). The release reads the CURRENT media store at call time — a
 	// store replaced by restartServices must not leave the hook pointing at
 	// the old one.
+	//
+	// Issue #1435 round 6: this republishes on EVERY media-store
+	// replacement, not once at boot — a configuration reload replaces the
+	// store and calls SetMediaStore again, and that can overlap a
+	// retention sweep. The store's publication is atomic, so the overlap
+	// is safe; a replacement takes effect for every later sweep.
 	if shared := al.GetSessionStore(); shared != nil {
 		shared.SetMediaReleaseFn(al.releaseSessionMedia)
 	}

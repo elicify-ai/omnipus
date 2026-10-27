@@ -72,11 +72,21 @@ type sessionMediaReleaseFn func(sessionID string) error
 // hook RetentionSweep calls for every session THIS store removes. It is a
 // per-store field, not a package-level variable: several stores can live in
 // one process (tests, embedded hosts), and a global hook would release one
-// store's scopes on behalf of another. Intended to be called once, at boot,
-// before any concurrent sweep can run — mirroring this codebase's existing
-// SetXxx hook-injection convention.
+// store's scopes on behalf of another.
+//
+// It MAY be called while a sweep is running: the production caller
+// republishes it on every media-store replacement (a configuration reload
+// calls AgentLoop.SetMediaStore again), and a reload can overlap a
+// scheduled or manual sweep. Publication and retrieval are therefore
+// synchronized through the atomic pointer, and a sweep takes ONE snapshot
+// of the hook per release pass — it never observes a half-published
+// callback, and a replacement takes effect for every LATER sweep.
 func (us *UnifiedStore) SetMediaReleaseFn(fn sessionMediaReleaseFn) {
-	us.mediaReleaseFn = fn
+	if fn == nil {
+		us.mediaReleaseFn.Store(nil)
+		return
+	}
+	us.mediaReleaseFn.Store(&fn)
 }
 
 // SetGoalRetentionSweepFn installs (or, passed nil, uninstalls) the goal
@@ -319,9 +329,16 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// into the sweep's return value — a failed release is never dropped
 	// silently, and the session files are already gone, so the removed
 	// count is unaffected.
-	if us.mediaReleaseFn != nil && len(removedSessions) > 0 {
+	//
+	// Issue #1435 round 6 (R5-SF-1 / R5-ARCH-1 / R5-T1): the hook is read
+	// ONCE, under the atomic publication, and that single snapshot is used
+	// for the whole release pass. A concurrent republication (a
+	// configuration reload replacing the media store) therefore cannot race
+	// this read, and a replacement takes effect for every LATER sweep.
+	if release := us.mediaReleaseFn.Load(); release != nil && len(removedSessions) > 0 {
+		releaseFn := *release
 		for _, sessID := range removedSessions {
-			if releaseErr := us.mediaReleaseFn(sessID); releaseErr != nil {
+			if releaseErr := releaseFn(sessID); releaseErr != nil {
 				slog.Error("session: retention_sweep: media release failed",
 					"session_id", sessID, "error", releaseErr)
 				expiryErr = errors.Join(expiryErr, fmt.Errorf("session: retention_sweep: media release for %s: %w", sessID, releaseErr))
