@@ -46,20 +46,37 @@ function logViewportReadRejection(action: FillDirection | 'latest', error: unkno
   logDiagnostic('chatHistoryReadRejected', { action, error: error instanceof Error ? error.name : 'unknown' })
 }
 
-function bindReaderIntent(scroller: HTMLElement, enterReading: () => void, dragging: { current: boolean }): () => void {
+/**
+ * Reader intent from real input. `downward` is armed by the reader's own
+ * downward input (wheel, ArrowDown/PageDown/End/Space, a touch swipe up) and
+ * disarmed by upward input: only an armed reader may resume follow-latest by
+ * reaching the end of the loaded window. A scroll with no reader input behind
+ * it (the list's own placement, a measurement re-anchor, a restore) never
+ * counts as the reader returning to the bottom.
+ */
+function bindReaderIntent(scroller: HTMLElement, enterReading: () => void, dragging: { current: boolean }, downward: { current: boolean }): () => void {
   // Intent to read earlier content means something only when there is earlier
   // content to scroll to: a conversation that fits never leaves the live end,
   // so it must not show Return to latest (final-gate architect item A).
   const enter = () => { if (scroller.scrollHeight > scroller.clientHeight) enterReading() }
+  const up = () => { downward.current = false; enter() }
   let touchY: number | null = null
-  const wheel = (event: WheelEvent) => { if (event.deltaY < 0 && !event.ctrlKey) enter() }
+  const wheel = (event: WheelEvent) => {
+    if (event.ctrlKey) return
+    if (event.deltaY < 0) up()
+    else if (event.deltaY > 0) downward.current = true
+  }
   const key = (event: KeyboardEvent) => {
-    if (!event.defaultPrevented && ['ArrowUp', 'PageUp', 'Home'].includes(event.key) && !(event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"], [role="combobox"]'))) enter()
+    if (event.defaultPrevented || (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"], [role="combobox"]'))) return
+    if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) up()
+    else if (event.key === ' ' && event.shiftKey) downward.current = false
+    else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) downward.current = true
   }
   const touchStart = (event: TouchEvent) => { touchY = event.touches.length === 1 ? event.touches[0].clientY : null }
   const touchMove = (event: TouchEvent) => {
     const y = event.touches.length === 1 ? event.touches[0].clientY : null
-    if (y !== null && touchY !== null && y > touchY) enter()
+    if (y !== null && touchY !== null && y > touchY) up()
+    else if (y !== null && touchY !== null && y < touchY) downward.current = true
     touchY = y
   }
   const pointerDown = (event: PointerEvent) => { dragging.current = event.target === scroller }
@@ -298,6 +315,8 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const priorWidth = useRef(0)
   const lastTop = useRef(0)
   const dragging = useRef(false)
+  // Armed by the reader's own downward input; see bindReaderIntent.
+  const downward = useRef(false)
   const compensating = useRef(false)
   // scrollTop the anchor bookkeeping last accounted for (capture or correction).
   const settledTop = useRef<number | null>(null)
@@ -412,8 +431,13 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     const own = settledTop.current !== null && Math.abs(scroller.scrollTop - settledTop.current) < 0.5
     if (state.history.viewMode === 'latest' && !owned && awayFromEnd && (scroller.scrollTop < lastTop.current - 1 || dragging.current)) {
       useChatStore.getState().enterHistoryReading(state.sid)
-    } else if (state.history.viewMode === 'historical' && leftFollowLatest.current && overflowing && !awayFromEnd && !own && scroller.scrollTop > lastTop.current + 1) {
-      // The reader scrolled back to the END of the loaded window by hand.
+    } else if (state.history.viewMode === 'historical' && leftFollowLatest.current && overflowing && !awayFromEnd && !own && !owned
+      && (downward.current || dragging.current) && scroller.scrollTop > lastTop.current + 1) {
+      // The reader scrolled back to the END of the loaded window by hand --
+      // with their own input (downward wheel/keys/swipe or a scrollbar drag).
+      // An application-owned or input-less scroll that lands at the end is
+      // not the reader returning, and never triggers this read.
+      downward.current = false
       // Re-enter follow-latest exactly as the Return-to-latest control does:
       // a fresh latest READ. It LOADS the true latest page, so it never
       // silently claims a window whose end is not the live end (a window with
@@ -439,7 +463,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   }, [capture, correct, fill, scrollRef])
   useLayoutEffect(() => {
     samples.current.reset(); heights.current.clear(); anchor.current = null; settledTop.current = null; ownedTop.current = null; opening.current = true
-    priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; leftFollowLatest.current = false; setAverage(80); setPrefix(0)
+    priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; leftFollowLatest.current = false; downward.current = false; setAverage(80); setPrefix(0)
     return () => {
       cancelFill(); samples.current.reset(); heights.current.clear(); anchor.current = null; priorFocus.current = null
       current.current = { sid: null, history: emptyHistoryState(), messages: [], verbose, anchorOffset: undefined }
@@ -449,7 +473,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   useLayoutEffect(() => {
     const scroller = scrollRef.current
     if (!scroller || !sid) return
-    return bindReaderIntent(scroller, () => useChatStore.getState().enterHistoryReading(sid), dragging)
+    return bindReaderIntent(scroller, () => useChatStore.getState().enterHistoryReading(sid), dragging, downward)
   }, [sid, scrollRef])
   useLayoutEffect(() => {
     const visibility = () => {
