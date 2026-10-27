@@ -3,7 +3,7 @@ import { SessionHistoryResponse } from '../../src/lib/api/generated/schemas';
 import { WsFrame } from '../../src/lib/api/generated/ws-schemas';
 import type { WebSocketRoute } from '@playwright/test';
 import { chatInput, waitForConnected } from './fixtures/selectors';
-import { test, HistoryHarness, observeTraffic, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
+import { test, seededHistoryTest, HistoryHarness, observeTraffic, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
 import { browseBack, dropSocket, expectedReaderOrdinals } from './fixtures/chat-history-paging/actions';
 import { ageRolledHistoryPartitions, sweepChatHistoryFixture } from './fixtures/chat-history';
 import { readerFixtureDays } from './fixtures/chat-history-paging/day-fixtures';
@@ -109,8 +109,7 @@ test('T24 B04:transport loss after real replay but before complete retains the p
   } finally { armed = false; await page.context().setOffline(false); }
 });
 
-test('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft and directly refreshes its closed interval', async ({ history, page }) => {
-  await history.seed({ label: 'snapshot', count: 3400 });
+seededHistoryTest({ label: 'snapshot', count: 3400 })('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft and directly refreshes its closed interval', async ({ history, page }) => {
   await history.authenticate();
   await history.open();
   await browseBack(history, 300);
@@ -144,8 +143,7 @@ test('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft a
   await history.record('historical-boot-snapshot', { anchor: old });
 });
 
-test('T24 B47 B10: failed range refresh keeps cached rows/out-of-date/anchor, pauses prefetch and Retry repeats the SAME range', async ({ history, page }) => {
-  await history.seed({ label: 'refresh', count: 3400 });
+seededHistoryTest({ label: 'refresh', count: 3400 })('T24 B47 B10: failed range refresh keeps cached rows/out-of-date/anchor, pauses prefetch and Retry repeats the SAME range', async ({ history, page }) => {
   await history.authenticate();
   await history.open();
   await browseBack(history, 300);
@@ -334,8 +332,7 @@ test('T24 B47:500 held tool groups can require MORE than5 bounded byte-limited r
 for (const kind of ['approval', 'question'] as const) {
   test.describe(`T24 genuine pending ${kind}`, () => {
     test.use({ historyControlKind: kind });
-    test(`T24 B05 B06 B26: pending ${kind} survives old-reader reconnect and a fresh viewer gets the real current snapshot`, async ({ history, page, browser }, info) => {
-      await history.seed({ label: `pending-${kind}`, count: 3400 });
+    seededHistoryTest({ label: `pending-${kind}`, count: 3400 })(`T24 B05 B06 B26: pending ${kind} survives old-reader reconnect and a fresh viewer gets the real current snapshot`, async ({ history, page, browser }, info) => {
       await history.authenticate();
       await history.open();
       await browseBack(history, 300);
@@ -368,8 +365,7 @@ for (const kind of ['approval', 'question'] as const) {
 
 test.describe('T24 actual journal retention overflow', () => {
   test.use({ historyControlKind: 'stream' });
-  test('T24 B26: retention_exceeded (same boot) refreshes the held interval without teleporting to the newly published tail', async ({ history, page, browser }) => {
-    await history.seed({ label: 'journal-reader', count: 3400 });
+  seededHistoryTest({ label: 'journal-reader', count: 3400 })('T24 B26: retention_exceeded (same boot) refreshes the held interval without teleporting to the newly published tail', async ({ history, page, browser }) => {
     await history.authenticate();
     await history.open();
     await browseBack(history, 300);
