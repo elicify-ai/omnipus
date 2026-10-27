@@ -100,9 +100,17 @@ func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, aud
 		report(err)
 		return nil
 	}
+	// One projection, occurrence-scoped on both surfaces: a cancellation record
+	// is excluded from the model-facing view only when it binds to an
+	// occurrence — a declared call in a valid group. A recognised record that
+	// binds to no occurrence authorises no removal, no observation and no
+	// re-indexing, so it stays, exactly as it stays in the assembled view.
+	omitted, _ := restartCancellations(len(history), func(i int) providers.Message {
+		return history[i]
+	})
 	cleaned := make([]providers.Message, 0, len(history))
-	for _, m := range history {
-		if restartCancellationID(m) == "" {
+	for i, m := range history {
+		if !omitted[i] {
 			cleaned = append(cleaned, m)
 		}
 	}
