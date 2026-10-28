@@ -15,7 +15,8 @@ import { useSessionStore } from '@/store/session'
 import { cursorFromTerminalFrame, fenceCursorAcrossBoots, isPendingTailMessage } from './cursor'
 import { findFirstSendMessage } from './first-send'
 import { abortHistoryReads, registerHistoryRelease } from './history'
-import { applyHistoryPageToBucket, HistoryPageProtocolError, releaseHistorySpanFacts } from './history-merge'
+import { applyHistoryPageToBucket, bindHistoryEntries, HistoryPageProtocolError, releaseHistorySpanFacts } from './history-merge'
+import { compatibleSource, joinParts, partTexts, remapStartSnapshot, remapToolAnchors } from './history-parts'
 import { ApiSchemaError } from '@/lib/api/http'
 import { logDiagnostic } from '@/lib/telemetry'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
@@ -151,7 +152,37 @@ function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryP
   const messagesById = { ...bucket.messagesById }
   const settledTurns = new Set<string>()
   let refreshed = false
+  let textAtToolCallStart = bucket.textAtToolCallStart
   const entries = page.entries.map(entry => {
+    // #1452 D1 S2/S6: a combined row settles per part. Only the part this
+    // saved record binds to takes its saved text; the entry keeps its source
+    // id so the page commit binds it to that same part.
+    const partOwners = Object.values(bucket.messagesById).filter(row => row.historyParts?.some(part => part.sourceId === entry.id) && compatibleSource(row, entry))
+    if (partOwners.length === 1) {
+      const current = partOwners[0]
+      const captured = baseline[current.id]
+      if (entry.role !== 'assistant' || entry.status !== 'done' || current.role !== 'assistant' || !captured) return entry
+      if (current.content !== captured.content || (!current.isStreaming && current.status !== 'streaming')) return entry
+      if (current.status === 'error' || current.status === 'interrupted') return entry
+      const working = messagesById[current.id]
+      const parts = working.historyParts
+      const texts = parts && partTexts(working)
+      const index = parts ? parts.findIndex(part => part.sourceId === entry.id) : -1
+      if (parts && texts && (!parts[index].position || parts[index].position === entry.historyPosition)) {
+        const shown = texts.map((text, i) => i === index ? entry.content ?? '' : text)
+        const joined = joinParts(parts.map((part, i) => i === index ? { ...part, text: 'saved' as const } : part), shown)
+        messagesById[current.id] = remapToolAnchors({ ...working, content: joined.content, historyParts: joined.historyParts, status: entry.status, isStreaming: false, confirmedUnfinished: undefined }, parts, texts, shown)
+        // S10: a live call still unbaked keeps its anchor in the settled text.
+        const starts = { ...textAtToolCallStart }
+        for (const callId of bucket.toolCallOrder) {
+          if (bucket.toolCallOwnerMessageId?.[callId] === current.id && starts[callId] !== undefined) starts[callId] = remapStartSnapshot(starts[callId], joined.content, parts, texts, shown)
+        }
+        textAtToolCallStart = starts
+        if (current.turnId) settledTurns.add(current.turnId)
+        refreshed = true
+        return entry
+      }
+    }
     // Live first-send narration can retain its generated display ID while the
     // token resolver registers the real message_id in mergedReplayIds. Match
     // only that actual alias, with the same turn/producer, never text or turn alone.
@@ -165,6 +196,8 @@ function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryP
       : []
     const current = bucket.messagesById[entry.id] ?? (aliases.length === 1 ? aliases[0] : undefined)
     const captured = current && baseline[current.id]
+    // #1452 D1 S1a: an occupied display id of another turn/producer never settles from this record.
+    if (current && !compatibleSource(current, entry)) return entry
     if (entry.role !== 'assistant' || entry.status !== 'done' || current?.role !== 'assistant' || !captured) return entry
     if (current.content !== captured.content || (!current.isStreaming && current.status !== 'streaming')) return entry
     if (current.status === 'error' || current.status === 'interrupted') return entry
@@ -180,7 +213,7 @@ function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryP
   const stillOpen = Object.values(messagesById).some(row => row.role === 'assistant' && (row.isStreaming || row.status === 'streaming'))
   return {
     bucket: {
-      ...bucket, messagesById, isStreaming: stillOpen ? bucket.isStreaming : false,
+      ...bucket, messagesById, textAtToolCallStart, isStreaming: stillOpen ? bucket.isStreaming : false,
       // A changed boot retains the personally witnessed-cut check. A normal
       // completed snapshot must not relabel its completed answer as unfinished.
       wipedOpenTurnIds: bootChanged ? bucket.wipedOpenTurnIds : bucket.wipedOpenTurnIds?.filter(id => !settledTurns.has(id)),
@@ -351,15 +384,17 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
           const needed = new Set(retainedPending(b).map(row => row.id))
           const liveOrder = (b.historyLiveOrder ?? []).filter(id => !stage.baseline[id] || needed.has(id))
           const liveIds = new Set(liveOrder)
-          const incoming = new Map(completedPage.entries.map(row => [row.id, row]))
+          // #1452 D1 S6: saved records bind to their display rows by part.
+          const bound = bindHistoryEntries(b, completedPage.entries, baseline)
+          const incoming = new Map(bound.map(row => [row.id, row]))
           const rows = [...new Set([...b.messageOrder, ...liveOrder])].flatMap(id => {
             const current = b.messagesById[id]
             const fresh = incoming.get(id)
-            return current ? [fresh && (liveIds.has(id) || (stage.publishedRows[id] && current.historyPosition === fresh.historyPosition)) ? mergeHistoryEntry(fresh, current, baseline[id]) : current] : []
+            return current ? [fresh && (liveIds.has(id) || (stage.publishedRows[id] && current.historyPosition === fresh.historyPosition)) ? fresh : current] : []
           })
           const patch = historyRowsPatch(b, rows, b.history.readerPositions)
           const capacity = Math.max(0, 100 - liveOrder.length)
-          const tail = completedPage.entries.filter(row => !liveIds.has(row.id))
+          const tail = completedPage.entries.filter((_, i) => !liveIds.has(bound[i].id))
           return { ...patch, ...completion, messageOrder: b.messageOrder, historyLiveOrder: liveOrder, historyNeedsSnapshot: false,
             history: { ...patch.history!, tailEntries: capacity ? tail.slice(-capacity) : [], pageMetadata: historyMetadata(completedPage), historyLoaded: true } }
         }

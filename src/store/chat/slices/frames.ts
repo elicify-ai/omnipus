@@ -39,6 +39,7 @@ import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
 import { appendErrorNotice, handleJudgeConclusionErrorFrame } from './error-notice-frames'
+import { recordCombinedPart, singlePart } from '../history-parts'
 
 
 
@@ -539,6 +540,9 @@ function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: T
   const m = draft.messagesById[bubbleId]
   if (frame.replace) {
     m.content = frame.content
+    // A catch-up replace rewrites the whole row; its recorded part offsets
+    // no longer describe the text, so the row merges as a whole again.
+    m.historyParts = undefined
   } else {
     // Opus review round 3 item N3 (MEDIUM-LOW): the #823 rewrite of the
     // token case dropped the paragraph-break insertion `pendingTextBoundary`
@@ -699,6 +703,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
         applyTokenContentTo(draft, messageId, frame)
         return
       }
+      recordCombinedPart(m, messageId, !frame.replace && m.pendingTextBoundary && m.content ? '\n\n' : '') // #1452 D1 S7/S2a: the joiner the append inserts
       m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
       draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
       applyTokenContentTo(draft, turnBubbleId, frame)
@@ -790,7 +795,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
     ...(frame.reply_to_message_id ? { replyToMessageId: frame.reply_to_message_id } : {}),
     ...(frame.reply_to_participant ? { replyToParticipant: frame.reply_to_participant } : {}),
     ...(frame.room_ref ? { roomRef: frame.room_ref } : {}), // K33 / FR-202
-    ...(idCollision ? { mergedReplayIds: [messageId] } : {}),
+    ...(idCollision ? { mergedReplayIds: [messageId], historyParts: singlePart(messageId) } : {}), // #1452 D1 S7: local id shows message_id
   }
   if (idCollision) {
     draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }

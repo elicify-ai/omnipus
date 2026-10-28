@@ -110,6 +110,11 @@ function reportCollapsedDuplicateIds(repeats: Map<string, number>): void {
   }
 }
 
+/** #1452 D1 S1a: a saved record whose id an incompatible display row already holds. */
+export function reportDuplicateMessageId(messageId: string): void {
+  reportCollapsedDuplicateIds(new Map([[messageId, 2]]))
+}
+
 /** Test seam: forget which duplicate ids were already reported. */
 export function resetDuplicateIdReports(): void {
   reportedDuplicateIds.clear()
