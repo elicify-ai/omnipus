@@ -731,6 +731,13 @@ func (us *UnifiedStore) NewScheduledSession(ownerAgentID string) (*UnifiedMeta, 
 // genuinely-absent case creates: errors.Is(err, fs.ErrNotExist). A corrupt
 // meta.json is an error the caller sees.
 func (us *UnifiedStore) GetOrCreateMainSession(workspaceID, agentID string) (*UnifiedMeta, error) {
+	return us.getOrCreateMainSession(workspaceID, agentID, "")
+}
+
+// getOrCreateMainSession is the shared body of GetOrCreateMainSession and
+// GetOrCreateMainSessionOwned (unified_main_owner.go). owner is stamped only
+// when the main is created; an existing main is returned unchanged.
+func (us *UnifiedStore) getOrCreateMainSession(workspaceID, agentID, owner string) (*UnifiedMeta, error) {
 	sessionID, err := MainSessionID(workspaceID, agentID)
 	if err != nil {
 		return nil, err
@@ -745,7 +752,7 @@ func (us *UnifiedStore) GetOrCreateMainSession(workspaceID, agentID string) (*Un
 				"main session %q: refusing to reuse or replace an unreadable stored identity: %w",
 				sessionID, readErr)
 		}
-		return us.createMainSessionLocked(sessionID, workspaceID, agentID)
+		return us.createMainSessionLocked(sessionID, workspaceID, agentID, owner)
 	}
 	if meta.Type != SessionTypeMain || meta.AgentID != agentID || meta.WorkspaceID != workspaceID {
 		return nil, fmt.Errorf(
@@ -756,8 +763,9 @@ func (us *UnifiedStore) GetOrCreateMainSession(workspaceID, agentID string) (*Un
 }
 
 // createMainSessionLocked materialises the main session for an already-validated
-// pair under its computed id. Caller must hold sessionID's shard.
-func (us *UnifiedStore) createMainSessionLocked(sessionID, workspaceID, agentID string) (*UnifiedMeta, error) {
+// pair under its computed id, with owner (possibly empty) stamped in the same
+// single identity write. Caller must hold sessionID's shard.
+func (us *UnifiedStore) createMainSessionLocked(sessionID, workspaceID, agentID, owner string) (*UnifiedMeta, error) {
 	now := time.Now().UTC()
 	meta := &UnifiedMeta{
 		SessionMeta: SessionMeta{
@@ -767,6 +775,7 @@ func (us *UnifiedStore) createMainSessionLocked(sessionID, workspaceID, agentID 
 			Status:      StatusActive,
 			Channel:     "main",
 			WorkspaceID: workspaceID,
+			Owner:       owner,
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		},
