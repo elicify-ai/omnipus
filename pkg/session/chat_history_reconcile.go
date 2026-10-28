@@ -329,6 +329,19 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 	if err = historyValidateAnchor(ctx, dir, cp, expired); err != nil {
 		return result, historyUnavailable("index_inconsistent", err)
 	}
+	// Derived-index damage is checked BEFORE the bounded collection, so a
+	// damaged index is refused as index_inconsistent whatever the lag; only a
+	// pure catchup_limit may trigger the demand self-heal. This first pass
+	// never trims: a torn or uncommitted unpublished tail is still discarded
+	// below, only once the canonical 64-fact bound has been enforced.
+	t, err := historyOpenTree(ctx, dir, cp, true)
+	if err != nil {
+		return result, historyUnavailable("index_inconsistent", err)
+	}
+	defer t.file.Close()
+	if _, _, err = historyValidateIndexTail(t, cp, false); err != nil {
+		return result, historyUnavailable("index_inconsistent", err)
+	}
 	items, result, err := historyCollectMutations(ctx, dir, cp, streams, dispEnd, expired)
 	if err != nil {
 		if errors.Is(err, ErrChatHistoryUnavailable) || ctx.Err() != nil {
@@ -336,12 +349,7 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 		}
 		return result, historyUnavailable("index_inconsistent", err)
 	}
-	t, err := historyOpenTree(ctx, dir, cp, true)
-	if err != nil {
-		return result, historyUnavailable("index_inconsistent", err)
-	}
-	defer t.file.Close()
-	saved, hasSaved, err := historyValidateIndexTail(t, cp)
+	saved, hasSaved, err := historyValidateIndexTail(t, cp, true)
 	if err != nil {
 		return result, historyUnavailable("index_inconsistent", err)
 	}
