@@ -5,7 +5,9 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -983,16 +985,28 @@ func (hcm *wsHandlerHandleChatMessage) persistUserMessage() bool {
 // unauthenticated connection (dev-mode bypass) are not persons and adopt
 // nothing. The adoption itself does not bump the main's recency.
 //
+// AdoptMainSessionOwner returns at once, without locks or disk I/O, for a
+// cached non-main or already-owned session, so this costs nothing on the
+// ordinary send path. A successful adoption is logged at Info.
+//
 // A failed adoption does not fail the message: the message is already saved
-// and the owner is attribution, not access. It is logged at error level with
-// the cause, and the next message from a signed-in person retries it.
+// and the owner is attribution, not access. A session that vanished between
+// the append and this call is logged at Debug only; any other failure is
+// logged at error level with the cause, and the next message from a signed-in
+// person retries it.
 func (hcm *wsHandlerHandleChatMessage) adoptMainOwnerOnSend() {
 	actor := hcm.wc.userID
 	if actor == "" || actor == config.MachinePrincipalUsername {
 		return
 	}
-	if _, err := hcm.store.AdoptMainSessionOwner(hcm.sessionID, actor); err != nil {
+	adopted, err := hcm.store.AdoptMainSessionOwner(hcm.sessionID, actor)
+	switch {
+	case err != nil && errors.Is(err, fs.ErrNotExist):
+		logsafeDebug("ws: main chat owner not recorded: the session no longer exists", "session_id", hcm.sessionID, "error", err)
+	case err != nil:
 		logsafeError("ws: could not record the owner of the main chat", "session_id", hcm.sessionID, "error", err)
+	case adopted:
+		logsafeInfo("ws: main chat owner recorded", "session_id", hcm.sessionID, "owner", actor)
 	}
 }
 

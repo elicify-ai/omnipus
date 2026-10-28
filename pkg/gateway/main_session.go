@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -313,11 +314,30 @@ func (a *restAPI) ensureMainSession(wsID, agentID, actor string) (string, error)
 	if store == nil {
 		return "", errNoSessionStore
 	}
-	owner := a.agentLoop.GetConfig().MainOwnerFor(actor)
+	owner := systemMainOwner(a.agentLoop.GetConfig(), actor)
 	if _, err := store.GetOrCreateMainSessionOwned(wsID, agentID, owner); err != nil {
 		return "", err
 	}
 	return sessionID, nil
+}
+
+// noOperatorLogOnce keeps the "no operator configured" note to one Debug line
+// per process: the gateway resolves a main owner on every open, boot sweep
+// and scheduled run, and repeating the same fact on each would be noise.
+var noOperatorLogOnce sync.Once
+
+// systemMainOwner is config.Config.MainOwnerFor for the gateway's main
+// creation paths. When it resolves to no owner (no person acting and no
+// configured account), a main created now stays ownerless; that is noted once
+// at Debug level.
+func systemMainOwner(cfg *config.Config, actor string) string {
+	owner := cfg.MainOwnerFor(actor)
+	if owner == "" {
+		noOperatorLogOnce.Do(func() {
+			slog.Debug("main session owner: no person is acting and no account is configured; mains created now stay ownerless")
+		})
+	}
+	return owner
 }
 
 // mainSessionAddress resolves the read-only member main projection without

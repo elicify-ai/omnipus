@@ -163,7 +163,7 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 	}
 	// No person creates this main: if it is new, it is owned by the operator
 	// (the first configured account; empty when none is configured).
-	meta, err := store.GetOrCreateMainSessionOwned(a.Receiver.WorkspaceID, a.Receiver.AgentID, al.GetConfig().OperatorUsername())
+	meta, err := store.GetOrCreateMainSessionOwned(a.Receiver.WorkspaceID, a.Receiver.AgentID, al.systemMainOwner())
 	if err != nil {
 		return "", "", false, storageRefusal("the receiver's conversation could not be prepared", err, ErrPeerRefused)
 	}

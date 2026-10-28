@@ -56,6 +56,16 @@ func (us *UnifiedStore) GetOrCreateMainSessionOwned(workspaceID, agentID, owner 
 // stats.json is not touched. The cache is updated only after the write
 // succeeded, so a failed write never publishes an unpersisted owner.
 //
+// Fast path: when this store's cache already holds the session and it is not
+// a main, or its cached owner is non-empty, the call returns (false, nil)
+// with no lock and no disk I/O — the common case of a saved message in an
+// ordinary or already-owned chat. A cached EMPTY owner may be stale (another
+// store may have adopted since), so it falls through to the locked path,
+// which stays authoritative. When that locked re-read finds an owner already
+// on disk that differs from the cached one, the cached owner is refreshed
+// from disk before returning false, so a later identity write through this
+// store cannot erase the winner's owner.
+//
 // On Windows fileutil.WithFlock is a documented no-op, so the cross-store /
 // cross-process half of the guarantee holds on Linux and macOS only; within
 // one store the session shard still makes the compare-and-set atomic.
@@ -66,18 +76,30 @@ func (us *UnifiedStore) AdoptMainSessionOwner(sessionID, owner string) (bool, er
 	if owner == "" {
 		return false, nil
 	}
+	us.cacheMu.RLock()
+	cached, cachedOK := us.metaCache[sessionID]
+	skip := cachedOK && (cached.Type != SessionTypeMain || cached.Owner != "")
+	us.cacheMu.RUnlock()
+	if skip {
+		return false, nil
+	}
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
 
 	sessionDir := filepath.Join(us.baseDir, sessionID)
 	metaPath := filepath.Join(sessionDir, "meta.json")
 	adopted := false
+	diskOwner := ""
 	err := fileutil.WithFlock(sessionFileLockPath(metaPath), func() error {
 		identity, err := u5ReadIdentityFile(sessionDir)
 		if err != nil {
 			return err
 		}
-		if identity.Type != SessionTypeMain || identity.Owner != "" {
+		if identity.Type != SessionTypeMain {
+			return nil
+		}
+		if identity.Owner != "" {
+			diskOwner = identity.Owner
 			return nil
 		}
 		identity.Owner = owner
@@ -95,6 +117,15 @@ func (us *UnifiedStore) AdoptMainSessionOwner(sessionID, owner string) (bool, er
 		return false, fmt.Errorf("unified_store: adopt owner of main %q: %w", sessionID, err)
 	}
 	if !adopted {
+		if diskOwner != "" {
+			// Lost to an earlier adopter (possibly another store): refresh ONLY
+			// the cached owner from the disk value just read under the lock.
+			us.cacheMu.Lock()
+			if c, ok := us.metaCache[sessionID]; ok && c.Owner != diskOwner {
+				c.Owner = diskOwner
+			}
+			us.cacheMu.Unlock()
+		}
 		return false, nil
 	}
 
