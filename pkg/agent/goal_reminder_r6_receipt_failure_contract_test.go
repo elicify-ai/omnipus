@@ -58,6 +58,7 @@ func TestGoalReminderR6ReceiptFailureReachesSession(t *testing.T) {
 			default:
 				rec, err := h.al.GetSessionLifecycleStore().Load(h.id)
 				return err == nil && rec.Generation > prior.Generation &&
+					rec.State != session.LifecycleRunning &&
 					!h.al.goalIsIdleSettling(h.goalID) && r6GateWorkerIdle(h, worker)
 			}
 		}
