@@ -251,13 +251,7 @@ func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHis
 			sr.latestByID[d.ID] = tcAddr{entryIdx: -1, tcIdx: -1}
 		}
 	}
-	position := string(e.Position)
-	origin := generated.HistoryEntryOrigin{Position: position}
-	if e.Entry.ID != "" {
-		id := e.Entry.ID
-		origin.EntryId = &id
-	}
-	sr.historyOrigin = &origin
+	sr.historyOrigin = historyFactOrigin(&e)
 	for _, tc := range e.Entry.ToolCalls {
 		result, resultErr := r.prepareResult(ctx, tc)
 		if resultErr != nil {
