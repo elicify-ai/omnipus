@@ -9,20 +9,41 @@ fail the run immediately — they are not soft-skipped.
 
 ### Required
 
-**`OPENROUTER_API_KEY_CI`** (environment variable, required, no soft-skip)
+**The live-model keys** (environment variables, required, no soft-skip)
 
-A valid OpenRouter API key. Used by tests that drive real LLM calls (chat, subagent
-delegate, handoff, media screenshot). Its absence is a CI configuration failure, not a
-per-test skip condition.
+The suite runs on the ONE central model setting, `tests/e2e/e2e-model.json`: a
+**primary** pair (the MiniMax plan) and a **fallback** pair (DeepSeek on OpenRouter),
+each with the product credential name it uses (`api_key_ref`). Both keys are needed:
+onboarding gives every agent the fallback model, because the product falls back per
+agent only.
 
-- In CI: add as a repository secret under Settings > Secrets > Actions.
-  The `playwright` job in `.github/workflows/pr.yml` injects it as `OPENROUTER_API_KEY_CI`.
-- Locally: `export OPENROUTER_API_KEY_CI="sk-..."` before running `npx playwright test`.
+| Side | CI secret / variable | Local fallback name |
+|---|---|---|
+| Primary (MiniMax) | `MINIMAX_API_KEY_CI` | `MINIMAX_API_KEY` |
+| Fallback (OpenRouter) | `OPENROUTER_API_KEY_CI` (per-shard slots `_B`/`_C` in CI) | `OPENROUTER_API_KEY` |
 
-The `global-setup.ts` preflight throws immediately if this variable is unset:
-```
-[E2E preflight] OPENROUTER_API_KEY_CI is not set.
-```
+The rule is `<api_key_ref>_CI`, then `<api_key_ref>` (`tests/e2e/fixtures/e2e-model-keys.ts`).
+Their absence is a CI configuration failure, not a per-test skip condition.
+
+- In CI: repository secrets under Settings > Secrets > Actions. The `playwright` job in
+  `.github/workflows/pr.yml` exports them as `MINIMAX_API_KEY_CI` and `OPENROUTER_API_KEY_CI`.
+  Fork pull requests get no secrets, so the e2e job fails at its key check there (unchanged).
+- Locally: `export MINIMAX_API_KEY_CI=... OPENROUTER_API_KEY_CI=...` before running
+  `npx playwright test`.
+
+The `global-setup.ts` preflight throws immediately if either key is missing, naming the
+variables to set.
+
+**Which pair a fixture uses.** A gateway that talks to a real model uses `E2E_PRIMARY`
+(`tests/e2e/fixtures/e2e-model.ts`), and every agent a spec creates takes its model fields
+from `e2eAgentModelFields('live')` (`tests/e2e/fixtures/e2e-agent-model.ts`), which adds the
+fallback to the agent's `fallback_models`. A gateway pointed at a local mock provider uses
+`E2E_FALLBACK` / `e2eAgentModelFields('mock')`: the mocks speak the OpenAI-compatible
+protocol of the fallback provider. Never write a model or provider id at a call site.
+
+**Switching a model** (the only sanctioned procedure): edit `tests/e2e/e2e-model.json` —
+both entries — AND add every new model id and provider id to `PATTERN` in
+`scripts/check-no-hardcoded-e2e-model.sh`. Old ids stay banned.
 
 **`OMNIPUS_HOME=/tmp/<fresh-dir>`** (environment variable, required per run)
 
@@ -56,8 +77,8 @@ export OMNIPUS_HOME=/tmp/omnipus-e2e-local
 rm -rf "$OMNIPUS_HOME" && mkdir -p "$OMNIPUS_HOME"
 OMNIPUS_BEARER_TOKEN="" ./omnipus gateway --allow-empty &
 
-# Run tests (with required key)
-export OPENROUTER_API_KEY_CI="sk-..."
+# Run tests (with the required primary and fallback keys)
+export MINIMAX_API_KEY_CI="..." OPENROUTER_API_KEY_CI="..."
 npx playwright test
 ```
 
@@ -80,15 +101,29 @@ To add a legitimate skip:
 
 CI runs are in `.github/workflows/pr.yml` under the `playwright` job. The job:
 1. Builds the Go binary with the SPA embedded.
-2. Seeds an `OMNIPUS_HOME` whose config.json and onboarding seed use the central e2e model — the `OMNIPUS_E2E_MODEL` env var (repo/step env in CI), falling back to the single value in `tests/e2e/e2e-model.json` (read fail-closed by `tests/e2e/fixtures/e2e-model.ts`).
-3. Seeds the OpenRouter credential into `credentials.json`.
-4. Starts the gateway and waits for `/health`.
-5. **Verifies `OPENROUTER_API_KEY_CI` is set** (preflight step) before running any test.
-6. Runs `npx playwright test`.
+2. Reads `tests/e2e/e2e-model.json` through `scripts/e2e-model.sh env` (fails closed on a
+   missing field, an equal primary/fallback pair, or the old `{"model": ...}` shape).
+3. **Checks the primary at job start** (`scripts/e2e-model.sh preflight`): one 1-token
+   call. If the primary answers 429, 5xx, 401/403, times out or cannot be reached, the
+   WHOLE job runs on the fallback — a `::warning::`, a job-summary line
+   (`LLM: fallback (primary MiniMax unavailable: ...)`), an `llm-route-<shard>` artifact,
+   and `OMNIPUS_E2E_PRIMARY_PROVIDER/_MODEL` pointing the fixtures at the fallback pair.
+   Any other answer, or a missing key, fails the job.
+4. Seeds an `OMNIPUS_HOME` whose config.json carries both provider rows
+   (`scripts/e2e-model.sh seed-config`) and both credentials.
+5. Starts the gateway, onboards on the primary, and gives every agent the fallback
+   (`scripts/e2e-model.sh seed-agent-fallbacks`).
+6. **Verifies both keys are set** (preflight step) before running any test.
+7. Runs `npx playwright test`.
 
 Required secrets (Settings > Secrets > Actions):
-- `OPENROUTER_API_KEY_CI` — OpenRouter API key.
+- `MINIMAX_API_KEY_CI` — the primary model key (one key for every shard).
+- `OPENROUTER_API_KEY_CI` (optional `_B`, `_C` per shard slot) — the fallback model key.
 - `OMNIPUS_MASTER_KEY_CI` — AES-256 master key (hex) for the test `credentials.json`.
+
+A manual-dispatch workflow, `.github/workflows/llm-fallback-smoke.yml`, proves the fallback
+with real keys: an invalid primary key and an unreachable primary must be answered by the
+fallback; the real primary key (the positive control) must be answered without a fallback.
 
 ## Skip-tracking dashboard
 
@@ -181,7 +216,10 @@ tests/e2e/
     console-errors.ts     — fixture that asserts zero unexpected JS console errors
     a11y.ts               — axe accessibility check helper
     login.ts              — loginAs() helper
-    onboard-via-api.ts    — onboardViaAPI() helper
+    onboard-via-api.ts    — onboardViaAPI(): primary onboarding + fallback provider + agent fallbacks
+    e2e-model.ts          — reader of tests/e2e/e2e-model.json (E2E_PRIMARY, E2E_FALLBACK)
+    e2e-agent-model.ts    — e2eAgentModelFields('live' | 'mock') for every agent a spec creates
+    e2e-model-keys.ts     — key env names per provider + requireLiveModelKeys()
     selectors.ts          — canonical DOM selector helpers
     onboarding-stubs.ts   — stubOnboarding(): puts the SPA back on the wizard
                             without mutating the shared gateway (ADR-068)

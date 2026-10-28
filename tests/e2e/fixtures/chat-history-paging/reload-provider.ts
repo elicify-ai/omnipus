@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { E2E_MODEL } from '../e2e-model';
+import { E2E_FALLBACK } from '../e2e-model';
 
 // D-U2 frozen provider totals. These are authored inputs, not sampled counters.
 export const EARLIER_TOKENS = 1_200;
@@ -51,7 +51,7 @@ export async function startReloadProvider(): Promise<ReloadProvider> {
     request.on('end', () => {
       if (request.method === 'GET' && request.url?.includes('/models')) {
         response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ data: [{ id: E2E_MODEL, object: 'model' }] }));
+        response.end(JSON.stringify({ data: [{ id: E2E_FALLBACK.model, object: 'model' }] }));
         return;
       }
       if (request.method !== 'POST' || !request.url?.includes('/chat/completions')) {
@@ -63,7 +63,7 @@ export async function startReloadProvider(): Promise<ReloadProvider> {
       catch (error) { failures.push(String(error)); response.writeHead(400); response.end(); return; }
       if (body.stream !== true) {
         response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ id: 'd16-probe', object: 'chat.completion', model: E2E_MODEL,
+        response.end(JSON.stringify({ id: 'd16-probe', object: 'chat.completion', model: E2E_FALLBACK.model,
           choices: [{ index: 0, message: { role: 'assistant', content: 'probe ok' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }));
         return;
@@ -135,10 +135,10 @@ function call(name: string, args: unknown, id: string) {
   return { role: 'assistant', tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] };
 }
 function chunk(delta: Record<string, unknown>, finishReason: string | null = null) {
-  return 'data: ' + JSON.stringify({ id: 'd16-stream', object: 'chat.completion.chunk', model: E2E_MODEL,
+  return 'data: ' + JSON.stringify({ id: 'd16-stream', object: 'chat.completion.chunk', model: E2E_FALLBACK.model,
     choices: [{ index: 0, delta, finish_reason: finishReason }] }) + '\n\n';
 }
 function usage(tokens: number) {
-  return 'data: ' + JSON.stringify({ id: 'd16-stream', object: 'chat.completion.chunk', model: E2E_MODEL, choices: [],
+  return 'data: ' + JSON.stringify({ id: 'd16-stream', object: 'chat.completion.chunk', model: E2E_FALLBACK.model, choices: [],
     usage: { prompt_tokens: Math.max(0, tokens - 1), completion_tokens: tokens ? 1 : 0, total_tokens: tokens } }) + '\n\n';
 }

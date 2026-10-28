@@ -37,7 +37,7 @@ import http from 'node:http';
 import { waitForConnected } from './fixtures/selectors';
 import { freshChat } from './fixtures/session-setup';
 import { GatewayProcess } from './fixtures/gateway-process';
-import { E2E_MODEL } from './fixtures/e2e-model';
+import { E2E_FALLBACK } from './fixtures/e2e-model';
 import { WsFrame } from '../../src/lib/api/generated/ws-schemas';
 
 // A retry must not conceal model-input omission in this acceptance test.
@@ -280,7 +280,7 @@ async function startGrepProvider() {
   const callId = 'context-acceptance-grep';
   const chunk = (delta: Record<string, unknown>, finish: string | null) =>
     'data: ' + JSON.stringify({
-      id: 'grep-acceptance-stream', object: 'chat.completion.chunk', model: E2E_MODEL,
+      id: 'grep-acceptance-stream', object: 'chat.completion.chunk', model: E2E_FALLBACK.model,
       created: Math.floor(Date.now() / 1000),
       choices: [{ index: 0, delta, finish_reason: finish }],
     }) + '\n\n';
@@ -296,7 +296,7 @@ async function startGrepProvider() {
     req.on('end', () => {
       if (req.method === 'GET' && req.url?.includes('/models')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ object: 'list', data: [{ id: E2E_MODEL, object: 'model' }] }));
+        res.end(JSON.stringify({ object: 'list', data: [{ id: E2E_FALLBACK.model, object: 'model' }] }));
         return;
       }
       if (req.method !== 'POST' || !req.url?.includes('/chat/completions')) {
@@ -314,7 +314,7 @@ async function startGrepProvider() {
       if (body.stream !== true) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-          id: 'grep-validation', object: 'chat.completion', model: E2E_MODEL,
+          id: 'grep-validation', object: 'chat.completion', model: E2E_FALLBACK.model,
           choices: [{ index: 0, message: { role: 'assistant', content: 'probe ok' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
         }));
@@ -543,7 +543,7 @@ test('agent grep tool finds a seeded match with context lines', async ({ browser
   let gateway: GatewayProcess | undefined;
   let context: BrowserContext | undefined;
   try {
-    gateway = await GatewayProcess.start({ apiBase: provider.url, model: E2E_MODEL });
+    gateway = await GatewayProcess.start({ apiBase: provider.url, model: E2E_FALLBACK.model });
     context = await browser.newContext({
       baseURL: gateway.baseURL, storageState: await gateway.browserStorageState(),
     });

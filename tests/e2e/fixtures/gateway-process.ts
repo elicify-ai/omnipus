@@ -39,7 +39,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { request, type APIRequestContext } from '@playwright/test';
 import { getFreePort, waitForHealth, DEFAULT_OMNIPUS_BINARY } from '../setup.js';
-import { E2E_MODEL } from './e2e-model.js';
+import { E2E_FALLBACK, E2E_PRIMARY } from './e2e-model.js';
+import { lookupModelKey } from './e2e-model-keys.js';
+import { onboardViaAPI } from './onboard-via-api.js';
 
 export interface ApiResult<T> {
   ok: boolean;
@@ -148,7 +150,10 @@ export class GatewayProcess {
         binary,
         adminUsername: opts.adminUsername ?? 'admin',
         adminPassword: opts.adminPassword ?? 'admin1234',
-        model: opts.model ?? E2E_MODEL,
+        // A mock-provider gateway (apiBase set) runs on the fallback pair: the
+        // mocks speak the OpenAI-compatible protocol. A live gateway runs on
+        // the primary.
+        model: opts.model ?? (opts.apiBase ? E2E_FALLBACK.model : E2E_PRIMARY.model),
         apiBase: opts.apiBase ?? '',
         extraArgs: opts.extraArgs ?? ['--sandbox=off'],
         extraEnv: opts.env ?? {},
@@ -213,25 +218,41 @@ export class GatewayProcess {
     });
   }
 
-  /** First-boot only: seed the admin/provider via onboarding, then log in. */
+  /** First-boot only: seed the admin/provider via onboarding, then log in.
+   *
+   * Live gateway (no apiBase): the shared onboardViaAPI — primary provider
+   * with its key, then the fallback provider and every agent's
+   * fallback_models. Mock gateway (apiBase): the fallback pair (an
+   * OpenAI-compatible provider) pointed at the mock; the mock accepts any key,
+   * so a placeholder is used when no real one is set. */
   private async onboardAndLogin(): Promise<void> {
-    const apiKey = process.env.OPENROUTER_API_KEY_CI ?? process.env.OPENROUTER_API_KEY ?? 'sk-test-placeholder';
+    if (!this.apiBase) {
+      await onboardViaAPI({
+        baseURL: this.baseURL,
+        model: this.model,
+        username: this.adminUsername,
+        password: this.adminPassword,
+      });
+      await this.login();
+      return;
+    }
+    const apiKey = lookupModelKey(E2E_FALLBACK.provider) ?? 'sk-test-placeholder';
     const onboardCtx = await request.newContext({ baseURL: this.baseURL });
     try {
       const res = await onboardCtx.post('/api/v1/onboarding/complete', {
         data: {
           provider: {
             auth_method: 'api_key',
-            id: 'openrouter',
+            id: E2E_FALLBACK.provider,
             api_key: apiKey,
             model: this.model,
             // provider-messages row 20: an explicit endpoint rides the same
             // onboarding contract (OnboardingProviderApiKey.endpoint —
             // contracts/components/schemas/OnboardingProviderApiKey.yaml;
             // rest_onboarding.go reads variant.Endpoint and persists it as
-            // the provider entry's api_base; probeBase prefers it) — when
-            // set, the key probe AND every later chat call go to this base.
-            ...(this.apiBase ? { endpoint: this.apiBase } : {}),
+            // the provider entry's api_base; probeBase prefers it) — the key
+            // probe AND every later chat call go to this base.
+            endpoint: this.apiBase,
           },
           admin: { username: this.adminUsername, password: this.adminPassword },
         },
