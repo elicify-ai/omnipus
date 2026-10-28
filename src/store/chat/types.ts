@@ -264,6 +264,14 @@ export type ChatMessage = Message & {
    */
   mergedReplayIds?: string[]
   /**
+   * #1452 D1 (chat-history-paging-spec S1/S7): the body-free ordered part
+   * list of a row that combines several sources (every site that appends to
+   * `mergedReplayIds` records the part). Lets a later saved record bind to
+   * its own part instead of the whole row; see history-parts.ts. Client-local,
+   * released with the row, never persisted or sent.
+   */
+  historyParts?: HistoryDisplayPart[]
+  /**
    * #823 catch-up redesign, Opus review round 3 item N1 (BE-DESIGN.md §6.5):
    * set ONCE, directly, by the `catch_up_complete` reducer's own sweep — NOT
    * recomputed reactively from `turnId !== activeTurnId` on every render.
@@ -807,6 +815,20 @@ export interface SessionChatState {
  * "started at the very beginning of the message".
  */
 export type PositionedToolCall = ToolCall & { textOffset?: number }
+
+/**
+ * One source of a combined display row (#1452 D1, S1). `start` is the
+ * part's offset in UTF-16 code units in the row's stored text, `joiner` the
+ * exact text inserted before it (S2a), `position` its bound saved history
+ * position once known, `text` whether it currently shows live or saved text.
+ */
+export interface HistoryDisplayPart { // not-wire-format: client-local display bookkeeping
+  sourceId: string
+  start: number
+  joiner: string
+  position?: string
+  text: 'live' | 'saved'
+}
 
 /**
  * Filter the span-index map (typed shape `{ messageId: string }`), returning

@@ -51,6 +51,7 @@ import { sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import { insertHistoryMessageId } from '../cursor'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, RateLimitEventData, SessionChatState } from '../types'
+import { recordCombinedPart } from '../history-parts'
 
 
 
@@ -443,6 +444,8 @@ function applyAssistantReplayCoalesce(
       if (candidate.pendingTextBoundary) {
         candidate.pendingTextBoundary = false
       }
+      // #1452 D1 S7/S2a: the replay coalesce's own paragraph-break joiner.
+      if (messageId) recordCombinedPart(candidate, messageId, '\n\n')
       candidate.content += '\n\n' + text
       // Keep the FIRST known model rather than the last — live
       // never shows a per-segment model tag at all (the
