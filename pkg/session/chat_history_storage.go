@@ -334,6 +334,22 @@ func (o *chatHistoryOwner) removeRetiredLocked(path string) error {
 	return nil
 }
 
+// retryRetired retries only the already remembered pending removals (no
+// directory discovery, no checkpoint). It is bounded local file I/O, so a
+// cancelled read still runs it: a real cleanup failure must outrank the
+// cancellation (spec "Combined read/retirement failure precedence", B69).
+func (o *chatHistoryOwner) retryRetired() error {
+	o.refsMu.Lock()
+	defer o.refsMu.Unlock()
+	var retirementErr error
+	for path := range o.retired {
+		if err := o.removeRetiredLocked(path); err != nil {
+			retirementErr = errors.Join(retirementErr, err)
+		}
+	}
+	return retirementErr
+}
+
 func (o *chatHistoryOwner) retire(dir, keep string) error {
 	o.refsMu.Lock()
 	defer o.refsMu.Unlock()
