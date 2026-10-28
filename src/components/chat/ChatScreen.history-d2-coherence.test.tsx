@@ -1,7 +1,7 @@
 // T66/B78: full-content cache generations are authoritative-commit based,
 // never equality of preview/size/status. Actual application/store/query cache.
 import { afterEach, expect, it, vi } from 'vitest'
-import { act, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
@@ -41,11 +41,13 @@ for (const kind of ['page', 'snapshot', 'refresh'] as const) {
     await userEvent.setup().click(previewToggle())
     await waitFor(() => expect(document.body.textContent).toContain('-FULL_END'))
     expect(fullReads(app)).toHaveLength(1)
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map(query => query.state.data)), 'instrument: successful full content really entered the application query cache').toContain(FULL_TEXT)
     const fresh = deferred<Response>(); releases.push(() => fresh.resolve(json(FULL_SOURCE)))
     app.network.respond('GET', fullPath(), () => fresh.promise)
     await redeliver(kind)
     await waitFor(() => expect(fullReads(app!)).toHaveLength(2))
     expect(document.body.textContent, 'expanded item must fall back to preview while new generation loads').not.toContain('-FULL_END')
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map(query => query.state.data)), 'equal-signature authoritative commit drops the prior cached body immediately').not.toContain(FULL_TEXT)
     await act(async () => fresh.resolve(json({ ...FULL_SOURCE, tool_calls: [{ ...FULL_SOURCE.tool_calls![0], result: { content: corrected } }] })))
     await waitFor(() => expect(document.body.textContent).toContain('-NEW_END!'))
     expect(fullReads(app)).toHaveLength(2)
@@ -72,7 +74,7 @@ it('T66: refresh while full read is pending discards the old same-session respon
   expect(fullReads(app)).toHaveLength(2)
 })
 
-it('T66: leaving aborts full read, late completion never repopulates cache, and returning reads afresh', async () => {
+it.each(['success', 'failure'] as const)('T66: leaving aborts full read; late %s cannot repopulate cache or show a stale error on return', async outcome => {
   app = await openPreviewApp()
   const held = deferred<Response>(); releases.push(() => held.resolve(json(FULL_SOURCE)))
   const signals: AbortSignal[] = []
@@ -88,7 +90,10 @@ it('T66: leaving aborts full read, late completion never repopulates cache, and 
     useSessionStore.getState().setActiveSession('d2-other-session', 'mia')
   })
   expect(signals[0].aborted, 'actual request signal must be aborted on release').toBe(true)
-  await act(async () => held.resolve(json(FULL_SOURCE)))
+  await act(async () => {
+    if (outcome === 'failure') held.reject(new TypeError('late released transport failure'))
+    else held.resolve(json(FULL_SOURCE))
+  })
   expect(JSON.stringify(queryClient.getQueryCache().getAll().map(query => query.state.data))).not.toContain(FULL_TEXT)
   expect(JSON.stringify(useChatStore.getState().sessionsById[MAIN_ID])).not.toContain(FULL_TEXT)
   vi.stubGlobal('fetch', originalFetch)
@@ -97,5 +102,6 @@ it('T66: leaving aborts full read, late completion never repopulates cache, and 
   app.network.respond('GET', fullPath(), () => json(FULL_SOURCE))
   await userEvent.setup().click(previewToggle())
   await waitFor(() => expect(document.body.textContent).toContain('-FULL_END'))
+  expect(screen.queryByRole('alert'), 'a late old-session failure never becomes a stale error on the next visit').not.toBeInTheDocument()
   expect(fullReads(app), 'next visit uses a fresh request instead of late released content').toHaveLength(1)
 })
