@@ -195,12 +195,20 @@ func gate1OriginCompletedProducer(t *testing.T) (*AgentLoop, *b3AsyncTool, *b3To
 // The architect's existing two-stage diagnostic contract distinguishes them.
 func TestGateFix1FinishedCallbackOriginReadDiagnostics(t *testing.T) {
 	for _, failRead := range []bool{true, false} {
-		label := "MissingCanonicalOriginRefusal"
+		label := "InitialTaskAudienceRefusal"
 		if failRead {
 			label = "OriginReadFailure"
 		}
 		t.Run(label, func(t *testing.T) {
-			al, probe, invocation, logPath := gate1OriginCompletedProducer(t)
+			var al *AgentLoop
+			var probe *b3AsyncTool
+			var invocation *b3ToolInvocation
+			var logPath string
+			if failRead {
+				al, probe, invocation, logPath = gate1OriginCompletedProducer(t)
+			} else {
+				al, probe, invocation, logPath = gate1InitialTaskOriginProducer(t)
+			}
 			lifecycle := al.GetSessionLifecycleStore()
 			store := al.GetSessionStore()
 			_, err := store.ReadTranscript(invocation.sid)
@@ -236,12 +244,12 @@ func TestGateFix1FinishedCallbackOriginReadDiagnostics(t *testing.T) {
 				require.Error(t, originErr, "BLOCKED: actual origin predicate must return the genuine read error")
 				require.False(t, allowed)
 			} else {
-				// Existing native missing-provenance negative-fixture seam: only
-				// own canonical metadata changes; resolver and guards stay real.
-				require.NoError(t, lifecycle.Mutate(invocation.sid, func(r *session.LifecycleRecord) error { r.Origin = nil; return nil }))
+				// Founder Q1 A: the real task origin was created before admission;
+				// never mutate a completed record or fabricate execution authority.
 				rec, loadErr := session.NewLifecycleStore(lifecycle.Dir()).Load(invocation.sid)
 				require.NoError(t, loadErr)
-				require.Nil(t, rec.Origin)
+				require.NotNil(t, rec.Origin)
+				require.Equal(t, session.OriginKindTask, rec.Origin.Kind)
 				allowed, originErr := al.asyncNotifyOriginReachesUser(context.Background(), invocation.sid)
 				require.NoError(t, originErr, "BLOCKED: control must be a refusal without a read error")
 				require.False(t, allowed)
@@ -320,4 +328,80 @@ func gate1AssertOriginSecondaryFields(t *testing.T, record map[string]any, notic
 	require.NotContains(t, string(encoded), b3PrivateBody)
 	require.NotContains(t, string(encoded), invocation.sid)
 	require.NotContains(t, string(encoded), invocation.id)
+}
+
+// gate1InitialTaskOriginProducer is used ONLY by the founder-authorized new
+// refusal control. Native launch/admission mint all ownership and execution IDs.
+func gate1InitialTaskOriginProducer(t *testing.T) (*AgentLoop, *b3AsyncTool, *b3ToolInvocation, string) {
+	t.Helper()
+	const name = "gate1_initial_task_async_probe"
+	provider := testutil.NewScenario().WithToolCalls([]providers.ToolCall{{ID: "gate1-real-initial-task-call", Function: &providers.FunctionCall{Name: name, Arguments: "{}"}}}).WithText("gate1 initial task producer completed")
+	al, mb, _ := newAsyncChildPublicationTestLoop(t, provider, false)
+	probe := &b3AsyncTool{al: al, name: name}
+	al.RegisterTool(probe)
+	setAskPolicyForAllAgents(t, al, probe.Name(), config.ToolPolicyAllow)
+	t.Cleanup(func() {
+		b3DrainInbound(mb)
+		for _, invocation := range probe.invocations() {
+			invocation.open()
+			b3DrainInbound(mb)
+			b3JoinTool(t, invocation)
+		}
+		mb.Close()
+	})
+	// This existing typed native helper calls the real SteerLauncher and
+	// supplies its required task ID; it does not manufacture a record.
+	launched, err := launchAs(t, al, "task")
+	require.NoError(t, err, "BLOCKED: initial canonical task launch must succeed")
+	initial, err := session.NewLifecycleStore(al.GetSessionLifecycleStore().Dir()).Load(launched.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, session.LifecycleQueued, initial.State)
+	require.Equal(t, launched.Generation, initial.Generation)
+	require.Nil(t, initial.ExecutionID)
+	require.NotNil(t, initial.Origin)
+	require.Equal(t, session.OriginKindTask, initial.Origin.Kind)
+	require.NotEmpty(t, initial.Origin.TaskID)
+	meta, err := al.GetSessionStore().GetMeta(launched.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, initial.Origin.TaskID, meta.TaskID)
+	require.Equal(t, initial.AgentID, meta.AgentID)
+	// Actual owner-pinned, concrete-session non-human entry, with a real
+	// messaging address captured by the callback. No route fallback is used.
+	_, err = al.ProcessScheduled(context.Background(), testDefaultAgentID, launched.SessionID, "gate1 native initial task", "telegram", "gate1-initial-task-conversation")
+	require.NoError(t, err)
+	calls := probe.invocations()
+	require.Len(t, calls, 1, "BLOCKED: actual task must execute the native async producer once")
+	invocation := calls[0]
+	require.NoError(t, invocation.readErr)
+	require.Equal(t, launched.SessionID, invocation.sid)
+	require.NotEmpty(t, invocation.id)
+	require.NotNil(t, invocation.owner)
+	channelType, _ := config.ParseInstanceKey(invocation.channel)
+	require.True(t, isMessagingChannel(channelType), "BLOCKED: control must reach canonical audience refusal, not non-messaging preflight")
+	require.NotEmpty(t, invocation.chat)
+	select {
+	case <-invocation.owner.done:
+	case <-time.After(b3JoinWatchdog):
+		t.Fatal("BLOCKED: actual producing task owner did not fully complete")
+	}
+	invocation.owner.mu.Lock()
+	settled := invocation.owner.result
+	invocation.owner.mu.Unlock()
+	require.NoError(t, settled)
+	require.Nil(t, al.ownLiveTurn(invocation.sid))
+	completed, err := session.NewLifecycleStore(al.GetSessionLifecycleStore().Dir()).Load(invocation.sid)
+	require.NoError(t, err)
+	require.Equal(t, session.LifecycleCompleted, completed.State)
+	require.NotNil(t, completed.Origin)
+	require.Equal(t, session.OriginKindTask, completed.Origin.Kind)
+	require.Equal(t, initial.Origin.TaskID, completed.Origin.TaskID)
+	allowed, err := al.asyncNotifyOriginReachesUser(context.Background(), invocation.sid)
+	require.NoError(t, err, "BLOCKED: initial task refusal must be nil-error with real canonical reads")
+	require.False(t, allowed)
+	path := filepath.Join(t.TempDir(), "native-initial-task-secondary.jsonl")
+	level := logger.GetLevel()
+	require.NoError(t, logger.EnableFileLogging(path))
+	logger.SetLevel(logger.WARN)
+	t.Cleanup(func() { logger.DisableFileLogging(); logger.SetLevel(level) })
+	return al, probe, invocation, path
 }
