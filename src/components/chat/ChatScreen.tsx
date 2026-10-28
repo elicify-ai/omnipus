@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import React, { useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { VirtualizedMessageList } from './ChatMessageList'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -45,6 +45,7 @@ import { ModelPicker } from './composer/ModelPicker'
 import { AutoApprovePicker } from './composer/AutoApprovePicker'
 import { TokenCounter } from './composer/TokenCounter'
 import { MarkdownText } from './markdown-text'
+import { CATCH_UP_SMOOTH, ThreadRevealContext } from './useOpenReveal'
 import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
@@ -500,10 +501,14 @@ class TextPartErrorBoundary extends React.Component<{ children: React.ReactNode 
 }
 
 function AssistantTextPart() {
+  // A reply already in progress when the chat opened must show its text so
+  // far, not re-type it from empty (the open flicker): catch-up pacing while
+  // the opened conversation is covered, normal pacing after the reveal.
+  const revealed = useContext(ThreadRevealContext)
   return (
     <TextPartErrorBoundary>
       <div>
-        <MarkdownText />
+        <MarkdownText smooth={revealed ? true : CATCH_UP_SMOOTH} />
       </div>
     </TextPartErrorBoundary>
   )
@@ -2848,7 +2853,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           ) : (
             /* key = active session: each chat gets a fresh scroll engine, so switching
                 chats lands at the bottom instead of keeping the previous chat's offset. */
-            <VirtualizedMessageList key={activeSessionId ?? '__none'} messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} />
+            <VirtualizedMessageList key={activeSessionId ?? '__none'} messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} openFailed={historyRead.isError} />
           )}
 
           <ChatConnectionNotice />
