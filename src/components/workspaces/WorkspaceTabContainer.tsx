@@ -12,6 +12,7 @@ import { getPanelDefinition } from '@/components/panel-shell/registry'
 import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
 import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 import { ChatControls } from '@/components/chat/ChatControls'
+import { ChatHeaderSlot } from '@/components/chat/ChatHeaderSlot'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { Button } from '@/components/ui/button'
 import { SidebarShowButton } from '@/components/layout/SidebarShowButton'
@@ -291,6 +292,15 @@ function WorkspaceTabContainerView({
               <ChatControls />
             </div>
           )}
+
+          {/* #1449 D13 (founder 2026-10-28): the chat's own chrome sits at
+              the right end of THIS header line — the same line as the
+              workspace strip, which stays where it is on the left. No new
+              row, no bar, no border, no background: the slot carries the
+              chat label / helper breadcrumb and the chat controls (today
+              "Add participant"; the group chat's Participants button plugs
+              into the same slot later). */}
+          {activeSegment === 'chat' && <ChatHeaderSlot />}
         </header>
 
         {/* Tab content */}

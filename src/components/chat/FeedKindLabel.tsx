@@ -1,7 +1,14 @@
 /**
- * Persistent above-feed kind (FR-008, BDD-07.1 — mains as amended by the
- * founder decision 2026-10-11: a main's header line reads the main's title
- * "<Agent name> - Main Session", not the bare "Main chat" kind).
+ * The chat's kind label, rendered in the workspace header line's right-end
+ * slot (FR-008, BDD-07.1 — mains as amended by the founder decision
+ * 2026-10-11: a main's header line reads the main's title "<Agent name> -
+ * Main Session", not the bare "Main chat" kind).
+ *
+ * #1449 D13 (founder 2026-10-28): the grey bar this used to render above the
+ * feed — with its background and its bottom border — is GONE. The label now
+ * renders as small muted text inside ChatHeaderSlot, in the same header line
+ * as the workspace strip. The role, the accessible name and the test hook are
+ * unchanged, so the line still reads the same to a screen reader.
  *
  * Words come from feedKindLabel on the workspace descriptor, and only when
  * that descriptor is the active session. Replay does not change them.
@@ -28,7 +35,7 @@
  */
 import { useId } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ListChecks } from '@phosphor-icons/react'
+import { CaretLeft, ListChecks } from '@phosphor-icons/react'
 import { fetchAgents, fetchSessions } from '@/lib/api'
 import type { Session } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -104,11 +111,12 @@ export function FeedKindLabel() {
     const rosterNameResolved = descriptor.agentId != null
       && agents.some((agent) => agent.id === descriptor.agentId && agent.name.trim() !== '')
     const namesUnavailable = main && agentsError && !rosterNameResolved
-    // Founder decision 2026-10-20 ("Breadcrumb"): a child chat reads
-    // "<parent title> › Helper" and the parent part opens the parent. The
-    // direct parent only. Any gap — no parent_session_id, a parent that is
-    // gone or not loaded, a main parent whose roster name is still loading —
-    // keeps the plain kind label with no link; a name is never fabricated.
+    // Founder decision 2026-10-20 ("Breadcrumb"), re-shaped by #1449 D13
+    // (2026-10-28): a child chat reads "‹ <parent title> / Helper" and the
+    // parent part opens the parent. The direct parent only. Any gap — no
+    // parent_session_id, a parent that is gone or not loaded, a main parent
+    // whose roster name is still loading — keeps the plain kind label with no
+    // link; a name is never fabricated.
     let parentCrumb: { parent: Session, label: string } | null = null
     if (activeIsChild) {
       const parentId = allSessions?.find((s) => s.id === descriptor.id)?.parent_session_id
@@ -127,10 +135,14 @@ export function FeedKindLabel() {
         aria-labelledby={labelId}
         aria-atomic="true"
         data-testid="feed-kind-label"
-        className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]"
+        className="flex min-w-0 items-center gap-[var(--space-1)]"
       >
-        <span id={labelId} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
-          {parentCrumb != null ? <><ParentCrumbLink parent={parentCrumb.parent} label={parentCrumb.label} />{` › ${label}`}</> : null}
+        <span
+          id={labelId}
+          title={parentCrumb != null ? `${parentCrumb.label} / ${label}` : undefined}
+          className="min-w-0 max-w-[32ch] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+        >
+          {parentCrumb != null ? <><CaretLeft size={14} className="shrink-0 align-middle" aria-hidden="true" /><ParentCrumbLink parent={parentCrumb.parent} label={parentCrumb.label} />{` / ${label}`}</> : null}
           {parentCrumb == null ? (namesUnavailable ? `${label} — agent names unavailable` : label) : null}
         </span>
       </div>
@@ -139,9 +151,9 @@ export function FeedKindLabel() {
 
   if (attachedSessionType === 'task') {
     return (
-      <div className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]">
+      <div className="flex min-w-0 items-center gap-[var(--space-1)]">
         <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
-        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
+        <span className="min-w-0 max-w-[32ch] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           Task: {attachedTaskTitle ?? 'Task Execution'}
         </span>
       </div>

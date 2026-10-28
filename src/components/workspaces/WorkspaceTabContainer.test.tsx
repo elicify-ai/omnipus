@@ -87,9 +87,13 @@ vi.mock('@/store/sidebar', () => ({
   SIDEBAR_PIN_BREAKPOINT: 1024,
 }))
 
-// Session store — only enterWorkspaceChat matters for the container
+// Session store — only enterWorkspaceChat matters for the container. The real
+// module is kept for everything else: the chat header slot (rendered by the
+// container) reaches the chat store, which registers its replay callbacks
+// with the session store at import time.
 const mockEnterWorkspaceChat = vi.fn()
-vi.mock('@/store/session', () => ({
+vi.mock('@/store/session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/store/session')>()),
   useSessionStore: (selector: ((s: { enterWorkspaceChat: (id: string) => void }) => unknown) | undefined) => {
     const state = { enterWorkspaceChat: mockEnterWorkspaceChat }
     return selector ? selector(state) : state
@@ -192,6 +196,33 @@ describe('WorkspaceTabContainer — layout', () => {
     })
 
     expect(screen.queryByTestId('chat-controls-mock')).toBeNull()
+  })
+
+  it('renders the chat header slot at the right end of the top bar row (#1449 D13)', async () => {
+    mockPathname = '/workspaces/ws-1/chat'
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    // The chat's own chrome sits in the SAME line as the workspace strip:
+    // no new row, no bar, no border, no background — and the strip keeps the
+    // left, with the slot at the right end.
+    const topBar = screen.getByTestId('workspace-top-bar')
+    const slot = screen.getByTestId('chat-header-slot')
+    expect(topBar.contains(slot)).toBe(true)
+    expect(topBar.lastElementChild).toBe(slot)
+    // The workspace strip is still on the left of that line.
+    expect(topBar.firstElementChild?.getAttribute('data-testid')).toBe('workspace-hamburger')
+    expect(topBar.querySelector('[data-testid="workspace-tab-strip"]')).not.toBeNull()
+  })
+
+  it('does NOT render the chat header slot outside the chat tab', async () => {
+    mockPathname = '/workspaces/ws-1/board'
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    expect(screen.queryByTestId('chat-header-slot')).toBeNull()
   })
 
   it('does NOT render a secondary breadcrumb row below the top bar', async () => {

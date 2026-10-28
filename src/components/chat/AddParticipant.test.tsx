@@ -12,6 +12,7 @@ vi.mock('@/lib/featureSwitches', async (importOriginal) => ({
 }))
 
 import { ChatScreen } from './ChatScreen'
+import { ChatHeaderSlot } from './ChatHeaderSlot'
 import { OmnipusRuntimeProvider } from './OmnipusRuntimeProvider'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
@@ -118,7 +119,21 @@ describe('Add participant — agents only, one workspace, no main-chat conversio
     expect(net.writes()).toEqual([])
   })
 
-  it('[FR-207/208; BDD-17.24/25] the real ChatScreen header shows Add participant in a main chat and removes it for Omnipus', async () => {
+  it('[FR-207/208; BDD-17.24/25] the chat body no longer carries its own Add participant row — the control lives in the header slot', async () => {
+    net.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json(wireHistoryPage(MAIN_ID, [], 0)))
+    net.respond('GET', '/api/v1/skills', () => json([]))
+    net.respond('GET', '/api/v1/commands', () => json([]))
+    net.respond('GET', '/api/v1/providers', () => json([]))
+    TestSocket.instances = []
+    vi.stubGlobal('WebSocket', TestSocket)
+    useSessionStore.setState({ attachedSessionType: 'main' })
+    await mountAt(<OmnipusRuntimeProvider><ChatScreen /></OmnipusRuntimeProvider>, `/workspaces/${WS}/chat`)
+    // #1449 D13: the control moved into the workspace header line's
+    // right-end slot; the chat body renders no row of its own.
+    expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull()
+  })
+
+  it('[FR-207/208; BDD-17.24/25] the real header slot shows Add participant in a main chat and removes it for Omnipus', async () => {
     await requiredExport('/src/components/chat/AddParticipant.tsx', 'AddParticipant', 'FR-207/208; row 138 header reachability')
     net.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json(wireHistoryPage(MAIN_ID, [], 0)))
     net.respond('GET', '/api/v1/sessions/main-omnipus/messages', () => json(wireHistoryPage('main-omnipus', [], 0)))
@@ -128,7 +143,16 @@ describe('Add participant — agents only, one workspace, no main-chat conversio
     TestSocket.instances = []
     vi.stubGlobal('WebSocket', TestSocket)
     useSessionStore.setState({ attachedSessionType: 'main' })
-    await mountAt(<OmnipusRuntimeProvider><ChatScreen /></OmnipusRuntimeProvider>, `/workspaces/${WS}/chat`)
+    // #1449 D13: the app renders the chat body AND the header slot; the
+    // control is reachable from the header slot (the workspace container
+    // mounts it in the header line), not from the chat body.
+    await mountAt(
+      <OmnipusRuntimeProvider>
+        <ChatHeaderSlot />
+        <ChatScreen />
+      </OmnipusRuntimeProvider>,
+      `/workspaces/${WS}/chat`,
+    )
     expect(await screen.findByRole('button', { name: 'Add participant' })).toBeVisible()
     act(() => useSessionStore.setState({ activeAgentId: 'omnipus', activeSessionId: 'main-omnipus', attachedSessionType: 'main' }))
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull())
