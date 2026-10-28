@@ -208,7 +208,20 @@ remaining canonical effect bytes.
 Ordinary operation may reconcile **at most 64** consistent mutation facts after
 a known valid index checkpoint. It does not manufacture a baseline from missing
 metadata, repeatedly walk a lifetime in batches, or start a preparing-history
-worker. Larger/inconsistent gaps need this operator command. History unavailability
+worker. Inconsistent or missing indexes need this operator command.
+
+A valid index that is only **more than 64** facts behind is the one exception:
+when a chat is opened or reloaded, attached over WebSocket, or retried, the
+server rebuilds that one chat's index in-process with the same engine as this
+command, then re-runs the bounded reconcile. It never runs at startup or during
+the retention sweep, and writes only `.chat-history`. It is refused for a chat
+folder larger than 32 MiB (not counting `.chat-history`), runs one rebuild at a
+time with a 30-second limit, and makes at most 3 attempts per chat per server
+run (busy, changed-during-rebuild or timed-out attempts at least 60 seconds
+apart; any other failure stops attempts until restart). Each attempt logs one
+warning; see the observability page, "Derived paging index and recovery". A
+chat that stays unavailable after that still needs this operator command, which
+remains available on this release branch unchanged. History unavailability
 is not permission to cancel running work: current sending, approvals and Stop
 remain separately available with an explicit history error.
 
