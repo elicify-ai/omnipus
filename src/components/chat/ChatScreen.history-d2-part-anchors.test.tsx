@@ -1,18 +1,20 @@
 // T66 / D1 S9/S10 / B78: actual live tokens -> tools -> tokens -> saved
 // preview settlement -> per-part render overlay. No pre-seeded part list.
 import { afterEach, expect, it } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Message } from '@/lib/api/generated/openapi-types'
 import type { ServerFrame } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
-import { entry, page, pos, replay, snapshot, STAMP } from '../../../tests/chat-history-paging/fixtures'
+import { deferred, entry, page, pos, replay, snapshot, STAMP } from '../../../tests/chat-history-paging/fixtures'
 import { sendFrames, stopHistory } from '../../../tests/chat-history-paging/application'
-import { MAIN_ID, fullPath, json, openPreviewApp, type PreviewApp } from '../../../tests/chat-history-paging/d2-preview-harness'
+import { MAIN_ID, fullPath, json, openPreviewApp, replaceRows, type PreviewApp } from '../../../tests/chat-history-paging/d2-preview-harness'
+import { hasTrueSizeLabel } from '../../../tests/chat-history-paging/size-label'
 
 let app: PreviewApp | undefined
-afterEach(async () => { await stopHistory(app); app = undefined })
+const releases: (() => void)[] = []
+afterEach(async () => { releases.splice(0).forEach(fn => fn()); await stopHistory(app); app = undefined })
 const TURN = 'd2-part-anchor-turn'
 const A = 'd2-live-A', B = 'd2-live-B'
 // A has100000 UTF16 units,100002 UTF8 bytes. Euro straddles byte65536:
@@ -81,7 +83,11 @@ for (const order of [[0, 1], [1, 0]]) {
     expect(offsets, 'relative A-end and B-end clamp into each own preview').toEqual([65534, 65534 + 2 + 65536])
     for (const [i, full] of [FULL_A, FULL_B].entries()) app!.network.respond('GET', fullPath(pos(i + 1)), () => json({ ...saved[i], content: full, content_original_size_bytes: undefined }))
     const user = userEvent.setup()
-    expect(screen.getAllByRole('button', { name: /^Show the rest/i }), 'one control for EACH shortened part, in source order').toHaveLength(2)
+    const expansionControls = screen.getAllByRole('button', { name: /^Show the rest/i })
+    expect(expansionControls, 'one control for EACH shortened part, in source order').toHaveLength(2)
+    for (const [index, button] of expansionControls.entries()) {
+      expect(hasTrueSizeLabel(button.textContent ?? '', saved[index].content_original_size_bytes!), 'each text control labels its own full saved byte size, not its preview length').toBe(true)
+    }
     for (const index of order) {
       const controls = screen.getAllByRole('button', { name: /^Show the rest/i })
       // Both controls remain in source order if an expanded control keeps its
@@ -90,6 +96,8 @@ for (const order of [[0, 1], [1, 0]]) {
       expect(control, 'each shortened part has its own reachable expansion control').toBeDefined()
       await user.click(control)
       await waitFor(() => expect(document.body.textContent).toContain(index === 0 ? 'A_END' : 'B_END'))
+      expect(document.body.textContent, 'the complete plain-text part renders, not just its end canary').toContain(index === 0 ? FULL_A : FULL_B)
+      if (index === order[0]) expect(document.body.textContent, 'expanding one part leaves the other part collapsed').not.toContain(index === 0 ? 'B_END' : 'A_END')
     }
     expect(app!.network.requests.filter(r => r.path === fullPath(pos(1)) || r.path === fullPath(pos(2))).map(r => r.path)).toEqual(order.map(i => fullPath(pos(i + 1))))
     expect(relativeAnchorContent().row.content, 'full text is a render overlay, never written to stored preview').toBe(PREVIEW_A + '\n\n' + PREVIEW_B)
@@ -102,12 +110,43 @@ for (const order of [[0, 1], [1, 0]]) {
     const textNodes: Text[] = []; for (let node = walker.nextNode(); node; node = walker.nextNode()) textNodes.push(node as Text)
     const aEnd = textNodes.find(node => node.textContent?.includes('A_END'))
     const bStart = textNodes.find(node => node.textContent?.includes('B_START'))
+    const bEnd = textNodes.find(node => node.textContent?.includes('B_END'))
     const toggles = host.querySelectorAll('[data-history-tool-row] button[aria-expanded]')
-    expect(aEnd).toBeDefined(); expect(bStart).toBeDefined(); expect(toggles).toHaveLength(2)
+    expect(aEnd).toBeDefined(); expect(bStart).toBeDefined(); expect(bEnd).toBeDefined(); expect(toggles).toHaveLength(2)
     expect(aEnd!.compareDocumentPosition(toggles[0]) & Node.DOCUMENT_POSITION_FOLLOWING, 'A tool remains after FULL A').not.toBe(0)
     expect(toggles[0].compareDocumentPosition(bStart!) & Node.DOCUMENT_POSITION_FOLLOWING, 'A tool stays before B, regardless of expansion order').not.toBe(0)
+    expect(bEnd!.compareDocumentPosition(toggles[1]) & Node.DOCUMENT_POSITION_FOLLOWING, 'B tool follows FULL B even when both expansion length differences apply').not.toBe(0)
   })
 }
+it('T66 B78: an expanded text part refetches an equal-preview suffix correction on actual window refresh', async () => {
+  const saved = await witnessAndSettle()
+  app!.network.respond('GET', fullPath(pos(1)), () => json({ ...saved[0], content: FULL_A, content_original_size_bytes: undefined }))
+  const user = userEvent.setup()
+  await user.click(screen.getAllByRole('button', { name: /^Show the rest/i })[0])
+  await waitFor(() => expect(document.body.textContent).toContain(FULL_A))
+  expect(document.body.textContent, 'B was not expanded by A').not.toContain('B_END')
+  const fullReads = () => app!.network.requests.filter(request => request.path.startsWith(`/api/v1/sessions/${MAIN_ID}/messages/`)).map(request => request.path)
+  expect(fullReads()).toEqual([fullPath(pos(1))])
+
+  const corrected = FULL_A.replace(/A_END$/, 'A_NEW')
+  expect(corrected.slice(0, 65534)).toBe(PREVIEW_A)
+  expect(new TextEncoder().encode(corrected).length).toBe(100002)
+  const fresh = deferred<Response>()
+  releases.push(() => fresh.resolve(json({ ...saved[0], content: corrected, content_original_size_bytes: undefined })))
+  app!.network.respond('GET', fullPath(pos(1)), () => fresh.promise)
+  await replaceRows(app!, saved, 'window_refresh')
+  await waitFor(() => expect(fullReads()).toEqual([fullPath(pos(1)), fullPath(pos(1))]))
+  expect(document.body.textContent, 'the expanded part stays open but its old generation body disappears').not.toContain('A_END')
+  expect(document.body.textContent).toContain(PREVIEW_A)
+  expect(document.body.textContent).toContain(PREVIEW_B)
+  await act(async () => fresh.resolve(json({ ...saved[0], content: corrected, content_original_size_bytes: undefined })))
+  await waitFor(() => expect(document.body.textContent).toContain(corrected))
+  expect(document.body.textContent).not.toContain('B_END')
+  expect(relativeAnchorContent().row.content).toBe(PREVIEW_A + '\n\n' + PREVIEW_B)
+  expect(JSON.stringify(relativeAnchorContent().row)).not.toContain(corrected)
+  expect(fullReads()).toEqual([fullPath(pos(1)), fullPath(pos(1))])
+})
+
 it('T66 S2/S10: live-wins part retains witnessed full text/anchors and has no expansion control', async () => {
   await witnessAndSettle(true)
   const { row, offsets } = relativeAnchorContent()

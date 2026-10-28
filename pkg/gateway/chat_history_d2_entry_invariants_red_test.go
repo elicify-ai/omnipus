@@ -116,8 +116,21 @@ func TestHistoryEntryRead_CleanupStorageFailureOutranksUnknown(t *testing.T) {
 	require.ErrorIs(t, err, session.ErrChatHistoryUnavailable)
 	require.ErrorIs(t, err, native, "native failed last-reader release established real pending cleanup")
 	unknown := "hp1_" + strings.Repeat("A", 43)
-	w := d2EntryRequest(f.api, f.sid, unknown, "Bearer d2-route-test-token", nil)
-	d2EntryRefusal(t, w, 500, historyStorageCopy, unknown, f.retired, "R1_BODY_CANARY")
+	expired := pagingPositionOracle(f.sid, session.ArchiveAddress{PartitionKey: "2026-01-01", ByteOffset: 0, EntryID: "r1-old"})
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tc := range []struct {
+		name, position string
+		ctx            context.Context
+	}{
+		{"unknown_position", unknown, context.Background()},
+		{"cancellation_with_proven_expiry", expired, cancelled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := d2EntryRequest(f.api, f.sid, tc.position, "Bearer d2-route-test-token", tc.ctx)
+			d2EntryRefusal(t, w, 500, historyStorageCopy, tc.position, f.retired, "R1_BODY_CANARY")
+		})
+	}
 }
 func TestHistoryEntryRead_WorkspaceMetadataStorageFailure(t *testing.T) {
 	d2RequireEntryRoute(t)
