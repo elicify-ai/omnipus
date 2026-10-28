@@ -35,7 +35,7 @@ func (r taskMainResolver) EligibleMain(workspaceID, agentID string) (string, boo
 	if !mainSessionPairEligible(r.api.agentLoop.GetConfig(), ws, agentID) {
 		return "", false, nil
 	}
-	id, err := r.api.ensureMainSession(ws.ID, agentID)
+	id, err := r.api.ensureMainSession(ws.ID, agentID, "")
 	if err != nil {
 		return "", false, fmt.Errorf("main resolver: main of %q in workspace %q: %w", agentID, workspaceID, err)
 	}

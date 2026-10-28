@@ -237,7 +237,9 @@ func (al *AgentLoop) AdmitRoomRequest(ctx context.Context, a RoomRequestAdmissio
 	if err := al.roomReceiverEligible(a.Receiver); err != nil {
 		return RoomAdmission{}, err
 	}
-	meta, err := store.GetOrCreateMainSession(a.Receiver.WorkspaceID, a.Receiver.AgentID)
+	// No person creates this main: if it is new, it is owned by the operator
+	// (the first configured account; empty when none is configured).
+	meta, err := store.GetOrCreateMainSessionOwned(a.Receiver.WorkspaceID, a.Receiver.AgentID, al.GetConfig().OperatorUsername())
 	if err != nil {
 		return RoomAdmission{}, roomStorageRefusal("the member's main chat could not be prepared", err)
 	}

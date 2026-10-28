@@ -13,7 +13,7 @@
 //     default workspace's ordinary member main.
 //
 // Nothing here mints a second identity, a hashed id or a member row: every
-// path funnels into UnifiedStore.GetOrCreateMainSession under the pair's one
+// path funnels into UnifiedStore.GetOrCreateMainSessionOwned under the pair's one
 // computed id.
 package gateway
 
@@ -297,7 +297,14 @@ func (a *restAPI) gateMainRead(w http.ResponseWriter, id string) bool {
 // established is eligible. It returns the computed id, or the refusal from the
 // store (over-cap id, or a stored identity that does not match the pair — see
 // UnifiedStore.GetOrCreateMainSession; nothing is written in either case).
-func (a *restAPI) ensureMainSession(wsID, agentID string) (string, error) {
+//
+// actor is the authenticated username of the person whose request is creating
+// the main, or "" when no person is acting (boot, tools, resolvers). A main
+// created here is owned by that person, else by the operator (the first
+// configured account; config.Config.MainOwnerFor) — never by the machine
+// principal "cli". An existing main is returned unchanged: opening or listing
+// is not a write, so it never adopts an owner (see adoptMainOwnerOnSend).
+func (a *restAPI) ensureMainSession(wsID, agentID, actor string) (string, error) {
 	sessionID, err := session.MainSessionID(wsID, agentID)
 	if err != nil {
 		return "", err
@@ -306,7 +313,8 @@ func (a *restAPI) ensureMainSession(wsID, agentID string) (string, error) {
 	if store == nil {
 		return "", errNoSessionStore
 	}
-	if _, err := store.GetOrCreateMainSession(wsID, agentID); err != nil {
+	owner := a.agentLoop.GetConfig().MainOwnerFor(actor)
+	if _, err := store.GetOrCreateMainSessionOwned(wsID, agentID, owner); err != nil {
 		return "", err
 	}
 	return sessionID, nil
@@ -361,14 +369,24 @@ func mainSessionErrorMessage(err error) string {
 //
 // Over-cap pairs never reach here: prepareWorkspacePutMembers validates every
 // prospective id up front and refuses the request with a visible 422.
+//
+// No person is the actor here (boot, tool-driven membership changes, the
+// detail-read retry): a main it creates is owned by the operator. A request
+// handler that knows its signed-in person uses ensureMainsForTeamFor.
 func (a *restAPI) ensureMainsForTeam(ws storedWorkspace) error {
+	return a.ensureMainsForTeamFor(ws, "")
+}
+
+// ensureMainsForTeamFor is ensureMainsForTeam with the acting person's
+// username (requestUsername), recorded as owner of any main this call creates.
+func (a *restAPI) ensureMainsForTeamFor(ws storedWorkspace, actor string) error {
 	cfg := a.agentLoop.GetConfig()
 	var errs []error
 	for _, agentID := range ws.CoreTeam {
 		if !mainSessionPairEligible(cfg, ws, agentID) {
 			continue
 		}
-		if _, err := a.ensureMainSession(ws.ID, agentID); err != nil {
+		if _, err := a.ensureMainSession(ws.ID, agentID, actor); err != nil {
 			errs = append(errs, fmt.Errorf("workspace %s agent %s: %w", ws.ID, agentID, err))
 		}
 	}
@@ -397,8 +415,9 @@ func (a *restAPI) ensureMainsForTeam(ws storedWorkspace) error {
 // created or trusted" (false, errMainChatNotPrepared): a fixed, actionable
 // message (the real cause is logged), so a retry shows something useful instead
 // of "session not found". It is re-attempted on every call, so a transient
-// storage failure at boot heals on the next open.
-func (a *restAPI) resolveMainSessionForRead(id string) (bool, error) {
+// storage failure at boot heals on the next open. actor is the requesting
+// person's username, recorded as owner only if this call creates the main.
+func (a *restAPI) resolveMainSessionForRead(id, actor string) (bool, error) {
 	wsID, agentID, ok := session.SplitMainSessionID(id)
 	if !ok {
 		return true, nil // not a computed main id: the ordinary lookup path owns it
@@ -416,7 +435,7 @@ func (a *restAPI) resolveMainSessionForRead(id string) (bool, error) {
 	if !mainSessionPairEligible(a.agentLoop.GetConfig(), ws, agentID) {
 		return false, nil
 	}
-	if _, err := a.ensureMainSession(wsID, agentID); err != nil {
+	if _, err := a.ensureMainSession(wsID, agentID, actor); err != nil {
 		// The full contextual error stays in the server log; the client gets a
 		// fixed, actionable message that carries no path, file name, id or
 		// stored identity value.

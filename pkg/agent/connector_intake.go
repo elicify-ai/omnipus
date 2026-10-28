@@ -151,7 +151,9 @@ func (al *AgentLoop) admitBoundConnectorInputCtx(ctx context.Context, msg *bus.I
 		return unroutable, fmt.Errorf("connector intake: session store unavailable")
 	}
 	// 4. The pair's main.
-	meta, mErr := store.GetOrCreateMainSession(pair.WorkspaceID, pair.AgentID)
+	// No person creates this main: if it is new, it is owned by the operator
+	// (the first configured account; empty when none is configured).
+	meta, mErr := store.GetOrCreateMainSessionOwned(pair.WorkspaceID, pair.AgentID, al.GetConfig().OperatorUsername())
 	if mErr != nil {
 		return unroutable, fmt.Errorf("connector intake: main session: %w", mErr)
 	}

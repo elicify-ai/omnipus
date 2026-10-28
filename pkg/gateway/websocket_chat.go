@@ -968,9 +968,32 @@ func (hcm *wsHandlerHandleChatMessage) persistUserMessage() bool {
 			hcm.sendAppendFailureError(appendErr)
 			return true
 		}
+		hcm.adoptMainOwnerOnSend()
 		hcm.acceptPersistedUserMessage(entry)
 	}
 	return false
+}
+
+// adoptMainOwnerOnSend gives an ownerless main its first owner when a signed-in
+// person's message has just been durably saved in it. This is the one choke
+// point for a person writing into an existing chat over the WebSocket: it runs
+// only after a successful append (never on open, attach or list, so reading a
+// main never changes it), and AdoptMainSessionOwner is a no-op for a non-main,
+// an already-owned main, or an empty owner. The machine principal "cli" and an
+// unauthenticated connection (dev-mode bypass) are not persons and adopt
+// nothing. The adoption itself does not bump the main's recency.
+//
+// A failed adoption does not fail the message: the message is already saved
+// and the owner is attribution, not access. It is logged at error level with
+// the cause, and the next message from a signed-in person retries it.
+func (hcm *wsHandlerHandleChatMessage) adoptMainOwnerOnSend() {
+	actor := hcm.wc.userID
+	if actor == "" || actor == config.MachinePrincipalUsername {
+		return
+	}
+	if _, err := hcm.store.AdoptMainSessionOwner(hcm.sessionID, actor); err != nil {
+		logsafeError("ws: could not record the owner of the main chat", "session_id", hcm.sessionID, "error", err)
+	}
 }
 
 // acceptPersistedUserMessage runs the success path of a durable append:
