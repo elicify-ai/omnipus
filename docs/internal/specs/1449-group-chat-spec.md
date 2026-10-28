@@ -1,12 +1,12 @@
-`Status: Draft`
+`Status: In review`
 
 `ADR: [ADR-20261028 — Group chat reuses the normal chat](../architecture/ADR-20261028-group-chat-reuses-the-normal-chat.md)` (accepted after its one correction round; section 11 of that ADR wins over its earlier text)
 
 # Feature Specification: Group chat reuses the normal chat (#1449)
 
 **Created**: 2026-10-28
-**Input**: founder requirements and decisions log D1-D20 at `docs/internal/specs/1449-group-chat-requirements.md` (interview-me output, in the requirements form the founder interview produced; there is no separate `.interview.json`); ADR above; approved wireframe `docs/internal/design/1449/index.html` (screenshot `wireframe-full.png`, frames 1-4).
-**Status note**: `Draft` because section "Open Founder Questions" still holds unanswered questions (plan-spec rule: no assumptions). The spec moves to `In review` and goes to grill-spec round 1 once the dispatcher has the founder's answers; none of the questions blocks the rest of the text.
+**Input**: founder requirements and decisions log D1-D25 at `docs/internal/specs/1449-group-chat-requirements.md` (interview-me output, in the requirements form the founder interview produced; there is no separate `.interview.json`); ADR above; approved wireframe `docs/internal/design/1449/index.html` (screenshot `wireframe-full.png`, frames 1-4).
+**Status note**: `In review`. The five founder questions of the first draft were answered as D21-D25 (2026-10-28) and are applied throughout; two new questions (F-6, F-7) are open and do not block grill-spec round 1. **D21 (no Stop in the group chat) supersedes the Stop parts of D4 and D16 and the ADR's Stop decisions (A6, C-I5, UAT-8, UAT-9, UAT-22); where this spec and the ADR differ on those points, the founder decision wins.** D23 changes the ADR's origin-precedence text (A5.2) the same way.
 
 ---
 
@@ -14,13 +14,13 @@
 
 Group chats (the team room, squads and ad-hoc groups) are live today but use their own screen: plain-text transcript, own message box, a header listing every member, a full-width layout, their own store and paging. Every chat feature and fix has to be built twice, and the group lacks most of what the normal chat shows (markdown, diagrams, images, files).
 
-This feature makes the group chat **the normal chat with more than one agent in it**. The group opens on the same message list, the same message box (without the model picker, Auto-approve, token counter and skills), the same centred column, the same history behaviour (paging, "Return to latest", the loading cover). Participants are no longer listed in a header: the header shows a small avatar stack with a count, and a side panel opens on demand with status, links, mute/remove, add, cost and the invitation context. Group messages and agent answers can carry images and files in both directions. Approval and question cards show up in the group only when they belong to **this** group's work. Stop in a group stops only this group's work. "Add participant" in an agent's main chat starts a **new** group in a new session; the agent's own chat stays one-to-one. The group storage on the server (`pkg/rooms`) is unchanged in kind; a thin adapter lets the shared chat stack read it (decision D1; option C, a full server merge, is rejected).
+This feature makes the group chat **the normal chat with more than one agent in it**. The group opens on the same message list, the same message box (without the model picker, Auto-approve, token counter and skills), the same centred column, the same history behaviour (paging, "Return to latest", the loading cover). Participants are no longer listed in a header: the header shows a small avatar stack with a count, and a side panel opens on demand with status, links, mute/remove, add, cost and the invitation context. Group messages and agent answers can carry images and files in both directions. Approval and question cards show up in the group only when they belong to **this** group's work. There is no Stop in the group: stopping happens in each agent's own chat (D21). "Add participant" in an agent's main chat starts a **new** group in a new session; the agent's own chat stays one-to-one. The group storage on the server (`pkg/rooms`) is unchanged in kind; a thin adapter lets the shared chat stack read it (decision D1; option C, a full server merge, is rejected).
 
 The header of normal and helper chats loses its grey bar and borders (D13). That part is **already built** on branch `feature/1449-minimal-header` (commits `1d7886ecc`, `ede852eb2`: the `ChatHeaderSlot` at the right end of the workspace header line). This spec covers only how the group plugs into that slot and what must not regress there.
 
-**Out of scope** (founder, requirements section 6): #1068 messaging scope; #1461 presence awareness; live writing of answers in groups (a later feature); a server merge of groups into sessions; stronger avoidance of passwords in the invitation summary (#1467, accepted risk D18); per-member Stop.
+**Out of scope** (founder, requirements section 6): #1068 messaging scope; #1461 presence awareness; live writing of answers in groups (a later feature); a server merge of groups into sessions; stronger avoidance of passwords in the invitation summary (#1467, accepted risk D18); any Stop control or stop endpoint in the group (D21).
 
-**Two items are not proven yet** and are marked everywhere they matter: **UNPROVEN-1** (stop one group turn without freezing the agent's own chat) and **UNPROVEN-2** (cancel one specific parked question for one group request). See "Unproven Items and Escalation Path".
+**Dropped by the founder (D21):** the ADR's two unproven Stop items (turn-scoped stop, per-request question cancel) disappear together with the group Stop; no agent-engine stop code is part of this feature. The remaining unproven ADR items are listed under "Items still to be proven in RED/CHECK".
 
 ## Existing Codebase Context
 
@@ -38,7 +38,7 @@ The header of normal and helper chats loses its grey bar and borders (D13). That
 | `src/hooks/useCancelState.ts` | session path unchanged; room path installs no global listener | From ADR C-I4 |
 | `src/components/panel-shell/registry.tsx`, `types.ts` | extended (`participants` panel) | Verified (files exist) |
 | `pkg/rooms/*` (`journal.go`, `answers.go`, `fanout.go`, `admin.go`, `messages.go`, `attach.go`) | extended | `pkg/rooms/journal.go` decodes with plain `json.Unmarshal` (From ADR; additive journal change) |
-| `pkg/agent/room_request.go`, `participant.go`, `stop_session.go`, `request_reminder.go`, `ask_user_wire.go` | extended / new stop primitive / unchanged | From ADR A5, C-I5 |
+| `pkg/agent/room_request.go`, `participant.go`, `stop_session.go`, `request_reminder.go`, `ask_user_wire.go` | extended (origin rule per D23, question provenance) / unchanged | From ADR A5, C-I6 |
 | `pkg/tools/answer_request.go::AnswerRequestTool` and `pkg/tools/ask_user_question.go` | extended (`media`; provenance at creation) | From ADR C-I1, C-I6 |
 | `pkg/addressing/addressing.go::Capture` | extended (`Media`) | From ADR C-I3 |
 | `pkg/gateway/rest_uploads.go::HandleUpload`, `rest.go` media routes, `ws_ask_user.go`, `rooms_runtime.go`, `policy_approver.go`, `approvals.go` | extended / unchanged | From ADR C-I1, C-I6, C-I5 |
@@ -52,7 +52,7 @@ The header of normal and helper chats loses its grey bar and borders (D13). That
 | `ChatMessageList` / `HistoryBoundary` / `useHistoryViewport` / `useOpenReveal` (switch to `ConversationSource`) | **HIGH (Inferred)** - the #1266/#1452 history stack, about 30 `ChatScreen.history-*.test.tsx` files plus `src/store/chat.history-*.test.ts` | `ChatScreen`, `useChatHistory`, the session chat | every opened chat |
 | `OmnipusComposer` extraction | **HIGH (Inferred)** - 1,000-line move out of a 2,961-line file; every `ChatScreen.*composer*` test | `ChatScreen` | every chat send path |
 | `Capture` (`pkg/addressing`) and `commitRoomRequest` | **HIGH (Inferred)** - durable request ledger shared by admission, rewake and held delivery | `pkg/rooms/fanout.go`, `pkg/agent/room_request.go` | all group requests |
-| new turn-scoped stop primitive (`pkg/agent`) | **HIGH (Inferred)** - agent engine; hands-on UAT required before landing (root `CLAUDE.md`, "Hands-on check before any agent-engine landing") | `StopSession`, `StopRequest` users | every Stop in every chat |
+| origin merge rule `pkg/agent/participant.go::mergeApprovalOrigin` and `pkg/gateway/policy_approver.go` (D23: room origin only when the step answers only the group) | **MEDIUM (Inferred)** - agent engine; hands-on UAT required before landing (root `CLAUDE.md`, "Hands-on check before any agent-engine landing") | every approval card of every chat (origin label) | all approval cards |
 | `AskUserQuestionTool.Execute` / `PendingSet` / `askUserResumeDispatcher` | MEDIUM (Inferred) | question cards, resume | `AskUserQuestionCard` consumers |
 | `buildAdmission` (invitation prefix, read-only) | MEDIUM (Inferred) - runs under the room lock | first-request admission | all group sends |
 | `FeedKindLabel`, `MainChatAddParticipant` | already changed on `feature/1449-minimal-header` | - | - |
@@ -67,17 +67,13 @@ Order of work: BE-0 edits these before any Go or TypeScript (5-step procedure, r
 
 | Schema / operation | New / Changed | File | Notes |
 |---|---|---|---|
-| `RoomEntry` | changed | `contracts/components/schemas/RoomEntry.yaml` + inline in `asyncapi.yaml` | + optional `attachments`: array of `MediaPart`, `maxItems: 16`. Absent = none. Journal change is additive; no version field. |
-| `RoomMessageRequest` | changed | `RoomMessageRequest.yaml` + inline copy | + optional `media`: array of strings, `maxItems: 16`, each `media://workspace/<workspace id>/<id>`. `text` becomes `minLength: 0`. Rule enforced by the handler with inbound validation on and off: text not blank **or** media non-empty. |
+| `RoomEntry` | changed | `contracts/components/schemas/RoomEntry.yaml` + inline in `asyncapi.yaml` | + optional `attachments`: array of `MediaPart`, `maxItems: 16`. Absent = none. Journal change is additive; no version field. **D24:** `text` states the one group message size limit (see the `RoomMessageRequest` row); today the schema says 5 MiB while the server enforces 65,536 bytes. |
+| `RoomMessageRequest` | changed | `RoomMessageRequest.yaml` + inline copy | + optional `media`: array of strings, `maxItems: 16`, each `media://workspace/<workspace id>/<id>`. `text` becomes `minLength: 0`. **D24: one size limit, 65,536 UTF-8 bytes** (the existing server default of `session_messaging.steer_body`; the ADR does not decide otherwise): the contract text (5 MiB today) is corrected to this limit and says it is counted in bytes. The same limit applies to an agent's answer text (`answer_request`, entry `text`). How an operator-raised `steer_body` interacts is question F-6. Rule enforced by the handler with inbound validation on and off: text not blank **or** media non-empty. |
 | `uploadFiles` (`POST /upload`) | changed | `contracts/openapi.yaml` | Closes existing drift: `workspace_id` (query or form field) already crosses the boundary undocumented. Document it and the conflict rule (both given: `workspace_id` routes to the library, `session_id` ignored). Add a `503` response for "workspace library unavailable". |
 | `AskUserQuestionCard` | changed | `AskUserQuestionCard.yaml` + inline copy in `asyncapi.yaml` | + optional `room_ref` (`RoomRef`) and `origin_label` (string 1-200), same shapes and limits as on `ToolApprovalRequiredFrame`. This one card is embedded in `AskUserQuestionFrame` (live) and `SessionStateFrame.pending_asks` (reconnect snapshot); the frame envelope gets no separate copy. |
-| `stopRoomWork` (`POST /rooms/{id}/stop`) | new | `contracts/openapi.yaml` | Response `200`. Errors use the existing `ErrorResponse`: `400` (invalid body), `401`, `404` "no such group chat". |
-| `RoomStopRequest` | new | `contracts/components/schemas/RoomStopRequest.yaml` | `{ client_request_id: string, 1..128 }`. No `agent_ids` selector. |
-| `RoomStopResponse` | new | `contracts/components/schemas/RoomStopResponse.yaml` | `{ results: [{ agent_id, request_id, outcome, reason? }] }`; `outcome` one of `cancelled`, `stopped`, `withdrawn`, `already_finished`, `failed`; `reason` present for `failed`. |
 | `Room` | changed | `Room.yaml` | + optional `invitation_context`: `RoomInvitationContext` and `invitation_context_status` (`generating` / `ready` / `unavailable`). `invitation_context.text` is returned by `getRoom` only. |
 | `RoomInvitationContext` | new | `contracts/components/schemas/RoomInvitationContext.yaml` | `{ status, text? (max 4096), author_agent_id, generated_at?, cost_micro_usd?, cost_unpriced? }`. |
 | `RoomMetaFrame` | changed | `RoomMetaFrame.yaml` + inline copy | + `invitation_context_status`. The text itself never travels on a frame. |
-| `RoomDeliveryState.reason` | none | - | already a free string: new values `stopped` and `withdrawn` need no schema change (ADR-verified). |
 | `answer_request` tool parameters | changed | `pkg/tools/answer_request.go` (tool schema, not a REST/WS wire type) | + optional `media` (array of strings, max 16). Listed here because agents read it; it is not SPA-facing. |
 
 **Must not collide with**: `RoomRef` (reused as is); `MediaPart` (reused as is - the one media shape the SPA already renders); `RoomEntryFrame`/`RoomSnapshotFrame` (carry `RoomEntry`, so they inherit `attachments`).
@@ -87,14 +83,14 @@ Order of work: BE-0 edits these before any Go or TypeScript (5-step procedure, r
 ## API and Data
 
 - **Reads**: `getRoomHistory` (`before_seq`, `limit` 1-1000, unchanged contract) feeds the shared list. The room store gains a `limit` argument so the shared fill rule can request pages of 20-100.
-- **Writes**: `postRoomMessage` (now with `media`), `uploadFiles` (library branch, no session), `stopRoomWork` (new), `answer_request` tool (now with `media`).
+- **Writes**: `postRoomMessage` (now with `media`), `uploadFiles` (library branch, no session), `answer_request` tool (now with `media`).
 - **Stored**: attachments live in the entry journal as `MediaPart` references; the bytes live in the **workspace library** (the same place a normal chat's uploads go). The room record gains the invitation-context record and the lists of members it was delivered to or skipped (server-internal, not on the wire). A new `stops` stream records frozen stop target sets keyed by `client_request_id`. Deleting a group removes only the group's own journal directory, never library files (D19).
 - **Streams to the browser** (unchanged routing, `attach_room`): `room_entry`, `room_snapshot`, `room_member_state`, `room_meta` (now carrying the invitation status).
 
 ---
 ## User Stories & Acceptance Criteria
 
-Decisions that shape every story (founder's, not reopened): D1 one chat screen for both kinds; D2 and D3 full display and files both ways; D4 composer; D5 "is working" line; D6 participants; D7 width; D8 and D15 approvals; D9 and D10 starting a group; D11 history; D13 minimal chrome; D16 stop vs withdraw; D17 add participant in main chats only; D18-D20 summary risk, files, unavailable summary.
+Decisions that shape every story (founder's, not reopened): D1 one chat screen for both kinds; D2 and D3 full display and files both ways; D4 composer; D5 "is working" line; D6 participants; D7 width; D8 and D15 approvals; D9 and D10 starting a group; D11 history; D13 minimal chrome; D17 add participant in main chats only; D18-D20 summary risk, files, unavailable summary; D21 no Stop in the group; D22 attention cue accepted; D23 cards only for work that answers the group; D24 one message size limit; D25 group files exactly like normal chat uploads.
 
 ### User Story 1 - Group messages look like normal chat messages (Priority: P0)
 
@@ -115,7 +111,7 @@ A person reading a group wants every agent answer to show markdown, tables, code
 
 ### User Story 2 - The group message box is the normal message box (Priority: P0)
 
-A person wants to type, attach, send and stop in the group exactly as in a normal chat, but without controls that make no sense for several agents (R3, D4).
+A person wants to type, attach and send in the group exactly as in a normal chat, but without controls that make no sense for several agents (R3, D4).
 
 **Why this priority**: the message box is the main interaction surface; the second complaint.
 
@@ -125,7 +121,7 @@ A person wants to type, attach, send and stop in the group exactly as in a norma
 
 1. **Given** a group is open, **When** the person looks at the message box, **Then** it has the same card, attach button and send button as the normal one.
 2. **Given** a group is open, **When** the person looks at the message box, **Then** there is no model picker, no Auto-approve control, no token counter and no skills control.
-3. **Given** at least one request of this group is still open (not started, waiting, or running), **When** the box is shown, **Then** a Stop button is visible; with none open it is not.
+3. **Given** a message longer than the group's size limit (65,536 bytes), **When** the person sends it, **Then** it is refused with a message that names the limit, and nothing is posted. The box has no Stop button (D21).
 4. **Given** the person types "/", **When** the menu opens, **Then** it lists only the six group commands (pause, resume, mute, unmute, members, help); another command is refused with a message and links to the members' own chats.
 5. **Given** the person types "@", **When** the menu opens, **Then** it offers "all" and every current member, muted ones included; a picked member stays addressed after a rename; deleting the picked name removes the addressing.
 6. **Given** the group is read-only, reconnecting, or has not yet received its first live view after opening, **When** the person looks at the box, **Then** sending is disabled and the reason is shown in the box's notice area.
@@ -164,6 +160,7 @@ A person asks an agent in the group for a file or a chart and wants the result i
 3. **Given** storing or checking an attached file fails, **When** the agent answers, **Then** the agent receives an error and nothing is posted.
 4. **Given** two answers with identical text but different files, **When** a repair after an interruption runs, **Then** they are never treated as the same answer.
 5. **Given** an answer names a file of another workspace, **When** the agent submits it, **Then** it is refused and nothing is posted.
+6. **Given** an agent answer text longer than the group's size limit (65,536 bytes), **When** the agent submits it, **Then** it is refused, and nothing is posted, copied or passed on.
 
 ### User Story 5 - Calm live view while several agents work (Priority: P1)
 
@@ -254,27 +251,12 @@ A person approving an agent's tool call during group work wants the card in the 
 5. **Given** the group is reloaded while a question is pending, **When** it reopens, **Then** the card is still shown in both places.
 6. **Given** a helper the agent started for the group needs an approval, **When** it asks, **Then** the card shows only in the agent's own chat; in the group the agent's avatar shows the attention animation with "Open <Agent>'s main chat", which stops once the approval is resolved.
 7. **Given** a secret is requested during group work, **When** it is asked, **Then** no secret card appears in the group; a link to the agent's own chat is shown.
-8. **Given** the agent's running work also handles a messaging-channel message, **When** an approval arises, **Then** the card stays in the agent's own chat only.
+8. **Given** the agent's running step also handles other input (a message typed in its own chat, a messaging-channel message, or a task), **When** an approval arises, **Then** the card stays in the agent's own chat only (D23: a card appears in the group only for work that answers the group).
 9. **Given** two browsers, **When** one approves and the other denies at the same moment, **Then** exactly one decision takes effect and both show the same final state.
 
-### User Story 10 - Stop and withdraw (Priority: P0)
+### User Story 10 - (retired by D21: no Stop in the group chat)
 
-A person who changes their mind wants one Stop button that stops this group's work, without freezing the agents' own chats and without cutting unrelated work (D4, D16).
-
-**Why this priority**: loss of control over running agents is the highest-impact failure. This story contains UNPROVEN-1 and UNPROVEN-2.
-
-**Independent Test**: address two agents, press Stop while both work; then repeat while one of them also answers a messaging-channel message.
-
-**Acceptance Scenarios**:
-
-1. **Given** two agents work on this group's requests, **When** the person presses Stop, **Then** both stop, their lines show "Stopped", Ask again is available in the panel, and each agent's own chat accepts new messages immediately.
-2. **Given** requests that had not started yet, **When** Stop is pressed, **Then** they are cancelled and never run.
-3. **Given** every addressed agent waits on an approval or a question, **When** Stop is pressed, **Then** the card is closed and answering the old question is impossible or does nothing.
-4. **Given** an agent's run also handles a messaging-channel message, **When** Stop is pressed, **Then** the group shows "Withdrawn from this group - <Agent> is still working on something else", the channel reply still completes, and no group answer appears later.
-5. **Given** the person's connection retried the stop, **When** the same stop arrives twice, **Then** the same result is returned and newer requests are never included.
-6. **Given** Stop partly fails, **When** the result arrives, **Then** each affected member shows the reason.
-7. **Given** a request finished between the click and the server acting, **When** the result arrives, **Then** it is reported as already finished and its answer stays.
-8. **Given** the group no longer exists, **When** Stop is sent, **Then** the person sees "no such group chat".
+The founder decided that the group chat has no Stop control; stopping happens in each agent's own chat (D21, supersedes the Stop parts of D4 and D16). The story, its scenarios, requirements, tests and UAT rows were removed; the id is not reused.
 
 ### User Story 11 - Minimal header, group included (Priority: P0)
 
@@ -359,12 +341,10 @@ The sidebar's group section, the six commands, mentions, pause and the audit beh
 - **Upload succeeds, post never sent**: an unattached library file stays, as with an abandoned normal-chat upload; no entry is written.
 - **Agent answer whose files cannot be copied**: tool error to the agent; nothing appended, mirrored or forwarded.
 - **A stopped member's held request with an image, revived later**: the model gets the image.
-- **Stop with nothing open**: success with an empty result list (the Stop button was not shown anyway).
-- **Stop while an approval is clicked**: exactly one transition wins; the outcome follows the resulting state.
-- **Retry of Stop after the server already froze a set**: same result; requests created after the first acceptance are untouched.
 - **Invitation summary arrives after the 45-second limit**: discarded. **Gateway restarts while generating**: shown as unavailable after restart. **Group deleted or origin agent removed during generation**: result discarded.
 - **Prose password in the origin chat** (not a registered secret, no known credential shape): can pass into the summary. Accepted by the founder (D18, #1467), stated in the documentation; no test asserts it is removed.
-- **Mixed turn of a web message and a group request** (the group wins over web in the existing precedence): the card shows in both the agent's chat and the group; see question F-3.
+- **A step that handles a group request and other input** (own-chat message, channel, task): the card stays in the agent's own chat only (D23). **A step that handles requests of two different groups**: not decided, see F-7.
+- **Message of exactly 65,536 bytes**: accepted; **65,537 bytes**: refused. **Multi-byte text**: counted in bytes, not characters (21,845 three-byte characters are accepted, 21,846 are refused).
 - **Opening a group right after a streaming chat**: no foreign tool calls on the group's last row.
 - **Reconnect during paging**: stale page responses (after leaving the group, after a truncating snapshot) are ignored.
 - **Very long group (more than 10,000 entries)**: the opening snapshot holds the newest 10,000; older pages load on demand.
@@ -382,7 +362,6 @@ Frames refer to the approved wireframe (`docs/internal/design/1449/`): 1 normal 
 | "... is working" lines | - | none shown | request states failed / interrupted / refused / unavailable show their label | several members: one line each; finished ones replaced by answers | working lines disappear as answers arrive |
 | Attention avatar + "Open <Agent>'s main chat" | - | - | link target unknown: line without link (as the existing "Open main chat" rule: shown when Omnipus can find that main chat) | - | animation while waiting; stops when resolved |
 | Group message box (shared composer, group profile) | disabled with reason "waiting for the group" until the first live view | placeholder "Message the group - type @ to address someone" | blocked reasons (reconnecting, read-only, snapshot pending) in the notice area; upload error on the chip; nothing-to-send refusal | attachments chips with some failed: failed chips marked, others kept | message posted, box cleared |
-| Stop button | hidden | hidden when no open request | partial failure shows a per-member reason | some members stopped, some withdrawn: per-line labels | lines show "Stopped" / "Withdrawn from this group - <Agent> is still working on something else" |
 | Header Participants button, frame 3 | rendered once the group is known | n/a (a group has at least two agents; the team room may be hidden below two) | - | members unknown: button hidden | avatar stack (3 + "+N") and count; pressed state while the panel is open |
 | Participants panel, frame 4 | skeleton rows while the group record loads | - | group record failed: error line with Retry | cost unpriced: "incomplete" marker; invitation context "generating..." | status per member, links, menu, Add participant, cost, invitation context |
 | Invitation context disclosure | "Invitation context: generating..." | n/a | "Invitation context: unavailable" | - | summary text rendered through the shared markdown pipeline |
@@ -395,7 +374,7 @@ Frames refer to the approved wireframe (`docs/internal/design/1449/`): 1 normal 
 2. They read answers with full formatting, images and files; each under its author (US 1).
 3. They type "@" and pick members, optionally attach a screenshot, and send (US 2, US 3). Working lines appear per member (US 5).
 4. A card appears (tool approval or question) and they answer it in the group or in the agent's chat; both update (US 9). For helper work they see the attention avatar and follow the link.
-5. They press Stop if needed (US 10). Lines show "Stopped" or "Withdrawn ..."; Ask again is in the panel.
+5. If they want to stop an agent they go to that agent's own chat (the member link in the panel or the attention link); the group itself has no Stop (D21). Ask again for an interrupted request is in the panel.
 6. They open the Participants panel to check status, mute or remove, add someone, read cost and the invitation context (US 7).
 7. To start a group they go to an agent's main chat, press Add participant at the right end of the header line, pick an agent; a new empty group opens (US 8).
 
@@ -407,7 +386,6 @@ Frames refer to the approved wireframe (`docs/internal/design/1449/`): 1 normal 
 - "... is working" lines are polite live-region updates (same as the normal chat's status indicator); the attention link is a real link.
 - Touch: icon controls adjacent to the strip's toggles use the design system's touch-minimum target (rule 12). Zoom and narrow behaviour per `docs/internal/design/design-system-definition.md`.
 - Escape in the group message box cancels nothing outside the group (US 13).
-- Stop is a real button with a text or tooltip label; it must be reachable by keyboard when visible.
 
 ## Design-System Components
 
@@ -430,11 +408,11 @@ No raw `<button>`, no `title=` tooltips, no hard-coded colours or spacing (rules
 
 - **Untrusted agent text**: group text renders through the same pipeline as normal-chat answers (no raw HTML, safe-link allow-list, remote images blocked by the page's content security policy, strict diagrams). Display-only; commands are parsed only from the person's posts on the server (FR-168). Flag: **security-lead on-demand review** of the room-rendering switch and media read posture.
 - **Files**: group files use the workspace library and the same read posture as every chat image (unguessable id plus a cross-workspace check; optional-auth routes). #1449 neither widens nor tightens it. **Reported to security-lead** (ADR 11.4): all chat media is served by optional-auth routes, pre-existing and installation-wide.
-- **Approvals** (`docs/security.md`, "Approve a request"): a card in the group is the same decision as in the agent's chat, with the same grant scope ("Always Allow" lasts for the agent chat's own scope); one decision wins. Cards from helpers and secrets stay in the agent's chat. Hard Constraint #6 is unaffected: no new tool, no new policy value, no Auto-approve change. `docs/security.md` must say group Stop differs from a chat's own Stop (DOC-004).
+- **Approvals** (`docs/security.md`, "Approve a request"): a card in the group is the same decision as in the agent's chat, with the same grant scope ("Always Allow" lasts for the agent chat's own scope); one decision wins. Cards from helpers and secrets stay in the agent's chat. Hard Constraint #6 is unaffected: no new tool, no new policy value, no Auto-approve change. `docs/security.md` must say a card appears in a group only for work that answers the group (D23) (DOC-004).
 - **Tool surface** (`docs/tools.md`): `answer_request` keeps `allow` in the ceiling and in role policies; its new `media` parameter is covered by the same policy and by the same file-access checks the agent's own chat uses. No new tool.
 - **Invitation summary** (privacy): same workspace only; excludes secret-card entries, secret-tool results and vault content; input and output pass the registered-secret scrubber and the credential-pattern redactor; output filtered before storage. **Known gap, accepted by the founder (D18, #1467)**: a password written in plain prose can pass. Documentation says so plainly.
 - **Focus-area review**: touches gateway upload and media routes, approvals and the agent engine - `security-lead` on-demand review (not part of implementation).
-- **Agent-engine landing**: hands-on UAT by `uat-tester` plus independent `uat-validator` on the exact candidate (root `CLAUDE.md`, "Hands-on check before any agent-engine landing") because `pkg/agent`, stop and gateway steering/stop handlers change.
+- **Agent-engine landing**: hands-on UAT by `uat-tester` plus independent `uat-validator` on the exact candidate (root `CLAUDE.md`, "Hands-on check before any agent-engine landing") because `pkg/agent` (origin rule, question provenance) and gateway approval handling change.
 
 ---
 
@@ -446,8 +424,8 @@ Primary flows:
 - When the person sends text and/or attachments, the system posts one message, shows it right-aligned, and delivers it to the addressed members' own chats with the same files.
 - When the person presses Participants, the system toggles the side panel; the chat column does not move.
 - When the person presses Add participant in a main chat and picks an agent, the system opens a new empty group; the original chat is unchanged; a background summary is prepared without posting anything.
-- When a card belongs to this group's work, the system shows it in the group and in the agent's own chat; one decision resolves both.
-- When the person presses Stop, the system stops this group's work only, as defined per request state in "Machine-Verifiable Constraints".
+- When a card belongs to this group's work, the system shows it in the group and in the agent's own chat; one decision resolves both. When the step also handles other input, the card stays in the agent's own chat only.
+- When a message is longer than 65,536 bytes, the system refuses it (422) and posts nothing.
 
 Error flows:
 - When a message has nothing to send, the system refuses it (422) and posts nothing.
@@ -455,13 +433,10 @@ Error flows:
 - When the file library is unavailable, the system answers an upload with an explicit 503-class error shown on the attachment chip; it never falls back to a chat session.
 - When an agent's answer files cannot be stored or checked, the agent gets a tool error and nothing is posted.
 - When the summary cannot be made (provider error, quota, 45-second limit, restart, deletion), the group works without it and the panel says "Invitation context: unavailable".
-- When Stop is sent for a missing group, the system answers 404 "no such group chat".
-- When a late answer arrives for a stopped or withdrawn request, the system refuses it and appends nothing.
 - When an earlier-page load fails, the system keeps the shown messages and offers Retry on the same page.
 
 Boundary conditions:
 - When a message carries 16 attachments, it is accepted; with 17 it is refused (400).
-- When a stop request id is 1 or 128 characters, it is accepted; empty or 129 characters, 400.
 - When the summary arrives at or before 45 seconds, it is used; after, it is discarded.
 - When the history fill needs pages, the system asks for pages of 20 to 100 entries, each strictly older than the last.
 
@@ -472,15 +447,13 @@ Boundary conditions:
 - The system must not post the invitation summary, or any trace of it, into the group or into either chat, because D10 makes it invisible background (viewable only in the panel).
 - The system must not hold a person's first group message while the summary is being made, because D20 says it is never held.
 - The system must not show approval, question or secret cards in the group unless they carry this group's reference; helper cards stay in the agent's own chat only (D15), because unrelated cards "do not make sense here" (founder, D8).
-- The system must not stop a member's whole chat, hold its later requests, or discard its queued person messages when the group Stop is pressed, because that breaks D8's "unrelated work stays".
-- The system must not silently turn a failed or impossible stop into "withdrawn"; if the turn-scoped stop cannot be built, the founder decides (ADR C-I5).
 - The system must not read or write any normal chat's stored transcript when a group is open (FR-199).
 - The system must not create a chat session for a group upload or message.
 - The system must not let agent text run a command, approve, or answer a card (FR-168).
 - The system must not delete files with a group (D19).
 - The system must not add anonymous read access beyond the normal chat's (ADR C-I1: group files share the normal chat's read posture; no tighter and no looser).
 - The system must not claim anywhere (UI, documentation, tests) that passwords written in plain prose are removed from the summary (D18).
-- The system must not add live writing of answers, per-member Stop, presence, or other human participants (out of scope).
+- The system must not add live writing of answers, presence, or other human participants (out of scope), and must not add a Stop control or stop endpoint to the group (D21).
 - The system must not reintroduce `FeedKindLabel`'s bar, `MainChatAddParticipant`'s row, `RoomHeader`'s member list, or `ChatControls` on group pages (retired by D13, ADR A9).
 - The system must not add "Add participant" to helper or non-main chats (D17).
 - The system must not introduce hand-written wire types (Hard Constraint #8).
@@ -494,33 +467,18 @@ Boundary conditions:
 | `postRoomMessage`: no non-blank text and no media | 422 | `ErrorResponse`; nothing appended |
 | `postRoomMessage`: more than 16 media, or other schema violation | 400 | existing `400BadRequest` |
 | `postRoomMessage`: media not `media://workspace/<this room's workspace>/<id>`, other workspace, missing, or stranded | 422 | `ErrorResponse`; nothing appended; whole message refused |
+| `postRoomMessage`: text longer than 65,536 UTF-8 bytes | 422 | `ErrorResponse` naming the size and the limit; nothing appended; same with inbound validation on and off (A-12) |
+| `answer_request`: text longer than 65,536 UTF-8 bytes | tool error | nothing posted, copied or passed on |
 | `postRoomMessage`: success | 202 | unchanged |
 | `uploadFiles` with `workspace_id`, library unavailable | 503 | `ErrorResponse`; never falls through to the session path |
 | `uploadFiles` with `workspace_id` of another workspace | 403 | as the normal chat's cross-workspace refusal today |
-| `stopRoomWork`: success | 200 | `RoomStopResponse` |
-| `stopRoomWork`: `client_request_id` empty or longer than 128 | 400 | `ErrorResponse` |
-| `stopRoomWork`: missing or deleted room | 404 | `{"error":"no such group chat"}` |
 | `answer_request` with unusable media | tool error | nothing appended, mirrored or forwarded |
-| `answer_request` for a stopped request | tool error | "the group stopped this request" |
-| `answer_request` for a withdrawn request | tool error | "this group withdrew the request" |
 
-**Stop outcomes per request state** (`RoomStopResponse.results[].outcome`; the target set is frozen at acceptance):
-
-| Request state at acceptance | Outcome | Delivery state afterwards |
-|---|---|---|
-| `recorded`, `admitted`, `held`, `awaiting_approval` (pre-admission) | `cancelled` | `cancelled`, reason `stopped`; pre-admission card withdrawn |
-| `working` or `waiting_on_user`, turn consumed only this group's requests | `stopped` | `interrupted`, reason `stopped` (UNPROVEN-1; UNPROVEN-2 when parked on a question) |
-| `waiting_on_user` on a pending tool approval | approval resolved as denied through the single approval authority; then `stopped` | `interrupted` |
-| `working` or `waiting_on_user`, turn also consumed another input (web, channel, peer, another group) | `withdrawn` | `cancelled`, reason `withdrawn`; the turn continues |
-| ended before the server acted | `already_finished` | unchanged |
-| a step failed | `failed` with `reason` | unchanged for that request |
-| `answered`, `refused`, `failed`, `interrupted`, `unavailable`, `cancelled` at acceptance | not in the set | unchanged |
-
-**Limits**: attachments per message at most 16; `client_request_id` 1..128; invitation text at most 4,096 characters, summary of about 200 words; summary input at most 40 entries and 16 KiB; summary time limit 45 seconds; history pages of 20..100 entries (server maximum 1000); `getRoomHistory` contract unchanged. Per-part upload size limit 100 MB, as the existing `uploadFiles` contract says.
+**Limits**: attachments per message at most 16; message and agent-answer text at most 65,536 UTF-8 bytes (D24); invitation text at most 4,096 characters, summary of about 200 words; summary input at most 40 entries and 16 KiB; summary time limit 45 seconds; history pages of 20..100 entries (server maximum 1000); `getRoomHistory` contract unchanged. Per-part upload size limit 100 MB, as the existing `uploadFiles` contract says.
 
 **Performance Bounds**: opening a group must not request history when the opening snapshot already covers the fill goal (zero `getRoomHistory` calls) - Scenario S-43; the list must not re-render existing rows when only a member's delivery state changes (row identity stable) - test T-30.
 
-**Scope Boundaries**: the system MUST NOT extend Stop to per-member selection, MUST NOT extend the invitation summary to a different workspace, and MUST NOT accept `media://` refs outside the room's workspace.
+**Scope Boundaries**: the system MUST NOT add any Stop control or endpoint to the group (D21), MUST NOT extend the invitation summary to a different workspace, and MUST NOT accept `media://` refs outside the room's workspace.
 
 ## Integration Boundaries
 
@@ -538,11 +496,11 @@ Boundary conditions:
 - **On failure**: 503 for unavailable; 403/422 for cross-workspace or invalid; nothing appended.
 - **Development**: real library, test workspace.
 
-### Agent engine (stop, questions, requests)
+### Agent engine (questions, requests)
 
-- **Data in / out**: stop requests with the frozen request ids; question provenance at creation; request capture with media.
-- **Contract**: `stopRoomWork`, `AskUserQuestionCard`, `answer_request` tool.
-- **On failure**: `failed` outcome with reason per request; never a silent downgrade.
+- **Data in / out**: question provenance at creation; request capture with media; the origin rule of D23.
+- **Contract**: `AskUserQuestionCard`, `answer_request` tool.
+- **On failure**: a refused answer (size, files) returns a tool error and appends nothing.
 - **Development**: real engine in Go integration tests with a stub model; hands-on UAT on the exact candidate before landing (root `CLAUDE.md`).
 
 ### Model provider (invitation summary)
@@ -561,16 +519,9 @@ Boundary conditions:
 
 ---
 
-## Unproven Items and Escalation Path
+## Items still to be proven in RED/CHECK
 
-The ADR marks two pieces of new agent-engine code as **not proven to be buildable** on the existing canceller. The spec treats them as gated work with a fixed escalation path; nothing downstream may paper over them.
-
-| Item | What is unproven | Why it matters | How it is proven | If it cannot be built |
-|---|---|---|---|---|
-| **UNPROVEN-1 - single-turn stop without freezing the agent chat** (ADR C-I5, A6.2; was risk R5) | A stop primitive "stop this turn if it is still turn T of session S, helper tree included, keep the queue, set no stopped fence" is new code; the existing canceller cancels per session and `StopSession` discards queued person messages and fences the session. Feasibility is **Inferred**, never traced. | Without it Stop either does nothing for running answers (fails D4) or kills the member's whole chat (breaks D8). | BE-2 begins with a RED spike test pack (T-11): stop a room-only turn while a queued person message exists and while a later request is held; assert the turn ends, queue and later requests survive, no fence. The spike result is reported before any dependent frontend work (FE-2 live paths) is accepted. | **Escalate to the founder.** It is never silently downgraded to "cancel not-started plus withdraw" (that fallback was withdrawn; it contradicts D4). The founder chooses: accept a reduced Stop, extend the primitive's scope, or defer. Spec text FR-057 stays unmet until then. |
-| **UNPROVEN-2 - per-request question cancel** (ADR C-I5, C-I6) | Cancelling one specific parked question for one group request so no answer or default can resume that work later. Today's cancel is session-scoped (`cancelPendingAskForScope`); a request-scoped variant is new code, and `AskUserQuestionTool.Execute` parks the turn (`ParksTurn`) with resume started later. | Without it, Stop leaves a live question card that can restart cancelled work (UAT-22). | RED test T-12: park a question for request R1 of two requests in the same session; Stop; assert R1's set is cancelled, R2's is untouched, a late answer or the default-safe timer cannot resume R1. | **Escalate to the founder**, same rule. Interim safe behaviour is not decided by this spec; question F-1 asks the founder which reduced behaviour, if any, is acceptable if it fails. |
-
-Also still **[U]/[I]** in the ADR and therefore proven in RED/CHECK, not assumed (not "unproven items" in the ADR's sense; failing them has a pre-designed fallback): the nested assistant-ui runtime scoping (FE-0 spike; fallback `ComposerTransport`, T-26) and approval frames reaching a client on a group page (T-40/S-81; risk R8).
+The ADR's two unproven Stop items (UNPROVEN-1 turn-scoped stop, UNPROVEN-2 per-request question cancel) were **dropped by D21** together with the group Stop; no spike, no escalation path and no agent-engine stop code remain in this feature. Still **[U]/[I]** in the ADR and therefore proven in RED/CHECK, not assumed (each has a pre-designed fallback): the nested assistant-ui runtime scoping (FE-0 spike; fallback `ComposerTransport`, T-26) and approval frames reaching a client on a group page (T-40/S-81; risk R8).
 
 ---
 
@@ -580,15 +531,14 @@ Also still **[U]/[I]** in the ADR and therefore proven in RED/CHECK, not assumed
 |---|------------------|------------------------|---------------------|
 | A-1 | Whether a summary output longer than 4,096 characters is truncated or counts as `unavailable` | truncate silently | Recommendation: truncate at 4,096 on a word boundary, status `ready`. Dispatcher/architect to confirm |
 | A-2 | Whether an origin chat with nothing to summarise (0 usable entries after exclusions) makes a summary or goes straight to `unavailable` | call the model with empty input | Recommendation: skip the call, status `unavailable`, no cost. Architect to confirm |
-| A-3 | The server enforces a 64 KiB text limit, while the contract says 5 MiB (ADR risk R9, existing today) | change one of them while there | Not changed by #1449; see F-4 for the founder; tests assert only the values this spec states |
+| A-3 | D24 requires one size limit, in bytes; OpenAPI `maxLength` counts characters, and the server counts UTF-8 bytes | set `maxLength` to 65536 and call it done | Contract text states "65,536 UTF-8 bytes"; the server stays the byte authority; the over-limit status is 422 whichever layer catches it (A-12) |
 | A-4 | Duplicate media refs in one message | dedupe silently | Recommendation: accepted as listed, shown once per listed ref; backend-lead to confirm in RED. Not asserted until confirmed |
-| A-5 | Exact English wording of states ("Stopped", "Withdrawn from this group - <Agent> is still working on something else", "Invitation context: unavailable"/"generating") | invent wording | Wording quoted from founder decisions D16/D20 and ADR C-I5/C-I8 is the oracle; other labels reuse today's `deliveryLabel` set |
+| A-5 | Exact English wording of states ("Invitation context: unavailable"/"generating") | invent wording | Wording quoted from founder decision D20 and ADR C-I8 is the oracle; other labels reuse today's `deliveryLabel` set |
 | A-6 | Whether the tooltip of the Participants button says "Participants" | any | Recommendation: "Participants" (same as the accessible name). Frontend-lead confirms with the design-system skill |
 | A-7 | Behaviour of the Participants panel on narrow widths | custom | Recommendation: same as the other registered side panels (they already collapse/overlay on narrow widths); no new behaviour |
-| A-8 | Whether Stop is also offered in the panel per member | add it | No. Out of scope (ADR C-I5 removed the selector); panel offers Ask again only |
 | A-9 | Whether `answer_request.media` may point to the same file more than once | n/a | Same as A-4 |
+| A-12 | Whether the schema-level maximum (a 400 under inbound validation) or the server byte check (422) answers an over-limit message | return whichever fires first | Spec value: 422 with the size message in both modes; backend-lead reconciles the schema and the handler (for example by documenting the byte limit in the schema text and leaving the byte check to the server) |
 | A-11 | Oracles for empty-file, oversize-file and unsafe-filename uploads in DS-10 are "as in the normal chat" | copy values from the implementation | qa-lead cites the normal chat's documented behaviour (`docs/using-omnipus-ui.md`) or the `uploadFiles` contract for each value; if neither states it, ask the dispatcher |
-| A-10 | "Unrelated work under the same main chat can also trigger the attention animation in the group" (known cost of the narrowed status flip, ADR C-I7) | treat as a bug | Documented, not silent; confirmation requested as F-2 |
 
 ---
 ## BDD Scenarios
@@ -676,31 +626,6 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 - **When** the person inspects the message box
 - **Then** the card, attach button and send button are present, and no model picker, Auto-approve control, token counter or skills control is present
 
-#### Scenario Outline: S-11 Stop button follows the existence of open requests
-**Traces to**: User Story 2, Acceptance Scenario 3
-**Category**: Alternate Path
-- **Given** a request of this group is in state `<state>`
-- **When** the message box is shown
-- **Then** the Stop button visibility is `<visible>`
-
-**Examples**:
-
-| state | visible |
-|---|---|
-| recorded | yes |
-| awaiting_approval | yes |
-| admitted | yes |
-| held | yes |
-| working | yes |
-| waiting_on_user | yes |
-| answered | no |
-| refused | no |
-| failed | no |
-| interrupted | no |
-| unavailable | no |
-| cancelled | no |
-| (no requests) | no |
-
 #### Scenario: S-12 Slash menu lists only the six group commands
 **Traces to**: User Story 2, Acceptance Scenario 4
 **Category**: Happy Path
@@ -774,6 +699,23 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 - **When** the person looks at the box
 - **Then** the placeholder reads "Message the group - type @ to address someone"
 
+#### Scenario Outline: S-118 Message size limit counts UTF-8 bytes
+**Traces to**: User Story 2, Acceptance Scenario 3
+**Category**: Edge Case
+- **Given** the person composed a message of `<size>`
+- **When** the person sends it
+- **Then** the outcome is `<outcome>`
+
+**Examples**:
+
+| size | outcome |
+|---|---|
+| 1 character | accepted (202) |
+| 65,536 ASCII characters (65,536 bytes) | accepted (202) |
+| 65,537 ASCII characters (65,537 bytes) | refused (422) with a message naming the size and the 65,536-byte limit; nothing posted |
+| 21,845 three-byte characters (65,535 bytes) | accepted (202) |
+| 21,846 three-byte characters (65,538 bytes) | refused (422); nothing posted |
+
 ### Story 3 - Files into the group
 
 #### Scenario: S-20 An image sent to @Jarvis shows in the message and reaches Jarvis's own chat
@@ -818,6 +760,12 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 | 1 | accepted |
 | 16 | accepted |
 | 17 | refused in the box; 400 if forced through the API |
+| 18 | text of 65,536 ASCII bytes | Max | 202 | BDD Scenario: S-118 | D24 |
+| 19 | text of 65,537 ASCII bytes | Max + 1 | 422 naming size and limit; nothing appended | BDD Scenario: S-118 | with inbound validation on and off (A-12) |
+| 20 | 21,845 three-byte characters (65,535 bytes) | Multi-byte under | 202 | BDD Scenario: S-118 | bytes, not characters |
+| 21 | 21,846 three-byte characters (65,538 bytes) | Multi-byte over | 422 | BDD Scenario: S-118 | |
+| 22 | agent answer text of 65,536 bytes with a file | Max | posted | BDD Scenario: S-119 | |
+| 23 | agent answer text of 65,537 bytes with a file | Max + 1 | tool error; nothing posted, copied or passed on | BDD Scenario: S-119 | |
 
 #### Scenario: S-25 A file of another workspace is refused and nothing is posted
 **Traces to**: User Story 3, Acceptance Scenario 5
@@ -909,6 +857,20 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 - **Given** Jarvis names `media://workspace/<other workspace>/<id>`
 - **When** Jarvis submits the answer
 - **Then** Jarvis receives a tool error and nothing is posted
+
+#### Scenario Outline: S-119 An agent answer over the size limit is refused whole
+**Traces to**: User Story 4, Acceptance Scenario 6
+**Category**: Error Path
+- **Given** Jarvis submits an answer whose text is `<size>` with one attached file
+- **When** the answer is submitted
+- **Then** the outcome is `<outcome>`
+
+**Examples**:
+
+| size | outcome |
+|---|---|
+| 65,536 bytes | posted, mirrored and forwarded |
+| 65,537 bytes | tool error; nothing posted, copied (including the file) or passed on |
 
 ### Story 5 - Live view
 
@@ -1289,12 +1251,20 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 - **When** the request is raised
 - **Then** no secret card appears in the group and a link to Mia's own chat is shown
 
-#### Scenario: S-79 A card from a run that also handles a channel message stays in the agent's chat
+#### Scenario Outline: S-79 A card from a step that also handles other input stays in the agent's chat
 **Traces to**: User Story 9, Acceptance Scenario 8
 **Category**: Edge Case
-- **Given** Jarvis's running work consumed both a group request and a messaging-channel message
+- **Given** Jarvis's running step consumed this group's request and also `<other>`
 - **When** an approval is raised
-- **Then** the card appears in Jarvis's own chat only
+- **Then** the card appears in Jarvis's own chat only, and not in the group
+
+**Examples**:
+
+| other |
+|---|
+| a message typed in Jarvis's own chat |
+| a messaging-channel message |
+| a task |
 
 #### Scenario: S-80 Approve and deny at the same moment produce exactly one decision
 **Traces to**: User Story 9, Acceptance Scenario 9
@@ -1324,11 +1294,11 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 | carries this group's reference for R1 | only R1 |
 | carries no group reference (helper or unrelated) | both R1 and R2 (existing per-chat behaviour) |
 
-#### Scenario Outline: S-83 Where a card appears follows the origin of the turn
+#### Scenario Outline: S-83 A card appears in the group only for work that answers the group
 **Traces to**: User Story 9, Acceptance Scenario 8
 **Category**: Edge Case
-- **Given** a turn that consumed `<inputs>`
-- **When** it raises a tool approval
+- **Given** a step that consumed `<inputs>`
+- **When** it raises a tool approval or a question
 - **Then** the card appears `<where>`
 
 **Examples**:
@@ -1336,119 +1306,11 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 | inputs | where |
 |---|---|
 | this group's request only | group and agent's chat |
-| this group's request and a web message | group and agent's chat (see F-3) |
-| this group's request and a channel message | agent's chat only |
-| this group's request and another agent's message | group and agent's chat |
+| this group's request and a message typed in the agent's own chat | agent's chat only (D23) |
+| this group's request and a channel message | agent's chat only (D23) |
+| this group's request and a task | agent's chat only (D23) |
+| this group's request and another agent's message | agent's chat only (D23: other input) |
 | a web message only | agent's chat only |
-
-### Story 10 - Stop
-
-#### Scenario: S-84 Stop ends both working agents and leaves their chats usable
-**Traces to**: User Story 10, Acceptance Scenario 1
-**Category**: Happy Path
-- **Given** Jarvis and Mia are working on this group's requests only
-- **When** the person presses Stop
-- **Then** both lines show "Stopped", the response reports `stopped` for both, and Ask again is available in the panel
-
-#### Scenario: S-85 Stop does not freeze the agent's own chat or discard its queued messages
-**Traces to**: User Story 10, Acceptance Scenario 1
-**Category**: Edge Case
-- **Given** Jarvis works on a group request and the person has a queued message in Jarvis's own chat
-- **When** the person presses Stop in the group and then sends a new message in Jarvis's chat
-- **Then** the queued message is still delivered, the new message is accepted at once, and a later group request to Jarvis is not held by a stopped state
-
-#### Scenario: S-86 Requests that have not started are cancelled
-**Traces to**: User Story 10, Acceptance Scenario 2
-**Category**: Alternate Path
-- **Given** requests in states recorded, admitted and held
-- **When** Stop is pressed
-- **Then** each is `cancelled` with reason `stopped` and never runs
-
-#### Scenario: S-87 A pre-admission approval card is withdrawn by Stop
-**Traces to**: User Story 10, Acceptance Scenario 2
-**Category**: Alternate Path
-- **Given** a request is `awaiting_approval` with its card shown
-- **When** Stop is pressed
-- **Then** the card is withdrawn and the request is `cancelled`
-
-#### Scenario: S-88 Stop cancels a parked question so it cannot resume the work (UNPROVEN-2)
-**Traces to**: User Story 10, Acceptance Scenario 3
-**Category**: Error Path
-- **Given** Mia's group request is parked on a question and Mia has a second request R2 from another group parked on its own question
-- **When** the person presses Stop in the first group
-- **Then** the first question is closed, answering it or its default timer does nothing, and R2's question is untouched
-
-#### Scenario: S-89 Stop denies a pending tool approval through the single authority
-**Traces to**: User Story 10, Acceptance Scenario 3
-**Category**: Alternate Path
-- **Given** Jarvis's group request waits on a tool approval
-- **When** Stop is pressed
-- **Then** the approval is resolved as denied once, the request is `stopped`, and a later click on the old card does nothing
-
-#### Scenario: S-90 A run that also handles a channel message is only withdrawn from the group
-**Traces to**: User Story 10, Acceptance Scenario 4
-**Category**: Edge Case
-- **Given** Jarvis's running turn consumed this group's request and a messaging-channel message
-- **When** Stop is pressed
-- **Then** the response reports `withdrawn`, the group shows "Withdrawn from this group - Jarvis is still working on something else", and the channel reply completes
-
-#### Scenario: S-91 A late answer for a stopped or withdrawn request is refused
-**Traces to**: User Story 10, Acceptance Scenario 4
-**Category**: Error Path
-- **Given** a request was withdrawn (or stopped) and its agent then submits `answer_request`
-- **When** the answer arrives
-- **Then** the tool reports "this group withdrew the request" (or "the group stopped this request") and nothing is appended
-
-#### Scenario: S-92 A repeated stop returns the same result and never selects newer requests
-**Traces to**: User Story 10, Acceptance Scenario 5
-**Category**: Edge Case
-- **Given** a stop with `client_request_id` "c1" froze requests {R1, R2} and a new request R3 was created afterwards
-- **When** a second stop with "c1" arrives
-- **Then** the response equals the first, R3 is untouched
-
-#### Scenario: S-93 A partial failure is shown per member with the reason
-**Traces to**: User Story 10, Acceptance Scenario 6
-**Category**: Error Path
-- **Given** stopping Mia's request fails and Jarvis's succeeds
-- **When** the response arrives
-- **Then** Jarvis shows "Stopped", Mia shows the failure with the server's reason, and Mia's request is unchanged
-
-#### Scenario: S-94 A request that finished before the stop is reported as already finished
-**Traces to**: User Story 10, Acceptance Scenario 7
-**Category**: Edge Case
-- **Given** Jarvis's answer is posted between the click and the server acting
-- **When** the response arrives
-- **Then** Jarvis's result is `already_finished` and his answer stays
-
-#### Scenario: S-95 Stop for a missing group answers 404
-**Traces to**: User Story 10, Acceptance Scenario 8
-**Category**: Error Path
-- **Given** the group was deleted
-- **When** a stop is sent
-- **Then** the answer is 404 with "no such group chat"
-
-#### Scenario Outline: S-96 The stop request id is validated
-**Traces to**: User Story 10, Acceptance Scenario 8
-**Category**: Edge Case
-- **Given** a stop body with `client_request_id` of `<length>` characters
-- **When** it is sent
-- **Then** the answer is `<status>`
-
-**Examples**:
-
-| length | status |
-|---|---|
-| 0 | 400 |
-| 1 | 200 |
-| 128 | 200 |
-| 129 | 400 |
-
-#### Scenario: S-97 Stop with nothing open succeeds with an empty result
-**Traces to**: User Story 10, Acceptance Scenario 2
-**Category**: Edge Case
-- **Given** every request of the group is terminal
-- **When** a stop is sent through the API
-- **Then** the answer is 200 with an empty result list
 
 ### Story 11 - Header
 
@@ -1615,33 +1477,31 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 
 | Level | Scope | Purpose |
 |---|---|---|
-| Unit (Go) | `pkg/rooms`, `pkg/addressing`, `pkg/agent`, `pkg/tools`, `pkg/askuser`, `pkg/gateway` handlers | stop semantics, media validation and ordering, invitation state machine, provenance, status flip |
+| Unit (Go) | `pkg/rooms`, `pkg/addressing`, `pkg/agent`, `pkg/tools`, `pkg/askuser`, `pkg/gateway` handlers | media validation and ordering, invitation state machine, provenance, status flip |
 | Unit (vitest) | room source projection, composer seam, profile, slash/mention, working lines, participants panel, header slot | shared-stack behaviour with a room fixture |
 | Integration | real hub and room service with a stub model; two-browser approval race | frames reach a group page, one-decision rule, mirror and repair |
 | Neutrality gate | the entire existing chat/history/composer suites | proves the shared stack is unchanged for sessions (FE-1 and FE-0 gates) |
-| E2E (Playwright) | real server, stub model | paging, rich content, attachments, stop, approvals, start-a-group |
+| E2E (Playwright) | real server, stub model | paging, rich content, attachments, approvals, start-a-group |
 | Hands-on UAT | exact candidate, tester + independent validator | rows below |
 
 Execution (not only writing): RED packs QA-R1 to QA-R4 are shown failing on a tests-only commit in CI; GREEN by the implementing leads; CHECK by a second instance of qa-lead (test integrity) and a second instance of each lead role; Go results come from CI (root `CLAUDE.md`: never run the full Go suite locally); frontend runs are targeted `npx vitest run <file>` through the slot runner. Every new vitest file must match a CI group pattern (`scripts/check-vitest-coverage.mjs`, T-53).
 
 ### Hands-on UAT rows (written at spec time)
 
-Procedure and independence rules: root `CLAUDE.md` ("Hands-on pipeline"), `.claude/skills/omnipus-planning-orchestration/knowledge/landing-trains.md`. Rows UAT-1 to UAT-28 are carried from the ADR (§10 and §11.6; UAT-11 is replaced by UAT-11b; UAT-9 is the amended §11.6 version). UAT-29 and UAT-30 are added by this spec. Provider/model for any agent-driven row: `openrouter` + `deepseek/deepseek-v4.1-flash` (root `CLAUDE.md`). **Rows marked AE touch the agent engine (stop, approvals, questions, requests) and require exact-commit hands-on UAT by `uat-tester` plus independent `uat-validator` before landing.**
+Procedure and independence rules: root `CLAUDE.md` ("Hands-on pipeline"), `.claude/skills/omnipus-planning-orchestration/knowledge/landing-trains.md`. Rows UAT-1 to UAT-28 are carried from the ADR (§10 and §11.6; UAT-11 is replaced by UAT-11b). **UAT-8, UAT-9 and UAT-22 (the Stop rows) are removed by D21; ids are not reused.** UAT-29 to UAT-32 are added by this spec. Provider/model for any agent-driven row: `openrouter` + `deepseek/deepseek-v4.1-flash` (root `CLAUDE.md`). **Rows marked AE touch the agent engine (approvals, questions, requests) and require exact-commit hands-on UAT by `uat-tester` plus independent `uat-validator` before landing.**
 
 | Row | Acceptance criterion | Steps | Expected result | Affected area | Validator critical path | Automation candidate |
 |---|---|---|---|---|---|---|
 | UAT-1 | US-1 AS 1.1, 1.2; S-01..S-03 | Open a group; an agent answers with a table, a Mermaid block, a formula and a code block | All render as in a normal chat; code has Copy; Mermaid draws | display | Re-drive with a fresh agent answer; compare with the same content in a normal chat | Stable: e2e T-48 |
 | UAT-2 | US-3 AS 3.1; S-20 | Attach a screenshot in the group composer and send to @Jarvis | The image shows in your message with the lightbox; Jarvis's main chat shows the request with the image; Jarvis can describe it | files-in, composer | Open Jarvis's main chat independently and check the image and Jarvis's description | Stable: e2e T-48 (stub model) |
 | UAT-3 | US-4 AS 4.1; S-29 | Ask an agent in the group to send back a file or diagram image | It appears in the agent's group answer with download/lightbox; the agent's main chat shows the same answer with the file | files-out, mirror | Check both places and the file download | Not yet: needs a real model |
-| UAT-4 | US-2 AS 2.1-2.3; S-10, S-11 | Compare the group composer with a normal one | Same card and attach button; no model picker, Auto, token counter or skills; Stop appears while someone works | composer | Side-by-side screenshot of both | Stable: T-27 |
+| UAT-4 | US-2 AS 2.1, 2.2; S-10 | Compare the group composer with a normal one | Same card and attach button; no model picker, Auto, token counter or skills; no Stop button | composer | Side-by-side screenshot of both | Stable: T-27 |
 | UAT-5 | US-2 AS 2.5; S-14, S-15 | Type "@" in the group | `@all` and the current members (muted included); a picked member stays addressed after a rename; deleting the token un-addresses | composer | Rename a member and send; check delivery | Stable: T-28 |
 | UAT-6 | US-2 AS 2.4; S-12, S-115 | Type "/" in the group | Only the six group commands; `/pause` then a message: not delivered; `/resume` resumes | composer, commands | Check the paused message is saved but absent from the agent's chat | Stable: T-28, T-46 |
 | UAT-7 | US-5 AS 5.1, 5.2; S-35, S-07 | Address two agents; watch | One "<Agent> is working..." line per agent, then each finished answer under its author's name and avatar | live view | Watch both lines until both answers; confirm no partial text | Partly: T-33; timing by hand |
-| UAT-8 (AE) | US-10 AS 10.1; S-84, S-85 | While both work, press Stop | Both stop; lines show interrupted/Stopped; Ask again is available in the panel; each agent's main chat still accepts new messages immediately (not stopped/held) | stop, agent engine | Send a message in each agent's chat right after Stop; confirm it is processed, and that a queued message was not discarded | Not yet: needs real running turns |
-| UAT-9 (AE) | US-10 AS 10.4; S-90, S-91 | Press Stop while an agent's run also handles a Telegram message | The group shows "Withdrawn from this group - <Agent> is still working on something else"; the Telegram reply still completes; no group answer appears later | stop, channel mix | Confirm the Telegram reply arrived and nothing was posted in the group afterwards | Not yet: needs a channel |
 | UAT-10 (AE) | US-9 AS 9.1, 9.2; S-71, S-72 | Ask an agent in the group to run a tool that needs approval | The card shows in the group and in the agent's chat; approve in the group; the agent's chat shows it resolved without reload | approvals | Open the agent's chat in a second browser; confirm no reload is needed | Stable: e2e T-49 (stub model) |
 | UAT-11b (AE) | US-9 AS 9.6; S-77 (replaces UAT-11, D15) | A group request makes the agent start a helper that needs an approval | The card appears only in the agent's main chat; in the group the agent's avatar shows the attention animation with "Open <Agent>'s main chat"; after approving there, the animation stops | approvals, helper, live view | Confirm the card is absent from the group; follow the link; approve; confirm the animation stops | Not yet: needs a real helper |
-| UAT-12 (AE) | US-9 AS 9.3; S-73 | The agent has an unrelated approval in its own chat | No card in the group; the member line says "waiting for you in <Agent>'s main chat" only if that agent's group work is blocked | approvals | Confirm no card in the group; note the known attention-animation cost (question F-2) | Not yet |
+| UAT-12 (AE) | US-9 AS 9.3; S-73 | The agent has an unrelated approval in its own chat | No card in the group; the member line says "waiting for you in <Agent>'s main chat" only if that agent's group work is blocked | approvals | Confirm no card in the group; the attention animation may light up for unrelated waiting (accepted, D22) | Not yet |
 | UAT-13 (AE) | US-9 AS 9.4; S-74 | An agent asks a question (question card) during group work | The question card shows in the group; answering it there updates the agent's chat | questions | Answer in the group; check the agent's chat shows it answered | Not yet |
 | UAT-14 (AE) | US-9 AS 9.7; S-78 | A secret is requested during group work | No secret card in the group; a link to the agent's chat | secrets | Confirm no secret card or value in the group | Not yet |
 | UAT-15 | US-8 AS 8.2, 8.3; S-60, S-61 | In Jarvis's main chat press Add participant (top right), pick Mia | A new empty group opens; Jarvis's chat unchanged; the panel shows Invitation context (generating then ready); it contains no keys or passwords | start group, invitation | Verify Jarvis's chat has no new message; read the summary for keys | Stable: e2e T-50 (stub model) |
@@ -1651,7 +1511,6 @@ Procedure and independence rules: root `CLAUDE.md` ("Hands-on pipeline"), `.clau
 | UAT-19 | US-11 AS 11.1-11.3; S-98..S-100 | Look at a normal chat, a helper chat and a group chat header | No bar, no borders. Left side unchanged. Right end: Add participant icon / "Jarvis / Research helper" (Jarvis links back) / avatar stack + count. Tooltips on hover; usable by keyboard and touch | header | Tab through the header; use touch emulation | Stable: T-37 |
 | UAT-20 | US-12; S-105, S-107 | An agent posts `/pause` or a link to `javascript:` in the group | It shows as text; nothing pauses; the link is struck through and not clickable | safety | Click the struck link; confirm the group is not paused | Stable: T-32 |
 | UAT-21 | US-6 AS 6.8; S-49 | Narrow window (phone width) on a group | The header strip collapses as today; the Participants button stays reachable | header, layout | Emulate 375 px and open the panel | Stable: T-35, T-38 |
-| UAT-22 (AE) | US-10 AS 10.3; S-88, S-89 (UNPROVEN-2) | Stop while every addressed agent waits on an approval or a question | Stop is visible; after Stop the card is closed and answering the old question is impossible or does nothing | stop, questions, approvals | Try to answer the old card after Stop; confirm the agent does not resume | Not yet |
 | UAT-23 (AE) | US-9 AS 9.9; S-80 | Approve in the group and deny in the agent's chat at the same moment (two browsers) | Exactly one decision takes effect; both views show the same final state | approvals race | Two browsers, simultaneous clicks, compare final state | Partly: T-13 |
 | UAT-24 (AE) | US-9 AS 9.5; S-75 | Reload a group while a question card from group work is pending | The card is still shown in the group and in the agent's chat | questions, reload | Reload both places | Partly: T-15 |
 | UAT-25 | US-8 AS 8.5; S-63 | Start a group while the model provider is down | The group opens; the first message goes out at once; the panel shows "Invitation context: unavailable" | invitation failure | Block the provider; time the first message | Stable: T-18/T-50 (stub) |
@@ -1660,6 +1519,8 @@ Procedure and independence rules: root `CLAUDE.md` ("Hands-on pipeline"), `.clau
 | UAT-28 | US-3 AS 3.5; S-25 | Attach to a group message a file reference from another workspace (API) | Refused; nothing is posted | media security | Replay the API call with a reference of workspace B into a group of workspace A | Stable: T-03 |
 | UAT-29 (added by this spec) | US-3 AS 3.2; S-21 | Attach only an image (no text) and send | The message is accepted and shown with the image; the addressed agent receives it | files-in | Check the entry and the agent's chat | Stable: e2e T-48 |
 | UAT-30 (added by this spec) | US-8 AS 8.6; S-67 | Put a registered secret value and a key-shaped string in the origin chat, start a group | The summary in the panel contains neither; (a password written in plain prose is not part of this row: accepted gap #1467) | invitation security | Read the stored summary text in the panel | Partly: T-19 |
+| UAT-31 (added by this spec) | US-2 AS 2.3; S-118 | Paste a message of 70,000 characters in the group box and send | It is refused with a visible message that names the size and the 65,536-byte limit; nothing is posted; a message of 65,536 characters is accepted | message size | Try both sizes; compare the error text with the limit | Stable: T-54 |
+| UAT-32 (AE, added by this spec) | US-9 AS 9.8; S-79 | Address an agent in the group and, while it works, send it a Telegram message (or a message in its own chat); then make the work need a tool approval | The card is shown only in the agent's own chat, not in the group | approvals, origin rule | Confirm the group shows no card; approve in the agent's chat | Not yet: needs a channel |
 
 ### Test Implementation Order
 
@@ -1670,9 +1531,9 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-24 (QA-R1) | `session_source_neutrality_gate` | Neutrality | S-117 | Whole existing chat/history suite green with no edits once the session source exists (FE-1 gate) |
 | T-25 (QA-R1) | `composer_seam_neutrality` | Neutrality | S-117 | Existing composer tests green after extraction and the composer-conversation seam (FE-0 gate) |
 | T-26 (QA-R1) | `room_composer_isolation` | Unit + spike | S-108, S-109, S-110, S-111, S-23 | Real composer on a group page: no active session; unrelated streaming, replaying, question-blocked session; assert no send/create/cancel/navigation and Escape scoped. Decides nested runtime vs transport seam |
-| T-27 | `composer_profile_controls` | Unit | S-10, S-11, S-19 | Controls present/absent, placeholder, Stop visibility matrix |
+| T-27 | `composer_profile_controls` | Unit | S-10, S-19 | Controls present/absent (no Stop), placeholder |
 | T-28 | `composer_slash_and_mentions` | Unit | S-12, S-13, S-14, S-15, S-16 | Moved from the old room composer tests; same meaning |
-| T-29 | `composer_blocked_and_empty` | Unit | S-17, S-18 | Blocked reasons; nothing to send |
+| T-29 | `composer_blocked_and_empty` | Unit | S-17, S-18, S-118 | Blocked reasons; nothing to send; over-limit refusal shown in the notice area |
 | T-37 | `chat_header_slot_group` | Unit | S-98, S-99, S-100, S-101, S-102 | Group control plugs into the slot; normal/helper unchanged; Open browser hidden; sr-only name |
 | T-38 | `workspace_tab_bar_fit_widest_cluster` | Unit | S-103 | Avatar stack + count at all strip modes |
 | T-39 | `avatar_stack_catalogue_contract` | Unit | (FR-067) | Four-part contract; `ActivityBar` uses it |
@@ -1686,13 +1547,9 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-07 | `answer_identity_and_repair` | Unit (Go) | S-32, S-33 | Request id + text + ordered refs; fault cuts between copy, append, mirror, mention admission |
 | T-08 | `mirror_attachments_to_main_chat` | Integration | S-20, S-29 | Request and answer mirrored with attachments; main-chat group-traffic entry expands to show them |
 | T-09 | `group_deletion_keeps_library_files` | Integration | S-112 | Journal directory removed; library entries remain |
-| T-10 (QA-R3) | `stop_endpoint_matrix` | Unit (Go) | S-86, S-87, S-92, S-93, S-94, S-95, S-96, S-97 | Frozen target set; idempotency; every outcome; validation; 404 |
-| T-11 | `stop_room_only_turn_spike` | Spike RED | S-84, S-85 | **UNPROVEN-1**: turn ends; queue and later requests survive; no fence. Reported before dependent frontend work |
-| T-12 | `stop_parked_question_spike` | Spike RED | S-88 | **UNPROVEN-2**: request-scoped cancel; sibling question untouched; no resume by answer or timer |
-| T-13 | `stop_vs_approval_concurrency` | Unit (Go) | S-89, S-80 | One transition wins |
-| T-14 | `stop_mixed_turn_withdraw` | Unit (Go) | S-90, S-91 | Mixed turn continues; late answer refused; nothing appended |
+| T-13 | `approval_single_decision` | Unit (Go) | S-80 | Approve and deny at the same moment: one transition wins |
 | T-15 | `question_provenance_durable` | Unit (Go) | S-74, S-75, S-76 | Origin captured at creation; present in live card and reconnect snapshot; resume carries it |
-| T-16 | `approval_origin_precedence_kept` | Unit (Go) | S-77, S-79, S-83 | Existing precedence and the helper-has-no-reference test unchanged |
+| T-16 | `card_origin_only_for_group_work` | Unit (Go) | S-77, S-79, S-83 | Room origin only when the step answers only the group (D23); any other input keeps the card in the agent's chat; the helper-has-no-reference test unchanged |
 | T-17 | `card_flips_only_own_request` | Unit (Go) | S-82 | With and without a reference |
 | T-18 | `invitation_state_machine` | Unit (Go) | S-61, S-63, S-64, S-65, S-66 | generating to ready/unavailable; 44/45/46 s; restart; deletion; late discard |
 | T-19 | `invitation_filters_and_exclusions` | Unit (Go) | S-67 | Registered value and pattern removed; secret entries/tool results excluded; prose password NOT asserted (#1467) |
@@ -1708,7 +1565,6 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-35 | `layout_widths_and_narrow` | Unit | S-39, S-49 | Column widths with/without panel; phone width |
 | T-36 | `participants_button_and_panel` | Unit | S-50, S-51, S-52, S-53, S-54, S-55, S-56, S-57, S-58 | Stack, toggle, content, Ask again, menu, team-room disable, delete, unpriced cost, close on leave |
 | T-40 | `group_cards_filtering_and_answer_once` | Unit | S-71, S-72, S-73, S-74, S-77, S-78, S-79 | Filter by group reference; helper/unrelated/secret absent; one decision |
-| T-41 | `stop_ui_labels_and_partial_failure` | Unit | S-11, S-84, S-90, S-93 | Stop visibility; "Stopped"/"Withdrawn..." labels; per-member reason |
 | T-42 | `room_store_additions` | Unit | S-44, S-45, S-48 | `limit`, attempt counter, view mode, view generation; stale-response fencing retained |
 | T-43 | `room_attachment_adapter` | Unit | S-20, S-22, S-23, S-24 | Upload with workspace and no session; chip errors; 16/17 |
 | T-44 | `add_participant_gating_and_new_group` | Unit | S-59, S-60 | Main chats only; opens a new group |
@@ -1716,10 +1572,12 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-46 | `pause_resume_mute_regression` | Unit | S-115, S-54 | Existing semantics |
 | T-47 (QA-M) | `e2e_room_history_paging` | E2E | S-40, S-41, S-42 | Existing spec re-expressed: verify the old anchor first, then Return to latest and verify the new row |
 | T-48 | `e2e_rich_content_and_attachments` | E2E | S-01, S-05, S-20, S-21, S-29 | Real server, stub model |
-| T-49 | `e2e_stop_and_approvals` | E2E | S-71, S-72, S-84 | Real server, stub model |
+| T-49 | `e2e_approvals` | E2E | S-71, S-72 | Real server, stub model |
 | T-50 | `e2e_start_group_and_invitation` | E2E | S-60, S-61, S-62, S-63 | Real server, stub model; provider-down variant |
 | T-52 | `docs_verifier_audit` | Audit | (DOC-001..DOC-008) | docs-verifier audits the drafts against actual behaviour |
 | T-53 | `vitest_coverage_group_guard` | CI gate | (process) | Every new vitest file matches a CI group pattern |
+| T-54 | `message_size_limit` | Unit (Go) | S-118, S-119 | 65,536 / 65,537 bytes; multi-byte boundary; agent answer over the limit posts nothing and copies no file; same result with inbound validation on and off |
+| T-55 | `contract_text_limit_agrees_with_server` | CI gate | S-118 | Entry and request text limits in the contract schemas (both copies) equal the server limit; fails if either drifts (D24) |
 
 ### Test Datasets
 
@@ -1747,39 +1605,11 @@ Construction reference: `.claude/skills/plan-spec/knowledge/test-dataset-templat
 | 16 | `client_message_id` `""` | Empty | 400 | BDD Scenario: S-18 | existing contract min length |
 | 17 | `client_message_id` of 129 characters | Max + 1 | 400 | BDD Scenario: S-18 | existing contract max length |
 
-Text length at the contract maximum is deliberately not a row: server and contract disagree today (A-3, F-4).
+The text-length rows below follow D24 (one limit, 65,536 UTF-8 bytes).
 
-#### Dataset DS-2: Stop request (`stopRoomWork`)
+#### Datasets DS-2 and DS-3
 
-| # | Input | Boundary Type | Expected Output | Traces to | Notes |
-|---|-------|---------------|-----------------|-----------|-------|
-| 1 | `client_request_id` `""` | Empty | 400 | BDD Scenario: S-96 | |
-| 2 | 1 character | Min | 200 | BDD Scenario: S-96 | |
-| 3 | 128 characters | Max | 200 | BDD Scenario: S-96 | |
-| 4 | 129 characters | Max + 1 | 400 | BDD Scenario: S-96 | |
-| 5 | unknown or deleted room id | Missing | 404 "no such group chat" | BDD Scenario: S-95 | |
-| 6 | all requests terminal | Nothing open | 200, `results` empty | BDD Scenario: S-97 | |
-| 7 | same id sent twice; a new request created between | Duplicate | identical results; new request untouched | BDD Scenario: S-92 | frozen set |
-| 8 | two different ids sent back to back | Concurrent | each result is consistent; a request is never reported both `stopped` and `already_finished` | BDD Scenario: S-92 | one transition per request |
-| 9 | request ends between click and acceptance | Race | `already_finished` | BDD Scenario: S-94 | |
-| 10 | no body / body of wrong type | Malformed | 400 | BDD Scenario: S-96 | |
-
-#### Dataset DS-3: Stop outcome per request state
-
-| # | Input | Boundary Type | Expected Output | Traces to | Notes |
-|---|-------|---------------|-----------------|-----------|-------|
-| 1 | state `recorded` | Not started | `cancelled` | BDD Scenario: S-86 | |
-| 2 | state `admitted` | Not started | `cancelled` | BDD Scenario: S-86 | |
-| 3 | state `held` | Not started | `cancelled` | BDD Scenario: S-86 | |
-| 4 | state `awaiting_approval` (pre-admission), card shown | Not started | `cancelled`, card withdrawn | BDD Scenario: S-87 | |
-| 5 | `working`, room-only turn | Running | `stopped`, delivery `interrupted` | BDD Scenario: S-84 | UNPROVEN-1 |
-| 6 | `working`, turn also consumed a channel message | Mixed | `withdrawn`, turn continues | BDD Scenario: S-90 | |
-| 7 | `working`, turn also consumed a web message | Mixed | `withdrawn`, turn continues | BDD Scenario: S-90 | any non-group input counts |
-| 8 | `working`, turn also consumed another group's request | Mixed | `withdrawn` | BDD Scenario: S-90 | |
-| 9 | `waiting_on_user`, parked question | Waiting | `stopped`, question closed | BDD Scenario: S-88 | UNPROVEN-2 |
-| 10 | `waiting_on_user`, pending tool approval | Waiting | approval denied once, `stopped` | BDD Scenario: S-89 | |
-| 11 | `answered`, `refused`, `failed`, `interrupted`, `unavailable`, `cancelled` | Terminal | not in the target set | BDD Scenario: S-97 | |
-| 12 | a step fails for one request | Failure | `failed` with `reason`; other requests unaffected | BDD Scenario: S-93 | |
+Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 
 #### Dataset DS-4: Invitation summary lifecycle
 
@@ -1852,15 +1682,17 @@ Text length at the contract maximum is deliberately not a row: server and contra
 | # | Input | Boundary Type | Expected Output | Traces to | Notes |
 |---|-------|---------------|-----------------|-----------|-------|
 | 1 | tool approval, turn consumed only this group's request | Happy | group + agent's chat | BDD Scenario: S-71 | |
-| 2 | same, turn also consumed a web message | Mixed | group + agent's chat | BDD Scenario: S-83 | F-3 |
-| 3 | same, turn also consumed a channel message | Mixed | agent's chat only | BDD Scenario: S-79 | |
-| 4 | same, turn also consumed another agent's message | Mixed | group + agent's chat | BDD Scenario: S-83 | |
+| 2 | same, step also handled a message typed in the agent's own chat | Mixed | agent's chat only | BDD Scenario: S-83 | D23 |
+| 3 | same, step also handled a channel message | Mixed | agent's chat only | BDD Scenario: S-79 | D23 |
+| 4 | same, step also handled another agent's message | Mixed | agent's chat only | BDD Scenario: S-83 | D23 |
 | 5 | approval of unrelated work (no reference) | Unrelated | agent's chat only | BDD Scenario: S-73 | |
 | 6 | helper's approval | Helper | agent's chat only + attention in group | BDD Scenario: S-77 | |
 | 7 | secret request | Secret | agent's chat only + link | BDD Scenario: S-78 | |
 | 8 | question during group work | Question | group + agent's chat | BDD Scenario: S-74 | |
 | 9 | question card after page reload | Reload | still in both | BDD Scenario: S-75 | |
 | 10 | approve in A, deny in B simultaneously | Race | exactly one decision | BDD Scenario: S-80 | |
+| 11 | same as 1, step also handled a task | Mixed | agent's chat only | BDD Scenario: S-79 | D23 |
+| 12 | step handled requests of two different groups | Mixed | **not asserted** until F-7 is answered | BDD Scenario: S-83 | F-7 |
 
 #### Dataset DS-9: History opening and paging
 
@@ -1905,10 +1737,10 @@ Text length at the contract maximum is deliberately not a row: server and contra
 | `FeedKindLabel` and header cluster | `FeedKindLabel.*`, `ChatScreen.kindLabel`, `AddParticipant`, `WorkspaceTabBar.fit`, `ChatHeaderSlot.test.tsx` | Yes - T-37, T-38 | the slot already exists on `feature/1449-minimal-header` |
 | FR-199: room frames never enter session buckets | `src/store/rooms.test.ts` "room frames do not replace or create the active agent's main transcript bucket" | Yes - S-116 | unchanged |
 | Helper approvals carry no group reference | `TestWU15Rooms_ReceiverHelperApprovalReloadRestoresCompleteApprovableCard` | No change | stays as is (D15) |
-| Hard stop interrupts initiating request without replay | `TestRoomsFix5_HardStopInterruptsInitiatingRequestWithoutReplay` | No change; new stop gets its own tests (T-10..T-14) | |
+| Hard stop interrupts initiating request without replay | `TestRoomsFix5_HardStopInterruptsInitiatingRequestWithoutReplay` | No change | |
 | Add participant starts an empty group, origin unchanged | `TestWU15Rooms_AddParticipantStartsEmptyAndLeavesOriginMainUnchanged` | Yes - T-22 | gains: invitation record exists, still no entry |
 | Contract-limit tests for rooms | `wu15_rooms_*` | Yes - T-01, T-02 | plus attachments and media |
-| REST room routes | `rest_rooms_test.go` | Yes - T-10 | plus the stop route |
+| REST room routes | `rest_rooms_test.go` | Yes - T-01, T-02, T-54 | plus message size and media |
 | `answer_request` has a ceiling policy entry for every agent | `pkg/coreagent/answer_request_policy_test.go` | No change | tool not new |
 
 ---
@@ -1925,7 +1757,6 @@ Text length at the contract maximum is deliberately not a row: server and contra
 - **FR-006**: System MUST render the group message box with the normal composer (same card, attach and send controls) under a group profile.
 - **FR-007**: System MUST omit the model picker, Auto-approve control, token counter and skills control from the group message box.
 - **FR-008**: System MUST allow up to 16 attachments per group message, show upload errors on the attachment chip, and refuse the 17th.
-- **FR-009**: System MUST show Stop while any request of the group is `recorded`, `awaiting_approval`, `admitted`, `held`, `working` or `waiting_on_user`, and MUST hide it otherwise.
 - **FR-010**: System MUST offer exactly the six group commands (pause, resume, mute, unmute, members, help) in the slash menu and MUST refuse other commands with the existing message and links to the members' own chats.
 - **FR-011**: System MUST offer "all" and every current member (muted included) after "@"; picks MUST stay bound to the member through a rename, deleting a picked name MUST remove the addressing, and typed names MUST resolve only by the exact-name rule.
 - **FR-012**: System SHOULD show the placeholder "Message the group - type @ to address someone".
@@ -1934,7 +1765,7 @@ Text length at the contract maximum is deliberately not a row: server and contra
 - **FR-015**: System MUST NOT send to, create, cancel, navigate, or be locked by any chat session from the group message box, and Escape in the group MUST NOT cancel anything outside the group.
 
 **Files and rich content (server)**
-- **FR-016**: System MUST store group uploads in the workspace library using the room's workspace and no session, and MUST NOT create a session for them.
+- **FR-016**: System MUST store group uploads exactly as normal chat uploads are stored, in the workspace media library (`workspaces/<workspace>/media/`, the Library panel), using the room's workspace and no session, and MUST NOT create a session for them (D25).
 - **FR-017**: System MUST answer 503 when the library is unavailable for a group upload and MUST NOT fall back to the session path.
 - **FR-018**: System MUST accept a message's media only as `media://workspace/<this room's workspace>/<id>` references that resolve, MUST resolve every reference before appending anything, and MUST refuse the whole message with 422 if any reference is another workspace's, missing, stranded, or not a workspace file.
 - **FR-019**: System MUST keep a message's media in the durable request together with its text so that initial admission, restart-time rewake and held delivery give the model the same files.
@@ -1943,7 +1774,7 @@ Text length at the contract maximum is deliberately not a row: server and contra
 - **FR-022**: System MUST identify an answer for mirror repair by request id, text and the ordered list of stored references.
 - **FR-023**: System MUST mirror a request's and an answer's attachments into the member's main chat and MUST show them in the main chat's collapsed group entry when expanded.
 - **FR-024**: System MUST NOT count attachments toward the text size cap and SHOULD list earlier attachments by filename only in the quoted group context.
-- **FR-025**: System MUST NOT delete library files when a group is deleted and MUST keep files downloadable from members' main chats.
+- **FR-025**: System MUST NOT delete library files when a group is deleted; they stay visible and deletable in the Library, and downloadable from members' main chats (D25).
 - **FR-026**: System MUST NOT grant group files a read posture different from the normal chat's (unguessable id plus the cross-workspace check, which refuses another workspace's caller with 403).
 
 **Live view**
@@ -1980,19 +1811,9 @@ Text length at the contract maximum is deliberately not a row: server and contra
 - **FR-049**: System MUST resolve a card once by its id (first valid decision wins) and both views MUST update without a reload.
 - **FR-050**: System MUST capture a question's group reference and origin label when the question is created, keep it immutable, carry it in the live card and the reconnect snapshot, and carry it into the resumed work's origin.
 - **FR-051**: System MUST NOT show in the group cards that carry no reference of this group: unrelated work, helper cards, secret cards; the group shows the attention animation and link instead.
-- **FR-052**: System MUST keep the existing origin precedence (channel over group over peer over web); a channel-joined turn's card MUST stay in the agent's chat only.
+- **FR-052**: System MUST show a tool-approval or question card in the group only when the step that raised it answers this group; a step that also handles any other input (a message typed in the agent's own chat, a messaging channel, a task, another agent's message) MUST keep its cards in the agent's own chat only (D23). A step that answers two different groups: not decided (F-7).
 - **FR-053**: System MUST flip to "waiting for you" only the request a reference-carrying card belongs to; a card without a reference keeps the existing per-chat behaviour.
 - **FR-054**: System MUST deliver this group's approval cards to a browser that is on the group page with no chat attached.
-
-**Stop**
-- **FR-055**: System MUST provide `stopRoomWork` accepting `client_request_id` (1..128) and returning per-request results with outcomes `cancelled`, `stopped`, `withdrawn`, `already_finished` or `failed` (with a reason).
-- **FR-056**: System MUST freeze the set of target requests at acceptance, record it durably, and replay the same result for a repeated `client_request_id` without selecting newer requests.
-- **FR-057**: System MUST apply the outcome table of "Machine-Verifiable Constraints" per request state: cancel not-started requests and withdraw their pre-admission card; stop a room-only running turn and its helper tree; cancel a parked question request-scoped; deny a pending tool approval through the single approval authority; withdraw (without stopping the turn) when the turn also consumed another input.
-- **FR-058**: System MUST NOT fence a member's session, hold its later requests, or discard queued person messages because of a group Stop.
-- **FR-059**: System MUST refuse a later `answer_request` for a stopped or withdrawn request and append nothing.
-- **FR-060**: System MUST label results "Stopped" or "Withdrawn from this group - <Agent> is still working on something else", and MUST show a partial failure per member with the server's reason.
-- **FR-061**: System MUST NOT downgrade a failed or unbuildable stop of a room-only turn or a parked question into "withdraw"; it MUST be escalated to the founder.
-- **FR-062**: System MUST answer a stop for a missing group with 404 "no such group chat" and an invalid body with 400.
 
 **Header and chrome**
 - **FR-063**: System MUST render the group's Participants button in the existing header slot at the right end of the workspace header line, leaving the left side unchanged.
@@ -2011,19 +1832,22 @@ Text length at the contract maximum is deliberately not a row: server and contra
 - **FR-072**: System MUST keep the semantics of `/pause`, `/resume`, `/mute`, `/unmute` and the refusal of other commands.
 - **FR-073**: System MUST keep the normal chat's history and composer behaviour unchanged; the existing suites pass with no edits.
 
+**Message size (D24)**
+- **FR-074**: System MUST refuse (422) a group message whose text is longer than 65,536 UTF-8 bytes, naming the size and the limit, and post nothing; the contract text for the message request and the entry states the same limit, and the server enforces it with inbound validation on and off.
+- **FR-075**: System MUST refuse an agent answer whose text is longer than 65,536 UTF-8 bytes with a tool error and MUST NOT post, copy its files, mirror or pass it on.
+
 ## Success Criteria
 
-- **SC-001**: Every scenario S-01 to S-117 is covered by at least one test in the Test Implementation Order, and every UAT row UAT-1 to UAT-30 is executed on the exact candidate commit (AE rows by `uat-tester` plus independent `uat-validator`).
+- **SC-001**: Every scenario S-01 to S-119 (S-84 to S-97 retired by D21) is covered by at least one test in the Test Implementation Order, and every UAT row UAT-1 to UAT-32 (UAT-8, UAT-9, UAT-22 retired by D21) is executed on the exact candidate commit (AE rows by `uat-tester` plus independent `uat-validator`).
 - **SC-002**: The existing chat history and composer suites pass with zero edited test files at the FE-0 and FE-1 gates.
 - **SC-003**: `make verify-contracts` and `scripts/check-no-handwritten-wire-types.sh` pass on the candidate; no hand-written wire type exists for the new fields.
-- **SC-004**: After a group Stop, 0 requests of any member are held by a stopped state and 0 queued person messages are discarded (S-85).
 - **SC-005**: The summary job causes 0 seconds of deliberate wait for any group message (S-69, S-63).
 - **SC-006**: 0 library files are deleted by deleting a group (S-112).
 - **SC-007**: `src/components/chat/ChatScreen.tsx` is never longer than 2,961 lines at any commit of the feature.
 - **SC-008**: On a group whose opening view fills the screen, the number of `getRoomHistory` calls on open is 0 (S-43).
 - **SC-009**: docs-verifier passes DOC-001 to DOC-008 against the actual behaviour.
+- **SC-012**: The contract text limit for the group message request and entry equals the server limit (65,536 UTF-8 bytes), checked by T-55 (S-118).
 - **SC-010**: The old `RoomTranscript`, `RoomComposer` and `RoomHeader` components are deleted only after the replacement tests pass in CI with red-before-green evidence.
-- **SC-011**: Both unproven items (UNPROVEN-1, UNPROVEN-2) have a recorded RED spike result before any dependent frontend work is accepted; if either fails, the founder decision is recorded before work continues.
 
 ---
 
@@ -2039,7 +1863,6 @@ Text length at the contract maximum is deliberately not a row: server and contra
 | Read a group with rich content | any signed-in person | shared message list on the group page | sidebar group section under the workspace, route `/workspaces/$workspaceId/rooms/$roomId` |
 | Send text and attachments | person | group message box (shared composer, group profile) | group page |
 | Slash commands, @ mentions | person | group message box menus | group page |
-| Stop | person (button); any REST client with the API credentials for `stopRoomWork` | Stop button in the group message box | visible while any request is open |
 | Ask again | person | Participants panel, member row | panel |
 | Participants | person | header slot button, then panel (`participants` panel) | group page |
 | Mute, remove, delete, add (in a group) | person | panel menu and Add participant | panel |
@@ -2061,11 +1884,11 @@ Existing pages read before naming destinations: `docs/group-chats.md` (current t
 |---|---|---|---|
 | DOC-001 | The group is the normal chat: formatting, images and files both ways, same message box without session-only controls, 16 attachments, files kept after deletion, agent text is display-only | `docs/group-chats.md` (intro, "Who receives your message", "How agents answer", new "Images and files", "Deleting a group", "Limits in this version") | Describe the screen and message box; replace the statement that a deleted group's files are removed with the D19 rule (journal only; library files stay); remove "Secret requests are not handled" or restate it as "a link to the agent's chat" |
 | DOC-002 | Participants button and panel; Add participant moved to the right end; starting a group; invitation context | `docs/group-chats.md` ("Add participant", "Member states", new "Participants panel" and "Invitation context") | Replace "top-left"; document panel contents, Ask again, cost; invitation context: what it is, never posted, readable in the panel, shown as generating or "Invitation context: unavailable", **and the plain statement that anything written in the original chat except recognised keys may appear in it (D18, #1467)** |
-| DOC-003 | Cards for this group's work appear in the group; helper and unrelated cards stay in the agent's chat; attention avatar; Stop versus Withdrawn | `docs/group-chats.md` ("Approvals and questions", "How agents answer") | Replace "belong to its main chat, not to the group" with the D8/D15 rule; document Stop, "Stopped", "Withdrawn from this group", Ask again, the late-answer refusal |
-| DOC-004 | A card can be answered in a group; group Stop differs from a chat's own Stop | `docs/security.md` ("Approve a request") | Same decision and grant scope wherever answered; one decision wins; group Stop leaves the agent's chat usable and unrelated work running, unlike a chat's own Stop |
+| DOC-003 | Cards for this group's work appear in the group, only for work that answers the group; helper, unrelated and mixed-input cards stay in the agent's chat; attention avatar; stopping happens in the agent's own chat | `docs/group-chats.md` ("Approvals and questions", "How agents answer") | Replace "belong to its main chat, not to the group" with the D8/D15/D23 rule; say there is no Stop in the group and point to the agent's own chat; document Ask again |
+| DOC-004 | A card can be answered in a group, only for work that answers the group | `docs/security.md` ("Approve a request") | Same decision and grant scope wherever answered; one decision wins; a step that also handles other input keeps its cards in the agent's chat |
 | DOC-005 | Minimal header: no bar or border; controls at the right end; helper breadcrumb; group Participants control; shared history behaviour | `docs/using-omnipus-ui.md` ("The chat area", "Who each message is from", "Reading earlier messages", "Sessions") | Describe the header controls per chat kind; state that groups use the same list, history, Return to latest and message box |
 | DOC-006 | Groups use the normal chat's history behaviour | `docs/group-chats.md` ("Opening a group: Earlier messages aren't shown") | Replace the room-specific scrolling text with the shared behaviour and keep the 10,000-entry snapshot statement |
-| DOC-007 | New stop operation, message `media`, upload by workspace | `docs/group-chats.md` ("API summary") | Add `stopRoomWork`, `media` on post, the 503/403/422 outcomes |
+| DOC-007 | Message `media`, upload by workspace, the 65,536-byte limit | `docs/group-chats.md` ("API summary", "Who receives your message") | Add `media` on post, the 503/403/422 outcomes and the size limit (the page already says 65,536 bytes by default; restate per F-6) |
 | DOC-008 | Group files are workspace library files that outlive the group | `docs/library.md` | One paragraph: files uploaded into or produced in a group appear in the Library like chat uploads and are not deleted with the group (docs-verifier confirms the page's current statement about chat uploads first) |
 
 The implementing lead drafts these; `docs-verifier` audits them against the actual behaviour (T-52) before landing.
@@ -2084,14 +1907,13 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-006 | US-2 | S-10, S-19 | T-27 | UAT-4 | DOC-001 |
 | FR-007 | US-2 | S-10 | T-27 | UAT-4 | DOC-001 |
 | FR-008 | US-3 | S-20, S-22, S-24 | T-43 | UAT-2 | DOC-001 |
-| FR-009 | US-2, US-10 | S-11, S-84 | T-27, T-41 | UAT-4, UAT-8 | DOC-003 |
 | FR-010 | US-2 | S-12, S-13 | T-28 | UAT-6 | DOC-001 |
 | FR-011 | US-2 | S-14, S-15, S-16 | T-28 | UAT-5 | DOC-001 |
 | FR-012 | US-2 | S-19 | T-27 | UAT-4 | none - wording only |
 | FR-013 | US-2 | S-17 | T-29 | - (covered in vitest; state names need a connection fault) | DOC-001 |
 | FR-014 | US-2, US-3 | S-18, S-21 | T-02, T-29 | UAT-29 | DOC-001 |
 | FR-015 | US-13 | S-23, S-108, S-109, S-110, S-111 | T-26 | UAT-27 | none - fixes interference; nothing documented |
-| FR-016 | US-3 | S-23, S-28 | T-04 | UAT-2 | DOC-001 |
+| FR-016 | US-3 | S-23, S-28 | T-04 | UAT-2 | DOC-001, DOC-008 |
 | FR-017 | US-3 | S-22 | T-04 | - (needs library fault; covered in Go) | DOC-001 |
 | FR-018 | US-3 | S-25, S-26 | T-03 | UAT-28 | DOC-007 |
 | FR-019 | US-3 | S-20, S-27 | T-05 | UAT-2 | DOC-001 |
@@ -2111,7 +1933,7 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-033 | US-7 | S-50, S-51, S-100 | T-36 | UAT-17 | DOC-002 |
 | FR-034 | US-7 | S-51, S-58 | T-36 | UAT-17 | DOC-002 |
 | FR-035 | US-7 | S-52, S-54, S-55, S-56, S-57 | T-36 | UAT-17 | DOC-002 |
-| FR-036 | US-7 | S-53 | T-36 | UAT-8 | DOC-002 |
+| FR-036 | US-7 | S-53 | T-36 | UAT-17 | DOC-002 |
 | FR-037 | US-6, US-7 | S-39 | T-35 | UAT-17 | DOC-002 |
 | FR-038 | US-8 | S-59, S-60 | T-44, T-22 | UAT-15 | DOC-002 |
 | FR-039 | US-8 | S-61, S-63 | T-18, T-50 | UAT-15 | DOC-002 |
@@ -2127,17 +1949,9 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-049 | US-9 | S-72, S-74, S-80 | T-13, T-40 | UAT-10, UAT-23 | DOC-004 |
 | FR-050 | US-9 | S-74, S-75, S-76 | T-15 | UAT-13, UAT-24 | DOC-003 |
 | FR-051 | US-9 | S-73, S-77, S-78 | T-16, T-40 | UAT-11b, UAT-12, UAT-14 | DOC-003 |
-| FR-052 | US-9 | S-79, S-83 | T-16 | UAT-9 | DOC-003 |
+| FR-052 | US-9 | S-79, S-83 | T-16 | UAT-32 | DOC-003 |
 | FR-053 | US-9 | S-82 | T-17 | UAT-12 | none - internal status rule |
 | FR-054 | US-9 | S-81 | T-23 | UAT-10 | none - internal delivery rule |
-| FR-055 | US-10 | S-95, S-96, S-97 | T-10 | UAT-8 | DOC-007 |
-| FR-056 | US-10 | S-92 | T-10 | - (idempotency needs a retried request; Go) | DOC-007 |
-| FR-057 | US-10 | S-84, S-86, S-87, S-88, S-89, S-94 | T-10, T-11, T-12, T-13 | UAT-8, UAT-22 | DOC-003 |
-| FR-058 | US-10 | S-85 | T-11 | UAT-8 | DOC-004 |
-| FR-059 | US-10 | S-91 | T-14 | UAT-9 | DOC-003 |
-| FR-060 | US-10 | S-90, S-93 | T-41 | UAT-9 | DOC-003 |
-| FR-061 | US-10 | S-84, S-88 | T-11, T-12 | UAT-8, UAT-22 | none - process rule (escalation), no user-visible text |
-| FR-062 | US-10 | S-95, S-96 | T-10 | - (error paths; Go) | DOC-007 |
 | FR-063 | US-11 | S-98 | T-37 | UAT-19 | DOC-005 |
 | FR-064 | US-11 | S-98, S-99 | T-37 | UAT-19 | DOC-005 |
 | FR-065 | US-11 | S-101 | T-37 | UAT-19 | none - removes a control that acted on the wrong chat |
@@ -2149,29 +1963,28 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-071 | US-15 | S-114 | T-45 | - (unchanged; covered by regression) | none - unchanged |
 | FR-072 | US-15 | S-115 | T-46 | UAT-6 | DOC-001 |
 | FR-073 | US-15 | S-117 | T-24, T-25 | UAT-18 | none - behaviour unchanged |
+| FR-074 | US-2 | S-118 | T-54, T-55, T-29 | UAT-31 | DOC-001, DOC-007 |
+| FR-075 | US-4 | S-119 | T-54 | UAT-31 | DOC-001 |
 
-**Completeness check**: FR-001 to FR-073 each have at least one scenario and one test; scenarios S-01 to S-117 each appear in the matrix and in the Test Implementation Order (verified by script, see the evidence table of the hand-off); DOC-001 to DOC-008 each appear at least once; each UI or behaviour change traces to a DOC TODO or states why none applies. Contract-first (Hard Constraint #8) is tracked by SC-003 and test T-51 rather than an FR because it has no user-visible scenario.
+**Completeness check**: FR-001 to FR-075 (FR-009 and FR-055 to FR-062 retired by D21; ids are not reused) each have at least one scenario and one test; scenarios S-01 to S-119 (S-84 to S-97 retired) each appear in the matrix and in the Test Implementation Order (verified by script, see the evidence table of the hand-off); DOC-001 to DOC-008 each appear at least once; each UI or behaviour change traces to a DOC TODO or states why none applies. Contract-first (Hard Constraint #8) is tracked by SC-003 and test T-51 rather than an FR because it has no user-visible scenario.
 
 ---
 
 ## Open Founder Questions
 
-Per plan-spec: unclear points are collected as questions with context, options and a recommendation, for a one-line answer. None blocks the rest of the spec; the spec stays `Draft` until they are answered.
+Founder answers applied in this revision: D21 (no Stop in the group), D22 (attention cue accepted), D23 (cards only for work that answers the group), D24 (one message size limit), D25 (group files stored like normal chat uploads). Two new points arose; neither blocks grill-spec round 1. Each is a one-line answer.
 
 | ID | Question | Context and impact | Options | Recommendation | Answer label |
 |---|---|---|---|---|---|
-| F-1 | If one of the two unproven pieces of Stop cannot be built (UNPROVEN-1: stopping one group turn without freezing the agent's own chat; UNPROVEN-2: cancelling one specific parked question), what should happen? | Both are new agent-engine code that the architect inferred but did not trace. The ADR forbids silently turning Stop into "withdraw" (which would leave running answers running). | A: stop and ask you again when it happens, with the spike result; B: pre-approve "withdraw only" for that case; C: pre-approve stopping the agent's whole chat for that case | A (decide with real evidence; nothing downstream depends on guessing now) | "F-1 A/B/C" |
-| F-2 | Accept that unrelated work running under the same agent can also make that agent's avatar show the attention animation in the group? | To keep the attention signal for helper approvals (D15), a card with no group reference still flips every working group request of that agent to "waiting for you". D8 says unrelated work should stay out of the group; the animation (not a card) is the only trace. | A: accept as documented; B: show the animation only for this group's own references (then helper approvals give no signal, contradicting D15) | A | "F-2 A/B" |
-| F-3 | When one agent turn handles both a message you typed in its own chat and a group request, the approval card currently appears in both the agent's chat and the group (group wins over web; only a messaging channel wins over the group). Confirm? | D8 said "channel wins" but did not rule on web plus group. Existing precedence is channel, group, peer, web. | A: confirm (card in both); B: treat web like channel (card only in the agent's chat) | A | "F-3 A/B" |
-| F-4 | The group message text limit is 5 MiB in the contract but about 64 KiB in the server today (ADR risk R9, existing). Leave as is in #1449? | Not caused by this feature; images and files do not count toward it. Changing it would be a separate decision with user-visible consequences for very long messages. | A: leave, file a separate issue; B: align in #1449 to the contract; C: align the contract to the server | A | "F-4 A/B/C" |
-| F-5 | Files you attach in a group and files agents send into a group will appear in the workspace Library like normal chat uploads, and stay there if you delete the group (D19). Is it acceptable that they are visible and deletable in the Library? | It follows from storing them in the workspace library (the way the normal chat already does) and from D19. | A: accept; B: hide group files from the Library listing (extra work, not decided by D19) | A | "F-5 A/B" |
+| F-6 | D24 needs one group message limit, named per the existing server behaviour: **65,536 bytes** (default of `session_messaging.steer_body`, which also governs messages between sessions and which an operator can change). The contract can state only one number. How should the operator setting behave for groups? | Today docs/group-chats.md says the limit follows `steer_body`. The contract and the server can only "agree on one limit" if the setting cannot move the group limit away from the contract number. | A: groups always use 65,536 bytes and ignore the setting; B: groups use the setting but never more than 65,536 bytes (a larger value is clamped, a smaller one is honoured); C: raise the fixed limit to a different number in both contract and server | B | "F-6 A/B/C" |
+| F-7 | When one agent step answers requests from two different groups at once and needs an approval, where does the card go? | D23 says cards appear in the group only for work that answers the group context. Two groups are two contexts; the card carries one group reference today (the first). | A: the agent's own chat only; B: in the first group only (today's behaviour); C: in both groups | A | "F-7 A/B/C" |
 
 ## Assumptions
 
 - GitNexus was not available in this session; the codebase context uses Read/Grep and the ADR's verified statements, labelled as such. Implementing leads re-run `impact` before every edit.
 - The interview-me state file (`.<spec-name>.interview.json`) does not exist for this feature; the requirements document's decisions log is the interview output (founder interview in the team-lead chat, 2026-10-27/28).
 - `ChatHeaderSlot` and the minimal header for normal and helper chats exist only on `feature/1449-minimal-header` (`1d7886ecc`, `ede852eb2`) and are assumed to land before or with this feature; this spec does not redo that work.
-- Spec-chosen values (ADR delegated them to the spec): summary time limit 45 s (ADR ceiling 60 s), summary input 40 entries / 16 KiB (ADR ceiling), about 200 words, text maximum 4,096; HTTP codes 422 for "nothing to send" and media-reference failures, 400 for schema violations, 503 for library unavailable, 200 for stop.
+- Spec-chosen values (ADR delegated them to the spec): summary time limit 45 s (ADR ceiling 60 s), summary input 40 entries / 16 KiB (ADR ceiling), about 200 words, text maximum 4,096; HTTP codes 422 for "nothing to send", media-reference failures and over-limit text, 400 for schema violations, 503 for library unavailable. The message size limit 65,536 bytes is the existing server default (D24); the interaction with the operator setting is F-6.
 - Removed or merged template sections: none removed. "Success Criteria" and "Open Founder Questions" are added. The contract-first requirement is a success criterion (SC-003) rather than an FR.
 - Per-OS differences: none expected (browser and Go server behaviour only); the SPA embed stub trap applies to local Go compiles (root `CLAUDE.md`).
 
@@ -2181,10 +1994,13 @@ Per plan-spec: unclear points are collected as questions with context, options a
 
 - Q: Does the group need its own header bar or member list? -> A: No; D13/R8/R9 and the approved wireframe (requirements decisions log D13).
 - Q: Do helper approvals show in the group? -> A: No, only the attention avatar and link (D15; ADR 11.2 C-I7).
-- Q: What does Stop do when the agent's run also serves a channel message? -> A: Withdraw only (D16; ADR C-I5).
+- Q: Does the group have a Stop? -> A: No; stopping happens in each agent's own chat (D21; supersedes the Stop parts of D4 and D16 and the ADR's Stop decisions).
+- Q: Is it accepted that the attention cue can light up for unrelated waiting? -> A: Yes (D22).
+- Q: When does a card appear in the group? -> A: Only for work that answers the group; a step that also handles other input keeps its cards in the agent's chat (D23; replaces the earlier "group wins over web" assumption).
+- Q: What is the group message size limit? -> A: One limit in contract and server (D24), named 65,536 bytes per the existing server behaviour; operator-setting interaction open as F-6.
+- Q: Where are group files stored? -> A: Exactly like normal chat uploads, in the workspace media library, visible and deletable in the Library, surviving group deletion (D25).
 - Q: Where does Add participant appear? -> A: Main chats only (D17).
 - Q: Can passwords in prose reach the invitation summary? -> A: Yes, accepted for #1449 (D18); tracked as #1467.
 - Q: Are files deleted with a group? -> A: Never (D19).
 - Q: What if the summary cannot be made? -> A: Start without it, panel shows "Invitation context: unavailable", the first message is never held (D20).
 - Q: Where do group files live? -> A: In the workspace library, same read posture as the normal chat (ADR 11.2 C-I1).
-- Q: Group wins over web in a mixed turn? -> A: Open, see F-3.
