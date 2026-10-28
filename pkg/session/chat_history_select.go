@@ -396,7 +396,7 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 		return ChatHistoryPage{}, err
 	}
 	for attempt := 1; ; attempt++ {
-		if _, err = us.reconcileChatHistoryIndex(ctx, sid); err != nil {
+		if _, err = us.reconcileChatHistoryIndexOnDemand(ctx, sid); err != nil {
 			return ChatHistoryPage{}, err
 		}
 		h := us.lockSession(sid)

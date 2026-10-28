@@ -38,13 +38,26 @@ func historyFailureCause(err error) string {
 
 // CheckChatHistoryReadiness validates the derived baseline and bounded suffix
 // without preparing or claiming that a public history page was loaded. The
-// gateway uses it for journal-only control catch-up.
+// gateway uses it for journal-only control catch-up. It is a demand path: an
+// index too far behind for the bounded catch-up may self-heal here.
 func (us *UnifiedStore) CheckChatHistoryReadiness(ctx context.Context, sessionID string) error {
-	_, err := us.reconcileChatHistoryIndex(ctx, sessionID)
+	_, err := us.reconcileChatHistoryIndexOnDemand(ctx, sessionID)
 	return err
 }
 
+// reconcileChatHistoryIndex is the non-healing bounded reconcile used by boot
+// and the retention sweep: it never rebuilds an index.
 func (us *UnifiedStore) reconcileChatHistoryIndex(ctx context.Context, sessionID string) (chatHistoryReconcileResult, error) {
+	return us.reconcileChatHistoryIndexWith(ctx, sessionID, false)
+}
+
+// reconcileChatHistoryIndexOnDemand is the user-demand variant (readiness and
+// page reads): a catchup_limit failure may trigger one bounded self-heal.
+func (us *UnifiedStore) reconcileChatHistoryIndexOnDemand(ctx context.Context, sessionID string) (chatHistoryReconcileResult, error) {
+	return us.reconcileChatHistoryIndexWith(ctx, sessionID, true)
+}
+
+func (us *UnifiedStore) reconcileChatHistoryIndexWith(ctx context.Context, sessionID string, heal bool) (chatHistoryReconcileResult, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return chatHistoryReconcileResult{}, err
 	}
@@ -56,6 +69,9 @@ func (us *UnifiedStore) reconcileChatHistoryIndex(ctx context.Context, sessionID
 	defer owner.mu.Unlock()
 	defer owner.logFailure(sessionID)
 	result, err := us.reconcileHistoryOwned(ctx, sessionID)
+	if heal && historyFailureReason(err) == "catchup_limit" {
+		result, err = us.healChatHistoryOwned(ctx, sessionID, owner, err)
+	}
 	owner.failure = err
 	return result, err
 }

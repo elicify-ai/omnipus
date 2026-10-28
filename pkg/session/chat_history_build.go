@@ -20,6 +20,8 @@ type ChatHistoryIndexBuildSummary struct {
 	SessionID, Action string
 	SourceGroupCount  int64
 	PartitionCount    int
+	// ArchiveRecordCount is every archive record the build read.
+	ArchiveRecordCount int64
 }
 type historySourceFact struct {
 	Size   int64
@@ -203,7 +205,7 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 			return positionErr == nil && rank > 0 && !retainedRanks[rank]
 		}
 	}
-	var groups int64
+	var groups, records int64
 	for _, stream := range streams {
 		for off := int64(0); off < stream.end; {
 			b, e := historyReadSuffix(ctx, stream, off, sid, "archive", "suffix")
@@ -218,6 +220,7 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 			if e = historyReduceArchive(planning, &cp, a, b, rec); e != nil {
 				return nil, e
 			}
+			records++
 			if rec.ViewMembership != ViewMembershipModel && rec.Type != EntryTypeToolCallEffect && rec.Type != EntryTypeModelRef {
 				groups++
 			}
@@ -283,7 +286,7 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 	if !reflect.DeepEqual(source, final) {
 		return nil, historyBuildFailure("source_changed", errors.New("canonical source changed during offline operation"))
 	}
-	return &ChatHistoryIndexBuild{summary: ChatHistoryIndexBuildSummary{SessionID: sid, Action: action, SourceGroupCount: groups, PartitionCount: len(streams)}, dir: dir, source: source, tree: planning, checkpoint: cp}, nil
+	return &ChatHistoryIndexBuild{summary: ChatHistoryIndexBuildSummary{SessionID: sid, Action: action, SourceGroupCount: groups, PartitionCount: len(streams), ArchiveRecordCount: records}, dir: dir, source: source, tree: planning, checkpoint: cp}, nil
 }
 func historyJSONEqual(a, b []byte) bool {
 	var av, bv any
@@ -302,7 +305,19 @@ func (b *ChatHistoryIndexBuild) Summary() ChatHistoryIndexBuildSummary {
 	}
 	return b.summary
 }
-func (b *ChatHistoryIndexBuild) Publish(ctx context.Context) (buildErr error) {
+func (b *ChatHistoryIndexBuild) Publish(ctx context.Context) error {
+	// Offline only: no live reader can hold a generation pin, so a fresh
+	// owner may retire every older generation.
+	return b.publish(ctx, func(generations, keep string) error {
+		owner := &chatHistoryOwner{refs: map[string]int{}, retired: map[string]bool{}}
+		return owner.retire(generations, keep)
+	})
+}
+
+// publish is Publish with the generation-retirement step supplied by the
+// caller. The in-process self-heal retires through the runtime owner so the
+// pins of concurrent page readers are honoured.
+func (b *ChatHistoryIndexBuild) publish(ctx context.Context, retire func(generations, keep string) error) (buildErr error) {
 	defer func() { buildErr = historyBuildFailure("storage_error", buildErr) }()
 	if b == nil || b.closed {
 		return errors.New("history build is closed")
@@ -342,8 +357,7 @@ func (b *ChatHistoryIndexBuild) Publish(ctx context.Context) (buildErr error) {
 	if err = historyPublish(b.dir, t, &cp, "repair", 0); err != nil {
 		return err
 	}
-	owner := &chatHistoryOwner{refs: map[string]int{}, retired: map[string]bool{}}
-	if err = owner.retire(filepath.Join(historyIndexPath(b.dir), "generations"), cp.File); err != nil {
+	if err = retire(filepath.Join(historyIndexPath(b.dir), "generations"), cp.File); err != nil {
 		return err
 	}
 	b.checkpoint = cp

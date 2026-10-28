@@ -238,6 +238,9 @@ type UnifiedStore struct {
 	historyMu           sync.Mutex
 	historyOwners       map[string]*chatHistoryOwner
 	historyStartupError error
+	// historyHealNow, when set (tests), is the clock for demand self-heal
+	// eligibility and backoff; nil means time.Now.
+	historyHealNow func() time.Time
 
 	// cacheMu is the FR-048(b) narrow lock guarding metaCache,
 	// cacheLoadFailures and the FR-097 parent index ONLY — see this struct's

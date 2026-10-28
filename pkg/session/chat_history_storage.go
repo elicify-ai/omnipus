@@ -82,6 +82,8 @@ type chatHistoryOwner struct {
 	// loggedReason/loggedCause are the reason and the cause of the failure
 	// already logged for this owner, so one failure episode logs once.
 	loggedReason, loggedCause string
+	// heal is the demand self-heal attempt state (chat_history_heal.go).
+	heal chatHistoryHealState
 }
 
 // logFailure logs the owner's derived-index failure once per failure episode:
