@@ -50,6 +50,7 @@ Group chats (team room, squads, ad-hoc groups; `src/components/rooms/`, `pkg/roo
 | D22 | Attention cue side effect | Accepted: the agent's attention animation in the group can also light up when the agent waits for the user on unrelated work | Founder answer F2: "yes" | Interview | 2026-10-28 |
 | D23 | Mixed-origin cards | An approval/question card appears in the group ONLY for work that answers the group context; a step that also handles other input (own chat, channel, task) keeps its cards in the agent's own chat | Founder answer F3: "the agent replies to the group chat context, not to other work the agent is doing" | Interview | 2026-10-28 |
 | D24 | Group message size | Fix the mismatch within #1449: the contract and the server must agree on one group message size limit | Founder answer F4: B | Interview | 2026-10-28 |
+| D25 | Group files storage | Group files are treated exactly like normal chat uploads: stored in the workspace media library (`workspaces/<workspace>/media/`, the Library panel), visible and deletable there, surviving group deletion | Founder answer F5: "ok" (after: normal chats already store uploads in the workspace media library) | Interview | 2026-10-28 |
 | D17 | Add participant placement | The Add participant icon appears in main agent chats only, as today | Founder answer to ADR question Q3 | Interview | 2026-10-28 |
 
 ## 4. Wireframe
