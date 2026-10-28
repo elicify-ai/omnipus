@@ -194,8 +194,14 @@ func c1PerformancePartial(t *testing.T, patch map[string]any) {
 		want[k] = v
 	}
 	quiet := want["goal_reminder_quiet_seconds"].(int)
-	enabled := want["goal_stalled_checkin_enabled"].(bool)
-	minutes := want["goal_stalled_checkin_minutes"].(int)
+	enabled, enabledOK := want["goal_stalled_checkin_enabled"].(bool)
+	if !enabledOK {
+		t.Fatalf("C1 test precondition: %s must be bool", "goal_stalled_checkin_enabled")
+	}
+	minutes, minutesOK := want["goal_stalled_checkin_minutes"].(int)
+	if !minutesOK {
+		t.Fatalf("C1 test precondition: %s must be int", "goal_stalled_checkin_minutes")
+	}
 	for _, got := range []map[string]any{mtiDecode(t, w.Body.Bytes()), mtiGetPerf(t, api)} {
 		c1PerformanceTuple(t, got, quiet, enabled, minutes)
 		for _, key := range []string{"max_parallel_agents", "tools_on_demand", "max_tool_iterations"} {
@@ -203,7 +209,11 @@ func c1PerformancePartial(t *testing.T, patch map[string]any) {
 		}
 		goalRounds := before["goal_max_rounds"]
 		if v, ok := patch["goal_max_rounds"]; ok {
-			goalRounds = float64(v.(int))
+			rounds, roundsOK := v.(int)
+			if !roundsOK {
+				t.Fatalf("C1 test precondition: %s must be int", "goal_max_rounds")
+			}
+			goalRounds = float64(rounds)
 		}
 		require.Equal(t, goalRounds, got["goal_max_rounds"])
 	}
@@ -280,12 +290,12 @@ func c1PerformanceRefreshFailure(t *testing.T, patch map[string]any) {
 	got := decodeReloadFailed(t, w.Body.Bytes())
 	require.Equal(t, "performance_reload_failed", got.Code)
 	require.Equal(t, gen.PerformanceReloadFailedDetailsStageRefresh, got.Details.Stage)
-	want := []string{}
+	want := make([]string, 0, len(patch))
 	for key := range patch {
 		want = append(want, key)
 	}
 	sort.Strings(want)
-	actual := []string{}
+	actual := make([]string, 0, len(got.Details.ChangedFields))
 	for _, key := range got.Details.ChangedFields {
 		actual = append(actual, string(key))
 	}
@@ -310,7 +320,10 @@ func c1PerformanceRefreshFailure(t *testing.T, patch map[string]any) {
 	require.Equal(t, expected, mtiGetPerf(t, api))
 	b, err := os.ReadFile(api.configPath())
 	require.NoError(t, err)
-	disk := mtiDecode(t, b)["planning"].(map[string]any)
+	disk, diskOK := mtiDecode(t, b)["planning"].(map[string]any)
+	if !diskOK {
+		t.Fatalf("C1 test precondition: %s must be an object", "planning")
+	}
 	for key, value := range patch {
 		if n, ok := value.(int); ok {
 			require.Equal(t, float64(n), disk[key])

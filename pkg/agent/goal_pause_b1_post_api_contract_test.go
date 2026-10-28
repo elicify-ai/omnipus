@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,7 +80,7 @@ func b1PostAPIMetadataReadError(t *testing.T) {
 	_, readErr := reader.GetMeta(fault.ID)
 	var syntax *json.SyntaxError
 	require.ErrorAs(t, readErr, &syntax, "SETUP: actual reader must fail JSON decoding, not just lose a session")
-	require.False(t, os.IsNotExist(readErr), "SETUP: missing-session fallback is not this metadata-read error category")
+	require.False(t, errors.Is(readErr, os.ErrNotExist), "SETUP: missing-session fallback is not this metadata-read error category")
 	al := &AgentLoop{sharedSessionStore: reader, eventBus: NewEventBus()}
 	t.Cleanup(al.eventBus.Close)
 	notices := []GoalPausedEvent{}
