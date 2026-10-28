@@ -76,6 +76,20 @@
 #                                               MiniMax-M3.1-Flash prefix
 #                                               on purpose (design.md §4.5
 #                                               case 21).
+#  22. MiniMax id inside evals/x_test.go        -> exit 0. A Go unit test is
+#                                               test data, not the CI model
+#                                               choice (chief decision: the
+#                                               guard skips *_test.go).
+#  23. DeepSeek id inside tests/e2e/fixtures/
+#      x.test.ts                                 -> exit 0. Same exemption
+#                                               for fixture unit tests.
+#  24. Those ids in tests/e2e/foo.spec.ts and
+#      .github/workflows/x.yml                   -> exit 1, both files named.
+#                                               Playwright specs and workflows
+#                                               stay banned.
+#  25. MiniMax id in deploy/foo_test.sh          -> exit 1, file named. A
+#                                               test-like name outside evals/
+#                                               and tests/e2e/ is not exempt.
 #
 # Exit: 0 all cases pass; 1 a case failed (prints which).
 
@@ -511,13 +525,80 @@ else
   fi
 fi
 
+# Case 22: a Go unit test under evals/ may name the MiniMax id. The current
+# guard scans every text file under evals/, so this is red until *_test.go
+# is skipped.
+t22="$tmp/go-unit"
+make_tree "$t22"
+printf '%s\n' 'package evals' 'const model = "MiniMax-M3.1-Flash"' > "$t22/evals/x_test.go"
+rc=0
+REPO_ROOT="$t22" bash "$GUARD" >"$tmp/c22.out" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "case22 go-unit-test-allowed: PASS (guard exited 0)"
+else
+  echo "case22 go-unit-test-allowed: FAIL — want exit 0 for evals/x_test.go, got $rc" >&2
+  sed 's/^/  /' "$tmp/c22.out" >&2
+  fail=1
+fi
+
+# Case 23: a vitest file under tests/e2e/fixtures/ may name the DeepSeek id.
+t23="$tmp/ts-unit"
+make_tree "$t23"
+mkdir -p "$t23/tests/e2e/fixtures"
+printf '%s\n' 'export const id = "deepseek/deepseek-v4.1-flash"' > "$t23/tests/e2e/fixtures/x.test.ts"
+rc=0
+REPO_ROOT="$t23" bash "$GUARD" >"$tmp/c23.out" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "case23 ts-fixture-test-allowed: PASS (guard exited 0)"
+else
+  echo "case23 ts-fixture-test-allowed: FAIL — want exit 0 for tests/e2e/fixtures/x.test.ts, got $rc" >&2
+  sed 's/^/  /' "$tmp/c23.out" >&2
+  fail=1
+fi
+
+# Case 24: a Playwright spec and a workflow still name the file. The
+# exemption is unit-test files only.
+t24="$tmp/still-banned"
+make_tree "$t24"
+printf '%s\n' 'const model = "MiniMax-M3.1-Flash"' > "$t24/tests/e2e/foo.spec.ts"
+printf '%s\n' 'model: deepseek/deepseek-v4.1-flash' > "$t24/.github/workflows/x.yml"
+if REPO_ROOT="$t24" bash "$GUARD" >"$tmp/c24.out" 2>&1; then
+  echo "case24 spec-and-workflow-still-banned: FAIL — guard went green" >&2
+  sed 's/^/  /' "$tmp/c24.out" >&2
+  fail=1
+elif grep -q "tests/e2e/foo.spec.ts" "$tmp/c24.out" && grep -q ".github/workflows/x.yml" "$tmp/c24.out"; then
+  echo "case24 spec-and-workflow-still-banned: PASS (guard named both files)"
+else
+  echo "case24 spec-and-workflow-still-banned: FAIL — want exit 1 naming both files" >&2
+  sed 's/^/  /' "$tmp/c24.out" >&2
+  fail=1
+fi
+
+# Case 25: deploy/foo_test.sh looks like a test and is still banned. The
+# skip is evals/*_test.go and tests/e2e/fixtures/*.test.ts, not every
+# filename that contains "test".
+t25="$tmp/deploy-test-name"
+make_tree "$t25"
+printf '%s\n' 'model=MiniMax-M3.1-Flash' > "$t25/deploy/foo_test.sh"
+if REPO_ROOT="$t25" bash "$GUARD" >"$tmp/c25.out" 2>&1; then
+  echo "case25 deploy-test-name-still-banned: FAIL — guard went green on deploy/foo_test.sh" >&2
+  sed 's/^/  /' "$tmp/c25.out" >&2
+  fail=1
+elif grep -q "deploy/foo_test.sh" "$tmp/c25.out"; then
+  echo "case25 deploy-test-name-still-banned: PASS (guard named deploy/foo_test.sh)"
+else
+  echo "case25 deploy-test-name-still-banned: FAIL — guard failed but did not name deploy/foo_test.sh" >&2
+  sed 's/^/  /' "$tmp/c25.out" >&2
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "check-no-hardcoded-e2e-model.test: FAILED" >&2
   exit 1
 fi
 if [ "${skipped:-0}" -gt 0 ]; then
-  echo "check-no-hardcoded-e2e-model.test: all 21 cases PASS ($skipped skipped)"
+  echo "check-no-hardcoded-e2e-model.test: all 25 cases PASS ($skipped skipped)"
 else
-  echo "check-no-hardcoded-e2e-model.test: all 21 cases PASS"
+  echo "check-no-hardcoded-e2e-model.test: all 25 cases PASS"
 fi
 exit 0

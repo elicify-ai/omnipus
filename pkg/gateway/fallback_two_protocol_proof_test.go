@@ -24,11 +24,11 @@ import (
 //
 // Two local HTTP stubs stand in for the providers. Stub A speaks the failure
 // half of an Anthropic messages call (the status codes below). Stub B speaks
-// an OpenAI-compatible SSE success and is the only place the token exists.
-// The gateway, the provider clients and the transcript are real. The harness
-// options WithProviderRows and WithCredentials are specified in
-// /workspace/ci-minimax/api-contract.md §5 — they do not exist yet, so this
-// file does not compile until they do. This is not a mock of the agent.
+// a non-streaming OpenAI chat completion and is the only place the token
+// exists. A multi-candidate fallback chain calls plain Chat, never ChatStream
+// (pkg/agent/loop_run_turn.go callProviderOnce, the len != 1 branch;
+// pkg/agent/loop_run_turn_attempt.go header). The gateway, the provider
+// clients and the transcript are real. This is not a mock of the agent.
 
 const (
 	proofPrimaryModel  = "MiniMax-M3.1-Flash"
@@ -98,27 +98,49 @@ func anthropicError(status int, retryAfter, errType, message string) http.Handle
 	}
 }
 
-func openAITokenStream(token string) http.HandlerFunc {
+// openAIChatCompletion answers plain Chat. ParseResponse reads
+// choices[0].message.content (pkg/providers/common/common.go). An SSE body
+// is not that shape, so a streaming stub can never satisfy the fallback call.
+func openAIChatCompletion(token string) http.HandlerFunc {
+	body, err := json.Marshal(map[string]any{
+		"id":     "x",
+		"object": "chat.completion",
+		"choices": []any{
+			map[string]any{
+				"index": 0,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": token,
+				},
+				"finish_reason": "stop",
+			},
+		},
+		"usage": map[string]any{
+			"prompt_tokens":     1,
+			"completion_tokens": 1,
+			"total_tokens":      2,
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
 	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		flusher, _ := w.(http.Flusher)
-		chunks := []string{
-			`data: {"choices":[{"delta":{"content":"` + token + `"},"finish_reason":null}]}` + "\n\n",
-			`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n",
-			"data: [DONE]\n\n",
-		}
-		for _, c := range chunks {
-			_, _ = io.WriteString(w, c)
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
 	}
 }
 
-func countProofNotes(home string) int {
+// proofDataRoot is where the harness writes sessions. AgentHomeBasePath is
+// the gateway home, and sessionsHomeFor returns its parent
+// (pkg/agent/shared_session_store.go). Walking the gateway home itself
+// never sees the transcript.
+func proofDataRoot(gatewayHome string) string {
+	return filepath.Dir(gatewayHome)
+}
+
+func countProofNotes(gatewayHome string) int {
 	n := 0
-	_ = filepath.Walk(home, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(proofDataRoot(gatewayHome), func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil || info.IsDir() || !strings.HasSuffix(path, "transcript.jsonl") {
 			return nil
 		}
@@ -132,7 +154,7 @@ func countProofNotes(home string) int {
 	return n
 }
 
-func proofTextHas(frames []map[string]any, home, token string) bool {
+func proofTextHas(frames []map[string]any, gatewayHome, token string) bool {
 	for _, f := range frames {
 		raw, _ := json.Marshal(f)
 		if strings.Contains(string(raw), token) {
@@ -140,7 +162,7 @@ func proofTextHas(frames []map[string]any, home, token string) bool {
 		}
 	}
 	found := false
-	_ = filepath.Walk(home, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(proofDataRoot(gatewayHome), func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil || info.IsDir() {
 			return nil
 		}
@@ -190,15 +212,20 @@ func driveProofTurn(t *testing.T, gw *testutil.TestGateway, home string, timeout
 		if frame["type"] == "error" {
 			break
 		}
-		if frame["type"] == "provider_fallback" {
-			// The note is written after the assistant answer. Poll instead of
-			// assuming one sleep is enough on a busy machine.
-			deadline := time.Now().Add(2 * time.Second)
-			for time.Now().Before(deadline) && countProofNotes(home) < 1 {
-				time.Sleep(50 * time.Millisecond)
-			}
-			break
+		// provider_fallback is emitted when the chain succeeds, before the
+		// assistant answer is sent (pkg/agent/fallback_note.go
+		// queueProviderFallbackNote). "done" is published after that answer
+		// is persisted (pkg/gateway/websocket_streamer.go Finalize). The
+		// transcript note is written after done. Stop on done, or when the
+		// read deadline set above expires, not on the fallback frame.
+		if frame["type"] != "done" {
+			continue
 		}
+		noteDeadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(noteDeadline) && countProofNotes(home) < 1 {
+			time.Sleep(50 * time.Millisecond)
+		}
+		break
 	}
 	return frames
 }
@@ -266,7 +293,7 @@ func TestFallbackTwoProtocolProof(t *testing.T) {
 				primary = newCountingStub(t, anthropicError(tc.status, tc.retryAfter, tc.errType, tc.message))
 				primaryURL = primary.srv.URL
 			}
-			fallback := newCountingStub(t, openAITokenStream(token))
+			fallback := newCountingStub(t, openAIChatCompletion(token))
 
 			gw := testutil.StartTestGateway(t,
 				testutil.WithProviderRows([]*config.ModelConfig{

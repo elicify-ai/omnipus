@@ -58,13 +58,24 @@ expect_rc() {
   return 1
 }
 
+# file_eq <path> <expected>
+# "$(cat file)" strips every trailing newline, so it can never equal an
+# expected value that ends in one. The expected strings below are unchanged;
+# cmp compares the bytes.
+file_eq() {
+  local path="$1"
+  local expected="$2"
+  printf '%s' "$expected" >"$tmp/file-eq-want"
+  cmp -s "$path" "$tmp/file-eq-want"
+}
+
 # Case: env prints the six lines for the new shape. design.md §4.2.
 t_env="$tmp/env.json"
 spec_json >"$t_env"
 rc=0
 run_reader "$tmp/env.out" "$tmp/env.err" env --file "$t_env" || rc=$?
 want_env=$'E2E_PRIMARY_PROVIDER=minimax-coding-plan\nE2E_PRIMARY_MODEL=MiniMax-M3.1-Flash\nE2E_PRIMARY_KEYREF=MINIMAX_API_KEY\nE2E_FALLBACK_PROVIDER=openrouter\nE2E_FALLBACK_MODEL=deepseek/deepseek-v4.1-flash\nE2E_FALLBACK_KEYREF=OPENROUTER_API_KEY\n'
-if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/env.out")" = "$want_env" ]; then
+if [ "$rc" -eq 0 ] && file_eq "$tmp/env.out" "$want_env"; then
   echo "case-env new-shape-lines: PASS"
 else
   echo "case-env new-shape-lines: FAIL — want exit 0 and the six KEY=value lines, got exit $rc" >&2
@@ -85,7 +96,7 @@ cat >"$t_trim" <<'EOF'
 EOF
 rc=0
 run_reader "$tmp/trim.out" "$tmp/trim.err" env --file "$t_trim" || rc=$?
-if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/trim.out")" = "$want_env" ]; then
+if [ "$rc" -eq 0 ] && file_eq "$tmp/trim.out" "$want_env"; then
   echo "case-env trims-fields: PASS"
 else
   echo "case-env trims-fields: FAIL — want the trimmed six lines, got exit $rc" >&2
@@ -161,7 +172,7 @@ fi
 rc=0
 run_reader "$tmp/leg.out" "$tmp/leg.err" env --legacy-ok --file "$t_old" || rc=$?
 want_leg=$'E2E_PRIMARY_PROVIDER=openrouter\nE2E_PRIMARY_MODEL=vendor/legacy-model\nE2E_PRIMARY_KEYREF=OPENROUTER_API_KEY\nE2E_FALLBACK_PROVIDER=\nE2E_FALLBACK_MODEL=\nE2E_FALLBACK_KEYREF=\n'
-if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/leg.out")" = "$want_leg" ] && grep -q 'WARN' "$tmp/leg.err"; then
+if [ "$rc" -eq 0 ] && file_eq "$tmp/leg.out" "$want_leg" && grep -q 'WARN' "$tmp/leg.err"; then
   echo "case-env legacy-ok-maps-with-warn: PASS"
 else
   echo "case-env legacy-ok-maps-with-warn: FAIL — want exit 0, the openrouter mapping, and WARN, got $rc" >&2
@@ -175,7 +186,7 @@ fi
 # --legacy-ok must not rewrite a document that is already the new shape.
 rc=0
 run_reader "$tmp/legnew.out" "$tmp/legnew.err" env --legacy-ok --file "$t_env" || rc=$?
-if [ "$rc" -eq 0 ] && [ "$(cat "$tmp/legnew.out")" = "$want_env" ] && ! grep -q 'WARN' "$tmp/legnew.err"; then
+if [ "$rc" -eq 0 ] && file_eq "$tmp/legnew.out" "$want_env" && ! grep -q 'WARN' "$tmp/legnew.err"; then
   echo "case-env legacy-ok-keeps-new-shape: PASS"
 else
   echo "case-env legacy-ok-keeps-new-shape: FAIL — want the new six lines and no WARN, got $rc" >&2
@@ -301,9 +312,9 @@ check_fallback() {
   local blob
   blob="$(cat "$out" "$err" 2>/dev/null || true)"
   if [ "$rc" -eq 0 ] \
-    && [ "$(cat "$out" 2>/dev/null || true)" = $'LLM_ROUTE=fallback\n' ] \
+    && file_eq "$out" $'LLM_ROUTE=fallback\n' \
     && grep -qF "$warning" "$err" \
-    && [ "$(cat "$route" 2>/dev/null || true)" = "$route_line" ] \
+    && file_eq "$route" "$route_line" \
     && ! printf '%s' "$blob" | grep -qF 'test-key-aaaa'; then
     echo "case-preflight $name-falls-back: PASS"
   else
@@ -389,9 +400,9 @@ fi
 ok="$tmp/pf200"
 rc200="$(run_preflight "200" "$ok")"
 if [ "$rc200" -eq 0 ] \
-  && [ "$(cat "$ok/out" 2>/dev/null || true)" = $'LLM_ROUTE=primary\n' ] \
+  && file_eq "$ok/out" $'LLM_ROUTE=primary\n' \
   && ! grep -q '::warning::' "$ok/err" \
-  && [ "$(cat "$ok/llm-route.json" 2>/dev/null || true)" = '{"route":"primary","status":"200","error_type":""}'$'\n' ]; then
+  && file_eq "$ok/llm-route.json" '{"route":"primary","status":"200","error_type":""}'$'\n'; then
   echo "case-preflight 200-stays-primary: PASS"
 else
   echo "case-preflight 200-stays-primary: FAIL — want LLM_ROUTE=primary and no warning, got $rc200" >&2

@@ -37,9 +37,9 @@ func captureJudge(t *testing.T, status int, body string) (*httptest.Server, *[]c
 		mu.Lock()
 		got = append(got, capturedJudgeCall{
 			Path:             r.URL.Path,
-			APIKey:           r.Header.Get("x-api-key"),
+			APIKey:           r.Header.Get("X-Api-Key"),
 			Authorization:    r.Header.Get("Authorization"),
-			AnthropicVersion: r.Header.Get("anthropic-version"),
+			AnthropicVersion: r.Header.Get("Anthropic-Version"),
 			Body:             parsed,
 		})
 		mu.Unlock()
