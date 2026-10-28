@@ -246,8 +246,8 @@ func TestMainOwner_ConcurrentAdoptionHasOnePersistedWinner(t *testing.T) {
 			defer done.Done()
 			ready.Done()
 			<-start
-			adopted, err := adopter.AdoptMainSessionOwner(main.ID, owner)
-			results <- result{owner: owner, adopted: adopted, err: err}
+			adopted, adoptErr := adopter.AdoptMainSessionOwner(main.ID, owner)
+			results <- result{owner: owner, adopted: adopted, err: adoptErr}
 		}()
 	}
 	ready.Wait()
