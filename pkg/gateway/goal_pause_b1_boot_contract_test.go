@@ -56,7 +56,7 @@ func (p *b1CompOutputTool) Execute(context.Context, map[string]any) *tools.ToolR
 	return &tools.ToolResult{ForLLM: b1CompPrivateOutput}
 }
 
-var b1CompFailure = errors.New("B1 controlled provider failure")
+var errB1CompFailure = errors.New("B1 controlled provider failure")
 
 type b1CompCall struct {
 	record *session.LifecycleRecord
@@ -91,7 +91,7 @@ func (p *b1CompProvider) Chat(ctx context.Context, messages []providers.Message,
 	}
 	p.mu.Unlock()
 	if mode == "fail" {
-		return nil, b1CompFailure
+		return nil, errB1CompFailure
 	}
 	if mode == "output" && round == 1 {
 		return &providers.LLMResponse{FinishReason: "tool_calls", ToolCalls: []providers.ToolCall{{ID: "b1-output-load", Name: "ToolSearch", Arguments: map[string]any{"names": []string{b1CompOutputToolName}}}, {ID: "b1-output-proof", Name: b1CompOutputToolName, Arguments: map[string]any{}}}}, nil
@@ -120,7 +120,6 @@ type b1CompFixture struct {
 	runCancel                     context.CancelFunc
 	runDone                       chan error
 	seq                           int
-	mu                            sync.Mutex
 	events                        []agent.Event
 	observeStop                   func()
 	sub                           agent.EventSubscription
@@ -541,7 +540,7 @@ func TestGoalPauseB1BootContract(t *testing.T) {
 		own := b1CompAssertBell(t, f, b1CompOwner, 1)
 		all := f.bells()
 		require.Len(t, all, 2)
-		recipients := []string{}
+		recipients := make([]string, 0, len(all))
 		for _, bell := range all {
 			recipients = append(recipients, bell.Recipient)
 		}

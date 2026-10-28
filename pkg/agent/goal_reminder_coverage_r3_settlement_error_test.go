@@ -82,7 +82,7 @@ func r3FailedSettlementErrorRetainsOutcome(t *testing.T) {
 	settlementErr, turnErr, ran := call.owner.result, call.owner.turnErr, call.owner.turnRan
 	call.owner.mu.Unlock()
 	require.True(t, ran)
-	require.ErrorIs(t, turnErr, r2ProviderFailure, "SETUP: retain the original actual provider-turn failure separately")
+	require.ErrorIs(t, turnErr, errR2ProviderFailure, "SETUP: retain the original actual provider-turn failure separately")
 	require.NotErrorIs(t, turnErr, os.ErrPermission, "SETUP: the write fault must not replace the turn's original error")
 	require.False(t, call.turn.stopRequested.Load())
 	require.False(t, call.turn.cancelFired.Load())
@@ -92,7 +92,7 @@ func r3FailedSettlementErrorRetainsOutcome(t *testing.T) {
 	require.ErrorAs(t, settlementErr, &pathErr)
 	require.Equal(t, fault.path, pathErr.Path, "SETUP: error must name the canonical journal, not a mirror/directory")
 	require.Equal(t, "open", pathErr.Op)
-	require.False(t, errors.Is(settlementErr, r2ProviderFailure), "SETUP: settlement result is NOT the expected provider error")
+	require.False(t, errors.Is(settlementErr, errR2ProviderFailure), "SETUP: settlement result is NOT the expected provider error")
 	require.Equal(t, session.LifecycleRunning, h.load(t).State)
 	require.Equal(t, call.record.ExecutionID, h.load(t).ExecutionID)
 	require.Equal(t, fault.before, h.journal(t), "SETUP: only the unsuccessful final write may touch this journal")

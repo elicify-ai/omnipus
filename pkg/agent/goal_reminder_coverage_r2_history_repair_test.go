@@ -124,8 +124,8 @@ func r2CorruptRunHistory(t *testing.T, store *task.Store, taskID string) func() 
 			return
 		}
 		require.NoError(t, os.WriteFile(path, original, info.Mode().Perm()))
-		exact, err := os.ReadFile(path)
-		require.NoError(t, err)
+		exact, readErr := os.ReadFile(path)
+		require.NoError(t, readErr)
 		require.Equal(t, original, exact)
 		restored = true
 	}

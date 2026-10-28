@@ -215,7 +215,7 @@ func stringsInvalidB3ToolName(name string) bool {
 		return true
 	}
 	for _, b := range []byte(name) {
-		if !letter(b) && !(b >= '0' && b <= '9') && b != '_' && b != '.' && b != ':' && b != '-' {
+		if !letter(b) && (b < '0' || b > '9') && b != '_' && b != '.' && b != ':' && b != '-' {
 			return true
 		}
 	}

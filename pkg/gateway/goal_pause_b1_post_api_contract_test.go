@@ -3,8 +3,9 @@ package gateway
 // Approved POST-API formatter baselines; no original-source RED is claimed.
 // Inputs/wants come ONLY from the sealed pending oracle file, not from output.
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestGoalPauseB1PostAPIFormatter(t *testing.T) {

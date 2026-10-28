@@ -5,9 +5,10 @@ package agent
 // live in the gateway boot composition using existing public PlanEngine.Tick.
 // These checks alone are NOT bell reachability or newly earned RED.
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestGoalPauseB1EdgesContract(t *testing.T) {

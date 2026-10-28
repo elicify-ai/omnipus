@@ -25,7 +25,7 @@ const (
 	r2ReplyEmpty
 )
 
-var r2ProviderFailure = errors.New("controlled provider request failure for the reminder-turn contract")
+var errR2ProviderFailure = errors.New("controlled provider request failure for the reminder-turn contract")
 
 type r2FailureProvider struct {
 	base *grProvider
@@ -40,7 +40,7 @@ func (p *r2FailureProvider) Chat(ctx context.Context, messages []providers.Messa
 	}
 	switch p.mode.Load() {
 	case r2ReplyProviderError:
-		return nil, r2ProviderFailure
+		return nil, errR2ProviderFailure
 	case r2ReplyEmpty:
 		return &providers.LLMResponse{FinishReason: "stop"}, nil
 	default:
@@ -82,7 +82,7 @@ func r2FailedReminder(t *testing.T, h *grHarness, provider *r2FailureProvider, m
 	result := grJoin(t, run)
 	grAwaitOwner(t, call)
 	if mode == r2ReplyProviderError {
-		require.ErrorIs(t, result.err, r2ProviderFailure, "SETUP: the actual provider failure must reach the real receiver")
+		require.ErrorIs(t, result.err, errR2ProviderFailure, "SETUP: the actual provider failure must reach the real receiver")
 	}
 	require.NotErrorIs(t, result.err, context.Canceled)
 	call.turn.mu.RLock()

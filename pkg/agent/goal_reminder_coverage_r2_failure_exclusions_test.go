@@ -218,7 +218,11 @@ func r2RequireActualParkEvent(t *testing.T, h *grHarness, call *grCall, events [
 	require.Len(t, ends, 1, "exactly this actual producing turn must report its park")
 	assert.Equal(t, call.turn.turnID, ends[0].Meta.TurnID)
 	assert.Equal(t, testDefaultAgentID, ends[0].Meta.AgentID)
-	assert.Equal(t, TurnEndStatusParked, ends[0].Payload.(TurnEndPayload).Status)
+	parked, parkedOK := ends[0].Payload.(TurnEndPayload)
+	if !parkedOK {
+		t.Fatalf("R2 test precondition: turn end payload must be TurnEndPayload")
+	}
+	assert.Equal(t, TurnEndStatusParked, parked.Status)
 }
 
 func r2RequirePersistedParkCard(t *testing.T, h *grHarness, card *askuser.PendingSet) {
@@ -266,7 +270,7 @@ func r2SendbackFailureExcluded(t *testing.T) {
 	require.False(t, call.turn.opts.goalWake.reminder)
 	h.root.release(call)
 	result := grJoin(t, run)
-	require.ErrorIs(t, result.err, r2ProviderFailure)
+	require.ErrorIs(t, result.err, errR2ProviderFailure)
 	grAwaitOwner(t, call)
 	call.turn.mu.RLock()
 	failed := call.turn.turnFailed
