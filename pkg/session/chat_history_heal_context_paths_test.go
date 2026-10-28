@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -219,12 +220,110 @@ func TestChatHistoryHeal_ClientCancellationDoesNotLatchDetachedRebuild(t *testin
 // FIX-ROUND-1 row 6 / pta F1: the real 30-second internal deadline must be
 // controlled without sleeping or manufacturing a builder result.
 func TestChatHistoryHeal_DeadlineIsTransientAndBounded(t *testing.T) {
-	// Exact requested seam: UnifiedStore.historyHealWithTimeout
-	// func(context.Context, time.Duration) (context.Context, context.CancelFunc),
-	// nil => context.WithTimeout. The author will assert requested duration=30s
-	// and return a REAL already-expired deadline context, then exercise normal
-	// readiness at 0 / 59.999 / 60 / 119.999 / 120 / 180 seconds. Expected failed
-	// attempts 1 / 1 / 2 / 2 / 3 / 3; class=deadline, slot released each time,
-	// original catchup_limit, retry after_backoff then after_restart on third.
-	t.Fatal("BLOCKED: UnifiedStore.historyHealWithTimeout func(context.Context, time.Duration) (context.Context, context.CancelFunc), default context.WithTimeout, not implemented — required by FIX-ROUND-1 row 6 / selfheal-design.md §2 step 4; no real-time 30-second sleep")
+	logs := selfHealCaptureLogs(t)
+	f := newSelfHealFixture(t)
+	before := historyTree(t, historyIndexDir(f.store, f.sid))
+	canonical := partitionBytes(t, f.store, f.sid)
+	_, original := f.store.reconcileChatHistoryIndex(context.Background(), f.sid)
+	selfHealRequireUnavailable(t, original, "catchup_limit")
+	require.Equal(t, 1, cap(chatHistoryHealSlot))
+	require.Zero(t, len(chatHistoryHealSlot), "positive control: this test starts with the only heal slot available")
+	base := time.Date(2026, 1, 3, 12, 0, 0, 0, time.UTC)
+	now := base
+	oldClock, oldTimeout := f.store.historyHealNow, f.store.historyHealWithTimeout
+	f.store.historyHealNow = func() time.Time { return now }
+	t.Cleanup(func() {
+		f.store.historyHealNow, f.store.historyHealWithTimeout = oldClock, oldTimeout
+	})
+	type requestKey struct{}
+	var request context.Context
+	var cancelRequest context.CancelFunc
+	t.Cleanup(func() {
+		if cancelRequest != nil {
+			cancelRequest()
+		}
+	})
+	attempts, expire := 0, true
+	f.store.historyHealWithTimeout = func(parent context.Context, duration time.Duration) (context.Context, context.CancelFunc) {
+		attempts++
+		require.Equal(t, 30*time.Second, duration, "design §2 step 4: each internal attempt requests exactly 30 seconds")
+		require.Equal(t, f.sid, parent.Value(requestKey{}), "detachment preserves request values")
+		require.Nil(t, parent.Done(), "the heal parent must not inherit the request cancellation channel")
+		_, hasDeadline := parent.Deadline()
+		require.False(t, hasDeadline, "the internal timeout must not inherit a request deadline")
+		if !expire {
+			return context.WithTimeout(parent, duration) // Remove the fault after attempt three.
+		}
+		cancelRequest()
+		require.ErrorIs(t, request.Err(), context.Canceled, "positive control: the original request really was cancelled")
+		require.NoError(t, parent.Err(), "request cancellation must not expire the detached internal parent")
+		// Change only the clock boundary. The real builder must observe a REAL
+		// deadline, not a fabricated build result, without a 30-second sleep.
+		expired, cancel := context.WithDeadline(parent, time.Time{})
+		require.ErrorIs(t, expired.Err(), context.DeadlineExceeded)
+		return expired, cancel
+	}
+	schedule := []struct {
+		elapsed  time.Duration
+		attempts int
+	}{
+		{0, 1},
+		{0, 1},
+		{60*time.Second - time.Millisecond, 1},
+		{60 * time.Second, 2},
+		{60*time.Second + time.Millisecond, 2},
+		{120*time.Second - time.Millisecond, 2},
+		{120 * time.Second, 3},
+		{120*time.Second + time.Millisecond, 3},
+		{180 * time.Second, 3},
+		{24 * time.Hour, 3},
+	}
+	for _, step := range schedule {
+		now = base.Add(step.elapsed)
+		// Each demand starts live; only the attempt's seam cancels its caller.
+		// The one-hour caller deadline is not a timing oracle or a sleep.
+		request, cancelRequest = context.WithDeadline(context.WithValue(context.Background(), requestKey{}, f.sid), time.Now().Add(time.Hour))
+		err := f.store.CheckChatHistoryReadiness(request, f.sid)
+		cancelRequest()
+		selfHealRequireUnavailable(t, err, "catchup_limit")
+		require.Equal(t, original.Error(), err.Error(), "the public error must stay the original bounded-reconcile failure")
+		require.Nil(t, errors.Unwrap(err), "do not replace catchup_limit with the internal deadline cause")
+		require.Equal(t, step.attempts, attempts, "elapsed=%s: timeout factory calls count actual attempts, not demand calls", step.elapsed)
+		records := selfHealEvents(t, logs, f.sid, selfHealBadLog)
+		require.Len(t, records, step.attempts, "elapsed=%s: only an actual attempt emits one warning", step.elapsed)
+		for i, record := range records {
+			selfHealRequireLogBase(t, record, f.sid, int64(i+1))
+			require.Equal(t, "deadline", record["class"], "a real context deadline is transient, not storage_error or readiness")
+			retry := "after_backoff"
+			if i == 2 {
+				retry = "after_restart" // Design §§1,4: there can be no fourth in-process attempt.
+			}
+			require.Equal(t, retry, record["retry"], "attempt=%d elapsed=%s", i+1, step.elapsed)
+		}
+		select {
+		case chatHistoryHealSlot <- struct{}{}:
+			<-chatHistoryHealSlot
+		default:
+			t.Fatal("deadline/backoff/latch leaked the real capacity-one rebuild slot")
+		}
+		require.Equal(t, before, historyTree(t, historyIndexDir(f.store, f.sid)), "an expired attempt must not publish a new baseline")
+		require.Equal(t, canonical, partitionBytes(t, f.store, f.sid))
+		require.Empty(t, selfHealEvents(t, logs, f.sid, selfHealOKLog))
+	}
+	// A now-healthy timeout factory must not unlock attempt four. This proves
+	// the attempt cap, rather than merely repeatedly observing the same fault.
+	expire = false
+	request, cancelRequest = context.WithDeadline(context.WithValue(context.Background(), requestKey{}, f.sid), time.Now().Add(time.Hour))
+	err := f.store.CheckChatHistoryReadiness(request, f.sid)
+	cancelRequest()
+	selfHealRequireUnavailable(t, err, "catchup_limit")
+	require.Equal(t, original.Error(), err.Error())
+	require.Nil(t, errors.Unwrap(err))
+	require.Equal(t, 3, attempts, "removing the expiry fault cannot permit a fourth attempt")
+	require.Len(t, selfHealEvents(t, logs, f.sid, selfHealBadLog), 3)
+	require.Empty(t, selfHealEvents(t, logs, f.sid, selfHealOKLog))
+	require.Zero(t, len(chatHistoryHealSlot))
+	require.Equal(t, before, historyTree(t, historyIndexDir(f.store, f.sid)))
+	require.Equal(t, canonical, partitionBytes(t, f.store, f.sid))
+	selfHealRequirePrivateLogs(t, logs, f)
 }
