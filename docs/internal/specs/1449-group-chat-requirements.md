@@ -41,6 +41,9 @@ Group chats (team room, squads, ad-hoc groups; `src/components/rooms/`, `pkg/roo
 | D12 | Sidebar | Keep the existing group section under each workspace | Already exists (`WorkspaceGroupChats`) | Interview | 2026-10-27 |
 | D13 | Minimal chrome (all chats) | No chat header bar and no borders. The existing workspace header line (workspace name + Tasks/Calendar/Library/Mail/Team) stays unchanged on the left; chat controls sit at the right end of the same line as icon-only ghost buttons with tooltips: normal chat → Add participant; helper chat → small muted breadcrumb "‹ Parent / Helper" (parent is the link; replaces the grey `FeedKindLabel` bar with its border); group chat → avatar stack + count as the Participants button. Wireframe approved by the founder ("the wireframe is excellent, I'm very happy with that") | R8/R9 | Interview | 2026-10-28 |
 | D14 | Presence | Agents knowing sign-in/open chat, and sign-in/return triggers, are NOT part of #1449 — tracked as #1461 | Own feature | Interview | 2026-10-27 |
+| D15 | Helper approvals | Approval/question cards from helpers an agent started for group work appear ONLY in that agent's main chat, not in the group. In the group, the agent's avatar shows the attention animation plus a link to its main chat. The ADR's proposal to show helper cards in the group is NOT adopted | Founder answer to ADR question Q1 | Interview | 2026-10-28 |
+| D16 | Stop with mixed work | Stop in a group withdraws only the group request; other work in the same run (for example a Telegram message) continues | Founder answer to ADR question Q2 (ADR proposal accepted) | Interview | 2026-10-28 |
+| D17 | Add participant placement | The Add participant icon appears in main agent chats only, as today | Founder answer to ADR question Q3 | Interview | 2026-10-28 |
 
 ## 4. Wireframe
 
