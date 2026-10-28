@@ -11,10 +11,38 @@ import { openSessionByDeepLink } from './fixtures/session-setup';
 import { assertRestoredControl, controlProvider, floodRealJournal, pendingAction, reconnectWithPending,
   sendControlInstruction, stopPendingControl, stopRunningControlTurn, waitForPendingControl } from './fixtures/chat-history-paging/control-actions';
 import { CONTROL_RUNNING } from './fixtures/chat-history-paging/control-provider';
+import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness';
 
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
 test.describe.configure({ retries: 0 });
 test.setTimeout(240_000); // Real3,000-row UI traversal, not a clock-based oracle.
+
+// Q-T8: the archived B26 run stopped in the short DOM-open poll, BEFORE it
+// reached the reconnect/focus assertion. Wait for the real addressed native
+// attach under the unchanged whole-test deadline, then keep every UI guard.
+// This is the existing reload fixture's readiness instrument, not a new sleep
+// or an enlarged locator timeout. Missing attach still fails the whole case.
+async function openBootMismatchReader(history: HistoryHarness) {
+  const { page, sessionId } = history;
+  const before = history.traffic.frames.length;
+  const observer = observeAddressedAttachReadiness(page);
+  const pending = observer.arm(sessionId);
+  try {
+    await page.goto(`${history.origin}/#/sessions/${sessionId}`);
+    const proof = await pending.wait();
+    expect(proof.request.session_id, 'native request addresses the B26 reader').toBe(sessionId);
+    expect(proof.completion.session_id, 'native completion answers that same reader').toBe(sessionId);
+    expect(history.traffic.frames.slice(before).filter(frame => frame.type === 'catch_up_complete' && frame.session_id === sessionId),
+      'opening readiness still requires exactly one real completion').toHaveLength(1);
+    await expect(page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible();
+    await expect(chatInput(page)).toBeVisible();
+    await expect(chatInput(page)).toBeEnabled();
+    await waitForConnected(page);
+    expect(history.traffic.failures, 'opening retains generated-frame validation').toEqual([]);
+    await history.info.attach('b26-addressed-open', { contentType: 'application/json', body: JSON.stringify(proof) });
+    await settled(page);
+  } finally { pending.cancel(); observer.dispose(); }
+}
 
 test('T24 B04:transport loss after real replay but before complete retains the prior reader and never claims catch-up success', async ({ history, page }) => {
   await history.seed({ label: 'incomplete', count: 800, shape: 'varied' });
@@ -111,7 +139,7 @@ test('T24 B04:transport loss after real replay but before complete retains the p
 
 seededHistoryTest({ label: 'snapshot', count: 3400 })('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft and directly refreshes its closed interval', async ({ history, page }) => {
   await history.authenticate();
-  await history.open();
+  await openBootMismatchReader(history);
   await browseBack(history, 300);
   const old = await anchor(page);
   await chatInput(page).fill('DRAFT_NOT_SENT_DURING_RECONNECT');
