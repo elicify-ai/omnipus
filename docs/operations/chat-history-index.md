@@ -212,6 +212,14 @@ worker. Larger/inconsistent gaps need this operator command. History unavailabil
 is not permission to cancel running work: current sending, approvals and Stop
 remain separately available with an explicit history error.
 
+An earlier day partition that is **empty** (0 bytes) holds no record address, so
+it cannot re-point one. Ordinary operation treats it as known-and-empty and
+records its end (0), exactly as the offline builder records every stream end; it
+is a catalog fact and does not consume the 64-fact allowance. An earlier day
+partition that is **not** empty, and that the checkpoint does not know, still
+refuses as an inconsistent archive catalog — it may hold addresses the index has
+already issued.
+
 Retention follows actual deletions. On native Windows, a reader-held sharing-busy
 partition remains present/indexed, later eligible removals continue, and a later
 normal sweep retries after the handle closes. Genuine permission or integrity

@@ -14,6 +14,12 @@ import (
 type historyCapturedStream struct {
 	key, path string
 	end       int64
+	// emptyKnown marks an earlier day partition the checkpoint does not know
+	// that is EMPTY (0 bytes). It holds no record address, so it cannot
+	// re-point one: it is known-and-empty, the rule the offline builder
+	// applies (PrepareChatHistoryIndex records every stream end, empty ones
+	// included).
+	emptyKnown bool
 }
 type historyMutation struct {
 	record         *ArchiveRecord
@@ -22,6 +28,9 @@ type historyMutation struct {
 	disposition    *InputDisposition
 	dispositionRef historyDispositionRef
 	expired        string
+	// empty is a known-empty earlier partition: a catalog fact with no
+	// canonical content, whose end (0) the checkpoint records.
+	empty string
 }
 
 func filepathJoinDisposition(dir string) string { return filepath.Join(dir, inputDispositionFileName) }
@@ -74,7 +83,15 @@ func historyCaptureStreams(dir string, cp historyCheckpoint) ([]historyCapturedS
 	streams := make([]historyCapturedStream, 0, len(actual))
 	for key, s := range actual {
 		if _, known := cp.ArchiveEnds[key]; !known && cp.CurrentKey != "" && key < cp.CurrentKey {
-			return nil, 0, nil, "", errors.New("archive catalog repointed")
+			if s.end != 0 {
+				return nil, 0, nil, "", errors.New("archive catalog repointed")
+			}
+			// An earlier day partition that is EMPTY holds no record address, so
+			// it cannot re-point one. It is known-and-empty, exactly as the
+			// offline builder records it (chat_history_build.go records every
+			// stream end, empty ones included); the reconcile records its end
+			// (0) on the next publish.
+			s.emptyKnown = true
 		}
 		streams = append(streams, s)
 	}
@@ -187,6 +204,7 @@ func historyValidateAnchor(ctx context.Context, dir string, cp historyCheckpoint
 }
 func historyCollectMutations(ctx context.Context, dir string, cp historyCheckpoint, streams []historyCapturedStream, dispEnd int64, expired []string) ([]historyMutation, chatHistoryReconcileResult, error) {
 	var result chatHistoryReconcileResult
+	var empty []historyMutation
 	items := make([]historyMutation, 0, chatHistoryRecoveryMaxItems+1)
 	add := func(m historyMutation) bool {
 		items = append(items, m)
@@ -202,6 +220,13 @@ func historyCollectMutations(ctx context.Context, dir string, cp historyCheckpoi
 		}
 	}
 	for _, s := range streams {
+		if s.emptyKnown {
+			// A known-empty earlier partition is a catalog fact, not canonical
+			// content: it carries no bytes to walk and does not consume the
+			// bounded catch-up allowance.
+			empty = append(empty, historyMutation{empty: s.key})
+			continue
+		}
 		off := cp.ArchiveEnds[s.key]
 		for off < s.end {
 			purpose := "suffix"
@@ -243,6 +268,11 @@ func historyCollectMutations(ctx context.Context, dir string, cp historyCheckpoi
 		}
 		off += int64(len(b))
 	}
+	// The known-empty coverage facts are appended last: they are catalog facts
+	// with no canonical content, so they never consume the bounded catch-up
+	// allowance that counts the archive and disposition facts above.
+	items = append(items, empty...)
+	result.ObservedItems = len(items)
 	return items, result, nil
 }
 func historyApplyMutations(t *chatHistoryIndexTree, cp *historyCheckpoint, items []historyMutation) error {
@@ -264,6 +294,12 @@ func historyApplyMutations(t *chatHistoryIndexTree, cp *historyCheckpoint, items
 		case m.expired != "":
 			delete(cp.ArchiveEnds, m.expired)
 			cp.Facts = append(cp.Facts, "expired/"+m.expired)
+		case m.empty != "":
+			// A known-empty earlier partition carries no record address. The
+			// checkpoint records its end (0), exactly as the offline builder
+			// records every stream end.
+			cp.ArchiveEnds[m.empty] = 0
+			cp.Facts = append(cp.Facts, "empty/"+m.empty)
 		}
 	}
 	return nil
