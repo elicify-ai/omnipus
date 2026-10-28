@@ -163,3 +163,70 @@ describe('C1 combined-gate timer edit ownership', () => {
     expect(server.goal_stalled_checkin_minutes).toBe(75)
   })
 })
+
+
+// Founder TM5: a newer valid edit settles during an older confirmed request;
+// the queued intent must request fresh consent automatically after settlement.
+describe('TM5 pending local timer edit resumes consent after an older save', () => {
+  for (const olderFails of [false, true]) {
+    it(`TM5 opens fresh re-auth for settled newer input after older ${olderFails ? 'error' : 'success'}`, async () => {
+      gate1Mode = 'local'
+      failRefresh = olderFails
+      const view = await mount()
+      await waitFor(() => expect(view.client.isFetching()).toBe(0))
+      gate1HoldPut = true
+      await edit(timerControls().minutes, '45')
+      expect(puts).toHaveLength(0)
+      await gate1LocalConsent()
+      await gate1PutStarted
+      expect(gate1ReauthCount).toBe(1)
+      expect(puts).toEqual([{ goal_stalled_checkin_minutes: 45 }])
+      expect(screen.queryByTestId('reauth-password-input')).not.toBeInTheDocument()
+      const minutes = timerControls().minutes
+      expect(minutes).toBeEnabled()
+      const oldSettled = new Promise<void>((resolve) => {
+        const unsubscribe = view.client.getMutationCache().subscribe((event) => {
+          if (event.type === 'updated' && event.action.type === (olderFails ? 'error' : 'success')) { unsubscribe(); resolve() }
+        })
+      })
+      vi.useFakeTimers()
+      const beforeNewEdit = Date.now()
+      fireEvent.change(minutes, { target: { value: '75' } })
+      expect(minutes).toHaveValue(75)
+      // The existing native helper uses a 700ms deterministic debounce flush.
+      // Here it MUST finish while the actual first HTTP request is still held.
+      await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+      expect(Date.now()).toBe(beforeNewEdit + 700)
+      expect(timerControls().minutes).toHaveValue(75)
+      expect(puts).toHaveLength(1)
+      expect(view.client.isMutating()).toBe(1)
+      expect(screen.queryByTestId('reauth-password-input')).not.toBeInTheDocument()
+      const release = gate1ReleasePut
+      expect(release).not.toBeNull()
+      if (release === null) throw new Error('BLOCKED: actual older confirmed HTTP request is not held')
+      await act(async () => { release(); await oldSettled; await vi.advanceTimersByTimeAsync(0) })
+      expect(Date.now()).toBe(beforeNewEdit + 700)
+      vi.useRealTimers()
+      expect(puts).toHaveLength(1)
+      // A correct automatic modal hides background controls from the role
+      // tree; query the actual attached field with the same contract bounds.
+      const liveMinutes = screen.getAllByRole('spinbutton', { hidden: true }).filter((input) => input.getAttribute('min') === '5' && input.getAttribute('max') === '1440')
+      expect(liveMinutes).toHaveLength(1)
+      expect(liveMinutes[0]).toBeInTheDocument()
+      expect(liveMinutes[0]).toHaveValue(75)
+      // No extra input gesture or edit is allowed to supply this prompt.
+      const freshPrompt = await screen.findByTestId('reauth-password-input')
+      expect(freshPrompt).toBeVisible()
+      expect(puts).toHaveLength(1)
+      expect(liveMinutes[0]).toBeInTheDocument()
+      expect(liveMinutes[0]).toHaveValue(75)
+      failRefresh = false
+      await gate1LocalConsent()
+      await waitFor(() => expect(puts).toHaveLength(2))
+      expect(puts[1]).toEqual({ goal_stalled_checkin_minutes: 75 })
+      await waitFor(() => expect(view.client.isFetching()).toBe(0))
+      expect(timerControls().minutes).toHaveValue(75)
+      expect(server.goal_stalled_checkin_minutes).toBe(75)
+    })
+  }
+})
