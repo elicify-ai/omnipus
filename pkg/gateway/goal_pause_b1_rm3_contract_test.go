@@ -3,9 +3,13 @@ package gateway
 // RM3: exact bounded contract accepted by the parent before implementation.
 // Real boot, pause notifier, owned audience, persistent store and live publication.
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/require"
@@ -47,7 +51,7 @@ func TestGoalPauseB1RM3UntitledChatBell(t *testing.T) {
 				require.Equal(t, "your chat with "+strings.TrimSpace(inst.Name), tc.wantCarrier)
 			}
 
-			f.user(t, "blocked", reason)
+			f.rm3UserWithArrangedTitle(t, "blocked", reason, tc.chatTitle)
 			current, err := store.GetMeta(f.sid)
 			require.NoError(t, err)
 			require.Equal(t, tc.chatTitle, current.Title, "RM3 must remain a genuinely arranged chat")
@@ -94,5 +98,42 @@ func TestGoalPauseB1RM3UntitledChatBell(t *testing.T) {
 			require.Equal(t, wantTitle, bell.Title, "RM3 actual named/untitled conversation context is required")
 			require.Equal(t, wantTitle, saved.Title, "saved and live global titles share the exact accepted contract")
 		})
+	}
+}
+
+func (f *b1CompFixture) rm3UserWithArrangedTitle(t *testing.T, mode, evidence, arrangedTitle string) {
+	t.Helper()
+	f.setMode(mode, evidence)
+	f.seq++
+	f.h.handleChatMessageWithClientID(context.Background(), f.chat, f.sid, "B1 genuine fixture input", "mia", nil, "", "", fmt.Sprintf("b1-input-%d", f.seq), nil, f.wc)
+	// Shared ownership is actual store data, not a metadata-read failure or fabricated principal.
+	if f.shared {
+		empty := ""
+		require.NoError(t, f.al.GetSessionStore().SetMeta(f.sid, session.MetaPatch{Owner: &empty}))
+	}
+	// The real handler has established metadata; ordinary Run has not started.
+	require.Nil(t, f.runCancel)
+	require.NoError(t, f.al.GetSessionStore().SetMeta(f.sid, session.MetaPatch{Title: &arrangedTitle}))
+	beforeRun, err := f.al.GetSessionStore().GetMeta(f.sid)
+	require.NoError(t, err)
+	require.Equal(t, arrangedTitle, beforeRun.Title)
+	f.startReceiver(t)
+	f.finishProduced(t)
+	if mode == "blocked" || mode == "waiting_on_user" {
+		g, err := goal.NewStore(f.home).Get(f.gid)
+		require.NoError(t, err)
+		require.NotNil(t, g.LatestClaim)
+		require.Equal(t, mode, string(g.LatestClaim.Status), "SETUP: actual successful goal_claim must persist before a missing bell is meaningful")
+		require.Equal(t, "active", string(g.State))
+		require.Equal(t, f.sid, g.ActiveSessionID)
+		f.collectEvents()
+		positive := false
+		for _, e := range f.events {
+			p, ok := e.Payload.(agent.GoalStatusChangedPayload)
+			if e.Kind == agent.EventKindGoalStatusChanged && ok && p.SessionID == f.sid && p.GoalID == f.gid && p.State == mode {
+				positive = true
+			}
+		}
+		require.True(t, positive, "SETUP: actual existing claim-pause status must be positive before any missing-bell RED")
 	}
 }
