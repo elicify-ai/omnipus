@@ -6,7 +6,7 @@
 
 **Created**: 2026-10-28
 **Input**: founder requirements and decisions log D1-D25 at `docs/internal/specs/1449-group-chat-requirements.md` (interview-me output, in the requirements form the founder interview produced; there is no separate `.interview.json`); ADR above; approved wireframe `docs/internal/design/1449/index.html` (screenshot `wireframe-full.png`, frames 1-4).
-**Status note**: `In review`. The five founder questions of the first draft were answered as D21-D25 (2026-10-28) and are applied throughout; two new questions (F-6, F-7) are open and do not block grill-spec round 1. **D21 (no Stop in the group chat) supersedes the Stop parts of D4 and D16 and the ADR's Stop decisions (A6, C-I5, UAT-8, UAT-9, UAT-22); where this spec and the ADR differ on those points, the founder decision wins.** D23 changes the ADR's origin-precedence text (A5.2) the same way. **Grill round 1 (2026-10-28, report `/workspace/logs/1449/1449-spec-review.md`) is applied: see "Grill Round 1 Dispositions".**
+**Status note**: `In review`. The five founder questions of the first draft were answered as D21-D25 (2026-10-28) and are applied throughout; two new questions (F-6, F-7) are open and do not block grill-spec round 1. **D21 (no Stop in the group chat) supersedes the Stop parts of D4 and D16 and the ADR's Stop decisions (A6, C-I5, UAT-8, UAT-9, UAT-22); where this spec and the ADR differ on those points, the founder decision wins.** D23 changes the ADR's origin-precedence text (A5.2) the same way. **Grill round 1 (report `/workspace/logs/1449/1449-spec-review.md`) and the final round 2 (report `/workspace/logs/1449/1449-spec-review-round2.md`) are applied: see "Grill Round 1 Dispositions" and "Grill Round 2 Dispositions".** Open with the founder: F-6, F-7 and Q-R2-1.
 
 ---
 
@@ -45,6 +45,7 @@ The header of normal and helper chats loses its grey bar and borders (D13). That
 | `pkg/media/store.go::resolveWorkspaceRef`, `pkg/media/library/library.go::Library.Upload` | reused unchanged | From ADR C-I1 |
 | `pkg/media/library/library.go::Library.IncrementRefcount`, `OrphanGC` (hourly, default age 30 days) and `pkg/agent/media_present.go::sessionRefcounter` | extended use (room retention ownership, FR-076) | Verified by reading: a fresh upload has refcount 0 and is collectable; only consuming sessions raise the count |
 | `pkg/gateway/rest_uploads.go::finishWorkspaceUpload`, `stageWorkspaceUploadCopy`; `pkg/gateway/rest_library_write.go::handleLibraryEntryDelete`; `pkg/library/transfer.go::Root.Delete` | reused; the staging step becomes shared with agent-returned files (FR-077) | Verified by reading: a normal upload is written twice (chat media copy, and a Library file under the workspace's `.library` folder); the Library panel deletes only the Library file |
+| `pkg/media/library/library.go::Library.Upload` / `uploadInternal` and `stageWorkspaceUploadCopy` (publication with a caller-preallocated identity, create-or-adopt) | extended (not a wire change): needed so an answer's publication is repeat-safe (FR-078) | Verified by reading: today each call mints a fresh UUID and collision-suffixed file name |
 | `pkg/config/defaults.go` (`"answer_request": "allow"`), `pkg/coreagent/seed.go`, `pkg/coreagent/role_policies_adr090.go` | unchanged (tool already registered and policy-entered) | Verified by grep |
 
 ### Impact Assessment
@@ -57,6 +58,7 @@ The header of normal and helper chats loses its grey bar and borders (D13). That
 | origin merge rule `pkg/agent/participant.go::mergeApprovalOrigin` and `pkg/gateway/policy_approver.go` (D23: room origin only when the step answers only the group) | **MEDIUM (Inferred)** - agent engine; hands-on UAT required before landing (root `CLAUDE.md`, "Hands-on check before any agent-engine landing") | every approval card of every chat (origin label) | all approval cards |
 | `AskUserQuestionTool.Execute` / `PendingSet` / `askUserResumeDispatcher` | MEDIUM (Inferred) | question cards, resume | `AskUserQuestionCard` consumers |
 | `buildAdmission` (invitation prefix, read-only) | MEDIUM (Inferred) - runs under the room lock | first-request admission | all group sends |
+| answer-intent staging, publication and recovery (`pkg/rooms`, `pkg/tools/answer_request.go`, `pkg/media/library`) | **HIGH (Inferred)** - new durable multi-step transaction in the room service | `DeliverAnswer`, `recover`, `AnswerRequestTool` | every group answer with files |
 | media retention (orphan collector) and Library publication of group files | **HIGH (Inferred)** - data loss if wrong; shared with normal chat uploads | normal chat upload path, `OrphanGC` | Library panel, member chats |
 | `src/components/chat/AttachmentCard.tsx` and the shared message rows (file rows gain download and error states) | **MEDIUM (Inferred)** - shared with every chat | `VirtualUserMessageRow`, `VirtualAssistantMessageRow` | all chats with files |
 | `FeedKindLabel`, `MainChatAddParticipant` | already changed on `feature/1449-minimal-header` | - | - |
@@ -89,7 +91,7 @@ Order of work: BE-0 edits these before any Go or TypeScript (5-step procedure, r
 - **Reads**: `getRoomHistory` (`before_seq`, `limit` 1-1000, unchanged contract) feeds the shared list. The room store gains a `limit` argument so the shared fill rule can request pages of 20-100.
 - **Summary detail**: the summary text is read only through `getRoom`. The panel refetches `getRoom` when a `room_meta` frame reports `ready`, and again after every reconnect or re-attach while the panel is open and the last known status was `generating` or the detail was never loaded. No text-bearing frame exists.
 - **Writes**: `postRoomMessage` (now with `media`), `uploadFiles` (library branch, no session), `answer_request` tool (now with `media`).
-- **Stored**: attachments live in the entry journal as `MediaPart` references. Each group file exists in the two representations a normal chat upload has: the chat media copy (`media://workspace/<workspace>/<id>`, under `workspaces/<workspace>/media/`, with a reference count and the orphan collector) and the Library file (under the workspace's `.library` folder, shown and deleted in the Library panel). The room record gains the invitation-context record. Server-internal (not wire) durable records are added for: **retention ownership** of each accepted attachment (FR-076), the **answer intent** of an agent answer with files (source identity to stored reference, text, mentions; FR-078), and the **invitation reservation** per request (FR-080). Deleting a group removes only the group's own journal directory (D19); the retention ownership is not released by deletion.
+- **Stored**: attachments live in the entry journal as `MediaPart` references. Each group file exists in the two representations a normal chat upload has: the chat media copy (`media://workspace/<workspace>/<id>`, under `workspaces/<workspace>/media/`, with a reference count and the orphan collector) and the Library file (under the workspace's `.library` folder, shown and deleted in the Library panel). The room record gains the invitation-context record. Server-internal (not wire) durable records are added for: **retention ownership** of each accepted attachment (FR-076), the **answer intent** of an agent answer with files (a state machine with immutable staged source bytes, preallocated publication identities, text and mentions; FR-078), and the **invitation reservation** per request with its transitions (FR-080). Deleting a group removes only the group's own journal directory (D19); the retention ownership is not released by deletion.
 - **Streams to the browser** (unchanged routing, `attach_room`): `room_entry`, `room_snapshot`, `room_member_state`, `room_meta` (now carrying the invitation status).
 
 ---
@@ -163,9 +165,10 @@ A person asks an agent in the group for a file or a chart and wants the result i
 1. **Given** an agent was asked for a diagram image, **When** it answers with the image, **Then** the group shows it with the lightbox and the agent's own chat shows the same answer with the file.
 2. **Given** the agent's file is within reach of its own chat but not yet in the workspace, **When** it answers with it, **Then** the file is stored in the workspace first (it also appears in the workspace Library) and the answer shows that stored file.
 3. **Given** storing or checking an attached file fails, **When** the agent answers, **Then** the agent receives an error and nothing is posted.
-4. **Given** two answers with identical text but different files, **When** a repair after an interruption runs, **Then** they are never treated as the same answer.
+4. **Given** two answers with identical text but different files, **When** a repair after an interruption runs, **Then** they are never treated as the same answer; an agent that repeats the same call (same text, same original files) while its answer is not yet fully completed gets that same answer completed, not a second one.
 5. **Given** an answer names a file of another workspace, **When** the agent submits it, **Then** it is refused and nothing is posted.
 6. **Given** an agent answer text longer than the group's size limit (65,536 bytes), **When** the agent submits it, **Then** it is refused, and nothing is posted, copied or passed on.
+7. **Given** an agent answer with files was accepted and the server stops before it is posted, **When** the server restarts, **Then** the answer is completed once from what was recorded (the original bytes, the text, the mentions) without asking the agent again; an answer the agent was told was refused is never posted later; and if the group, the agent's membership or the request no longer allows it, it is not posted.
 
 ### User Story 5 - Calm live view while several agents work (Priority: P1)
 
@@ -238,6 +241,7 @@ A person in an agent's main chat wants to add another agent; this starts a new g
 6. **Given** the origin chat contains a recognised key or credential, **When** the summary is made, **Then** the recognised value is not in the summary.
 7. **Given** a summary was made, **When** the panel shows "Cost so far", **Then** it includes the summary's cost once.
 8. **Given** the summary is still being made, **When** the person sends the first message, **Then** the message is never held; the invited agent simply goes without the summary.
+9. **Given** the first request to a member could not be stored and is retried, or another request reaches the member meanwhile, **When** the requests are delivered, **Then** the member receives the summary exactly once and a request that went out without it never gets it later.
 
 ### User Story 9 - Approvals and questions appear in the group only when they belong to it (Priority: P1)
 
@@ -321,7 +325,7 @@ A person who deletes a group must not lose the files uploaded into it or produce
 **Acceptance Scenarios**:
 
 1. **Given** a group with an image is deleted, **When** the person opens the agent's own chat or the Library, **Then** the image still opens.
-2. **Given** a file is deleted in the Library panel, **When** an existing group shows the entry, **Then** the entry keeps opening exactly as the same file does in the normal chat (the Library panel removes the Library file; the chat copy stays until it is itself removed).
+2. **Given** a file is deleted in the Library panel, **When** an existing group shows the entry, **Then** the outcome depends on the founder's answer to Q-R2-1 (pending). **Option A:** one explicit deletion removes both copies and the group entry shows the broken-file state with Retry (the shared deletion also changes normal chats). **Option B:** the Library panel removes the Library file only, the group entry keeps opening exactly as in a normal chat, and a distinct, reachable Library action removes the retained chat copy.
 3. **Given** the chat copy of a file is gone, **When** an existing group shows the entry, **Then** the entry shows the broken-file state with Retry, not a silent gap.
 4. **Given** a file attached to a message in a paused group, or to a request held for a stopped agent, or to a group that was then deleted, **When** more than 30 days pass and the automatic orphan cleanup runs (also after a restart), **Then** the file still opens.
 
@@ -344,7 +348,7 @@ The sidebar's group section, the six commands, mentions, pause and the audit beh
 
 - **Group with 2, 3, 4 and 10 members**: the stack shows 2, 3, 3 plus "+1", 3 plus "+7"; the count is always the full number.
 - **Message with only an attachment**: accepted. **Text with 16 attachments**: accepted. **17th**: refused in the box and, if forced through the API, with 400.
-- **Attachment deleted from the Library after posting**: the entry shows the broken-file state with Retry.
+- **Attachment deleted from the Library after posting**: pending Q-R2-1 (Option A: broken-file state with Retry; Option B: the entry keeps opening until the chat copy is removed by its own action). The chat copy being gone always shows the broken-file state with Retry.
 - **Upload succeeds, post never sent**: an unattached library file stays, as with an abandoned normal-chat upload; no entry is written.
 - **Agent answer whose files cannot be copied**: tool error to the agent; nothing appended, mirrored or forwarded.
 - **A stopped member's held request with an image, revived later**: the model gets the image.
@@ -544,6 +548,7 @@ The ADR's two unproven Stop items (UNPROVEN-1 turn-scoped stop, UNPROVEN-2 per-r
 | A-7 | Behaviour of the Participants panel on narrow widths | custom | Recommendation: same as the other registered side panels (they already collapse/overlay on narrow widths); no new behaviour |
 | A-9 | Whether `answer_request.media` may point to the same file more than once | n/a | Same as A-4 |
 | A-12 | Whether the schema-level maximum (a 400 under inbound validation) or the server byte check (422) answers an over-limit message | return whichever fires first | Spec value: 422 with the size message in both modes; backend-lead reconciles the schema and the handler (for example by documenting the byte limit in the schema text and leaving the byte check to the server) |
+| A-13 | Bounds of the private staging for an answer's original bytes | none | Recommendation: the same per-file limit as uploads (100 MB, `uploadFiles` contract), at most 16 files per answer, removed on rejection and after commit; architect confirms before RED |
 | A-11 | Oracles for empty-file, oversize-file and unsafe-filename uploads in DS-10 are "as in the normal chat" | copy values from the implementation | qa-lead cites the normal chat's documented behaviour (`docs/using-omnipus-ui.md`) or the `uploadFiles` contract for each value; if neither states it, ask the dispatcher |
 
 ---
@@ -817,7 +822,7 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 **Category**: Edge Case
 - **Given** the person uploaded a file in the group and closed the page without sending
 - **When** the group is read
-- **Then** it contains no entry for the file, and the file remains an unattached library file
+- **Then** it contains no entry for the file; the chat media copy has no owner and is collectable by the orphan cleanup, while the Library file stays listed in the Library panel (the cleanup never removes it)
 
 #### Scenario Outline: S-120 Attachments never consume the text budget
 **Traces to**: User Story 3, Acceptance Scenario 2
@@ -875,7 +880,7 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 **Category**: Error Path
 - **Given** storing Jarvis's file fails
 - **When** Jarvis submits the answer
-- **Then** Jarvis receives a tool error and no entry, mirror or forwarded mention exists
+- **Then** Jarvis receives a definitive "nothing posted" tool error only after the intent is durably recorded as rejected, and no entry, mirror or forwarded mention exists, now or after any restart
 
 #### Scenario: S-32 Two answers with the same text and different files stay distinct
 **Traces to**: User Story 4, Acceptance Scenario 4
@@ -935,6 +940,64 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 - **Given** Jarvis answered with a file that only its chat could reach
 - **When** the person opens the workspace Library panel
 - **Then** the file is listed there with its name and can be downloaded from it, and the group entry opens the same bytes
+
+#### Scenario: S-137 An equal repeat after the answer fully completed is a new answer, as for text-only answers
+**Traces to**: User Story 4, Acceptance Scenario 4
+**Category**: Edge Case
+- **Given** Jarvis's answer "done" with file F was posted, mirrored and its mentions admitted, and its tool receipt was lost
+- **When** Jarvis submits the same text with the same original file again
+- **Then** a new answer is posted (the same rule as for text-only answers today), with its own entry and its own publication; while the first was still incomplete, the repeat completes the first instead (S-133)
+
+#### Scenario: S-140 An answer refused with "nothing posted" never posts later
+**Traces to**: User Story 4, Acceptance Scenario 7
+**Category**: Error Path
+- **Given** an answer's file could not be read, Jarvis received the definitive "nothing posted" error, and the server then restarts
+- **When** the server recovers
+- **Then** no entry, mirror or forwarded mention appears for that answer, and its staged bytes and unreferenced published files are removed
+
+#### Scenario: S-141 A source file that changes or disappears after acceptance does not change the answer
+**Traces to**: User Story 4, Acceptance Scenario 7
+**Category**: Edge Case
+- **Given** an answer with file F was accepted (its bytes were staged), then F was edited (or deleted) before the answer was posted, and the server restarts
+- **When** the answer is completed
+- **Then** the posted file has the bytes F had at acceptance, and exactly one answer, one mirror and one Library artifact exist
+
+#### Scenario Outline: S-142 A crash inside publication creates no duplicate artifact
+**Traces to**: User Story 4, Acceptance Scenario 7
+**Category**: Edge Case
+- **Given** the server stops `<cut>` for one file of an accepted answer
+- **When** the answer is completed after restart
+- **Then** the file exists once as a chat media copy and once as a Library file, with the identities allocated when the answer was accepted
+
+**Examples**:
+
+| cut |
+|---|
+| after the chat media copy was committed and before its result was recorded |
+| after the Library file was written and before its result was recorded |
+| after both were written and before the entry was appended |
+
+#### Scenario: S-143 An append failure keeps a pending answer recoverable through the collector and a restart
+**Traces to**: User Story 4, Acceptance Scenario 7
+**Category**: Edge Case
+- **Given** appending an accepted answer failed for a reason that can be retried, a controlled clock then moves 31 days ahead, the orphan cleanup runs and the server restarts
+- **When** the answer is completed
+- **Then** its original bytes are still available and the answer posts once; if the failure was definitive the files are released and removed only after the rejection was recorded
+
+#### Scenario Outline: S-144 Recovery rechecks the room before posting
+**Traces to**: User Story 4, Acceptance Scenario 7
+**Category**: Error Path
+- **Given** an accepted answer is pending and, before recovery, `<change>`
+- **When** the server recovers
+- **Then** the answer is not posted, mentions are not admitted, the intent is recorded as rejected, and no model work is restarted
+
+**Examples**:
+
+| change |
+|---|
+| the group was deleted |
+| the agent was removed from the group |
+| the request was cancelled |
 
 ### Story 5 - Live view
 
@@ -1299,6 +1362,31 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 - **When** both are built
 - **Then** exactly one of them carries the summary and the other is recorded as skipped, with no duplicate and no loss, also across a restart
 
+#### Scenario: S-138 Failure, a second request, then a retry still delivers the summary once
+**Traces to**: User Story 8, Acceptance Scenario 9
+**Category**: Edge Case
+- **Given** R1 reserved the summary for Mia and its capture write failed (R1 became unavailable), then R2 arrived for Mia
+- **When** R1 is retried
+- **Then** R1 carries the summary once, R2 went without it and never gets it later, and Mia received the summary exactly once
+
+#### Scenario Outline: S-139 Reservation transitions
+**Traces to**: User Story 8, Acceptance Scenario 9
+**Category**: Edge Case
+- **Given** R1 reserved the summary for Mia and `<event>`
+- **When** the next request R3 for Mia is admitted later
+- **Then** the reservation is `<state>` and R3 `<r3>`
+
+**Examples**:
+
+| event | state | r3 |
+|---|---|---|
+| the receiver write failed (unavailable, unknown or storage error), no capture exists | kept for R1 | goes without |
+| the capture is stored but the acknowledgement to the room failed | delivered (receiver facts reconciled) | goes without |
+| the receiver's facts could not be read | kept for R1 (a read error is not proof of absence) | goes without |
+| R1 was cancelled and the receiver's facts show no capture | released | may carry it |
+| cancellation raced the commit and the capture exists | delivered | goes without |
+| R2, skipped while R1 held the reservation, and R1 was then cancelled | released; R2 stays without it | may carry it |
+
 ### Story 9 - Approvals and questions
 
 #### Scenario: S-71 A tool approval for this group's work shows in the group and in the agent's chat
@@ -1546,12 +1634,19 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 - **When** the group shows the entry
 - **Then** the normal chat's broken-image state with Retry is shown
 
-#### Scenario: S-136 A file deleted in the Library panel keeps opening in the group like in a normal chat
+#### Scenario: S-136 Option A (pending Q-R2-1): one Library deletion removes both copies
 **Traces to**: User Story 14, Acceptance Scenario 2
 **Category**: Alternate Path
-- **Given** a group image also listed in the Library panel
+- **Given** a group image listed in the Library panel
 - **When** the person deletes it in the Library panel
-- **Then** the Library no longer lists it and the group entry still opens, exactly as the same upload does in a normal chat
+- **Then** the Library no longer lists it, the group entry and its mirrored copies show the broken-file state with Retry, and no repair or retention step recreates it
+
+#### Scenario: S-145 Option B (pending Q-R2-1): Library Delete removes the Library file only; a distinct action removes the chat copy
+**Traces to**: User Story 14, Acceptance Scenario 2
+**Category**: Alternate Path
+- **Given** a group image listed in the Library panel
+- **When** the person deletes it with the Library panel's Delete
+- **Then** the Library no longer lists it and the group entry still opens, as the same upload does in a normal chat; and when the person then uses the named Library action that removes the retained chat copy, the entry shows the broken-file state and nothing recreates it
 
 #### Scenario: S-124 A paused group's attachment survives the orphan cleanup
 **Traces to**: User Story 14, Acceptance Scenario 4
@@ -1572,7 +1667,7 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 **Category**: Edge Case
 - **Given** a group with an image was deleted and a controlled clock moves 31 days ahead
 - **When** the real orphan cleanup runs
-- **Then** the image still opens from the agent's main chat and the Library; an upload that was never posted (S-28) is collected by the same run
+- **Then** the original media URL still opens (fixture: no consuming session owns the file, so only the group's retention owner can protect it); the same file also opens from the agent's main chat in a second fixture; an upload that was never posted (S-28) has its chat media copy collected by the same run while its Library file stays listed
 
 ### Story 15 - Preserved behaviour
 
@@ -1679,7 +1774,7 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-04 | `upload_workspace_branch` | Unit (Go) | S-22, S-23, S-28, S-128 | `workspace_id` without `session_id`; 503 when the library is unavailable; no session created; parity with the existing normal-chat upload for any other input (no new authorization); both representations written |
 | T-05 | `request_capture_carries_media` | Unit (Go) | S-27, S-20 | Initial admission, rewake and held delivery all hand the model the same files |
 | T-06 | `answer_request_media` | Unit (Go) | S-29, S-30, S-31, S-34 | Workspace ref; own-chat copy; copy/check failure; other workspace |
-| T-07 | `answer_identity_and_repair` | Unit (Go) | S-32, S-33, S-133 | Retry with identical original file arguments (not pre-normalized stored ids); every fault cut including intent recorded before copy and recovery from the intent; new answers with the same text stay distinct |
+| T-07 | `answer_identity_and_repair` | Unit (Go) | S-32, S-133, S-137 | Retry with identical original file arguments (not pre-normalized stored ids); equal repeat while incomplete completes the first; equal repeat after full completion is a new answer; text-only behaviour unchanged |
 | T-08 | `mirror_attachments_to_main_chat` | Integration | S-20, S-29 | Request and answer mirrored with attachments; main-chat group-traffic entry expands to show them |
 | T-09 | `group_deletion_keeps_library_files` | Integration | S-112 | Journal directory removed; library entries remain |
 | T-13 | `approval_single_decision` | Unit (Go) | S-80 | Approve and deny at the same moment: one transition wins |
@@ -1688,7 +1783,7 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-17 | `card_flips_only_own_request` | Unit (Go) | S-82 | With and without a reference |
 | T-18 | `invitation_state_machine` | Unit (Go) | S-61, S-63, S-64, S-65, S-66 | generating to ready/unavailable; 44/45/46 s; restart; deletion; late discard |
 | T-19 | `invitation_filters_and_exclusions` | Unit (Go) | S-67 | Registered value and pattern removed; secret entries/tool results excluded; prose password NOT asserted (#1467) |
-| T-20 | `invitation_delivery_rules` | Unit (Go) | S-62, S-69, S-131, S-132 | First request only; skipped when not ready; never held; origin never receives; reservation bound to the request id; receiver-write failure then retry; concurrent first requests; restart |
+| T-20 | `invitation_delivery_rules` | Unit (Go) | S-62, S-69, S-131, S-132, S-138, S-139 | First request only; skipped when not ready; never held; origin never receives; reservation transitions; failed write then retry; composed R1 fails / R2 arrives / R1 retries; stored capture with failed acknowledgement; facts-read error; cancellation racing the commit; concurrent first requests; restart |
 | T-21 | `invitation_cost_once` | Unit (Go) | S-68 | One cost line; unpriced flag; dedupe |
 | T-22 | `invitation_invisible_and_group_starts_empty` | Integration | S-60, S-70 | Amended add-participant test: record exists, no entry, origin unchanged; summary absent from entries/frames/mirror |
 | T-23 | `approval_frames_reach_group_page` | Integration (real hub) | S-81 | Cards for this group reach a client with no chat attached |
@@ -1709,16 +1804,17 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-48 | `e2e_rich_content_and_attachments` | E2E | S-01, S-05, S-20, S-21, S-29 | Real server, stub model |
 | T-49 | `e2e_approvals` | E2E | S-71, S-72 | Real server, stub model |
 | T-50 | `e2e_start_group_and_invitation` | E2E | S-60, S-61, S-62, S-63 | Real server, stub model; provider-down variant |
-| T-52 | `docs_verifier_audit` | Audit | (DOC-001..DOC-008) | docs-verifier audits the drafts against actual behaviour |
+| T-52 | `docs_verifier_audit` | Audit | (DOC-001..DOC-008) | docs-verifier audits the drafts against actual behaviour, including the normal-chat file-card download and Retry text in DOC-005 |
 | T-53 | `vitest_coverage_group_guard` | CI gate | (process) | Every new vitest file matches a CI group pattern |
 | T-54 | `message_size_limit` | Unit (Go) | S-118, S-119 | 65,536 / 65,537 bytes; multi-byte boundary; agent answer over the limit posts nothing and copies no file; same result with inbound validation on and off |
 | T-55 | `contract_text_limit_agrees_with_server` | CI gate | S-118 | Entry and request text limits in the contract schemas (both copies) equal the server limit; fails if either drifts (D24) |
 | T-56 | `e2e_remote_image_blocked_in_browser` | E2E (real browser, embedded SPA) | S-106 | Controlled remote image endpoint, a positive control proving the instrument sees an allowed request, and the blocked image's policy violation or failure recorded |
 | T-57 | `quoted_context_attachments_by_filename` | Unit (Go) | S-120, S-121 | Text at 65,536/65,537 bytes with 5 MB media; quoted history names earlier files as text only; only the current request's files reach the model |
 | T-58 | `invitation_detail_refresh_transport` | Unit + integration (frontend transport) | S-61, S-122, S-123 | Status-only frame, then the detail fetch, then the rendered text; disconnect during generation; fetch failure with Retry |
-| T-59 | `attachment_retention_collector` | Unit (Go, controlled clock) | S-124, S-125, S-126, S-28 | The real orphan collector 31 days ahead, before and after restart: paused group, held request, deleted group; never-posted upload still collected; ownership acquired once; released when the append fails |
-| T-60 | `library_publication_and_deletion` | Integration + E2E | S-127, S-128, S-136 | Person uploads and agent-returned files listed and downloadable through the real Library surface; Library deletion effect on the group URL equals the normal chat's |
+| T-59 | `attachment_retention_collector` | Unit (Go, controlled clock) | S-124, S-125, S-126, S-28 | The real orphan collector 31 days ahead, before and after restart. Asserts the chat media copy and the Library file separately: referenced chat copies survive; an unowned never-posted chat copy is collected while its Library file stays; a deleted paused group's original media URL still opens in a fixture with no consuming-session owner (so a missing group owner is detected), and separately from the agent's chat; ownership acquired once and released when the append fails |
+| T-60 | `library_publication_and_deletion` | Integration + E2E | S-127, S-128, S-136, S-145 | Person uploads and agent-returned files listed and downloadable through the real Library surface; the deletion outcome per the founder's Q-R2-1 answer (S-136 for Option A, S-145 for Option B) is tested on both the Library listing and the group URL; the unchosen option's scenario is not run |
 | T-61 | `shared_file_rows_download_and_error` | Unit | S-129, S-130 | PDF download by keyboard in user and agent rows; missing non-image file shows inline error and Retry; existing normal-chat row tests unchanged |
+| T-62 | `answer_intent_lifecycle` | Unit (Go) | S-33, S-140, S-141, S-142, S-143, S-144 | The full lifecycle: accepted, publishing, committed, rejected; changed or missing original sources; every cut inside each publication; append failure with collector and restart; restart after a returned definitive failure; room, membership and cancellation rechecks; asserts original bytes, one answer, one mirror, no duplicate Library artifact and no model restart |
 
 ### Test Datasets
 
@@ -1780,7 +1876,11 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | 14 | cost 0.02 dollars written twice | Duplicate | counted once | BDD Scenario: S-68 | |
 | 15 | receiver capture write fails, same request retried | Failure | summary carried once | BDD Scenario: S-131 | |
 | 16 | two first requests at once | Concurrency | exactly one carries it | BDD Scenario: S-132 | |
-| 17 | request cancelled before capture | Release | reservation released; next first request may carry it | BDD Scenario: S-131 | |
+| 17 | request cancelled, receiver facts show no capture | Release | reservation released; a later new request may carry it | BDD Scenario: S-139 | |
+| 18 | request unavailable after a storage failure, then R2 arrives, then R1 retried | Retryable | R1 carries it once; R2 never | BDD Scenario: S-138 | |
+| 19 | capture stored, acknowledgement failed | Reconcile | delivered; no second delivery | BDD Scenario: S-139 | |
+| 20 | facts read fails | Read error | reservation kept | BDD Scenario: S-139 | |
+| 21 | cancellation races the commit, capture exists | Race | delivered | BDD Scenario: S-139 | |
 
 #### Dataset DS-5: Summary input and filters
 
@@ -1845,6 +1945,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | 10 | approve in A, deny in B simultaneously | Race | exactly one decision | BDD Scenario: S-80 | |
 | 11 | same as 1, step also handled a task | Mixed | agent's chat only | BDD Scenario: S-79 | D23 |
 | 12 | step handled requests of two different groups | Mixed | **not asserted** until F-7 is answered | BDD Scenario: S-83 | F-7 |
+| Q-R2-1 | Clarify D25 at the two-copy boundary: a group file exists as a chat copy and a Library file, and the Library panel's Delete removes only the Library file today. How should explicit deletion work? | The spec cannot keep both promises as written: "both copies deletable in the Library" and "the group copy keeps opening after Library Delete". Group deletion deliberately keeps the files (D19), so after a Library Delete the retained chat copy could stay reachable with no way to remove it. | A: one explicit Library deletion removes both copies (also changes normal chats; old chat links stop working); B: keep today's Library Delete and add a distinct, reachable Library action that removes the retained chat copy | A (per the round-2 reviewer: clearest meaning of deleting the file; scope: the shared deletion also changes normal chats) | "Q-R2-1 A" or "Q-R2-1 B" |
 
 #### Dataset DS-9: History opening and paging
 
@@ -1883,12 +1984,14 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | 1 | attachment in a paused group, 31 days, cleanup runs | Age over limit | file survives | BDD Scenario: S-124 | default orphan age 30 days |
 | 2 | held request's attachment, restart, 31 days, cleanup | Age + restart | file survives; agent receives it | BDD Scenario: S-125 | |
 | 3 | group deleted, 31 days, cleanup | Deleted | file survives; opens from the agent's chat and Library | BDD Scenario: S-126 | D19 |
-| 4 | upload never posted, 31 days, cleanup | Unowned | collected | BDD Scenario: S-28 | existing behaviour kept |
+| 4 | upload never posted, 31 days, cleanup | Unowned | chat media copy collected; Library file stays listed | BDD Scenario: S-28 | existing behaviour kept, each copy asserted |
 | 5 | append failed after ownership acquired | Failure | ownership released; file collectible | BDD Scenario: S-124 | |
 | 6 | the same message retried | Duplicate | ownership counted once | BDD Scenario: S-124 | idempotent |
+| 8 | upload never posted, 31 days | Two copies | chat media copy collected; Library file stays | BDD Scenario: S-28 | M1: assert each copy |
+| 9 | deleted paused group with no consuming session, 31 days | Group owner only | original media URL opens | BDD Scenario: S-126 | detects a missing group owner |
 | 7 | file at 29 days | Under limit | survives with or without ownership | BDD Scenario: S-124 | |
 
-#### Dataset DS-12: Answer identity and retry
+#### Dataset DS-12: Answer identity, lifetime and recovery
 
 | # | Input | Boundary Type | Expected Output | Traces to | Notes |
 |---|-------|---------------|-----------------|-----------|-------|
@@ -1899,6 +2002,14 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | 5 | crash after copy | Cut | completed from the intent; no second copy | BDD Scenario: S-33 | |
 | 6 | crash after append / mirror / mention admission | Cut | repaired once | BDD Scenario: S-33 | |
 | 7 | text only, no files | Existing | existing repair behaviour unchanged | BDD Scenario: S-32 | |
+| 8 | equal call after the answer fully completed | Lifetime | new answer | BDD Scenario: S-137 | same as text-only today |
+| 9 | original file changed after acceptance | Source change | staged bytes posted | BDD Scenario: S-141 | |
+| 10 | original file deleted after acceptance | Source gone | staged bytes posted | BDD Scenario: S-141 | |
+| 11 | cut after chat media copy committed, result not recorded | Publication cut | one chat copy, one Library file | BDD Scenario: S-142 | preallocated identities |
+| 12 | cut after Library file written, result not recorded | Publication cut | one chat copy, one Library file | BDD Scenario: S-142 | |
+| 13 | definitive rejection returned, then restart | Rejected | never posts; staging removed | BDD Scenario: S-140 | |
+| 14 | retryable append failure, 31 days, cleanup, restart | Pending | posts once from staged bytes | BDD Scenario: S-143 | |
+| 15 | group deleted / agent removed / request cancelled before recovery | Recheck | rejected; nothing posted; no model work | BDD Scenario: S-144 | |
 
 ### Regression Test Requirements
 
@@ -1946,12 +2057,12 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 - **FR-017**: System MUST answer 503 when the library is unavailable for a group upload and MUST NOT fall back to the session path.
 - **FR-018**: System MUST accept a message's media only as `media://workspace/<this room's workspace>/<id>` references that resolve, MUST resolve every reference before appending anything, and MUST refuse the whole message with 422 if any reference is another workspace's, missing, stranded, or not a workspace file.
 - **FR-019**: System MUST keep a message's media in the durable request together with its text so that initial admission, restart-time rewake and held delivery give the model the same files.
-- **FR-020**: System MUST let `answer_request` carry up to 16 optional `media` entries (workspace references of the room's workspace, or references or paths the agent's own chat can already send), MUST publish the latter into the workspace (FR-077) before anything is posted, and MUST return a tool error and append nothing on any failure.
-- **FR-021**: System MUST order an agent answer as: record the answer intent, publish files, append the entry, mirror to the agent's chat, then admit mentions; and a person's message as: resolve media, acquire retention, then append deliveries and the entry.
-- **FR-022**: System MUST identify an answer attempt by request id, text and the ordered original source identities of its files (a workspace reference, or a path with its content hash), and MUST map each source to its stored reference once; mirror repair matches on that identity and the stored references.
+- **FR-020**: System MUST let `answer_request` carry up to 16 optional `media` entries (workspace references of the room's workspace, or references or paths the agent's own chat can already send), MUST stage and publish the latter as FR-078 defines before anything is posted, and MUST return a tool error and append nothing on any definitive failure.
+- **FR-021**: System MUST order an agent answer as: validate and stage the original bytes and record the accepted intent, publish files (both representations), append the entry, mirror to the agent's chat, then admit mentions; and a person's message as: resolve media, acquire retention, then append deliveries and the entry.
+- **FR-022**: System MUST identify an answer attempt by request id, text and the ordered original source identities of its files (a workspace reference, or a path with its content hash taken at acceptance); see FR-084 for how long that identity denotes the same attempt.
 - **FR-023**: System MUST mirror a request's and an answer's attachments into the member's main chat and MUST show them in the main chat's collapsed group entry when expanded.
 - **FR-024**: System MUST NOT count attachments (their bytes, number or metadata) toward the text size cap: text of 65,536 bytes with valid media is accepted and text of 65,537 bytes is refused whatever the media size (S-120).
-- **FR-025**: System MUST NOT delete library files when a group is deleted; both representations stay, visible and deletable in the Library panel as for normal chat uploads, and downloadable from members' main chats (D25).
+- **FR-025**: System MUST NOT delete library files when a group is deleted; both representations stay, and downloadable from members' main chats (D25). Which Library action removes which representation is **pending Q-R2-1** (Option A: one deletion removes both; Option B: Delete removes the Library file and a distinct named action removes the retained chat copy). Whichever is chosen, a retention or recovery step MUST NOT recreate a file the user explicitly deleted.
 - **FR-026**: System MUST NOT add any upload or media-read authorization to group files: their read posture is the normal chat's (unguessable id; the media route derives the caller workspace from its own URL). The only new cross-workspace rule is at room ingestion (FR-018, 422). The resolver's cross-workspace refusal is asserted only with an independently supplied caller workspace (S-135).
 
 **Live view**
@@ -1977,7 +2088,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 - **FR-040**: System MUST exclude secret-card entries, secret-tool results and vault content from the summary input, and MUST pass input and output through the registered-secret scrubber and the credential-pattern redactor, filtering the output before storing it.
 - **FR-041**: System MUST keep the summary state as `generating`, then `ready` or `unavailable` (provider error, quota, time limit, restart while generating, group deleted, origin agent removed), and MUST discard a result that arrives after `unavailable` or after deletion.
 - **FR-042**: System MUST NOT wait for or hold any message because of the summary: delivery only reads the current state, and a member whose first request goes out while the summary is not `ready` goes without it.
-- **FR-043**: System MUST deliver a `ready` summary once, as quoted background, on each non-origin member's first request, and MUST NOT give it to the origin agent. The include-or-skip decision is a reservation bound to the request id, durably retained with the request so a retry of the same request reuses it; a reservation whose request ends without a receiver capture is released; of concurrent first requests exactly one reserves (FR-080).
+- **FR-043**: System MUST deliver a `ready` summary once, as quoted background, on each non-origin member's first request, and MUST NOT give it to the origin agent. The include-or-skip decision is a reservation bound to the request id with the transitions of FR-080.
 - **FR-044**: System MUST expose the summary text only through the group read used by the panel, and MUST NOT put it into any entry, live update or mirrored chat.
 - **FR-045**: System MUST publish summary status changes (not text) on the group's live metadata, and the open panel MUST refetch the group record on a `ready` change and after every reconnect while its detail may be stale (FR-079), showing "generating", the text, or "Invitation context: unavailable".
 - **FR-046**: System MUST count the summary's cost once into the group's allocated cost and the origin agent's usage, only when the call ran.
@@ -2015,17 +2126,19 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 
 **Round-1 additions (grill findings B1, I1-I5, I10, M4)**
 - **FR-076**: System MUST give every accepted group attachment (a person's message, an agent's answer, requests held or paused, and the mirrored copies) a persistent retention owner so the automatic orphan cleanup never removes a file a group entry or pending request still references. Ownership is acquired idempotently once per (entry or request id, reference) before the append, recorded durably so a restart can repair a missed acquisition, released if the append fails, and not released by deleting the group (D19). Only a user's explicit deletion removes a file.
-- **FR-077**: System MUST publish every group file in both representations a normal chat upload has (chat media copy and Library file) through one shared publication path used for person uploads and agent-returned files; deleting in the Library panel removes the Library file only, as for a normal chat upload.
-- **FR-078**: System MUST record the answer intent (text, mentions, source-to-stored-reference map) durably before publishing an agent answer's files, reuse stored references on a retry with the same original sources, and complete the append, mirror and mention admission from the intent after a restart when no entry exists yet.
+- **FR-077**: System MUST publish every group file in both representations a normal chat upload has (chat media copy and Library file) through one shared, repeat-safe publication path used for person uploads and agent-returned files. What the Library panel's deletion removes is **pending Q-R2-1** (see FR-025).
+- **FR-078**: System MUST treat an agent answer with files as a durable answer intent with these states and rules. (1) **Accepted**: validation passed (room open, request owned by the caller, member still a member, request not cancelled, size limits) and every original source was read once, hashed and copied into private, immutable staging owned by the intent; the intent also records text, mentions and, for every file, the media identity and Library file name allocated at acceptance. The intent holds retention for its staged bytes and published artifacts from this moment. (2) **Publishing**: each file is published into both representations under its preallocated identities with create-or-adopt semantics, so repeating a step never creates a second artifact; the per-file outcome is recorded durably. (3) **Committed**: the entry is appended (the entry carries the intent id), ownership passes to the entry (acquire before release), then mirror and mention admission complete. (4) **Rejected**: a definitive failure (unreadable source, validation, size, room gone, member removed, request cancelled) is recorded durably as rejected before the agent receives the definitive "nothing posted" error; a rejected intent never posts, staged bytes and unreferenced published files are then removed, and a file the user deleted explicitly is never recreated. (5) A retryable failure leaves the intent accepted and the agent receives an honest "accepted, completing" result, not "nothing posted". (6) After a restart the server completes every accepted intent from the recorded data only: it never asks the agent again, never replays or resumes model work, and rechecks that the room exists, the member still belongs and the request is not cancelled before posting or admitting mentions, otherwise it rejects.
 - **FR-079**: System MUST fetch the summary text only through `getRoom`: refetch on a `ready` status change and after reconnect or re-attach while the panel is open and the detail may be stale; a failed fetch shows an error with Retry.
-- **FR-080**: System MUST bind the summary include-or-skip decision to a stable request id, retain the selected context with the request, and reconcile it with the receiver's capture so a failed receiver write neither loses nor duplicates the summary; concurrent first requests to one member reserve it exactly once.
+- **FR-080**: System MUST give the summary reservation these transitions: reserved for request R (durable with R, decided once) then either delivered (R's receiver capture is durable) or released. The reservation MUST be kept across every retryable outcome of R (unavailable, unknown, storage error, a failed facts read, a capture-write failure, a failed acknowledgement after a stored capture, where the receiver's durable facts are reconciled first). It is released only when R is irreversibly cancelled and the receiver's facts positively show no capture; a read error is never proof of absence. A request that was sent without the summary (including R2 skipped while R held it) never receives it later; after a release only a later new request may reserve it. Concurrent first requests reserve exactly once. D20 holds: nothing waits.
 - **FR-081**: System MUST provide the file-card behaviours of FR-002 in the shared rows used by every chat.
 - **FR-082**: System MUST list earlier group attachments in the quoted group context by filename only and MUST hand only the current request's files to the model as input (S-121).
 - **FR-083**: System MUST return focus on closing the Participants panel as the shared panel shell does for each action (close button to the message box, Escape to the invoking trigger) and keep an unsent draft.
+- **FR-084**: System MUST define the lifetime of an answer-attempt identity as follows. A call with files whose key equals the key of the request's most recent answer returns and completes that answer while it is not fully completed (entry appended, mirrored, mentions admitted) and never creates a second entry; once it is fully completed, an equal call is a new answer (the same rule text-only answers follow today, which this feature does not change).
+- **FR-085**: System MUST keep the answer recovery boundary of FR-078 (6): completing an accepted answer persists work the agent already authored; it MUST NOT regenerate an answer, restart or resume an interrupted turn, or bypass cancellation, membership or deletion.
 
 ## Success Criteria
 
-- **SC-001**: Every scenario S-01 to S-136 (S-11 and S-84 to S-97 retired by D21) is covered by at least one test in the Test Implementation Order, and every UAT row UAT-1 to UAT-33 (UAT-8, UAT-9, UAT-22 retired by D21) is executed on the exact candidate commit (AE rows by `uat-tester` plus independent `uat-validator`).
+- **SC-001**: Every scenario S-01 to S-145 (S-11 and S-84 to S-97 retired by D21) is covered by at least one test in the Test Implementation Order, and every UAT row UAT-1 to UAT-33 (UAT-8, UAT-9, UAT-22 retired by D21) is executed on the exact candidate commit (AE rows by `uat-tester` plus independent `uat-validator`).
 - **SC-002**: The existing chat history and composer suites pass with zero edited test files at the FE-0 and FE-1 gates.
 - **SC-003**: `make verify-contracts` and `scripts/check-no-handwritten-wire-types.sh` pass on the candidate; no hand-written wire type exists for the new fields.
 - **SC-005**: The summary job causes 0 seconds of deliberate wait for any group message (S-69, S-63).
@@ -2033,7 +2146,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 - **SC-007**: `src/components/chat/ChatScreen.tsx` is never longer than 2,961 lines at any commit of the feature.
 - **SC-008**: On a group whose opening view fills the screen, the number of `getRoomHistory` calls on open is 0 (S-43).
 - **SC-009**: docs-verifier passes DOC-001 to DOC-008 against the actual behaviour.
-- **SC-013**: With a controlled clock 31 days ahead, the real orphan cleanup removes 0 referenced group files (paused group, held request, deleted group, after restart) and still removes an upload that was never posted (S-124, S-125, S-126, S-28).
+- **SC-013**: With a controlled clock 31 days ahead, the real orphan cleanup removes 0 referenced group files (paused group, held request, deleted group, after restart) and still removes the chat media copy of an upload that was never posted while its Library file stays listed (S-124, S-125, S-126, S-28).
 - **SC-012**: The contract text limit for the group message request and entry equals the server limit (65,536 UTF-8 bytes), checked by T-55 (S-118).
 - **SC-010**: The old `RoomTranscript`, `RoomComposer` and `RoomHeader` components are deleted only after the replacement tests pass in CI with red-before-green evidence.
 
@@ -2074,10 +2187,10 @@ Existing pages read before naming destinations: `docs/group-chats.md` (current t
 | DOC-002 | Participants button and panel; Add participant moved to the right end; starting a group; invitation context | `docs/group-chats.md` ("Add participant", "Member states", new "Participants panel" and "Invitation context") | Replace "top-left"; document panel contents, Ask again, cost; invitation context: what it is, never posted, readable in the panel, shown as generating or "Invitation context: unavailable", **and the plain statement that anything written in the original chat except recognised keys may appear in it (D18, #1467)** |
 | DOC-003 | Cards for this group's work appear in the group, only for work that answers the group; helper, unrelated and mixed-input cards stay in the agent's chat; attention avatar; stopping happens in the agent's own chat | `docs/group-chats.md` ("Approvals and questions", "How agents answer") | Replace "belong to its main chat, not to the group" with the D8/D15/D23 rule; say there is no Stop in the group and point to the agent's own chat; document Ask again |
 | DOC-004 | A card can be answered in a group, only for work that answers the group | `docs/security.md` ("Approve a request") | Same decision and grant scope wherever answered; one decision wins; a step that also handles other input keeps its cards in the agent's chat |
-| DOC-005 | Minimal header: no bar or border; controls at the right end; helper breadcrumb; group Participants control; shared history behaviour | `docs/using-omnipus-ui.md` ("The chat area", "Who each message is from", "Reading earlier messages", "Sessions") | Describe the header controls per chat kind; state that groups use the same list, history, Return to latest and message box |
+| DOC-005 | Minimal header: no bar or border; controls at the right end; helper breadcrumb; group Participants control; shared history behaviour; **file cards in every chat** | `docs/using-omnipus-ui.md` ("The chat area", "Who each message is from", "Reading earlier messages", "Sessions", and the existing Retry guidance) | Describe the header controls per chat kind; state that groups use the same list, history, Return to latest and message box; **add: a file card (yours or an agent's, any file type) downloads by mouse or keyboard (Enter); if the file cannot be fetched the card shows an error with Retry, which repeats the same file fetch and is not a message resend or a repeat of the agent's work** |
 | DOC-006 | Groups use the normal chat's history behaviour | `docs/group-chats.md` ("Opening a group: Earlier messages aren't shown") | Replace the room-specific scrolling text with the shared behaviour and keep the 10,000-entry snapshot statement |
 | DOC-007 | Message `media`, upload by workspace, the 65,536-byte limit | `docs/group-chats.md` ("API summary", "Who receives your message") | Add `media` on post, the 503/422 outcomes and the size limit (the page already says 65,536 bytes by default; restate per F-6, pending) |
-| DOC-008 | Group files are stored like normal chat uploads in two representations and outlive the group | `docs/library.md` | Say what is true: files appear in the Library as normal chat uploads do; deleting one in the Library panel removes the Library file, not the chat copy; neither is deleted with the group (docs-verifier confirms the page's current statement about chat uploads first) |
+| DOC-008 | Group files are stored like normal chat uploads in two representations and outlive the group | `docs/library.md` | Say what is true: files appear in the Library as normal chat uploads do; neither copy is deleted with the group; **what the Library panel's deletion removes follows the founder's Q-R2-1 answer (pending): Option A one deletion removes both copies; Option B Delete removes the Library file and a named action removes the retained chat copy** (docs-verifier confirms the page's current statement about chat uploads first) |
 
 The implementing lead drafts these; `docs-verifier` audits them against the actual behaviour (T-52) before landing.
 
@@ -2088,7 +2201,7 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | Requirement | User Story | BDD Scenario(s) | Test Name(s) | UAT | Documentation TODO(s) |
 |---|---|---|---|---|---|
 | FR-001 | US-1 | S-01, S-02, S-03, S-04 | T-31, T-48 | UAT-1 | DOC-001 |
-| FR-002 | US-1 | S-05, S-06, S-113, S-129, S-130 | T-31, T-48, T-61 | UAT-2, UAT-3, UAT-33 | DOC-001 |
+| FR-002 | US-1 | S-05, S-06, S-113, S-129, S-130 | T-31, T-48, T-61 | UAT-2, UAT-3, UAT-33 | DOC-001, DOC-005 |
 | FR-003 | US-1 | S-07 | T-30 | UAT-7 | DOC-005 |
 | FR-004 | US-1 | S-08 | T-30 | - (covered by S-08 in vitest; low-risk unchanged mark) | none - behaviour unchanged |
 | FR-005 | US-1, US-13 | S-09, S-116 | T-30 | UAT-27 | none - removes a wrong cross-chat display, nothing documented |
@@ -2107,10 +2220,10 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-019 | US-3 | S-20, S-27 | T-05 | UAT-2 | DOC-001 |
 | FR-020 | US-4 | S-29, S-30, S-31, S-34, S-127 | T-06, T-60 | UAT-3, UAT-33 | DOC-001 |
 | FR-021 | US-4 | S-29, S-33 | T-07 | UAT-3 | none - internal ordering, no user-visible rule beyond the outcome |
-| FR-022 | US-4 | S-32, S-33, S-133 | T-07 | - (needs fault injection; Go only) | none - internal repair identity |
+| FR-022 | US-4 | S-32, S-133, S-137 | T-07 | - (needs fault injection; Go only) | none - internal repair identity |
 | FR-023 | US-3, US-4 | S-20, S-29 | T-08 | UAT-2, UAT-3 | DOC-001 |
 | FR-024 | US-3 | S-24, S-120 | T-01, T-54, T-57 | UAT-31 | DOC-001 |
-| FR-025 | US-14 | S-112, S-113, S-126, S-136 | T-09, T-59, T-60 | UAT-26 | DOC-001, DOC-008 |
+| FR-025 | US-14 | S-112, S-113, S-126, S-136, S-145 | T-09, T-59, T-60 | UAT-26 | DOC-001, DOC-008 |
 | FR-026 | US-3 | S-25, S-135 | T-03, T-04 | UAT-28 | DOC-008 |
 | FR-027 | US-5 | S-35, S-37, S-38 | T-33 | UAT-7 | DOC-001 |
 | FR-028 | US-5, US-9 | S-36, S-77 | T-33, T-40 | UAT-11b | DOC-003 |
@@ -2128,7 +2241,7 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-040 | US-8 | S-67 | T-19 | UAT-30 | DOC-002 |
 | FR-041 | US-8 | S-61, S-64, S-65, S-66 | T-18 | UAT-25 | DOC-002 |
 | FR-042 | US-8 | S-63, S-69, S-132 | T-20 | UAT-25 | DOC-002 |
-| FR-043 | US-8 | S-62, S-131, S-132 | T-20 | UAT-16 | DOC-002 |
+| FR-043 | US-8 | S-62, S-131, S-132, S-138, S-139 | T-20 | UAT-16 | DOC-002 |
 | FR-044 | US-8 | S-70 | T-22 | UAT-16 | DOC-002 |
 | FR-045 | US-8 | S-61, S-122, S-123 | T-18, T-36, T-58 | UAT-15 | DOC-002 |
 | FR-046 | US-8 | S-68 | T-21 | UAT-17 | DOC-002 |
@@ -2153,22 +2266,24 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-073 | US-15 | S-117 | T-24, T-25 | UAT-18 | none - behaviour unchanged |
 | FR-074 | US-2 | S-118 | T-54, T-55, T-29 | UAT-31 | DOC-001, DOC-007 |
 | FR-075 | US-4 | S-119 | T-54 | UAT-31 | DOC-001 |
-| FR-076 | US-14 | S-124, S-125, S-126, S-28 | T-59 | UAT-26 | DOC-008 |
-| FR-077 | US-3, US-4 | S-127, S-128, S-136 | T-60 | UAT-33 | DOC-008 |
-| FR-078 | US-4 | S-33, S-133 | T-07 | - (needs fault injection; Go only) | none - internal recovery |
+| FR-076 | US-14 | S-124, S-125, S-126, S-28, S-143 | T-59, T-62 | UAT-26 | DOC-008 |
+| FR-077 | US-3, US-4 | S-127, S-128, S-136, S-145 | T-60 | UAT-33 | DOC-008 |
+| FR-078 | US-4 | S-33, S-140, S-141, S-142, S-143, S-144 | T-62 | - (needs fault injection; Go only) | none - internal recovery |
 | FR-079 | US-8 | S-61, S-122, S-123 | T-58 | UAT-15 | DOC-002 |
-| FR-080 | US-8 | S-131, S-132 | T-20 | UAT-16 | DOC-002 |
+| FR-080 | US-8 | S-131, S-132, S-138, S-139 | T-20 | UAT-16 | DOC-002 |
 | FR-081 | US-1 | S-129, S-130 | T-61 | UAT-33 | DOC-005 |
 | FR-082 | US-3 | S-121 | T-57 | - (needs a quoted-history fixture; Go only) | DOC-001 |
 | FR-083 | US-7 | S-134 | T-36 | UAT-17 | DOC-002 |
+| FR-084 | US-4 | S-133, S-137 | T-07 | - (needs a lost receipt; Go only) | none - internal retry rule |
+| FR-085 | US-4 | S-33, S-140, S-144 | T-62 | - (needs fault injection; Go only) | none - internal recovery boundary |
 
-**Completeness check**: FR-001 to FR-083 (FR-009 and FR-055 to FR-062 retired by D21; ids are not reused) each have at least one scenario and one test; scenarios S-01 to S-136 (S-11 and S-84 to S-97 retired) each appear in the matrix and in the Test Implementation Order (verified by script, see the evidence table of the hand-off); DOC-001 to DOC-008 each appear at least once; each UI or behaviour change traces to a DOC TODO or states why none applies. Contract-first (Hard Constraint #8) is tracked by SC-003 and test T-51 rather than an FR because it has no user-visible scenario.
+**Completeness check**: FR-001 to FR-085 (FR-009 and FR-055 to FR-062 retired by D21; ids are not reused) each have at least one scenario and one test; scenarios S-01 to S-145 (S-11 and S-84 to S-97 retired) each appear in the matrix and in the Test Implementation Order (verified by script, see the evidence table of the hand-off); DOC-001 to DOC-008 each appear at least once; each UI or behaviour change traces to a DOC TODO or states why none applies. Contract-first (Hard Constraint #8) is tracked by SC-003 and test T-51 rather than an FR because it has no user-visible scenario.
 
 ---
 
 ## Open Founder Questions
 
-Founder answers applied in this revision: D21 (no Stop in the group), D22 (attention cue accepted), D23 (cards only for work that answers the group), D24 (one message size limit), D25 (group files stored like normal chat uploads). **F-6 and F-7 are pending with the founder; team-lead sends the answers separately and they are applied then.** Round 1 introduced no new founder question. Neither point blocks the rest of the spec. Each is a one-line answer.
+Founder answers applied in this revision: D21 (no Stop in the group), D22 (attention cue accepted), D23 (cards only for work that answers the group), D24 (one message size limit), D25 (group files stored like normal chat uploads). **F-6, F-7 and Q-R2-1 are pending with the founder; team-lead sends the answers separately and they are applied then.** Round 1 introduced no new founder question. Neither point blocks the rest of the spec. Each is a one-line answer.
 
 | ID | Question | Context and impact | Options | Recommendation | Answer label |
 |---|---|---|---|---|---|
@@ -2197,6 +2312,19 @@ Report: `/workspace/logs/1449/1449-spec-review.md` (verdict BLOCK: 1 Blocking, 1
 | M3 UAT-15 password promise | ACCEPTED | D18, FR-047 | UAT-15 follows UAT-30 scope and excludes unregistered prose passwords |
 | M4 panel focus return | ACCEPTED | `src/components/panel-shell/SidePanelShell.tsx` uses `requestClose('chat')` for the close button; Escape returns to the trigger | Accessibility text, FR-083, S-134, T-36 |
 | Technical ambiguity rows A-1, A-2 | NOTED | - | Marked "architect decision required before RED"; not approved by repetition in datasets |
+
+## Grill Round 2 Dispositions
+
+Report: `/workspace/logs/1449/1449-spec-review-round2.md` (final round; verdict BLOCK: 1 Blocking, 4 Important, 1 Minor). This is the last fix round.
+
+| Finding | Disposition | Evidence read | Spec fix |
+|---|---|---|---|
+| R2-B1 answer intent is not a recoverable publication transaction | ACCEPTED, fixed without a scope change; no founder decision needed (S-33 is kept, not weakened) | `pkg/media/library/library.go::uploadInternal` mints a UUID per call; `pkg/gateway/rest_uploads.go::stageWorkspaceUploadCopy` picks collision-suffixed names; `pkg/agent/upload_workpath.go::uploadWorkPathRegistry` is in-memory; `pkg/rooms/service.go::recover` repairs only appended answers | FR-078 rewritten as a lifecycle (accepted with immutable staged bytes, publishing with preallocated identities and create-or-adopt, committed, rejected before the definitive error, retryable result, restart completion that never replays model work); FR-085; S-31, S-33, S-140 to S-144; DS-12; T-62; A-13 (staging bounds). Cost stated: private staging storage and a create-or-adopt publication API in `pkg/media/library` |
+| R2-I1 Library deletion promises conflict | PARTLY: both options kept visible, pending founder Q-R2-1 | `LibraryExplorer.tsx::deleteMutation` calls `deleteLibraryEntry` (Library file only); `deleteWorkspaceMedia` exists with no UI caller | Q-R2-1 added; FR-025, FR-077, AS 14.2, Edge Cases, DOC-008 now state both outcomes; S-136 (Option A) and S-145 (Option B); T-60 runs only the chosen option; explicit deletion is never undone by repair |
+| R2-I2 identity lifetime | ACCEPTED | `pkg/rooms/answers.go::unmirroredAnswer` matches only while unmirrored | FR-084 (equal call while incomplete completes the first; after full completion it is a new answer, as text-only today), S-137, S-133, DS-12 rows 8-10, T-07 |
+| R2-I3 reservation release on retryable terminal states | ACCEPTED | `pkg/rooms/types.go::terminal` includes unavailable; `fanout.go::admittable` re-admits unavailable/unknown | FR-043, FR-080 (explicit transitions; read error is not proof of absence; skipped request never gets it later), S-138, S-139, DS-4 rows 17-21, T-20 |
+| R2-I4 missing doc TODO for normal-chat file rows | ACCEPTED | `docs/using-omnipus-ui.md` "The chat area" has no file-card text | DOC-005 extended (download by mouse/keyboard, inline error, Retry repeats the fetch, not a message resend), T-52 audit text, FR-002 row links DOC-005 |
+| R2-M1 collector oracle does not name the copy | ACCEPTED | `OrphanGC` acts on media manifest entries; the Library file is a separate workspace file | S-28, S-126, DS-11 rows 4, 8, 9, T-59, SC-013 assert each copy; deleted-paused-group fixture without a consuming-session owner |
 
 ## Assumptions
 
