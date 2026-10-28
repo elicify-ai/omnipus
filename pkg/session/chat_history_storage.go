@@ -385,7 +385,9 @@ func (o *chatHistoryOwner) retire(dir, keep string) error {
 
 // validateIndexTail never trims framed damage or any canonical bytes. Only the
 // incomplete unpublished final transaction can be redone from the known root.
-func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint) (historyCheckpoint, bool, error) {
+// With discard false it only checks for damage and never truncates: the
+// discard itself runs only after the canonical 64-fact bound was enforced.
+func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint, discard bool) (historyCheckpoint, bool, error) {
 	info, err := t.file.Stat()
 	if err != nil {
 		return historyCheckpoint{}, false, err
@@ -396,6 +398,9 @@ func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint) (hi
 	for off < info.Size() {
 		frame, next, readErr := t.readFrame(off, info.Size())
 		if errors.Is(readErr, io.ErrUnexpectedEOF) {
+			if !discard {
+				return historyCheckpoint{}, false, nil
+			}
 			return historyCheckpoint{}, false, historyDiscardUnpublishedTail(t, cp)
 		}
 		if readErr != nil {
@@ -417,6 +422,9 @@ func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint) (hi
 		// Every complete frame beyond the published boundary was checked and
 		// none committed. Canonical mutation counting has already enforced64;
 		// tree-node count is not a substitute for that unique-fact bound.
+		if !discard {
+			return historyCheckpoint{}, false, nil
+		}
 		return historyCheckpoint{}, false, historyDiscardUnpublishedTail(t, cp)
 	}
 	return saved, found, nil

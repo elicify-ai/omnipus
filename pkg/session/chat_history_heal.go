@@ -94,6 +94,11 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 		return fail("storage_error", nil)
 	}
 	size, err := historyHealSourceSize(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		// A listed source file vanished during the walk: a proven move such
+		// as a day rollover, not a stable storage failure.
+		return fail("source_changed", nil)
+	}
 	if err != nil {
 		return fail("storage_error", nil)
 	}
@@ -102,10 +107,14 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 	}
 	hctx, cancel := us.historyHealContext(context.WithoutCancel(ctx))
 	defer cancel()
-	build, err := PrepareChatHistoryIndex(hctx, dir, ChatHistoryIndexBuildOptions{})
+	build, err := PrepareChatHistoryIndex(hctx, dir, ChatHistoryIndexBuildOptions{demand: true})
 	if err == nil {
 		summary := build.Summary()
-		err = build.publish(hctx, func(generations, keep string) error {
+		// Retire in the store's own path spelling: reader pins (retain) are
+		// keyed by filepath.Join(us.baseDir, ...), while the builder works on
+		// an absolute, symlink-resolved directory.
+		generations := filepath.Join(historyIndexPath(filepath.Join(us.baseDir, sid)), "generations")
+		err = build.publish(hctx, func(_, keep string) error {
 			// Retire with the RUNTIME owner so page readers' retained
 			// generations survive until their last release.
 			h := us.lockSession(sid)
@@ -115,9 +124,14 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 		err = errors.Join(err, build.Close())
 		if err == nil {
 			// Fold in appends after the build's captured ends; this bounded
-			// reconcile is the proof of readiness with live writers.
-			result, readyErr := us.reconcileHistoryOwned(ctx, sid)
+			// reconcile is the proof of readiness with live writers. It runs
+			// on the detached heal context: a client leaving mid-heal is not
+			// a readiness failure.
+			result, readyErr := us.reconcileHistoryOwned(hctx, sid)
 			if readyErr != nil {
+				if errors.Is(hctx.Err(), context.DeadlineExceeded) {
+					return fail("deadline", nil)
+				}
 				return fail("readiness", readyErr)
 			}
 			*state = chatHistoryHealState{}
@@ -134,6 +148,11 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 	var buildErr *ChatHistoryIndexBuildError
 	if errors.As(err, &buildErr) {
 		class = buildErr.HistoryIndexBuildClass()
+	}
+	if class == "index_inconsistent" {
+		// The existing published index failed its complete proof: real
+		// derived damage, refused as such rather than as plain lag.
+		return fail(class, historyUnavailable("index_inconsistent", err))
 	}
 	return fail(class, nil)
 }
