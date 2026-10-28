@@ -8459,7 +8459,7 @@
     {
       "path": "src/components/settings/PerformanceSection.goalTimerOwnership.gate1.test.tsx",
       "kind": "test",
-      "reason": "Exact test-only native PerformanceSection ownership integration fixture: mounts the real existing application-classified ToastContainer beside the real PerformanceSection under QueryClient; only HTTP requests are mocked. This preserves the application toast host while driving real confirmation/cancellation and held-PUT/newer-draft flows. The cases assert consent, request and live-field ownership, not toast contents. No production consumer, raw product control, component export, catalog, scanner, manifest or debt-baseline change is authorized."
+      "reason": "Exact test-only native PerformanceSection ownership integration fixture: mounts the real existing application-classified ToastContainer beside the real PerformanceSection under QueryClient; the HTTP transport and the browser-cookie boundary are stubbed. This preserves the application toast host while driving real confirmation/cancellation and held-PUT/newer-draft flows. The cases assert consent, request and live-field ownership, not toast contents. No production consumer, raw product control, component export, catalog, scanner, manifest or debt-baseline change is authorized."
     }
   ]
 }
