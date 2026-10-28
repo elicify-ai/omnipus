@@ -1,4 +1,4 @@
-Status: In review
+Status: Approved
 
 `ADR: [ADR-20261028 — Group chat reuses the normal chat](../architecture/ADR-20261028-group-chat-reuses-the-normal-chat.md)` (accepted after its one correction round; section 11 of that ADR wins over its earlier text)
 
@@ -6,7 +6,7 @@ Status: In review
 
 **Created**: 2026-10-28
 **Input**: founder requirements and decisions log D1-D28 at `docs/internal/specs/1449-group-chat-requirements.md` (interview-me output, in the requirements form the founder interview produced; there is no separate `.interview.json`); ADR above; approved wireframe `docs/internal/design/1449/index.html` (screenshot `wireframe-full.png`, frames 1-4).
-**Status note**: `In review`. The five founder questions of the first draft were answered as D21-D25 (2026-10-28) and are applied throughout. The three later questions were answered on 2026-10-28 and are applied throughout: Q-R2-1 as D26 (one Library deletion removes both copies of a chat file, normal and group alike), F-6 as D27 (groups follow `session_messaging.steer_body`, clamped to at most 65,536 bytes) and F-7 as D28 (a step answering two groups keeps its card in the agent's own chat; both groups show the attention cue). **D21 (no Stop in the group chat) supersedes the Stop parts of D4 and D16 and the ADR's Stop decisions (A6, C-I5, UAT-8, UAT-9, UAT-22); where this spec and the ADR differ on those points, the founder decision wins.** D23 changes the ADR's origin-precedence text (A5.2) the same way. **Grill round 1 (report `/workspace/logs/1449/1449-spec-review.md`) and the final round 2 (report `/workspace/logs/1449/1449-spec-review-round2.md`) are applied: see "Grill Round 1 Dispositions" and "Grill Round 2 Dispositions".** No founder question is open. The status stays `In review` only because of the technical items listed under "Open Before Approval".
+**Status note**: `Approved` (2026-10-28). The five founder questions of the first draft were answered as D21-D25 (2026-10-28) and are applied throughout. The three later questions were answered on 2026-10-28 and are applied throughout: Q-R2-1 as D26 (one Library deletion removes both copies of a chat file, normal and group alike), F-6 as D27 (groups follow `session_messaging.steer_body`, clamped to at most 65,536 bytes) and F-7 as D28 (a step answering two groups keeps its card in the agent's own chat; both groups show the attention cue). **D21 (no Stop in the group chat) supersedes the Stop parts of D4 and D16 and the ADR's Stop decisions (A6, C-I5, UAT-8, UAT-9, UAT-22); where this spec and the ADR differ on those points, the founder decision wins.** D23 changes the ADR's origin-precedence text (A5.2) the same way. **Grill round 1 (report `/workspace/logs/1449/1449-spec-review.md`) and the final round 2 (report `/workspace/logs/1449/1449-spec-review-round2.md`) are applied: see "Grill Round 1 Dispositions" and "Grill Round 2 Dispositions".** No founder question is open. The technical items that held the spec in review (A-1, A-2, A-13 decided by the architect; A-4/A-9 and A-6/A-7 set as owner-refinable defaults) are recorded under "Technical Decisions"; nothing is left undecided.
 
 ---
 
@@ -93,7 +93,7 @@ Order of work: BE-0 edits these before any Go or TypeScript (5-step procedure, r
 
 **Must not collide with**: `RoomRef` (reused as is); `MediaPart` (reused as is - the one media shape the SPA already renders); `RoomEntryFrame`/`RoomSnapshotFrame` (carry `RoomEntry`, so they inherit `attachments`).
 
-**Open contract questions** are in "Ambiguity Warnings" (A-3, A-4, A-9).
+**Contract-related decisions** are in "Ambiguity Warnings" and "Technical Decisions" (A-3, A-4, A-9, A-12, A-14).
 
 ## API and Data
 
@@ -567,16 +567,16 @@ The ADR's two unproven Stop items (UNPROVEN-1 turn-scoped stop, UNPROVEN-2 per-r
 
 | # | What's Ambiguous | Likely Agent Assumption | Question to Resolve |
 |---|------------------|------------------------|---------------------|
-| A-1 | Whether a summary output longer than 4,096 characters is truncated or counts as `unavailable` | truncate silently | Recommendation: truncate at 4,096 on a word boundary, status `ready`. Architect decision required before RED (round-1 note: not approved by repetition in datasets) |
-| A-2 | Whether an origin chat with nothing to summarise (0 usable entries after exclusions) makes a summary or goes straight to `unavailable` | call the model with empty input | Recommendation: skip the call, status `unavailable`, no cost. Architect decision required before RED (round-1 note) |
+| A-1 | Whether a summary output longer than 4,096 characters is truncated or counts as `unavailable` | truncate silently | **Decided (architect, 2026-10-28, TD-1):** after filtering, an output longer than 4,096 characters is cut at the last word boundary at or before 4,096 characters (a hard cut at 4,096 when no word boundary exists), status `ready`, cost counted once as usual |
+| A-2 | Whether an origin chat with nothing to summarise (0 usable entries after exclusions) makes a summary or goes straight to `unavailable` | call the model with empty input | **Decided (architect, 2026-10-28, TD-2):** no model call, status `unavailable` at once, no cost line |
 | A-3 | D24/D27 require one size limit, in bytes; OpenAPI `maxLength` counts characters, and the server counts UTF-8 bytes; the operator can lower the limit | set `maxLength` to 65536 and call it done | Contract text states "at most 65,536 UTF-8 bytes; a smaller operator `session_messaging.steer_body` lowers it"; the server stays the byte authority and applies `min(steer_body, 65,536)`; the over-limit status is 422 whichever layer catches it (A-12) |
-| A-4 | Duplicate media refs in one message | dedupe silently | Recommendation: accepted as listed, shown once per listed ref; backend-lead to confirm in RED. Not asserted until confirmed |
+| A-4 | Duplicate media refs in one message | dedupe silently | **Set (TD-4), default, owner may refine during RED with evidence (backend-lead):** accepted as listed and shown once per listed reference (no silent de-duplication); retention is acquired once per (entry, reference) as FR-076 already says. Asserted by DS-1 row 32 |
 | A-5 | Exact English wording of states ("Invitation context: unavailable"/"generating") | invent wording | Wording quoted from founder decision D20 and ADR C-I8 is the oracle; other labels reuse today's `deliveryLabel` set |
-| A-6 | Whether the tooltip of the Participants button says "Participants" | any | Recommendation: "Participants" (same as the accessible name). Frontend-lead confirms with the design-system skill |
-| A-7 | Behaviour of the Participants panel on narrow widths | custom | Recommendation: same as the other registered side panels (they already collapse/overlay on narrow widths); no new behaviour |
-| A-9 | Whether `answer_request.media` may point to the same file more than once | n/a | Same as A-4 |
+| A-6 | Whether the tooltip of the Participants button says "Participants" | any | **Set (TD-6), default, owner may refine during RED with evidence (frontend-lead):** "Participants" (same as the accessible name), checked against the design-system skill |
+| A-7 | Behaviour of the Participants panel on narrow widths | custom | **Set (TD-7), default, owner may refine during RED with evidence (frontend-lead):** same as the other registered side panels (they already collapse/overlay on narrow widths); no new behaviour |
+| A-9 | Whether `answer_request.media` may point to the same file more than once | n/a | **Set (TD-4), default, owner may refine during RED with evidence (backend-lead):** same as A-4: accepted as listed, one staged and published file per listed entry; asserted by DS-12 row 16 |
 | A-12 | Whether the schema-level maximum (a 400 under inbound validation) or the server byte check (422) answers an over-limit message | return whichever fires first | Spec value: 422 with the size message in both modes; backend-lead reconciles the schema and the handler (for example by documenting the byte limit in the schema text and leaving the byte check to the server) |
-| A-13 | Bounds of the private staging for an answer's original bytes | none | Recommendation: the same per-file limit as uploads (100 MB, `uploadFiles` contract), at most 16 files per answer, removed on rejection and after commit; architect confirms before RED |
+| A-13 | Bounds of the private staging for an answer's original bytes | none | **Decided (architect, 2026-10-28, TD-3):** at most 16 files per answer and 100 MB per file (the `uploadFiles` per-part limit); a larger file is a definitive rejection ("nothing posted") before acceptance; staging lives under the room service's own data, never in an agent-reachable tree; staged bytes are removed after the commit or after a recorded rejection; while an intent stays accepted, staging is kept (also across restarts and the orphan cleanup) |
 | A-14 | How a Library file is matched to its chat copy for uploads made before this feature (the association was only in memory) | match by file name only | Spec value (architect, applying D26): a one-time repair on start matches a `.library` file to the media entry of the same workspace with the same SHA-256 and the same file name ignoring a " (N)" duplicate suffix, only when exactly one entry matches; no match or several matches leave the file without an association (its deletion removes only the Library file, and the dialog says nothing about chats). Never matched across workspaces |
 | A-11 | Oracles for empty-file, oversize-file and unsafe-filename uploads in DS-10 are "as in the normal chat" | copy values from the implementation | qa-lead cites the normal chat's documented behaviour (`docs/using-omnipus-ui.md`) or the `uploadFiles` contract for each value; if neither states it, ask the dispatcher |
 
@@ -1864,10 +1864,10 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-51 | `contracts_verify_and_schema_limits` | CI gate | (SC-003) | `make verify-contracts`; schema limit tests for new fields |
 | T-01 (QA-R3) | `contract_limits_attachments_media` | Unit (Go) | S-24, S-21 | 16/17 limits on entry and request |
 | T-02 | `post_message_nothing_to_send` | Unit (Go) | S-18, S-21 | Blank/whitespace/media-only rule with inbound validation on and off |
-| T-03 | `media_ref_resolution_matrix` | Unit (Go) | S-25, S-26, S-135 | Room ingestion: workspace ok; non-workspace; another workspace; missing; stranded; whole message refused (422). Resolver level: another workspace's reference refused with an independently supplied caller workspace |
+| T-03 | `media_ref_resolution_matrix` | Unit (Go) | S-21, S-25, S-26, S-135 | Room ingestion: the same valid reference listed twice is accepted as listed with retention counted once (TD-4); workspace ok; non-workspace; another workspace; missing; stranded; whole message refused (422). Resolver level: another workspace's reference refused with an independently supplied caller workspace |
 | T-04 | `upload_workspace_branch` | Unit (Go) | S-22, S-23, S-28, S-128 | `workspace_id` without `session_id`; 503 when the library is unavailable; no session created; parity with the existing normal-chat upload for any other input (no new authorization); both representations written |
 | T-05 | `request_capture_carries_media` | Unit (Go) | S-27, S-20 | Initial admission, rewake and held delivery all hand the model the same files |
-| T-06 | `answer_request_media` | Unit (Go) | S-29, S-30, S-31, S-34 | Workspace ref; own-chat copy; copy/check failure; other workspace |
+| T-06 | `answer_request_media` | Unit (Go) | S-29, S-30, S-31, S-34 | Workspace ref; own-chat copy; copy/check failure; other workspace; the same file listed twice (TD-4); 16 files accepted, 17 files and a file over 100 MB rejected definitively before acceptance (TD-3) |
 | T-07 | `answer_identity_and_repair` | Unit (Go) | S-32, S-133, S-137 | Retry with identical original file arguments (not pre-normalized stored ids); equal repeat while incomplete completes the first; equal repeat after full completion is a new answer; text-only behaviour unchanged |
 | T-08 | `mirror_attachments_to_main_chat` | Integration | S-20, S-29 | Request and answer mirrored with attachments; main-chat group-traffic entry expands to show them |
 | T-09 | `group_deletion_keeps_library_files` | Integration | S-112 | Journal directory removed; library entries remain |
@@ -1875,10 +1875,10 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-15 | `question_provenance_durable` | Unit (Go) | S-74, S-75, S-76 | Origin captured at creation; present in live card and reconnect snapshot; resume carries it |
 | T-16 | `card_origin_only_for_group_work` | Unit (Go) | S-77, S-79, S-83, S-151 | Room origin only when the step answers only one group (D23); any other input, including a second group's request (D28), keeps the card in the agent's chat with no group reference; the helper-has-no-reference test unchanged |
 | T-17 | `card_flips_only_own_request` | Unit (Go) | S-82, S-151 | With and without a reference; a two-group step's card (no reference) flips both groups' requests to waiting (D28) |
-| T-18 | `invitation_state_machine` | Unit (Go) | S-61, S-63, S-64, S-65, S-66 | generating to ready/unavailable; 44/45/46 s; restart; deletion; late discard |
+| T-18 | `invitation_state_machine` | Unit (Go) | S-61, S-63, S-64, S-65, S-66 | generating to ready/unavailable; 44/45/46 s; restart; deletion; late discard; output over 4,096 characters cut at a word boundary or hard-cut, still `ready` (TD-1); zero usable entries gives `unavailable` with no model call (TD-2) |
 | T-19 | `invitation_filters_and_exclusions` | Unit (Go) | S-67 | Registered value and pattern removed; secret entries/tool results excluded; prose password NOT asserted (#1467) |
 | T-20 | `invitation_delivery_rules` | Unit (Go) | S-62, S-69, S-131, S-132, S-138, S-139 | First request only; skipped when not ready; never held; origin never receives; reservation transitions; failed write then retry; composed R1 fails / R2 arrives / R1 retries; stored capture with failed acknowledgement; facts-read error; cancellation racing the commit; concurrent first requests; restart |
-| T-21 | `invitation_cost_once` | Unit (Go) | S-68 | One cost line; unpriced flag; dedupe |
+| T-21 | `invitation_cost_once` | Unit (Go) | S-68 | One cost line; unpriced flag; dedupe; no cost line when no model call was made (TD-2) |
 | T-22 | `invitation_invisible_and_group_starts_empty` | Integration | S-60, S-70 | Amended add-participant test: record exists, no entry, origin unchanged; summary absent from entries/frames/mirror |
 | T-23 | `approval_frames_reach_group_page` | Integration (real hub) | S-81 | Cards for this group reach a client with no chat attached |
 | T-30 (QA-R4) | `room_source_projection` | Unit | S-07, S-08, S-09, S-116 | Row identity stable under delivery frames; no foreign tool calls; after-pause mark; no session bucket touched |
@@ -1952,6 +1952,7 @@ Construction reference: `.claude/skills/plan-spec/knowledge/test-dataset-templat
 | 29 | `steer_body` 1,000; text of 1,001 bytes | Lowered, over | 422 naming 1,000 | BDD Scenario: S-150 | a smaller setting is honoured |
 | 30 | `steer_body` 1,000; agent answer of 1,001 bytes | Lowered, answer | tool error naming 1,000; nothing posted | BDD Scenario: S-150 | same limit for answers |
 | 31 | `steer_body` unset or 0 | Default | limit 65,536 | BDD Scenario: S-150 | `EffectiveSteerBodyBytes` default |
+| 32 | media `[ref X, ref X]` (same valid ref twice) | Duplicate | 202; entry lists both; shown twice; retention counted once | BDD Scenario: S-21 | TD-4 (owner-refinable default) |
 
 The text-length rows above follow D24 and D27 (one limit, at most 65,536 UTF-8 bytes, lowered by a smaller operator setting).
 
@@ -1975,7 +1976,8 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | 10 | second message to the same member | Repeat | no summary prefix | BDD Scenario: S-62 | delivered once |
 | 11 | message to the origin agent | Origin | never receives the summary | BDD Scenario: S-62 | |
 | 12 | summary text 4096 characters | Max | `ready`, stored | BDD Scenario: S-61 | contract maximum |
-| 13 | summary text 4097 characters | Max + 1 | per A-1 (truncate at a word boundary) | BDD Scenario: S-61 | pending A-1 confirmation |
+| 13 | summary text 4097 characters | Max + 1 | `ready`; text cut at the last word boundary at or before 4,096 characters | BDD Scenario: S-61 | TD-1 |
+| 13b | summary text 4,200 characters with no space | Max + 1, no boundary | `ready`; hard cut at exactly 4,096 characters | BDD Scenario: S-61 | TD-1 |
 | 14 | cost 0.02 dollars written twice | Duplicate | counted once | BDD Scenario: S-68 | |
 | 15 | receiver capture write fails, same request retried | Failure | summary carried once | BDD Scenario: S-131 | |
 | 16 | two first requests at once | Concurrency | exactly one carries it | BDD Scenario: S-132 | |
@@ -1998,7 +2000,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | 7 | secret-request card entry | Excluded | not part of the model's input | BDD Scenario: S-67 | |
 | 8 | result of a secret tool / vault content | Excluded | not part of the model's input | BDD Scenario: S-67 | |
 | 9 | "the password is hunter2" in plain prose, unregistered | Known gap | **not asserted** (accepted, #1467) | BDD Scenario: S-67 | recorded so it cannot become a false green |
-| 10 | origin tail with 0 usable entries | Empty | per A-2 (no call; `unavailable`; no cost) | BDD Scenario: S-63 | pending A-2 confirmation |
+| 10 | origin tail with 0 usable entries | Empty | no model call; `unavailable`; no cost line | BDD Scenario: S-63 | TD-2 |
 
 #### Dataset DS-6: Rendering and safety of agent text
 
@@ -2112,6 +2114,10 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | 13 | definitive rejection returned, then restart | Rejected | never posts; staging removed | BDD Scenario: S-140 | |
 | 14 | retryable append failure, 31 days, cleanup, restart | Pending | posts once from staged bytes | BDD Scenario: S-143 | |
 | 15 | group deleted / agent removed / request cancelled before recovery | Recheck | rejected; nothing posted; no model work | BDD Scenario: S-144 | |
+| 16 | answer lists the same file twice | Duplicate | accepted; two listed attachments | BDD Scenario: S-29 | TD-4 (owner-refinable default) |
+| 17 | answer with 16 files | Max | accepted | BDD Scenario: S-31 | TD-3 |
+| 18 | answer with 17 files | Max + 1 | definitive rejection; nothing posted | BDD Scenario: S-31 | TD-3 |
+| 19 | answer file of 100 MB + 1 byte | Over per-file limit | definitive rejection before acceptance; nothing staged or posted | BDD Scenario: S-31 | TD-3 |
 
 #### Dataset DS-13: Library deletion of a chat file (D26)
 
@@ -2210,7 +2216,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 
 **Starting a group and invitation context**
 - **FR-038**: System MUST show "Add participant" only in an agent's main chat; it MUST create a new empty group, leave the original chat unchanged and post no message.
-- **FR-039**: System MUST generate the invitation summary in the gateway after an ad-hoc group with an origin chat is created, using the origin agent's model, from at most 40 entries and 16 KiB of the origin chat, producing about 200 words and at most 4,096 characters, within 45 seconds, in the same workspace only.
+- **FR-039**: System MUST generate the invitation summary in the gateway after an ad-hoc group with an origin chat is created, using the origin agent's model, from at most 40 entries and 16 KiB of the origin chat, producing about 200 words and at most 4,096 characters (a longer filtered output is cut at the last word boundary at or before 4,096 characters, or hard-cut when none exists, and stays `ready`, TD-1), within 45 seconds, in the same workspace only. When the origin chat has no usable entry after the exclusions of FR-040, it MUST NOT call the model and MUST set `unavailable` with no cost (TD-2).
 - **FR-040**: System MUST exclude secret-card entries, secret-tool results and vault content from the summary input, and MUST pass input and output through the registered-secret scrubber and the credential-pattern redactor, filtering the output before storing it.
 - **FR-041**: System MUST keep the summary state as `generating`, then `ready` or `unavailable` (provider error, quota, time limit, restart while generating, group deleted, origin agent removed), and MUST discard a result that arrives after `unavailable` or after deletion.
 - **FR-042**: System MUST NOT wait for or hold any message because of the summary: delivery only reads the current state, and a member whose first request goes out while the summary is not `ready` goes without it.
@@ -2253,7 +2259,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 **Round-1 additions (grill findings B1, I1-I5, I10, M4)**
 - **FR-076**: System MUST give every accepted group attachment (a person's message, an agent's answer, requests held or paused, and the mirrored copies) a persistent retention owner so the automatic orphan cleanup never removes a file a group entry or pending request still references. Ownership is acquired idempotently once per (entry or request id, reference) before the append, recorded durably so a restart can repair a missed acquisition, released if the append fails, and not released by deleting the group (D19). Only a user's explicit deletion removes a file.
 - **FR-077**: System MUST publish every group file in both representations a normal chat upload has (chat media copy and Library file) through one shared, repeat-safe publication path used for person uploads and agent-returned files. The publication path MUST also record durably, on the chat copy's media entry, the path of its Library file (`library_path`, FR-086).
-- **FR-078**: System MUST treat an agent answer with files as a durable answer intent with these states and rules. (1) **Accepted**: validation passed (room open, request owned by the caller, member still a member, request not cancelled, size limits) and every original source was read once, hashed and copied into private, immutable staging owned by the intent; the intent also records text, mentions and, for every file, the media identity and Library file name allocated at acceptance. The intent holds retention for its staged bytes and published artifacts from this moment. (2) **Publishing**: each file is published into both representations under its preallocated identities with create-or-adopt semantics, so repeating a step never creates a second artifact; the per-file outcome is recorded durably. (3) **Committed**: the entry is appended (the entry carries the intent id), ownership passes to the entry (acquire before release), then mirror and mention admission complete. (4) **Rejected**: a definitive failure (unreadable source, validation, size, room gone, member removed, request cancelled) is recorded durably as rejected before the agent receives the definitive "nothing posted" error; a rejected intent never posts, staged bytes and unreferenced published files are then removed, and a file the user deleted explicitly is never recreated. (5) A retryable failure leaves the intent accepted and the agent receives an honest "accepted, completing" result, not "nothing posted". (6) After a restart the server completes every accepted intent from the recorded data only: it never asks the agent again, never replays or resumes model work, and rechecks that the room exists, the member still belongs and the request is not cancelled before posting or admitting mentions, otherwise it rejects.
+- **FR-078**: System MUST treat an agent answer with files as a durable answer intent with these states and rules. (1) **Accepted**: validation passed (room open, request owned by the caller, member still a member, request not cancelled, size limits including at most 16 files and 100 MB per file, TD-3) and every original source was read once, hashed and copied into private, immutable staging owned by the intent; the intent also records text, mentions and, for every file, the media identity and Library file name allocated at acceptance. The intent holds retention for its staged bytes and published artifacts from this moment. (2) **Publishing**: each file is published into both representations under its preallocated identities with create-or-adopt semantics, so repeating a step never creates a second artifact; the per-file outcome is recorded durably. (3) **Committed**: the entry is appended (the entry carries the intent id), ownership passes to the entry (acquire before release), then mirror and mention admission complete. (4) **Rejected**: a definitive failure (unreadable source, validation, size, room gone, member removed, request cancelled) is recorded durably as rejected before the agent receives the definitive "nothing posted" error; a rejected intent never posts, staged bytes and unreferenced published files are then removed, and a file the user deleted explicitly is never recreated. (5) A retryable failure leaves the intent accepted and the agent receives an honest "accepted, completing" result, not "nothing posted". (6) After a restart the server completes every accepted intent from the recorded data only: it never asks the agent again, never replays or resumes model work, and rechecks that the room exists, the member still belongs and the request is not cancelled before posting or admitting mentions, otherwise it rejects.
 - **FR-079**: System MUST fetch the summary text only through `getRoom`: refetch on a `ready` status change and after reconnect or re-attach while the panel is open and the detail may be stale; a failed fetch shows an error with Retry.
 - **FR-080**: System MUST give the summary reservation these transitions: reserved for request R (durable with R, decided once) then either delivered (R's receiver capture is durable) or released. The reservation MUST be kept across every retryable outcome of R (unavailable, unknown, storage error, a failed facts read, a capture-write failure, a failed acknowledgement after a stored capture, where the receiver's durable facts are reconciled first). It is released only when R is irreversibly cancelled and the receiver's facts positively show no capture; a read error is never proof of absence. A request that was sent without the summary (including R2 skipped while R held it) never receives it later; after a release only a later new request may reserve it. Concurrent first requests reserve exactly once. D20 holds: nothing waits.
 - **FR-081**: System MUST provide the file-card behaviours of FR-002 in the shared rows used by every chat.
@@ -2424,17 +2430,18 @@ None open. Founder answers applied in this revision: D21 (no Stop in the group),
 | F-6 | How does the operator setting `steer_body` interact with the one group limit? | B: groups follow the setting but never above 65,536 bytes; a larger value is clamped, a smaller one honoured; the contract states the maximum and that a smaller setting lowers it | D27 | Contract table (`RoomMessageRequest`, `RoomEntry`), US-2 AS 2.3, US-4 AS 4.6, Edge Cases, FR-074, FR-075, S-150, DS-1 rows 26-31, T-55, T-65, UAT-35, SC-012, DOC-007, A-3 |
 | F-7 | Where does the card go when one step answers two different groups? | A: the agent's own chat only; both groups show the attention animation and link | D28 | US-9 AS 9.10, Edge Cases, FR-028, FR-052, S-83, S-151, DS-8 row 12, T-16, T-17, T-33, T-40, UAT-36, DOC-003 |
 
-## Open Before Approval
+## Technical Decisions
 
-The status stays `In review` (not `Approved`) because these technical items are still open. None needs the founder; each is a one-line decision by the named role, recorded in this spec before RED starts.
+Recorded 2026-10-28 on the coordinator's instruction; none needs the founder. TD-1 to TD-3 are architect decisions. TD-4 to TD-7 are the spec's recommendations adopted as defaults: **default, owner may refine during RED with evidence** (a refinement is recorded here with its evidence; it never changes a founder decision).
 
-| ID | Open item | Owner | Recommendation already in the spec |
-|---|---|---|---|
-| A-1 | Summary output longer than 4,096 characters: truncate or `unavailable` | architect | truncate on a word boundary, status `ready` |
-| A-2 | Origin chat with nothing to summarise | architect | skip the model call, `unavailable`, no cost |
-| A-13 | Bounds of the private staging of an answer's original bytes | architect | 100 MB per file, at most 16 files, removed on rejection and after commit |
-| A-4 / A-9 | Duplicate media references in one message or answer | backend-lead (in RED) | accept as listed, show once per listed reference; not asserted until confirmed |
-| A-6, A-7 | Participants tooltip wording; narrow-width panel behaviour | frontend-lead | "Participants"; same as the other registered side panels |
+| ID | Item | Decision | Kind | Applied in |
+|---|---|---|---|---|
+| TD-1 (A-1) | Summary output longer than 4,096 characters | Cut at the last word boundary at or before 4,096 characters (hard cut when none), status `ready`, cost counted once | Architect decision. Rationale: the model ran and produced usable background; `unavailable` would discard it and still cost money | FR-039, DS-4 rows 13 and 13b, T-18 |
+| TD-2 (A-2) | Origin chat with nothing to summarise | No model call; `unavailable` at once; no cost line | Architect decision. Rationale: a call on empty input costs money and invites invented content | FR-039, DS-5 row 10, T-18, T-21 |
+| TD-3 (A-13) | Bounds of the private staging of an answer's original bytes | At most 16 files, 100 MB per file (the upload limit); over-limit is a definitive rejection before acceptance; staging outside agent-reachable trees; removed after commit or recorded rejection; kept while accepted, across restarts and the orphan cleanup | Architect decision. Rationale: same bounds as a person's upload; no new limit to document | FR-078 (1), DS-12 rows 17-19, T-62 |
+| TD-4 (A-4, A-9) | The same file listed twice in a message or answer | Accepted as listed and shown once per listed reference; retention counted once per (entry, reference) | Default, owner may refine during RED with evidence (backend-lead) | DS-1 row 32, DS-12 row 16, T-03, T-06 |
+| TD-6 (A-6) | Participants tooltip wording | "Participants" | Default, owner may refine during RED with evidence (frontend-lead) | S-100, T-37 |
+| TD-7 (A-7) | Participants panel on narrow widths | Same as the other registered side panels; no new behaviour | Default, owner may refine during RED with evidence (frontend-lead) | S-49, T-35 |
 
 ## Grill Round 1 Dispositions
 
@@ -2457,7 +2464,7 @@ Report: `/workspace/logs/1449/1449-spec-review.md` (verdict BLOCK: 1 Blocking, 1
 | M2 malformed rows and dangling IDs | ACCEPTED | scan of the file | rows moved into DS-1 (rows 18-23); SC-001 states S-11 retired; T-51 cites SC-003; UAT-31 says ASCII |
 | M3 UAT-15 password promise | ACCEPTED | D18, FR-047 | UAT-15 follows UAT-30 scope and excludes unregistered prose passwords |
 | M4 panel focus return | ACCEPTED | `src/components/panel-shell/SidePanelShell.tsx` uses `requestClose('chat')` for the close button; Escape returns to the trigger | Accessibility text, FR-083, S-134, T-36 |
-| Technical ambiguity rows A-1, A-2 | NOTED | - | Marked "architect decision required before RED"; not approved by repetition in datasets; listed under "Open Before Approval" |
+| Technical ambiguity rows A-1, A-2 | DECIDED (architect, 2026-10-28) | - | TD-1 and TD-2 under "Technical Decisions"; FR-039, DS-4 rows 13/13b and DS-5 row 10 now carry the decided values |
 
 ## Grill Round 2 Dispositions
 
