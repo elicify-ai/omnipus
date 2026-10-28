@@ -121,7 +121,7 @@ The gateway's new **Async notification publish failed** records identify actual 
 
 | Stage | Meaning |
 |---|---|
-| `notice_save` | Omnipus could not save the system warning, or its conversation storage was unavailable. |
+| `notice_save` | Omnipus could not save the system warning: the save failed, the conversation storage was unavailable, or the notification had no conversation to save it in. |
 | `origin_read` | Omnipus could not read the saved conversation origin to decide whether an external warning was allowed. |
 
 Both stages use `error_class=secondary_warning_failure`, a fixed source and the same `notice_id` as the failed notification's other diagnostics. Only the existing validated tool name and shortened tool/session references may be added. These records contain no raw error cause or type, conversation route, notification content, command arguments, tool output, question or approval text. A refused audience without a read error does not produce this secondary-error record.

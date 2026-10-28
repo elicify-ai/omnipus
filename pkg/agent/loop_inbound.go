@@ -1001,16 +1001,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		}
 	}
 
-	ts.opts.UserMessage = msg.Content
-	ts.userMessage = msg.Content
-	// The goal loop's own follow-up (keeper reminder, deferred steer) keeps
-	// its origin, so the woken turn's claim reaches the goal loop (D1).
-	if msg.Sender.CanonicalID == goalLoopFollowUpSenderID {
-		ts.opts.SenderID = goalLoopFollowUpSenderID
-		if inboundMetadata(msg, "goal_reminder") == "true" {
-			ts.opts.goalReminderGoalID = inboundMetadata(msg, "goal_id")
-		}
-	}
+	applySteeredSystemWakeMessage(ts, msg)
 	if !al.registerTurnIfAbsent(ts) {
 		release()
 		return "", steer.ErrStaleGeneration
@@ -1072,6 +1063,19 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	rootExecution.recordTurnOutcome(err)
 	return result.finalContent, err
+}
+
+func applySteeredSystemWakeMessage(ts *turnState, msg bus.InboundMessage) {
+	ts.opts.UserMessage = msg.Content
+	ts.userMessage = msg.Content
+	// The goal loop's own follow-up (keeper reminder, deferred steer) keeps
+	// its origin, so the woken turn's claim reaches the goal loop (D1).
+	if msg.Sender.CanonicalID == goalLoopFollowUpSenderID {
+		ts.opts.SenderID = goalLoopFollowUpSenderID
+		if inboundMetadata(msg, "goal_reminder") == "true" {
+			ts.opts.goalReminderGoalID = inboundMetadata(msg, "goal_id")
+		}
+	}
 }
 
 // consumeAdmittedWake is processSteeredSystemWake's consumption step, run
