@@ -24,33 +24,46 @@ func pagingSeedTools(t *testing.T, s *session.UnifiedStore, sid string, n, paylo
 	}
 }
 
+// D2 A2.7: construct post-shortening contributions from independently sized
+// inline results, not a large single result which must now become a preview.
+func pagingSeedInlineToolGroups(t *testing.T, s *session.UnifiedStore, sid string, groups, calls, payloadBytes int) {
+	t.Helper()
+	for i := 1; i <= groups; i++ {
+		tools := make([]session.ToolCall, calls)
+		for j := range tools {
+			tools[j] = session.ToolCall{ID: session.ToolCallID(fmt.Sprintf("inline-%03d-%03d", i, j)), Tool: "read_file", Status: "success", ContentState: "full", Parameters: map[string]any{}, Result: map[string]any{"text": strings.Repeat("x", payloadBytes)}}
+		}
+		require.NoError(t, s.AppendTranscriptStrict(sid, session.TranscriptEntry{ID: fmt.Sprintf("tool-owner-%03d", i), Type: session.EntryTypeToolCall, AgentID: "mia", ToolCalls: tools}))
+	}
+}
 func TestChatHistoryPage_SoftBytesRespectTwoScreenFloor(t *testing.T) {
 	cases := []struct {
-		name                                           string
-		groups, payloadBytes, limit, minRows, returned int
-		stop, override                                 string
-		exceeded                                       bool
+		name                                                  string
+		groups, calls, payloadBytes, limit, minRows, returned int
+		stop, override                                        string
+		exceeded                                              bool
 	}{
-		// Spec D-B1:20*200KiB=4096000 <4194304;21*200KiB=4300800 >4194304.
-		{"budget_bites_only_after_floor", 100, 200 * 1024, 100, 20, 20, "byte_budget", "", false},
-		// Spec D-B1b:20*256KiB=5242880, so floor necessarily exceeds soft budget.
-		{"floor_beats_bytes", 40, 256 * 1024, 40, 20, 20, "byte_budget", "height_floor", true},
-		{"normal_open_unchanged", 40, 7 * 1024, 40, 20, 40, "row_target", "", false},
-		{"normal_prefetch_unchanged", 40, 7 * 1024, 20, 20, 20, "row_target", "", false},
-		{"advisory_floor_equals_cap", 100, 48 * 1024, 100, 100, 100, "row_target", "height_floor", true},
+		// D2 A2.7 re-derivation:5 inline calls/group, each JSON exactly51200
+		// bytes (payload51189 +11 JSON syntax).16 groups=80 rows=4096000
+		// result bytes <4194304 with room for envelopes;17=85 rows=4352000.
+		{"budget_bites_only_after_floor", 20, 5, 51189, 100, 80, 16, "byte_budget", "", false},
+		{"floor_beats_bytes", 20, 5, 51189, 100, 85, 17, "byte_budget", "height_floor", true},
+		{"normal_open_unchanged", 40, 1, 7 * 1024, 40, 20, 40, "row_target", "", false},
+		{"normal_prefetch_unchanged", 40, 1, 7 * 1024, 20, 20, 20, "row_target", "", false},
+		{"advisory_floor_equals_cap", 100, 1, 48 * 1024, 100, 100, 100, "row_target", "height_floor", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			api, cleanup := newTestRestAPI(t)
 			defer cleanup()
 			sid := createTestSession(t, api)
-			pagingSeedTools(t, api.agentLoop.GetSessionStore(), sid, tc.groups, tc.payloadBytes)
+			pagingSeedInlineToolGroups(t, api.agentLoop.GetSessionStore(), sid, tc.groups, tc.calls, tc.payloadBytes)
 			p := pagingRead(t, api, sid, fmt.Sprintf("limit=%d&min_rows=%d", tc.limit, tc.minRows))
 			require.Equal(t, pagingWantIDs("tool-owner", tc.groups-tc.returned+1, tc.groups), pagingIDs(p), "whole nearest groups, never truncating floor or returning all100 when bytes bite")
-			require.Equal(t, tc.returned, p.PageInfo.RowCount, "one finished call=start/result logical row")
+			require.Equal(t, tc.returned*tc.calls, p.PageInfo.RowCount, "one finished call=start/result logical row; whole owning groups")
 			require.Equal(t, tc.minRows, p.PageInfo.MinRows)
 			require.EqualValues(t, 4194304, p.PageInfo.SoftByteBudget)
-			require.GreaterOrEqual(t, p.PageInfo.ProjectedBytes, int64(tc.returned*tc.payloadBytes), "meter includes actual full tool output, not a guessed tiny REST weight")
+			require.GreaterOrEqual(t, p.PageInfo.ProjectedBytes, int64(tc.returned*tc.calls*(tc.payloadBytes+11)), "meter includes actual full tool output, not a guessed tiny REST weight")
 			require.Equal(t, tc.exceeded, p.PageInfo.ByteBudgetExceeded)
 			if tc.override == "" {
 				require.Nil(t, p.PageInfo.BudgetOverride)
@@ -72,11 +85,12 @@ func TestChatHistoryPage_SoftBytesRespectTwoScreenFloor(t *testing.T) {
 			}
 			for _, e := range p.Entries {
 				require.NotNil(t, e.ToolCalls)
-				require.Len(t, *e.ToolCalls, 1)
-				call := (*e.ToolCalls)[0]
-				require.Equal(t, "success", string(call.Status))
-				require.NotNil(t, call.Result)
-				require.Equal(t, map[string]any{"text": strings.Repeat("x", tc.payloadBytes)}, *call.Result, "soft budget never truncates an admitted whole result")
+				require.Len(t, *e.ToolCalls, tc.calls)
+				for _, call := range *e.ToolCalls {
+					require.Equal(t, "success", string(call.Status))
+					require.NotNil(t, call.Result)
+					require.Equal(t, map[string]any{"text": strings.Repeat("x", tc.payloadBytes)}, *call.Result, "post-shortening inline result stays byte-identical")
+				}
 			}
 			pagingShape(t, p, tc.groups > tc.returned, false)
 		})
@@ -90,9 +104,10 @@ func TestChatHistoryPage_Atomic101RowsAndOversizedToolRemainWhole(t *testing.T) 
 	pagingSeed(t, api.agentLoop.GetSessionStore(), sid, "old", 1)
 	calls := make([]session.ToolCall, 100)
 	for i := range calls {
-		calls[i] = session.ToolCall{ID: session.ToolCallID(fmt.Sprintf("atomic-%03d", i)), Tool: "read_file", Status: "success", Parameters: map[string]any{}, Result: map[string]any{"text": "small"}}
+		// A2.7:100 independently inline51200-byte results keep the atomic
+		// owner over4MiB AFTER shortening (rather than one result that shrinks).
+		calls[i] = session.ToolCall{ID: session.ToolCallID(fmt.Sprintf("atomic-%03d", i)), Tool: "read_file", Status: "success", Parameters: map[string]any{}, Result: map[string]any{"text": strings.Repeat("x", 51189)}}
 	}
-	calls[0].Result = map[string]any{"text": strings.Repeat("x", 4*1024*1024+1024)}
 	require.NoError(t, api.agentLoop.GetSessionStore().AppendTranscriptStrict(sid, session.TranscriptEntry{ID: "atomic-owner", Role: "assistant", Content: "one narration row", AgentID: "mia", Timestamp: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC), ToolCalls: calls}), "fixture is below canonical8-MiB record admission")
 	p := pagingRead(t, api, sid, "limit=20&min_rows=20")
 	require.Equal(t, []string{"atomic-owner"}, pagingIDs(p))
@@ -107,7 +122,8 @@ func TestChatHistoryPage_Atomic101RowsAndOversizedToolRemainWhole(t *testing.T) 
 	pagingShape(t, p, true, false)
 }
 
-func TestChatHistoryPage_NearAdmission100FloorHasNoHardByteDefense(t *testing.T) {
+// T63/B75: founder-authorized D2 replacement of the old no-hard-defense rule.
+func TestChatHistoryPage_NearAdmissionCorpusIsShortened(t *testing.T) {
 	pagingNearAdmissionProbe(t)
 }
 
