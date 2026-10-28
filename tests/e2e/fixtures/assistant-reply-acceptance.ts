@@ -15,6 +15,19 @@ export function assistantReplyChallenge(prefix: string) {
   }
 }
 
+/** Completion-selection gate shared by the browser checker and its focused unit tests. */
+export function matchingHansReplyCompletions(
+  receivedFrames: readonly string[],
+  sessionId: string,
+  row: { messageId: string | null; turnId: string | null; mergedMessageIds: string | null },
+) {
+  return receivedFrames.flatMap((raw) => {
+    const frame = DoneFrame.safeParse(JSON.parse(raw))
+    return frame.success && frame.data.session_id === sessionId && frame.data.message_id === row.messageId
+      ? [frame.data] : []
+  })
+}
+
 /** Hans's "follow-up succeeds" requires an actual completed answer saved in the same conversation. */
 export async function assertHansReplyPersisted(
   page: Page,
@@ -31,11 +44,12 @@ export async function assertHansReplyPersisted(
   expect(messageId, 'the completed assistant row has a durable message identity').toEqual(expect.any(String))
   expect(messageId).not.toBe('')
 
-  const completed = () => receivedFrames.flatMap((raw) => {
-    const frame = DoneFrame.safeParse(JSON.parse(raw))
-    return frame.success && frame.data.session_id === sessionId && frame.data.message_id === messageId
-      ? [frame.data] : []
-  })
+  const row = {
+    messageId,
+    turnId: await reply.getAttribute('data-turn-id'),
+    mergedMessageIds: await reply.getAttribute('data-merged-message-ids'),
+  }
+  const completed = () => matchingHansReplyCompletions(receivedFrames, sessionId, row)
   await expect.poll(() => completed().length, {
     timeout: 60_000, message: 'one actual turn completion must identify the rendered assistant reply',
   }).toBe(1)
