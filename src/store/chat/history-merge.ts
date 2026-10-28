@@ -8,6 +8,8 @@ import { applySpanFrame } from './slices/span-frames'
 import { emptySessionState } from './session'
 import type { HistorySpanFrame } from '@/lib/api/sessions'
 import { fallbackPairKey } from './slices/provider-frames'
+import { compatibleSource, joinParts, localHistoryKey, partTexts, remapToolAnchors, rowSourceIds, singlePart } from './history-parts'
+import { reportDuplicateMessageId } from './messages'
 
 /** Expected contradiction in a page's relation to the current reader. */
 export class HistoryPageProtocolError extends Error {}
@@ -260,9 +262,15 @@ export function applySavedToolOwnership(rows: ChatMessage[], owners: ReadonlyMap
   })
 }
 
-export function savedToolOwnerPatch(ownerMap: Record<string, string> | undefined, owners: ReadonlyMap<string, string>): Record<string, string> | undefined {
-  if (!ownerMap || !owners.size) return ownerMap
-  return Object.fromEntries(Object.entries(ownerMap).map(([call, owner]) => [call, owners.get(call) ?? owner]))
+/**
+ * Point live owners at the saved owning row, and record the saved owner of
+ * every saved call whose row the reader retains (#1452 D1 B83: a saved
+ * tool-only record keeps its ownership however its page arrived).
+ */
+export function savedToolOwnerPatch(ownerMap: Record<string, string> | undefined, owners: ReadonlyMap<string, string>, retained: Record<string, ChatMessage> = {}): Record<string, string> | undefined {
+  if (!owners.size) return ownerMap
+  const saved = [...owners].filter(([, owner]) => retained[owner])
+  return { ...Object.fromEntries(Object.entries(ownerMap ?? {}).map(([call, owner]) => [call, owners.get(call) ?? owner])), ...Object.fromEntries(saved) }
 }
 
 export function currentHistoryEntries(bucket: SessionChatState): SessionHistoryEntry[] {
@@ -274,12 +282,91 @@ export function currentHistoryEntries(bucket: SessionChatState): SessionHistoryE
   })
 }
 
-/** The display row that coalesced this saved source's id, same turn and producer. */
-function coalescedOwner(bucket: SessionChatState, entry: SessionHistoryEntry): ChatMessage | undefined {
-  const owners = Object.values(bucket.messagesById).filter(row =>
-    row.role === entry.role && row.mergedReplayIds?.includes(entry.id) &&
-    (!entry.turnId || !row.turnId || entry.turnId === row.turnId) && (!entry.agentId || !row.agentId || entry.agentId === row.agentId))
-  return owners.length === 1 ? owners[0] : undefined
+/** The source a part of the row displayed at `position` recorded as bound there, if any. */
+function boundSourceAt(bucket: SessionChatState, position: string): string | undefined {
+  const id = bucket.historySourceAliases?.[position]
+  return id ? bucket.messagesById[id]?.historyParts?.find(part => part.position === position)?.sourceId : undefined
+}
+
+/**
+ * Bind one saved record onto the one compatible row that displays its source
+ * (S1/S2). A row with a part list changes only that part: live text stays
+ * exactly when today's whole-row rule (mergeHistoryEntry's liveWins) would
+ * keep it, otherwise that part alone takes its saved text, and the row's text
+ * is its parts joined with their recorded joiners. A part already bound to
+ * another occurrence keeps its binding and text; the record's position only
+ * names the same row (no text dropped or doubled). Returns undefined when the
+ * record must not bind (a legacy alias row already holding another position).
+ */
+function bindToRow(row: ChatMessage, entry: SessionHistoryEntry, original: ChatMessage | undefined, captured: ChatMessage | undefined): ChatMessage | undefined {
+  const parts = row.historyParts
+  if (!parts) {
+    // A row without a part list merges whole, as before part tracking. A
+    // legacy alias claim binds only the one saved source the row represents.
+    if (row.id !== entry.id && (row !== original || (row.historyPosition && row.historyPosition !== entry.historyPosition))) return undefined
+    return original ? mergeHistoryEntry({ ...entry, id: row.id }, original, captured) : { ...entry, id: row.id }
+  }
+  const index = parts.findIndex(part => part.sourceId === entry.id)
+  if (parts[index].position && parts[index].position !== entry.historyPosition) return { ...row, historyPosition: entry.historyPosition }
+  const texts = partTexts(row)
+  if (!texts) return { ...(original ? mergeHistoryEntry({ ...entry, id: row.id }, original, captured) : { ...entry, id: row.id }), historyParts: undefined }
+  const liveWins = !!original && (original !== captured || original.isStreaming === true || original.status === 'streaming')
+  const shown = texts.map((text, i) => i === index && !liveWins ? entry.content ?? '' : text)
+  const joined = joinParts(parts.map((part, i) => i === index ? { ...part, position: entry.historyPosition, text: liveWins ? part.text : 'saved' } : part), shown)
+  // Undefined baseline: the current row wins; the row itself as baseline: the saved record wins.
+  const merged = mergeHistoryEntry({ ...entry, id: row.id }, row, liveWins ? undefined : row)
+  return remapToolAnchors({ ...merged, content: joined.content, historyParts: joined.historyParts, mergedReplayIds: row.mergedReplayIds, historyPosition: entry.historyPosition }, parts, texts, shown)
+}
+
+/**
+ * #1452 D1 S1/S1a/S3/S4/S6: the one binding function every saved-record entry
+ * point uses (REST pages and their callers, the WS snapshot commit and the
+ * loaded-window refresh). Returns one positioned row per entry, in order.
+ *
+ * Ownership is looked up by recorded source first: a record binds only when
+ * EXACTLY ONE compatible row (same role; same turn and producer when both are
+ * known) displays its id. Otherwise it is its own row, keyed by its own id
+ * unless an incompatible row already occupies that display key; only then it
+ * gets a position-derived client-local key, its part list keeps the source id
+ * and the existing duplicate-ID diagnostic is recorded. A position whose
+ * recorded part names a different source is a protocol contradiction and is
+ * never silently rebound.
+ */
+export function bindHistoryEntries(bucket: SessionChatState, entries: readonly SessionHistoryEntry[], baseline: Record<string, ChatMessage>): ChatMessage[] {
+  const work = new Map<string, ChatMessage>()
+  const value = (id: string) => work.get(id) ?? bucket.messagesById[id]
+  const bySource = new Map<string, string[]>()
+  const index = (row: ChatMessage) => {
+    for (const source of new Set(rowSourceIds(row))) {
+      const owners = bySource.get(source) ?? []
+      if (!owners.includes(row.id)) bySource.set(source, [...owners, row.id])
+    }
+  }
+  Object.values(bucket.messagesById).forEach(index)
+  const rows = entries.map(entry => {
+    const bound = boundSourceAt(bucket, entry.historyPosition)
+    if (bound !== undefined && bound !== entry.id) throw new HistoryPageProtocolError('History position changed its source.')
+    const owners = (bySource.get(entry.id) ?? []).flatMap(id => value(id) ? [value(id)] : []).filter(row => compatibleSource(row, entry))
+    const merged = owners.length === 1 ? bindToRow(owners[0], entry, bucket.messagesById[owners[0].id], baseline[owners[0].id]) : undefined
+    if (merged) { work.set(merged.id, merged); return merged }
+    let row: ChatMessage = entry
+    // S3: two claimants of one occurrence both stay, diagnosed, nothing dropped.
+    const occupied = !!value(entry.id)
+    if (occupied || owners.length > 1) reportDuplicateMessageId(entry.id)
+    if (occupied) {
+      row = { ...entry, id: localHistoryKey(entry.historyPosition), historyParts: singlePart(entry.id, entry.historyPosition) }
+    }
+    work.set(row.id, row)
+    index(row)
+    return row
+  })
+  // A combined row bound at several positions shows its final value at each.
+  return rows.map(row => row.historyParts ? { ...work.get(row.id)!, historyPosition: row.historyPosition } : row)
+}
+
+/** S8: a row bound at several positions takes its display slot at its last one. */
+export function lastBoundOccurrence(rows: ChatMessage[]): ChatMessage[] {
+  return rows.filter((row, index) => !row.historyParts || !rows.slice(index + 1).some(later => later.id === row.id))
 }
 
 export function applyHistoryPageToBucket(bucket: SessionChatState, page: SessionHistoryPage, action: HistoryActionKind, baseline: Record<string, ChatMessage> = bucket.messagesById, readTick?: number): Partial<SessionChatState> {
@@ -291,26 +378,13 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   const newOverlap = pagePositions.filter(position => existingPositions.has(position))
   if (oldOverlap.join() !== newOverlap.join()) throw new HistoryPageProtocolError('Contradictory history overlap.')
   if ((action === 'older' || action === 'newer') && page.entries.length && page.entries.every(entry => existingPositions.has(entry.historyPosition))) throw new HistoryPageProtocolError('History boundary did not advance.')
-  // A saved source whose id a displayed reply already coalesced (the token
-  // resolver's mergedReplayIds) merges onto that display row: it keeps its
-  // identity and live text and takes the saved position, never a second reply
-  // beside it (D4/D7, r21). Only when it is the ONE saved source that display
-  // row represents (final-gate F1): a row the page also selects by its own id,
-  // a row two page sources would claim, or a row already holding another saved
-  // position stays itself, and each distinct saved entry keeps its own row, so
-  // no saved segment collapses into another under one display identity.
-  const candidates = page.entries.map(entry => bucket.messagesById[entry.id] ? undefined : coalescedOwner(bucket, entry))
-  const claims = new Map<string, number>()
-  page.entries.forEach((entry, i) => {
-    const claimed = candidates[i]?.id ?? (bucket.messagesById[entry.id] ? entry.id : undefined)
-    if (claimed) claims.set(claimed, (claims.get(claimed) ?? 0) + 1)
-  })
-  const incoming = page.entries.map((entry, i) => {
-    const candidate = candidates[i]
-    const owner = candidate && claims.get(candidate.id) === 1 && (!candidate.historyPosition || candidate.historyPosition === entry.historyPosition) ? candidate : undefined
-    return owner ? mergeHistoryEntry({ ...entry, id: owner.id }, owner, baseline[owner.id]) : mergeHistoryEntry(entry, bucket.messagesById[entry.id], baseline[entry.id])
-  })
-  const union = action === 'older' ? [...incoming, ...old] : action === 'newer' ? [...old, ...incoming] : incoming
+  // #1452 D1: every saved record binds through the shared part-aware
+  // binding (S6); a combined row already on the reader takes its new value at
+  // each of its positions.
+  const incoming = bindHistoryEntries(bucket, page.entries, baseline)
+  const combined = new Map(incoming.filter(row => row.historyParts).map(row => [row.id, row]))
+  const current = old.map(row => combined.has(row.id) ? { ...combined.get(row.id)!, historyPosition: row.historyPosition } : row)
+  const union = action === 'older' ? [...incoming, ...current] : action === 'newer' ? [...current, ...incoming] : incoming
   const byPosition = new Map<string, ChatMessage>()
   for (const row of union) {
     if (!row.historyPosition) continue
@@ -347,7 +421,7 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   rememberHistoryReadFacts(page.session_id, incoming, [page.page_info.context], readTick)
   const spans = settleHistorySpans(page.session_id, applySavedToolOwnership(finalRows, toolOwners), hidden, bucket.pendingSpanUpdatesBySpanId)
   const patch = { ...historyRowsPatch(bucket, [...spans.rows, ...hidden], positions), messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: hiddenIds }
-  patch.toolCallOwnerMessageId = savedToolOwnerPatch(patch.toolCallOwnerMessageId, toolOwners)
+  patch.toolCallOwnerMessageId = savedToolOwnerPatch(patch.toolCallOwnerMessageId, toolOwners, patch.messagesById)
   patch.spanBySpanId = { ...patch.spanBySpanId, ...spans.index }
   patch.historySourceAliases = Object.fromEntries(positions.flatMap(position => {
     const row = byPosition.get(position)

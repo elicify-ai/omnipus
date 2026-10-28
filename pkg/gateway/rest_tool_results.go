@@ -66,6 +66,14 @@ func (a *restAPI) HandleToolResults(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusNotFound, "tool result not found")
 			return
 		}
+		if errors.Is(err, ErrToolResultTooLarge) {
+			slog.Error("rest: tool-results: stored result exceeds the retrieval cap",
+				"session_id", sessionID,
+				"ref", ref,
+			)
+			jsonErr(w, http.StatusInternalServerError, "could not read tool result")
+			return
+		}
 		slog.Error("rest: tool-results: read failed",
 			"session_id", sessionID,
 			"ref", ref,
@@ -75,12 +83,8 @@ func (a *restAPI) HandleToolResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bound response size to replayMaxResultBytes (1 MiB) so a corrupt on-disk
-	// file cannot OOM the response writer.
-	if len(data) > replayMaxResultBytes {
-		data = data[:replayMaxResultBytes]
-	}
-
+	// readByRef bounds the read itself and refuses an over-cap body whole, so
+	// the response is always the complete stored JSON.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if _, werr := w.Write(data); werr != nil {

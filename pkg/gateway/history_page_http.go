@@ -67,6 +67,8 @@ func historyHTTPFailure(ctx context.Context, w http.ResponseWriter, id string, e
 		jsonErr(w, 400, "invalid history page range")
 	case errors.Is(err, session.ErrHistoryPositionNotFound):
 		jsonErr(w, 404, "history position not found")
+	case errors.Is(err, session.ErrHistoryEntryExpired):
+		jsonErr(w, 410, "history entry expired")
 	default:
 		state := historyStateForError(err)
 		if state.Message != nil && *state.Message == historyUnavailableCopy {
@@ -86,14 +88,19 @@ func (a *restAPI) historyProjectionDeps(store *session.UnifiedStore, id string) 
 	}
 	return deps
 }
-func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id string) {
+
+// readableSessionStore applies the history page's session access order
+// after the registered auth wrapper and the session-id check: main-session
+// eligibility, then store resolution and session metadata. It writes the
+// refusal and returns nil when the session may not be read.
+func (a *restAPI) readableSessionStore(w http.ResponseWriter, id string) *session.UnifiedStore {
 	if !a.gateMainRead(w, id) {
-		return
+		return nil
 	}
 	store := a.resolveSessionStore(id)
 	if store == nil {
 		jsonErr(w, 404, "session not found")
-		return
+		return nil
 	}
 	if _, err := store.GetMeta(id); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -101,6 +108,51 @@ func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id
 		} else {
 			jsonSessionStorageError(w, "read", id, err)
 		}
+		return nil
+	}
+	return store
+}
+
+// serveSessionHistoryEntry is GET /sessions/{id}/messages/{history_position}
+// (operationId getSessionHistoryEntry; chat-history paging spec, Amendment
+// 2026-10-27 D2, A2.2). Session refusals precede any position work; the full
+// public projection after effects comes from the same projector as a page
+// entry, with display shortening off. Errors keep historyHTTPFailure's
+// storage-primary precedence.
+func (a *restAPI) serveSessionHistoryEntry(w http.ResponseWriter, r *http.Request, id, rawPosition string) {
+	store := a.readableSessionStore(w, id)
+	if store == nil {
+		return
+	}
+	position, err := session.ParseHistoryPosition(rawPosition)
+	if err != nil {
+		historyHTTPFailure(r.Context(), w, id, err)
+		return
+	}
+	entry, err := store.ReadChatHistoryEntry(r.Context(), id, position)
+	if err != nil {
+		historyHTTPFailure(r.Context(), w, id, err)
+		return
+	}
+	_, encoded, err := historyWireMessage(id, entry)
+	if err != nil {
+		historyHTTPFailure(r.Context(), w, id, historyProjectionError(err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if _, err = w.Write(encoded); err != nil {
+		slog.Debug("rest: write response body failed", "error", err)
+		return
+	}
+	if _, err = w.Write([]byte("\n")); err != nil {
+		slog.Debug("rest: write newline failed", "error", err)
+	}
+}
+
+func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id string) {
+	store := a.readableSessionStore(w, id)
+	if store == nil {
 		return
 	}
 	attempt := newHistoryPageAttempt("rest_messages")

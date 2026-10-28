@@ -13,6 +13,9 @@ var (
 	ErrInvalidHistoryPosition    = errors.New("invalid history position")
 	ErrInvalidHistoryPageRange   = errors.New("invalid history page range")
 	ErrHistoryProjection         = errors.New("history projection failed")
+	// ErrHistoryEntryExpired: a same-session position proven expired by its
+	// retention tombstone. Never inferred from a missing or corrupt index.
+	ErrHistoryEntryExpired = errors.New("history entry expired")
 )
 
 // ChatHistoryUnavailableError carries a fixed reason separately from its

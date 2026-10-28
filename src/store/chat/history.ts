@@ -6,8 +6,8 @@ import { queryClient } from '@/lib/queryClient'
 import { useConnectionStore } from '@/store/connection'
 import { mergeRecordedSessionTokens } from './session-usage'
 import { isPendingTailMessage } from './cursor'
-import { emptyHistoryState, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
-import { applySavedToolOwnership, savedToolCallOwners, savedToolOwnerPatch, applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, rememberHistoryReadFacts, settleHistorySpans, beginHistoryReadTick } from './history-merge'
+import { emptyHistoryState, historyRowsPatch, retainedPending } from './history-state'
+import { applySavedToolOwnership, savedToolCallOwners, savedToolOwnerPatch, applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, rememberHistoryReadFacts, settleHistorySpans, beginHistoryReadTick, bindHistoryEntries, lastBoundOccurrence } from './history-merge'
 export { emptyHistoryState } from './history-state'
 export type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing, SessionHistoryState, SessionHistoryRange, HistoryRequestState } from './types'
 
@@ -115,23 +115,24 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
     const ordered = old.filter(position => seen.has(position))
     if (ordered.join() !== staged.map(entry => entry.historyPosition).join()) throw new Error('Contradictory refresh order.')
     withBucket(sid, b => {
-      const rows = staged.map(entry => {
-        const current = b.messagesById[entry.id]
-        return mergeHistoryEntry(entry, current, owner.baseline[entry.id])
-      })
+      // #1452 D1 S6: the same part-aware binding as a page commit, so a
+      // combined live row is neither split nor doubled by the refresh.
+      const positioned = bindHistoryEntries(b, staged, owner.baseline)
+      const rows = lastBoundOccurrence(positioned)
       const rowIds = new Set(rows.map(row => row.id))
       const confirmed = new Set(rows.flatMap(row => row.clientMessageId ? [row.clientMessageId] : []))
       const needed = retainedPending(b).filter(row => !rowIds.has(row.id) && !confirmed.has(row.clientMessageId ?? row.id))
       const pending = needed.filter(isPendingTailMessage)
       const liveOrder = [...new Set([...(b.historyLiveOrder ?? []), ...needed.map(row => row.id)])].filter(id => !rowIds.has(id) && !confirmed.has(b.messagesById[id]?.clientMessageId ?? id)).slice(-100)
-      const toolOwners = savedToolCallOwners(staged, rows)
+      const toolOwners = savedToolCallOwners(staged, positioned)
       const live = applySavedToolOwnership(liveOrder.flatMap(id => b.messagesById[id] ? [b.messagesById[id]] : []), toolOwners)
       // Refreshed saved rows re-settle their spans exactly as a page commit
       // does, or a reconstructed helper row would lose its span (I3).
       rememberHistoryReadFacts(sid, rows, contexts, owner.readTick)
       const spans = settleHistorySpans(sid, applySavedToolOwnership([...rows, ...pending], toolOwners), live, b.pendingSpanUpdatesBySpanId)
       const patch = historyRowsPatch(b, [...spans.rows, ...live], ordered)
-      patch.toolCallOwnerMessageId = savedToolOwnerPatch(patch.toolCallOwnerMessageId, toolOwners)
+      patch.toolCallOwnerMessageId = savedToolOwnerPatch(patch.toolCallOwnerMessageId, toolOwners, patch.messagesById)
+      patch.historySourceAliases = Object.fromEntries(positioned.flatMap(row => patch.messagesById?.[row.id] ? [[row.historyPosition!, row.id]] : []))
       return { ...patch, messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: liveOrder,
         spanBySpanId: { ...patch.spanBySpanId, ...spans.index },
         sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, recordedTokens),
