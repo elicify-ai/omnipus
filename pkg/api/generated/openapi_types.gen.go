@@ -20505,8 +20505,11 @@ type Message struct {
 	// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 
-	// Content Raw markdown/text content of the message.
+	// Content Raw markdown/text content of the message. On a history page this may be a display preview; see content_original_size_bytes.
 	Content *string `json:"content,omitempty"`
+
+	// ContentOriginalSizeBytes Present only when `content` is a read-time display preview of an ordinary user/assistant chat message (entry type `message` or omitted) whose saved text exceeds 65,536 UTF-8 bytes: `content` then holds its first at most 65,536 bytes cut back to a character boundary, and this field is the exact UTF-8 length of the full saved text (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). The full text is read through getSessionHistoryEntry. Unrelated to `truncated`/`truncation_reason`, which mean the turn itself was cut short. Never present on a getSessionHistoryEntry response, which carries the full content.
+	ContentOriginalSizeBytes *int `json:"content_original_size_bytes,omitempty"`
 
 	// ContextWindowNotice Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
 	ContextWindowNotice *struct {
@@ -20857,6 +20860,7 @@ type Message struct {
 		ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
 		// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+		// `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
 		Result *map[string]interface{} `json:"result,omitempty"`
 
 		// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
@@ -24370,7 +24374,7 @@ type SessionDetail struct {
 	// NextBefore Present iff available and has_earlier; equals the first selected history_position.
 	NextBefore *string `json:"next_before,omitempty"`
 
-	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
 	PageInfo *SessionHistoryPageInfo `json:"page_info,omitempty"`
 
 	// Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
@@ -24567,7 +24571,7 @@ type SessionHistoryResponse struct {
 	// NextBefore Present iff has_earlier, equal to the first selected history_position.
 	NextBefore *string `json:"next_before,omitempty"`
 
-	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
 	PageInfo  SessionHistoryPageInfo `json:"page_info"`
 	SessionId string                 `json:"session_id"`
 
@@ -26776,6 +26780,7 @@ type ToolCall struct {
 	ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
 	// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+	// `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
 	Result *map[string]interface{} `json:"result,omitempty"`
 
 	// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.

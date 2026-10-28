@@ -1,0 +1,45 @@
+title: HistoryResultPreview
+description: >
+  Read-time display marker for a saved tool result whose JSON encoding exceeds
+  51,200 bytes (chat-history paging spec, "Amendment 2026-10-27 (founder,
+  #1452 D2)", A2.1/A2.2). Emitted only by the session-history readers (REST
+  messages page, bounded session detail and the history-origin replay page of
+  a snapshot) in place of the result value; the saved archive, the model
+  context and the live tool frames are unchanged.
+
+  Distinct from ToolResultRef (`_ref`, live offload store fetched through
+  /sessions/{session_id}/tool-results/{ref}), TruncatedResult (`_truncated`,
+  not retrievable) and the browser-only `_truncated_client`. The full value is
+  addressed by the enclosing entry's history_position plus ToolCall.id /
+  ToolCallResultFrame.call_id and is read through getSessionHistoryEntry
+  (GET /sessions/{id}/messages/{history_position}).
+
+  `_history_preview` is a reserved key: an object carrying it must match this
+  schema, and an ordinary tool result never carries it. Byte rule, enforced at
+  the real server and browser boundaries rather than by this schema: the UTF-8
+  length of `preview` is at most 4,096 bytes. `maxLength` below is only the
+  character-count upper bound JSON Schema can express.
+type: object
+required:
+  - _history_preview
+  - original_size_bytes
+  - preview
+additionalProperties: false
+properties:
+  _history_preview:
+    type: boolean
+    enum:
+      - true
+    description: Discriminator distinguishing this marker from ToolResultRef and TruncatedResult.
+  original_size_bytes:
+    type: integer
+    minimum: 51201
+    description: Exact JSON-encoded size in bytes of the full (unshortened) result.
+  preview:
+    type: string
+    maxLength: 4096
+    description: >
+      The first at most 4,096 bytes of the full result's JSON encoding, cut back
+      to a UTF-8 character boundary. maxLength is a character-count bound only;
+      the 4,096-byte rule is checked separately at the server and browser
+      boundaries.

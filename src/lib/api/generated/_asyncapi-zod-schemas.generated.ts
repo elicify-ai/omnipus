@@ -450,6 +450,14 @@ export const ToolResultRef = z
   })
   .strict();
 
+export const HistoryResultPreview = z
+  .object({
+    _history_preview: z.literal(true),
+    original_size_bytes: z.number().int().min(51201),
+    preview: z.string().max(4096),
+  })
+  .strict();
+
 export const DelegationFailure = z
   .object({
     error: z.literal("delegation_denied"),
@@ -632,6 +640,7 @@ export const ReplayMessageFrame = z
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
     content: z.string(),
+    content_original_size_bytes: z.number().int().min(65537).optional(),
     role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
     reply_to_message_id: z.string().min(1).optional(),
@@ -1574,9 +1583,10 @@ export const SessionHistoryPageInfo = z
     row_count: z.number().int().min(0),
     source_group_count: z.number().int().min(0).max(100),
     soft_byte_budget: z.number().int().min(1),
+    byte_ceiling: z.number().int().min(1),
     projected_bytes: z.number().int().min(0),
     byte_budget_exceeded: z.boolean(),
-    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget"]),
+    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget", "byte_ceiling"]),
     budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
     first_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
     last_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),

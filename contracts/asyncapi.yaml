@@ -3975,6 +3975,35 @@ components:
           minimum: 0
         preview:
           type: string
+    HistoryResultPreview:
+      title: HistoryResultPreview
+      description: >
+        Read-time display marker for a saved tool result whose JSON encoding exceeds
+        51,200 bytes, emitted only on a history-origin tool_call_result frame of a
+        snapshot replay page (chat-history paging spec, "Amendment 2026-10-27
+        (founder, #1452 D2)", A2.2). Distinct from ToolResultRef (`_ref`, live
+        offload store) and TruncatedResult (`_truncated`, not retrievable). The full
+        value is read through REST getSessionHistoryEntry by the frame's
+        history_origin position plus call_id. The UTF-8 length of `preview` is at
+        most 4,096 bytes; that byte rule is enforced at the real server and browser
+        boundaries, maxLength is only the character-count bound. Keep in sync by
+        hand with contracts/components/schemas/HistoryResultPreview.yaml.
+      type: object
+      required:
+      - _history_preview
+      - original_size_bytes
+      - preview
+      additionalProperties: false
+      properties:
+        _history_preview:
+          type: boolean
+          const: true
+        original_size_bytes:
+          type: integer
+          minimum: 51201
+        preview:
+          type: string
+          maxLength: 4096
     DelegationFailure:
       title: DelegationFailure
       description: 'Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error")
@@ -4332,8 +4361,8 @@ components:
             Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional
             non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is
             inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that
-            excludes every reserved discriminator key the nine $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark) — `_truncated`, `_marshal_error`,
-            `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch
+            excludes every reserved discriminator key the ten $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark; #1452 D2 added HistoryResultPreview) — `_truncated`, `_marshal_error`,
+            `_ref`, `_history_preview`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch
             matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a
             reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is
             correctly rejected, rather than silently passing through branch (b). ADR-034''s external-file-$ref
@@ -4378,12 +4407,14 @@ components:
               - required:
                 - _ref
               - required:
+                - _history_preview
+              - required:
                 - error
                 properties:
                   error:
                     type: string
-            description: 'Catch-all for an ordinary object tool result carrying none of the nine $refs'' reserved
-              discriminator keys (_truncated, _marshal_error, _ref, error) below.
+            description: 'Catch-all for an ordinary object tool result carrying none of the ten $refs'' reserved
+              discriminator keys (_truncated, _marshal_error, _ref, _history_preview, error) below.
 
 
               The `error` exclusion is keyed on `error` being a STRING (F13 hardening) — matching the
@@ -4404,6 +4435,7 @@ components:
           - $ref: '#/components/schemas/TruncatedResult'
           - $ref: '#/components/schemas/MarshalErrorResult'
           - $ref: '#/components/schemas/ToolResultRef'
+          - $ref: '#/components/schemas/HistoryResultPreview'
           - $ref: '#/components/schemas/DelegationFailure'
           - $ref: '#/components/schemas/FileExistsRefusal'
           - $ref: '#/components/schemas/PermissionDenied'
@@ -4867,6 +4899,18 @@ components:
           minLength: 1
         content:
           type: string
+        content_original_size_bytes:
+          type: integer
+          minimum: 65537
+          readOnly: true
+          description: >
+            Present only when `content` is a read-time display preview of an ordinary
+            user/assistant chat message (entry type `message` or omitted) on a
+            history-origin replay page: `content` then holds the first at most 65,536
+            UTF-8 bytes on a character boundary and this is the exact UTF-8 length of
+            the full saved text (chat-history paging spec, "Amendment 2026-10-27
+            (founder, #1452 D2)", A2.2). Unrelated to truncated/truncation_reason.
+            Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
         role:
           type: string
           enum:
@@ -8750,7 +8794,8 @@ components:
         Cross-field invariants are checked by producers and consumers: min_rows <= limit;
         source_group_count matches selected groups and is at most 100; first/last positions
         exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget
-        stop cannot underfill min_rows. No optional absence is serialized as null.
+        stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <=
+        byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
       required:
         - mode
         - limit
@@ -8758,6 +8803,7 @@ components:
         - row_count
         - source_group_count
         - soft_byte_budget
+        - byte_ceiling
         - projected_bytes
         - byte_budget_exceeded
         - stop_reason
@@ -8802,6 +8848,19 @@ components:
           description: >
             Server-owned soft projected-page budget, currently 4194304 bytes (4 MiB).
             Positive integer, deliberately not a one-value enum or a hard response cap.
+        byte_ceiling:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            Server-owned hard page selection ceiling, currently 8388608 bytes (8 MiB),
+            on the same meter as projected_bytes (chat-history paging spec, "Amendment
+            2026-10-27 (founder, #1452 D2)", A2.3). Before adding any further group,
+            selection stops with stop_reason byte_ceiling if the page with that group
+            would exceed it, even below min_rows. The first group is always returned
+            whole, so projected_bytes <= byte_ceiling holds unless source_group_count
+            is 1. A page selection limit, not a heap or absolute response-size
+            guarantee; not an operator setting.
         projected_bytes:
           type: integer
           format: int64
@@ -8822,10 +8881,14 @@ components:
             - end
             - range_end
             - byte_budget
+            - byte_ceiling
           description: >
             Actual selection boundary. row_target/source_cap take precedence when their
             boundary coincides with bytes. True end, closed clear/range or source cap may
-            underfill; bytes alone may not cut below min_rows or split a whole group.
+            underfill; the soft byte_budget may not cut below min_rows. byte_ceiling is
+            the one byte stop allowed below min_rows, and it is reported when the next
+            group would exceed both the soft budget and the ceiling. No byte stop
+            splits a whole group.
         budget_override:
           type: string
           enum:

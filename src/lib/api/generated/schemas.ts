@@ -177,6 +177,7 @@ type SessionDetail = {
         row_count: number;
         source_group_count: number;
         soft_byte_budget: number;
+        byte_ceiling: number;
         projected_bytes: number;
         byte_budget_exceeded: boolean;
         stop_reason:
@@ -185,7 +186,8 @@ type SessionDetail = {
           | "clear"
           | "end"
           | "range_end"
-          | "byte_budget";
+          | "byte_budget"
+          | "byte_ceiling";
         budget_override?: ("height_floor" | "atomic_group") | undefined;
         first_position?: string | undefined;
         last_position?: string | undefined;
@@ -248,6 +250,7 @@ type Message = {
   view_membership?: ("chat" | "model" | "both") | undefined;
   role?: ("user" | "assistant" | "system") | undefined;
   content?: string | undefined;
+  content_original_size_bytes?: number | undefined;
   summary?: string | undefined;
   timestamp: string;
   tokens?: number | undefined;
@@ -657,6 +660,7 @@ type page_info = {
   row_count: number;
   source_group_count: number;
   soft_byte_budget: number;
+  byte_ceiling: number;
   projected_bytes: number;
   byte_budget_exceeded: boolean;
   stop_reason:
@@ -665,7 +669,8 @@ type page_info = {
     | "clear"
     | "end"
     | "range_end"
-    | "byte_budget";
+    | "byte_budget"
+    | "byte_ceiling";
   budget_override?: ("height_floor" | "atomic_group") | undefined;
   first_position?: string | undefined;
   last_position?: string | undefined;
@@ -3924,6 +3929,7 @@ export const Message: z.ZodType<Message> = z.object({
   view_membership: z.enum(["chat", "model", "both"]).optional(),
   role: z.enum(["user", "assistant", "system"]).optional(),
   content: z.string().optional(),
+  content_original_size_bytes: z.number().int().gte(65537).optional(),
   summary: z.string().optional(),
   timestamp: z.string().datetime({ offset: true }),
   tokens: z.number().int().gte(0).optional(),
@@ -4252,6 +4258,7 @@ export const SessionDetail: z.ZodType<SessionDetail> = z.object({
       row_count: z.number().int().gte(0),
       source_group_count: z.number().int().gte(0).lte(100),
       soft_byte_budget: z.number().int().gte(1),
+      byte_ceiling: z.number().int().gte(1),
       projected_bytes: z.number().int().gte(0),
       byte_budget_exceeded: z.boolean(),
       stop_reason: z.enum([
@@ -4261,6 +4268,7 @@ export const SessionDetail: z.ZodType<SessionDetail> = z.object({
         "end",
         "range_end",
         "byte_budget",
+        "byte_ceiling",
       ]),
       budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
       first_position: z
@@ -4339,6 +4347,7 @@ export const page_info: z.ZodType<page_info> = z.object({
   row_count: z.number().int().gte(0),
   source_group_count: z.number().int().gte(0).lte(100),
   soft_byte_budget: z.number().int().gte(1),
+  byte_ceiling: z.number().int().gte(1),
   projected_bytes: z.number().int().gte(0),
   byte_budget_exceeded: z.boolean(),
   stop_reason: z.enum([
@@ -4348,6 +4357,7 @@ export const page_info: z.ZodType<page_info> = z.object({
     "end",
     "range_end",
     "byte_budget",
+    "byte_ceiling",
   ]),
   budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
   first_position: z
@@ -14646,7 +14656,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/sessions/:id/messages",
     alias: "getSessionMessages",
-    description: `Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; bytes alone cannot underfill the floor. An individual group&#x27;s drawn weight may exceed the row target or 100. No lifetime read/rebuild, 503/preparing state or full-history fallback.
+    description: `Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; the soft budget alone cannot underfill the floor. An individual group&#x27;s drawn weight may exceed the row target or 100. A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason byte_ceiling) may stop below min_rows; the first group is always whole. Tool results over 51,200 encoded bytes are shown as a HistoryResultPreview and ordinary message text over 65,536 UTF-8 bytes as a preview with content_original_size_bytes; getSessionHistoryEntry returns the full occurrence (chat-history paging spec, &quot;Amendment 2026-10-27 (founder, #1452 D2)&quot;). No lifetime read/rebuild, 503/preparing state or full-history fallback.
 `,
     requestFormat: "json",
     parameters: [
@@ -14728,6 +14738,62 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 500,
         description: `Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly &quot;Session history is unavailable. Retry after the operator restores its index.&quot; A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress.
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/sessions/:id/messages/:history_position",
+    alias: "getSessionHistoryEntry",
+    description: `Returns the full public projection of exactly one saved history occurrence, addressed by the same opaque same-session history_position a history page carries (chat-history paging spec, &quot;Amendment 2026-10-27 (founder, #1452 D2)&quot;, A2.1/A2.2). It is the same reduction as the page reader after tool-call effects, cancellation and disposition, with display shortening off, at the server&#x27;s current read cut: the response never carries a HistoryResultPreview marker and never carries content_original_size_bytes. It never returns the private archive envelope or a pre-correction value, and the read writes nothing (archive, positions, index, tool_results/ and model context are unchanged). It is a position-addressed read, not a UI navigation destination, an around selector or a message-ID resolver. Authorization is identical to getSessionMessages and is applied in the same order before any position work: the registered auth wrapper (valid cookie, configured user bearer or CLI bearer; invalid or revoked credentials refused), session-ID syntax, main-session eligibility, then session existence/metadata. No new per-user ownership rule is introduced. Refusal checks run in this precedence order: 401, 400 invalid session ID, 404 &quot;session not found&quot;, 400 &quot;invalid history position&quot;, 404 &quot;history position not found&quot;, 410 &quot;history entry expired&quot;. This order does not override the storage-primary rule shared with getSessionMessages: a cleanup storage failure combined with cancellation, an unknown position or any selector error is the sanitized storage 500, never 404 or 410.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "history_position",
+        type: "Path",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+      },
+    ],
+    response: Message,
+    errors: [
+      {
+        status: 400,
+        description: `ErrorResponse.error is exactly &quot;invalid session ID&quot; for a malformed session ID (checked before any session lookup), or exactly &quot;invalid history position&quot; for a malformed, blank, badly encoded, wrong-version or non-47-character position (checked only after the session refusals below).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `ErrorResponse.error is exactly &quot;session not found&quot; for a missing session store, session metadata that does not exist, or a main session the caller is not eligible to read, checked before any position work (also when the position is malformed). Otherwise exactly &quot;history position not found&quot; for an unknown or foreign well-formed position; there is no foreign lookup, and a foreign session&#x27;s expired position is also unknown here.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 410,
+        description: `ErrorResponse.error is exactly &quot;history entry expired&quot;: a same-session position proven expired by its retention tombstone, including a sweep during the read. No content and no other metadata. A corrupt or missing index is never reported as expiry; it is the 500 below.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The existing sanitized errors, all recoverable by retry: session metadata that exists but cannot be read (corruption, permission or I/O) and an unreadable workspace record during the main-session eligibility check use the fixed redacted session-storage error; a required index that is unavailable after the bounded reconciliation check uses exactly &quot;Session history is unavailable. Retry after the operator restores its index.&quot;; other required storage/projection failures, including a cleanup storage failure combined with cancellation, an unknown position or a selector error, use the fixed redacted session-storage error.
 `,
         schema: ErrorResponse,
       },
@@ -18283,6 +18349,14 @@ export const ToolResultRef = z
   })
   .strict();
 
+export const HistoryResultPreview = z
+  .object({
+    _history_preview: z.literal(true),
+    original_size_bytes: z.number().int().min(51201),
+    preview: z.string().max(4096),
+  })
+  .strict();
+
 export const DelegationFailure = z
   .object({
     error: z.literal("delegation_denied"),
@@ -18465,6 +18539,7 @@ export const ReplayMessageFrame = z
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
     content: z.string(),
+    content_original_size_bytes: z.number().int().min(65537).optional(),
     role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
     reply_to_message_id: z.string().min(1).optional(),
@@ -19407,9 +19482,10 @@ export const SessionHistoryPageInfo = z
     row_count: z.number().int().min(0),
     source_group_count: z.number().int().min(0).max(100),
     soft_byte_budget: z.number().int().min(1),
+    byte_ceiling: z.number().int().min(1),
     projected_bytes: z.number().int().min(0),
     byte_budget_exceeded: z.boolean(),
-    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget"]),
+    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget", "byte_ceiling"]),
     budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
     first_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
     last_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),

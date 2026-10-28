@@ -3222,8 +3222,14 @@ paths:
         The shared projector meters the larger prepared REST/history-WS encoding under
         a server-owned 4194304-byte soft budget; whole groups and advisory min_rows
         take precedence. At least one whole eligible group remains. True end, clear,
-        range or 100-source-group cap can underfill; bytes alone cannot underfill the
-        floor. An individual group's drawn weight may exceed the row target or 100.
+        range or 100-source-group cap can underfill; the soft budget alone cannot
+        underfill the floor. An individual group's drawn weight may exceed the row target or 100.
+        A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason
+        byte_ceiling) may stop below min_rows; the first group is always whole. Tool
+        results over 51,200 encoded bytes are shown as a HistoryResultPreview and
+        ordinary message text over 65,536 UTF-8 bytes as a preview with
+        content_original_size_bytes; getSessionHistoryEntry returns the full occurrence
+        (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)").
         No lifetime read/rebuild, 503/preparing state or full-history fallback.
       tags:
       - sessions
@@ -3337,6 +3343,115 @@ paths:
             Other required storage/projection failures retain the fixed redacted
             session-storage error. Prior view and authorized live controls remain
             usable; no success/empty partial history, 503 or preparing progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /sessions/{id}/messages/{history_position}:
+    get:
+      operationId: getSessionHistoryEntry
+      summary: Read one saved history occurrence in full
+      description: >
+        Returns the full public projection of exactly one saved history occurrence,
+        addressed by the same opaque same-session history_position a history page
+        carries (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)",
+        A2.1/A2.2). It is the same reduction as the page reader after tool-call
+        effects, cancellation and disposition, with display shortening off, at the
+        server's current read cut: the response never carries a HistoryResultPreview
+        marker and never carries content_original_size_bytes. It never returns the
+        private archive envelope or a pre-correction value, and the read writes
+        nothing (archive, positions, index, tool_results/ and model context are
+        unchanged). It is a position-addressed read, not a UI navigation destination,
+        an around selector or a message-ID resolver.
+        Authorization is identical to getSessionMessages and is applied in the same
+        order before any position work: the registered auth wrapper (valid cookie,
+        configured user bearer or CLI bearer; invalid or revoked credentials
+        refused), session-ID syntax, main-session eligibility, then session
+        existence/metadata. No new per-user ownership rule is introduced.
+        Refusal checks run in this precedence order: 401, 400 invalid session ID,
+        404 "session not found", 400 "invalid history position", 404 "history
+        position not found", 410 "history entry expired". This order does not
+        override the storage-primary rule shared with getSessionMessages: a cleanup
+        storage failure combined with cancellation, an unknown position or any
+        selector error is the sanitized storage 500, never 404 or 410.
+      tags:
+      - sessions
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Addressed session ID; access refusal precedes position validation or lookup.
+      - name: history_position
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+        description: >
+          Opaque same-session history position of the occurrence, exactly as a history
+          page, session detail or snapshot replay page carried it. The full tool result
+          of a HistoryResultPreview is addressed by this position plus ToolCall.id.
+      responses:
+        '200':
+          description: >
+            The full public projection of that one occurrence, with history_position
+            set. Never a HistoryResultPreview marker in any tool result and never
+            content_original_size_bytes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          description: >
+            ErrorResponse.error is exactly "invalid session ID" for a malformed session
+            ID (checked before any session lookup), or exactly "invalid history
+            position" for a malformed, blank, badly encoded, wrong-version or
+            non-47-character position (checked only after the session refusals below).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: >
+            ErrorResponse.error is exactly "session not found" for a missing session
+            store, session metadata that does not exist, or a main session the caller
+            is not eligible to read, checked before any position work (also when the
+            position is malformed). Otherwise exactly "history position not found" for
+            an unknown or foreign well-formed position; there is no foreign lookup, and
+            a foreign session's expired position is also unknown here.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: >
+            ErrorResponse.error is exactly "history entry expired": a same-session
+            position proven expired by its retention tombstone, including a sweep during
+            the read. No content and no other metadata. A corrupt or missing index is
+            never reported as expiry; it is the 500 below.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: >
+            The existing sanitized errors, all recoverable by retry: session metadata
+            that exists but cannot be read (corruption, permission or I/O) and an
+            unreadable workspace record during the main-session eligibility check use
+            the fixed redacted session-storage error; a required index that is
+            unavailable after the bounded reconciliation check uses exactly "Session
+            history is unavailable. Retry after the operator restores its index."; other
+            required storage/projection failures, including a cleanup storage failure
+            combined with cancellation, an unknown position or a selector error, use the
+            fixed redacted session-storage error.
           content:
             application/json:
               schema:

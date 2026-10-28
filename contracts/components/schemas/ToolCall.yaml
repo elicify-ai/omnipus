@@ -79,7 +79,22 @@ properties:
       admitted provider result bytes live in the canonical session day
       archive and projection changes never mutate those retained bytes
       (session-core C-ARCHIVE / U2; FR-004/FR-006).
+
+      `_history_preview` is a reserved key (chat-history paging spec,
+      "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page,
+      session detail or snapshot a saved result over 51,200 encoded bytes is
+      replaced by a HistoryResultPreview marker, and an object carrying
+      `_history_preview` must match HistoryResultPreview exactly. An ordinary
+      result never carries that key. The `not` below expresses this rule
+      ("not: carries the key and fails HistoryResultPreview"); the
+      4,096-byte UTF-8 limit on `preview` is checked separately at the server
+      and browser boundaries. getSessionHistoryEntry never returns a marker.
     additionalProperties: true
+    not:
+      required:
+        - _history_preview
+      not:
+        $ref: './HistoryResultPreview.yaml'
   parent_tool_call_id:
     type: string
     description: Parent tool call ID for nested subagent tool invocations.

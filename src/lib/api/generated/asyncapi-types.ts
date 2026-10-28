@@ -448,6 +448,12 @@ export interface ToolResultRef {
   preview: string;
 }
 
+export interface HistoryResultPreview {
+  _history_preview: true;
+  original_size_bytes: number;
+  preview: string;
+}
+
 export interface DelegationFailure {
   error: "delegation_denied";
   reason: string;
@@ -601,6 +607,7 @@ export interface ReplayMessageFrame {
   type: "replay_message";
   session_id: string;
   content: string;
+  content_original_size_bytes?: number;
   role: "user" | "assistant" | "system" | "turn_canceled";
   id?: string;
   reply_to_message_id?: string;
@@ -1376,9 +1383,10 @@ export interface SessionHistoryPageInfo {
   row_count: number;
   source_group_count: number;
   soft_byte_budget: number;
+  byte_ceiling: number;
   projected_bytes: number;
   byte_budget_exceeded: boolean;
-  stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget";
+  stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget" | "byte_ceiling";
   budget_override?: "height_floor" | "atomic_group";
   first_position?: string;
   last_position?: string;
