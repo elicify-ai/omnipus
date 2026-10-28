@@ -127,11 +127,13 @@ func TestChatHistoryEmptyEarlierPartition_RolloverAfterStampedEmptySessionKeepsI
 	// The index covers both records and knows the empty earlier partition.
 	cp := historyCheckpointOf(t, s, sid)
 	require.Equal(t, historyLaterDay, cp.CurrentKey)
+	require.Contains(t, cp.ArchiveEnds, historyEarlierDay, "an absent map key must not pass as a saved empty partition")
 	require.Equal(t, int64(0), cp.ArchiveEnds[historyEarlierDay],
 		"the empty earlier partition is known-and-empty, exactly as the offline builder records it")
 	transcript, err := os.Stat(filepath.Join(dir, archiveCurrentFile))
 	require.NoError(t, err)
 	require.Equal(t, transcript.Size(), cp.ArchiveEnds[historyLaterDay], "both records are indexed")
+	healFixEmptyCatalogFixedPoint(t, s, sid)
 }
 
 // The exact on-disk layout of the incident: an earlier day's partition the
@@ -154,8 +156,10 @@ func TestChatHistoryEmptyEarlierPartition_ExactLayoutIsKnownAndEmpty(t *testing.
 	historyRequireAvailable(t, s.CheckChatHistoryReadiness(context.Background(), sid))
 
 	after := historyCheckpointOf(t, s, sid)
+	require.Contains(t, after.ArchiveEnds, historyEarlierDay, "saved coverage must contain the earlier day, not merely return a zero default")
 	require.Equal(t, int64(0), after.ArchiveEnds[historyEarlierDay],
 		"the known-empty partition is recorded, exactly as the offline builder records it")
+	healFixEmptyCatalogFixedPoint(t, s, sid)
 }
 
 // The protection stays: a NON-empty earlier partition the checkpoint does not
@@ -216,7 +220,9 @@ func TestChatHistoryEmptyEarlierPartition_BrokenSessionSelfHealsAfterRestart(t *
 	transcript, err := os.Stat(filepath.Join(dir, archiveCurrentFile))
 	require.NoError(t, err)
 	require.Equal(t, transcript.Size(), cp.ArchiveEnds[historyLaterDay], "the bounded suffix is indexed again")
+	require.Contains(t, cp.ArchiveEnds, historyEarlierDay, "restart must preserve membership for the empty earlier partition")
 	require.Equal(t, int64(0), cp.ArchiveEnds[historyEarlierDay])
+	healFixEmptyCatalogFixedPoint(t, restarted, sid)
 }
 
 // The bounded catch-up allowance stays a bound: the boot/sweep reconciler
