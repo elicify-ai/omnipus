@@ -17,6 +17,25 @@ type chatHistoryReconcileResult struct {
 	IndexGeneration, RetentionGeneration                                               string
 }
 
+// historyFailureReason is the public reason of a derived-index failure. It
+// never exposes the private cause to a caller.
+func historyFailureReason(err error) string {
+	var unavailable *ChatHistoryUnavailableError
+	if errors.As(err, &unavailable) {
+		return unavailable.Reason
+	}
+	return "unknown"
+}
+
+// historyFailureCause is the mechanism of a derived-index failure: a catalog
+// check, a storage error. It carries no record content.
+func historyFailureCause(err error) string {
+	if cause := errors.Unwrap(err); cause != nil {
+		return cause.Error()
+	}
+	return err.Error()
+}
+
 // CheckChatHistoryReadiness validates the derived baseline and bounded suffix
 // without preparing or claiming that a public history page was loaded. The
 // gateway uses it for journal-only control catch-up.
@@ -35,6 +54,7 @@ func (us *UnifiedStore) reconcileChatHistoryIndex(ctx context.Context, sessionID
 	owner := us.historyOwner(sessionID)
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
+	defer owner.logFailure(sessionID)
 	result, err := us.reconcileHistoryOwned(ctx, sessionID)
 	owner.failure = err
 	return result, err
@@ -91,6 +111,7 @@ func (us *UnifiedStore) historyAccepted(sessionID string, addr ArchiveAddress, r
 		return
 	}
 	defer owner.mu.Unlock()
+	defer owner.logFailure(sessionID)
 	if hookErr != nil {
 		owner.failure = historyUnavailable("storage_error", hookErr)
 		return
@@ -142,6 +163,7 @@ func (us *UnifiedStore) historyDispositionAccepted(sessionID string, rec InputDi
 		return
 	}
 	defer owner.mu.Unlock()
+	defer owner.logFailure(sessionID)
 	if hookErr != nil {
 		owner.failure = historyUnavailable("storage_error", hookErr)
 		return
@@ -196,6 +218,7 @@ func (us *UnifiedStore) prepareHistoryAppend(sessionID string) {
 		return
 	}
 	defer o.mu.Unlock()
+	defer o.logFailure(sessionID)
 	_, err := us.reconcileHistoryOwned(context.Background(), sessionID)
 	o.failure = err
 }

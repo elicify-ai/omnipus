@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,6 +79,28 @@ type chatHistoryOwner struct {
 	refsMu  sync.Mutex
 	refs    map[string]int
 	retired map[string]bool
+	// loggedReason/loggedCause are the reason and the cause of the failure
+	// already logged for this owner, so one failure episode logs once.
+	loggedReason, loggedCause string
+}
+
+// logFailure logs the owner's derived-index failure once per failure episode:
+// the session id, the public reason and the cause. It never logs record
+// content and never changes what the owner holds.
+func (o *chatHistoryOwner) logFailure(sessionID string) {
+	failure := o.failure
+	if failure == nil {
+		// The owner is healthy again: the next failure episode logs again.
+		o.loggedReason, o.loggedCause = "", ""
+		return
+	}
+	reason := historyFailureReason(failure)
+	cause := historyFailureCause(failure)
+	if reason == o.loggedReason && cause == o.loggedCause {
+		return
+	}
+	o.loggedReason, o.loggedCause = reason, cause
+	slog.Warn("chat history: derived index unavailable", "session_id", sessionID, "reason", reason, "cause", cause)
 }
 
 func (us *UnifiedStore) historyOwner(id string) *chatHistoryOwner {
