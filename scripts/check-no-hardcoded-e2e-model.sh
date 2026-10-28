@@ -17,13 +17,18 @@
 #
 # Switching the model (the ONLY sanctioned procedure — runbook):
 #   1. edit tests/e2e/e2e-model.json (BOTH entries, primary and fallback), AND
-#   2. add every new model id AND every new provider id to PATTERN below
+#   2. add every new model id AND every new provider id to PATTERN below, AND
+#   3. update the expected ids in the unit-test oracles (evals/**/*_test.go,
+#      tests/e2e/fixtures/*.test.ts) where they pin the central file — the
+#      guard does not police those files, so it will not remind you
 #      (`openrouter` is the one exception: mock specs and docs use it
 #      legitimately, so it cannot be banned). Old ids STAY BANNED — old ids
 #      must never return, and the current ids must never be re-hardcoded
 #      outside the source file either.
 # Any other path (a literal in a workflow, a deploy script, an eval flag
-# default, a TOML, an extensionless file, a comment) fails this guard.
+# default, a TOML, an extensionless file, a comment) fails this guard — with
+# ONE exception: the unit-test files of the guarded trees (below), which may
+# spell the ids as test data.
 #
 # Banned literals (old ids that must never return, plus the current ids):
 #   z-ai/glm-5.2, z-ai/glm-5.3-flash, z-ai/glm-5-turbo,
@@ -54,6 +59,19 @@
 #   and the transient Playwright/dependency dirs (node_modules, test-results,
 #   playwright-report) that can appear under tests/e2e at runtime. A comment
 #   is a literal on a scanned surface; it fails like code.
+#
+# Unit-test files are exempt — and ONLY these two shapes, ONLY in these two
+# trees (chief decision Q1 A, 2026-10-28):
+#   evals/**/*_test.go             Go unit tests of the eval-runner
+#   tests/e2e/fixtures/*.test.ts   vitest unit tests of the e2e fixtures
+# Why: a unit test that pins the reader's behaviour must spell the expected
+# ids as its oracle (derived from the spec, not from the code under test);
+# that is test DATA, not the CI model choice, and nothing in CI consumes it
+# as a model to run. pkg/ is already exempt for exactly this reason (see
+# "Deliberately NOT scanned" below). Everything else stays banned: Playwright
+# specs (tests/e2e/*.spec.ts) and every other fixture DO drive real runs; a
+# test-like name outside evals/ and tests/e2e/ (deploy/foo_test.sh, a
+# workflow) is not exempt.
 #
 # Deliberately NOT scanned (and why):
 #   docs/** (incl. ADR-054-* and docs/internal/_archive/**)
@@ -168,17 +186,24 @@ scan() {
   rm -f "$errf" "$rawf"
 }
 
-# .github/workflows/, deploy/ and evals/ — ALL text files, no --include
-# filter (finding G1): a literal in deploy/foo.toml or an extensionless file
-# is an offender like one in a .yml.
-scan ".github/workflows/ deploy/ evals/" '' -rnIE "$PATTERN" .github/workflows/ deploy/ evals/
+# .github/workflows/ and deploy/ — ALL text files, no --include filter
+# (finding G1): a literal in deploy/foo.toml or an extensionless file is an
+# offender like one in a .yml. No unit-test exemption here: deploy/foo_test.sh
+# is banned like any other file.
+scan ".github/workflows/ deploy/" '' -rnIE "$PATTERN" .github/workflows/ deploy/
+
+# evals/ — ALL text files except the Go unit tests (*_test.go; see the header:
+# test data, not the CI model choice).
+scan "evals/" '' -rnIE "$PATTERN" --exclude='*_test.go' evals/
 
 # tests/e2e/**: every text file type (binaries skipped via -I), excluding
-# exactly tests/e2e/e2e-model.json (the single committed source of truth)
-# and the transient node_modules/test-results/playwright-report dirs. The
-# exclusion stays path-exact: the filter removes only lines whose file path
-# is exactly tests/e2e/e2e-model.json.
-scan "tests/e2e/" '^tests/e2e/e2e-model\.json:' -rnIE "$PATTERN" \
+# exactly tests/e2e/e2e-model.json (the single committed source of truth),
+# the fixture unit tests directly under tests/e2e/fixtures/ (*.test.ts; see
+# the header) and the transient node_modules/test-results/playwright-report
+# dirs. The exclusions stay path-exact: the filter removes only lines whose
+# file path is exactly tests/e2e/e2e-model.json or
+# tests/e2e/fixtures/<name>.test.ts — never a spec, never a nested path.
+scan "tests/e2e/" '^tests/e2e/e2e-model\.json:|^tests/e2e/fixtures/[^/]+\.test\.ts:' -rnIE "$PATTERN" \
   --exclude-dir=node_modules --exclude-dir=test-results --exclude-dir=playwright-report \
   tests/e2e/
 
@@ -191,7 +216,8 @@ scan ".github/*.md" '' -HnE "$PATTERN" .github/*.md
 if [ -n "$violations" ]; then
   {
     echo "check-no-hardcoded-e2e-model: FAILED — hardcoded e2e model id(s) found outside tests/e2e/e2e-model.json"
-    echo "  (the single committed source of truth; see this guard's header for the consumer wiring"
+    echo "  (the single committed source of truth; unit-test files of evals/ and tests/e2e/fixtures/ are exempt;"
+    echo "   see this guard's header for the consumer wiring"
     echo "   and the switch runbook: edit the JSON (both entries) AND add every new model or provider id to PATTERN — old ids stay banned)"
     printf '%s\n' "$violations" | sed 's/^/  /'
   } >&2
