@@ -42,6 +42,15 @@ test('the workspace strip keeps the header line at narrow widths; the chat slot 
     const header = page.getByTestId('workspace-top-bar');
     await expect(header).toBeVisible({ timeout: 30_000 });
 
+    // READINESS: the header appears before the roster and the session do.
+    // Measuring an empty slot would prove nothing, so wait for the slot's
+    // REAL content — the full identity line and the participant control —
+    // before every measurement.
+    const line = page.locator('[data-testid="feed-kind-label"] span[title]');
+    await expect(line, `the chat identity never appeared at ${width}px`).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole('button', { name: 'Add participant' }), `the participant control never appeared at ${width}px`).toBeVisible({ timeout: 30_000 });
+    expect(await line.getAttribute('title'), `the identity is not the full one at ${width}px`).toContain(LONG_AGENT_NAME);
+
     // The workspace navigation is still on the line: the strip may collapse
     // to icons or to its narrow menu, but the workspace stays reachable.
     await expect(page.getByTestId('workspace-name-button'), `the strip lost the workspace at ${width}px`).toBeVisible();
@@ -63,15 +72,53 @@ test('the workspace strip keeps the header line at narrow widths; the chat slot 
     const stripBox = await page.getByTestId('workspace-header-entries').boundingBox();
     expect(stripBox, `no strip box at ${width}px`).not.toBeNull();
     expect(stripBox!.width, `the chat slot squeezed the workspace strip out at ${width}px`).toBeGreaterThanOrEqual(slotBox!.width);
+
+    // The long identity is TRUNCATED (clipped, not overflowing), and the full
+    // text stays reachable through the title.
+    const truncation = await line.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(truncation.scroll, `the long identity is not truncated at ${width}px`).toBeGreaterThan(truncation.client);
   }
 
-  // The long identity is TRUNCATED (clipped, not overflowing) at the narrowest
-  // width, and the full text stays reachable through the title.
-  const line = page.locator('[data-testid="feed-kind-label"] span[title]');
-  await expect(line).toBeVisible();
-  const truncation = await line.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
-  expect(truncation.scroll, 'the long identity is not truncated').toBeGreaterThan(truncation.client);
-  expect(await line.getAttribute('title')).toContain(LONG_AGENT_NAME);
+  expect(traffic.unknown, 'a missing API fixture is a backdrop failure').toEqual([]);
+  expect(traffic.errors, 'a page crash is a backdrop failure').toEqual([]);
+});
+
+test('the failed-roster warning fits the capped slot and never overlaps the participant control', async ({ page }) => {
+  const traffic = await installSidebarBackdropEdges(page, { agentName: LONG_AGENT_NAME, agentsError: true });
+  await page.setViewportSize({ width: 420, height: 800 });
+  // The deep link attaches the chat and writes its descriptor; the workspace
+  // entry then cannot resolve the team (the roster read fails), which is the
+  // state the honest "agent names unavailable" warning exists for.
+  await page.goto(`/#/sessions/${backdropMain.id}`, { waitUntil: 'domcontentloaded' });
+
+  // The roster failed, so the header shows the honest warning instead of the
+  // agent's name. The warning must be on screen before anything is measured.
+  const warning = page.locator('[data-testid="feed-kind-label"] [title="agent names unavailable"]');
+  await expect(warning, 'the failed-roster warning never appeared').toBeVisible({ timeout: 30_000 });
+
+  // The slot is capped, so its CONTENT must fit the cap: a warning that
+  // overflowed would push the line sideways.
+  const slot = page.getByTestId('chat-header-slot');
+  const overflow = await slot.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+  expect(overflow.scroll, 'the warning overflows the capped slot').toBeLessThanOrEqual(overflow.client + 1);
+
+  // The warning stays INSIDE the header line.
+  const headerBox = await page.getByTestId('workspace-top-bar').boundingBox();
+  const warningBox = await warning.boundingBox();
+  expect(warningBox, 'no warning box').not.toBeNull();
+  expect(warningBox!.x + warningBox!.width, 'the warning reaches past the header line').toBeLessThanOrEqual(headerBox!.x + headerBox!.width + 1);
+
+  // The explanation stays reachable: the warning's own title, and the
+  // identity's title, which carries the whole line.
+  expect(await warning.getAttribute('title')).toBe('agent names unavailable');
+  const identity = page.locator('[data-testid="feed-kind-label"] span[title]').first();
+  expect(await identity.getAttribute('title')).toContain('agent names unavailable');
+
+  // The participant control is NOT offered in this state: the workspace
+  // entry failed, so there is no main chat of THIS workspace to start a group
+  // from. That is why the warning and the control can never share the slot —
+  // and why the slot's own cap must still hold the warning.
+  await expect(page.getByRole('button', { name: 'Add participant' }), 'the control is offered while the entry failed').toHaveCount(0);
 
   expect(traffic.unknown, 'a missing API fixture is a backdrop failure').toEqual([]);
   expect(traffic.errors, 'a page crash is a backdrop failure').toEqual([]);

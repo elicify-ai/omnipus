@@ -15,7 +15,11 @@
  *     breadcrumb, the main title, and the honest-failure warning);
  *   - the honest-failure warning is a SEPARATE element outside the
  *     truncating identity, so a clipped identity can never take the warning
- *     with it. The status region still names both parts.
+ *     with it, and it is a COMPACT glyph rather than the sentence: the
+ *     header slot is capped, so the sentence could not fit beside the
+ *     identity and the participant control. The glyph's title and its
+ *     screen-reader text carry the explanation, and the status region still
+ *     names both parts.
  *
  * Words come from feedKindLabel on the workspace descriptor, and only when
  * that descriptor is the active session. Replay does not change them.
@@ -42,7 +46,7 @@
  */
 import { useId } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CaretLeft, ListChecks } from '@phosphor-icons/react'
+import { CaretLeft, ListChecks, WarningCircle } from '@phosphor-icons/react'
 import { fetchAgents, fetchSessions } from '@/lib/api'
 import type { Session } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -141,6 +145,12 @@ export function FeedKindLabel() {
     // The warning carries its own id, so the status region's accessible name
     // still reads the whole line ("<id> - Main Session — agent names
     // unavailable"), and the identity's title carries the full text too.
+    //
+    // The warning's VISIBLE form is a compact glyph, not the sentence: the
+    // header slot is capped (a quarter of the header line), so a 27-character
+    // sentence cannot fit beside the identity and the participant control —
+    // it overflowed the line at narrow widths. The glyph always fits; its
+    // title and its screen-reader text carry the explanation.
     const identityText = parentCrumb != null ? `${parentCrumb.label} / ${label}` : label
     const warningText = namesUnavailable ? ' — agent names unavailable' : ''
     return (
@@ -162,9 +172,11 @@ export function FeedKindLabel() {
         {namesUnavailable && (
           <span
             id={warningId}
-            className="shrink-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
+            title="agent names unavailable"
+            className="flex shrink-0 items-center text-[var(--color-warning)]"
           >
-            {warningText}
+            <WarningCircle size={14} aria-hidden="true" />
+            <span className="sr-only">{warningText}</span>
           </span>
         )}
       </div>

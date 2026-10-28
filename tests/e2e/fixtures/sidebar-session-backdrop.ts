@@ -41,12 +41,12 @@ const state = AppState.parse({
   onboarding_complete: true, identity: { mode: 'local', edition: 'core', signed_in: true }, dev_mode_bypass: false,
 });
 
-export async function installSidebarBackdropEdges(page: Page, options: { extraSessions?: SessionType[]; agentName?: string } = {}) {
+export async function installSidebarBackdropEdges(page: Page, options: { extraSessions?: SessionType[]; agentName?: string; agentsError?: boolean } = {}) {
   const traffic = { requests: [] as string[], unknown: [] as string[], attaches: [] as string[], errors: [] as string[] };
   page.on('pageerror', error => traffic.errors.push(error.message));
-  // `extraSessions` adds sessions (e.g. a helper chat with a parent) and
-  // `agentName` renames the workspace's agent; the defaults keep this
-  // fixture's own set unchanged.
+  // `extraSessions` adds sessions (e.g. a helper chat with a parent),
+  // `agentName` renames the workspace's agent and `agentsError` fails the
+  // roster read; the defaults keep this fixture's own set unchanged.
   const sessions = [backdropInitial, backdropMain, backdropTarget, ...(options.extraSessions ?? [])];
   const agent = options.agentName ? Agent.parse({ ...backdropAgent, name: options.agentName }) : backdropAgent;
   const history = (id: string) => wireHistoryPage(id, [], 0);
@@ -82,7 +82,9 @@ export async function installSidebarBackdropEdges(page: Page, options: { extraSe
     if (endpoint === '/workspaces') return json(url.searchParams.get('status') === 'archived' ? [] : [backdropWorkspace]);
     if (endpoint === `/workspaces/${backdropWorkspace.id}`) return json(backdropWorkspace);
     if (endpoint === `/workspaces/${backdropWorkspace.id}/rooms`) return json(Room.array().parse([]));
-    if (endpoint === '/agents') return json([agent]);
+    if (endpoint === '/agents') return options.agentsError
+      ? route.fulfill({ status: 500, json: { error: 'roster unavailable' } })
+      : json([agent]);
     if (endpoint === `/agents/${agent.id}`) return json(agent);
     if (endpoint === '/sessions') return json(SessionPage.parse({ sessions }));
     for (const session of sessions) {

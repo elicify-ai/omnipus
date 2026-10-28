@@ -39,8 +39,14 @@ import { MainChatAddParticipant } from './AddParticipant'
 
 export function ChatHeaderSlot({ workspaceId }: { workspaceId: string }) {
   const { pathname } = useLocation()
+  // The router accepts a chat address with a trailing slash
+  // ("/workspaces/<id>/chat/") and matches the SAME route, so the slot must
+  // read the same route: normalise the trailing slashes before comparing —
+  // the same normalisation usePanelDeepLink's isOwningChat does. Room paths
+  // stay excluded: they are a different conversation.
+  const normalized = pathname.replace(/\/+$/, '')
   const base = `/workspaces/${workspaceId}`
-  const isSessionChat = pathname === base || pathname === `${base}/chat`
+  const isSessionChat = normalized === base || normalized === `${base}/chat`
 
   return (
     <div

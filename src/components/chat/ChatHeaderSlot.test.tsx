@@ -90,9 +90,23 @@ function renderSlot() {
   return render(<QueryClientProvider client={qc}><ChatHeaderSlot workspaceId={WORKSPACE_ID} /></QueryClientProvider>)
 }
 
+/**
+ * The workspace-entry gates, cleared before EVERY case.
+ *
+ * Both gates hide the Add participant control, so a case that leaves one
+ * behind would pass for the wrong reason: the failed-entry case would be
+ * satisfied by the preceding resolving-entry flag and would prove nothing
+ * about the failed-entry branch. Each case sets exactly the state it means
+ * to test.
+ */
+function clearEntryGates(): void {
+  useSessionStore.setState({ resolvingSessionForWorkspace: {}, workspaceEntry: null })
+}
+
 beforeEach(() => {
   selectSession.mockReset()
   mockPathname = `/workspaces/${WORKSPACE_ID}/chat`
+  clearEntryGates()
   vi.mocked(fetchAgents).mockReset().mockResolvedValue([mia])
   vi.mocked(fetchWorkspaces).mockReset().mockResolvedValue([])
   vi.mocked(fetchSessions).mockReset().mockResolvedValue([])
@@ -208,17 +222,23 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
     await waitFor(() => {
       expect(label.textContent).toBe('mia - Main Session — agent names unavailable')
     })
-    const warning = screen.getByText(/agent names unavailable/)
+    // The status region names the identity AND the warning.
+    const [identityId, warningId] = (label.getAttribute('aria-labelledby') ?? '').split(' ')
+    const identity = document.getElementById(identityId ?? '')
+    const warning = document.getElementById(warningId ?? '')
+    expect(identity).not.toBeNull()
+    expect(warning).not.toBeNull()
     // The warning is its OWN element, outside the truncating identity — a
     // clipped identity can never take the warning with it.
-    const truncating = label.querySelector('span[title]')
-    expect(truncating).not.toBeNull()
-    expect(truncating?.contains(warning)).toBe(false)
+    expect(identity?.contains(warning as Node)).toBe(false)
+    // Its VISIBLE form is a compact glyph that fits the capped slot; the
+    // explanation lives in its title and in its screen-reader text.
+    expect(warning?.querySelector('svg')).not.toBeNull()
+    expect(warning?.getAttribute('title')).toBe('agent names unavailable')
+    expect(warning?.textContent).toContain('agent names unavailable')
     // The full text stays reachable: the identity's title carries the whole
     // line, warning included.
-    expect(truncating?.getAttribute('title')).toBe('mia - Main Session — agent names unavailable')
-    // And the status region still announces the whole line.
-    expect(label.getAttribute('aria-labelledby')).toContain(warning.getAttribute('id') ?? '')
+    expect(identity?.getAttribute('title')).toBe('mia - Main Session — agent names unavailable')
   })
 
   it('a ROOM page shows no chat chrome: no label, no Add participant', async () => {
@@ -245,7 +265,11 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
 
   it('hides "Add participant" after a failed workspace entry', () => {
     setMainChat()
+    // ONLY the failed-entry gate is set: the resolution has finished, so
+    // this case can fail if (and only if) the failed-attempt branch stops
+    // hiding the control.
     useSessionStore.setState({
+      resolvingSessionForWorkspace: {},
       workspaceEntry: {
         status: 'failed-attempt',
         committed: null,
@@ -257,5 +281,26 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
     })
     renderSlot()
     expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull()
+  })
+
+  it('shows "Add participant" once the workspace entry has settled with no failure', () => {
+    // The counterpart of the two gates above: with neither gate set, the
+    // control is offered. Without this, a gate that hid the control
+    // UNCONDITIONALLY would pass both hiding cases.
+    setMainChat()
+    useSessionStore.setState({ resolvingSessionForWorkspace: {}, workspaceEntry: null })
+    renderSlot()
+    expect(screen.getByRole('button', { name: 'Add participant' })).toBeVisible()
+  })
+
+  it('a chat address with a trailing slash shows the same controls as the plain one', async () => {
+    // The router matches "/workspaces/<id>/chat/" to the same chat route, so
+    // the slot must read the same route — a trailing slash must not hide the
+    // chat's identity or its controls.
+    mockPathname = `/workspaces/${WORKSPACE_ID}/chat/`
+    setMainChat()
+    renderSlot()
+    expect(screen.getByRole('button', { name: 'Add participant' })).toBeVisible()
+    expect(await screen.findByTestId('feed-kind-label')).toBeInTheDocument()
   })
 })
