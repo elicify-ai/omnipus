@@ -85,7 +85,7 @@ func TestHistoryEntryRead_AccessAndErrors(t *testing.T) {
 	}{
 		{"session_before_bad_position", "missing-session", "malformed", 404, "session not found"},
 		{"ineligible_main", "main-session-missing-workspace+mia", "malformed", 404, "session not found"},
-		{"invalid_session", "bad%20id", "malformed", 400, ""},
+		{"invalid_session", "bad..id", "malformed", 400, ""}, // Existing validateEntityID rejects any '..'.
 		{"bad_position", "", "hp1_short", 400, "invalid history position"},
 		{"unknown_position", "", "hp1_" + strings.Repeat("A", 43), 404, "history position not found"},
 	}
@@ -95,7 +95,7 @@ func TestHistoryEntryRead_AccessAndErrors(t *testing.T) {
 			if tc.sid != "" {
 				sid = tc.sid
 			}
-			d2EntryRefusal(t, d2EntryRequest(api, sid, tc.position, "Bearer d2-route-test-token", nil), tc.status, tc.message, "FULL_PUBLIC_CANARY")
+			d2EntryRefusal(t, d2EntryRequest(api, sid, tc.position, "Bearer d2-route-test-token", nil), tc.status, tc.message, sid, tc.position, "FULL_PUBLIC_CANARY")
 		})
 	}
 	t.Run("foreign_valid_position_is_not_looked_up", func(t *testing.T) {
@@ -125,7 +125,7 @@ func TestHistoryEntryRead_AccessAndErrors(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(index, "checkpoint.json"), []byte("{broken"), 0600))
 			}
 			w := d2EntryRequest(api, sid, position, "Bearer d2-route-test-token", nil)
-			d2EntryRefusal(t, w, 500, "", sid, index, "FULL_PUBLIC_CANARY")
+			d2EntryRefusal(t, w, 500, "", sid, position, index, "FULL_PUBLIC_CANARY")
 			require.NotContains(t, w.Body.String(), "history entry expired")
 		})
 	}
