@@ -346,7 +346,12 @@ export function bindHistoryEntries(bucket: SessionChatState, entries: readonly S
   const rows = entries.map(entry => {
     const bound = boundSourceAt(bucket, entry.historyPosition)
     if (bound !== undefined && bound !== entry.id) throw new HistoryPageProtocolError('History position changed its source.')
-    const owners = (bySource.get(entry.id) ?? []).flatMap(id => value(id) ? [value(id)] : []).filter(row => compatibleSource(row, entry))
+    // S1a: a position already displayed by a row showing this same source
+    // stays on that row (the same occurrence re-read), whatever else claims it.
+    const prior = bucket.historySourceAliases?.[entry.historyPosition]
+    const priorRow = prior ? value(prior) : undefined
+    const owners = priorRow && rowSourceIds(priorRow).includes(entry.id) && compatibleSource(priorRow, entry) ? [priorRow]
+      : (bySource.get(entry.id) ?? []).flatMap(id => value(id) ? [value(id)] : []).filter(row => compatibleSource(row, entry))
     const merged = owners.length === 1 ? bindToRow(owners[0], entry, bucket.messagesById[owners[0].id], baseline[owners[0].id]) : undefined
     if (merged) { work.set(merged.id, merged); return merged }
     let row: ChatMessage = entry
