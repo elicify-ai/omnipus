@@ -52,6 +52,9 @@ Group chats (team room, squads, ad-hoc groups; `src/components/rooms/`, `pkg/roo
 | D24 | Group message size | Fix the mismatch within #1449: the contract and the server must agree on one group message size limit | Founder answer F4: B | Interview | 2026-10-28 |
 | D25 | Group files storage | Group files are treated exactly like normal chat uploads: stored in the workspace media library (`workspaces/<workspace>/media/`, the Library panel), visible and deletable there, surviving group deletion | Founder answer F5: "ok" (after: normal chats already store uploads in the workspace media library) | Interview | 2026-10-28 |
 | D17 | Add participant placement | The Add participant icon appears in main agent chats only, as today | Founder answer to ADR question Q3 | Interview | 2026-10-28 |
+| D26 | Library deletion of a chat file | One explicit deletion in the Library removes both associated copies of a file: the Library file and the retained chat copy. Old chat references then show the file as unavailable. Applies the same way to normal chat and group attachments; the shared deletion change and its confirmation and error behaviour are authorised. Deleting a group still never deletes files (D19) | Resolves spec question Q-R2-1 (grill round 2 finding R2-I1: the Library panel's Delete removed only the Library file, so the retained chat copy had no way to be removed) | Founder answer Q10 / Q-R2-1: A (Discord #team-b, "q10a") | 2026-10-28 |
+| D27 | Group message size and the operator setting | Group messages (and agents' group answers) follow the operator setting `session_messaging.steer_body`, but never above 65,536 bytes: a larger value is clamped to 65,536, a smaller one is honoured. The contract states the 65,536-byte maximum and says a smaller operator setting can lower it | Completes D24 (one limit in contract and server) while keeping the existing operator setting | Founder answer F-6: B (Discord #team-b, "f6 b") | 2026-10-28 |
+| D28 | Cards from a step that answers two groups | A step that answers requests from two different groups keeps its approval or question card in the agent's own chat only; both groups show the attention animation and the link to the agent's main chat (as in D15/D23) | Two groups are two contexts; D23 keeps a card in the group only for work that answers that one group | Founder answer F-7: A (Discord #team-b, "f7 a") | 2026-10-28 |
 
 ## 4. Wireframe
 
@@ -74,7 +77,7 @@ Approved wireframe (design tokens from `src/styles/tokens.generated.css`, Phosph
 
 ## 7. User-facing documentation TODO
 
-`docs/group-chats.md` (screen, composer, participant panel, approvals, invitation context, starting a group from a chat); `docs/using-omnipus-ui.md` (minimal header controls, helper-chat breadcrumb). `docs-verifier` audits the drafts.
+`docs/group-chats.md` (screen, composer, participant panel, approvals, invitation context, starting a group from a chat, the group message size limit per D27); `docs/using-omnipus-ui.md` (minimal header controls, helper-chat breadcrumb); `docs/library.md` (Library deletion removes both copies of a chat file, D26); `docs/settings.md` (`steer_body` is clamped to 65,536 bytes for groups, D27). `docs-verifier` audits the drafts.
 
 ## 8. Next steps
 

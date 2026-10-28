@@ -1,12 +1,12 @@
-`Status: In review`
+Status: In review
 
 `ADR: [ADR-20261028 — Group chat reuses the normal chat](../architecture/ADR-20261028-group-chat-reuses-the-normal-chat.md)` (accepted after its one correction round; section 11 of that ADR wins over its earlier text)
 
 # Feature Specification: Group chat reuses the normal chat (#1449)
 
 **Created**: 2026-10-28
-**Input**: founder requirements and decisions log D1-D25 at `docs/internal/specs/1449-group-chat-requirements.md` (interview-me output, in the requirements form the founder interview produced; there is no separate `.interview.json`); ADR above; approved wireframe `docs/internal/design/1449/index.html` (screenshot `wireframe-full.png`, frames 1-4).
-**Status note**: `In review`. The five founder questions of the first draft were answered as D21-D25 (2026-10-28) and are applied throughout; two new questions (F-6, F-7) are open and do not block grill-spec round 1. **D21 (no Stop in the group chat) supersedes the Stop parts of D4 and D16 and the ADR's Stop decisions (A6, C-I5, UAT-8, UAT-9, UAT-22); where this spec and the ADR differ on those points, the founder decision wins.** D23 changes the ADR's origin-precedence text (A5.2) the same way. **Grill round 1 (report `/workspace/logs/1449/1449-spec-review.md`) and the final round 2 (report `/workspace/logs/1449/1449-spec-review-round2.md`) are applied: see "Grill Round 1 Dispositions" and "Grill Round 2 Dispositions".** Open with the founder: F-6, F-7 and Q-R2-1.
+**Input**: founder requirements and decisions log D1-D28 at `docs/internal/specs/1449-group-chat-requirements.md` (interview-me output, in the requirements form the founder interview produced; there is no separate `.interview.json`); ADR above; approved wireframe `docs/internal/design/1449/index.html` (screenshot `wireframe-full.png`, frames 1-4).
+**Status note**: `In review`. The five founder questions of the first draft were answered as D21-D25 (2026-10-28) and are applied throughout. The three later questions were answered on 2026-10-28 and are applied throughout: Q-R2-1 as D26 (one Library deletion removes both copies of a chat file, normal and group alike), F-6 as D27 (groups follow `session_messaging.steer_body`, clamped to at most 65,536 bytes) and F-7 as D28 (a step answering two groups keeps its card in the agent's own chat; both groups show the attention cue). **D21 (no Stop in the group chat) supersedes the Stop parts of D4 and D16 and the ADR's Stop decisions (A6, C-I5, UAT-8, UAT-9, UAT-22); where this spec and the ADR differ on those points, the founder decision wins.** D23 changes the ADR's origin-precedence text (A5.2) the same way. **Grill round 1 (report `/workspace/logs/1449/1449-spec-review.md`) and the final round 2 (report `/workspace/logs/1449/1449-spec-review-round2.md`) are applied: see "Grill Round 1 Dispositions" and "Grill Round 2 Dispositions".** No founder question is open. The status stays `In review` only because of the technical items listed under "Open Before Approval".
 
 ---
 
@@ -14,7 +14,7 @@
 
 Group chats (the team room, squads and ad-hoc groups) are live today but use their own screen: plain-text transcript, own message box, a header listing every member, a full-width layout, their own store and paging. Every chat feature and fix has to be built twice, and the group lacks most of what the normal chat shows (markdown, diagrams, images, files).
 
-This feature makes the group chat **the normal chat with more than one agent in it**. The group opens on the same message list, the same message box (without the model picker, Auto-approve, token counter and skills), the same centred column, the same history behaviour (paging, "Return to latest", the loading cover). Participants are no longer listed in a header: the header shows a small avatar stack with a count, and a side panel opens on demand with status, links, mute/remove, add, cost and the invitation context. Group messages and agent answers can carry images and files in both directions. Approval and question cards show up in the group only when they belong to **this** group's work. There is no Stop in the group: stopping happens in each agent's own chat (D21). "Add participant" in an agent's main chat starts a **new** group in a new session; the agent's own chat stays one-to-one. The group storage on the server (`pkg/rooms`) is unchanged in kind; a thin adapter lets the shared chat stack read it (decision D1; option C, a full server merge, is rejected).
+This feature makes the group chat **the normal chat with more than one agent in it**. The group opens on the same message list, the same message box (without the model picker, Auto-approve, token counter and skills), the same centred column, the same history behaviour (paging, "Return to latest", the loading cover). Participants are no longer listed in a header: the header shows a small avatar stack with a count, and a side panel opens on demand with status, links, mute/remove, add, cost and the invitation context. Group messages and agent answers can carry images and files in both directions; they are stored like normal chat uploads, and one explicit deletion in the Library removes a chat file everywhere, in normal chats and groups alike (D26). Approval and question cards show up in the group only when they belong to **this** group's work. There is no Stop in the group: stopping happens in each agent's own chat (D21). "Add participant" in an agent's main chat starts a **new** group in a new session; the agent's own chat stays one-to-one. The group storage on the server (`pkg/rooms`) is unchanged in kind; a thin adapter lets the shared chat stack read it (decision D1; option C, a full server merge, is rejected).
 
 The header of normal and helper chats loses its grey bar and borders (D13). That part is **already built** on branch `feature/1449-minimal-header` (commits `1d7886ecc`, `ede852eb2`: the `ChatHeaderSlot` at the right end of the workspace header line). This spec covers only how the group plugs into that slot and what must not regress there.
 
@@ -44,8 +44,11 @@ The header of normal and helper chats loses its grey bar and borders (D13). That
 | `pkg/gateway/rest_uploads.go::HandleUpload`, `rest.go` media routes, `ws_ask_user.go`, `rooms_runtime.go`, `policy_approver.go`, `approvals.go` | extended / unchanged | From ADR C-I1, C-I6, C-I5 |
 | `pkg/media/store.go::resolveWorkspaceRef`, `pkg/media/library/library.go::Library.Upload` | reused unchanged | From ADR C-I1 |
 | `pkg/media/library/library.go::Library.IncrementRefcount`, `OrphanGC` (hourly, default age 30 days) and `pkg/agent/media_present.go::sessionRefcounter` | extended use (room retention ownership, FR-076) | Verified by reading: a fresh upload has refcount 0 and is collectable; only consuming sessions raise the count |
-| `pkg/gateway/rest_uploads.go::finishWorkspaceUpload`, `stageWorkspaceUploadCopy`; `pkg/gateway/rest_library_write.go::handleLibraryEntryDelete`; `pkg/library/transfer.go::Root.Delete` | reused; the staging step becomes shared with agent-returned files (FR-077) | Verified by reading: a normal upload is written twice (chat media copy, and a Library file under the workspace's `.library` folder); the Library panel deletes only the Library file |
+| `pkg/gateway/rest_uploads.go::finishWorkspaceUpload`, `stageWorkspaceUploadCopy`; `pkg/gateway/rest_library_write.go::handleLibraryEntryDelete`; `pkg/library/transfer.go::Root.Delete` | the staging step becomes shared with agent-returned files (FR-077); the Library delete handler is **extended** to remove the associated chat copy too (D26, FR-086) | Verified by reading: a normal upload is written twice (chat media copy, and a Library file under the workspace's `.library` folder); the Library panel deletes only the Library file |
 | `pkg/media/library/library.go::Library.Upload` / `uploadInternal` and `stageWorkspaceUploadCopy` (publication with a caller-preallocated identity, create-or-adopt) | extended (not a wire change): needed so an answer's publication is repeat-safe (FR-078) | Verified by reading: today each call mints a fresh UUID and collision-suffixed file name |
+| `pkg/agent/upload_workpath.go::uploadWorkPathRegistry` / `RecordUploadWorkPath` | superseded as the source of the Library-file association by a durable record (FR-086); may stay as a cache | Verified by reading: in-memory map with FIFO eviction, lost on restart, so it cannot back a deletion |
+| `src/components/library/LibraryExplorer.tsx::deleteMutation` and its confirmation dialog | extended (confirmation names the chat copy; error with Retry, FR-087) | Verified by reading: calls `deleteLibraryEntry` (Library file only today) |
+| `pkg/config/session_messaging.go::EffectiveSteerBodyBytes`, `pkg/gateway/rooms_runtime.go::gatewayRoomDeps.Limits` | reused; the group limit becomes `min(EffectiveSteerBodyBytes(), 65536)` (D27, FR-074) | Verified by reading: default `DefaultSMSteerBodyBytes = 65536`; any value of at least 1 is used as is today |
 | `pkg/config/defaults.go` (`"answer_request": "allow"`), `pkg/coreagent/seed.go`, `pkg/coreagent/role_policies_adr090.go` | unchanged (tool already registered and policy-entered) | Verified by grep |
 
 ### Impact Assessment
@@ -61,6 +64,7 @@ The header of normal and helper chats loses its grey bar and borders (D13). That
 | answer-intent staging, publication and recovery (`pkg/rooms`, `pkg/tools/answer_request.go`, `pkg/media/library`) | **HIGH (Inferred)** - new durable multi-step transaction in the room service | `DeliverAnswer`, `recover`, `AnswerRequestTool` | every group answer with files |
 | media retention (orphan collector) and Library publication of group files | **HIGH (Inferred)** - data loss if wrong; shared with normal chat uploads | normal chat upload path, `OrphanGC` | Library panel, member chats |
 | `src/components/chat/AttachmentCard.tsx` and the shared message rows (file rows gain download and error states) | **MEDIUM (Inferred)** - shared with every chat | `VirtualUserMessageRow`, `VirtualAssistantMessageRow` | all chats with files |
+| Library deletion removing the associated chat copy (`handleLibraryEntryDelete`, the media manifest association, `LibraryExplorer` dialog) | **HIGH (Inferred)** - irreversible data removal shared with every normal chat upload (D26) | Library panel delete, `moveLibraryEntry` / rename (association must follow the file) | every chat that shows the deleted file (shows it as unavailable) |
 | `FeedKindLabel`, `MainChatAddParticipant` | already changed on `feature/1449-minimal-header` | - | - |
 
 **HIGH rows need sign-off before GREEN starts** (spec rule). The HIGH rows are the reason for the ordering in the ADR (§11 C-M1): the session-source and composer changes ship neutral first, with the existing suites unchanged as the gate.
@@ -73,13 +77,18 @@ Order of work: BE-0 edits these before any Go or TypeScript (5-step procedure, r
 
 | Schema / operation | New / Changed | File | Notes |
 |---|---|---|---|
-| `RoomEntry` | changed | `contracts/components/schemas/RoomEntry.yaml` + inline in `asyncapi.yaml` | + optional `attachments`: array of `MediaPart`, `maxItems: 16`. Absent = none. Journal change is additive; no version field. **D24:** `text` states the one group message size limit (see the `RoomMessageRequest` row); today the schema says 5 MiB while the server enforces 65,536 bytes. |
-| `RoomMessageRequest` | changed | `RoomMessageRequest.yaml` + inline copy | + optional `media`: array of strings, `maxItems: 16`, each `media://workspace/<workspace id>/<id>`. `text` becomes `minLength: 0`. **D24: one size limit, 65,536 UTF-8 bytes** (the existing server default of `session_messaging.steer_body`; the ADR does not decide otherwise): the contract text (5 MiB today) is corrected to this limit and says it is counted in bytes. The same limit applies to an agent's answer text (`answer_request`, entry `text`). How an operator-raised `steer_body` interacts is question F-6. Rule enforced by the handler with inbound validation on and off: text not blank **or** media non-empty. |
+| `RoomEntry` | changed | `contracts/components/schemas/RoomEntry.yaml` + inline in `asyncapi.yaml` | + optional `attachments`: array of `MediaPart`, `maxItems: 16`. Absent = none. Journal change is additive; no version field. **D24/D27:** `text` states the one group message size limit with the same wording as the `RoomMessageRequest` row (at most 65,536 UTF-8 bytes; a smaller operator setting `session_messaging.steer_body` lowers it); today the schema says 5 MiB while the server enforces the operator setting. |
+| `RoomMessageRequest` | changed | `RoomMessageRequest.yaml` + inline copy | + optional `media`: array of strings, `maxItems: 16`, each `media://workspace/<workspace id>/<id>`. `text` becomes `minLength: 0`. **D24/D27: one size limit.** The contract text (5 MiB today) is corrected to: "at most 65,536 UTF-8 bytes; an operator can lower this limit with `session_messaging.steer_body`, never raise it" (counted in bytes, not characters). The server's effective limit is `min(steer_body, 65,536)`: a larger operator value is clamped to 65,536, a smaller one is honoured, the default is 65,536. The same effective limit applies to an agent's answer text (`answer_request`, entry `text`). Rule enforced by the handler with inbound validation on and off: text not blank **or** media non-empty. |
 | `uploadFiles` (`POST /upload`) | changed | `contracts/openapi.yaml` | Closes existing drift: `workspace_id` (query or form field) already crosses the boundary undocumented. Document it and the conflict rule (both given: `workspace_id` routes to the library, `session_id` ignored). Add a `503` response for "workspace library unavailable". |
 | `AskUserQuestionCard` | changed | `AskUserQuestionCard.yaml` + inline copy in `asyncapi.yaml` | + optional `room_ref` (`RoomRef`) and `origin_label` (string 1-200), same shapes and limits as on `ToolApprovalRequiredFrame`. This one card is embedded in `AskUserQuestionFrame` (live) and `SessionStateFrame.pending_asks` (reconnect snapshot); the frame envelope gets no separate copy. |
 | `Room` | changed | `Room.yaml` | + optional `invitation_context`: `RoomInvitationContext` and `invitation_context_status` (`generating` / `ready` / `unavailable`). `invitation_context.text` is returned by `getRoom` only. |
 | `RoomInvitationContext` | new | `contracts/components/schemas/RoomInvitationContext.yaml` | `{ status, text? (max 4096), author_agent_id, generated_at?, cost_micro_usd?, cost_unpriced? }`. |
 | `RoomMetaFrame` | changed | `RoomMetaFrame.yaml` + inline copy | + `invitation_context_status`. The text itself never travels on a frame. |
+| `LibraryEntry` | changed (**D26, contract change for backend-lead**) | `contracts/components/schemas/LibraryEntry.yaml` | + optional, read-only `chat_copy`: boolean, `true` when the file has an associated chat copy that a deletion of this entry also removes (FR-086). Absent or `false` = no associated chat copy. Lets the delete confirmation say so before anything is removed (FR-087). |
+| `MediaLibraryEntry` | changed (**D26, contract change for backend-lead**) | `contracts/components/schemas/MediaLibraryEntry.yaml` | + optional, read-only `library_path`: string, the workspace-relative path of the entry's Library file (for example `.library/shot.png`), same path rules as `LibraryEntry.path`. This is the durable association between the two copies (the in-memory `uploadWorkPathRegistry` is lost on restart and cannot back a deletion). Written by the shared publication path (FR-077), updated by a same-workspace move or rename, cleared when the Library file is deleted. |
+| `deleteLibraryEntry` (`DELETE /library/{workspace_id}/entries`) | changed (**D26, contract change for backend-lead**) | `contracts/openapi.yaml` | Description states: deleting a file that has an associated chat copy also deletes that chat copy (bytes and manifest entry); deleting a directory does so for every associated file inside it; retention owners (session reference counts, group retention, FR-076) never block an explicit deletion. Order: chat copy first, Library file last, so a failure leaves the entry listed and a repeat completes the work; a chat copy that is already gone counts as removed. Responses: `204` both removed; `500` `ErrorResponse` "could not delete <name> completely" when either removal failed (the Library file is then still present); existing `400`/`401`/`403`/`404` unchanged. No new request field: the behaviour is not optional (D26). |
+| `moveLibraryEntry`, `renameLibraryEntry`, `copyLibraryEntry` | changed (description only, **D26**) | `contracts/openapi.yaml` | Rename and a move inside the same workspace keep the association (the media entry's `library_path` follows the file). A copy is a new file with no association. A move to another workspace drops the association: the moved file becomes an ordinary file there and the chat copy stays in the original workspace (stated as a known limit in DOC-008). |
+| `deleteWorkspaceMedia` | unchanged | `contracts/openapi.yaml` | Has no UI caller; not part of D26 (D26 is about the Library's deletion). |
 | `answer_request` tool parameters | changed | `pkg/tools/answer_request.go` (tool schema, not a REST/WS wire type) | + optional `media` (array of strings, max 16). Listed here because agents read it; it is not SPA-facing. |
 
 **Must not collide with**: `RoomRef` (reused as is); `MediaPart` (reused as is - the one media shape the SPA already renders); `RoomEntryFrame`/`RoomSnapshotFrame` (carry `RoomEntry`, so they inherit `attachments`).
@@ -90,14 +99,14 @@ Order of work: BE-0 edits these before any Go or TypeScript (5-step procedure, r
 
 - **Reads**: `getRoomHistory` (`before_seq`, `limit` 1-1000, unchanged contract) feeds the shared list. The room store gains a `limit` argument so the shared fill rule can request pages of 20-100.
 - **Summary detail**: the summary text is read only through `getRoom`. The panel refetches `getRoom` when a `room_meta` frame reports `ready`, and again after every reconnect or re-attach while the panel is open and the last known status was `generating` or the detail was never loaded. No text-bearing frame exists.
-- **Writes**: `postRoomMessage` (now with `media`), `uploadFiles` (library branch, no session), `answer_request` tool (now with `media`).
-- **Stored**: attachments live in the entry journal as `MediaPart` references. Each group file exists in the two representations a normal chat upload has: the chat media copy (`media://workspace/<workspace>/<id>`, under `workspaces/<workspace>/media/`, with a reference count and the orphan collector) and the Library file (under the workspace's `.library` folder, shown and deleted in the Library panel). The room record gains the invitation-context record. Server-internal (not wire) durable records are added for: **retention ownership** of each accepted attachment (FR-076), the **answer intent** of an agent answer with files (a state machine with immutable staged source bytes, preallocated publication identities, text and mentions; FR-078), and the **invitation reservation** per request with its transitions (FR-080). Deleting a group removes only the group's own journal directory (D19); the retention ownership is not released by deletion.
+- **Writes**: `postRoomMessage` (now with `media`), `uploadFiles` (library branch, no session), `answer_request` tool (now with `media`), `deleteLibraryEntry` (now also removes the associated chat copy, D26).
+- **Stored**: attachments live in the entry journal as `MediaPart` references. Each group file exists in the two representations a normal chat upload has: the chat media copy (`media://workspace/<workspace>/<id>`, under `workspaces/<workspace>/media/`, with a reference count and the orphan collector) and the Library file (under the workspace's `.library` folder, shown and deleted in the Library panel). The room record gains the invitation-context record. Server-internal (not wire) durable records are added for: **retention ownership** of each accepted attachment (FR-076), the **answer intent** of an agent answer with files (a state machine with immutable staged source bytes, preallocated publication identities, text and mentions; FR-078), and the **invitation reservation** per request with its transitions (FR-080). Deleting a group removes only the group's own journal directory (D19); the retention ownership is not released by deletion. Each media manifest entry durably records the path of its Library file (`library_path`); one explicit Library deletion removes both copies (D26), for normal chat uploads and group files alike.
 - **Streams to the browser** (unchanged routing, `attach_room`): `room_entry`, `room_snapshot`, `room_member_state`, `room_meta` (now carrying the invitation status).
 
 ---
 ## User Stories & Acceptance Criteria
 
-Decisions that shape every story (founder's, not reopened): D1 one chat screen for both kinds; D2 and D3 full display and files both ways; D4 composer; D5 "is working" line; D6 participants; D7 width; D8 and D15 approvals; D9 and D10 starting a group; D11 history; D13 minimal chrome; D17 add participant in main chats only; D18-D20 summary risk, files, unavailable summary; D21 no Stop in the group; D22 attention cue accepted; D23 cards only for work that answers the group; D24 one message size limit; D25 group files exactly like normal chat uploads.
+Decisions that shape every story (founder's, not reopened): D1 one chat screen for both kinds; D2 and D3 full display and files both ways; D4 composer; D5 "is working" line; D6 participants; D7 width; D8 and D15 approvals; D9 and D10 starting a group; D11 history; D13 minimal chrome; D17 add participant in main chats only; D18-D20 summary risk, files, unavailable summary; D21 no Stop in the group; D22 attention cue accepted; D23 cards only for work that answers the group; D24 one message size limit; D25 group files exactly like normal chat uploads; D26 one Library deletion removes both copies of a chat file; D27 the size limit follows the operator setting but never above 65,536 bytes; D28 a step answering two groups keeps its card in the agent's own chat.
 
 ### User Story 1 - Group messages look like normal chat messages (Priority: P0)
 
@@ -128,7 +137,7 @@ A person wants to type, attach and send in the group exactly as in a normal chat
 
 1. **Given** a group is open, **When** the person looks at the message box, **Then** it has the same card, attach button and send button as the normal one.
 2. **Given** a group is open, **When** the person looks at the message box, **Then** there is no model picker, no Auto-approve control, no token counter and no skills control.
-3. **Given** a message longer than the group's size limit (65,536 bytes), **When** the person sends it, **Then** it is refused with a message that names the limit, and nothing is posted. The box has no Stop button (D21).
+3. **Given** a message longer than the group's size limit (65,536 bytes, or the operator's smaller `session_messaging.steer_body`; a larger setting is clamped to 65,536, D27), **When** the person sends it, **Then** it is refused with a message that names the limit in force, and nothing is posted. The box has no Stop button (D21).
 4. **Given** the person types "/", **When** the menu opens, **Then** it lists only the six group commands (pause, resume, mute, unmute, members, help); another command is refused with a message and links to the members' own chats.
 5. **Given** the person types "@", **When** the menu opens, **Then** it offers "all" and every current member, muted ones included; a picked member stays addressed after a rename; deleting the picked name removes only that explicit addressing, after which the ordinary rules apply (a message with no @-name goes to every member that is not muted).
 6. **Given** the group is read-only, reconnecting, or has not yet received its first live view after opening, **When** the person looks at the box, **Then** sending is disabled and the reason is shown in the box's notice area.
@@ -167,7 +176,7 @@ A person asks an agent in the group for a file or a chart and wants the result i
 3. **Given** storing or checking an attached file fails, **When** the agent answers, **Then** the agent receives an error and nothing is posted.
 4. **Given** two answers with identical text but different files, **When** a repair after an interruption runs, **Then** they are never treated as the same answer; an agent that repeats the same call (same text, same original files) while its answer is not yet fully completed gets that same answer completed, not a second one.
 5. **Given** an answer names a file of another workspace, **When** the agent submits it, **Then** it is refused and nothing is posted.
-6. **Given** an agent answer text longer than the group's size limit (65,536 bytes), **When** the agent submits it, **Then** it is refused, and nothing is posted, copied or passed on.
+6. **Given** an agent answer text longer than the group's size limit (the same effective limit as person messages, D27), **When** the agent submits it, **Then** it is refused, and nothing is posted, copied or passed on.
 7. **Given** an agent answer with files was accepted and the server stops before it is posted, **When** the server restarts, **Then** the answer is completed once from what was recorded (the original bytes, the text, the mentions) without asking the agent again; an answer the agent was told was refused is never posted later; and if the group, the agent's membership or the request no longer allows it, it is not posted.
 
 ### User Story 5 - Calm live view while several agents work (Priority: P1)
@@ -262,6 +271,7 @@ A person approving an agent's tool call during group work wants the card in the 
 7. **Given** a secret is requested during group work, **When** it is asked, **Then** no secret card appears in the group; a link to the agent's own chat is shown.
 8. **Given** the agent's running step also handles other input (a message typed in its own chat, a messaging-channel message, or a task), **When** an approval arises, **Then** the card stays in the agent's own chat only (D23: a card appears in the group only for work that answers the group).
 9. **Given** two browsers, **When** one approves and the other denies at the same moment, **Then** exactly one decision takes effect and both show the same final state.
+10. **Given** the agent's running step answers requests from two different groups, **When** an approval or question arises, **Then** the card stays in the agent's own chat only, and both groups show the agent's attention animation with "Open <Agent>'s main chat" until it is resolved (D28).
 
 ### User Story 10 - (retired by D21: no Stop in the group chat)
 
@@ -316,7 +326,7 @@ A person who opens a group right after a streaming chat, or a chat with an open 
 
 ### User Story 14 - Files outlive the group (Priority: P2)
 
-A person who deletes a group must not lose the files uploaded into it or produced by it (D19).
+A person who deletes a group must not lose the files uploaded into it or produced by it (D19); a person who deletes a file in the Library must have it gone everywhere (D26).
 
 **Why this priority**: data-loss protection.
 
@@ -325,9 +335,11 @@ A person who deletes a group must not lose the files uploaded into it or produce
 **Acceptance Scenarios**:
 
 1. **Given** a group with an image is deleted, **When** the person opens the agent's own chat or the Library, **Then** the image still opens.
-2. **Given** a file is deleted in the Library panel, **When** an existing group shows the entry, **Then** the outcome depends on the founder's answer to Q-R2-1 (pending). **Option A:** one explicit deletion removes both copies and the group entry shows the broken-file state with Retry (the shared deletion also changes normal chats). **Option B:** the Library panel removes the Library file only, the group entry keeps opening exactly as in a normal chat, and a distinct, reachable Library action removes the retained chat copy.
+2. **Given** a group file is deleted in the Library panel, **When** an existing group (or a member's main chat that mirrored it) shows the entry, **Then** both copies are gone (D26) and the entry shows the file as unavailable (the broken-file state with Retry, which keeps failing); nothing recreates the file.
 3. **Given** the chat copy of a file is gone, **When** an existing group shows the entry, **Then** the entry shows the broken-file state with Retry, not a silent gap.
 4. **Given** a file attached to a message in a paused group, or to a request held for a stopped agent, or to a group that was then deleted, **When** more than 30 days pass and the automatic orphan cleanup runs (also after a restart), **Then** the file still opens.
+5. **Given** a file uploaded in a normal chat, **When** the person deletes it in the Library panel, **Then** both copies are gone and the normal chat shows it as unavailable, exactly as a group does (D26 applies to all chat files).
+6. **Given** the person chooses Delete on a Library file that has a chat copy, **When** the confirmation opens, **Then** it says that the copy used in chats is deleted too and that chats will show the file as unavailable; **and when** the deletion fails part-way, **Then** the panel shows an error naming the file, the file stays listed, and repeating Delete completes it.
 
 ### User Story 15 - What already works keeps working (Priority: P1)
 
@@ -348,14 +360,20 @@ The sidebar's group section, the six commands, mentions, pause and the audit beh
 
 - **Group with 2, 3, 4 and 10 members**: the stack shows 2, 3, 3 plus "+1", 3 plus "+7"; the count is always the full number.
 - **Message with only an attachment**: accepted. **Text with 16 attachments**: accepted. **17th**: refused in the box and, if forced through the API, with 400.
-- **Attachment deleted from the Library after posting**: pending Q-R2-1 (Option A: broken-file state with Retry; Option B: the entry keeps opening until the chat copy is removed by its own action). The chat copy being gone always shows the broken-file state with Retry.
+- **Attachment deleted from the Library after posting**: both copies are removed (D26); the group entry, the mirrored main-chat entries and any normal chat that used it show the file as unavailable (broken-file state with Retry). The chat copy being gone always shows that state.
+- **Library directory deleted** (for example the `.library` folder): every file inside with an associated chat copy loses that copy too (D26).
+- **Library file renamed or moved inside the workspace, then deleted**: the association follows the file; both copies are removed. **Copied**: the copy has no association; deleting it removes only the copy. **Moved to another workspace**: the association is dropped; the chat copy stays in the original workspace (known limit, documented).
+- **Upload made before this feature** (its association was only in memory): a one-time repair on start associates a `.library` file with the media entry of the same workspace that has the same SHA-256 and the same file name (ignoring a " (N)" duplicate suffix), only when exactly one entry matches; otherwise the file shows no chat copy and its deletion removes only the Library file (FR-086).
+- **Library deletion fails part-way** (chat copy removed, Library file not, or the reverse attempt failed): 500, the file stays listed, a repeat completes it; a chat copy already gone counts as removed.
+- **Explicit Library deletion of a file a pending answer intent or a retention owner still references**: deleted anyway; the intent never recreates it (FR-078 (4)); the group entry shows it as unavailable.
 - **Upload succeeds, post never sent**: an unattached library file stays, as with an abandoned normal-chat upload; no entry is written.
 - **Agent answer whose files cannot be copied**: tool error to the agent; nothing appended, mirrored or forwarded.
 - **A stopped member's held request with an image, revived later**: the model gets the image.
 - **Invitation summary arrives after the 45-second limit**: discarded. **Gateway restarts while generating**: shown as unavailable after restart. **Group deleted or origin agent removed during generation**: result discarded.
 - **Prose password in the origin chat** (not a registered secret, no known credential shape): can pass into the summary. Accepted by the founder (D18, #1467), stated in the documentation; no test asserts it is removed.
-- **A step that handles a group request and other input** (own-chat message, channel, task): the card stays in the agent's own chat only (D23). **A step that handles requests of two different groups**: not decided, see F-7.
+- **A step that handles a group request and other input** (own-chat message, channel, task): the card stays in the agent's own chat only (D23). **A step that handles requests of two different groups**: the card stays in the agent's own chat only; both groups show the attention animation and the link (D28).
 - **Message of exactly 65,536 bytes**: accepted; **65,537 bytes**: refused. **Multi-byte text**: counted in bytes, not characters (21,845 three-byte characters are accepted, 21,846 are refused).
+- **Operator setting `steer_body`** (D27): 131,072 → the group limit stays 65,536; 1,000 → the limit is 1,000 (1,000 bytes accepted, 1,001 refused with a message naming 1,000); unset or 0 → the default 65,536. A changed setting applies to the next message; entries already stored are never re-checked.
 - **Opening a group right after a streaming chat**: no foreign tool calls on the group's last row.
 - **Reconnect during paging**: stale page responses (after leaving the group, after a truncating snapshot) are ignored.
 - **Very long group (more than 10,000 entries)**: the opening snapshot holds the newest 10,000; older pages load on demand.
@@ -377,6 +395,7 @@ Frames refer to the approved wireframe (`docs/internal/design/1449/`): 1 normal 
 | Participants panel, frame 4 | skeleton rows while the group record loads | - | group record failed: error line with Retry | cost unpriced: "incomplete" marker; invitation context "generating..." | status per member, links, menu, Add participant, cost, invitation context |
 | Invitation context disclosure | "Invitation context: generating..." | n/a | "Invitation context: unavailable" | - | summary text rendered through the shared markdown pipeline |
 | Approval / question cards in the group | as in the normal chat | none | as in the normal chat (expired, cancelled) | several pending: shown one at a time with "+N more" as in the normal chat | card shown with "for group <name>" origin; resolved card closes |
+| Library panel delete confirmation (existing panel, D26) | "Deleting..." on the confirm button, as today | - | partial failure: error naming the file, the file stays listed, Delete can be repeated | - | file without a chat copy: today's dialog; file with a chat copy: the dialog adds that the copy used in chats is deleted too and chats will show the file as unavailable |
 | Header slot, frames 1 and 2 (already built) | - | - | roster failed: id fallback in the breadcrumb (existing honest states) | - | Add participant icon (main chat) / muted breadcrumb (helper chat) |
 
 ## User Journey
@@ -422,7 +441,8 @@ No raw `<button>`, no `title=` tooltips, no hard-coded colours or spacing (rules
 - **Approvals** (`docs/security.md`, "Approve a request"): a card in the group is the same decision as in the agent's chat, with the same grant scope ("Always Allow" lasts for the agent chat's own scope); one decision wins. Cards from helpers and secrets stay in the agent's chat. Hard Constraint #6 is unaffected: no new tool, no new policy value, no Auto-approve change. `docs/security.md` must say a card appears in a group only for work that answers the group (D23) (DOC-004).
 - **Tool surface** (`docs/tools.md`): `answer_request` keeps `allow` in the ceiling and in role policies; its new `media` parameter is covered by the same policy and by the same file-access checks the agent's own chat uses. No new tool.
 - **Invitation summary** (privacy): same workspace only; excludes secret-card entries, secret-tool results and vault content; input and output pass the registered-secret scrubber and the credential-pattern redactor; output filtered before storage. **Known gap, accepted by the founder (D18, #1467)**: a password written in plain prose can pass. Documentation says so plainly.
-- **Focus-area review**: touches gateway upload and media routes, approvals and the agent engine - `security-lead` on-demand review (not part of implementation).
+- **Explicit deletion** (D26): a Library deletion now also removes the chat copy that every chat of the workspace may show. Authorization is unchanged (the existing Library delete route and its workspace scoping); the association is resolved only inside the same workspace, so a deletion can never remove another workspace's chat copy. The confirmation states the consequence before anything is removed.
+- **Focus-area review**: touches gateway upload, media and Library delete routes, approvals and the agent engine - `security-lead` on-demand review (not part of implementation).
 - **Agent-engine landing**: hands-on UAT by `uat-tester` plus independent `uat-validator` on the exact candidate (root `CLAUDE.md`, "Hands-on check before any agent-engine landing") because `pkg/agent` (origin rule, question provenance) and gateway approval handling change.
 
 ---
@@ -436,7 +456,8 @@ Primary flows:
 - When the person presses Participants, the system toggles the side panel; the chat column does not move.
 - When the person presses Add participant in a main chat and picks an agent, the system opens a new empty group; the original chat is unchanged; a background summary is prepared without posting anything.
 - When a card belongs to this group's work, the system shows it in the group and in the agent's own chat; one decision resolves both. When the step also handles other input, the card stays in the agent's own chat only.
-- When a message is longer than 65,536 bytes, the system refuses it (422) and posts nothing.
+- When a message is longer than the group limit (65,536 bytes, or the operator's smaller `steer_body`, D27), the system refuses it (422), names the limit in force and posts nothing.
+- When the person deletes a file in the Library that has a chat copy, the system removes both copies after a confirmation that says so; every chat that shows the file then shows it as unavailable (D26).
 
 Error flows:
 - When a message has nothing to send, the system refuses it (422) and posts nothing.
@@ -445,6 +466,7 @@ Error flows:
 - When an agent's answer files cannot be stored or checked, the agent gets a tool error and nothing is posted.
 - When the summary cannot be made (provider error, quota, 45-second limit, restart, deletion), the group works without it and the panel says "Invitation context: unavailable".
 - When an earlier-page load fails, the system keeps the shown messages and offers Retry on the same page.
+- When a Library deletion removes only one of the two copies, the system answers 500, keeps the Library file listed and lets a repeat finish the deletion.
 
 Boundary conditions:
 - When a message carries 16 attachments, it is accepted; with 17 it is refused (400).
@@ -462,6 +484,9 @@ Boundary conditions:
 - The system must not create a chat session for a group upload or message.
 - The system must not let agent text run a command, approve, or answer a card (FR-168).
 - The system must not delete files with a group (D19).
+- The system must not leave the chat copy of a file behind after an explicit Library deletion, and must not recreate a file the person deleted explicitly through any retention, repair or recovery step (D26, FR-078).
+- The system must not let the operator setting raise the group message limit above 65,536 bytes (D27).
+- The system must not show in a group a card from a step that answers two different groups (D28).
 - The system must not add anonymous read access beyond the normal chat's (ADR C-I1: group files share the normal chat's read posture; no tighter and no looser).
 - The system must not claim anywhere (UI, documentation, tests) that passwords written in plain prose are removed from the summary (D18).
 - The system must not add live writing of answers, presence, or other human participants (out of scope), and must not add a Stop control or stop endpoint to the group (D21).
@@ -478,13 +503,15 @@ Boundary conditions:
 | `postRoomMessage`: no non-blank text and no media | 422 | `ErrorResponse`; nothing appended |
 | `postRoomMessage`: more than 16 media, or other schema violation | 400 | existing `400BadRequest` |
 | `postRoomMessage`: media not `media://workspace/<this room's workspace>/<id>`, other workspace, missing, or stranded | 422 | `ErrorResponse`; nothing appended; whole message refused |
-| `postRoomMessage`: text longer than 65,536 UTF-8 bytes | 422 | `ErrorResponse` naming the size and the limit; nothing appended; same with inbound validation on and off (A-12) |
-| `answer_request`: text longer than 65,536 UTF-8 bytes | tool error | nothing posted, copied or passed on |
+| `postRoomMessage`: text longer than the effective limit (`min(steer_body, 65,536)` UTF-8 bytes) | 422 | `ErrorResponse` naming the size and the limit in force; nothing appended; same with inbound validation on and off (A-12) |
+| `answer_request`: text longer than the effective limit | tool error | names the limit in force; nothing posted, copied or passed on |
+| `deleteLibraryEntry`: file (or directory) with associated chat copies, all removed | 204 | both copies gone |
+| `deleteLibraryEntry`: removal of a chat copy or of the Library file failed | 500 | `ErrorResponse` "could not delete <name> completely"; the Library file is still listed; a repeat completes it |
 | `postRoomMessage`: success | 202 | unchanged |
 | `uploadFiles` with `workspace_id`, library unavailable | 503 | `ErrorResponse`; never falls through to the session path |
 | `answer_request` with unusable media | tool error | nothing appended, mirrored or forwarded |
 
-**Limits**: attachments per message at most 16; message and agent-answer text at most 65,536 UTF-8 bytes (D24); invitation text at most 4,096 characters, summary of about 200 words; summary input at most 40 entries and 16 KiB; summary time limit 45 seconds; history pages of 20..100 entries (server maximum 1000); `getRoomHistory` contract unchanged. Per-part upload size limit 100 MB, as the existing `uploadFiles` contract says.
+**Limits**: attachments per message at most 16; message and agent-answer text at most 65,536 UTF-8 bytes, lowered by a smaller operator `session_messaging.steer_body` and never raised by a larger one (D24, D27); invitation text at most 4,096 characters, summary of about 200 words; summary input at most 40 entries and 16 KiB; summary time limit 45 seconds; history pages of 20..100 entries (server maximum 1000); `getRoomHistory` contract unchanged. Per-part upload size limit 100 MB, as the existing `uploadFiles` contract says.
 
 **Performance Bounds**: opening a group must not request history when the opening snapshot already covers the fill goal (zero `getRoomHistory` calls) - Scenario S-43; the list must not re-render existing rows when only a member's delivery state changes (row identity stable) - test T-30.
 
@@ -504,6 +531,7 @@ Boundary conditions:
 - **Data in / out**: group uploads and agent answer files go in; both representations (chat media copy, Library file) are written by one shared publication path; `media://workspace/...` references come out and are stored in entries and mirrored; retention ownership keeps referenced files out of the orphan collector.
 - **Contract**: `uploadFiles` (`workspace_id`), `MediaPart`.
 - **On failure**: 503 for unavailable; 422 at room ingestion for a reference that is not the room's workspace file; nothing appended. Upload and media-read authorization are unchanged.
+- **Deletion** (D26): `deleteLibraryEntry` removes the Library file and its associated chat copy (found through the media entry's durable `library_path`); chat copy first, Library file last; 500 on a partial failure with the file still listed. Deleting a group never deletes files (D19).
 - **Development**: real library, test workspace.
 
 ### Agent engine (questions, requests)
@@ -541,7 +569,7 @@ The ADR's two unproven Stop items (UNPROVEN-1 turn-scoped stop, UNPROVEN-2 per-r
 |---|------------------|------------------------|---------------------|
 | A-1 | Whether a summary output longer than 4,096 characters is truncated or counts as `unavailable` | truncate silently | Recommendation: truncate at 4,096 on a word boundary, status `ready`. Architect decision required before RED (round-1 note: not approved by repetition in datasets) |
 | A-2 | Whether an origin chat with nothing to summarise (0 usable entries after exclusions) makes a summary or goes straight to `unavailable` | call the model with empty input | Recommendation: skip the call, status `unavailable`, no cost. Architect decision required before RED (round-1 note) |
-| A-3 | D24 requires one size limit, in bytes; OpenAPI `maxLength` counts characters, and the server counts UTF-8 bytes | set `maxLength` to 65536 and call it done | Contract text states "65,536 UTF-8 bytes"; the server stays the byte authority; the over-limit status is 422 whichever layer catches it (A-12) |
+| A-3 | D24/D27 require one size limit, in bytes; OpenAPI `maxLength` counts characters, and the server counts UTF-8 bytes; the operator can lower the limit | set `maxLength` to 65536 and call it done | Contract text states "at most 65,536 UTF-8 bytes; a smaller operator `session_messaging.steer_body` lowers it"; the server stays the byte authority and applies `min(steer_body, 65,536)`; the over-limit status is 422 whichever layer catches it (A-12) |
 | A-4 | Duplicate media refs in one message | dedupe silently | Recommendation: accepted as listed, shown once per listed ref; backend-lead to confirm in RED. Not asserted until confirmed |
 | A-5 | Exact English wording of states ("Invitation context: unavailable"/"generating") | invent wording | Wording quoted from founder decision D20 and ADR C-I8 is the oracle; other labels reuse today's `deliveryLabel` set |
 | A-6 | Whether the tooltip of the Participants button says "Participants" | any | Recommendation: "Participants" (same as the accessible name). Frontend-lead confirms with the design-system skill |
@@ -549,6 +577,7 @@ The ADR's two unproven Stop items (UNPROVEN-1 turn-scoped stop, UNPROVEN-2 per-r
 | A-9 | Whether `answer_request.media` may point to the same file more than once | n/a | Same as A-4 |
 | A-12 | Whether the schema-level maximum (a 400 under inbound validation) or the server byte check (422) answers an over-limit message | return whichever fires first | Spec value: 422 with the size message in both modes; backend-lead reconciles the schema and the handler (for example by documenting the byte limit in the schema text and leaving the byte check to the server) |
 | A-13 | Bounds of the private staging for an answer's original bytes | none | Recommendation: the same per-file limit as uploads (100 MB, `uploadFiles` contract), at most 16 files per answer, removed on rejection and after commit; architect confirms before RED |
+| A-14 | How a Library file is matched to its chat copy for uploads made before this feature (the association was only in memory) | match by file name only | Spec value (architect, applying D26): a one-time repair on start matches a `.library` file to the media entry of the same workspace with the same SHA-256 and the same file name ignoring a " (N)" duplicate suffix, only when exactly one entry matches; no match or several matches leave the file without an association (its deletion removes only the Library file, and the dialog says nothing about chats). Never matched across workspaces |
 | A-11 | Oracles for empty-file, oversize-file and unsafe-filename uploads in DS-10 are "as in the normal chat" | copy values from the implementation | qa-lead cites the normal chat's documented behaviour (`docs/using-omnipus-ui.md`) or the `uploadFiles` contract for each value; if neither states it, ask the dispatcher |
 
 ---
@@ -740,6 +769,23 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 | 65,537 ASCII characters (65,537 bytes) | refused (422) with a message naming the size and the 65,536-byte limit; nothing posted |
 | 21,845 three-byte characters (65,535 bytes) | accepted (202) |
 | 21,846 three-byte characters (65,538 bytes) | refused (422); nothing posted |
+
+#### Scenario Outline: S-150 The operator setting lowers the group limit but never raises it
+**Traces to**: User Story 2, Acceptance Scenario 3; User Story 4, Acceptance Scenario 6
+**Category**: Edge Case
+- **Given** the operator set `session_messaging.steer_body` to `<setting>`
+- **When** the person sends a group message of `<size>` (and, separately, an agent submits an answer of the same size)
+- **Then** the outcome is `<outcome>`
+
+**Examples**:
+
+| setting | size | outcome |
+|---|---|---|
+| unset | 65,536 bytes | accepted (default limit 65,536) |
+| 131,072 | 65,536 bytes | accepted |
+| 131,072 | 65,537 bytes | refused (422 / tool error) naming the 65,536-byte limit; nothing posted (clamped) |
+| 1,000 | 1,000 bytes | accepted |
+| 1,000 | 1,001 bytes | refused (422 / tool error) naming the 1,000-byte limit; nothing posted |
 
 ### Story 3 - Files into the group
 
@@ -1504,7 +1550,15 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 | this group's request and a channel message | agent's chat only (D23) |
 | this group's request and a task | agent's chat only (D23) |
 | this group's request and another agent's message | agent's chat only (D23: other input) |
+| this group's request and another group's request | agent's chat only; both groups show the attention animation and link (D28) |
 | a web message only | agent's chat only |
+
+#### Scenario: S-151 A step that answers two groups keeps its card in the agent's chat and lights up both groups
+**Traces to**: User Story 9, Acceptance Scenario 10
+**Category**: Edge Case
+- **Given** Jarvis's running step consumed request R1 of group "Launch" and request R2 of group "Ops"
+- **When** the step raises a tool approval (or a question)
+- **Then** the card appears only in Jarvis's own chat; neither group shows a card; both "Launch" and "Ops" show Jarvis's attention animation with "Open Jarvis's main chat"; once the card is resolved in Jarvis's chat, the animation stops in both groups
 
 ### Story 11 - Header
 
@@ -1634,19 +1688,56 @@ Expected values come from this spec, the cited contract schemas and the ADR; nev
 - **When** the group shows the entry
 - **Then** the normal chat's broken-image state with Retry is shown
 
-#### Scenario: S-136 Option A (pending Q-R2-1): one Library deletion removes both copies
+#### Scenario: S-136 One Library deletion removes both copies of a group file (D26)
 **Traces to**: User Story 14, Acceptance Scenario 2
-**Category**: Alternate Path
-- **Given** a group image listed in the Library panel
-- **When** the person deletes it in the Library panel
-- **Then** the Library no longer lists it, the group entry and its mirrored copies show the broken-file state with Retry, and no repair or retention step recreates it
+**Category**: Happy Path
+- **Given** a group image "shot.png" listed in the Library panel, shown in the group and mirrored into Jarvis's main chat
+- **When** the person deletes it in the Library panel and confirms
+- **Then** the Library no longer lists it, its chat media copy no longer exists, the group entry and the mirrored entry show the file as unavailable (broken-file state; Retry keeps failing), and no repair, retention or recovery step recreates either copy, also after a restart and an orphan-cleanup run
 
-#### Scenario: S-145 Option B (pending Q-R2-1): Library Delete removes the Library file only; a distinct action removes the chat copy
+#### Scenario: S-145 (retired by D26)
+
+The founder chose Option A (D26); the Option B scenario is removed and its id is not reused.
+
+#### Scenario: S-146 A normal chat upload deleted in the Library shows as unavailable in the normal chat
+**Traces to**: User Story 14, Acceptance Scenario 5
+**Category**: Happy Path
+- **Given** the person uploaded "notes.pdf" in Jarvis's main chat (no group involved)
+- **When** the person deletes "notes.pdf" in the Library panel and confirms
+- **Then** both copies are gone and Jarvis's chat shows the file card in its unavailable state with Retry, exactly as a group entry does
+
+#### Scenario: S-147 The delete confirmation names the chat copy
+**Traces to**: User Story 14, Acceptance Scenario 6
+**Category**: Happy Path
+- **Given** two Library files: "shot.png" with a chat copy and "draft.md" without one
+- **When** the person chooses Delete on each
+- **Then** the confirmation for "shot.png" says that the copy used in chats is deleted too and chats will show the file as unavailable; the confirmation for "draft.md" is today's dialog with no mention of chats
+
+#### Scenario: S-148 A deletion that fails part-way keeps the file listed and can be repeated
+**Traces to**: User Story 14, Acceptance Scenario 6
+**Category**: Error Path
+- **Given** "shot.png" has a chat copy and removing its Library file fails after the chat copy was removed
+- **When** the person confirms Delete
+- **Then** the server answers 500 "could not delete shot.png completely", the panel shows that error, "shot.png" stays listed, and a repeated Delete answers 204 and removes it (the missing chat copy counts as already removed)
+
+#### Scenario Outline: S-149 The association follows the file
 **Traces to**: User Story 14, Acceptance Scenario 2
-**Category**: Alternate Path
-- **Given** a group image listed in the Library panel
-- **When** the person deletes it with the Library panel's Delete
-- **Then** the Library no longer lists it and the group entry still opens, as the same upload does in a normal chat; and when the person then uses the named Library action that removes the retained chat copy, the entry shows the broken-file state and nothing recreates it
+**Category**: Edge Case
+- **Given** the group image "shot.png" (chat copy C) and the change `<change>`
+- **When** the person deletes `<target>` in the Library panel
+- **Then** `<outcome>`
+
+**Examples**:
+
+| change | target | outcome |
+|---|---|---|
+| renamed to "final.png" | "final.png" | both "final.png" and C are removed |
+| moved to "designs/shot.png" in the same workspace | "designs/shot.png" | both removed |
+| copied to "copy.png" | "copy.png" | only "copy.png" is removed; "shot.png" and C stay |
+| none | the `.library` folder | every file inside and every associated chat copy are removed |
+| moved to another workspace | the moved file | only the moved file is removed; C stays in the original workspace (association dropped by the move) |
+| uploaded before this feature, exactly one media entry with the same SHA-256 and name | "shot.png" | both removed (one-time repair matched them, A-14) |
+| uploaded before this feature, two media entries with the same SHA-256 and name | "shot.png" | only the Library file is removed; the dialog does not mention chats |
 
 #### Scenario: S-124 A paused group's attachment survives the orphan cleanup
 **Traces to**: User Story 14, Acceptance Scenario 4
@@ -1717,7 +1808,7 @@ Execution (not only writing): RED packs QA-R1 to QA-R4 are shown failing on a te
 
 ### Hands-on UAT rows (written at spec time)
 
-Procedure and independence rules: root `CLAUDE.md` ("Hands-on pipeline"), `.claude/skills/omnipus-planning-orchestration/knowledge/landing-trains.md`. Rows UAT-1 to UAT-28 are carried from the ADR (§10 and §11.6; UAT-11 is replaced by UAT-11b). **UAT-8, UAT-9 and UAT-22 (the Stop rows) are removed by D21; ids are not reused.** UAT-29 to UAT-33 are added by this spec. Provider/model for any agent-driven row: `openrouter` + `deepseek/deepseek-v4.1-flash` (root `CLAUDE.md`). **Rows marked AE touch the agent engine (approvals, questions, requests) and require exact-commit hands-on UAT by `uat-tester` plus independent `uat-validator` before landing.**
+Procedure and independence rules: root `CLAUDE.md` ("Hands-on pipeline"), `.claude/skills/omnipus-planning-orchestration/knowledge/landing-trains.md`. Rows UAT-1 to UAT-28 are carried from the ADR (§10 and §11.6; UAT-11 is replaced by UAT-11b). **UAT-8, UAT-9 and UAT-22 (the Stop rows) are removed by D21; ids are not reused.** UAT-29 to UAT-33 are added by this spec; UAT-34 to UAT-36 apply the founder decisions D26 to D28. Provider/model for any agent-driven row: `openrouter` + `deepseek/deepseek-v4.1-flash` (root `CLAUDE.md`). **Rows marked AE touch the agent engine (approvals, questions, requests) and require exact-commit hands-on UAT by `uat-tester` plus independent `uat-validator` before landing.**
 
 | Row | Acceptance criterion | Steps | Expected result | Affected area | Validator critical path | Automation candidate |
 |---|---|---|---|---|---|---|
@@ -1751,6 +1842,9 @@ Procedure and independence rules: root `CLAUDE.md` ("Hands-on pipeline"), `.clau
 | UAT-31 (added by this spec) | US-2 AS 2.3; S-118 | Paste a message of 70,000 ASCII characters in the group box and send | It is refused with a visible message that names the size and the 65,536-byte limit; nothing is posted; a message of 65,536 ASCII characters is accepted | message size | Try both sizes; compare the error text with the limit | Stable: T-54 |
 | UAT-32 (AE, added by this spec) | US-9 AS 9.8; S-79 | Address an agent in the group and, while it works, send it a Telegram message (or a message in its own chat); then make the work need a tool approval | The card is shown only in the agent's own chat, not in the group | approvals, origin rule | Confirm the group shows no card; approve in the agent's chat | Not yet: needs a channel |
 | UAT-33 (added by this spec) | US-1 AS 1.3, US-3 AS 3.1, US-4 AS 4.2; S-127, S-128, S-129 | Send a PDF in the group; ask an agent to return a file; open the Library panel; download the PDF from the group with the keyboard | Both files are listed in the Library and download; the group downloads the PDF with Enter | files, Library | Open the Library in a second browser; download both | Stable: T-60, T-61 |
+| UAT-34 (D26) | US-14 AS 14.2, 14.5, 14.6; S-136, S-146, S-147 | Send an image in a group to @Jarvis; upload a PDF in Jarvis's main chat; open the Library panel and delete both files, reading each confirmation | Each confirmation says the copy used in chats is deleted too; after confirming, neither file is listed; the group entry, Jarvis's mirrored entry and the normal-chat PDF all show the file as unavailable; a file without a chat copy shows today's dialog | Library deletion | In a second browser, reload the group and Jarvis's chat and fetch both original media URLs (expect not found); restart the server and confirm nothing reappears | Stable: T-60, T-64 |
+| UAT-35 (D27) | US-2 AS 2.3, US-4 AS 4.6; S-150 | Set `session_messaging.steer_body` to 1,000 and send a group message of 1,001 characters; then set it to 131,072 and send 70,000 characters | First: refused naming the 1,000-byte limit; then refused naming the 65,536-byte limit; a 1,000-character message is accepted at the first setting; nothing refused is posted | message size, operator setting | Change the setting, send both sizes, compare each error text with the limit in force | Stable: T-65 |
+| UAT-36 (AE, D28) | US-9 AS 9.10; S-151 | Address Jarvis in two groups at once so one step answers both requests, with work that needs a tool approval | The card is shown only in Jarvis's own chat; both groups show Jarvis's attention animation with "Open Jarvis's main chat"; after approving there, both animations stop | approvals, origin rule, live view | Open both groups in a second browser; confirm no card in either; follow one link; approve; confirm both animations stop | Not yet: needs a real model that batches both requests |
 
 ### Test Implementation Order
 
@@ -1779,8 +1873,8 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-09 | `group_deletion_keeps_library_files` | Integration | S-112 | Journal directory removed; library entries remain |
 | T-13 | `approval_single_decision` | Unit (Go) | S-80 | Approve and deny at the same moment: one transition wins |
 | T-15 | `question_provenance_durable` | Unit (Go) | S-74, S-75, S-76 | Origin captured at creation; present in live card and reconnect snapshot; resume carries it |
-| T-16 | `card_origin_only_for_group_work` | Unit (Go) | S-77, S-79, S-83 | Room origin only when the step answers only the group (D23); any other input keeps the card in the agent's chat; the helper-has-no-reference test unchanged |
-| T-17 | `card_flips_only_own_request` | Unit (Go) | S-82 | With and without a reference |
+| T-16 | `card_origin_only_for_group_work` | Unit (Go) | S-77, S-79, S-83, S-151 | Room origin only when the step answers only one group (D23); any other input, including a second group's request (D28), keeps the card in the agent's chat with no group reference; the helper-has-no-reference test unchanged |
+| T-17 | `card_flips_only_own_request` | Unit (Go) | S-82, S-151 | With and without a reference; a two-group step's card (no reference) flips both groups' requests to waiting (D28) |
 | T-18 | `invitation_state_machine` | Unit (Go) | S-61, S-63, S-64, S-65, S-66 | generating to ready/unavailable; 44/45/46 s; restart; deletion; late discard |
 | T-19 | `invitation_filters_and_exclusions` | Unit (Go) | S-67 | Registered value and pattern removed; secret entries/tool results excluded; prose password NOT asserted (#1467) |
 | T-20 | `invitation_delivery_rules` | Unit (Go) | S-62, S-69, S-131, S-132, S-138, S-139 | First request only; skipped when not ready; never held; origin never receives; reservation transitions; failed write then retry; composed R1 fails / R2 arrives / R1 retries; stored capture with failed acknowledgement; facts-read error; cancellation racing the commit; concurrent first requests; restart |
@@ -1790,11 +1884,11 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-30 (QA-R4) | `room_source_projection` | Unit | S-07, S-08, S-09, S-116 | Row identity stable under delivery frames; no foreign tool calls; after-pause mark; no session bucket touched |
 | T-31 | `shared_rendering_rich_content` | Unit | S-01, S-02, S-03, S-04, S-05, S-06, S-113 | Markdown, code copy, diagram, math, images, files, broken state through the shared pipeline |
 | T-32 | `agent_text_is_display_only` | Unit | S-104, S-105, S-107 | Raw HTML, script/data links, "/pause" text (the remote-image guarantee is T-56) |
-| T-33 | `working_lines_and_attention` | Unit | S-35, S-36, S-37, S-38 | One line per member; replaced by answers; attention + link; no partial text; terminal labels |
+| T-33 | `working_lines_and_attention` | Unit | S-35, S-36, S-37, S-38, S-151 | One line per member; replaced by answers; attention + link; no partial text; terminal labels; attention in each group whose request waits on a card held in the agent's chat (D28) |
 | T-34 | `room_history_oracles` | Unit | S-40, S-41, S-42, S-43, S-44, S-45, S-46, S-47, S-48 | Assertion map of the ADR (C-I9): retained, amended and re-expressed |
 | T-35 | `layout_widths_and_narrow` | Unit | S-39, S-49 | Column widths with/without panel; phone width |
 | T-36 | `participants_button_and_panel` | Unit | S-50, S-51, S-52, S-53, S-54, S-55, S-56, S-57, S-58, S-134 | Stack, toggle, content, Ask again, menu, team-room disable, delete, unpriced cost, close on leave, focus per close action with the real trigger registration and a preserved draft |
-| T-40 | `group_cards_filtering_and_answer_once` | Unit | S-71, S-72, S-73, S-74, S-77, S-78, S-79 | Filter by group reference; helper/unrelated/secret absent; one decision |
+| T-40 | `group_cards_filtering_and_answer_once` | Unit | S-71, S-72, S-73, S-74, S-77, S-78, S-79, S-151 | Filter by group reference; helper/unrelated/secret absent; one decision |
 | T-42 | `room_store_additions` | Unit | S-44, S-45, S-48 | `limit`, attempt counter, view mode, view generation; stale-response fencing retained |
 | T-43 | `room_attachment_adapter` | Unit | S-20, S-22, S-23, S-24 | Upload with workspace and no session; chip errors; 16/17 |
 | T-44 | `add_participant_gating_and_new_group` | Unit | S-59, S-60 | Main chats only; opens a new group |
@@ -1806,15 +1900,18 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-50 | `e2e_start_group_and_invitation` | E2E | S-60, S-61, S-62, S-63 | Real server, stub model; provider-down variant |
 | T-52 | `docs_verifier_audit` | Audit | (DOC-001..DOC-008) | docs-verifier audits the drafts against actual behaviour, including the normal-chat file-card download and Retry text in DOC-005 |
 | T-53 | `vitest_coverage_group_guard` | CI gate | (process) | Every new vitest file matches a CI group pattern |
-| T-54 | `message_size_limit` | Unit (Go) | S-118, S-119 | 65,536 / 65,537 bytes; multi-byte boundary; agent answer over the limit posts nothing and copies no file; same result with inbound validation on and off |
-| T-55 | `contract_text_limit_agrees_with_server` | CI gate | S-118 | Entry and request text limits in the contract schemas (both copies) equal the server limit; fails if either drifts (D24) |
+| T-54 | `message_size_limit` | Unit (Go) | S-118, S-119 | 65,536 / 65,537 bytes at the default setting; multi-byte boundary; agent answer over the limit posts nothing and copies no file; same result with inbound validation on and off |
+| T-55 | `contract_text_limit_agrees_with_server` | CI gate | S-118, S-150 | The 65,536-byte maximum stated in the contract schemas (both copies, request and entry) equals the server's clamp constant; fails if either drifts (D24, D27) |
 | T-56 | `e2e_remote_image_blocked_in_browser` | E2E (real browser, embedded SPA) | S-106 | Controlled remote image endpoint, a positive control proving the instrument sees an allowed request, and the blocked image's policy violation or failure recorded |
 | T-57 | `quoted_context_attachments_by_filename` | Unit (Go) | S-120, S-121 | Text at 65,536/65,537 bytes with 5 MB media; quoted history names earlier files as text only; only the current request's files reach the model |
 | T-58 | `invitation_detail_refresh_transport` | Unit + integration (frontend transport) | S-61, S-122, S-123 | Status-only frame, then the detail fetch, then the rendered text; disconnect during generation; fetch failure with Retry |
 | T-59 | `attachment_retention_collector` | Unit (Go, controlled clock) | S-124, S-125, S-126, S-28 | The real orphan collector 31 days ahead, before and after restart. Asserts the chat media copy and the Library file separately: referenced chat copies survive; an unowned never-posted chat copy is collected while its Library file stays; a deleted paused group's original media URL still opens in a fixture with no consuming-session owner (so a missing group owner is detected), and separately from the agent's chat; ownership acquired once and released when the append fails |
-| T-60 | `library_publication_and_deletion` | Integration + E2E | S-127, S-128, S-136, S-145 | Person uploads and agent-returned files listed and downloadable through the real Library surface; the deletion outcome per the founder's Q-R2-1 answer (S-136 for Option A, S-145 for Option B) is tested on both the Library listing and the group URL; the unchosen option's scenario is not run |
+| T-60 | `library_publication_and_deletion` | Integration + E2E | S-127, S-128, S-136, S-146 | Person uploads and agent-returned files listed and downloadable through the real Library surface, each with its durable `library_path`; one Library deletion (D26) removes both copies, asserted on the Library listing, the chat media manifest, the group URL, the mirrored entry and a normal-chat upload; nothing reappears after a restart and an orphan-cleanup run |
 | T-61 | `shared_file_rows_download_and_error` | Unit | S-129, S-130 | PDF download by keyboard in user and agent rows; missing non-image file shows inline error and Retry; existing normal-chat row tests unchanged |
 | T-62 | `answer_intent_lifecycle` | Unit (Go) | S-33, S-140, S-141, S-142, S-143, S-144 | The full lifecycle: accepted, publishing, committed, rejected; changed or missing original sources; every cut inside each publication; append failure with collector and restart; restart after a returned definitive failure; room, membership and cancellation rechecks; asserts original bytes, one answer, one mirror, no duplicate Library artifact and no model restart |
+| T-63 | `library_delete_removes_chat_copy` | Unit (Go) | S-136, S-148, S-149 | Handler and association: chat copy first, Library file last; 204; partial failure 500 with the file still present and a repeat completing it; directory deletion; rename and same-workspace move keep the association; copy and cross-workspace move do not; retention owners and a pending answer intent do not block and do not recreate; the one-time legacy repair (exactly one SHA-256 and name match; zero or several leave no association); never across workspaces |
+| T-64 | `library_delete_confirmation_and_error` | Unit (vitest) | S-147, S-148 | Dialog text with and without `chat_copy`; 500 shows the error naming the file and keeps the row; a repeat succeeds; vault-note "Move to trash" unchanged |
+| T-65 | `group_size_limit_operator_setting` | Unit (Go) | S-150 | Effective limit `min(steer_body, 65,536)`: unset, 131,072 (clamped), 1,000 (honoured) for person messages and agent answers; error text names the limit in force; a live setting change applies to the next message |
 
 ### Test Datasets
 
@@ -1849,8 +1946,14 @@ Construction reference: `.claude/skills/plan-spec/knowledge/test-dataset-templat
 | 23 | agent answer text of 65,537 bytes with a file | Max + 1 | tool error; nothing posted, copied or passed on | BDD Scenario: S-119 | |
 | 24 | text 65,536 ASCII bytes with 1 valid 5 MB media | Max with media | 202 | BDD Scenario: S-120 | media never consumes text bytes |
 | 25 | text 65,537 ASCII bytes with 1 tiny media | Max + 1 with media | 422 | BDD Scenario: S-120 | independent of media size |
+| 26 | `steer_body` 131,072; text of 65,536 bytes | Clamp, at limit | 202 | BDD Scenario: S-150 | D27 |
+| 27 | `steer_body` 131,072; text of 65,537 bytes | Clamp, over | 422 naming 65,536 | BDD Scenario: S-150 | a larger setting never raises the limit |
+| 28 | `steer_body` 1,000; text of 1,000 bytes | Lowered, at limit | 202 | BDD Scenario: S-150 | D27 |
+| 29 | `steer_body` 1,000; text of 1,001 bytes | Lowered, over | 422 naming 1,000 | BDD Scenario: S-150 | a smaller setting is honoured |
+| 30 | `steer_body` 1,000; agent answer of 1,001 bytes | Lowered, answer | tool error naming 1,000; nothing posted | BDD Scenario: S-150 | same limit for answers |
+| 31 | `steer_body` unset or 0 | Default | limit 65,536 | BDD Scenario: S-150 | `EffectiveSteerBodyBytes` default |
 
-The text-length rows below follow D24 (one limit, 65,536 UTF-8 bytes).
+The text-length rows above follow D24 and D27 (one limit, at most 65,536 UTF-8 bytes, lowered by a smaller operator setting).
 
 #### Datasets DS-2 and DS-3
 
@@ -1944,8 +2047,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | 9 | question card after page reload | Reload | still in both | BDD Scenario: S-75 | |
 | 10 | approve in A, deny in B simultaneously | Race | exactly one decision | BDD Scenario: S-80 | |
 | 11 | same as 1, step also handled a task | Mixed | agent's chat only | BDD Scenario: S-79 | D23 |
-| 12 | step handled requests of two different groups | Mixed | **not asserted** until F-7 is answered | BDD Scenario: S-83 | F-7 |
-| Q-R2-1 | Clarify D25 at the two-copy boundary: a group file exists as a chat copy and a Library file, and the Library panel's Delete removes only the Library file today. How should explicit deletion work? | The spec cannot keep both promises as written: "both copies deletable in the Library" and "the group copy keeps opening after Library Delete". Group deletion deliberately keeps the files (D19), so after a Library Delete the retained chat copy could stay reachable with no way to remove it. | A: one explicit Library deletion removes both copies (also changes normal chats; old chat links stop working); B: keep today's Library Delete and add a distinct, reachable Library action that removes the retained chat copy | A (per the round-2 reviewer: clearest meaning of deleting the file; scope: the shared deletion also changes normal chats) | "Q-R2-1 A" or "Q-R2-1 B" |
+| 12 | step handled requests of two different groups | Mixed | agent's chat only; attention animation and link in both groups | BDD Scenario: S-151 | D28 |
 
 #### Dataset DS-9: History opening and paging
 
@@ -2011,6 +2113,28 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | 14 | retryable append failure, 31 days, cleanup, restart | Pending | posts once from staged bytes | BDD Scenario: S-143 | |
 | 15 | group deleted / agent removed / request cancelled before recovery | Recheck | rejected; nothing posted; no model work | BDD Scenario: S-144 | |
 
+#### Dataset DS-13: Library deletion of a chat file (D26)
+
+| # | Input | Boundary Type | Expected Output | Traces to | Notes |
+|---|-------|---------------|-----------------|-----------|-------|
+| 1 | delete a group file with a chat copy | Happy | 204; Library file and chat copy gone; group, mirror show unavailable | BDD Scenario: S-136 | |
+| 2 | delete a normal chat upload | Happy | 204; both gone; normal chat shows unavailable | BDD Scenario: S-146 | D26 applies to all chat files |
+| 3 | delete a file without a chat copy | No association | 204; only the file removed; today's dialog | BDD Scenario: S-147 | |
+| 4 | chat copy removal fails | Failure | 500; Library file still listed | BDD Scenario: S-148 | |
+| 5 | Library file removal fails after the chat copy was removed | Partial | 500; file still listed; repeat gives 204 | BDD Scenario: S-148 | missing chat copy counts as removed |
+| 6 | chat copy already gone before the deletion | Already removed | 204; Library file removed | BDD Scenario: S-148 | idempotent |
+| 7 | chat copy referenced by 3 sessions and a group retention owner | Owned | 204; both gone; no owner blocks or recreates | BDD Scenario: S-136 | explicit deletion wins (FR-076) |
+| 8 | pending answer intent references the file | Intent | deleted; the intent never recreates it | BDD Scenario: S-136 | FR-078 (4) |
+| 9 | renamed, then deleted | Association moves | both removed | BDD Scenario: S-149 | |
+| 10 | moved inside the workspace, then deleted | Association moves | both removed | BDD Scenario: S-149 | |
+| 11 | copied, copy deleted | No association | only the copy removed | BDD Scenario: S-149 | |
+| 12 | `.library` folder deleted | Directory | every associated chat copy removed | BDD Scenario: S-149 | |
+| 13 | moved to another workspace, then deleted there | Cross-workspace | only the moved file removed; chat copy stays | BDD Scenario: S-149 | documented limit |
+| 14 | legacy upload, exactly one SHA-256 + name match | Repair | associated; both removed | BDD Scenario: S-149 | A-14 |
+| 15 | legacy upload, two matches | Ambiguous | no association; only the Library file removed | BDD Scenario: S-149 | A-14 |
+| 16 | legacy upload, same SHA-256 in another workspace only | Cross-workspace | no association | BDD Scenario: S-149 | never across workspaces |
+| 17 | after deletion: restart and orphan-cleanup run | Durability | nothing reappears | BDD Scenario: S-136 | |
+
 ### Regression Test Requirements
 
 | Existing Behaviour | Existing Test | New Regression Test Needed | Notes |
@@ -2030,6 +2154,8 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | Contract-limit tests for rooms | `wu15_rooms_*` | Yes - T-01, T-02 | plus attachments and media |
 | REST room routes | `rest_rooms_test.go` | Yes - T-01, T-02, T-54 | plus message size and media |
 | `answer_request` has a ceiling policy entry for every agent | `pkg/coreagent/answer_request_policy_test.go` | No change | tool not new |
+| Library delete of a plain work-tree file, directory, vault note (trash) | existing `rest_library_write` and `LibraryExplorer` delete tests | Yes - T-63, T-64 | files with no chat copy keep today's behaviour unchanged |
+| Session messaging `steer_body` for messages between sessions | existing `session_messaging` tests | No change | D27 clamps only the group limit; session-to-session messages keep the setting as is |
 
 ---
 ## Functional Requirements
@@ -2062,12 +2188,12 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 - **FR-022**: System MUST identify an answer attempt by request id, text and the ordered original source identities of its files (a workspace reference, or a path with its content hash taken at acceptance); see FR-084 for how long that identity denotes the same attempt.
 - **FR-023**: System MUST mirror a request's and an answer's attachments into the member's main chat and MUST show them in the main chat's collapsed group entry when expanded.
 - **FR-024**: System MUST NOT count attachments (their bytes, number or metadata) toward the text size cap: text of 65,536 bytes with valid media is accepted and text of 65,537 bytes is refused whatever the media size (S-120).
-- **FR-025**: System MUST NOT delete library files when a group is deleted; both representations stay, and downloadable from members' main chats (D25). Which Library action removes which representation is **pending Q-R2-1** (Option A: one deletion removes both; Option B: Delete removes the Library file and a distinct named action removes the retained chat copy). Whichever is chosen, a retention or recovery step MUST NOT recreate a file the user explicitly deleted.
+- **FR-025**: System MUST NOT delete library files when a group is deleted; both representations stay, and downloadable from members' main chats (D25). One explicit Library deletion removes both representations (D26, FR-086), and a retention or recovery step MUST NOT recreate a file the user explicitly deleted.
 - **FR-026**: System MUST NOT add any upload or media-read authorization to group files: their read posture is the normal chat's (unguessable id; the media route derives the caller workspace from its own URL). The only new cross-workspace rule is at room ingestion (FR-018, 422). The resolver's cross-workspace refusal is asserted only with an independently supplied caller workspace (S-135).
 
 **Live view**
 - **FR-027**: System MUST show one "<Agent> is working..." line per member whose latest request is `admitted`, `working`, `waiting_on_user` or `awaiting_approval`, replace it with the finished answer, show the state label for terminal non-answer states, and MUST NOT show partial answer text.
-- **FR-028**: System MUST show the attention animation on a member's avatar, with the link "Open <Agent>'s main chat", while its group request is `waiting_on_user` and the card is not in the group; the animation MUST stop when the card is resolved.
+- **FR-028**: System MUST show the attention animation on a member's avatar, with the link "Open <Agent>'s main chat", while its group request is `waiting_on_user` and the card is not in the group (including a card held in the agent's chat because the step answers two groups, D28, in every group concerned); the animation MUST stop when the card is resolved.
 
 **Layout and history**
 - **FR-029**: System MUST lay a group out in the normal chat's centred columns (messages and message box widths as the normal chat), with or without the Participants panel open.
@@ -2099,7 +2225,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 - **FR-049**: System MUST resolve a card once by its id (first valid decision wins) and both views MUST update without a reload.
 - **FR-050**: System MUST capture a question's group reference and origin label when the question is created, keep it immutable, carry it in the live card and the reconnect snapshot, and carry it into the resumed work's origin.
 - **FR-051**: System MUST NOT show in the group cards that carry no reference of this group: unrelated work, helper cards, secret cards; the group shows the attention animation and link instead.
-- **FR-052**: System MUST show a tool-approval or question card in the group only when the step that raised it answers this group; a step that also handles any other input (a message typed in the agent's own chat, a messaging channel, a task, another agent's message) MUST keep its cards in the agent's own chat only (D23). A step that answers two different groups: not decided (F-7).
+- **FR-052**: System MUST show a tool-approval or question card in the group only when the step that raised it answers this group; a step that also handles any other input (a message typed in the agent's own chat, a messaging channel, a task, another agent's message) MUST keep its cards in the agent's own chat only (D23). A step that answers requests from two different groups MUST keep its cards in the agent's own chat only, carrying no group reference, and every group concerned shows the attention animation and link (D28, FR-028).
 - **FR-053**: System MUST flip to "waiting for you" only the request a reference-carrying card belongs to; a card without a reference keeps the existing per-chat behaviour.
 - **FR-054**: System MUST deliver this group's approval cards to a browser that is on the group page with no chat attached.
 
@@ -2120,13 +2246,13 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 - **FR-072**: System MUST keep the semantics of `/pause`, `/resume`, `/mute`, `/unmute` and the refusal of other commands.
 - **FR-073**: System MUST keep the normal chat's history and composer behaviour unchanged; the existing suites pass with no edits.
 
-**Message size (D24)**
-- **FR-074**: System MUST refuse (422) a group message whose text is longer than 65,536 UTF-8 bytes, naming the size and the limit, and post nothing; the contract text for the message request and the entry states the same limit, and the server enforces it with inbound validation on and off.
-- **FR-075**: System MUST refuse an agent answer whose text is longer than 65,536 UTF-8 bytes with a tool error and MUST NOT post, copy its files, mirror or pass it on.
+**Message size (D24, D27)**
+- **FR-074**: System MUST compute the group text limit as `min(session_messaging.steer_body, 65,536)` UTF-8 bytes (the default setting gives 65,536; a larger setting is clamped; a smaller one is honoured), read at submission time. It MUST refuse (422) a group message whose text is longer than that limit, naming the size and the limit in force, and post nothing; the contract text for the message request and the entry states the 65,536-byte maximum and that a smaller operator setting lowers it; the server enforces it with inbound validation on and off. Messages between sessions keep using `steer_body` unchanged.
+- **FR-075**: System MUST refuse an agent answer whose text is longer than the same effective limit with a tool error naming the limit in force and MUST NOT post, copy its files, mirror or pass it on.
 
 **Round-1 additions (grill findings B1, I1-I5, I10, M4)**
 - **FR-076**: System MUST give every accepted group attachment (a person's message, an agent's answer, requests held or paused, and the mirrored copies) a persistent retention owner so the automatic orphan cleanup never removes a file a group entry or pending request still references. Ownership is acquired idempotently once per (entry or request id, reference) before the append, recorded durably so a restart can repair a missed acquisition, released if the append fails, and not released by deleting the group (D19). Only a user's explicit deletion removes a file.
-- **FR-077**: System MUST publish every group file in both representations a normal chat upload has (chat media copy and Library file) through one shared, repeat-safe publication path used for person uploads and agent-returned files. What the Library panel's deletion removes is **pending Q-R2-1** (see FR-025).
+- **FR-077**: System MUST publish every group file in both representations a normal chat upload has (chat media copy and Library file) through one shared, repeat-safe publication path used for person uploads and agent-returned files. The publication path MUST also record durably, on the chat copy's media entry, the path of its Library file (`library_path`, FR-086).
 - **FR-078**: System MUST treat an agent answer with files as a durable answer intent with these states and rules. (1) **Accepted**: validation passed (room open, request owned by the caller, member still a member, request not cancelled, size limits) and every original source was read once, hashed and copied into private, immutable staging owned by the intent; the intent also records text, mentions and, for every file, the media identity and Library file name allocated at acceptance. The intent holds retention for its staged bytes and published artifacts from this moment. (2) **Publishing**: each file is published into both representations under its preallocated identities with create-or-adopt semantics, so repeating a step never creates a second artifact; the per-file outcome is recorded durably. (3) **Committed**: the entry is appended (the entry carries the intent id), ownership passes to the entry (acquire before release), then mirror and mention admission complete. (4) **Rejected**: a definitive failure (unreadable source, validation, size, room gone, member removed, request cancelled) is recorded durably as rejected before the agent receives the definitive "nothing posted" error; a rejected intent never posts, staged bytes and unreferenced published files are then removed, and a file the user deleted explicitly is never recreated. (5) A retryable failure leaves the intent accepted and the agent receives an honest "accepted, completing" result, not "nothing posted". (6) After a restart the server completes every accepted intent from the recorded data only: it never asks the agent again, never replays or resumes model work, and rechecks that the room exists, the member still belongs and the request is not cancelled before posting or admitting mentions, otherwise it rejects.
 - **FR-079**: System MUST fetch the summary text only through `getRoom`: refetch on a `ready` status change and after reconnect or re-attach while the panel is open and the detail may be stale; a failed fetch shows an error with Retry.
 - **FR-080**: System MUST give the summary reservation these transitions: reserved for request R (durable with R, decided once) then either delivered (R's receiver capture is durable) or released. The reservation MUST be kept across every retryable outcome of R (unavailable, unknown, storage error, a failed facts read, a capture-write failure, a failed acknowledgement after a stored capture, where the receiver's durable facts are reconciled first). It is released only when R is irreversibly cancelled and the receiver's facts positively show no capture; a read error is never proof of absence. A request that was sent without the summary (including R2 skipped while R held it) never receives it later; after a release only a later new request may reserve it. Concurrent first requests reserve exactly once. D20 holds: nothing waits.
@@ -2134,11 +2260,13 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 - **FR-082**: System MUST list earlier group attachments in the quoted group context by filename only and MUST hand only the current request's files to the model as input (S-121).
 - **FR-083**: System MUST return focus on closing the Participants panel as the shared panel shell does for each action (close button to the message box, Escape to the invoking trigger) and keep an unsent draft.
 - **FR-084**: System MUST define the lifetime of an answer-attempt identity as follows. A call with files whose key equals the key of the request's most recent answer returns and completes that answer while it is not fully completed (entry appended, mirrored, mentions admitted) and never creates a second entry; once it is fully completed, an equal call is a new answer (the same rule text-only answers follow today, which this feature does not change).
+- **FR-086**: System MUST, on one explicit Library deletion (`deleteLibraryEntry`) of a file that has an associated chat copy, remove both the Library file and that chat copy, for normal chat uploads and group files alike (D26). The association is the media entry's durable `library_path`, kept across rename and same-workspace move, absent for a copy, dropped by a move to another workspace, and resolved only within the same workspace. Deleting a directory applies this to every associated file inside it. Retention owners and pending answer intents MUST NOT block the deletion and MUST NOT recreate either copy. The server MUST remove the chat copy first and the Library file last, answer 204 when both are gone, treat an already-missing chat copy as removed, and answer 500 with the Library file still present when either removal fails, so a repeat completes it. For uploads made before this feature, a one-time repair on start MUST associate a `.library` file with the same-workspace media entry of equal SHA-256 and equal file name (ignoring a " (N)" duplicate suffix) only when exactly one entry matches (A-14). Chats that show a deleted file MUST show it as unavailable (FR-002). Deleting a group still MUST NOT delete files (D19, FR-025).
+- **FR-087**: System MUST, in the Library panel, mark a file that has a chat copy (`chat_copy`) and, when the person chooses Delete on it, say in the confirmation that the copy used in chats is deleted too and that chats will show the file as unavailable; on a failed deletion it MUST show an error naming the file, keep the file listed, and allow the deletion to be repeated. Files without a chat copy keep today's dialog.
 - **FR-085**: System MUST keep the answer recovery boundary of FR-078 (6): completing an accepted answer persists work the agent already authored; it MUST NOT regenerate an answer, restart or resume an interrupted turn, or bypass cancellation, membership or deletion.
 
 ## Success Criteria
 
-- **SC-001**: Every scenario S-01 to S-145 (S-11 and S-84 to S-97 retired by D21) is covered by at least one test in the Test Implementation Order, and every UAT row UAT-1 to UAT-33 (UAT-8, UAT-9, UAT-22 retired by D21) is executed on the exact candidate commit (AE rows by `uat-tester` plus independent `uat-validator`).
+- **SC-001**: Every scenario S-01 to S-151 (S-11 and S-84 to S-97 retired by D21; S-145 retired by D26) is covered by at least one test in the Test Implementation Order, and every UAT row UAT-1 to UAT-36 (UAT-8, UAT-9, UAT-22 retired by D21) is executed on the exact candidate commit (AE rows by `uat-tester` plus independent `uat-validator`).
 - **SC-002**: The existing chat history and composer suites pass with zero edited test files at the FE-0 and FE-1 gates.
 - **SC-003**: `make verify-contracts` and `scripts/check-no-handwritten-wire-types.sh` pass on the candidate; no hand-written wire type exists for the new fields.
 - **SC-005**: The summary job causes 0 seconds of deliberate wait for any group message (S-69, S-63).
@@ -2147,7 +2275,8 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 - **SC-008**: On a group whose opening view fills the screen, the number of `getRoomHistory` calls on open is 0 (S-43).
 - **SC-009**: docs-verifier passes DOC-001 to DOC-008 against the actual behaviour.
 - **SC-013**: With a controlled clock 31 days ahead, the real orphan cleanup removes 0 referenced group files (paused group, held request, deleted group, after restart) and still removes the chat media copy of an upload that was never posted while its Library file stays listed (S-124, S-125, S-126, S-28).
-- **SC-012**: The contract text limit for the group message request and entry equals the server limit (65,536 UTF-8 bytes), checked by T-55 (S-118).
+- **SC-012**: The contract's 65,536-byte maximum for the group message request and entry equals the server's clamp constant, and the server applies `min(steer_body, 65,536)`, checked by T-55 and T-65 (S-118, S-150).
+- **SC-014**: After one explicit Library deletion of a chat file, 0 copies of it remain (Library file and chat media copy), also after a restart and an orphan-cleanup run, for group files and normal chat uploads (S-136, S-146, T-60, T-63).
 - **SC-010**: The old `RoomTranscript`, `RoomComposer` and `RoomHeader` components are deleted only after the replacement tests pass in CI with red-before-green evidence.
 
 ---
@@ -2173,6 +2302,8 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 | Approvals and questions for this group's work | person | approval/question cards in the group thread area (same components as the normal chat) and in the agent's chat | group page |
 | Helper attention signal | person | attention avatar and "Open <Agent>'s main chat" link in the working line and the header stack | group page |
 | Group files in the workspace | person | Library panel (existing) and the agent's main chat | existing screens |
+| Delete a chat file everywhere (D26) | person | Library panel Delete, confirmation dialog (`LibraryExplorer`) | Library panel |
+| Group message size limit (D27) | operator sets `session_messaging.steer_body`; person and agent are refused above the limit in force | group message box notice area; agent tool error | settings / config |
 
 A backend change without a UI path does not exist in this feature: every server change above has a named screen.
 - **Test plan execution**: RED packs QA-R1, QA-R2 (chrome), QA-R3 (Go) and QA-R4 (room source, panel, approvals) are shown failing on a tests-only commit in CI before the corresponding GREEN; CHECK is a second qa-lead instance plus a second instance of each lead role; then the single combined 5-reviewer gate on the combined feature branch; then the integration or standalone candidate, one full CI run, and the UAT rows above on the exact candidate. Written is not executed: SC-001 requires execution evidence per row.
@@ -2185,12 +2316,12 @@ Existing pages read before naming destinations: `docs/group-chats.md` (current t
 |---|---|---|---|
 | DOC-001 | The group is the normal chat: formatting, images and files both ways, same message box without session-only controls, 16 attachments, files kept after deletion, agent text is display-only | `docs/group-chats.md` (intro, "Who receives your message", "How agents answer", new "Images and files", "Deleting a group", "Limits in this version") | Describe the screen and message box; replace the statement that a deleted group's files are removed with the D19 rule (journal only; library files stay); remove "Secret requests are not handled" or restate it as "a link to the agent's chat" |
 | DOC-002 | Participants button and panel; Add participant moved to the right end; starting a group; invitation context | `docs/group-chats.md` ("Add participant", "Member states", new "Participants panel" and "Invitation context") | Replace "top-left"; document panel contents, Ask again, cost; invitation context: what it is, never posted, readable in the panel, shown as generating or "Invitation context: unavailable", **and the plain statement that anything written in the original chat except recognised keys may appear in it (D18, #1467)** |
-| DOC-003 | Cards for this group's work appear in the group, only for work that answers the group; helper, unrelated and mixed-input cards stay in the agent's chat; attention avatar; stopping happens in the agent's own chat | `docs/group-chats.md` ("Approvals and questions", "How agents answer") | Replace "belong to its main chat, not to the group" with the D8/D15/D23 rule; say there is no Stop in the group and point to the agent's own chat; document Ask again |
+| DOC-003 | Cards for this group's work appear in the group, only for work that answers the group; helper, unrelated, mixed-input and two-group cards stay in the agent's chat; attention avatar; stopping happens in the agent's own chat | `docs/group-chats.md` ("Approvals and questions", "How agents answer") | Replace "belong to its main chat, not to the group" with the D8/D15/D23/D28 rule (when one step of an agent answers two groups, the card is in the agent's own chat and both groups show the attention cue and link); say there is no Stop in the group and point to the agent's own chat; document Ask again |
 | DOC-004 | A card can be answered in a group, only for work that answers the group | `docs/security.md` ("Approve a request") | Same decision and grant scope wherever answered; one decision wins; a step that also handles other input keeps its cards in the agent's chat |
 | DOC-005 | Minimal header: no bar or border; controls at the right end; helper breadcrumb; group Participants control; shared history behaviour; **file cards in every chat** | `docs/using-omnipus-ui.md` ("The chat area", "Who each message is from", "Reading earlier messages", "Sessions", and the existing Retry guidance) | Describe the header controls per chat kind; state that groups use the same list, history, Return to latest and message box; **add: a file card (yours or an agent's, any file type) downloads by mouse or keyboard (Enter); if the file cannot be fetched the card shows an error with Retry, which repeats the same file fetch and is not a message resend or a repeat of the agent's work** |
 | DOC-006 | Groups use the normal chat's history behaviour | `docs/group-chats.md` ("Opening a group: Earlier messages aren't shown") | Replace the room-specific scrolling text with the shared behaviour and keep the 10,000-entry snapshot statement |
-| DOC-007 | Message `media`, upload by workspace, the 65,536-byte limit | `docs/group-chats.md` ("API summary", "Who receives your message") | Add `media` on post, the 503/422 outcomes and the size limit (the page already says 65,536 bytes by default; restate per F-6, pending) |
-| DOC-008 | Group files are stored like normal chat uploads in two representations and outlive the group | `docs/library.md` | Say what is true: files appear in the Library as normal chat uploads do; neither copy is deleted with the group; **what the Library panel's deletion removes follows the founder's Q-R2-1 answer (pending): Option A one deletion removes both copies; Option B Delete removes the Library file and a named action removes the retained chat copy** (docs-verifier confirms the page's current statement about chat uploads first) |
+| DOC-007 | Message `media`, upload by workspace, the group size limit (D27) | `docs/group-chats.md` ("API summary", "Who receives your message"); `docs/settings.md` (`steer_body`) | Add `media` on post and the 503/422 outcomes. Replace the size sentence (today: "up to 65,536 bytes long by default. Your operator can change this with `session_messaging.steer_body`") with: a group message, and an agent's group answer, can be up to 65,536 bytes; an operator can lower this with `session_messaging.steer_body` but not raise it above 65,536 bytes for groups; the error names the limit in force. In `docs/settings.md`, add to `steer_body` that group chats use it only up to 65,536 bytes |
+| DOC-008 | Group files are stored like normal chat uploads in two representations and outlive the group; one Library deletion removes a chat file everywhere (D26) | `docs/library.md` ("Ordinary deletes are permanent" and the `.library` paragraph); `docs/group-chats.md` ("Deleting a group"); `docs/using-omnipus-ui.md` ("The chat area", file cards) | Say what is true: files appear in the Library as normal chat uploads do; neither copy is deleted with the group; deleting a chat file in the Library also deletes the copy chats use (the confirmation says so), and every chat that showed it, normal or group, then shows it as unavailable; this cannot be undone; a renamed or moved file keeps this link, a copy does not, and a file moved to another workspace leaves its chat copy behind; uploads from before this version are linked only when they can be matched unambiguously (docs-verifier confirms the page's current statements first) |
 
 The implementing lead drafts these; `docs-verifier` audits them against the actual behaviour (T-52) before landing.
 
@@ -2223,10 +2354,10 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-022 | US-4 | S-32, S-133, S-137 | T-07 | - (needs fault injection; Go only) | none - internal repair identity |
 | FR-023 | US-3, US-4 | S-20, S-29 | T-08 | UAT-2, UAT-3 | DOC-001 |
 | FR-024 | US-3 | S-24, S-120 | T-01, T-54, T-57 | UAT-31 | DOC-001 |
-| FR-025 | US-14 | S-112, S-113, S-126, S-136, S-145 | T-09, T-59, T-60 | UAT-26 | DOC-001, DOC-008 |
+| FR-025 | US-14 | S-112, S-113, S-126, S-136 | T-09, T-59, T-60 | UAT-26, UAT-34 | DOC-001, DOC-008 |
 | FR-026 | US-3 | S-25, S-135 | T-03, T-04 | UAT-28 | DOC-008 |
 | FR-027 | US-5 | S-35, S-37, S-38 | T-33 | UAT-7 | DOC-001 |
-| FR-028 | US-5, US-9 | S-36, S-77 | T-33, T-40 | UAT-11b | DOC-003 |
+| FR-028 | US-5, US-9 | S-36, S-77, S-151 | T-33, T-40 | UAT-11b, UAT-36 | DOC-003 |
 | FR-029 | US-6 | S-39, S-49 | T-35 | UAT-17, UAT-21 | DOC-005 |
 | FR-030 | US-6 | S-40, S-41, S-42, S-45, S-46, S-47 | T-34, T-47 | UAT-18 | DOC-006 |
 | FR-031 | US-6 | S-43, S-44, S-48 | T-34, T-42 | UAT-18 | DOC-006 |
@@ -2250,7 +2381,7 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-049 | US-9 | S-72, S-74, S-80 | T-13, T-40 | UAT-10, UAT-23 | DOC-004 |
 | FR-050 | US-9 | S-74, S-75, S-76 | T-15 | UAT-13, UAT-24 | DOC-003 |
 | FR-051 | US-9 | S-73, S-77, S-78 | T-16, T-40 | UAT-11b, UAT-12, UAT-14 | DOC-003 |
-| FR-052 | US-9 | S-79, S-83 | T-16 | UAT-32 | DOC-003 |
+| FR-052 | US-9 | S-79, S-83, S-151 | T-16, T-17 | UAT-32, UAT-36 | DOC-003, DOC-004 |
 | FR-053 | US-9 | S-82 | T-17 | UAT-12 | none - internal status rule |
 | FR-054 | US-9 | S-81 | T-23 | UAT-10 | none - internal delivery rule |
 | FR-063 | US-11 | S-98 | T-37 | UAT-19 | DOC-005 |
@@ -2264,10 +2395,10 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-071 | US-15 | S-114 | T-45 | - (unchanged; covered by regression) | none - unchanged |
 | FR-072 | US-15 | S-115 | T-46 | UAT-6 | DOC-001 |
 | FR-073 | US-15 | S-117 | T-24, T-25 | UAT-18 | none - behaviour unchanged |
-| FR-074 | US-2 | S-118 | T-54, T-55, T-29 | UAT-31 | DOC-001, DOC-007 |
-| FR-075 | US-4 | S-119 | T-54 | UAT-31 | DOC-001 |
+| FR-074 | US-2 | S-118, S-150 | T-54, T-55, T-29, T-65 | UAT-31, UAT-35 | DOC-001, DOC-007 |
+| FR-075 | US-4 | S-119, S-150 | T-54, T-65 | UAT-31, UAT-35 | DOC-001, DOC-007 |
 | FR-076 | US-14 | S-124, S-125, S-126, S-28, S-143 | T-59, T-62 | UAT-26 | DOC-008 |
-| FR-077 | US-3, US-4 | S-127, S-128, S-136, S-145 | T-60 | UAT-33 | DOC-008 |
+| FR-077 | US-3, US-4 | S-127, S-128, S-136 | T-60, T-63 | UAT-33, UAT-34 | DOC-008 |
 | FR-078 | US-4 | S-33, S-140, S-141, S-142, S-143, S-144 | T-62 | - (needs fault injection; Go only) | none - internal recovery |
 | FR-079 | US-8 | S-61, S-122, S-123 | T-58 | UAT-15 | DOC-002 |
 | FR-080 | US-8 | S-131, S-132, S-138, S-139 | T-20 | UAT-16 | DOC-002 |
@@ -2276,19 +2407,34 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-083 | US-7 | S-134 | T-36 | UAT-17 | DOC-002 |
 | FR-084 | US-4 | S-133, S-137 | T-07 | - (needs a lost receipt; Go only) | none - internal retry rule |
 | FR-085 | US-4 | S-33, S-140, S-144 | T-62 | - (needs fault injection; Go only) | none - internal recovery boundary |
+| FR-086 | US-14 | S-136, S-146, S-148, S-149 | T-60, T-63 | UAT-34 | DOC-008 |
+| FR-087 | US-14 | S-147, S-148 | T-64 | UAT-34 | DOC-008 |
 
-**Completeness check**: FR-001 to FR-085 (FR-009 and FR-055 to FR-062 retired by D21; ids are not reused) each have at least one scenario and one test; scenarios S-01 to S-145 (S-11 and S-84 to S-97 retired) each appear in the matrix and in the Test Implementation Order (verified by script, see the evidence table of the hand-off); DOC-001 to DOC-008 each appear at least once; each UI or behaviour change traces to a DOC TODO or states why none applies. Contract-first (Hard Constraint #8) is tracked by SC-003 and test T-51 rather than an FR because it has no user-visible scenario.
+**Completeness check**: FR-001 to FR-087 (FR-009 and FR-055 to FR-062 retired by D21; ids are not reused) each have at least one scenario and one test; scenarios S-01 to S-151 (S-11 and S-84 to S-97 retired by D21, S-145 retired by D26) each appear in the matrix and in the Test Implementation Order (verified by script, see the evidence table of the hand-off); DOC-001 to DOC-008 each appear at least once; each UI or behaviour change traces to a DOC TODO or states why none applies. Contract-first (Hard Constraint #8) is tracked by SC-003 and test T-51 rather than an FR because it has no user-visible scenario.
 
 ---
 
 ## Open Founder Questions
 
-Founder answers applied in this revision: D21 (no Stop in the group), D22 (attention cue accepted), D23 (cards only for work that answers the group), D24 (one message size limit), D25 (group files stored like normal chat uploads). **F-6, F-7 and Q-R2-1 are pending with the founder; team-lead sends the answers separately and they are applied then.** Round 1 introduced no new founder question. Neither point blocks the rest of the spec. Each is a one-line answer.
+None open. Founder answers applied in this revision: D21 (no Stop in the group), D22 (attention cue accepted), D23 (cards only for work that answers the group), D24 (one message size limit), D25 (group files stored like normal chat uploads), and on 2026-10-28 (Discord #team-b, "q10a, f6 b, f7 a"):
 
-| ID | Question | Context and impact | Options | Recommendation | Answer label |
-|---|---|---|---|---|---|
-| F-6 | D24 needs one group message limit, named per the existing server behaviour: **65,536 bytes** (default of `session_messaging.steer_body`, which also governs messages between sessions and which an operator can change). The contract can state only one number. How should the operator setting behave for groups? | Today docs/group-chats.md says the limit follows `steer_body`. The contract and the server can only "agree on one limit" if the setting cannot move the group limit away from the contract number. | A: groups always use 65,536 bytes and ignore the setting; B: groups use the setting but never more than 65,536 bytes (a larger value is clamped, a smaller one is honoured); C: raise the fixed limit to a different number in both contract and server | B | "F-6 A/B/C" |
-| F-7 | When one agent step answers requests from two different groups at once and needs an approval, where does the card go? | D23 says cards appear in the group only for work that answers the group context. Two groups are two contexts; the card carries one group reference today (the first). | A: the agent's own chat only; B: in the first group only (today's behaviour); C: in both groups | A | "F-7 A/B/C" |
+| ID | Question | Answer | Decision | Where applied |
+|---|---|---|---|---|
+| Q-R2-1 (Q10) | How should explicit deletion of a chat file work, given its two copies? | A: one explicit Library deletion removes both copies; old chat references show the file as unavailable; for normal and group attachments alike; the shared deletion change and its confirmation and error behaviour are authorised | D26 | Contract table (`LibraryEntry.chat_copy`, `MediaLibraryEntry.library_path`, `deleteLibraryEntry`, move/rename/copy), US-14 AS 14.2, 14.5, 14.6, Edge Cases, FR-025, FR-077, FR-086, FR-087, S-136, S-146 to S-149 (S-145 retired), DS-13, T-60, T-63, T-64, UAT-34, SC-014, DOC-008, A-14 |
+| F-6 | How does the operator setting `steer_body` interact with the one group limit? | B: groups follow the setting but never above 65,536 bytes; a larger value is clamped, a smaller one honoured; the contract states the maximum and that a smaller setting lowers it | D27 | Contract table (`RoomMessageRequest`, `RoomEntry`), US-2 AS 2.3, US-4 AS 4.6, Edge Cases, FR-074, FR-075, S-150, DS-1 rows 26-31, T-55, T-65, UAT-35, SC-012, DOC-007, A-3 |
+| F-7 | Where does the card go when one step answers two different groups? | A: the agent's own chat only; both groups show the attention animation and link | D28 | US-9 AS 9.10, Edge Cases, FR-028, FR-052, S-83, S-151, DS-8 row 12, T-16, T-17, T-33, T-40, UAT-36, DOC-003 |
+
+## Open Before Approval
+
+The status stays `In review` (not `Approved`) because these technical items are still open. None needs the founder; each is a one-line decision by the named role, recorded in this spec before RED starts.
+
+| ID | Open item | Owner | Recommendation already in the spec |
+|---|---|---|---|
+| A-1 | Summary output longer than 4,096 characters: truncate or `unavailable` | architect | truncate on a word boundary, status `ready` |
+| A-2 | Origin chat with nothing to summarise | architect | skip the model call, `unavailable`, no cost |
+| A-13 | Bounds of the private staging of an answer's original bytes | architect | 100 MB per file, at most 16 files, removed on rejection and after commit |
+| A-4 / A-9 | Duplicate media references in one message or answer | backend-lead (in RED) | accept as listed, show once per listed reference; not asserted until confirmed |
+| A-6, A-7 | Participants tooltip wording; narrow-width panel behaviour | frontend-lead | "Participants"; same as the other registered side panels |
 
 ## Grill Round 1 Dispositions
 
@@ -2311,7 +2457,7 @@ Report: `/workspace/logs/1449/1449-spec-review.md` (verdict BLOCK: 1 Blocking, 1
 | M2 malformed rows and dangling IDs | ACCEPTED | scan of the file | rows moved into DS-1 (rows 18-23); SC-001 states S-11 retired; T-51 cites SC-003; UAT-31 says ASCII |
 | M3 UAT-15 password promise | ACCEPTED | D18, FR-047 | UAT-15 follows UAT-30 scope and excludes unregistered prose passwords |
 | M4 panel focus return | ACCEPTED | `src/components/panel-shell/SidePanelShell.tsx` uses `requestClose('chat')` for the close button; Escape returns to the trigger | Accessibility text, FR-083, S-134, T-36 |
-| Technical ambiguity rows A-1, A-2 | NOTED | - | Marked "architect decision required before RED"; not approved by repetition in datasets |
+| Technical ambiguity rows A-1, A-2 | NOTED | - | Marked "architect decision required before RED"; not approved by repetition in datasets; listed under "Open Before Approval" |
 
 ## Grill Round 2 Dispositions
 
@@ -2320,7 +2466,7 @@ Report: `/workspace/logs/1449/1449-spec-review-round2.md` (final round; verdict 
 | Finding | Disposition | Evidence read | Spec fix |
 |---|---|---|---|
 | R2-B1 answer intent is not a recoverable publication transaction | ACCEPTED, fixed without a scope change; no founder decision needed (S-33 is kept, not weakened) | `pkg/media/library/library.go::uploadInternal` mints a UUID per call; `pkg/gateway/rest_uploads.go::stageWorkspaceUploadCopy` picks collision-suffixed names; `pkg/agent/upload_workpath.go::uploadWorkPathRegistry` is in-memory; `pkg/rooms/service.go::recover` repairs only appended answers | FR-078 rewritten as a lifecycle (accepted with immutable staged bytes, publishing with preallocated identities and create-or-adopt, committed, rejected before the definitive error, retryable result, restart completion that never replays model work); FR-085; S-31, S-33, S-140 to S-144; DS-12; T-62; A-13 (staging bounds). Cost stated: private staging storage and a create-or-adopt publication API in `pkg/media/library` |
-| R2-I1 Library deletion promises conflict | PARTLY: both options kept visible, pending founder Q-R2-1 | `LibraryExplorer.tsx::deleteMutation` calls `deleteLibraryEntry` (Library file only); `deleteWorkspaceMedia` exists with no UI caller | Q-R2-1 added; FR-025, FR-077, AS 14.2, Edge Cases, DOC-008 now state both outcomes; S-136 (Option A) and S-145 (Option B); T-60 runs only the chosen option; explicit deletion is never undone by repair |
+| R2-I1 Library deletion promises conflict | ACCEPTED, resolved by founder decision D26 (Q-R2-1: A, 2026-10-28) | `LibraryExplorer.tsx::deleteMutation` calls `deleteLibraryEntry` (Library file only); `deleteWorkspaceMedia` exists with no UI caller | Q-R2-1 asked and answered (D26): one Library deletion removes both copies, normal and group alike. FR-025, FR-077, new FR-086 and FR-087, AS 14.2, 14.5, 14.6, Edge Cases, DOC-008; S-136 (chosen), S-145 retired, S-146 to S-149; DS-13; T-60, T-63, T-64; UAT-34; SC-014; contract changes for backend-lead (`LibraryEntry.chat_copy`, `MediaLibraryEntry.library_path`, `deleteLibraryEntry`); explicit deletion is never undone by repair |
 | R2-I2 identity lifetime | ACCEPTED | `pkg/rooms/answers.go::unmirroredAnswer` matches only while unmirrored | FR-084 (equal call while incomplete completes the first; after full completion it is a new answer, as text-only today), S-137, S-133, DS-12 rows 8-10, T-07 |
 | R2-I3 reservation release on retryable terminal states | ACCEPTED | `pkg/rooms/types.go::terminal` includes unavailable; `fanout.go::admittable` re-admits unavailable/unknown | FR-043, FR-080 (explicit transitions; read error is not proof of absence; skipped request never gets it later), S-138, S-139, DS-4 rows 17-21, T-20 |
 | R2-I4 missing doc TODO for normal-chat file rows | ACCEPTED | `docs/using-omnipus-ui.md` "The chat area" has no file-card text | DOC-005 extended (download by mouse/keyboard, inline error, Retry repeats the fetch, not a message resend), T-52 audit text, FR-002 row links DOC-005 |
@@ -2331,7 +2477,7 @@ Report: `/workspace/logs/1449/1449-spec-review-round2.md` (final round; verdict 
 - GitNexus was not available in this session; the codebase context uses Read/Grep and the ADR's verified statements, labelled as such. Implementing leads re-run `impact` before every edit.
 - The interview-me state file (`.<spec-name>.interview.json`) does not exist for this feature; the requirements document's decisions log is the interview output (founder interview in the team-lead chat, 2026-10-27/28).
 - `ChatHeaderSlot` and the minimal header for normal and helper chats exist only on `feature/1449-minimal-header` (`1d7886ecc`, `ede852eb2`) and are assumed to land before or with this feature; this spec does not redo that work.
-- Spec-chosen values (ADR delegated them to the spec): summary time limit 45 s (ADR ceiling 60 s), summary input 40 entries / 16 KiB (ADR ceiling), about 200 words, text maximum 4,096; HTTP codes 422 for "nothing to send", media-reference failures and over-limit text, 400 for schema violations, 503 for library unavailable. The message size limit 65,536 bytes is the existing server default (D24); the interaction with the operator setting is F-6.
+- Spec-chosen values (ADR delegated them to the spec): summary time limit 45 s (ADR ceiling 60 s), summary input 40 entries / 16 KiB (ADR ceiling), about 200 words, text maximum 4,096; HTTP codes 422 for "nothing to send", media-reference failures and over-limit text, 400 for schema violations, 503 for library unavailable. The message size limit is at most 65,536 bytes, the existing server default (D24), lowered but never raised by `session_messaging.steer_body` (D27).
 - Removed or merged template sections: none removed. "Success Criteria" and "Open Founder Questions" are added. The contract-first requirement is a success criterion (SC-003) rather than an FR.
 - Per-OS differences: none expected (browser and Go server behaviour only); the SPA embed stub trap applies to local Go compiles (root `CLAUDE.md`).
 
@@ -2344,10 +2490,12 @@ Report: `/workspace/logs/1449/1449-spec-review-round2.md` (final round; verdict 
 - Q: Does the group have a Stop? -> A: No; stopping happens in each agent's own chat (D21; supersedes the Stop parts of D4 and D16 and the ADR's Stop decisions).
 - Q: Is it accepted that the attention cue can light up for unrelated waiting? -> A: Yes (D22).
 - Q: When does a card appear in the group? -> A: Only for work that answers the group; a step that also handles other input keeps its cards in the agent's chat (D23; replaces the earlier "group wins over web" assumption).
-- Q: What is the group message size limit? -> A: One limit in contract and server (D24), named 65,536 bytes per the existing server behaviour; operator-setting interaction open as F-6.
+- Q: What is the group message size limit? -> A: One limit in contract and server (D24): at most 65,536 bytes; the operator setting `session_messaging.steer_body` can lower it, a larger value is clamped (D27).
 - Q: Where are group files stored? -> A: Exactly like normal chat uploads, in the workspace media library, visible and deletable in the Library, surviving group deletion (D25).
 - Q: Where does Add participant appear? -> A: Main chats only (D17).
 - Q: Can passwords in prose reach the invitation summary? -> A: Yes, accepted for #1449 (D18); tracked as #1467.
 - Q: Are files deleted with a group? -> A: Never (D19).
 - Q: What if the summary cannot be made? -> A: Start without it, panel shows "Invitation context: unavailable", the first message is never held (D20).
 - Q: Where do group files live? -> A: In the workspace library, same read posture as the normal chat (ADR 11.2 C-I1).
+- Q: What does deleting a chat file in the Library do? -> A: One explicit deletion removes both copies (Library file and chat copy); chats show the file as unavailable; same for normal and group attachments; group deletion still never deletes files (D26).
+- Q: Where does a card go when one step answers two different groups? -> A: The agent's own chat only; both groups show the attention animation and link (D28).
