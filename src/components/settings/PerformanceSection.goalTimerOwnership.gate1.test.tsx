@@ -37,7 +37,9 @@ beforeEach(() => {
       server = { ...server, pending_apply: { stage: 'refresh', changed_fields: Object.keys(patch) } }
       return json({ error: 'C1 synthetic saved but not applied', code: 'performance_reload_failed', details: { stage: 'refresh', changed_fields: Object.keys(patch), lowered_agents: [] } }, 500)
     }
-    server = { ...server, ...patch }; return json(server)
+    server = { ...server, ...patch }
+    delete server.pending_apply
+    return json(server)
   }))
 })
 afterEach(() => {
