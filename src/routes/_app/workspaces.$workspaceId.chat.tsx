@@ -6,6 +6,7 @@ import { usePanelDeepLink } from '@/components/panel-shell/usePanelDeepLink'
 import type { PanelId } from '@/components/panel-shell/types'
 import { useSessionStore } from '@/store/session'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
+import { logDiagnostic } from '@/lib/telemetry'
 
 // Chat tab — the workspace's default front view (chat-first). Agent picker is
 // scoped to the workspace team; sessions are filtered by this workspace_id.
@@ -75,9 +76,13 @@ function useSyncOpenSearchKey(workspaceId: string, open: string | undefined): vo
       return
     }
     if (!linkRef.current.adopted) return
-    navigate({
+    void Promise.resolve(navigate({
       search: ((prev: Record<string, unknown>) => ({ ...prev, open: live })) as never,
       replace: true,
+    })).catch((error: unknown) => {
+      // A dropped navigation promise must not vanish: the address would keep
+      // naming a chat the user is no longer in.
+      logDiagnostic('workspaceChatOpenSearchSyncFailed', { workspaceId, open: live ?? null, error: error instanceof Error ? error.name : 'unknown' })
     })
   }, [workspaceId, activeSessionId, open, blocked, navigate])
 }
