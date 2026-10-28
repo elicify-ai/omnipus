@@ -8455,6 +8455,11 @@
       "path": "src/components/settings/PerformanceSection.goalTimers.c1.test.tsx",
       "kind": "test",
       "reason": "Exact test-only boundary: C1 QA-authored goal-timer test renders the existing application-classified ToastContainer to assert real visible error alerts (role=alert) for out-of-range timer input, not just queued toast data. The application-only import is confined to this test; no production consumer or public component export is added. Mirrors the reviewed usePanelShell.standalone.test.tsx ToastContainer boundary. All QA assertions and production catalog locks unchanged."
+    },
+    {
+      "path": "src/components/settings/PerformanceSection.goalTimerOwnership.gate1.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only native PerformanceSection ownership integration fixture: mounts the real existing application-classified ToastContainer beside the real PerformanceSection under QueryClient; only HTTP requests are mocked. This preserves the application toast host while driving real confirmation/cancellation and held-PUT/newer-draft flows. The cases assert consent, request and live-field ownership, not toast contents. No production consumer, raw product control, component export, catalog, scanner, manifest or debt-baseline change is authorized."
     }
   ]
 }
