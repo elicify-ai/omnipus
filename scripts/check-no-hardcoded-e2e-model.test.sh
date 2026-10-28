@@ -56,6 +56,26 @@
 #                                               on a partial scan (finding
 #                                               G2b, 2026-09-27). Skipped as
 #                                               root like case 13.
+#  15. MiniMax-M3.1-Flash in .github/workflows/x.yml -> exit 1, file named
+#                                               (design.md §4.5 case 15).
+#  16. minimax-coding-plan in deploy/foo.sh    -> exit 1, file named
+#                                               (design.md §4.5 case 16).
+#  17. Both new ids only in e2e-model.json     -> exit 0 (allowance; the
+#                                               new shape, design.md §4.5
+#                                               case 17).
+#  18. DeepSeek id in a tests/e2e comment      -> exit 1, file named. The
+#                                               fallback id stays banned
+#                                               (design.md §4.5 case 18).
+#  19. e2e-model.json in the old {"model":...}
+#      shape                                  -> exit 2 (design.md §4.5
+#                                               case 19).
+#  20. e2e-model.json missing .fallback        -> exit 2 (design.md §4.5
+#                                               case 20).
+#  21. MiniMax-M3.1-Flash-Preview under evals/ -> exit 1, file named. The
+#                                               banned pattern is the
+#                                               MiniMax-M3.1-Flash prefix
+#                                               on purpose (design.md §4.5
+#                                               case 21).
 #
 # Exit: 0 all cases pass; 1 a case failed (prints which).
 
@@ -74,11 +94,25 @@ trap 'rm -rf "$tmp"' EXIT
 # make_tree <root>: a minimal synthetic repo with every directory AND file the
 # guard existence-checks (.github/SECRETS.md included), so case 5 can delete
 # any one of them and observe exit 2.
+# legal_model_json is the one document design.md §4.1 allows. make_tree plants
+# it so the shape check (cases 19 and 20) does not turn every older case into
+# exit 2 once the guard requires primary and fallback. The DeepSeek id is still
+# only in this file, which is the allowance case 8 proves.
+legal_model_json() {
+  cat <<'EOF'
+{
+  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash", "api_key_ref": "MINIMAX_API_KEY" },
+  "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
+}
+EOF
+}
+
 make_tree() {
   local root="$1"
   mkdir -p "$root/.github/workflows" "$root/deploy" "$root/scripts" \
            "$root/evals" "$root/pkg" "$root/cmd" "$root/src" "$root/tests/e2e"
   : > "$root/.github/SECRETS.md"
+  legal_model_json > "$root/tests/e2e/e2e-model.json"
 }
 
 fail=0
@@ -206,13 +240,14 @@ else
   fi
 fi
 
-# Case 8: the literal ONLY in tests/e2e/e2e-model.json — the ONE allowed
-# location. Allowance case: green under the old guard too (it never scanned
-# tests/e2e at all); against the NEW guard it proves the exclusion is exactly
-# this file, while case 6 proves tests/e2e is genuinely scanned.
+# Case 8: the literals ONLY in tests/e2e/e2e-model.json — the ONE allowed
+# location. The planted document is the new primary+fallback shape (design.md
+# §4.1). The old {"model":...} shape is no longer allowed — case 19 requires
+# exit 2 for it — so this allowance now plants the legal shape, DeepSeek id
+# included, and still asserts exit 0. Case 6 proves tests/e2e is scanned.
 t8="$tmp/allowed-file"
 make_tree "$t8"
-printf '%s' '{ "model": "deepseek/deepseek-v4.1-flash" }' > "$t8/tests/e2e/e2e-model.json"
+legal_model_json > "$t8/tests/e2e/e2e-model.json"
 rc=0
 REPO_ROOT="$t8" bash "$GUARD" >"$tmp/c8.out" 2>&1 || rc=$?
 if [ "$rc" -eq 0 ]; then
@@ -354,13 +389,135 @@ else
   chmod 0755 "$t14/tests/e2e/sealed"
 fi
 
+# Case 15: MiniMax-M3.1-Flash planted in a workflow. The current guard's
+# PATTERN does not name it, so this case is red until the pattern grows.
+# design.md §4.5 (15).
+t15="$tmp/minimax-workflow"
+make_tree "$t15"
+printf '%s\n' 'model: MiniMax-M3.1-Flash' > "$t15/.github/workflows/x.yml"
+if REPO_ROOT="$t15" bash "$GUARD" >"$tmp/c15.out" 2>&1; then
+  echo "case15 minimax-model-in-workflow-fails: FAIL — guard went green on MiniMax-M3.1-Flash" >&2
+  sed 's/^/  /' "$tmp/c15.out" >&2
+  fail=1
+else
+  if grep -q "x.yml" "$tmp/c15.out"; then
+    echo "case15 minimax-model-in-workflow-fails: PASS (guard named x.yml)"
+  else
+    echo "case15 minimax-model-in-workflow-fails: FAIL — guard failed but did not name x.yml" >&2
+    sed 's/^/  /' "$tmp/c15.out" >&2
+    fail=1
+  fi
+fi
+
+# Case 16: the provider id minimax-coding-plan planted in deploy/. design.md §4.5 (16).
+t16="$tmp/minimax-provider"
+make_tree "$t16"
+printf '%s\n' 'provider=minimax-coding-plan' > "$t16/deploy/foo.sh"
+if REPO_ROOT="$t16" bash "$GUARD" >"$tmp/c16.out" 2>&1; then
+  echo "case16 minimax-provider-in-deploy-fails: FAIL — guard went green on minimax-coding-plan" >&2
+  sed 's/^/  /' "$tmp/c16.out" >&2
+  fail=1
+else
+  if grep -q "deploy/foo.sh" "$tmp/c16.out"; then
+    echo "case16 minimax-provider-in-deploy-fails: PASS (guard named deploy/foo.sh)"
+  else
+    echo "case16 minimax-provider-in-deploy-fails: FAIL — guard failed but did not name deploy/foo.sh" >&2
+    sed 's/^/  /' "$tmp/c16.out" >&2
+    fail=1
+  fi
+fi
+
+# Case 17: both new ids appear only inside the legal json. Allowance: exit 0.
+# design.md §4.5 (17). Green on a guard that does not yet ban the ids is
+# expected; the teeth are cases 15, 16 and 21.
+t17="$tmp/ids-only-in-json"
+make_tree "$t17"
+legal_model_json > "$t17/tests/e2e/e2e-model.json"
+rc=0
+REPO_ROOT="$t17" bash "$GUARD" >"$tmp/c17.out" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "case17 new-ids-only-in-json-passes: PASS (guard exited 0)"
+else
+  echo "case17 new-ids-only-in-json-passes: FAIL — want exit 0, got $rc" >&2
+  sed 's/^/  /' "$tmp/c17.out" >&2
+  fail=1
+fi
+
+# Case 18: the DeepSeek fallback id in a tests/e2e comment is still banned.
+# design.md §4.5 (18).
+t18="$tmp/deepseek-comment"
+make_tree "$t18"
+printf '%s\n' '// judge uses deepseek/deepseek-v4.1-flash' > "$t18/tests/e2e/fallback.spec.ts"
+if REPO_ROOT="$t18" bash "$GUARD" >"$tmp/c18.out" 2>&1; then
+  echo "case18 deepseek-comment-fails: FAIL — guard went green on the fallback id in a comment" >&2
+  sed 's/^/  /' "$tmp/c18.out" >&2
+  fail=1
+else
+  if grep -q "tests/e2e/fallback.spec.ts" "$tmp/c18.out"; then
+    echo "case18 deepseek-comment-fails: PASS (guard named tests/e2e/fallback.spec.ts)"
+  else
+    echo "case18 deepseek-comment-fails: FAIL — guard failed but did not name the file" >&2
+    sed 's/^/  /' "$tmp/c18.out" >&2
+    fail=1
+  fi
+fi
+
+# Case 19: the old {"model":...} shape is not a legal source file. Exit 2.
+# design.md §4.5 (19). The current guard has no shape check, so it exits 0.
+t19="$tmp/old-shape"
+make_tree "$t19"
+printf '%s\n' '{ "model": "deepseek/deepseek-v4.1-flash" }' > "$t19/tests/e2e/e2e-model.json"
+rc=0
+REPO_ROOT="$t19" bash "$GUARD" >"$tmp/c19.out" 2>&1 || rc=$?
+if [ "$rc" -eq 2 ]; then
+  echo "case19 old-shape-exit2: PASS (guard exited 2)"
+else
+  echo "case19 old-shape-exit2: FAIL — want exit 2, got $rc" >&2
+  sed 's/^/  /' "$tmp/c19.out" >&2
+  fail=1
+fi
+
+# Case 20: a document with primary but no fallback is not legal. Exit 2.
+# design.md §4.5 (20).
+t20="$tmp/missing-fallback"
+make_tree "$t20"
+printf '%s\n' '{"primary":{"provider":"minimax-coding-plan","model":"MiniMax-M3.1-Flash","api_key_ref":"MINIMAX_API_KEY"}}' > "$t20/tests/e2e/e2e-model.json"
+rc=0
+REPO_ROOT="$t20" bash "$GUARD" >"$tmp/c20.out" 2>&1 || rc=$?
+if [ "$rc" -eq 2 ]; then
+  echo "case20 missing-fallback-exit2: PASS (guard exited 2)"
+else
+  echo "case20 missing-fallback-exit2: FAIL — want exit 2, got $rc" >&2
+  sed 's/^/  /' "$tmp/c20.out" >&2
+  fail=1
+fi
+
+# Case 21: MiniMax-M3.1-Flash-Preview under evals/ is caught by the
+# MiniMax-M3.1-Flash prefix on purpose. design.md §4.5 (21).
+t21="$tmp/preview-superset"
+make_tree "$t21"
+printf '%s\n' 'catalog id MiniMax-M3.1-Flash-Preview' > "$t21/evals/notes.md"
+if REPO_ROOT="$t21" bash "$GUARD" >"$tmp/c21.out" 2>&1; then
+  echo "case21 preview-superset-fails: FAIL — guard went green on MiniMax-M3.1-Flash-Preview" >&2
+  sed 's/^/  /' "$tmp/c21.out" >&2
+  fail=1
+else
+  if grep -q "evals/notes.md" "$tmp/c21.out"; then
+    echo "case21 preview-superset-fails: PASS (guard named evals/notes.md)"
+  else
+    echo "case21 preview-superset-fails: FAIL — guard failed but did not name evals/notes.md" >&2
+    sed 's/^/  /' "$tmp/c21.out" >&2
+    fail=1
+  fi
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "check-no-hardcoded-e2e-model.test: FAILED" >&2
   exit 1
 fi
 if [ "${skipped:-0}" -gt 0 ]; then
-  echo "check-no-hardcoded-e2e-model.test: all 14 cases PASS ($skipped skipped)"
+  echo "check-no-hardcoded-e2e-model.test: all 21 cases PASS ($skipped skipped)"
 else
-  echo "check-no-hardcoded-e2e-model.test: all 14 cases PASS"
+  echo "check-no-hardcoded-e2e-model.test: all 21 cases PASS"
 fi
 exit 0
