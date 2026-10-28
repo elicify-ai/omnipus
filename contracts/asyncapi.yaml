@@ -1723,6 +1723,11 @@ components:
           type: string
           minLength: 1
           description: Original recorded entry ID when nonempty and valid; otherwise omitted.
+        turn_id:
+          type: string
+          minLength: 1
+          description: >
+            Original recorded turn ID of the persisted source record (its own TranscriptEntry.TurnID) when nonempty; omitted when that record has no recorded turn, which means unknown. Never filled from the active turn, session state, a neighbouring record or any inference (chat-history paging spec, D1 S11d).
     SessionHistoryState:
       title: SessionHistoryState
       type: object

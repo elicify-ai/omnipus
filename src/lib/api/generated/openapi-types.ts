@@ -18254,6 +18254,8 @@ export interface components {
             position: string;
             /** @description Original recorded entry ID when nonempty and valid; otherwise omitted. */
             entry_id?: string;
+            /** @description Original recorded turn ID of the persisted source record (its own TranscriptEntry.TurnID) when nonempty; omitted when that record has no recorded turn, which means unknown. Never filled from the active turn, session state, a neighbouring record or any inference (chat-history paging spec, D1 S11d). */
+            turn_id?: string;
         };
         /**
          * SubagentStartFrame

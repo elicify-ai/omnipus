@@ -742,6 +742,8 @@ type HistoryEntryOrigin struct {
 	EntryId *string `json:"entry_id,omitempty"`
 	// Same-session occurrence fingerprint; canonical unpadded base64url SHA-256.
 	Position string `json:"position"`
+	// Original recorded turn ID of the persisted source record (its own TranscriptEntry.TurnID) when nonempty; omitted when that record has no recorded turn, which means unknown. Never filled from the active turn, session state, a neighbouring record or any inference (chat-history paging spec, D1 S11d).
+	TurnId *string `json:"turn_id,omitempty"`
 }
 
 // HistoryResultPreview — Read-time display marker for a saved tool result whose JSON encoding exceeds 51,200 bytes, emitted only on a history-origin tool_call_result frame of a snapshot replay page (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2). Distinct from ToolResultRef (`_ref`, live offload store) and TruncatedResult (`_truncated`, not retrievable). The full value is read through REST getSessionHistoryEntry by the frame's history_origin position plus call_id. The UTF-8 length of `preview` is at most 4,096 bytes; that byte rule is enforced at the real server and browser boundaries, maxLength is only the character-count bound. Keep in sync by hand with contracts/components/schemas/HistoryResultPreview.yaml.

@@ -99,6 +99,7 @@ export type WsFrameType =
 export interface HistoryEntryOrigin {
   position: string;
   entry_id?: string;
+  turn_id?: string;
 }
 
 export interface SessionHistoryState {
