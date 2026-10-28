@@ -14,7 +14,7 @@ import (
 // gateway/carrier history_page_measurement receipt required by T18/UAT.
 // Both owned flushers are stopped/joined; construction is outside measurement.
 // Q-T10: the allocation-only fixture uses batched canonical setup plus the real
-// offline builder. See seedCoreAllocationFixture's explicit seam-G exception;
+// offline builder. See seedCoreAllocationFixture's isolated setup path;
 // this test is not evidence for per-row writer/durability throughput.
 func TestChatHistoryIndex_PrefixIndependentCoreAllocations(t *testing.T) {
 	var allocated [2]int64

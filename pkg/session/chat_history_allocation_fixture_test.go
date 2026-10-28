@@ -11,7 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Q-T10: founder-authorized ALLOCATION-ONLY exception to fixture seam G.
+// Q-T10: ALLOCATION-ONLY fixture-seam-G exception — pending founder approval.
+// Do not integrate this setup path before that approval is recorded.
 // This is NOT buildChatHistoryDayFixture and must not replace it in writer,
 // durability, retention or publication tests. The unit being measured is the
 // real indexed reader, not 100k canonical saves or 100k derived publications.
