@@ -4,10 +4,13 @@
 // and canvas height comes ONLY from its real spacer, never an injected prefix.
 import { vi } from 'vitest'
 
-export function installHistoryLayout({ virtual = false, hidden = false } = {}) {
+export function installHistoryLayout({ virtual = false, hidden = false, innerParts = false } = {}) {
   const state = {
     height: 800, width: 1024, rowHeight: 80, controlHeight: 32, hidden,
     rowHeights: new Map<string, number>(), toolHeights: new Map<string, number>(),
+    // S11/T83 opt-in physical browser metrics. Defaults above are unchanged.
+    // Heights are independent fixture inputs, never read from store parts.
+    partHeights: new Map<string, number>(), paragraphHeight: 60,
   }
   const descriptors = new Map<string, PropertyDescriptor | undefined>()
   const originalRect = HTMLElement.prototype.getBoundingClientRect
@@ -18,8 +21,14 @@ export function installHistoryLayout({ virtual = false, hidden = false } = {}) {
   const observers = new Set<LayoutResizeObserver>()
   const isViewport = (element: Element) => element.getAttribute('aria-label') === 'Conversation history'
   const viewportFor = (element: Element) => element.closest<HTMLElement>('[aria-label="Conversation history"]')
+  const partsFor = (row: HTMLElement) => [...row.querySelectorAll<HTMLElement>('[data-history-part]')]
+    .filter(part => part.closest('[data-history-anchor]') === row && !part.parentElement?.closest('[data-history-part]'))
+  const partHeight = (part: HTMLElement) => (state.partHeights.get(part.dataset.historyPart ?? '') ?? state.rowHeight)
+    + [...part.querySelectorAll<HTMLElement>('[data-history-tool-row]')].reduce((sum, tool) => sum + (state.toolHeights.get(tool.dataset.historyToolRow ?? '') ?? state.rowHeight), 0)
   const rowHeight = (element: HTMLElement) => {
     if (element.hidden) return 0
+    const parts = innerParts ? partsFor(element) : []
+    if (parts.length) return parts.reduce((sum, part) => sum + partHeight(part), 0)
     return state.rowHeights.get(element.dataset.historyPosition ?? '')
       ?? state.rowHeight * (1 + element.querySelectorAll('[data-history-tool-row]').length)
   }
@@ -60,6 +69,22 @@ export function installHistoryLayout({ virtual = false, hidden = false } = {}) {
     if (!viewport) return originalRect.call(element)
     if (isViewport(element)) return new DOMRect(0, 0, state.width, state.height)
     if (element.hasAttribute('data-history-anchor')) return new DOMRect(0, rowTop(element, viewport), state.width, rowHeight(element))
+    if (innerParts) {
+      const part = element.closest<HTMLElement>('[data-history-part]')
+      const row = part?.closest<HTMLElement>('[data-history-anchor]')
+      if (part && row) {
+        const parts = partsFor(row)
+        const prefix = parts.slice(0, parts.indexOf(part)).reduce((sum, prior) => sum + partHeight(prior), 0)
+        const paragraph = element.matches('p') ? element : element.closest<HTMLElement>('p')
+        const paragraphs = [...part.querySelectorAll('p')]
+        const paragraphOffset = paragraph ? Math.max(0, paragraphs.indexOf(paragraph)) * state.paragraphHeight : 0
+        const tool = element.closest<HTMLElement>('[data-history-tool-row]')
+        const toolOffset = tool ? state.partHeights.get(part.dataset.historyPart ?? '') ?? state.rowHeight : 0
+        const height = tool ? state.toolHeights.get(tool.dataset.historyToolRow ?? '') ?? state.rowHeight
+          : paragraph ? state.paragraphHeight : partHeight(part)
+        return new DOMRect(0, rowTop(row, viewport) + prefix + paragraphOffset + toolOffset, state.width, height)
+      }
+    }
     if (element.hasAttribute('data-history-tool-row')) {
       const height = state.toolHeights.get(element.dataset.historyToolRow ?? '') ?? state.rowHeight
       return new DOMRect(0, 0, state.width, height)
