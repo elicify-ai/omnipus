@@ -3,7 +3,7 @@ import { SessionHistoryResponse } from '../../src/lib/api/generated/schemas';
 import { WsFrame } from '../../src/lib/api/generated/ws-schemas';
 import type { WebSocketRoute } from '@playwright/test';
 import { chatInput, waitForConnected } from './fixtures/selectors';
-import { test, HistoryHarness, observeTraffic, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
+import { test, seededHistoryTest, HistoryHarness, observeTraffic, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
 import { browseBack, dropSocket, expectedReaderOrdinals } from './fixtures/chat-history-paging/actions';
 import { ageRolledHistoryPartitions, sweepChatHistoryFixture } from './fixtures/chat-history';
 import { readerFixtureDays } from './fixtures/chat-history-paging/day-fixtures';
@@ -11,10 +11,38 @@ import { openSessionByDeepLink } from './fixtures/session-setup';
 import { assertRestoredControl, controlProvider, floodRealJournal, pendingAction, reconnectWithPending,
   sendControlInstruction, stopPendingControl, stopRunningControlTurn, waitForPendingControl } from './fixtures/chat-history-paging/control-actions';
 import { CONTROL_RUNNING } from './fixtures/chat-history-paging/control-provider';
+import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness';
 
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
 test.describe.configure({ retries: 0 });
 test.setTimeout(240_000); // Real3,000-row UI traversal, not a clock-based oracle.
+
+// Q-T8 / B26: use the reload fixture's real addressed attach as the opening
+// prerequisite, then retain every DOM/focus/reconnect assertion. Replay done
+// alone is not readiness (D7). The unchanged whole-test deadline bounds this
+// event wait; no sleep or enlarged locator timeout substitutes for completion.
+// The full boot-mismatch case still requires a candidate browser run.
+async function openBootMismatchReader(history: HistoryHarness) {
+  const { page, sessionId } = history;
+  const before = history.traffic.frames.length;
+  const observer = observeAddressedAttachReadiness(page);
+  const pending = observer.arm(sessionId);
+  try {
+    await page.goto(`${history.origin}/#/sessions/${sessionId}`);
+    const proof = await pending.wait();
+    expect(proof.request.session_id, 'native request addresses the B26 reader').toBe(sessionId);
+    expect(proof.completion.session_id, 'native completion answers that same reader').toBe(sessionId);
+    expect(history.traffic.frames.slice(before).filter(frame => frame.type === 'catch_up_complete' && frame.session_id === sessionId),
+      'opening readiness still requires exactly one real completion').toHaveLength(1);
+    await expect(page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible();
+    await expect(chatInput(page)).toBeVisible();
+    await expect(chatInput(page)).toBeEnabled();
+    await waitForConnected(page);
+    expect(history.traffic.failures, 'opening retains generated-frame validation').toEqual([]);
+    await history.info.attach('b26-addressed-open', { contentType: 'application/json', body: JSON.stringify(proof) });
+    await settled(page);
+  } finally { pending.cancel(); observer.dispose(); }
+}
 
 test('T24 B04:transport loss after real replay but before complete retains the prior reader and never claims catch-up success', async ({ history, page }) => {
   await history.seed({ label: 'incomplete', count: 800, shape: 'varied' });
@@ -109,10 +137,9 @@ test('T24 B04:transport loss after real replay but before complete retains the p
   } finally { armed = false; await page.context().setOffline(false); }
 });
 
-test('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft and directly refreshes its closed interval', async ({ history, page }) => {
-  await history.seed({ label: 'snapshot', count: 3400 });
+seededHistoryTest({ label: 'snapshot', count: 3400 })('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft and directly refreshes its closed interval', async ({ history, page }) => {
   await history.authenticate();
-  await history.open();
+  await openBootMismatchReader(history);
   await browseBack(history, 300);
   const old = await anchor(page);
   await chatInput(page).fill('DRAFT_NOT_SENT_DURING_RECONNECT');
@@ -144,8 +171,7 @@ test('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft a
   await history.record('historical-boot-snapshot', { anchor: old });
 });
 
-test('T24 B47 B10: failed range refresh keeps cached rows/out-of-date/anchor, pauses prefetch and Retry repeats the SAME range', async ({ history, page }) => {
-  await history.seed({ label: 'refresh', count: 3400 });
+seededHistoryTest({ label: 'refresh', count: 3400 })('T24 B47 B10: failed range refresh keeps cached rows/out-of-date/anchor, pauses prefetch and Retry repeats the SAME range', async ({ history, page }) => {
   await history.authenticate();
   await history.open();
   await browseBack(history, 300);
@@ -334,8 +360,7 @@ test('T24 B47:500 held tool groups can require MORE than5 bounded byte-limited r
 for (const kind of ['approval', 'question'] as const) {
   test.describe(`T24 genuine pending ${kind}`, () => {
     test.use({ historyControlKind: kind });
-    test(`T24 B05 B06 B26: pending ${kind} survives old-reader reconnect and a fresh viewer gets the real current snapshot`, async ({ history, page, browser }, info) => {
-      await history.seed({ label: `pending-${kind}`, count: 3400 });
+    seededHistoryTest({ label: `pending-${kind}`, count: 3400 })(`T24 B05 B06 B26: pending ${kind} survives old-reader reconnect and a fresh viewer gets the real current snapshot`, async ({ history, page, browser }, info) => {
       await history.authenticate();
       await history.open();
       await browseBack(history, 300);
@@ -368,8 +393,7 @@ for (const kind of ['approval', 'question'] as const) {
 
 test.describe('T24 actual journal retention overflow', () => {
   test.use({ historyControlKind: 'stream' });
-  test('T24 B26: retention_exceeded (same boot) refreshes the held interval without teleporting to the newly published tail', async ({ history, page, browser }) => {
-    await history.seed({ label: 'journal-reader', count: 3400 });
+  seededHistoryTest({ label: 'journal-reader', count: 3400 })('T24 B26: retention_exceeded (same boot) refreshes the held interval without teleporting to the newly published tail', async ({ history, page, browser }) => {
     await history.authenticate();
     await history.open();
     await browseBack(history, 300);

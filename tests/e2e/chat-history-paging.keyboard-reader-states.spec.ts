@@ -100,9 +100,11 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
       // This tests reflow; it does not pretend deviceScaleFactor changes CSS zoom.
       await page.setViewportSize({ width: 640, height: 500 });
     }
-    // D1/D5: 300 post-clear groups exceed two maximum-100 pages, leaving
-    // real older content for automatic prefetch and the distinct Enter request.
-    await history.seed({ label: 'a11y', count: 320, clearAt: [19] });
+    // D5/D8: 300 post-clear groups leave older content for BOTH requests.
+    // Varied real paragraphs are chosen to cover the 2H goal in one page;
+    // a tiny single-line page could require a legitimate delayed top-up.
+    // Prove this prefetch completed before starting the keyboard attempt.
+    await history.seed({ label: 'a11y', count: 320, clearAt: [19], shape: 'varied' });
     await history.authenticate();
     await history.open();
     await page.evaluate(() => {
@@ -125,6 +127,7 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
     // D8 / architect Q1: prefetch is its own request transition, not an
     // announcement to discard or charge to the later keyboard attempt.
     const prefetch = await holdPage(page, (url) => url.searchParams.has('before'));
+    const beforePrefetch = await geometry(page);
     let prefetchAnnouncements: string[];
     try {
       await scrollToDistance(page, 0);
@@ -142,6 +145,9 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
       await expect(page.getByText('Loading earlier messages…', { exact: true })).toHaveCount(0);
       await expect(historyScroller(page)).not.toHaveAttribute('aria-busy', 'true');
       await settled(page);
+      const afterPrefetch = await geometry(page);
+      expect(afterPrefetch.height - beforePrefetch.height,
+        'fixture must actually add at least 2H before testing a distinct keyboard attempt').toBeGreaterThanOrEqual(2 * afterPrefetch.H);
       prefetchAnnouncements = await page.evaluate(() => (window as unknown as { __historyAnnouncements: string[] }).__historyAnnouncements);
       expect(prefetchAnnouncements.filter((value) => value === 'Loading earlier messages…'), 'exactly one polite announcement for the settled automatic prefetch').toHaveLength(1);
       expect(prefetch.requests, 'prefetch settled before a distinct keyboard request').toHaveLength(1);
@@ -149,7 +155,11 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
     const held = await holdPage(page, (url) => url.searchParams.has('before'));
     try {
       const earlier = page.getByRole('button', { name: 'Show earlier messages', exact: true });
-      await earlier.focus();
+      // Native focus scrolling to this offscreen boundary would itself start
+      // ANOTHER automatic prefetch before Enter. Focus without navigation so
+      // this phase really is the separate keyboard action named by the test.
+      await earlier.evaluate(element => (element as HTMLElement).focus({ preventScroll: true }));
+      await expect(earlier, 'keyboard input targets the actual focused recovery control').toBeFocused();
       await settled(page);
       await expect(earlier, 'the distinct keyboard attempt starts only after the prefetch guard clears').not.toHaveAttribute('aria-disabled', 'true');
       await expect(historyScroller(page), 'no automatic request remains in flight before Enter').not.toHaveAttribute('aria-busy', 'true');
