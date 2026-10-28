@@ -64,39 +64,60 @@ jobs:
           CGO_ENABLED=0 go build -tags goolm,stdjson -o ./omnipus ./cmd/omnipus/
 
       - name: Read central e2e model
-        # One committed source of truth for the real-LLM model id. Every model
-        # literal in live config is banned (scripts/check-no-hardcoded-e2e-model.sh),
-        # so the seeding and onboarding steps below interpolate $OMNIPUS_E2E_MODEL.
+        # One committed source of truth for the real-LLM models (a primary and a
+        # fallback pair). Every model or provider literal in live config is banned
+        # (scripts/check-no-hardcoded-e2e-model.sh); scripts/e2e-model.sh is the
+        # one shell reader and exports E2E_PRIMARY_* / E2E_FALLBACK_*.
         run: |
-          m=$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json)
-          if [ -z "$m" ]; then
-            echo "::error::tests/e2e/e2e-model.json: .model is missing, empty, or whitespace-only" >&2
-            exit 1
-          fi
-          echo "OMNIPUS_E2E_MODEL=$m" >> "$GITHUB_ENV"
+          set -euo pipefail
+          bash scripts/e2e-model.sh env >> "$GITHUB_ENV"
+
+      - name: Check the primary LLM (job start)
+        # One 1-token call to the primary. Unavailable (429 / 5xx / 401-403 /
+        # timeout / no connection) => this job runs on the fallback, with a
+        # ::warning:: and a job-summary line. Any other answer, or a missing key,
+        # fails the step. Never prints the body or the key.
+        env:
+          MINIMAX_API_KEY_CI: ${{ secrets.MINIMAX_API_KEY_CI }}
+        run: |
+          set -euo pipefail
+          route=$(bash scripts/e2e-model.sh preflight --route-out "$RUNNER_TEMP/llm-route.json")
+          echo "$route" >> "$GITHUB_ENV"
+
+      - name: Upload LLM route
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: llm-route-sandbox-uat-${{ matrix.mode }}
+          path: ${{ runner.temp }}/llm-route.json
+          if-no-files-found: ignore
 
       - name: Seed config (sandbox mode = ${{ matrix.mode }})
+        # The two provider rows and default_model come from the shared template
+        # (scripts/e2e-model.sh seed-config); this job keeps its own sandbox block.
         run: |
           set -euo pipefail
           mkdir -p "$OMNIPUS_HOME"
-          cat > "$OMNIPUS_HOME/config.json" <<EOF
-          {
-            "version": 1,
-            "gateway": { "port": ${{ matrix.port }}, "dev_mode_bypass": true },
-            "sandbox": { "mode": "${{ matrix.mode }}", "audit_log": true },
-            "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "${OMNIPUS_E2E_MODEL}" } } },
-            "providers": [
-              { "provider": "openrouter",
-                "model": "${OMNIPUS_E2E_MODEL}",
-                "api_base": "https://openrouter.ai/api/v1",
-                "api_key_ref": "OPENROUTER_API_KEY" }
-            ]
-          }
-          EOF
-          ./omnipus credentials set OPENROUTER_API_KEY "${LLM_KEY}"
+          bash scripts/e2e-model.sh seed-config ${{ matrix.port }} --route "$LLM_ROUTE" \
+            | jq --arg mode "${{ matrix.mode }}" \
+                '.sandbox = {mode: $mode, audit_log: true} | del(.agents.defaults.auto_recap_enabled)' \
+            > "$OMNIPUS_HOME/config.json"
+          if [ -z "${PRIMARY_KEY:-}" ] && [ "$LLM_ROUTE" != "fallback" ]; then
+            echo "::error::MINIMAX_API_KEY_CI secret is not set (the primary model key)." >&2
+            exit 1
+          fi
+          if [ -z "${FALLBACK_KEY:-}" ]; then
+            echo "::error::${{ matrix.keyslot }} secret is not set (the fallback model key)." >&2
+            exit 1
+          fi
+          if [ -n "${PRIMARY_KEY:-}" ]; then
+            ./omnipus credentials set "$E2E_PRIMARY_KEYREF" "${PRIMARY_KEY}"
+          fi
+          ./omnipus credentials set "$E2E_FALLBACK_KEYREF" "${FALLBACK_KEY}"
         env:
           OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_CI }}
-          LLM_KEY: ${{ secrets[matrix.keyslot] }}
+          PRIMARY_KEY: ${{ secrets.MINIMAX_API_KEY_CI }}
+          FALLBACK_KEY: ${{ secrets[matrix.keyslot] }}
 
       - name: Start gateway
         run: |
@@ -138,10 +159,19 @@ jobs:
           exit $fail
 
       - name: Onboard + create probe agent
+        # Onboards the primary (or, after a failed job-start check, the fallback)
+        # with its key; then every agent, the probe included, gets the fallback
+        # pair in its fallback_models (the product falls back per agent only).
         run: |
           set -euo pipefail
-          curl -sf -X POST "$BASE/api/v1/onboarding/complete" -H 'Content-Type: application/json' \
-            -d "{\"provider\":{\"id\":\"openrouter\",\"api_key\":\"${LLM_KEY}\",\"model\":\"${OMNIPUS_E2E_MODEL}\"},\"admin\":{\"username\":\"admin\",\"password\":\"admin12345\"}}" \
+          if [ "$LLM_ROUTE" = "fallback" ]; then
+            prov="$E2E_FALLBACK_PROVIDER" model="$E2E_FALLBACK_MODEL" key="$FALLBACK_KEY"
+          else
+            prov="$E2E_PRIMARY_PROVIDER" model="$E2E_PRIMARY_MODEL" key="$PRIMARY_KEY"
+          fi
+          jq -n --arg id "$prov" --arg key "$key" --arg model "$model" \
+              '{provider:{id:$id,api_key:$key,model:$model},admin:{username:"admin",password:"admin12345"}}' \
+            | curl -sf -X POST "$BASE/api/v1/onboarding/complete" -H 'Content-Type: application/json' -d @- \
             > /tmp/onboard.json
           TOK=$(python3 -c "import json;print(json.load(open('/tmp/onboard.json'))['token'])")
           echo "TOK=$TOK" >> "$GITHUB_ENV"
@@ -171,8 +201,12 @@ jobs:
           print(json.dumps({'agent':a['id'],'workspace':ws[0]['id'] if ws else ''}))
           PY
           cat /tmp/probe.json
+          if [ "$LLM_ROUTE" != "fallback" ]; then
+            bash scripts/e2e-model.sh seed-agent-fallbacks "$BASE" "$TOK"
+          fi
         env:
-          LLM_KEY: ${{ secrets[matrix.keyslot] }}
+          PRIMARY_KEY: ${{ secrets.MINIMAX_API_KEY_CI }}
+          FALLBACK_KEY: ${{ secrets[matrix.keyslot] }}
 
       - name: F/X — inside probes, run in parallel
         run: |
