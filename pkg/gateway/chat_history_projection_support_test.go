@@ -165,7 +165,12 @@ func pagingProjectionProbe(t *testing.T, mode string) {
 // prepared factory is required BEFORE allocating/seeding this synthetic corpus.
 func pagingNearAdmissionProbe(t *testing.T) {
 	t.Helper()
-	s, sid, home := pagingProjectionFixture(t)
+	d2RequireShortening(t) // T63: loud missing-implementation RED before the unchanged heavy corpus.
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+	s, home := api.agentLoop.GetSessionStore(), api.homePath
+	sid := createTestSession(t, api)
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "d2-corpus-test-token")
 	r, err := newHistoryPageRequest(sid, session.ChatHistoryPageOptions{Limit: 100, MinRows: 100}, historyPageProjectionDeps{ToolStore: newToolResultStore(home)})
 	require.NoError(t, err, "real near-admission factory")
 	require.NotNil(t, r)
@@ -178,23 +183,27 @@ func pagingNearAdmissionProbe(t *testing.T) {
 		require.Greater(t, len(encoded), 8*1024*1024-4096)
 		require.NoError(t, s.AppendTranscriptStrict(sid, e), "actual8-MiB canonical admission, not guessed payload multiplication")
 	}
-	p, err := r.Read(context.Background(), s)
-	require.NoError(t, err)
-	require.Len(t, p.Response.Entries, 100)
+	require.NoError(t, s.Close(), "T63: fixture construction and owned background work finish before memory measurement")
+	p := d2MeasurePreparedPeak(t, func() (preparedHistoryPage, error) { return r.Read(context.Background(), s) })
+	require.Len(t, p.Response.Entries, 100, "B75: the unchanged near-admission corpus now fits after shortening")
 	require.Equal(t, 100, p.Response.PageInfo.RowCount)
-	require.True(t, p.Response.PageInfo.ByteBudgetExceeded)
-	require.NotNil(t, p.Response.PageInfo.BudgetOverride)
-	require.Equal(t, "height_floor", *p.Response.PageInfo.BudgetOverride)
+	require.False(t, p.Response.PageInfo.ByteBudgetExceeded)
+	require.Nil(t, p.Response.PageInfo.BudgetOverride)
+	require.Less(t, p.Response.PageInfo.ProjectedBytes, int64(4194304))
+	require.EqualValues(t, 8388608, p.Response.PageInfo.ByteCeiling)
 	require.Contains(t, []string{"row_target", "source_cap"}, p.Response.PageInfo.StopReason)
-	var actual int64
-	for _, raw := range p.ReplayFrames {
-		actual += int64(len(raw))
+	for _, entry := range p.Response.Entries {
+		require.NotNil(t, entry.ToolCalls)
+		require.Len(t, *entry.ToolCalls, 1)
+		require.NotNil(t, (*entry.ToolCalls)[0].Result)
+		require.Equal(t, map[string]any{"_history_preview": true, "original_size_bytes": float64(len(payload) + 11), "preview": `{"text":"` + strings.Repeat("x", 4087)}, *(*entry.ToolCalls)[0].Result)
 	}
-	rest, err := json.Marshal(p.Response.Entries)
-	require.NoError(t, err)
-	if int64(len(rest)) > actual {
-		actual = int64(len(rest))
-	}
-	require.Greater(t, actual, int64(4194304))
-	require.GreaterOrEqual(t, p.Response.PageInfo.ProjectedBytes, actual)
+	// Full projection is separately addressed; no 800MiB carrier re-marshal.
+	full := d2EntryRequest(api, sid, *p.Response.Entries[0].HistoryPosition, "Bearer d2-corpus-test-token", nil)
+	require.Equal(t, 200, full.Code, "T63/B75: a selected occurrence remains retrievable in full")
+	var message generated.Message
+	require.NoError(t, json.Unmarshal(full.Body.Bytes(), &message))
+	require.NotNil(t, message.ToolCalls)
+	require.Equal(t, map[string]any{"text": payload}, *(*message.ToolCalls)[0].Result)
+	require.Nil(t, message.ContentOriginalSizeBytes)
 }
