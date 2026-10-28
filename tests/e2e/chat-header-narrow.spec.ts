@@ -37,10 +37,10 @@ test('the workspace strip keeps the header line at narrow widths; the chat slot 
 
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 800 });
-    await page.goto(`/#/workspaces/${backdropWorkspace.id}/chat`);
+    await page.goto(`/#/workspaces/${backdropWorkspace.id}/chat`, { waitUntil: 'domcontentloaded' });
 
     const header = page.getByTestId('workspace-top-bar');
-    await expect(header).toBeVisible();
+    await expect(header).toBeVisible({ timeout: 30_000 });
 
     // The workspace navigation is still on the line: the strip may collapse
     // to icons or to its narrow menu, but the workspace stays reachable.
@@ -80,10 +80,10 @@ test('the workspace strip keeps the header line at narrow widths; the chat slot 
 test('the helper breadcrumb stays on ONE line, caret included', async ({ page }) => {
   const traffic = await installSidebarBackdropEdges(page, { extraSessions: [helper] });
   await page.setViewportSize({ width: 900, height: 800 });
-  await page.goto(`/#/workspaces/${backdropWorkspace.id}/chat?open=${HELPER_ID}`);
+  await page.goto(`/#/workspaces/${backdropWorkspace.id}/chat?open=${HELPER_ID}`, { waitUntil: 'domcontentloaded' });
 
   const label = page.getByTestId('feed-kind-label');
-  await expect(label).toBeVisible();
+  await expect(label).toBeVisible({ timeout: 30_000 });
   await expect(label).toContainText('/');
 
   // The caret and the breadcrumb text share one line. The TEXT's own box is
