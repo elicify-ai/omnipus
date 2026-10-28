@@ -219,9 +219,10 @@ func TestChatHistoryEmptyEarlierPartition_BrokenSessionSelfHealsAfterRestart(t *
 	require.Equal(t, int64(0), cp.ArchiveEnds[historyEarlierDay])
 }
 
-// The bounded catch-up allowance stays a bound: a session further behind than
-// the allowance still cannot be recovered at runtime. It needs the offline
-// rebuild.
+// The bounded catch-up allowance stays a bound: the boot/sweep reconciler
+// refuses a session further behind than the allowance. Demand readiness may
+// self-heal it under selfheal-design.md; this test is retargeted to the
+// non-healing entry point with its original catchup_limit oracle unchanged.
 func TestChatHistoryEmptyEarlierPartition_BeyondCatchupAllowanceStaysUnavailable(t *testing.T) {
 	s, sid := newEffectsSession(t)
 	base := s.BaseDir()
@@ -240,7 +241,7 @@ func TestChatHistoryEmptyEarlierPartition_BeyondCatchupAllowanceStaysUnavailable
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = restarted.Close() })
 
-	err = restarted.CheckChatHistoryReadiness(context.Background(), sid)
+	_, err = restarted.reconcileChatHistoryIndex(context.Background(), sid)
 	require.Error(t, err, "a session over the catch-up allowance stays unavailable")
 	var unavailable *ChatHistoryUnavailableError
 	require.ErrorAs(t, err, &unavailable)
