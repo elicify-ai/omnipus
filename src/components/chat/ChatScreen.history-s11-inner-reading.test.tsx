@@ -110,7 +110,9 @@ async function setup(direction: 'older' | 'newer', virtual: boolean) {
   else {
     // A true older-edge eviction establishes hasLater at B. No direct flag
     // seeding:497 older sources +20 =517, evicting the17 groups after B.
-    const initial = [...segmentSources(), ...Array.from({ length: 17 }, (_, i) => user(i + 4))]
+    // Source4 is the same later text on both cuts, never a user source whose
+    // position gets silently reused for a different record on the newer read.
+    const initial = [...segmentSources(), text(4, 's11-reader-C', 'Later segment text.'), ...Array.from({ length: 16 }, (_, i) => user(i + 5))]
     await read(initial, 'latest', true)
     useChatStore.getState().enterHistoryReading(MAIN_ID)
     const padding = Array.from({ length: 497 }, (_, i) => user(i - 497))
