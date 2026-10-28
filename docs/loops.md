@@ -13,6 +13,8 @@ Send the command yourself in the web app or a connected chat platform, using the
 | `/loop` | Show this chat's loop, its cadence and its run count. |
 | `/loop stop` | Remove this chat's loop schedule and clear its loop state. |
 
+In the web app, the loop footer disappears when the chat receives the loop's stopped status; you do not need to reload the page.
+
 Intervals must be positive durations, for example `30s`, `5m`, `1h30m` or `1d`. Starting another loop in the same chat replaces its existing loop.
 
 ## Self-paced check-ins

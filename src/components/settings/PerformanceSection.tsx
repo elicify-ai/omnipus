@@ -312,6 +312,11 @@ export function PerformanceSection(): React.ReactElement {
   const pendingRef = useRef<PerformanceSettingsUpdate | null>(null)
   // True from gate-open until the gate settles; see openStepUp.
   const gateInFlightRef = useRef(false)
+  // Only a confirmed save can hand off a newer queued edit to another gate.
+  // The version triggers that handoff after success OR error; a ref alone
+  // would not rerender when the older gate releases its synchronous guard.
+  const recheckPendingAfterSaveRef = useRef(false)
+  const [settledGateVersion, setSettledGateVersion] = useState(0)
 
   // Draft generations (CG-CR-1 / CG-CR-2).
   //
@@ -817,8 +822,26 @@ export function PerformanceSection(): React.ReactElement {
       })
       .finally(() => {
         gateInFlightRef.current = false
+        // TM5: a newer edit may already have settled and queued while this
+        // confirmed PUT was pending. Retry only the consent gate, not the
+        // PUT or its token, and do so for both success and error. Cancelled
+        // gates never captured a body and keep their existing discard path.
+        if (captured && pendingRef.current) {
+          recheckPendingAfterSaveRef.current = true
+          setSettledGateVersion((version) => version + 1)
+        }
       })
   }, [stepUp, mutation, setPendingPatch, discardCancelledProposal])
+
+  useEffect(() => {
+    // Wait for the old dialog's closed state as well as its in-flight ref.
+    // Read the current gate callback here: the one captured by the older
+    // save can still see its old open state. Consume this one-shot handoff
+    // before opening, so rerenders/cancellation cannot reopen it repeatedly.
+    if (!recheckPendingAfterSaveRef.current || stepUp.open || gateInFlightRef.current || lowering !== null) return
+    recheckPendingAfterSaveRef.current = false
+    if (pendingRef.current) openStepUp()
+  }, [settledGateVersion, stepUp.open, lowering, openStepUp])
 
   // triggerSave validates the current input and opens the step-up gate.
   const triggerSave = useCallback(() => {
