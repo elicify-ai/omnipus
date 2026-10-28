@@ -6,11 +6,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/require"
 )
@@ -28,9 +30,6 @@ func TestGoalPauseB1RM3UntitledChatBell(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := b1CompBoot(t, false, false)
-			if tc.chatTitle == "" {
-				rm3UseActualMemberMain(t, f)
-			}
 			f.arm(t)
 			store := f.al.GetSessionStore()
 			meta, err := store.GetMeta(f.sid)
@@ -54,7 +53,7 @@ func TestGoalPauseB1RM3UntitledChatBell(t *testing.T) {
 				require.Equal(t, "your chat with "+strings.TrimSpace(inst.Name), tc.wantCarrier)
 			}
 
-			f.rm3UserWithArrangedTitle(t, "blocked", reason, tc.chatTitle)
+			finish := f.rm3PauseAtPublication(t, "blocked", reason, tc.chatTitle)
 			current, err := store.GetMeta(f.sid)
 			require.NoError(t, err)
 			require.Equal(t, tc.chatTitle, current.Title, "RM3 must remain a genuinely arranged chat")
@@ -100,28 +99,74 @@ func TestGoalPauseB1RM3UntitledChatBell(t *testing.T) {
 			wantTitle := "Goal paused in " + tc.wantCarrier + ": " + reason
 			require.Equal(t, wantTitle, bell.Title, "RM3 actual named/untitled conversation context is required")
 			require.Equal(t, wantTitle, saved.Title, "saved and live global titles share the exact accepted contract")
+			finish()
 		})
 	}
 }
 
-func (f *b1CompFixture) rm3UserWithArrangedTitle(t *testing.T, mode, evidence, arrangedTitle string) {
+type rm3PublicationBoundaryProvider struct {
+	base     *b1CompProvider
+	held     chan struct{}
+	release  chan struct{}
+	heldOnce sync.Once
+}
+
+func (p *rm3PublicationBoundaryProvider) GetDefaultModel() string { return p.base.GetDefaultModel() }
+
+func (p *rm3PublicationBoundaryProvider) Chat(ctx context.Context, messages []providers.Message, defs []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error) {
+	response, err := p.base.Chat(ctx, messages, defs, model, options)
+	if err != nil || response == nil || len(response.ToolCalls) > 0 {
+		return response, err
+	}
+	// The real tool round has already returned its actual pause claim.
+	// Hold only the external final answer before production auto-title runs.
+	p.heldOnce.Do(func() { close(p.held) })
+	select {
+	case <-p.release:
+		return response, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (f *b1CompFixture) rm3PauseAtPublication(t *testing.T, mode, evidence, arrangedTitle string) func() {
 	t.Helper()
+	require.False(t, f.shared)
+	require.Nil(t, f.runCancel)
+	meta, err := f.al.GetSessionStore().GetMeta(f.sid)
+	require.NoError(t, err)
+	require.Equal(t, f.wc.userID, meta.Owner)
+	inst, ok := f.al.GetRegistry().GetAgent(meta.AgentID)
+	require.True(t, ok)
+	originalProvider := inst.Provider
+	boundary := &rm3PublicationBoundaryProvider{base: f.p, held: make(chan struct{}), release: make(chan struct{})}
+	inst.Provider = boundary
+	t.Cleanup(func() { inst.Provider = originalProvider })
 	f.setMode(mode, evidence)
 	f.seq++
 	f.h.handleChatMessageWithClientID(context.Background(), f.chat, f.sid, "B1 genuine fixture input", "mia", nil, "", "", fmt.Sprintf("b1-input-%d", f.seq), nil, f.wc)
-	// Shared ownership is actual store data, not a metadata-read failure or fabricated principal.
-	if f.shared {
-		empty := ""
-		require.NoError(t, f.al.GetSessionStore().SetMeta(f.sid, session.MetaPatch{Owner: &empty}))
-	}
-	// The real handler has established metadata; ordinary Run has not started.
-	require.Nil(t, f.runCancel)
 	require.NoError(t, f.al.GetSessionStore().SetMeta(f.sid, session.MetaPatch{Title: &arrangedTitle}))
 	beforeRun, err := f.al.GetSessionStore().GetMeta(f.sid)
 	require.NoError(t, err)
 	require.Equal(t, arrangedTitle, beforeRun.Title)
+	require.Equal(t, meta.Owner, beforeRun.Owner)
 	f.startReceiver(t)
-	f.finishProduced(t)
+	var finishOnce sync.Once
+	finish := func() {
+		finishOnce.Do(func() {
+			close(boundary.release)
+			f.finishProduced(t)
+		})
+	}
+	t.Cleanup(finish)
+	b1CompWait(t, "actual final provider response held after real pause publication", func() bool {
+		select {
+		case <-boundary.held:
+			return true
+		default:
+			return false
+		}
+	})
 	if mode == "blocked" || mode == "waiting_on_user" {
 		g, err := goal.NewStore(f.home).Get(f.gid)
 		require.NoError(t, err)
@@ -139,51 +184,5 @@ func (f *b1CompFixture) rm3UserWithArrangedTitle(t *testing.T, mode, evidence, a
 		}
 		require.True(t, positive, "SETUP: actual existing claim-pause status must be positive before any missing-bell RED")
 	}
-}
-
-// Use the normal persisted member-main factory, not a metadata Type patch.
-func rm3UseActualMemberMain(t *testing.T, f *b1CompFixture) {
-	t.Helper()
-	require.Nil(t, f.runCancel)
-	store := f.al.GetSessionStore()
-	original, err := store.GetMeta(f.sid)
-	require.NoError(t, err)
-	require.Equal(t, b1CompOwner, original.Owner)
-	require.Equal(t, b1CompOwner, f.wc.userID)
-	registered, ok := f.al.GetRegistry().GetAgent(original.AgentID)
-	require.True(t, ok)
-	require.NotNil(t, registered)
-	workspaces, err := listWorkspaceFiles(f.home)
-	require.NoError(t, err)
-	eligible := make([]storedWorkspace, 0, len(workspaces))
-	for _, ws := range workspaces {
-		if ws.IsDefault && mainSessionPairEligible(f.al.GetConfig(), ws, original.AgentID) {
-			eligible = append(eligible, ws)
-		}
-	}
-	require.Len(t, eligible, 1, "real boot default workspace must own the registered member main")
-	ws := eligible[0]
-	require.Equal(t, f.wc.userID, ws.Owner, "main audience comes from the same actual workspace owner")
-	main, err := store.GetOrCreateMainSession(ws.ID, original.AgentID)
-	require.NoError(t, err)
-	require.Equal(t, session.SessionTypeMain, main.Type)
-	require.Equal(t, ws.ID, main.WorkspaceID)
-	require.Equal(t, original.AgentID, main.AgentID)
-	gotWorkspace, gotAgent, computedMain := session.SplitMainSessionID(main.ID)
-	require.True(t, computedMain)
-	require.Equal(t, ws.ID, gotWorkspace)
-	require.Equal(t, original.AgentID, gotAgent)
-	isMain, allowed, err := mainSessionGate(f.home, f.al.GetConfig(), main.ID)
-	require.NoError(t, err)
-	require.True(t, isMain)
-	require.True(t, allowed)
-	owner := f.wc.userID
-	require.NoError(t, store.SetMeta(main.ID, session.MetaPatch{Owner: &owner}))
-	ready, err := store.GetMeta(main.ID)
-	require.NoError(t, err)
-	require.Equal(t, session.SessionTypeMain, ready.Type)
-	require.Equal(t, owner, ready.Owner)
-	require.Empty(t, ready.Title, "a genuine member main remains actually untitled in storage")
-	f.sid = main.ID
-	bindTestConnToSession(f.h, f.chat, f.sid, f.wc)
+	return finish
 }
