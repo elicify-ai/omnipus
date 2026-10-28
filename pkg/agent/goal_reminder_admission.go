@@ -68,6 +68,8 @@ func (al *AgentLoop) runOrdinaryGoalFollowUp(ctx context.Context, agent *AgentIn
 		messageID: inboundMetadata(msg, "steer_message_id"), goalID: inboundMetadata(msg, "goal_id"), generation: generation,
 		runID: inboundMetadata(msg, "goal_parent_run_id"), reminder: inboundMetadata(msg, "goal_reminder") == "true",
 	}
+	// Cover pre-admission failures too; the existing guard preserves admitted owners.
+	defer rollbackUnadmittedGoalCheckIn(opts.TranscriptSessionID, opts.goalWake)
 	if err != nil || generation < 1 || opts.goalWake.messageID == "" || opts.goalWake.goalID == "" {
 		return al.failOrdinaryGoalPreTurn(opts, errors.New("goal reminder: missing or invalid wake identity"))
 	}
@@ -94,9 +96,6 @@ func (al *AgentLoop) runOrdinaryGoalFollowUp(ctx context.Context, agent *AgentIn
 	}
 	msg.SessionID, msg.SessionKey = opts.TranscriptSessionID, opts.SessionKey
 	response, _, runErr := al.runInboundTurnWithRevival(ctx, agent, msg, opts)
-	if runErr != nil {
-		rollbackUnadmittedGoalCheckIn(opts.TranscriptSessionID, opts.goalWake)
-	}
 	if errors.Is(runErr, errOrdinaryGoalWakeIgnored) {
 		al.goalMarkIdleSettling(opts.goalWake.goalID, false)
 		return "", nil

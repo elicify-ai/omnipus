@@ -97,8 +97,15 @@ func (n *asyncNotifierImpl) publishOriginWarning(ctx context.Context, event Asyn
 		return nil
 	}
 	allowed, err := n.loop.asyncNotifyOriginReachesUser(ctx, event.TranscriptSessionID)
-	if err != nil || !allowed {
+	if err != nil {
+		fields := asyncNotifyDiagnosticFields(event, noticeID)
+		fields["stage"] = "origin_read"
+		fields["error_class"] = "secondary_warning_failure"
+		logger.ErrorCF("agent", "Async notification secondary warning failed", fields)
 		return err
+	}
+	if !allowed {
+		return nil
 	}
 	if n.loop.bus.TryPublishOutbound(bus.OutboundMessage{
 		Channel: event.Channel, ChatID: event.ChatID, SessionID: event.TranscriptSessionID, Content: content,
@@ -117,6 +124,10 @@ func (n *asyncNotifierImpl) reportAsyncNotifyFailure(ctx context.Context, event 
 		return nil
 	}
 	if event.TranscriptSessionID == "" {
+		fields := asyncNotifyDiagnosticFields(event, noticeID)
+		fields["stage"] = "notice_save"
+		fields["error_class"] = "secondary_warning_failure"
+		logger.ErrorCF("agent", "Async notification secondary warning failed", fields)
 		return errors.New("async notification delivery warning: transcript session is unavailable")
 	}
 	noticeCtx := context.WithoutCancel(ctx)
@@ -142,6 +153,12 @@ func (n *asyncNotifierImpl) reportAsyncNotifyFailure(ctx context.Context, event 
 				Id: &entry.ID, Role: entry.Role, Content: entry.Content, Timestamp: &stamp,
 			}
 		}
+	}
+	if saveErr != nil {
+		fields := asyncNotifyDiagnosticFields(event, noticeID)
+		fields["stage"] = "notice_save"
+		fields["error_class"] = "secondary_warning_failure"
+		logger.ErrorCF("agent", "Async notification secondary warning failed", fields)
 	}
 	if ctx.Err() == context.Canceled {
 		return saveErr

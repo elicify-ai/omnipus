@@ -142,6 +142,8 @@ The check-in lists at most ten owned work identifiers, plus a count of any remai
 
 A successfully sent check-in is not repeated for the same observed stall. Fresh real progress re-arms it; an old retained progress signal does not restart the clock on every poll. If sending the check-in actually fails, a later check can try again. This tracking is in memory only: after a server restart the observation clock starts again, which can delay a check-in and can allow an extra one for work that had already been checked.
 
+An accepted notification is not yet a started work turn. If a storage read fails before the check-in can be admitted as a work turn, repairing storage lets a later check-in try again without a reply just to unblock it. That failed start does not add to either reminder-pause count; the usual Stop, question and goal-state holds still apply.
+
 The check-in is a real reminder turn, not just a notification. Only after the whole turn has finished is it assessed under the ordinary progress and failure rules—even if the background work is still busy. A completed check-in without progress adds to the five-reminder count; a failed check-in uses the separate failure count. A real tool call during the check-in counts as progress under the same rule as any other reminder. Sending it or merely finishing its answer does not itself spend an outcome.
 
 A helper still in the middle of a live turn is **not** covered by this check-in. The existing suppression remains even if that turn appears wedged: Omnipus warns in the server log after its stall grace, but does not start a check-in, cancel it or start replacement work from that branch. Stop, pending questions, claim pauses and either reminder brake continue to take precedence.
