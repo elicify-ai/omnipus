@@ -21,9 +21,11 @@ export function matchingHansReplyCompletions(
   sessionId: string,
   row: { messageId: string | null; turnId: string | null; mergedMessageIds: string | null },
 ) {
+  const messageIds = new Set([row.messageId, ...(row.mergedMessageIds?.split(' ').filter(Boolean) ?? [])])
   return receivedFrames.flatMap((raw) => {
     const frame = DoneFrame.safeParse(JSON.parse(raw))
-    return frame.success && frame.data.session_id === sessionId && frame.data.message_id === row.messageId
+    return frame.success && frame.data.session_id === sessionId && frame.data.turn_id === row.turnId &&
+      frame.data.message_id !== undefined && messageIds.has(frame.data.message_id)
       ? [frame.data] : []
   })
 }
