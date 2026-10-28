@@ -9,7 +9,7 @@ import { useUiStore } from '@/store/ui'
 
 const oldFields = { max_parallel_agents: 4, effective_max_parallel_agents: 4, max_parallel_agents_configured: true, tools_on_demand: true, goal_max_rounds: 20, max_tool_iterations: 1000 }
 const timerDefaults = { goal_reminder_quiet_seconds: 60, goal_stalled_checkin_enabled: true, goal_stalled_checkin_minutes: 30 }
-const timerKeys = Object.keys(timerDefaults)
+
 let server: Record<string, unknown>
 let disk: Record<string, unknown>
 let puts: Record<string, unknown>[]
@@ -83,21 +83,8 @@ async function confirmation(accept: boolean) {
   fireEvent.click(target)
   await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
 }
-function assertTimerPatch(actual: Record<string, unknown>, required: Record<string, unknown>, before: Record<string, unknown>) {
-  expect(Object.keys(actual).length).toBeGreaterThan(0)
-  expect(actual).toMatchObject(required)
-  const expectedValues = { ...before, ...required }
-  for (const key of Object.keys(actual)) { expect(timerKeys).toContain(key); expect(actual[key]).toEqual(expectedValues[key]) }
-}
-async function saveEdit(input: HTMLElement, value: string, required: Record<string, unknown>) {
-  const before = { ...server }; const count = puts.length; const priorReads = reads
-  await edit(input, value)
-  expect(puts).toHaveLength(count)
-  await confirmation(true)
-  await waitFor(() => expect(puts).toHaveLength(count + 1))
-  assertTimerPatch(puts[count], required, before)
-  await waitFor(() => expect(reads).toBeGreaterThan(priorReads))
-}
+
+
 
 let gate1Mode: 'platform' | 'local'
 let gate1HoldPut: boolean
