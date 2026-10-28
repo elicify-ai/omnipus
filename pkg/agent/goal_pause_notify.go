@@ -1,6 +1,11 @@
 package agent
 
-import "errors"
+import (
+	"errors"
+	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/session"
+)
 
 // GoalPausedEvent is an internal report to the gateway's existing bell producer.
 // Owner is read successfully from the actual session, never inferred from a
@@ -59,12 +64,45 @@ func (al *AgentLoop) notifyGoalPaused(sessionID, goalID, cause, reason string) {
 			reason = "blocked"
 		}
 	}
-	title := meta.Title
-	if title == "" {
-		title = "this chat"
-	}
 	(*hook)(GoalPausedEvent{
 		SessionID: sessionID, GoalID: goalID, AgentID: meta.AgentID,
-		ChatTitle: title, Owner: meta.Owner, Reason: reason,
+		ChatTitle: al.goalPausedChatTitle(meta), Owner: meta.Owner, Reason: reason,
 	})
+}
+
+// untitledGoalPauseChat names a chat that has no title to show. It never
+// carries an agent or session ID.
+const untitledGoalPauseChat = "an untitled chat"
+
+// goalPausedChatTitle is the chat label the bell names. A main chat is never
+// titled (its label is derived on read), so it gets the same
+// "<Agent> - Main Session" label the sidebar shows, built from the agent's
+// registered display name. A missing or blank name, and any other chat without
+// a title, become "an untitled chat" — never the agent ID.
+func (al *AgentLoop) goalPausedChatTitle(meta *session.UnifiedMeta) string {
+	if meta.Type == session.SessionTypeMain {
+		if name := al.registeredAgentDisplayName(meta.AgentID); name != "" {
+			return session.MainSessionTitle(name)
+		}
+		return untitledGoalPauseChat
+	}
+	if meta.Title == "" {
+		return untitledGoalPauseChat
+	}
+	return meta.Title
+}
+
+// registeredAgentDisplayName returns the trimmed display name of a registered
+// agent, or "" when the agent is unknown or unnamed. Unlike
+// AgentRegistry.GetAgentName it has no agent-ID fallback.
+func (al *AgentLoop) registeredAgentDisplayName(agentID string) string {
+	registry := al.GetRegistry()
+	if registry == nil {
+		return ""
+	}
+	inst, ok := registry.GetAgent(agentID)
+	if !ok || inst == nil {
+		return ""
+	}
+	return strings.TrimSpace(inst.Name)
 }

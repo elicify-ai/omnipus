@@ -120,7 +120,7 @@ Ordinary automatic reminders wait while the goal session's background commands, 
 
 ### A bell notice when a goal pauses
 
-The notification bell shows a warning when the goal first pauses after five completed reminders without progress, after three failed automatic reminders in a row, or when the agent claims it is blocked or waiting for your reply. The warning names the chat and a short reason. Clicking it marks it read and opens that chat. It is not a Judge verdict.
+The notification bell shows a warning when the goal first pauses after five completed reminders without progress, after three failed automatic reminders in a row, or when the agent claims it is blocked or waiting for your reply. The warning names the chat and a short reason, for example **Goal paused in Jim - Main Session: blocked**. A chat with a title is named by that title. An agent's main chat is named the way the sidebar shows it: the agent's display name followed by **- Main Session**, as in the example for an agent named Jim. A main chat whose agent has no display name, and any other chat without a title, appear as **an untitled chat**; the warning never shows an agent or chat ID in their place. Clicking it marks it read and opens that chat. It is not a Judge verdict.
 
 There is at most one **unread** warning for the same goal in each recipient's saved bell history. A later pause updates that unread item rather than stacking another one. After you mark it read, a genuinely later pause can create a new item. Replying to resume the goal does **not** mark the warning read or remove it; read it or use the bell's mark-as-read control separately.
 
