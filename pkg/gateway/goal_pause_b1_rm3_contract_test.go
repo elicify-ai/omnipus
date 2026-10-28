@@ -28,6 +28,9 @@ func TestGoalPauseB1RM3UntitledChatBell(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := b1CompBoot(t, false, false)
+			if tc.chatTitle == "" {
+				rm3UseActualMemberMain(t, f)
+			}
 			f.arm(t)
 			store := f.al.GetSessionStore()
 			meta, err := store.GetMeta(f.sid)
@@ -136,4 +139,51 @@ func (f *b1CompFixture) rm3UserWithArrangedTitle(t *testing.T, mode, evidence, a
 		}
 		require.True(t, positive, "SETUP: actual existing claim-pause status must be positive before any missing-bell RED")
 	}
+}
+
+// Use the normal persisted member-main factory, not a metadata Type patch.
+func rm3UseActualMemberMain(t *testing.T, f *b1CompFixture) {
+	t.Helper()
+	require.Nil(t, f.runCancel)
+	store := f.al.GetSessionStore()
+	original, err := store.GetMeta(f.sid)
+	require.NoError(t, err)
+	require.Equal(t, b1CompOwner, original.Owner)
+	require.Equal(t, b1CompOwner, f.wc.userID)
+	registered, ok := f.al.GetRegistry().GetAgent(original.AgentID)
+	require.True(t, ok)
+	require.NotNil(t, registered)
+	workspaces, err := listWorkspaceFiles(f.home)
+	require.NoError(t, err)
+	eligible := make([]storedWorkspace, 0, len(workspaces))
+	for _, ws := range workspaces {
+		if ws.IsDefault && mainSessionPairEligible(f.al.GetConfig(), ws, original.AgentID) {
+			eligible = append(eligible, ws)
+		}
+	}
+	require.Len(t, eligible, 1, "real boot default workspace must own the registered member main")
+	ws := eligible[0]
+	require.Equal(t, f.wc.userID, ws.Owner, "main audience comes from the same actual workspace owner")
+	main, err := store.GetOrCreateMainSession(ws.ID, original.AgentID)
+	require.NoError(t, err)
+	require.Equal(t, session.SessionTypeMain, main.Type)
+	require.Equal(t, ws.ID, main.WorkspaceID)
+	require.Equal(t, original.AgentID, main.AgentID)
+	gotWorkspace, gotAgent, computedMain := session.SplitMainSessionID(main.ID)
+	require.True(t, computedMain)
+	require.Equal(t, ws.ID, gotWorkspace)
+	require.Equal(t, original.AgentID, gotAgent)
+	isMain, allowed, err := mainSessionGate(f.home, f.al.GetConfig(), main.ID)
+	require.NoError(t, err)
+	require.True(t, isMain)
+	require.True(t, allowed)
+	owner := f.wc.userID
+	require.NoError(t, store.SetMeta(main.ID, session.MetaPatch{Owner: &owner}))
+	ready, err := store.GetMeta(main.ID)
+	require.NoError(t, err)
+	require.Equal(t, session.SessionTypeMain, ready.Type)
+	require.Equal(t, owner, ready.Owner)
+	require.Empty(t, ready.Title, "a genuine member main remains actually untitled in storage")
+	f.sid = main.ID
+	bindTestConnToSession(f.h, f.chat, f.sid, f.wc)
 }
