@@ -193,7 +193,10 @@ func c1PerformancePartial(t *testing.T, patch map[string]any) {
 	for k, v := range patch {
 		want[k] = v
 	}
-	quiet := want["goal_reminder_quiet_seconds"].(int)
+	quiet, quietOK := want["goal_reminder_quiet_seconds"].(int)
+	if !quietOK {
+		t.Fatalf("C1 test precondition: %s must be int", "goal_reminder_quiet_seconds")
+	}
 	enabled, enabledOK := want["goal_stalled_checkin_enabled"].(bool)
 	if !enabledOK {
 		t.Fatalf("C1 test precondition: %s must be bool", "goal_stalled_checkin_enabled")

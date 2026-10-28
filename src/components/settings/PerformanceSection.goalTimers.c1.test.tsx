@@ -119,7 +119,7 @@ describe('C1 actual PerformanceSection goal timer controls', () => {
     expect(puts).toEqual([])
   })
   it('OFF retains edited minutes across unrelated quiet edit, refetch/remount and ON', async () => {
-    let view = await mount(); let controls = timerControls()
+    const view = await mount(); let controls = timerControls()
     await saveEdit(controls.minutes, '45', { goal_stalled_checkin_minutes: 45 })
     const count = puts.length; const before = { ...server }
     fireEvent.click(controls.stalled); expect(puts).toHaveLength(count); await confirmation(true)
@@ -128,7 +128,7 @@ describe('C1 actual PerformanceSection goal timer controls', () => {
     await waitFor(() => expect(controls.minutes).toBeDisabled()); expect(controls.minutes).toHaveValue(45)
     await saveEdit(controls.quiet, '120', { goal_reminder_quiet_seconds: 120 })
     expect(server.goal_stalled_checkin_enabled).toBe(false); expect(server.goal_stalled_checkin_minutes).toBe(45)
-    view.unmount(); view = await mount(); controls = timerControls()
+    view.unmount(); await mount(); controls = timerControls()
     expect(controls.quiet).toHaveValue(120); expect(controls.minutes).toHaveValue(45); expect(controls.minutes).toBeDisabled(); expect(controls.stalled).toHaveAttribute('aria-checked', 'false')
     const onCount = puts.length; fireEvent.click(controls.stalled); await confirmation(true)
     await waitFor(() => expect(puts).toHaveLength(onCount + 1))
