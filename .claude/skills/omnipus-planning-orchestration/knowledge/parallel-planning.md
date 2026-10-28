@@ -2,7 +2,7 @@
 
 Detail behind SKILL.md §1. Design source: sections 5.6, 7.1 and 7.6 of
 `docs/internal/design/dev-team-setup-design-2026-09-25.md`.
-Last reviewed: 2026-10-23
+Last reviewed: 2026-10-28 — dev-team roster update (ten roles)
 
 Current ownership, topology and review rules: root `CLAUDE.md` ("Subagent Workflow");
 cut and landing procedure: `knowledge/landing-trains.md`.
@@ -12,7 +12,7 @@ cut and landing procedure: `knowledge/landing-trains.md`.
 ### 1. Build the dependency graph
 
 - Decompose the commissioned work into units small enough to size and dispatch: one
-  unit is a coherent deliverable a single dispatch or squad can own.
+  unit is a coherent deliverable a single dispatch or stream can own.
 - For every pair of units, decide: does one need the other's output? Cross-stack work
   has a fixed order — contract first, then the stacks in parallel, then one combined
   review over the combined diff.

@@ -1,6 +1,6 @@
 # Dispatch and watch — keep workers observable and resumable
 
-Last reviewed: 2026-10-23 — text contradictions and implemented tooling
+Last reviewed: 2026-10-28 — dev-team roster update (ten roles)
 
 Mechanics for the planning loop's "Dispatch and watch" step. Launcher selection stays
 in the personal rules, outside this repo; set `OMNIPUS_WORKER_CLI` from those rules
@@ -62,8 +62,8 @@ Append a newline-terminated user message to that worker's `.control.jsonl` to st
 ```
 
 For Agent-tool workers, observe their progress and use `SendMessage` to the original
-worker for steering and resuming. New work goes directly to specialists; the retained
-#1266 squad lead still uses its own foreground goal-loop wait.
+worker for steering and resuming. New work goes directly to specialists; a separate
+team-lead session running an independent stream uses its own foreground goal-loop wait.
 
 ## Resume the same session
 

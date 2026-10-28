@@ -8,13 +8,13 @@ description: >
   (GitNexus first, Read/Grep fallback), treats the code as fact and fixes the spec
   with a dated correction line, updates the Status field (Draft | In review |
   Approved | Implemented | Superseded), and flags anything that is really an open
-  founder decision rather than a plain sync. Loaded on demand by team-lead or
-  squad-lead — not preloaded, not run automatically on every commit.
+  founder decision rather than a plain sync. Loaded on demand by team-lead —
+  not preloaded, not run automatically on every commit.
 ---
 
 # Spec sync
 
-Last reviewed: 2026-10-23 — delivery-process check scope
+Last reviewed: 2026-10-28 — dev-team roster update (ten roles)
 
 Companion to plan-spec (writes a spec) and grill-spec (reviews a spec). spec-sync
 runs after the fact: it makes sure a spec still describes what the code does, once

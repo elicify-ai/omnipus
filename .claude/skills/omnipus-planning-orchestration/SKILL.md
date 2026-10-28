@@ -1,18 +1,19 @@
 ---
 name: omnipus-planning-orchestration
-description: Planning and orchestration procedure for team-lead and squad-lead — the dependency-graph planning loop with safely-parallel waves and the three change sizes, the cross-session coordination ledger (claims, holds, landing lock, landing announcements, chief naming and vacancy), the machine-capacity check before every dispatch wave, the idle-time playbook, and event-driven status reporting with batched landing asks. MANDATORY at session start and re-opened before creating every new plan.
+description: Planning and orchestration procedure for team-lead — the dependency-graph planning loop with safely-parallel waves and the three change sizes, the cross-session coordination ledger (claims, holds, landing lock, landing announcements, chief naming and vacancy), the machine-capacity check before every dispatch wave, the idle-time playbook, and event-driven status reporting with batched landing asks. MANDATORY at session start and re-opened before creating every new plan.
 ---
 
 # Omnipus planning and orchestration
 
-**Audience:** team-lead coordinating workers directly, and separate, directly addressable
-squad-lead sessions for independent streams; the existing #1266 exception remains.
+**Audience:** team-lead coordinating workers directly — including a separate, directly
+addressable team-lead session running an independent stream. There is no separate
+squad-lead role (founder, 2026-10-27).
 Topology authority: root `CLAUDE.md` ("Subagent Workflow"). Loading is mandatory: preloaded at session start via the
 `skills:` frontmatter field, re-opened before creating every new plan. A plan that does
 not cite this skill is a review finding; the skills acknowledgement line (shared-skill
 rule 13) proves the load.
 
-Last reviewed: 2026-10-23 — approved delivery-process rollout
+Last reviewed: 2026-10-28 — dev-team roster update (ten roles)
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (sections 5.6–5.9, 7.6, 7.7).
 Read that design with its 2026-10-23 amendment; current rules are in root `CLAUDE.md`
 ("Subagent Workflow", "Build, test, and quality gates", "Running CLI agents").
@@ -22,7 +23,7 @@ Read that design with its 2026-10-23 amendment; current rules are in root `CLAUD
 Impatient with idle time, patient with quality: hate waiting and serial work; always ask
 "what else can run now?"; never trade a quality gate for speed; stay calm and factual in
 reports; own problems whatever their origin. Three principles, binding on team-lead and
-every squad lead:
+every team-lead session:
 
 1. **Maximise safe parallelism** — the dependency graph and safe-parallel detection
    below decide what runs together; nothing is serialised "to be safe".
@@ -59,14 +60,14 @@ Full procedure: `knowledge/parallel-planning.md`. The loop:
    engagement start, repeat it in every dispatch brief that needs it, re-confirm with the
    founder at each landing. It is never hard-coded in any repo asset.
 
-## 2. Coordination — squads, chief, ledger
+## 2. Coordination — streams, chief, ledger
 
 Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
 
 - The **coordination ledger** — a directory outside every checkout and worktree
   (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/`) — is the single
-  coordination state. Read `CHIEF.md`, `HOLDS.md` and the squad files at session start
-  and before every landing; update your own squad row on every status change.
+  coordination state. Read `CHIEF.md`, `HOLDS.md` and the stream files at session start
+  and before every landing; update your own stream row on every status change.
 - **Claims record the plan** — check them before assigning an owner; they are not a
   machine lock. Resolve an overlapping area with the chief, not another same-area lane.
 - **Trains and standalone candidates** — read `knowledge/landing-trains.md` for cuts,
@@ -74,20 +75,19 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
   Use `knowledge/coordination-ledger.md` for the approval/lock/push sequence and exact
   ledger formats. No full lane CI and no per-lane gates.
 - **Direct coordination** — team-lead dispatches specialists itself for new work. A
-  separate squad-lead session manages only its commissioned independent stream and
-  hands evidence to the chief for integration. The retained #1266 in-session lead
-  follows `.claude/agents/squad-lead.md` §4a; on a stop, compare its reply with its
+  separate team-lead session manages only its commissioned independent stream and
+  hands evidence to the chief for integration; on a stop, compare its reply with its
   recorded GOAL, resume unfinished work in the same session, and route founder
-  questions unchanged. This is an exception, not a template for new squads.
+  questions unchanged. There is no separate squad-lead role (founder, 2026-10-27).
 - **A red integration branch stops all landings** — with one exception: a landing that
   only fixes the red integration branch may land (it takes the lock like any landing and
   says so in its announcement).
-- **Stale rows**: a squad row is stale after 2 hours with no update and no live session
+- **Stale rows**: a stream row is stale after 2 hours with no update and no live session
   behind it. A live session refreshes its row when it passes the 2-hour mark. Releasing
   or re-assigning a stale claim needs the founder's agreement, asked by the chief.
 - **Chief**: named by the founder ("you are chief"); record it in `CHIEF.md`, refresh
   on handover/restart, cut candidates and perform mechanical integration directly.
-  Mark a vacancy and ask the founder for a successor; no squad lead appoints itself.
+  Mark a vacancy and ask the founder for a successor; no session appoints itself.
 - After any context compaction or resume: **re-read the ledger directory before the next
   write** — the ledger, not any session's memory, is the coordination state.
 
@@ -110,7 +110,7 @@ agents") before launch or resume.
 
 ## 4. Idle-time playbook
 
-While waiting — CI running, a review in flight, another squad, the founder's decision —
+While waiting — CI running, a review in flight, another session, the founder's decision —
 ask: what else can run NOW? Allowed without asking, in this order; anything outside
 these classes asks first:
 
@@ -142,7 +142,7 @@ silently deferring a gate (principle 3).
   rendering in a browser at that moment — start the server, load the page, then report
   the link (localhost:6006 was reported as ready before any server was started).
 - Reports up the chain: terse and technical, with evidence — files, commands with exit
-  codes, certainty labels (shared-skill rule 14). Squad reports cap at ~40 lines plus
+  codes, certainty labels (shared-skill rule 14). Stream reports cap at ~40 lines plus
   the evidence table.
 
 ## 6. Founder-facing demos — handover and dispatch hygiene

@@ -1,14 +1,14 @@
 # squads/<squad-id>.md template (design 5.9)
 #
-# Last reviewed: 2026-10-23
+# Last reviewed: 2026-10-28 — dev-team roster update (ten roles); row format unchanged
 # Current process: root CLAUDE.md (Subagent Workflow), plus the planning skill's
 # knowledge/coordination-ledger.md. The strict row format below is unchanged.
-# New feature/train rows use lead=team-lead; separate independent streams may use
-# lead=squad-lead. Only existing #1266 keeps an in-session squad lead.
+# Every row uses lead=team-lead: a separate independent stream is a separate
+# team-lead session, and there is no squad-lead role.
 #
 # One canonical file per feature/train/independent stream (for example
 # squads/security-hardening.md). Updated on every status change by the
-# squad's own session/lead — "The squad's own file; updated on every status
+# stream's own session — "The stream's own file; updated on every status
 # change". Claims are planning information, not machine locks; resolve duplicate
 # area owners with the chief before dispatch. Only HOLDS.md and
 # LANDING-LOCK are mechanically enforced (by the pre-push hook).
@@ -29,9 +29,9 @@
 #
 #   LANDING-ANNOUNCEMENT squad=<squad-id> branch=<branch-name> announced-at=<ISO8601> by=<who>
 #
-# The squad's GOAL is its own line below the row (never a row field — goal
-# text may contain "|"), written by whoever starts the squad and kept until
-# the squad is landed or released; no parser reads it:
+# The stream's GOAL is its own line below the row (never a row field — goal
+# text may contain "|"), written by whoever starts the stream and kept until
+# the stream is landed or released; no parser reads it:
 #
 #   GOAL squad=<squad-id> set-at=<ISO8601> by=<who> :: <end state, one line>
 #
