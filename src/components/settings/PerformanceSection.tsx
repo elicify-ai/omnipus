@@ -313,6 +313,34 @@ export function PerformanceSection(): React.ReactElement {
   // True from gate-open until the gate settles; see openStepUp.
   const gateInFlightRef = useRef(false)
 
+  // Draft generations (CG-CR-1 / CG-CR-2).
+  //
+  // Every user edit bumps the generation of the field it edited. The queued
+  // body records the generation each field was written at, and the body handed
+  // to the mutation carries those generations along. Two rules follow, and
+  // both are needed for this save coordinator to stay truthful:
+  //
+  //   - a COMMIT may mark a control clean only while that control still shows
+  //     the edit that was saved. While a PUT is in flight the operator can
+  //     type a NEWER value into the same input; that edit is still on screen
+  //     and must survive the older save, so its generation has moved on and
+  //     the control keeps its dirty flag (the server-sync effect then leaves
+  //     the newer value alone) — CG-CR-2.
+  //   - a CANCELLED confirmation must leave the queue: its patch is dropped,
+  //     so a later, unrelated save cannot apply the change the operator
+  //     declined. An edit made after that confirmation opened is a NEWER
+  //     draft, not the cancelled one: it stays visible and stays queued —
+  //     CG-CR-1.
+  const draftGenRef = useRef<Record<string, number>>({})
+  const pendingGenRef = useRef<Record<string, number>>({})
+  // What the open confirmation proposes to save, and the generation of each
+  // field it carries. The cancel path needs both to tell the cancelled
+  // change apart from a newer one.
+  const gateProposalRef = useRef<{
+    body: PerformanceSettingsUpdate
+    gen: Record<string, number>
+  } | null>(null)
+
   // Single writer for the pending slot.
   const setPendingPatch = useCallback((next: PerformanceSettingsUpdate | null) => {
     pendingRef.current = next
@@ -323,7 +351,19 @@ export function PerformanceSection(): React.ReactElement {
   const enqueuePending = useCallback((patch: PerformanceSettingsUpdate) => {
     const prev = pendingRef.current
     setPendingPatch(prev ? { ...prev, ...patch } : patch)
+    // Record the generation each queued field was written at, so a commit or
+    // a cancellation can tell "the edit that was saved" from "a newer edit
+    // the operator has made since".
+    const gens = pendingGenRef.current
+    for (const key of Object.keys(patch)) {
+      gens[key] = draftGenRef.current[key] ?? 0
+    }
   }, [setPendingPatch])
+
+  // Bump the draft generation of the field a user edit just changed.
+  const bumpDraftGen = useCallback((key: string) => {
+    draftGenRef.current[key] = (draftGenRef.current[key] ?? 0) + 1
+  }, [])
 
   // Debounce timers for autosave — one per independently-saved control.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -421,28 +461,138 @@ export function PerformanceSection(): React.ReactElement {
   // above, which overwrites the input with the server's value — doing that
   // for a field the PUT never sent is precisely the silent revert finding
   // 15 describes.
-  const clearCommittedDirty = useCallback((saved: PerformanceSettingsUpdate) => {
+  //
+  // CG-CR-2: "has not re-edited" is decided by the field's draft generation,
+  // not by the queued patch alone. While a PUT is in flight the operator can
+  // type a NEWER value into the same input (the numeric fields stay editable
+  // during a save — that is existing behaviour and stays). That newer edit is
+  // still on screen and must survive the older save: the generation captured
+  // with the body is compared with the current one, and when it has moved on
+  // the control keeps its dirty flag, so the server-sync effect does not
+  // overwrite the newer value with the older saved one.
+  const clearCommittedDirty = useCallback((saved: PerformanceSettingsUpdate, capturedGen?: Record<string, number>) => {
     const queued = pendingRef.current
+    const gens = capturedGen ?? {}
+    // True when the edit this body carried is still the one on screen. A
+    // field the operator never edited has no generation of its own: the
+    // queue records the baseline 0 for it, so both sides compare the same
+    // baseline.
+    const settled = (key: string) => {
+      const atCapture = gens[key]
+      if (atCapture === undefined) return true
+      return atCapture === (draftGenRef.current[key] ?? 0)
+    }
     const parallelSaved = 'max_parallel_agents' in saved || 'tools_on_demand' in saved
     const parallelRequeued =
       queued !== null && ('max_parallel_agents' in queued || 'tools_on_demand' in queued)
-    if (parallelSaved && !parallelRequeued) setDirty(false)
-    if ('goal_max_rounds' in saved && !(queued !== null && 'goal_max_rounds' in queued)) {
+    if (parallelSaved && !parallelRequeued && settled('max_parallel_agents') && settled('tools_on_demand')) {
+      setDirty(false)
+    }
+    if ('goal_max_rounds' in saved && !(queued !== null && 'goal_max_rounds' in queued) && settled('goal_max_rounds')) {
       setGoalDirty(false)
     }
-    if ('goal_reminder_quiet_seconds' in saved && !(queued !== null && 'goal_reminder_quiet_seconds' in queued)) {
+    if ('goal_reminder_quiet_seconds' in saved && !(queued !== null && 'goal_reminder_quiet_seconds' in queued) && settled('goal_reminder_quiet_seconds')) {
       setQuietDirty(false)
     }
-    if ('goal_stalled_checkin_enabled' in saved && !(queued !== null && 'goal_stalled_checkin_enabled' in queued)) {
+    if ('goal_stalled_checkin_enabled' in saved && !(queued !== null && 'goal_stalled_checkin_enabled' in queued) && settled('goal_stalled_checkin_enabled')) {
       setStalledDirty(false)
     }
-    if ('goal_stalled_checkin_minutes' in saved && !(queued !== null && 'goal_stalled_checkin_minutes' in queued)) {
+    if ('goal_stalled_checkin_minutes' in saved && !(queued !== null && 'goal_stalled_checkin_minutes' in queued) && settled('goal_stalled_checkin_minutes')) {
       setStalledMinutesDirty(false)
     }
-    if ('max_tool_iterations' in saved && !(queued !== null && 'max_tool_iterations' in queued)) {
+    if ('max_tool_iterations' in saved && !(queued !== null && 'max_tool_iterations' in queued) && settled('max_tool_iterations')) {
       setToolIterDirty(false)
     }
   }, [])
+
+  // discardCancelledProposal removes a cancelled confirmation's patch from the
+  // queue (CG-CR-1) and re-marks the affected controls clean, so the
+  // cancelled edit is neither shown nor applied by a later, unrelated save.
+  //
+  // Two things are deliberately NOT discarded:
+  //   - a field the operator edited AGAIN while the confirmation was open
+  //     holds a NEWER value in the queue: that newer edit is not the
+  //     cancelled change, so it stays queued and stays visible, and its own
+  //     confirmation saves it;
+  //   - the autosave timer of such a newer edit keeps running, so the newer
+  //     value is still proposed on its own.
+  // A timer that is still pending for a control the operator has NOT edited
+  // since the confirmation opened belongs to the cancelled edit itself (any
+  // later edit bumps that control's generation), so it is discarded — it
+  // would otherwise re-propose the very value the operator just declined.
+  const discardCancelledProposal = useCallback(() => {
+    const proposal = gateProposalRef.current
+    gateProposalRef.current = null
+    if (!proposal) return
+    const slot = pendingRef.current
+    if (slot) {
+      const next: PerformanceSettingsUpdate = { ...slot }
+      let dropped = false
+      for (const key of Object.keys(proposal.body) as (keyof PerformanceSettingsUpdate)[]) {
+        // Drop only the value this confirmation proposed: when the queue
+        // already holds a newer edit for that field, the newer one stays.
+        if (next[key] === proposal.body[key]) {
+          delete next[key]
+          delete pendingGenRef.current[key]
+          dropped = true
+        }
+      }
+      if (dropped) setPendingPatch(Object.keys(next).length > 0 ? next : null)
+    }
+    const gens = proposal.gen
+    // True when the operator has not edited that control since the
+    // confirmation opened. A control the operator never edited has no
+    // generation of its own: the queue recorded the baseline 0 for it, so
+    // both sides compare the same baseline.
+    const untouched = (key: string) => {
+      const atOpen = gens[key]
+      if (atOpen === undefined) return true
+      return atOpen === (draftGenRef.current[key] ?? 0)
+    }
+    // The autosave timer that could still re-propose a cancelled value.
+    const timerFor = (key: string): { current: ReturnType<typeof setTimeout> | null } | null => {
+      switch (key) {
+        case 'max_parallel_agents': return debounceRef
+        case 'goal_max_rounds': return goalDebounceRef
+        case 'goal_reminder_quiet_seconds': return quietDebounceRef
+        case 'goal_stalled_checkin_minutes': return stalledMinutesDebounceRef
+        case 'max_tool_iterations': return toolIterDebounceRef
+        default: return null
+      }
+    }
+    const discardTimer = (key: string) => {
+      const timer = timerFor(key)
+      if (timer?.current) {
+        clearTimeout(timer.current)
+        timer.current = null
+      }
+    }
+    if ('max_parallel_agents' in proposal.body || 'tools_on_demand' in proposal.body) {
+      if (untouched('max_parallel_agents') && untouched('tools_on_demand')) {
+        setDirty(false)
+        discardTimer('max_parallel_agents')
+      }
+    }
+    if ('goal_max_rounds' in proposal.body && untouched('goal_max_rounds')) {
+      setGoalDirty(false)
+      discardTimer('goal_max_rounds')
+    }
+    if ('goal_reminder_quiet_seconds' in proposal.body && untouched('goal_reminder_quiet_seconds')) {
+      setQuietDirty(false)
+      discardTimer('goal_reminder_quiet_seconds')
+    }
+    if ('goal_stalled_checkin_enabled' in proposal.body && untouched('goal_stalled_checkin_enabled')) {
+      setStalledDirty(false)
+    }
+    if ('goal_stalled_checkin_minutes' in proposal.body && untouched('goal_stalled_checkin_minutes')) {
+      setStalledMinutesDirty(false)
+      discardTimer('goal_stalled_checkin_minutes')
+    }
+    if ('max_tool_iterations' in proposal.body && untouched('max_tool_iterations')) {
+      setToolIterDirty(false)
+      discardTimer('max_tool_iterations')
+    }
+  }, [setPendingPatch])
 
   // F4: name the agents a save actually lowered — a 10 s status toast plus
   // the same text kept inline under the field.
@@ -454,8 +604,10 @@ export function PerformanceSection(): React.ReactElement {
   }, [addToast])
 
   const mutation = useMutation({
-    mutationFn: ({ body, token }: { body: PerformanceSettingsUpdate; token?: string }) =>
-      updatePerformanceSettings(body, token),
+    // `gen` carries the draft generation of every field the body holds, so
+    // the commit knows which edit it actually saved (see clearCommittedDirty).
+    mutationFn: (variables: { body: PerformanceSettingsUpdate; token?: string; gen?: Record<string, number> }) =>
+      updatePerformanceSettings(variables.body, variables.token),
     onSuccess: (result, variables) => {
       setSaveStatus('saved')
       // A successful PUT answers with the server's pending-apply state: only
@@ -465,7 +617,7 @@ export function PerformanceSection(): React.ReactElement {
         setUnapplied(null)
         setUnappliedNotice(null)
       }
-      clearCommittedDirty(variables.body)
+      clearCommittedDirty(variables.body, variables.gen)
       reportLowered(result?.max_tool_iterations_lowered_agents)
       // The slot was emptied when the body was handed over (onConfirmed),
       // so anything sitting in it now is a NEWER edit — leave it queued.
@@ -508,7 +660,7 @@ export function PerformanceSection(): React.ReactElement {
         }
         setUnappliedNotice(err.userMessage)
         setNoticeSince(Date.now())
-        clearCommittedDirty(variables.body)
+        clearCommittedDirty(variables.body, variables.gen)
         addToast({ variant: 'warning', message: err.userMessage, duration: LOWERED_TOAST_DURATION_MS })
         reportLowered(err.loweredAgents)
         if (err.loweredUnknown) setLoweredSummary(UNKNOWN_LOWERED_TEXT)
@@ -598,6 +750,15 @@ export function PerformanceSection(): React.ReactElement {
     // enqueuePending; the one open dialog reads the slot at confirm time.
     if (stepUp.open || gateInFlightRef.current) return
     gateInFlightRef.current = true
+    // What this confirmation proposes to save (CG-CR-1): the queue as it
+    // stands now, with the generation of each field. If the operator
+    // cancels, this patch must leave the queue — otherwise the next
+    // confirmed control merges it and the cancelled change is applied
+    // without the operator ever seeing it.
+    gateProposalRef.current = {
+      body: pendingRef.current ? { ...pendingRef.current } : {},
+      gen: { ...pendingGenRef.current },
+    }
     // capturedBody is read from the pending slot lazily, on run()'s FIRST
     // invocation — never here, synchronously, at gate-open time. Two
     // reasons this has to be lazy, one per mode:
@@ -612,17 +773,22 @@ export function PerformanceSection(): React.ReactElement {
     // gate ever call run() twice) submitting the SAME body.
     let captured = false
     let capturedBody: PerformanceSettingsUpdate | null = null
+    let capturedGen: Record<string, number> = {}
     const runOnce = (token?: string) => {
       if (!captured) {
         captured = true
         capturedBody = pendingRef.current
+        // The generation each field was written at, so the commit knows
+        // whether the edit it saved is still the one on screen (CG-CR-2).
+        capturedGen = { ...pendingGenRef.current }
         // Empty the slot as the body is handed over, so an edit made while
         // this gate/PUT cycle is in flight accumulates on its own and is
         // not cleared by this PUT's onSuccess.
         setPendingPatch(null)
+        pendingGenRef.current = {}
       }
       if (!capturedBody) return Promise.resolve(undefined)
-      return mutation.mutateAsync({ body: capturedBody, token })
+      return mutation.mutateAsync({ body: capturedBody, token, gen: capturedGen })
     }
     void stepUp
       .gate(
@@ -635,18 +801,16 @@ export function PerformanceSection(): React.ReactElement {
       )
       .catch((err: unknown) => {
         if (isReAuthCancelled(err)) {
-          // Cancelling means the pending change was never sent. Clear dirty
-          // so the sync effect above (`data && !dirty`) re-applies the
-          // last-known-good server values — otherwise the switch/input would
-          // keep showing the unsaved edit indefinitely, until the user
-          // happened to change it again.
+          // Cancelling means the pending change was never sent. The
+          // cancelled patch leaves the queue (CG-CR-1) and the controls it
+          // carried are marked clean, so the sync effect above
+          // (`data && !dirty`) re-applies the last-known-good server values
+          // — otherwise the switch/input would keep showing the unsaved edit
+          // indefinitely, until the user happened to change it again. A
+          // control the operator edited again while the confirmation was
+          // open keeps its newer value: that edit is not the cancelled one.
           setSaveStatus('idle')
-          setDirty(false)
-          setGoalDirty(false)
-          setQuietDirty(false)
-          setStalledDirty(false)
-          setStalledMinutesDirty(false)
-          setToolIterDirty(false)
+          discardCancelledProposal()
         }
         // A real save failure already surfaced its toast via the mutation's
         // onError above.
@@ -654,7 +818,7 @@ export function PerformanceSection(): React.ReactElement {
       .finally(() => {
         gateInFlightRef.current = false
       })
-  }, [stepUp, mutation, setPendingPatch])
+  }, [stepUp, mutation, setPendingPatch, discardCancelledProposal])
 
   // triggerSave validates the current input and opens the step-up gate.
   const triggerSave = useCallback(() => {
@@ -683,6 +847,7 @@ export function PerformanceSection(): React.ReactElement {
   function handleInputChange(value: string) {
     setInputValue(value)
     setDirty(true)
+    bumpDraftGen('max_parallel_agents')
     setSaveStatus('idle')
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
@@ -708,6 +873,7 @@ export function PerformanceSection(): React.ReactElement {
   function handleGoalInputChange(value: string) {
     setGoalMaxRoundsInput(value)
     setGoalDirty(true)
+    bumpDraftGen('goal_max_rounds')
     setSaveStatus('idle')
     if (goalDebounceRef.current) clearTimeout(goalDebounceRef.current)
     goalDebounceRef.current = setTimeout(() => {
@@ -733,6 +899,7 @@ export function PerformanceSection(): React.ReactElement {
   function handleQuietSecondsChange(value: string) {
     setQuietSecondsInput(value)
     setQuietDirty(true)
+    bumpDraftGen('goal_reminder_quiet_seconds')
     setSaveStatus('idle')
     if (quietDebounceRef.current) clearTimeout(quietDebounceRef.current)
     quietDebounceRef.current = setTimeout(() => {
@@ -751,6 +918,7 @@ export function PerformanceSection(): React.ReactElement {
   function handleStalledMinutesChange(value: string) {
     setStalledMinutesInput(value)
     setStalledMinutesDirty(true)
+    bumpDraftGen('goal_stalled_checkin_minutes')
     setSaveStatus('idle')
     if (stalledMinutesDebounceRef.current) clearTimeout(stalledMinutesDebounceRef.current)
     stalledMinutesDebounceRef.current = setTimeout(() => {
@@ -769,6 +937,7 @@ export function PerformanceSection(): React.ReactElement {
   function handleStalledEnabledChange(checked: boolean) {
     setStalledEnabled(checked)
     setStalledDirty(true)
+    bumpDraftGen('goal_stalled_checkin_enabled')
     setSaveStatus('saving')
     enqueuePending({ goal_stalled_checkin_enabled: checked })
     openStepUp()
@@ -859,6 +1028,7 @@ export function PerformanceSection(): React.ReactElement {
   function handleToolIterChange(value: string) {
     setToolIterInput(value)
     setToolIterDirty(true)
+    bumpDraftGen('max_tool_iterations')
     setToolIterError(null)
     setLoweredSummary(null)
     setLowering(null)
@@ -911,6 +1081,7 @@ export function PerformanceSection(): React.ReactElement {
     const previousToolsOnDemand = toolsOnDemand
     setToolsOnDemand(checked)
     setDirty(true)
+    bumpDraftGen('tools_on_demand')
     if (debounceRef.current) clearTimeout(debounceRef.current)
     const body = buildBody(inputValue, checked)
     if (body) {
