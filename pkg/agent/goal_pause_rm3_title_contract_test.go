@@ -26,6 +26,7 @@ func TestGoalPauseRM3TitleContract(t *testing.T) {
 		{"MainBlankNameNeverUsesID", true, "", "", "an untitled chat"},
 		{"MainWhitespaceNameNeverUsesID", true, " \t ", "", "an untitled chat"},
 		{"OrdinaryEmptyTitleDoesNotGuessAgentLabel", false, "Jim", "", "an untitled chat"},
+		{"OrdinaryWhitespaceOnlyTitleIsUntitled", false, "Jim", " \t ", "an untitled chat"},
 		{"TitledOrdinaryChatUnchanged", false, "Jim", titledChat, titledChat},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
