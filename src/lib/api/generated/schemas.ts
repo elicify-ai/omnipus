@@ -390,6 +390,7 @@ type Message = {
           | {
               position: string;
               entry_id?: string | undefined;
+              turn_id?: string | undefined;
             }
           | undefined;
         type: "subagent_end";
@@ -539,6 +540,7 @@ type HelperEvent = {
 type history_origin = {
   position: string;
   entry_id?: string | undefined;
+  turn_id?: string | undefined;
 };
 type subagent_start = {
   history_origin?: history_origin | undefined;
@@ -621,6 +623,7 @@ type subagent_end = {
     | {
         position: string;
         entry_id?: string | undefined;
+        turn_id?: string | undefined;
       }
     | undefined;
   type: "subagent_end";
@@ -3896,6 +3899,7 @@ export const history_origin: z.ZodType<history_origin> = z.object({
     .max(47)
     .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
   entry_id: z.string().min(1).optional(),
+  turn_id: z.string().min(1).optional(),
 });
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
@@ -4079,6 +4083,7 @@ export const Message: z.ZodType<Message> = z.object({
             .max(47)
             .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
           entry_id: z.string().min(1).optional(),
+          turn_id: z.string().min(1).optional(),
         })
         .optional(),
       type: z.literal("subagent_end"),
@@ -4206,6 +4211,7 @@ export const subagent_end: z.ZodType<subagent_end> = z.object({
         .max(47)
         .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
       entry_id: z.string().min(1).optional(),
+      turn_id: z.string().min(1).optional(),
     })
     .optional(),
   type: z.literal("subagent_end"),
@@ -17898,6 +17904,7 @@ export const HistoryEntryOrigin = z
   .object({
     position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
     entry_id: z.string().min(1).optional(),
+    turn_id: z.string().min(1).optional(),
   })
   .strict();
 

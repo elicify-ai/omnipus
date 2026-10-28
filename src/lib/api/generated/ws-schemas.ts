@@ -21,6 +21,7 @@ export const HistoryEntryOrigin = z
   .object({
     position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
     entry_id: z.string().min(1).optional(),
+    turn_id: z.string().min(1).optional(),
   })
   .strict();
 
