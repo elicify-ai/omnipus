@@ -54,7 +54,13 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 
 	// Dispatch tool-results sub-resource before the generic method switch so the
 	// full path (including ref) is available to HandleToolResults via r.URL.Path.
+	// Security F1 (#1452): a stored result is readable only while its session
+	// is, under the same access order as the history page (main eligibility,
+	// then session existence) — never by reference alone.
 	if strings.HasPrefix(subPath, "tool-results/") || subPath == "tool-results" {
+		if r.Method == http.MethodGet && a.readableSessionStore(w, sessionID) == nil {
+			return
+		}
 		a.HandleToolResults(w, r)
 		return
 	}
@@ -65,6 +71,8 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 			a.listSessions(w, r)
 		} else if subPath == "messages" {
 			a.getSessionMessages(w, r, sessionID)
+		} else if position, ok := strings.CutPrefix(subPath, "messages/"); ok {
+			a.serveSessionHistoryEntry(w, r, sessionID, position)
 		} else {
 			a.getSession(w, r, sessionID)
 		}
@@ -699,6 +707,13 @@ func (a *restAPI) removeStoppedSession(store *session.UnifiedStore, id string) e
 	if err := store.DeleteSession(id); err != nil {
 		return err
 	}
+	// Security F1 (#1452): offloaded tool results die with their session and
+	// every deleted descendant, not only at the separate retention sweep.
+	results := newToolResultStore(a.homePath)
+	var resultErr error
+	for _, sid := range append([]string{id}, descendantIDs...) {
+		resultErr = errors.Join(resultErr, results.removeSession(sid))
+	}
 	// N6: the session is gone, so drop any retained external-CLI driver (and its
 	// option/env snapshot) for it and every deleted descendant.
 	if a.agentLoop != nil {
@@ -741,7 +756,7 @@ func (a *restAPI) removeStoppedSession(store *session.UnifiedStore, id string) e
 				"session_id", id, "error", err)
 		}
 	}
-	return nil
+	return resultErr
 }
 
 // isWorkerAgentID reports whether agentID resolves to a worker agent in the config.

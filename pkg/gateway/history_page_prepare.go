@@ -72,6 +72,9 @@ func (r *historyPageRequest) prepareResult(ctx context.Context, tc session.ToolC
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if d, ok := tc.HistoryDisplayPreview(); ok {
+		return historyPreviewMarker(d), nil
+	}
 	if tc.Result == nil {
 		return tc.Result, nil
 	}
@@ -110,6 +113,26 @@ func historyWireMessage(sid string, e session.ChatHistoryEntry) (generated.Messa
 	}
 	position := string(e.Position)
 	message.HistoryPosition = &position
+	// A2.1/A2.2: map the session reader's private display records to the
+	// generated fields. A full-content read never carries either record.
+	if n := e.Entry.DisplayContentOriginalSizeBytes(); n > 0 {
+		message.ContentOriginalSizeBytes = &n
+	}
+	if message.ToolCalls != nil {
+		calls := *message.ToolCalls
+		if len(calls) != len(e.Entry.ToolCalls) {
+			return message, nil, errors.New("history tool call projection mismatch")
+		}
+		for i, tc := range e.Entry.ToolCalls {
+			if d, ok := tc.HistoryDisplayPreview(); ok {
+				marker, markerErr := historyPreviewMarkerObject(d)
+				if markerErr != nil {
+					return message, nil, markerErr
+				}
+				calls[i].Result = &marker
+			}
+		}
+	}
 	if e.Entry.Type == session.EntryTypeProviderFallback {
 		// PF=A (chat-history paging spec D10; seams-decision section Q):
 		// the fallback-only semantic profile runs in the real projection in
@@ -129,6 +152,10 @@ func historyWireMessage(sid string, e session.ChatHistoryEntry) (generated.Messa
 		if serverErr {
 			return message, nil, errors.New("message projection schema unavailable")
 		}
+		return historyMessagePlaceholder(e)
+	}
+	// The schema checks the marker's shape; the UTF-8 byte rule is separate.
+	if !historyMessageMarkersValid(message) {
 		return historyMessagePlaceholder(e)
 	}
 	return message, raw, err
@@ -283,6 +310,9 @@ func validateHistorySourceFrame(raw []byte) error {
 	}
 	if msg, _ := validateBodyAgainstSchema(schema, raw); msg != "" {
 		return errors.New("invalid prepared historical frame")
+	}
+	if schema == "ToolCallResultFrame" {
+		return historyFrameMarkerValid(raw)
 	}
 	return nil
 }

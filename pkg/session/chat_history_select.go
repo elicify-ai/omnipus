@@ -66,7 +66,7 @@ func historyMode(o ChatHistoryPageOptions) string {
 	}
 }
 func historyEmptyPage(sid string, o ChatHistoryPageOptions, cp historyCheckpoint) ChatHistoryPage {
-	return ChatHistoryPage{SessionID: sid, Entries: []ChatHistoryEntry{}, Cut: ChatHistoryReadCut{sessionID: sid, generation: cp.Generation, retentionGeneration: cp.RetentionGeneration}, PageInfo: ChatHistoryPageInfo{Mode: historyMode(o), Limit: o.Limit, MinRows: o.MinRows, SoftByteBudget: o.SoftByteBudget, StopReason: "end", RetentionGeneration: cp.RetentionGeneration, Context: ChatHistoryContext{Spans: []ChatHistorySpan{}, DuplicateIDs: []ChatHistoryDuplicate{}}}}
+	return ChatHistoryPage{SessionID: sid, Entries: []ChatHistoryEntry{}, Cut: ChatHistoryReadCut{sessionID: sid, generation: cp.Generation, retentionGeneration: cp.RetentionGeneration}, PageInfo: ChatHistoryPageInfo{Mode: historyMode(o), Limit: o.Limit, MinRows: o.MinRows, SoftByteBudget: o.SoftByteBudget, ByteCeiling: DefaultChatHistoryByteCeiling, StopReason: "end", RetentionGeneration: cp.RetentionGeneration, Context: ChatHistoryContext{Spans: []ChatHistorySpan{}, DuplicateIDs: []ChatHistoryDuplicate{}}}}
 }
 func historyFindEligible(t *chatHistoryIndexTree, rank uint64, forward, inclusive bool) (uint64, bool, error) {
 	n, ok, err := t.seek(historyRankKey("e/", rank), forward, inclusive)
@@ -336,7 +336,11 @@ func historySelect(t *chatHistoryIndexTree, dir string, cp historyCheckpoint, o 
 		if e != nil {
 			return p, e
 		}
-		if len(p.Entries) > 0 && p.PageInfo.RowCount >= o.MinRows && weight > o.SoftByteBudget {
+		// A2.3: the hard ceiling stops before any group after the first that
+		// would cross it, even below min_rows, and outranks a coincident soft
+		// budget stop. The rejected lookahead is discarded, not retained.
+		ceilingStop := len(p.Entries) > 0 && weight > p.PageInfo.ByteCeiling
+		if ceilingStop || len(p.Entries) > 0 && p.PageInfo.RowCount >= o.MinRows && weight > o.SoftByteBudget {
 			if m := historyMetrics(t.ctx); m != nil {
 				m.SelectedArchiveRecords--
 				m.SelectedArchiveBytes -= r.Length
@@ -344,6 +348,9 @@ func historySelect(t *chatHistoryIndexTree, dir string, cp historyCheckpoint, o 
 				m.LookaheadArchiveBytes += r.Length
 			}
 			p.PageInfo.StopReason = "byte_budget"
+			if ceilingStop {
+				p.PageInfo.StopReason = "byte_ceiling"
+			}
 			break
 		}
 		p = candidate
@@ -384,17 +391,47 @@ func historySelect(t *chatHistoryIndexTree, dir string, cp historyCheckpoint, o 
 	return p, nil
 }
 
-// Initial selection plus at most two reselects after a retention move.
-const chatHistoryPageMaxAttempts = 3
-
-func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opts ChatHistoryPageOptions) (ChatHistoryPage, error) {
-	o, err := historyNormalizeOptions(opts)
+// historySelectEntry projects exactly one eligible occurrence in full (A2.2):
+// display shortening is off for it and for every dependency it reads. A
+// position this session never bound is unknown; a bound position whose
+// record is gone is the retention tombstone, i.e. proven expiry.
+func historySelectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoint, position HistoryPosition) (ChatHistoryPage, error) {
+	rank, err := historyTokenRank(t, position)
 	if err != nil {
 		return ChatHistoryPage{}, err
 	}
-	if err = validateSessionID(sid); err != nil {
+	r, present, err := historyReadRecordMeta(t, rank)
+	if err != nil {
 		return ChatHistoryPage{}, err
 	}
+	if !present {
+		return ChatHistoryPage{}, ErrHistoryEntryExpired
+	}
+	if !r.Eligible || r.Position != position {
+		return ChatHistoryPage{}, ErrHistoryPositionNotFound
+	}
+	t.fullProjection = true
+	cut := ChatHistoryReadCut{sessionID: cp.SessionID, generation: cp.Generation, retentionGeneration: cp.RetentionGeneration}
+	entry, err := historyProjectEntry(t, dir, cp, cut, r, map[uint64]ChatHistoryEntry{}, "selected")
+	if err != nil {
+		return ChatHistoryPage{}, err
+	}
+	return ChatHistoryPage{SessionID: cp.SessionID, Entries: []ChatHistoryEntry{entry}, Cut: cut}, nil
+}
+
+// Initial selection plus at most two reselects after a retention move.
+const chatHistoryPageMaxAttempts = 3
+
+// historySelector reads one validated selection at a pinned cut: the bounded
+// page (historySelect) or one full occurrence (historySelectEntry).
+type historySelector func(t *chatHistoryIndexTree, dir string, cp historyCheckpoint) (ChatHistoryPage, error)
+
+// readChatHistoryPage is the one bounded read attempt loop shared by the page
+// and single-occurrence readers: cut capture (the cut_captured read event),
+// generation pinning, cleanup-failure precedence and retention re-validation
+// with bounded reselect. Callers validate their own inputs first.
+func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, selectAtCut historySelector) (ChatHistoryPage, error) {
+	var err error
 	for attempt := 1; ; attempt++ {
 		if _, err = us.reconcileChatHistoryIndex(ctx, sid); err != nil {
 			return ChatHistoryPage{}, err
@@ -436,7 +473,7 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 			}()
 			readErr = historyReadEvent(ctx, chatHistoryReadEvent{SessionID: sid, Scope: "page", Phase: "cut_captured", Cut: cut})
 			if readErr == nil {
-				page, readErr = historySelect(t, dir, cp, o)
+				page, readErr = selectAtCut(t, dir, cp)
 			}
 			return page, readErr
 		}()
@@ -478,7 +515,7 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 			continue
 		}
 		if err != nil {
-			if errors.Is(err, ErrHistoryPositionNotFound) || errors.Is(err, ErrInvalidHistoryPosition) || errors.Is(err, ErrInvalidHistoryPageRange) || errors.Is(err, ErrHistoryProjection) {
+			if errors.Is(err, ErrHistoryPositionNotFound) || errors.Is(err, ErrHistoryEntryExpired) || errors.Is(err, ErrInvalidHistoryPosition) || errors.Is(err, ErrInvalidHistoryPageRange) || errors.Is(err, ErrHistoryProjection) {
 				return ChatHistoryPage{}, err
 			}
 			return ChatHistoryPage{}, historyUnavailable("storage_error", err)

@@ -365,6 +365,14 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 	if err != nil {
 		return ChatHistoryEntry{}, err
 	}
+	// A2.1: display shortening runs last, on the fully reduced value, and only
+	// on the bounded page copy; facts the projection consumes are derived from
+	// the full value first. The full-content reader keeps the value whole.
+	if !t.fullProjection {
+		if entry, err = historyShortenForDisplay(entry); err != nil {
+			return ChatHistoryEntry{}, err
+		}
+	}
 	out := ChatHistoryEntry{Position: r.Position, Entry: entry, RowCount: rows, NestedDelegateParents: parents}
 	cache[r.Rank] = out
 	return out, nil
