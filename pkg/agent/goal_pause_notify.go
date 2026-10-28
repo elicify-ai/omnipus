@@ -77,8 +77,9 @@ const untitledGoalPauseChat = "an untitled chat"
 // goalPausedChatTitle is the chat label the bell names. A main chat is never
 // titled (its label is derived on read), so it gets the same
 // "<Agent> - Main Session" label the sidebar shows, built from the agent's
-// registered display name. A missing or blank name, and any other chat without
-// a title, become "an untitled chat" — never the agent ID.
+// registered display name. A missing or blank name, and any other chat whose
+// title is empty or whitespace-only, become "an untitled chat" — never the
+// agent ID. A non-blank title is returned exactly as stored.
 func (al *AgentLoop) goalPausedChatTitle(meta *session.UnifiedMeta) string {
 	if meta.Type == session.SessionTypeMain {
 		if name := al.registeredAgentDisplayName(meta.AgentID); name != "" {
@@ -86,7 +87,7 @@ func (al *AgentLoop) goalPausedChatTitle(meta *session.UnifiedMeta) string {
 		}
 		return untitledGoalPauseChat
 	}
-	if meta.Title == "" {
+	if strings.TrimSpace(meta.Title) == "" {
 		return untitledGoalPauseChat
 	}
 	return meta.Title
