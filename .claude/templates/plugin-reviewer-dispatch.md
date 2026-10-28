@@ -1,8 +1,8 @@
 # Plugin-reviewer dispatch template
 
-Last reviewed: 2026-10-23
+Last reviewed: 2026-10-28 — dev-team roster update (ten roles); the dispatcher is always a team-lead session
 
-Team-lead or squad-lead: paste the block between the two markers at the **head** of every dispatch to a gate plugin reviewer — `code-reviewer`, `silent-failure-hunter`, `pr-test-analyzer`. Use it for explicitly requested optional plugin reviewers too — `type-design-analyzer`, `comment-analyzer`, `code-simplifier` are optional, not part of the gate. Name the model explicitly in every reviewer dispatch; model selection stays outside repo assets. Fill the two placeholders with a tool that cannot misparse the text (e.g. Python `str.replace`), never `sed` with a delimiter that can occur in the text — a `#` in an issue reference has broken a `sed` fill and a reviewer ran without its rules — then append the task brief below the block, and verify the filled prompt contains the discipline block (the `agent-discipline:shared-traits:start` marker) before dispatching. Two errors this template exists to prevent: dispatching a plugin reviewer without it, and pasting the `omnipus-shared-rules` skill body into the dispatch — the reviewer loads the skill itself; only the discipline block and the load instruction travel with the dispatch.
+Team-lead: paste the block between the two markers at the **head** of every dispatch to a gate plugin reviewer — `code-reviewer`, `silent-failure-hunter`, `pr-test-analyzer`. Use it for explicitly requested optional plugin reviewers too — `type-design-analyzer`, `comment-analyzer`, `code-simplifier` are optional, not part of the gate. Name the model explicitly in every reviewer dispatch; model selection stays outside repo assets. Fill the two placeholders with a tool that cannot misparse the text (e.g. Python `str.replace`), never `sed` with a delimiter that can occur in the text — a `#` in an issue reference has broken a `sed` fill and a reviewer ran without its rules — then append the task brief below the block, and verify the filled prompt contains the discipline block (the `agent-discipline:shared-traits:start` marker) before dispatching. Two errors this template exists to prevent: dispatching a plugin reviewer without it, and pasting the `omnipus-shared-rules` skill body into the dispatch — the reviewer loads the skill itself; only the discipline block and the load instruction travel with the dispatch.
 
 --- paste from here ---
 
@@ -22,7 +22,7 @@ A plugin reviewer's own agent file is not ours to edit, so this dispatch carries
 
 ### The evidence table (mandatory; ends every report)
 
-Every dispatch report ends with this table — including a stop-and-ask, blocked or question report: what you verified before stopping (for example the search that proved an element absent) goes in it. A report without it is a finding in your dispatcher's (team-lead or squad-lead) output review, not a formality gap.
+Every dispatch report ends with this table — including a stop-and-ask, blocked or question report: what you verified before stopping (for example the search that proved an element absent) goes in it. A report without it is a finding in your dispatcher's (team-lead) output review, not a formality gap.
 
 | Column | Content |
 |---|---|
@@ -40,7 +40,7 @@ A claim without evidence is labelled **Unknown** — plausibility never promotes
 | **Read before citing** | Never name a file, function, flag, config key or command without having read or run it **in this task**; otherwise say Unknown |
 | **Docs over memory** | Library and tool behaviour comes from current documentation or a quick test — never from recall alone |
 | **Test the instrument** | Before trusting a green or an empty search, show that the check could have seen the failure (rule 6's discipline as a personal duty, not only a team habit) |
-| **No fabricated gaps** | If input is missing or unclear, say so and stop and ask your dispatcher — team-lead or squad-lead (rule 15) — never fill the gap with plausible content |
+| **No fabricated gaps** | If input is missing or unclear, say so and stop and ask your dispatcher — team-lead (rule 15) — never fill the gap with plausible content |
 <!-- agent-discipline:shared-traits:end -->
 
 ## Reviewer discipline (binds this dispatch)
@@ -51,7 +51,7 @@ Canonical source: `.claude/templates/agent-discipline.md`.
 ### Reviewer discipline (every reviewer-side role)
 
 - **Every claim is untrue until you have verified it.** Re-check every claim your verdict depends on — read the code, read the CI run, inspect the evidence artifacts — first-hand, in this task.
-- **Local re-runs are not the reviewer's tool.** Reviewers verify by reading — code, CI results, artifacts. CI is the authority; the **single** local narrow re-run allowed at a time is performed by team-lead, on request, under the one-at-a-time machine-load rule. A reviewer who wants a re-run asks their dispatcher (team-lead or squad-lead) for it.
+- **Local re-runs are not the reviewer's tool.** Reviewers verify by reading — code, CI results, artifacts. CI is the authority; the **single** local narrow re-run allowed at a time is performed by team-lead, on request, under the one-at-a-time machine-load rule. A reviewer who wants a re-run asks their dispatcher (team-lead) for it.
 - **A claim you cannot verify is marked UNVERIFIED** in your report and produces a **WARNING, not a block**. Your dispatcher decides: verify it itself, dispatch a verification, or accept it with the gap stated to the founder. An UNVERIFIED claim never silently passes, and never blocks alone.
 - **Every finding carries four things**: a **failure scenario** (this input or this state leads to this wrong result), **evidence** (the `file::symbol` read, the command run), **severity**, and **certainty**. A style preference with no failure scenario is not a finding — it is a comment at most, and it does not gate.
 <!-- agent-discipline:reviewer-rules:end -->

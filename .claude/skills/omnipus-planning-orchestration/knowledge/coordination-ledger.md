@@ -1,9 +1,9 @@
-# The coordination ledger — squads, chief, holds, landing lock
+# The coordination ledger — streams, chief, holds, landing lock
 
 Detail behind SKILL.md §2. Design source: sections 5.4, 5.7, 5.9 and 7.6 of
 `docs/internal/design/dev-team-setup-design-2026-09-25.md`.
 
-Last reviewed: 2026-10-23
+Last reviewed: 2026-10-28 — dev-team roster update (ten roles)
 
 Process authority: root `CLAUDE.md` ("Subagent Workflow"). Candidate assembly, review,
 CI and UAT procedure: `knowledge/landing-trains.md`.
@@ -24,13 +24,13 @@ of this prose.
 | File | Contents (one line per record) | Write rule |
 |---|---|---|
 | `CHIEF.md` | current chief session · named by · named-at — or `VACANT since <ts>` | Overwritten on handover or when a vacancy is noticed |
-| `squads/<squad-id>.md` | owning session (or "in-session") · lead · worktree (absolute path) · branch · claim (trees/files) · status · last-updated (timestamp + who). The row also carries the squad's GOAL line, and its landing announcement when one is pending | The squad's own file; updated on every status change |
+| `squads/<squad-id>.md` | owning session (or "in-session") · lead · worktree (absolute path) · branch · claim (trees/files) · status · last-updated (timestamp + who). The row also carries the stream's GOAL line, and its landing announcement when one is pending | The stream's own file; updated on every status change |
 | `HOLDS.md` | what (branch or tree) · held by · why · since · released-at | Append on hold; edit the line on release |
-| `LANDING-LOCK` | squad · branch · taken-at (absent or empty = free) | Created atomically (one writer wins); released right after the push |
-| `LANDING-LOG.md` | squad · branch · commit · checks evidence · founder-yes note · landed-at | Append only — never edited |
+| `LANDING-LOCK` | `squad=` · branch · taken-at (absent or empty = free) | Created atomically (one writer wins); released right after the push |
+| `LANDING-LOG.md` | `squad=` · branch · commit · checks evidence · founder-yes note · landed-at | Append only — never edited |
 | `MESSAGES.md` | Urgent calls only ("hold pushes", "integration red") — the durable record of the message channel | Append only |
 
-Squad status vocabulary (exact): `planned` / `in-flight` / `gated` / `handed-back` /
+Stream status vocabulary (exact): `planned` / `in-flight` / `gated` / `handed-back` /
 `waiting-for-founder` / `landed` / `blocked` / `released`.
 
 ## Exact line formats (case-sensitive, pipe-delimited `key=value` — parsed literally)
@@ -41,7 +41,7 @@ header comment (the hook's normative-parser copy, kept in sync with these by gov
 section 9). A field name, an `=`, a space, or a `|` out of place is not "close enough" —
 `scripts/dev-machine-capacity.sh` and the pre-push hook parse these by exact match; a
 malformed hold is silently ignored, a malformed lock blocks everything, and a malformed
-squad row undercounts the capacity monitor to zero (this broke exactly this way in test
+stream row undercounts the capacity monitor to zero (this broke exactly this way in test
 T5 — never write a ledger line as free-form prose with `·` separators; that is this
 table above, for humans to read, not what you write to disk).
 
@@ -59,11 +59,11 @@ table above, for humans to read, not what you write to disk).
   LANDING-ANNOUNCEMENT squad=<squad-id> branch=<branch-name> announced-at=<ISO8601> by=<who>
   ```
 
-  The squad's GOAL (SKILL.md §2, the goal judge) is its own line below the row — never
+  The stream's GOAL (SKILL.md §2, the goal judge) is its own line below the row — never
   a row field: goal text is free prose that may contain `|`. Written by whoever starts
-  the squad (team-lead, for an in-session squad), kept until the squad is `landed` or
+  the stream (team-lead), kept until the stream is `landed` or
   `released`. Neither parser reads it — the capacity monitor matches only lines starting
-  `squad=`, and the pre-push hook never reads squad files:
+  `squad=`, and the pre-push hook never reads stream files:
 
   ```
   GOAL squad=<squad-id> set-at=<ISO8601> by=<who> :: <end state, one line>
@@ -77,7 +77,7 @@ table above, for humans to read, not what you write to disk).
 
 - **`LANDING-LOCK`** (template: `LANDING-LOCK.template`) — the whole file is one line
   when held, absent or empty when free; space-separated, not pipe-separated, and parsed
-  by the pre-push hook (branch= and squad= both, since A4 — the squad field proves who
+  by the pre-push hook (branch= and squad= both, since A4 — the `squad=` field proves who
   holds the lock, not only which branch it covers):
 
   ```
@@ -109,9 +109,9 @@ table above, for humans to read, not what you write to disk).
 
 ## Read before acting
 
-- Read `CHIEF.md`, `HOLDS.md` and the squad files **at session start and before every
+- Read `CHIEF.md`, `HOLDS.md` and the stream files **at session start and before every
   landing**.
-- Update your own squad row on every status change — a row not updated is a row nobody
+- Update your own stream row on every status change — a row not updated is a row nobody
   believes. `last-updated` is the staleness signal: refresh your row when you pass the
   2-hour mark so a live session is never mistaken for dead.
 - After any context compaction or resume, re-read the whole ledger directory before
@@ -119,15 +119,16 @@ table above, for humans to read, not what you write to disk).
 
 ## Features, trains and independent sessions
 
-Retain the existing `squads/` filenames and strict row formats; the parser key `squad=`
-does not require a squad-lead dispatch. For new directly coordinated features and
-trains, write `lead=team-lead` and name the responsible session. Separate independent
-streams may name `lead=squad-lead`; only existing #1266 retains an in-session lead.
-Use one canonical ledger file per stream and record its GOAL and current evidence.
+Retain the existing `squads/` filenames and strict row formats; `squad=` is a fixed
+ledger key and file-location convention, not a role reference. For new directly
+coordinated features and trains, write `lead=team-lead` and name the responsible
+session. A separate independent stream is a separate team-lead session, so it also
+writes `lead=team-lead`. Use one canonical ledger file per stream and record its GOAL
+and current evidence.
 
 The chief collects ready branches, makes mechanical merges and prepares candidate
 evidence; workers receive only conflicts needing a code/design choice. A separate
-squad session hands its branch/evidence to the chief for integration, rather than
+session hands its branch/evidence to the chief for integration, rather than
 running another verification cycle for each lane. Large standalone candidates retain
 their own landing; coordinate the second-lander merge/re-check through the chief.
 
@@ -200,7 +201,7 @@ immediately through the existing area owner, consolidating related red checks.
 
 ## Stale rows — the 2-hour rule
 
-A squad row is stale after **2 hours with no update and no live session** behind it.
+A stream row is stale after **2 hours with no update and no live session** behind it.
 The chief asks the founder before releasing or re-assigning a stale claim — releasing
 someone else's in-flight work is a founder decision. The 2-hour sweep is what cleans up
 after a session that died without updating its row.
@@ -215,20 +216,20 @@ after a session that died without updating its row.
   Escalate unresolved disputes to the founder, rather than inventing a ruling.
 - **Vacancy:** if the chief's session ends without handover, whoever notices first
   marks `VACANT since <ts>` in `CHIEF.md` and the founder is asked to name a successor
-  — no squad lead appoints itself. Chief-owned train cuts and mechanical integration
+  — no session appoints itself. Chief-owned train cuts and mechanical integration
   wait for that appointment; retain prepared branch evidence rather than silently
   replacing the chief. Independent standalone work retains its own landing, subject
   to the same approval, lock and second-lander re-check.
 
 ## When a session ends
 
-Before ending, a session updates its squad file: work released, handed to a named
+Before ending, a session updates its stream file: work released, handed to a named
 successor session, or marked with its exact state for re-assignment.
 
 ## Messages — urgent calls only
 
 Urgent calls ("hold pushes", "integration red") travel session-to-session over the
-`SendMessage` tool, addressed to the peer session named in its squad row's `session=`
+`SendMessage` tool, addressed to the peer session named in its stream row's `session=`
 field (or, for the chief, the session named in `CHIEF.md`'s `chief=` field). **Until a
 dry run has actually proven `SendMessage` delivery between two live sessions in this
 setup, treat cross-session messaging as unproven and default to `MESSAGES.md`**: append
