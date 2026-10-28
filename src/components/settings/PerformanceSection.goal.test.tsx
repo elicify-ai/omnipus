@@ -400,6 +400,8 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
       screen.getByRole('spinbutton', { name: 'Max parallel agents' }),
       screen.getByRole('spinbutton', { name: 'Tries per goal' }),
       screen.getByRole('spinbutton', { name: /^Max tool calls per turn/ }),
+      screen.getByRole('spinbutton', { name: 'Idle reminder quiet window (seconds)' }),
+      screen.getByRole('spinbutton', { name: 'Stalled-work check-in interval (minutes)' }),
     ]
     const all = screen.getAllByRole('spinbutton')
     expect(all).toHaveLength(known.length)

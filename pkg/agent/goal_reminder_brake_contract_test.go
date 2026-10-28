@@ -292,7 +292,7 @@ func grBrakeTodosNotProgress(t *testing.T) {
 	msg := h.reminder(t)
 	grSetStreak(t, h, 2)
 	grActionReminder(t, h, msg, "set_todos", map[string]any{
-		"outcome": "Only rearrange the checklist", "todos": []any{map[string]any{"text": "Do the work later", "status": "pending"}},
+		"outcome": "Only rearrange the checklist", "todos": []any{map[string]any{"text": "Do the work later", "active_form": "Completing Do the work later", "status": "pending"}},
 	})
 	h.age(t)
 	next := h.reminder(t)
