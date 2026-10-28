@@ -109,6 +109,28 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
     expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull()
   })
 
+  it('the control carries the catalogued tooltip "Add participant"', async () => {
+    setMainChat()
+    renderSlot()
+    const control = screen.getByRole('button', { name: 'Add participant' })
+    await userEvent.hover(control)
+    const tooltip = await screen.findByRole('tooltip')
+    expect(tooltip).toHaveTextContent('Add participant')
+  })
+
+  it('a task session shows its task label in the slot', async () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: WORKSPACE_ID })
+    useSessionStore.setState({
+      activeSessionId: 'sid-task',
+      activeAgentId: 'mia',
+      attachedSessionType: 'task',
+      attachedTaskTitle: 'Ship the deck',
+      sessionByWorkspace: {},
+    })
+    renderSlot()
+    expect(await screen.findByText('Task: Ship the deck')).toBeVisible()
+  })
+
   it('the old grey bar is gone — the replacement carries no border and no background', async () => {
     setMainChat()
     renderSlot()
