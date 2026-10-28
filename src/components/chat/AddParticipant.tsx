@@ -25,6 +25,7 @@ import { fetchAgents, fetchWorkspace, workspacesQueryKeys } from '@/lib/api'
 import { createRoom, fetchWorkspaceRooms, roomsQueryKeys, updateRoomMembers } from '@/lib/api/rooms'
 import { classifyMutationFailure, mutationFailureMessage } from '@/lib/mutationOutcome'
 import { isOmnipusAgentId } from '@/lib/omnipus'
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { ROOMS_ENABLED } from '@/lib/featureSwitches'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
@@ -215,13 +216,23 @@ function AddParticipantDialog({ target, onClose }: { target: AddParticipantTarge
  * #1449 D13 (founder 2026-10-28): it renders in the workspace header line's
  * right-end slot (ChatHeaderSlot) as an icon-only ghost button — its own row
  * above the chat is gone. The visibility rules are unchanged.
+ *
+ * The workspace-entry gate (workspaceEntryBlocksSend) applies here too: the
+ * control lives in the HEADER, above the chat, so it must not be offered
+ * while the workspace is still being entered. During a workspace switch the
+ * store keeps the PREVIOUS workspace's session until the new one resolves —
+ * without this gate the button would pair the new workspace's id with the old
+ * workspace's session and create a group from a chat the user is not
+ * looking at.
  */
 export function MainChatAddParticipant() {
   const sessionId = useSessionStore((state) => state.activeSessionId)
   const agentId = useSessionStore((state) => state.activeAgentId)
   const isMain = useSessionStore((state) => state.attachedSessionType === 'main')
   const workspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
+  const entryBlocked = useSessionStore((state) => workspaceEntryBlocksSend(state, workspaceId))
   if (!ROOMS_ENABLED) return null
+  if (entryBlocked) return null
   if (!sessionId || sessionId === '__pending' || !agentId || !workspaceId || !isMain || isOmnipusAgentId(agentId)) return null
   return (
     <AddParticipant target={{ kind: 'main', workspaceId, agentId, sessionId }} presentation="icon" />

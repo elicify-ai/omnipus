@@ -11,11 +11,16 @@
  *
  * The rules under test:
  *   - "Add participant" keeps its visibility rules — a member's MAIN chat
- *     only, never Omnipus's chat, never a helper/task chat;
- *   - the old bar's replacement carries no border and no background;
+ *     only, never Omnipus's chat, never a helper/task chat — and stays
+ *     hidden while the workspace entry is still being resolved (a switch
+ *     keeps the PREVIOUS workspace's session until the new one lands);
+ *   - a ROOM page shows no chat chrome at all: the room owns its own
+ *     controls until the group Participants button lands;
+ *   - the old bar's replacement carries no border and no background, and the
+ *     honest "agent names unavailable" warning is never clipped away with
+ *     the truncating identity;
  *   - a narrow header line truncates the breadcrumb and keeps the full text
- *     in its title;
- *   - the breadcrumb's parent is the link back to the parent chat.
+ *     in its title.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
@@ -33,6 +38,14 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   fetchAgents: vi.fn(),
   fetchSessions: vi.fn(),
   fetchWorkspaces: vi.fn(),
+}))
+
+// The slot reads the ROUTE to decide whether the chat on screen is this
+// workspace's session chat. Only the location primitive is needed here.
+let mockPathname = '/workspaces/ws_slot_test/chat'
+vi.mock('@tanstack/react-router', () => ({
+  useLocation: () => ({ pathname: mockPathname, search: {} }),
+  useNavigate: () => vi.fn(),
 }))
 
 import { ChatHeaderSlot } from './ChatHeaderSlot'
@@ -74,11 +87,12 @@ function setHelperChat(): void {
 
 function renderSlot() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={qc}><ChatHeaderSlot /></QueryClientProvider>)
+  return render(<QueryClientProvider client={qc}><ChatHeaderSlot workspaceId={WORKSPACE_ID} /></QueryClientProvider>)
 }
 
 beforeEach(() => {
   selectSession.mockReset()
+  mockPathname = `/workspaces/${WORKSPACE_ID}/chat`
   vi.mocked(fetchAgents).mockReset().mockResolvedValue([mia])
   vi.mocked(fetchWorkspaces).mockReset().mockResolvedValue([])
   vi.mocked(fetchSessions).mockReset().mockResolvedValue([])
@@ -175,13 +189,73 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
     await waitFor(() => {
       expect(label.textContent).toBe('Mia - Main Session / Helper')
     })
+    // jsdom has no layout engine, so the GEOMETRY of the narrow header (no
+    // overflow, the workspace strip keeping the line) is proved by the
+    // Playwright measurement, not here. What jsdom can prove is the part a
+    // user loses when the line is clipped: the full breadcrumb stays
+    // reachable through the title.
     const line = label.querySelector('span')
     expect(line?.getAttribute('title')).toBe('Mia - Main Session / Helper')
-    // Truncation, not overflow: the line clips and the slot can shrink.
-    expect(line?.className).toMatch(/truncate/)
-    expect(line?.className).toMatch(/max-w-\[32ch\]/)
-    const slot = screen.getByTestId('chat-header-slot')
-    expect(slot.className).toMatch(/shrink/)
-    expect(slot.className).not.toMatch(/w-\[/)
+    // The DOM keeps the whole breadcrumb — the browser, not the data, clips it.
+    expect(label.textContent).toBe('Mia - Main Session / Helper')
+  })
+
+  it('the honest "agent names unavailable" warning is never clipped with the identity', async () => {
+    vi.mocked(fetchAgents).mockRejectedValue(new Error('roster down'))
+    setMainChat()
+    renderSlot()
+    const label = await screen.findByTestId('feed-kind-label')
+    await waitFor(() => {
+      expect(label.textContent).toBe('mia - Main Session — agent names unavailable')
+    })
+    const warning = screen.getByText(/agent names unavailable/)
+    // The warning is its OWN element, outside the truncating identity — a
+    // clipped identity can never take the warning with it.
+    const truncating = label.querySelector('span[title]')
+    expect(truncating).not.toBeNull()
+    expect(truncating?.contains(warning)).toBe(false)
+    // The full text stays reachable: the identity's title carries the whole
+    // line, warning included.
+    expect(truncating?.getAttribute('title')).toBe('mia - Main Session — agent names unavailable')
+    // And the status region still announces the whole line.
+    expect(label.getAttribute('aria-labelledby')).toContain(warning.getAttribute('id') ?? '')
+  })
+
+  it('a ROOM page shows no chat chrome: no label, no Add participant', async () => {
+    mockPathname = `/workspaces/${WORKSPACE_ID}/rooms/room-1`
+    setMainChat()
+    renderSlot()
+    // The slot region exists (the group Participants button plugs in here
+    // later) but carries nothing of the PREVIOUS main chat.
+    expect(screen.getByTestId('chat-header-slot')).toBeInTheDocument()
+    expect(screen.getByTestId('chat-header-slot').textContent).toBe('')
+    expect(screen.queryByTestId('feed-kind-label')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull()
+  })
+
+  it('hides "Add participant" while the workspace entry is still being resolved', () => {
+    // A workspace switch keeps the PREVIOUS workspace's session until the
+    // new one resolves. The control must not offer an action that pairs the
+    // new workspace with the old session.
+    setMainChat()
+    useSessionStore.setState({ resolvingSessionForWorkspace: { [WORKSPACE_ID]: true } })
+    renderSlot()
+    expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull()
+  })
+
+  it('hides "Add participant" after a failed workspace entry', () => {
+    setMainChat()
+    useSessionStore.setState({
+      workspaceEntry: {
+        status: 'failed-attempt',
+        committed: null,
+        attempted: { sessionId: MAIN_ID, sendEnabled: false },
+        acknowledged: false,
+        retry: true,
+        fellBack: false,
+      },
+    })
+    renderSlot()
+    expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull()
   })
 })

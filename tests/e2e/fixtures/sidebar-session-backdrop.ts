@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import type { Session as SessionType } from '../../../src/lib/api/generated/openapi-types';
 import { Agent, AppState, GodModeStatus, Room, SandboxStatus, Session, SessionDetail, SessionPage, Workspace } from '../../../src/lib/api/generated/schemas';
 import { WsFrame } from '../../../src/lib/api/generated/ws-schemas';
 import { wireAvailableDetail, wireHistoryPage, wireHistorySnapshot } from '../../chat-history-paging/legacy-wire';
@@ -40,10 +41,14 @@ const state = AppState.parse({
   onboarding_complete: true, identity: { mode: 'local', edition: 'core', signed_in: true }, dev_mode_bypass: false,
 });
 
-export async function installSidebarBackdropEdges(page: Page) {
+export async function installSidebarBackdropEdges(page: Page, options: { extraSessions?: SessionType[]; agentName?: string } = {}) {
   const traffic = { requests: [] as string[], unknown: [] as string[], attaches: [] as string[], errors: [] as string[] };
   page.on('pageerror', error => traffic.errors.push(error.message));
-  const sessions = [backdropInitial, backdropMain, backdropTarget];
+  // `extraSessions` adds sessions (e.g. a helper chat with a parent) and
+  // `agentName` renames the workspace's agent; the defaults keep this
+  // fixture's own set unchanged.
+  const sessions = [backdropInitial, backdropMain, backdropTarget, ...(options.extraSessions ?? [])];
+  const agent = options.agentName ? Agent.parse({ ...backdropAgent, name: options.agentName }) : backdropAgent;
   const history = (id: string) => wireHistoryPage(id, [], 0);
   await page.routeWebSocket(/\/api\/v1\/chat\/ws/, socket => {
     let seq = 0;
@@ -77,8 +82,8 @@ export async function installSidebarBackdropEdges(page: Page) {
     if (endpoint === '/workspaces') return json(url.searchParams.get('status') === 'archived' ? [] : [backdropWorkspace]);
     if (endpoint === `/workspaces/${backdropWorkspace.id}`) return json(backdropWorkspace);
     if (endpoint === `/workspaces/${backdropWorkspace.id}/rooms`) return json(Room.array().parse([]));
-    if (endpoint === '/agents') return json([backdropAgent]);
-    if (endpoint === `/agents/${backdropAgent.id}`) return json(backdropAgent);
+    if (endpoint === '/agents') return json([agent]);
+    if (endpoint === `/agents/${agent.id}`) return json(agent);
     if (endpoint === '/sessions') return json(SessionPage.parse({ sessions }));
     for (const session of sessions) {
       if (endpoint === `/sessions/${session.id}`) return json(SessionDetail.parse(wireAvailableDetail(session, history(session.id))));

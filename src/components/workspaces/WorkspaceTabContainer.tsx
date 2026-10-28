@@ -299,8 +299,10 @@ function WorkspaceTabContainerView({
               row, no bar, no border, no background: the slot carries the
               chat label / helper breadcrumb and the chat controls (today
               "Add participant"; the group chat's Participants button plugs
-              into the same slot later). */}
-          {activeSegment === 'chat' && <ChatHeaderSlot />}
+              into the same slot later). On a room page the slot stays
+              empty — the room owns its own chrome until the group work
+              lands. */}
+          {activeSegment === 'chat' && <ChatHeaderSlot workspaceId={workspace.id} />}
         </header>
 
         {/* Tab content */}

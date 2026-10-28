@@ -10,6 +10,13 @@
  * as the workspace strip. The role, the accessible name and the test hook are
  * unchanged, so the line still reads the same to a screen reader.
  *
+ * Two details the narrow header line forced:
+ *   - the identity truncates, so its title carries the FULL text (the
+ *     breadcrumb, the main title, and the honest-failure warning);
+ *   - the honest-failure warning is a SEPARATE element outside the
+ *     truncating identity, so a clipped identity can never take the warning
+ *     with it. The status region still names both parts.
+ *
  * Words come from feedKindLabel on the workspace descriptor, and only when
  * that descriptor is the active session. Replay does not change them.
  * A status role takes its accessible name from the author, not from its
@@ -56,11 +63,11 @@ function noteHeaderUnavailable(sessionId: string): void {
 
 export function FeedKindLabel() {
   const labelId = useId()
+  const warningId = useId()
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const sessionByWorkspace = useSessionStore((s) => s.sessionByWorkspace)
   const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
-  const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
 
   // Live agents roster — current display names only; the derivation happens
   // per render in feedKindLabel/sessionDisplayTitle.
@@ -129,36 +136,70 @@ export function FeedKindLabel() {
         if (parentLabel != null) parentCrumb = { parent, label: parentLabel }
       }
     }
+    // The identity line and the honest-failure warning are SEPARATE elements:
+    // the identity truncates, the warning must never be clipped away with it.
+    // The warning carries its own id, so the status region's accessible name
+    // still reads the whole line ("<id> - Main Session — agent names
+    // unavailable"), and the identity's title carries the full text too.
+    const identityText = parentCrumb != null ? `${parentCrumb.label} / ${label}` : label
+    const warningText = namesUnavailable ? ' — agent names unavailable' : ''
     return (
       <div
         role="status"
-        aria-labelledby={labelId}
+        aria-labelledby={namesUnavailable ? `${labelId} ${warningId}` : labelId}
         aria-atomic="true"
         data-testid="feed-kind-label"
         className="flex min-w-0 items-center gap-[var(--space-1)]"
       >
         <span
           id={labelId}
-          title={parentCrumb != null ? `${parentCrumb.label} / ${label}` : undefined}
+          title={`${identityText}${warningText}`}
           className="min-w-0 max-w-[32ch] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
         >
-          {parentCrumb != null ? <><CaretLeft size={14} className="shrink-0 align-middle" aria-hidden="true" /><ParentCrumbLink parent={parentCrumb.parent} label={parentCrumb.label} />{` / ${label}`}</> : null}
-          {parentCrumb == null ? (namesUnavailable ? `${label} — agent names unavailable` : label) : null}
+          {parentCrumb != null ? <><CaretLeft size={14} className="inline-block align-middle" aria-hidden="true" /><ParentCrumbLink parent={parentCrumb.parent} label={parentCrumb.label} />{` / ${label}`}</> : null}
+          {parentCrumb == null ? label : null}
         </span>
+        {namesUnavailable && (
+          <span
+            id={warningId}
+            className="shrink-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
+          >
+            {warningText}
+          </span>
+        )}
       </div>
     )
   }
 
   if (attachedSessionType === 'task') {
-    return (
-      <div className="flex min-w-0 items-center gap-[var(--space-1)]">
-        <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
-        <span className="min-w-0 max-w-[32ch] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-          Task: {attachedTaskTitle ?? 'Task Execution'}
-        </span>
-      </div>
-    )
+    return <TaskKindLabel />
   }
 
   return null
+}
+
+/**
+ * The task transcript's identity line ("Task: <title>"), on its own.
+ *
+ * Split out so a surface that needs ONLY this identity — the standalone
+ * session shell (the /sessions/{id} fallback, which has no workspace header
+ * line) — can say what the transcript is without starting the roster and
+ * session-list queries the full label needs. No query, no dangling work.
+ */
+export function TaskKindLabel() {
+  const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
+  const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
+  if (attachedSessionType !== 'task') return null
+  const taskText = `Task: ${attachedTaskTitle ?? 'Task Execution'}`
+  return (
+    <div className="flex min-w-0 items-center gap-[var(--space-1)]">
+      <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
+      <span
+        title={taskText}
+        className="min-w-0 max-w-[32ch] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+      >
+        {taskText}
+      </span>
+    </div>
+  )
 }

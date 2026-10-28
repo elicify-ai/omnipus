@@ -18,22 +18,41 @@
  * stack + count as the Participants button) plugs into this same slot; it is
  * deliberately NOT implemented here.
  *
- * Narrow widths: the slot never forces a width. It shrinks with the header
- * line (flex shrink), the label truncates and carries its full text in the
- * title, and the controls stay icon-only — so the workspace strip keeps its
- * room and its own full/icons/narrow modes.
+ * TWO rules the slot must keep:
+ *
+ * 1. It belongs to the SESSION chat. A room page is a different
+ *    conversation — the room header owns its own controls until the group
+ *    Participants button lands — so the slot stays EMPTY there. Without
+ *    this, opening a group after a main chat would show the main chat's
+ *    title and an "Add participant" action that creates yet another group
+ *    from the remembered main instead of adding to the group on screen.
+ *
+ * 2. The workspace strip always wins the width. The slot's share of the
+ *    header line is capped (max-w) so it can never squeeze the workspace
+ *    navigation out of the line; the label inside truncates, and the whole
+ *    slot shrinks under pressure. The slot keeps its automatic minimum
+ *    width so the icon control is never clipped.
  */
+import { useLocation } from '@tanstack/react-router'
 import { FeedKindLabel } from './FeedKindLabel'
 import { MainChatAddParticipant } from './AddParticipant'
 
-export function ChatHeaderSlot() {
+export function ChatHeaderSlot({ workspaceId }: { workspaceId: string }) {
+  const { pathname } = useLocation()
+  const base = `/workspaces/${workspaceId}`
+  const isSessionChat = pathname === base || pathname === `${base}/chat`
+
   return (
     <div
       data-testid="chat-header-slot"
-      className="flex shrink items-center justify-end gap-[var(--space-1)] pr-[var(--space-2-5)]"
+      className="flex max-w-[25%] shrink items-center justify-end gap-[var(--space-1)] pr-[var(--space-2-5)]"
     >
-      <FeedKindLabel />
-      <MainChatAddParticipant />
+      {isSessionChat ? (
+        <>
+          <FeedKindLabel />
+          <MainChatAddParticipant />
+        </>
+      ) : null}
     </div>
   )
 }

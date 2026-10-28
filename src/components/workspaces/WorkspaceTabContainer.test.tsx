@@ -225,6 +225,22 @@ describe('WorkspaceTabContainer — layout', () => {
     expect(screen.queryByTestId('chat-header-slot')).toBeNull()
   })
 
+  it('renders the chat header slot EMPTY on a room page (#1449 D13)', async () => {
+    // The rooms segment resolves to 'chat' for the strip, but a room is a
+    // DIFFERENT conversation: the slot carries nothing of the remembered main
+    // chat until the group Participants button lands.
+    mockPathname = '/workspaces/ws-1/rooms/room-1'
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    const slot = screen.getByTestId('chat-header-slot')
+    expect(slot).toBeInTheDocument()
+    expect(slot.textContent).toBe('')
+    expect(screen.queryByTestId('feed-kind-label')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull()
+  })
+
   it('does NOT render a secondary breadcrumb row below the top bar', async () => {
     await act(async () => {
       render(<WorkspaceTabContainer workspaceId="ws-1" />)
