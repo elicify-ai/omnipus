@@ -41,6 +41,14 @@ func (us *UnifiedStore) historyHealClock() time.Time {
 	return time.Now()
 }
 
+// historyHealContext bounds one heal attempt by chatHistoryHealTimeout.
+func (us *UnifiedStore) historyHealContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if us.historyHealWithTimeout != nil {
+		return us.historyHealWithTimeout(parent, chatHistoryHealTimeout)
+	}
+	return context.WithTimeout(parent, chatHistoryHealTimeout)
+}
+
 // historyHealTransient reports whether a failure class may be retried after
 // the backoff, rather than latching for the process lifetime.
 func historyHealTransient(class string) bool {
@@ -92,7 +100,7 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 	if size > chatHistoryHealMaxSourceBytes {
 		return fail("too_large", nil)
 	}
-	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatHistoryHealTimeout)
+	hctx, cancel := us.historyHealContext(context.WithoutCancel(ctx))
 	defer cancel()
 	build, err := PrepareChatHistoryIndex(hctx, dir, ChatHistoryIndexBuildOptions{})
 	if err == nil {
