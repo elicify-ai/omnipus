@@ -193,22 +193,13 @@ func TestChatHistorySelfHeal_HardFailureLatchesUntilRestart(t *testing.T) {
 	selfHealRequirePrivateLogs(t, logs, f)
 }
 
-// Design §5.7 / §1 Attempts. Deliberately loud pending test, not a skip and not
-// a production-code compile error. archiveNow only controls append partition
-// days; no retry clock or process-wide heal slot exists in dd88fc7ea.
+// Design §§1,4,5.7: transient failures retry at least 60 seconds apart, at
+// most three times. The third failure can only retry after restart: there is
+// no remaining in-process attempt, even after backoff. No wall-clock sleeps.
 func TestChatHistorySelfHeal_BusyBackoffIsAtLeast60SecondsAndAtMost3Attempts(t *testing.T) {
-	// Developer seam required: UnifiedStore.historyHealNow func() time.Time
-	// (nil => time.Now) used for heal eligibility/last-attempt timestamps, and
-	// a holdable process-wide capacity-one heal slot (proposed private name:
-	// chatHistoryHealSlot). QA must then drive REAL CheckChatHistoryReadiness
-	// with the slot held at t=0, 59.999s, 60s, 60.001s, 119.999s, 120s, 180s.
-	// Expected attempts:       1,       1,   2,       2,        2,    3,    3.
-	// Each actual busy attempt warns class=busy/retry=after_backoff; checks
-	// during backoff and after attempt three never consume another attempt.
-	// Repeat with a real source_changed induced by writing a canonical byte
-	// at the existing rebuild read hook between inventories. Never sleep for
-	// the 60-second boundary or fake the rebuild/reconciler to test this.
-	t.Fatal("BLOCKED: injectable heal-eligibility clock (proposed UnifiedStore.historyHealNow func() time.Time) and holdable capacity-one process-wide heal slot not implemented — required by selfheal-design.md §1 Attempts and §5.7; archiveNow is append-day only")
+	for _, class := range []string{"busy", "source_changed"} {
+		t.Run(class, func(t *testing.T) { selfHealAssertTransientBackoff(t, class) })
+	}
 }
 
 // Design §5.10 / §2: the session-dir stat total excludes .chat-history.
