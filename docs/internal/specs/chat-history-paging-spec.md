@@ -11,7 +11,7 @@ Gate-round-0 follow-up: 2026-10-23 — reports on candidate `98844ce862e0d227b1a
 Gate-round-1 clarification: 2026-10-23 — R1-1 cleanup/read-error precedence and T48/T51 coverage precision; authoring baseline `ef227406ff493f1ece29d5b1bd2583c23718dfa6`, section Z coordination ruling; user/operator-visible combined-error correction flagged to team-lead, no implementation or gate closure claimed
 Founder amendment: 2026-10-27 — the standalone chat-history index repair command was removed by founder decision (greenfield, no upgrade path). D13, DOC-4 and MAJ-203 below describe that removed command and are historical records, not current requirements; the shared `pkg/session` offline builder and the product's named history receipts remain.
 Founder amendment: 2026-10-27 (#1452) — D1 per-part source tracking for combined replies and D2 "the page carries what is displayed, full content on demand" with a hard 8 MiB page ceiling, founder-approved via team-lead's question tool. See the sections "Amendment 2026-10-27 (founder, #1452 D1)" and "Amendment 2026-10-27 (founder, #1452 D2)" after D16. D2 reopens and supersedes the marked §D4a/§D3 sentences. This amendment has not been grilled; team-lead decides whether a grill-spec round runs before RED. Grill round 1 (2026-10-27, REVISE, 8 Important/3 Minor, no founder questions) was fixed in place the same day without changing any founder value; a second grill round follows.
-Founder amendment: 2026-10-28 (#1452 D1 fold) — rule S11: every saved record of one turn segment forms one row, exactly like live (founder, Discord #team-b: Q1 B, Q2 A, Q3 yes). Adds S11, AC-D1-6, B87–B96, T69–T81, U-D1-4…U-D1-6 and a Documentation TODO (D1); changes S4 and revises B83/T59. No contract change. See "S11 — one row per turn segment" in the D1 amendment.
+Founder amendment: 2026-10-28 (#1452 D1 fold) — rule S11: every saved record of one turn segment forms one row, exactly like live (founder, Discord #team-b: Q1 B, Q2 A, Q3 yes). Adds S11, AC-D1-6, B87–B98, T69–T84, U-D1-4…U-D1-6 and a Documentation TODO (D1); changes S4 and S8 and revises B83/T59. **Corrected 2026-10-28 after the one S11 grill (REVISE 0/7/1, all accepted):** adds one additive contract field, optional `HistoryEntryOrigin.turn_id` (S11d). See "S11 — one row per turn segment" and "S11 grill dispositions" in the D1 amendment.
 Issue: https://github.com/elicify-ai/omnipus/issues/1266
 Size: Feature
 Author: architect
@@ -857,7 +857,7 @@ Backend-lead changes the canonical component schemas (ToolCallResultFrame, Sessi
 3. **AC-D1-3** — A saved record never joins a row from a different turn or producer, and an already-bound position never silently moves to another occurrence.
 4. **AC-D1-4** — Joiners, tool placement and display order are exact and identical over REST and WS.
 5. **AC-D1-5** — The R5, r21-a, alias-boundaries and protected-edge regressions keep their current assertions.
-6. **AC-D1-6** (added 2026-10-28, S11) — History rebuilt by any route (REST page, WS snapshot, refresh, a tab joining mid-turn, any page split) shows one row per turn segment with the same text, tool-card positions and display id as the live tab; a user message, a visible notice, an outcome row, another agent or another (or unknown) turn still separates rows.
+6. **AC-D1-6** (added 2026-10-28, S11; corrected after grill) — History rebuilt by any route (REST page, WS snapshot, refresh, a tab joining mid-turn, any page split) shows one row per turn segment with the same text, joiners, tool-card positions, row order and display key as the live tab (S11b precedence); a user message, a clear marker, an error/interrupted/outcome row, another agent, another turn or an unknown turn still separates rows, and information notices are drawn after the combined row exactly as live draws them.
 
 **Rules (normative).**
 
@@ -872,49 +872,77 @@ Backend-lead changes the canonical component schemas (ToolCallResultFrame, Sessi
 | S5 — release | The part list lives on the row and is released with it under D9. `historySourceAliases` keeps its current shape (position → display row id). |
 | S6 — one function, every entry point | One shared binding function serves:<br>• REST latest/older/newer (`applyHistoryPageToBucket`);<br>• the WS snapshot (`settleCompletedSnapshot` and its staging merge in `history-replay.ts`);<br>• the existing-window refresh (`history.ts::createHistorySlice.refresh`);<br>• the other `applyHistoryPageToBucket` callers (`clear-refetch.ts`, `store.ts`). |
 | S7 — record parts at every combine site | Every place that appends to `mergedReplayIds` also records the part: the Step-2 combine, the id-collision mint and the placeholder rekey in `resolveTokenBubbleByMessageId`, plus the `replay_message` combine. |
-| S8 — display order | A row bound to several positions takes its display slot at its **last bound position**, which is the existing last-occurrence rule of `applyHistoryPageToBucket`'s `finalRows`. A separate row whose position lies between two bound parts is therefore drawn **before** the combined row. This holds when the parts arrive on different pages. |
+| S8 — display order | A row bound to several positions takes its display slot at its **last bound position**, which is the existing last-occurrence rule of `applyHistoryPageToBucket`'s `finalRows`. A separate row whose position lies between two bound parts is therefore drawn **before** the combined row. This holds when the parts arrive on different pages. [Changed 2026-10-28 (S11, grill I4): a row **with a part list** takes its slot at its **first** bound position, where live mints the bubble; rows without parts keep the canonical duplicate-id last-occurrence rule. See "Effect on S1–S10" in S11.] |
 | S9 — per-part shortening and expansion (with D2 A2.4) | D2 shortening metadata is kept **per part**: the part's position, `content_original_size_bytes`, and the preview length in UTF-16 code units. Each shortened part gets its own expansion control, which fetches **that part's** position only. Expansion is a **render-time overlay**: the stored row text stays the preview; while rendering, the fetched full text replaces only that part's preview span. Neighbouring parts and their joiners are untouched, and the full text is never written into the chat store. Tool anchors (`textOffset`) at or after a part's end shift by the overlay's length difference. Anchors inside a part longer than its new text clamp to the part's end. Two parts can be expanded in either order with the same result. [Superseded in part 2026-10-28 (grill R2-I3): "the stored row text stays the preview" holds only for a part whose saved text won under S2; the anchor-shift and clamp sentences are replaced by S10, which derives every anchor from part-relative coordinates instead of shifting stored offsets.] A part whose **live** text wins under S2 keeps its full witnessed text, ignores any shortening metadata of its bound record and has no expansion control. |
 | S10 — anchor coordinates across settlement and expansion (added 2026-10-28, grill R2-I3) | Today a live tool anchor is stamped against the full witnessed text and preserved on later bakes (`src/store/chat/session.ts::stampToolCallOffset`, `prevOffset`); saved tool calls carry no offset (`contracts/components/schemas/ToolCall.yaml` has no offset field), and `src/lib/messageParts.ts::splitMessageParts` clamps an offset to the content and places offset-less calls last. For a row with a part list:<br>• **Record part-relative.** Each live-stamped anchor is also recorded body-free as (part index, offset within that part, UTF-16 units), computed from the witnessed text when stamped or when the part list is recorded. An anchor at a part's end, or inside the joiner after it, belongs to that part's end; it never belongs to the next part.<br>• **Derive, never shift.** The effective anchor is always recomputed from the stored part state: `start(part) + min(relative offset, length(part))`, where `length(part)` is the part's currently shown text (live text, saved text, preview, or the fetched full text while expanded) and `start(part)` is the sum of the earlier parts' shown lengths plus their joiners. The stored `textOffset` written at settlement equals this derivation for the collapsed state, so `splitMessageParts` always receives coordinates of the stored text. Expansion recomputes from the relative anchor, never from a previously derived offset, so no difference is applied twice.<br>• **Live wins** (S2): the part's text and its anchors are unchanged from today.<br>• **Saved text wins:** the part shows its saved text (the preview, if shortened); its anchors clamp into it by the formula; later parts' anchors move with the recomputed `start`.<br>• **Worked example.** Live A = 100,000 ASCII characters with a tool anchor at A's end (relative 100,000); B adds 20,000. Settlement replaces A with a 65,536-character preview: the anchor is shown at 65,536, at the end of A's preview and before B. Expanding A shows it at 100,000. Expanding B as well changes neither A's anchor nor its order.<br>• **Multi-byte text.** Lengths are UTF-16 units of the actual strings; the server cuts on a UTF-8 character boundary, so a preview never ends inside a surrogate pair.<br>• Calls without an offset stay last in the row, as today. |
-| S11 — one row per turn segment (added 2026-10-28) | Every saved record of one turn segment binds into one display row, exactly as live shows it. Full rule, entry points (including the J2 live junction), turn identity for WS tool frames and the negative cases: section "S11 — one row per turn segment" below. |
+| S11 — one row per turn segment (added 2026-10-28; corrected after grill) | Every saved or live source of one turn segment binds into one display row, exactly as live shows it. Full rule (segment and transparent records, identity precedence and atomic re-key, joiners, entry points including the J2 live junction and saved-row adoption, per-part release, the `HistoryEntryOrigin.turn_id` contract field, negative cases and the reading-position rule): section "S11 — one row per turn segment" below. |
 
 **Constraints preserved.** These existing tests stay green unchanged: R5 (`src/store/chat.history-fg-r5-alias-segments.test.ts`), both r21-a variants (`src/store/chat.history-dead-stream.test.ts`), `src/store/chat.history-alias-boundaries.test.ts`, `src/components/chat/ChatScreen.history-protected-edge.test.tsx`, and the R-J regression (`src/store/chat/disconnect-catchup-regressions.test.ts`). The parked `f1n3-attempt.patch` is rejected because it fails R5 (`squad-1266/fe2/logs/gate/n3b.txt`).
 
-#### S11 — one row per turn segment (added 2026-10-28, founder: Q1 B, Q2 A, Q3 yes)
+#### S11 — one row per turn segment (added 2026-10-28, founder: Q1 B, Q2 A, Q3 yes; corrected 2026-10-28 after the one S11 grill, see "S11 grill dispositions")
 
-**Authority and source.** Founder decision 2026-10-28 (Discord #team-b, "i agree" to team-lead's recommendation): Q1 = B, full segment parity; Q2 = A, built inside D1 on D1's schedule; Q3 = yes, the B83/T59 expectation changes to one row. Design check: `/workspace/logs/history-fold/ARCH-CHECK.md`. Failures it fixes: llm-agents S-09 and S-08 and catch-up c/d/e/f, root cause in `/workspace/omnipus-coordination/incidents/e2e-goal-reminder-20261028/ROOT-CAUSE-SUMMARY.md`. **No contract, server or model-context change.**
+**Authority and source.** Founder decision 2026-10-28 (Discord #team-b, "i agree" to team-lead's recommendation):
+- Q1 = B: full segment parity;
+- Q2 = A: built inside D1, on D1's schedule;
+- Q3 = yes: the B83/T59 expectation changes to one row.
 
-**Problem.** Live shows **one bubble per turn segment**. A segment is all assistant output of one turn and one producer, up to the next user message (`src/store/chat/slices/frames.ts::resolveTokenBubbleByMessageId` steps 2 and 3). The pre-paging replay matched live: it coalesced an empty tail and merged same-turn entries (`src/store/chat/slices/replay-and-status-frames.ts::applyAssistantReplayCoalesce`, ADR-070 §2.2).
+Design check: `/workspace/logs/history-fold/ARCH-CHECK.md`. One-round grill: `/workspace/logs/history-fold/s11-spec-review.md` (REVISE, 0 Blocking / 7 Important / 1 Minor; all dispositions are below).
 
-The server saves one segment as several records:
+Failures it fixes: llm-agents S-09 and S-08, and catch-up c/d/e/f. Root cause: `/workspace/omnipus-coordination/incidents/e2e-goal-reminder-20261028/ROOT-CAUSE-SUMMARY.md`.
+
+Scope:
+- **One additive contract change:** S11d, `HistoryEntryOrigin.turn_id`.
+- One small live-resolver change: S11c, saved-row adoption and re-key.
+- No model-context change.
+
+**Problem.** Live shows **one bubble per turn segment**. Its boundaries are those of `src/store/chat/slices/frames.ts::resolveTokenBubbleByMessageId` steps 2 and 3:
+- a user row;
+- another known turn;
+- another known agent;
+- a bubble closed as error, interrupted or terminal outcome.
+
+The server saves one segment as several records (`pkg/agent/turn_transcript.go::appendIntermediateAssistantTranscript`, `::appendToolCallTranscript`):
 - the text before a tool call;
 - an empty accounting record for a round with no text;
 - one `tool_call` record per call;
 - the final text.
 
-The sources are `pkg/agent/turn_transcript.go::appendIntermediateAssistantTranscript` and `::appendToolCallTranscript`.
+Paged history reduces each saved record on its own (D4). S4 then draws every record that live did not combine as its own row. So history rebuilt in a new tab, after a reload or after a mid-turn join shows a tool-only row and one row per text segment, where live shows one bubble.
 
-Paged history reduces each saved record alone (D4). S4 then draws every record that live has not combined as its own row. History rebuilt in a new tab, after a reload, or after a mid-turn join therefore shows a tool-only row and one row per text segment, where live shows one bubble.
-
-**What stays.** D4's per-record source groups stay as they are (`src/store/chat/history-replay.ts::createHistoryFrameOwner.collect`, "A tool-only owning source is a real non-prose group"). That covers three things:
-- the client's row-count check against `page_info.row_count` (`::sourceProjection`, `::finish`);
+**What stays unchanged.** D4's per-record source groups stay exactly as they are (`src/store/chat/history-replay.ts::createHistoryFrameOwner.collect`, "A tool-only owning source is a real non-prose group"). That keeps three things intact:
+- the client row-count check (`::sourceProjection`, `::finish`);
 - tool-result ownership (`::mergeProjectionResult`);
 - the D4 rule "never whichever row precedes the page edge".
 
-S11 works only in the step that binds saved records to display rows.
+S11 acts only where saved records are bound to display rows. Source-group count and display-row count are distinct, and S11 changes only the second.
 
 | Rule | Requirement |
 |---|---|
-| S11a — the segment | Two consecutive **visible** saved assistant records X then Y belong to one segment when **all** hold:<br>• no user row lies between them, and no other visible row (system, notice, provider-fallback note, context-window notice, judge verdict, helper or goal event, clear marker, span row or delegate row);<br>• the agents are equal when both are known;<br>• the **turns are known on both and equal** (S11d);<br>• X is not an error, interrupted or terminal-outcome row (`terminal_outcome`), and neither is Y;<br>• Y's id does not occupy an incompatible display row (S1a, R-J).<br>**Silent records do not count.** A silent record is an `isSilentHistoryRecord` record: the content-less, tool-less accounting or turn-start row (`src/components/chat/ChatMessageList.tsx::isSilentHistoryRecord`). Silent records are skipped when deciding "consecutive". They are neither boundaries nor parts, keep their own source group and stay undrawn. The exception: a silent record whose **known** turn differs from the segment's turn is a boundary. |
-| S11b — the row | All records of one segment bind to **one** display row. It is created or extended through the shared binding function (S6), as an S7 combine site. Its fields:<br>• **Display id:** the id of the segment's **first record with text**. If no record of the segment has text yet, it is the first tool-only record's id. Live uses the same id: the tool-opened placeholder is re-keyed to the first `message_id`. When text arrives later for a row that has no text yet, the row is re-keyed to that text record's id. Only the display key changes; no position rebinds to another occurrence (S1a). The result is the same in either load order.<br>• **Part list:** one part per record in saved order, each with its `position`. A tool-only part has empty text and joiner `""`.<br>• **Joiners (S2a):** a text part gets `""` when the row's text before it is empty. Otherwise it gets `"\n\n"`, the boundary live inserts after a tool call (`pendingTextBoundary`) and the paragraph break the replay coalesce inserts. The oracle is the live reducer's own text for the same frames.<br>• **`mergedReplayIds`:** every text record of the segment except the display id, exactly as live registers them. It **never** holds a tool-call id.<br>• **Tool calls:** in saved order. Each call from a tool-only part gets the S10 part-relative anchor (that part, offset 0). Its effective `textOffset` is therefore the end of the text before it, which is where live stamps it (`textAtToolCallStart`). Saved calls carry no offset of their own, and without this anchor `src/lib/messageParts.ts::splitMessageParts` would draw them after all text.<br>• **Tool ownership:** `toolCallOwnerMessageId` and `historySourceAliases` for every bound position point at this row. Saved ownership (`history-merge.ts::savedToolCallOwners`, UAT RR-V-LIVE-READ) then resolves to the combined row.<br>• **Display slot:** S8, the last bound position. A row still streaming stays at the live tail. |
-| S11c — where it runs | Every S6 entry point:<br>• REST latest, older and newer;<br>• the WS snapshot commit, in both the latest and the historical branch of `history-replay.ts::finish`;<br>• the existing-window refresh;<br>• `clear-refetch.ts` and the other `applyHistoryPageToBucket` callers;<br>• the 100-group tail-cache restore.<br>Two more places:<br>• **J2, the live junction.** At a snapshot commit where the session has an active turn, the saved records at the page's end that belong to that turn's open segment bind into that turn's **live** row, if one exists. The live row keeps its display id and its live text (S2). This covers a tab that joins mid-turn: the tool record is saved, the answer still streams, and the active turn's tokens can reach the bucket before `catch_up_complete` commits the page.<br>• **Step 2 adoption.** When `resolveTokenBubbleByMessageId` step 2 adopts a saved row of the segment that has no text yet, it re-keys the row to the token's `message_id` (S11b display id), not just appending to `mergedReplayIds`.<br>A page that adds an earlier or later record of an already-drawn segment extends that row (prepend or append). Releasing or trimming a bound position (S5, the 500-group window) removes only that part, its calls and its anchors. The row's other parts are unchanged. |
-| S11d — turn identity, WS tool frames | REST `Message` carries `turn_id` on every record. WS `tool_call_start` and `tool_call_result` frames carry **no** `turn_id` (`contracts/components/schemas/ToolCallStartFrame.yaml`, `ToolCallResultFrame.yaml`). A snapshot-built tool-only record therefore takes its turn from the **nearest earlier assistant record of the same source run** with a known turn. The server writes the round's text or accounting record just before its tool records. Only records in the loaded reader count, and a user row or other visible boundary stops the search.<br>A record whose turn is still unknown **does not join** any segment. It stays its own row until a later page commit supplies the earlier record; then binding re-runs. This is deliberately stricter than live, which adopts turnless ("unstamped") bubbles. Without a user row between, such a record can belong to an earlier, agent-initiated turn: see the existing `src/components/chat/ChatScreen.working-on.test.tsx` "never trusts replay-bubble ownership when REST identifies a tool-only call as an older turn".<br>REST uses the record's own `turn_id`. Parity (B85) is required wherever the earlier record is loaded on both carriers. The one accepted difference is a WS tool-only record at the very start of the loaded reader: it stays separate until the earlier page loads. If the test author's RED run shows this difference in an ordinary case, the fallback is an additive optional `turn_id` on `HistoryEntryOrigin`. That is a contract change: the architect sets the shape and backend-lead edits and regenerates. It is out of scope unless needed. |
-| S11e — stays separate (negative cases) | A tool-only record stays its own row when no text follows it in its segment **and** no text precedes it in that segment: a turn that ends after the tool call (model stop, stall or error).<br>A segment ends, and the records on each side stay in different rows, at each of these:<br>• `turn_canceled` (retained context, not a part);<br>• an error, interrupted or terminal-outcome row;<br>• a user message, including a mid-turn steer (live step 2 stops at the last user message);<br>• any other visible row;<br>• another agent;<br>• another known turn;<br>• an unknown turn (S11d);<br>• an id reused across turns (S1a, R-J). |
+| S11a — the segment | Two saved or live assistant sources X, then Y in source order, belong to **one segment** when all of these hold:<br>• **No boundary record lies between them.** The boundary records are a user row (including a mid-turn steer), a clear marker, or a row that live closes as error, interrupted or terminal outcome (`terminal_outcome`).<br>• Their **agents are equal** when both are known.<br>• Their **turns are known on both and equal** (S11d). An unknown turn never joins.<br>• Neither X nor Y is an error, interrupted or terminal-outcome row.<br>• Y's id does not occupy an incompatible display row (S1a, R-J).<br>**Transparent records** do not end a segment and are never parts of the combined row. They keep their own source group and position:<br>• silent records (`src/components/chat/ChatMessageList.tsx::isSilentHistoryRecord`: content-less, tool-less accounting or turn-start rows), which stay undrawn;<br>• persisted span and delegate facts, which settle onto their owning row;<br>• rows that live's token resolver skips without closing the bubble: context-window notice, provider-fallback note, judge verdict, helper event, goal outcome, browser-handover notice. These stay drawn as their own rows.<br>**Rule of truth:** a record class is a boundary exactly when live ends the open bubble at it (step 2 stops at it, or its handler closes the bubble). If a class's live handler is found to close the bubble, that class is a boundary. T78 pins every listed class against the real live handlers. A finding that contradicts this table is corrected here; it is not accepted as a mismatch. |
+| S11b — the row, identity and text | All sources of one segment bind to **one** display row through the shared binding function (S6), as an S7 combine site.<br>**Display id (one precedence, highest first):**<br>(1) S1a's occupied-key exception, and a live row that witnessed the segment's earliest text, keep their key. This includes a first-send generated key with the real id in `mergedReplayIds` (r21-a).<br>(2) Otherwise the id is that of the **earliest text source of the segment known to the bucket**, in source order.<br>(3) While the segment has no text, a **provisional key** is used: the live placeholder's key if live opened the row, else the earliest tool-only source's id.<br>When a higher-precedence source becomes known, the row is **re-keyed atomically** (contract below). That happens when the first text arrives, when J2 commits an earlier text source, or when an older page supplies one.<br>**Re-key contract (one store update):**<br>• move the `messagesById` key and every `messageOrder` / `historyLiveOrder` entry;<br>• repoint `historySourceAliases` for **every** bound position, plus `toolCallOwnerMessageId`, `spanBySpanId` owners and pending tool-owner references;<br>• `mergedReplayIds` becomes every **text** source id of the segment except the new key; the old key is added only if it is a text source;<br>• the session-level `mergedReplayMessageIds` is updated the same way;<br>• part `sourceId`s and positions never change.<br>A tool-call id never enters either prose-alias index. Later tokens and `done` for any registered text id still resolve to the row (step 1). The streaming-row render keeps focus under the parent focus rules.<br>**Text and joiners (S2a stays binding):**<br>(1) A **recorded** joiner is immutable.<br>(2) A seam no client recorded gets: `"\n\n"` when at least one tool-only part lies between two text parts and the text before is non-empty (live's `pendingTextBoundary`: `frames.ts::applyTokenContentTo` adds the break only when content is non-empty); `""` between two adjacent text parts with no tool between (a plain token append); `""` for the first text after tool-only parts.<br>The replay coalesce's paragraph break (`applyAssistantReplayCoalesce`) applies only where that reducer actually combined and recorded it. It is not the rule for an unrecorded seam.<br>**Tool calls:** in source order. Each call from a tool-only part gets the S10 part-relative anchor (that part, offset 0). Its effective `textOffset` is the end of the text before it, which is where live stamps it. Saved calls carry no own offset, and without the anchor `src/lib/messageParts.ts::splitMessageParts` would draw them last.<br>**Tool ownership:** `toolCallOwnerMessageId` and `historySourceAliases` of every bound position point at the row. Saved ownership (`history-merge.ts::savedToolCallOwners`, UAT RR-V-LIVE-READ) therefore resolves to it. D2 expansion of a shortened tool result or text part reads **that part's own position** (S9), never the row's slot.<br>**Display slot (S8, changed — see below):** the row's **first bound position**, which is where live mints the bubble. A transparent row inside the segment is drawn after the combined row, as live draws it. A row still streaming stays at the live tail. |
+| S11c — where it runs | **Every S6 entry point:**<br>• REST latest, older and newer;<br>• the WS snapshot commit, in both branches of `history-replay.ts::finish`;<br>• the existing-window refresh;<br>• `clear-refetch.ts` and the other `applyHistoryPageToBucket` callers;<br>• the 100-group tail-cache restore.<br>**Plus three live paths:**<br>• **J2, the live junction.** At a snapshot commit while the session has an active turn, saved sources of that turn's open segment bind into the turn's live row when one exists, under the S11b precedence. If the page holds an earlier text source than the live row witnessed, the live row is re-keyed to it, keeping its live part text (S2). Both arrival orders are required: active-turn tokens before `catch_up_complete`, and commit before the first token.<br>• **Saved-row adoption.** When `resolveTokenBubbleByMessageId` step 2 would adopt a **saved** row (one with a history position), the S11a conditions apply in full, including known equal turns. A saved row with unknown turn is never adopted; step 3 then mints a new row. If the adopted row has no text, it is re-keyed to the token's `message_id` by the S11b contract, instead of only appending to `mergedReplayIds`. Live-only unstamped placeholders keep today's adoption.<br>• **Page extension.** A page that supplies an earlier or later source of an already drawn segment extends that row (prepend or append).<br>**Release.** Releasing or trimming one bound position (S5, the 500-group window) removes only that part, its calls, anchors and aliases. The surviving parts keep their text. The surviving key follows the S11b precedence and re-keys when the removed part held the key. Reloading the removed source binds it again, and binding is idempotent. |
+| S11d — turn identity (contract change, accepted 2026-10-28, grill I1) | REST `Message` already carries `turn_id`. WS history frames carry it through a new **optional `HistoryEntryOrigin.turn_id`**:<br>• type string, `minLength: 1`;<br>• value: the persisted source record's own `TranscriptEntry.TurnID` when it is non-empty;<br>• **omitted** when the source recorded no turn, which means unknown;<br>• never filled from the active turn, the session state, a neighbouring record or any inference.<br>It rides on every origin-stamped frame, including `tool_call_start` and `tool_call_result`. It changes no source group, position, row count, sequencing or live (non-history) frame.<br>The client uses the source's own turn only: `turn_id` on REST, `history_origin.turn_id` on WS. The earlier backward-inference rule is **withdrawn**. A source with unknown turn never joins on either carrier, so REST and WS decide identically for the same sources (B85 unconditional).<br>**Owner:** the D2 backend developer (Opus, backend owner of this D1/D2 package) edits `contracts/components/schemas/HistoryEntryOrigin.yaml` and its AsyncAPI inline mirrors, stamps the field in `pkg/gateway/history_page_prepare.go` (origin creation / `stampHistoryOrigin`), regenerates through `scripts/gen-contracts.sh` in one atomic commit (the Hard Constraint #8 steps) and keeps `make verify-contracts` clean. No hand-written wire types.<br>**Shape** decided by the architect. **Rollout note:** the object is closed (`additionalProperties: false`), so the gateway and the embedded SPA must ship together. A stale cached SPA rejects the snapshot as a schema error until it reloads, which is the same constraint as D2's contract changes. |
+| S11e — what stays separate (negative cases) | A segment with **no text at all** is **one tool-only row** holding all its calls in order, at offset 0. Examples: `[E1, T1, E2, T2]` ending in a normal stop, a cancellation, an error or an outcome. It never joins the next segment, because a boundary separates them by definition.<br>Sources stay in different rows across:<br>• a user row or steer;<br>• a clear marker;<br>• an error, interrupted or terminal-outcome row (on either side);<br>• another known agent or turn;<br>• an unknown turn;<br>• a reused id across turns (S1a, R-J).<br>`turn_canceled` is retained context, never a part and never a new visible row. |
 
 **Effect on S1–S10.**
-- **S4 changes:** "a saved record that no compatible row has combined is its own row" now reads "…is its own row **unless S11 binds it into its turn segment's row**". Reason: S4 is exactly the rule that drew one segment as several rows.
-- **S7 gains one combine site:** the S11 binding and the step-2 re-key. S7 itself is unchanged.
-- **B83 and its test T59 are revised (below).**
-- S1, S1a, S2, S2a, S3, S5, S6, S8, S9 and S10 are unchanged. S11 uses them as written.
+
+- **S4 changes.** It now reads "…is its own row **unless S11 binds it into its turn segment's row**". Reason: S4 is exactly the rule that drew one segment as several rows.
+- **S8 changes** (forced by grill I4). A row bound at several positions takes its slot at its **first** bound position, not its last.
+  - Reason: under S11 only transparent rows can lie inside a segment, and live draws them after the bubble, because live mints the bubble at its first source.
+  - Last-position slotting would draw them before the row, a new live/history mismatch.
+  - D1 chose "last" only because of the duplicate-id filter's last-occurrence rule and the old separate-T order of B83. Q3 superseded both.
+  - `history-merge.ts::lastBoundOccurrence` becomes a first-occurrence rule for rows with parts. Rows without parts keep the canonical duplicate-id last-occurrence rule.
+- **S7** gains combine sites: the S11 binding, J2 and the saved-row adoption re-key.
+- **S5** gains per-part release (S11c).
+- **S9** is unchanged, and S11b states that the expansion target is the part's position.
+- S1, S1a, S2, S2a, S3, S6 and S10 are unchanged and are used as written.
+- **B83/T59 are revised (below).** The T59 fixture must give T the same `turn_id` and agent as A and B and use a real tool-only source shape (a `tool_call` record). It keeps a separate unknown-turn negative.
+
+**Reading position (grill I6).** A fold, re-key, settlement or delayed layout must preserve the reader's visible **content point**: the topmost visible source part, plus its pixel offset inside that part. Preserving only the outer row is not enough.
+- Each rendered part carries its source position as a DOM marker (`data-history-part="<position>"`).
+- `src/components/chat/useHistoryViewport.ts::captureAnchor` / `::correctAnchor` stay the **one** compensation owner and anchor on that inner marker when present.
+- The existing protected-edge and focus policies stay.
+- Settled drift is at most 1 px, in virtual and plain layouts, in both paging directions.
 
 #### Acceptance scenarios (D1)
 
@@ -946,7 +974,7 @@ Traces to: AC-D1-4; User Story 2, Acceptance Scenario 2.
 Category: Edge Case.
 **Given** a combined bubble A+B and a separate saved tool-only record T whose position lies between A and B, delivered first on one page and then split across two pages, **When** they are loaded, **Then** the tool call is drawn exactly once, under saved tool ownership, and the display order is exactly **T, then the combined bubble** (S8: the bubble takes its last bound position, B's).
 
-[Superseded 2026-10-28 (founder Q3 = yes, S11): T is not a separate row.] **Revised Then:** T, A and B are one turn segment, so the tool call is drawn exactly once, under saved tool ownership, **inside the one combined row**. The row text is A + its joiner + B as in B84, T's card is anchored at the end of A (S10/S11b), `historySourceAliases` maps T's position to that row, and the result is identical on one page and across two pages (S8: the row's slot is its last bound position, B's).
+[Superseded 2026-10-28 (founder Q3 = yes, S11; corrected after grill): T is not a separate row.] **Revised Given/Then:** T is a real `tool_call` source with the same recorded turn and agent as A and B (an unknown-turn T is the separate negative in B95). T, A and B are one turn segment, so the tool call is drawn exactly once, under saved tool ownership, **inside the one combined row**. The row text keeps the recorded joiners of the live combine (S2a), T's card is anchored at the end of A (S10/S11b), `historySourceAliases` maps T's position to that row, and the result is identical on one page and across two pages (S8 as changed: the row's slot is its first bound position, A's).
 
 ##### B84 — Real joiners settle to exact saved text
 Traces to: AC-D1-4.
@@ -972,80 +1000,139 @@ Category: Error Path.
 - no text is lost.
 
 ##### B87 — A reply that starts with a tool call reloads as one row (S11)
-Traces to: AC-D1-6.
+Traces to: AC-D1-6, AC-D1-4.
 Category: Happy Path.
-**Given** a finished turn saved as [silent E, tool-only T (`set_todos`), text P], **When** it loads by REST page and, separately, by WS snapshot, **Then**:
-- exactly one assistant row is drawn, with display id P;
-- the row's text is P's saved text;
-- T's card is anchored at offset 0, before the text;
-- the positions of T and P both map to that row;
-- the client's row count still matches `page_info.row_count`;
-- rows, ids, order, text and bindings are identical on both carriers.
+**Given** a finished turn saved as `[E, T(set_todos), P]`, all with the same recorded turn and agent. T is a real `tool_call` record, and on WS its frames carry `history_origin.turn_id`. **When** it loads by REST page and, separately, by WS snapshot, **Then** on each carrier, checked against independent literal expectations:
+- exactly one assistant row is drawn, keyed P, with text exactly P;
+- one card is drawn, anchored at offset 0;
+- the T and P positions both alias to P;
+- T's id is in neither prose-alias index;
+- E stays a silent source;
+- the per-source row count is unchanged.
 
 ##### B88 — A tab that joins mid-turn shows the same single row as the live tab (J2)
 Traces to: AC-D1-6, AC-D1-2.
 Category: Edge Case.
-**Given** a running turn, **When** a second tab attaches while its snapshot holds [E, T] and the answer P still streams, including the order where P's tokens reach the bucket before `catch_up_complete`, and then done, a completed snapshot and a window refresh follow, **Then**:
-- the second tab shows one row throughout, keyed P;
-- after settlement its text equals saved P exactly once;
-- the call is drawn once;
-- the row equals the first tab's live row for the same frames: same text, same card position, same id.
+**Given** a running turn, **When** a second tab attaches, in each of these cases:
+- **(a) tool-first:** the snapshot holds `[E, T]` and P streams;
+- **(b) prose-first:** the snapshot holds `[A, T]` and B streams;
+- each case in both orders: active-turn tokens reach the bucket before `catch_up_complete`, or the commit lands before the first token;
+- each followed by done, a completed snapshot, a repeat snapshot and a window refresh;
+
+**Then**:
+- the second tab shows one row at every step;
+- its key follows S11b: provisional key, then P in (a); A in (b), with B re-keyed to A when the snapshot brings A after B's tokens;
+- after settlement its text equals the saved text exactly once;
+- every call is drawn once;
+- later tokens and `done` for P or B still route to the row;
+- `historySourceAliases`, part source ids, tool owners and both prose-alias indexes have the exact independently specified values;
+- the result equals the first tab's live row for the same frames; this live comparison is supplemental to the literal expectations.
 
 ##### B89 — Several tool rounds before the answer stay in one row
 Traces to: AC-D1-6.
 Category: Edge Case.
-**Given** a segment [E, T1, E, T2, P], **When** it loads, **Then** one row shows T1's card, then T2's card, both at offset 0, then P's text.
+**Given** a segment `[E1, T1, E2, T2, P]`, **When** it loads, **Then** one row shows T1's card, then T2's card, both at offset 0, then P's text.
 
 ##### B90 — A page edge inside a segment does not split it
 Traces to: AC-D1-6, AC-D1-1.
 Category: Edge Case.
-**Given** a segment whose records are split across two pages, **When** the pages load newest-first (older page brings T) and, in a second run, in the "newer" direction (T first, P later), **Then**:
-- both runs end with the same single row, keyed P;
-- T's card sits before the text;
+**Given** a segment `[A, T, B]` and a tool-first segment `[E, T, P]`, each split across two pages, including a cut between E and T, **When** the pages load newest-first and, in a second run, in the "newer" direction, **Then**:
+- both runs end with the same single row, under the same key and aliases;
+- the cards keep their anchors;
 - no text is doubled or lost;
-- the protected-edge scroll assertions keep holding.
+- the reading-position rule holds (B98).
 
-##### B91 — Text, tool, text is one row (full segment parity)
-Traces to: AC-D1-6, AC-D1-4.
+##### B91 — Text, tool, text is one row with exact joiners
+Traces to: AC-D1-6, AC-D1-4, AC-D1-5.
 Category: Happy Path.
-**Given** a finished segment [A text, T, B text], **When** it loads by REST, by WS snapshot and by window refresh, **Then**:
-- one row keyed A is drawn, with `mergedReplayIds` = [B];
-- its text is A + `"\n\n"` + B;
-- T's card is anchored at the end of A;
-- the text equals what the live reducer produces for the same turn.
+**Given** a finished segment `[A, T, B]`, and separately a no-tool segment `[A, B]` (two text sources of one turn, nothing between), **When** each loads by REST, by WS snapshot and by window refresh, and also from a live-witnessed row, **Then**:
+- **`[A, T, B]`:** one row keyed A, with `mergedReplayIds = [B]`, text exactly A + `"\n\n"` + B, and T's card at offset `A.length`;
+- **`[A, B]`:** text exactly A + B with no break, the same as the live token path;
+- a witnessed row keeps its recorded joiner (S2a);
+- R5 and T56–T61 keep their exact assertions.
 
-##### B92 — A tool call with no answer after it stays its own row
+##### B92 — A segment with no text stays one tool-only row
 Traces to: AC-D1-6, AC-D1-3.
 Category: Error Path.
-**Given** [E, T] at a turn's end, and separately [T, `turn_canceled`] and [T, error or terminal-outcome row], **When** each loads, **Then**:
-- T is its own row with its card;
-- the cancel, error or outcome row is unchanged and separate.
+**Given** `[E1, T1, E2, T2]` with no text, ending in each of: a normal stop, `turn_canceled`, an error row, an interrupted row and a terminal-outcome row, and the same outcomes placed before a candidate text source, **When** each loads, **Then**:
+- one tool-only row is drawn, holding both cards in order at offset 0;
+- no prose alias is added;
+- the outcome row stays separate and nothing joins across it;
+- the cancel marker is not a visible row.
 
-##### B93 — A user message or a visible notice ends the segment
+##### B93 — A user message ends the segment; notices do not
 Traces to: AC-D1-6, AC-D1-3.
 Category: Edge Case.
-**Given** [T, user steer, P] of one turn, and separately [T, visible system or provider-fallback notice, P], **When** each loads, **Then** the rows stay T, the boundary row, then P, in that order, as live shows them.
+**Given** `[A, T, user steer, B]` of one turn, and `[A, notice, B]` for each transparent class in S11a (context-window notice, provider-fallback note, judge verdict, helper event, goal outcome, browser-handover notice) and for a clear marker, live-driven and cold, and with the class at a page edge, **When** each loads, **Then**:
+- **user steer:** rows `[A+T]`, user, B, in that order;
+- **each transparent class:** one row A + B, followed by the notice row, matching the real live handler's order;
+- **clear marker:** separate rows.
 
 ##### B94 — Another agent, another turn or a reused id never joins
 Traces to: AC-D1-3.
 Category: Error Path.
-**Given** T of agent X followed by P of agent Y; T and P with known, different turns; and the R-J reused-id fixture, **When** each loads, **Then** each record keeps its own row and R-J keeps its assertions.
+**Given** each of these:
+- T of agent X then P of agent Y, and the reverse;
+- known different turns in both directions;
+- an unknown agent between two different known agents;
+- the alias-only, occupied and two-claimant cases of B86;
+- the R-J fixture;
 
-##### B95 — An agent-started turn without a user message never absorbs the previous turn's tool record
-Traces to: AC-D1-3.
+**When** each loads, **Then** no two sources with different known producers or turns join, and B86 and R-J keep their assertions.
+
+##### B95 — A source with an unknown turn never joins, on any carrier or live
+Traces to: AC-D1-3, AC-D1-4.
 Category: Error Path.
-**Given** [T (turn 1), E (turn 2), P (turn 2)] with no user row, delivered by REST and by WS (where T's turn is derived per S11d), and a WS case where T is the first loaded record with no earlier record, **When** each loads, **Then**:
-- T stays its own row on both carriers;
-- in the first-record WS case T stays separate until an older page supplies its turn, then binding re-runs and the result follows the turns;
-- the existing working-on test ("never trusts replay-bubble ownership…") stays green unmodified.
+**Given** each of these:
+- `[T(turn 1), E(turn 2), P(turn 2)]` with no user row;
+- `[E1, T1, P1]`, where the turn is known from T's own record or origin;
+- a source with `turn_id` omitted on WS and absent on REST, on either side of a candidate;
+- an unknown saved empty T that has committed, then a live token of the active turn;
 
-##### B96 — Releasing one part of a combined segment keeps the rest
+**When** each loads or streams, **Then**:
+- turn 1 and turn 2 never join;
+- `[E1, T1, P1]` joins;
+- an unknown source stays its own row on REST and WS alike;
+- the live token mints a new row instead of adopting the unknown saved T;
+- the working-on test "never trusts replay-bubble ownership…" stays green unmodified.
+
+##### B96 — Releasing one part keeps the rest
 Traces to: AC-D1-6.
 Category: Edge Case.
-**Given** a row combined from [T, P], **When** the 500-group window trims T's position, or the tail cache is restored without it, **Then**:
-- T's card and anchor leave the row;
-- P's text and id are unchanged;
-- nothing is thrown, orphaned or drawn twice.
+**Given** rows combined from `[T, P]` and `[A, T, B]`, **When** the 500-group window or a tail-cache restore drops a leading tool part, the key-holding first text part, a middle part or the last part, and the dropped source is later reloaded, **Then**:
+- only that part, its calls, anchors and aliases leave the row;
+- the surviving key follows S11b, re-keying when needed;
+- no card, body or alias refers to the removed occurrence;
+- a D2 expansion in flight for a surviving part still addresses that part's position;
+- the reload restores the original row, idempotently.
+
+##### B97 — Display identity is decided once and re-keys atomically
+Traces to: AC-D1-6, AC-D1-3.
+Category: Edge Case.
+**Given** the S11b precedence cases:
+- a witnessed first-send generated key (r21-a);
+- an S1a occupied key;
+- a provisional tool-only key that receives text;
+- a live key B that learns an earlier text source A;
+
+**When** each transition happens, **Then**:
+- the row keeps or moves its key exactly per S11b;
+- `historySourceAliases`, tool owners, span owners, both prose-alias indexes and `historyLiveOrder` are consistent in the same store update;
+- no tool-call id becomes a prose alias;
+- r21-a and alias-boundaries keep their assertions.
+
+##### B98 — The reader's place inside a growing row does not move
+Traces to: AC-D1-6; inherited D8/SC-003.
+Category: Edge Case.
+**Given** the reader looking at a marked paragraph inside part P (or B) of a drawn row, **When** any of these happens:
+- an older page folds T, or A + T, above it inside the same row;
+- a re-key, settlement or delayed tool or expanded-content layout follows;
+- the reader scrolls while the read is pending;
+
+**Then**, in virtual and plain layouts and in both paging directions:
+- the marked point's settled screen position moves by at most 1 px;
+- focus is preserved;
+- the existing protected-edge tests stay unchanged and green, but are not taken as this proof.
 
 #### Tests (D1)
 
@@ -1054,24 +1141,27 @@ Category: Edge Case.
 | T56 chatHistoryAlias.splitPageKeepsBothParts | Unit/store | B79 | Carry the F1 split-page case from `squad-1266/fe2/logs/gate/gate.test.ts.final`. RED on base: "saved segment A is readable". |
 | T57 chatHistoryAlias.returnToLatestWhileStreamingShowsPartOnce | Unit/store | B80 | Carry the N3 case and add the later-token assertion. RED on base: "expected 2 to be 1". |
 | T58 chatHistoryAlias.windowRefreshKeepsCombinedBubble | Unit/store | B81 | Real refresh path, not a direct merge call. |
-| T59 chatHistoryAlias.toolOnlyBetweenParts | Unit/store | B83 | Exact display-order assertion (T before the bubble), on one page and across two pages. [Revised 2026-10-28, founder Q3 = yes: the oracle changes from "T before the bubble" to **one row**: contents `[SAVED_A + joiner + SAVED_B]`, `d1-saved-call` drawn once inside it with its anchor at the end of A, and `historySourceAliases[pos(2)]` and `toolCallOwnerMessageId['d1-saved-call']` equal to the combined row's id; on one page and across two pages.] |
+| T59 chatHistoryAlias.toolOnlyBetweenParts | Unit/store | B83 | Exact display-order assertion (T before the bubble), on one page and across two pages. [Revised 2026-10-28, founder Q3 = yes; corrected after grill: the fixture gives T the same `turn_id` and agent as A and B and uses a real `tool_call` source; the oracle changes from "T before the bubble" to **one row** whose text is SAVED_A + the recorded joiner + SAVED_B (the existing `livePair()` joiner, unchanged by S11), with `d1-saved-call` drawn once inside it anchored at the end of A, and `historySourceAliases[pos(2)]` and `toolCallOwnerMessageId['d1-saved-call']` equal to the combined row's id; on one page and across two pages. A separate case keeps T without a turn and asserts it stays its own row (B95).] |
 | T60 chatHistoryAlias.realJoinersSettle | Unit/store | B84 | Both the replay joiner and the `pendingTextBoundary` joiner, with exact final text. |
 | T61 chatHistoryAlias.restWsParity | Integration/store | B85 | |
 | T68 chatHistoryAlias.reusedIdAcrossTurns | Unit/store | B86 | REST, snapshot and refresh; includes the single-existing-owner case. Added 2026-10-28 (grill R2-I2): both the alias-only case (key stays the source id) and the occupied-display-id case (position-derived key), plus the two-claimant case. `chat.history-alias-boundaries.test.ts` stays unmodified and green. |
-| T69 chatHistoryFold.toolFirstSegmentRest | Unit/store | B87 | [E, T(`set_todos`), P] by REST: one row keyed P, card at offset 0, both positions bound. Added 2026-10-28 (S11). |
-| T70 chatHistoryFold.toolFirstSegmentSnapshotParity | Integration/store | B87, B85 | Same records by WS snapshot: identical to T69, and the snapshot is not rejected (row-count check). |
-| T71 chatHistoryFold.midTurnJoinMatchesLiveTab | Integration/store | B88 | Two buckets fed the real frame orders of S-09, including tokens before `catch_up_complete`; then done, completed snapshot and refresh. Oracle: the first tab's live row. Fixture from the real CI frame order (root-cause scratch evidence). |
-| T72 chatHistoryFold.multiRoundToolsBeforeAnswer | Unit/store | B89 | [E, T1, E, T2, P]: card order and offsets. |
-| T73 chatHistoryFold.pageEdgeBothLoadOrders | Unit/store + component | B90 | Older-first and newer-first runs give equal rows; protected-edge harness assertions hold. |
-| T74 chatHistoryFold.textToolTextOneRow | Unit/store | B91 | REST, snapshot and refresh; exact text A + `"\n\n"` + B and anchor at end of A, compared with the live reducer's output for the same turn. |
-| T75 chatHistoryFold.toolWithoutAnswerStaysSeparate | Unit/store | B92 | [E, T] at turn end. |
-| T76 chatHistoryFold.cancelErrorOutcomeEndSegment | Unit/store | B92 | `turn_canceled`, error and terminal-outcome cases. |
-| T77 chatHistoryFold.userSteerEndsSegment | Unit/store | B93 | Exact order T, user, P. |
-| T78 chatHistoryFold.visibleNoticeEndsSegment | Unit/store | B93 | System notice and provider-fallback note between. |
-| T79 chatHistoryFold.otherAgentTurnOrReusedIdNeverJoins | Unit/store | B94 | Agent, known-turn and R-J cases. |
-| T80 chatHistoryFold.agentStartedTurnNoUserRow | Unit/store | B95 | REST and WS, including the first-loaded-record WS case and the later re-bind. |
-| T81 chatHistoryFold.releaseOnePart | Unit/store | B96 | 500-group trim and tail-cache restore. |
-| llm-agents S-09, S-08; catch-up c, d, e, f | E2E (existing) | B87, B88 | Must pass on the candidate with their oracles **unchanged** (one assistant row, equal text). |
+| T69 chatHistoryFold.toolFirstSegmentRest | Unit/store | B87 | Added 2026-10-28 (S11), corrected after grill. REST `[E, T, P]` with literal expectations per B87. |
+| T70 chatHistoryFold.toolFirstSegmentSnapshot | Integration/store | B87, B85 | Same sources by WS snapshot, with **real tool-only origin emission** (tool frames carrying `history_origin.turn_id`), not a turn-bearing synthetic replay carrier. Literal expectations equal T69. The snapshot is not rejected. |
+| T71 chatHistoryFold.midTurnJoin | Integration/store | B88 | Cases (a) and (b), in both arrival orders, plus repeat snapshot and refresh idempotency. Independent expected ids, texts and indexes for each bucket. The live-tab comparison is supplemental. Frame order taken from the real CI trace where available. |
+| T72 chatHistoryFold.multiRoundToolsBeforeAnswer | Unit/store | B89 | `[E1, T1, E2, T2, P]`: card order and offsets. |
+| T73 chatHistoryFold.pageEdgeBothLoadOrders | Unit/store | B90 | Both segments, both directions, the E/T cut. Exact rows, keys and aliases. |
+| T74 chatHistoryFold.joinersExact | Unit/store | B91 | `[A, T, B]` and the no-tool `[A, B]` on REST, snapshot, refresh and witnessed rows; exact literal strings and anchors. |
+| T75 chatHistoryFold.toolOnlySegmentOneRow | Unit/store | B92 | `[E1, T1, E2, T2]` with normal stop. |
+| T76 chatHistoryFold.outcomesEndSegment | Unit/store | B92 | `turn_canceled`, error, interrupted and terminal outcome on both sides of a candidate. |
+| T77 chatHistoryFold.userSteerEndsSegment | Unit/store | B93 | Cold and live-driven; exact order `[A+T]`, user, B. |
+| T78 chatHistoryFold.transparentAndBoundaryClasses | Integration/store | B93 | Drives the **real** live handlers for each S11a class and for the clear marker, then the same sources cold on REST and WS, including a class at a page edge. Pins the per-class boundary table. A class whose live handler closes the bubble fails this test, and the spec table is corrected, never the oracle. |
+| T79 chatHistoryFold.producerTurnReusedId | Unit/store | B94 | Every B94 case. R-J and B86 unchanged. |
+| T80 chatHistoryFold.unknownTurnNeverJoins | Unit/store | B95 | Every B95 case, including the live token after an unknown saved T. |
+| T81 chatHistoryFold.releaseOnePart | Unit/store | B96 | Every B96 case. |
+| T82 chatHistoryFold.identityPrecedenceAndRekey | Unit/store | B97 | Every B97 transition, asserting all listed indexes after one store update. |
+| T83 chatHistoryFold.innerReadingPoint | Component (virtual + plain) | B98 | Measures a marked paragraph or card inside the row before and after each B98 event. Measurement must locate inner content independently (`tests/chat-history-paging/measurement-layout.ts` gives inner rectangles real offsets). The 1 px criterion is asserted. |
+| T84 TestHistoryOrigin_TurnIDFromPersistedSource | Integration (gateway) | B87, B95 | Real replay emitter. `history_origin.turn_id` equals each source's recorded `TurnID` on replay, tool start/result and special frames. It is **omitted** for a source without a turn, including during an active turn of another id. It is validated by the generated schemas; positions, row count and live frames are unchanged. |
+| llm-agents S-09, S-08; catch-up c, d, e, f | E2E (existing) | B87, B88 | Must pass on the candidate with their oracles **unchanged**. |
 | R5, r21-a, alias-boundaries, protected-edge, R-J | Existing | B82 | Must stay green and unmodified. |
 | `ChatScreen.working-on.test.tsx` "never trusts replay-bubble ownership when REST identifies a tool-only call as an older turn" | Existing | B95 | Added 2026-10-28 (S11d): must stay green and unmodified. Any **other** existing test whose oracle asserts separate rows for one turn segment is a frozen-oracle change: the test author lists each one with the failing assertion before GREEN, and team-lead approves it; only B83/T59 is pre-approved by the founder. |
 
@@ -1084,19 +1174,48 @@ Run on the exact candidate commit, with the agreed UAT provider/model and an ind
 | U-D1-1 | Ask: "Write one sentence, then run `sleep 20` in bash, then write a second sentence." While it sleeps, scroll up until the Return-to-latest arrow appears, then select it before the reply ends. | When the reply finishes, both sentences appear exactly once, in one reply. |
 | U-D1-2 | Same prompt. After the reply finishes, switch the browser offline and back online, then scroll up and back down. | Both sentences appear exactly once; neither disappears. |
 | U-D1-3 | Smoke check: a chat with 60+ messages including several multi-part replies; reload; scroll to the top and back. | Every multi-part reply is complete, with nothing doubled. The exact page-boundary split is not reliably reproducible by hand; T56 is the authority for it. |
-| U-D1-4 | Added 2026-10-28 (S11). In tab 1 ask: "First make a short checklist, then write five paragraphs about the sea." As soon as the checklist card appears, open the same chat in tab 2. Wait for the reply to finish in both. | Each tab shows **one** reply, with the checklist card above the text in the same place, and the same text. Receipt: the network/WS panel shows a saved tool record followed by a separate text record (otherwise the row is NOT EXERCISED). |
-| U-D1-5 | Ask: "Write one sentence, run `echo hi` in bash, then write a second sentence." After it finishes, reload; then open the chat in a new tab. | One reply: first sentence, the bash card, then the second sentence, in all three views (live, reload, new tab). |
-| U-D1-6 | Ask the same as U-D1-5, but while the bash card is visible send "also add a third sentence". | The reply before your message and the reply after it stay **separate**, on either side of your message, in the live view and after reload. |
+| U-D1-4 | Added 2026-10-28 (S11), corrected after grill I7. In tab 1 ask: "First make a short checklist, then run `sleep 30` in bash, then write five paragraphs about the sea." While the `sleep` card is still running (the Stop control is visible), open the same chat in tab 2. Wait for the reply to finish in both tabs. | Each tab shows **one** reply: the checklist card, then the bash card, then the full text, with the same complete text (compared in full, not by prefix) and the same card count and order. **Receipts:** (1) tab 2's WS log shows `session_state` with an active turn equal to the running turn; (2) the snapshot shows the saved tool records with `history_origin.turn_id` equal to that turn; (3) the timestamps show where the first live token and `catch_up_complete` fell relative to each other. If (1) or (2) is missing, or tab 2 attached after the turn ended, the row is **NOT EXERCISED**. The exact J2 commit orders are proven by T71, not by this row. |
+| U-D1-5 | Ask: "Write one sentence, run `echo hi` in bash, then write a second sentence." After it finishes, reload; then open the chat in a new tab. | All three views (live, reload, new tab) show one reply: first sentence, the bash card, then the second sentence, with identical full text and card position. **Receipt:** the history response shows three separate saved records (text, `tool_call`, text) of one `turn_id`; otherwise **NOT EXERCISED**. Record the row's `data-message-id` in each view. |
+| U-D1-6 | Ask: "Write one sentence, run `sleep 30` in bash, then write a second sentence." While the `sleep` card is still running (Stop visible), send "also add a third sentence". | The reply before your message and the continuation after it stay **separate**, on either side of your message, both live and after reload. **Receipt:** the WS log shows that your message was accepted before the turn's `done`, and that the continuation carries the **same** `turn_id` as the first part. If the turn had ended (a new turn id), the row is **NOT EXERCISED**. |
 
 #### Documentation TODO (D1)
 
-Added 2026-10-28 (S11); D1's earlier rules S1–S10 change no user-visible wording beyond "nothing doubles or disappears", which the guide already promises.
+Added 2026-10-28 (S11), corrected after grill. D1's rules S1–S10 change no user-visible wording beyond "nothing doubles or disappears", which the guide already promises.
 
 | Document | Required update |
 |---|---|
-| DOC-1 (user guide, `docs/using-omnipus-ui.md`, the paragraph beginning "An answer that is still running continues to stream…" and the paragraph beginning "Saved tool calls keep their recorded identities…") | A reply that uses tools shows as **one** reply, with its tool cards where they happened, the same while it runs, after a reload, in another tab and when scrolling up to an older page. A message you send mid-reply, or a notice, still splits the reply at that point. The existing sentence "keeps that reply matched to the same message in both views, even when tool activity arrives before the reply's text" becomes true for history too; keep it. |
+| DOC-1 (user guide, `docs/using-omnipus-ui.md`, the paragraph beginning "An answer that is still running continues to stream…" and the paragraph beginning "Saved tool calls keep their recorded identities…") | Say that one uninterrupted turn segment is **one** reply, with its tool cards where they happened. It looks the same while running, after a reload, in another tab and when scrolling up. A message you send mid-reply, an error or an outcome notice still separates replies, and a different agent or turn is always a separate reply. Information notices (for example the context-window notice) appear after the reply they occurred in, as they do live. Keep the existing sentence "keeps that reply matched … even when tool activity arrives before the reply's text". Do not describe a notice as splitting a reply. |
+| DOC-3 (protocol, `docs/protocol/websocket-protocol.md`, sections "History metadata, ownership and availability" and "Prepared historical media and readiness") | Document the optional `history_origin.turn_id`: the persisted source's own turn, omitted when the source recorded none (unknown); never the active turn; present on every origin-stamped history frame, including tool start and result; live frames unchanged. |
 
-The frontend writer drafts it in the same change; docs-verifier audits it. No operator, protocol or observability document changes (no contract, metric or diagnostic changes).
+The frontend writer drafts DOC-1 and the D2 backend developer drafts DOC-3 in the same change. docs-verifier audits both. No observability or operator document changes, because no metric or diagnostic changes.
+
+#### S11 grill dispositions (2026-10-28, one round, report `/workspace/logs/history-fold/s11-spec-review.md`)
+
+| Finding | Disposition | Fix in this spec |
+|---|---|---|
+| I1 — WS turn inference cannot deliver parity | **ACCEPTED.** The backward inference is withdrawn. The optional `HistoryEntryOrigin.turn_id` is adopted now, from the persisted source only; omitted means unknown, never inferred. | S11d (shape, owner, rollout note); "Scope" now names the contract change; B87/B95; T70, T80, T84; DOC-3; FR-039 and the matrix. Owner: the D2 backend developer edits `contracts/` and regenerates; the architect set the shape. |
+| I2 — the J2 live id conflicts with the first-text id | **ACCEPTED.** One identity precedence (witnessed and occupied keys first, then the earliest known text source, then a provisional key), plus an atomic re-key contract covering every index. | S11b identity and re-key contract; S11c J2 and saved-row adoption; B88 (tool-first and prose-first, both orders, commit before first token); B97/T82. |
+| I3 — unconditional paragraph joiners contradict S2a | **ACCEPTED.** A recorded joiner is immutable. An unrecorded seam follows the live token rule: a break only after a tool with non-empty text before; none for adjacent text; none for the first text. R5 and T56–T61 are untouched. | S11b "Text and joiners"; B91/T74 with the no-tool case. |
+| I4 — live does not end a segment at visible notices | **ACCEPTED, by aligning history to live** (Q1 B, "exactly like live"), not by changing live. Notices and similar rows are **transparent**: they do not end a segment and are drawn after the combined row, as live draws them. Boundaries are only what live treats as boundaries. This forces **S8 → first bound position** (reason in "Effect on S1–S10"). No new mismatch is accepted and no live display changes. | S11a boundary/transparent table with a rule of truth; S8 change; B93/T78 driving every class through real live handlers; DOC-1 wording. |
+| I5 — two row-count rules for a segment with no text | **ACCEPTED.** A segment with no text is one tool-only row. | S11e; B92 (multi-tool, every ending); T75/T76. |
+| I6 — the scroll oracle cannot see movement inside a folded row | **ACCEPTED.** The reading point is the visible source part plus its inner offset; one compensation owner; at most 1 px. | "Reading position" paragraph; B98/T83; protected-edge stays, but is not the proof. |
+| I7 — UAT can pass without the race | **ACCEPTED.** Rows now require an active-turn attach, record shape and same-turn steer receipts, full-text comparison and card order; otherwise NOT EXERCISED. | U-D1-4, U-D1-5, U-D1-6. |
+| M1 — central completion and traceability exclude S11 | **ACCEPTED.** | FR-039, SC-019, the traceability matrix, the BDD index and the test index now name S11, AC-D1-6, B87–B98, T69–T84, U-D1-4..6, DOC-1/DOC-3 and the contract task. |
+
+Inventory items from the review are also applied:
+- **T59:** a same-turn, real `tool_call` fixture plus an unknown-turn negative.
+- **T69/T70:** literal expectations.
+- **T71:** both shapes and both orders.
+- **T72/T75/T76:** the missing endings.
+- **T77/T78:** every class.
+- **T79:** both directions.
+- **T80:** the live-token case.
+- **T81/B96:** per-part release.
+- **S9:** expansion addresses the part's own occurrence.
+
+Frozen assertions untouched: R5, both r21-a variants, alias-boundaries, protected-edge, R-J, the working-on test, T56–T58, T60, T61 and T68. Only B83/T59 changes, under Q3.
+
+**One pre-existing gap, stated rather than fixed here.** The non-snapshot replay coalesce (`applyAssistantReplayCoalesce`, used by incremental catch-up) inserts `"\n\n"` at a no-tool seam, where the live token path inserts nothing. S11 does not change that reducer. Its recorded joiner is kept under S2a, so a row combined by that path keeps its break. This is not new with S11.
 
 ### Amendment 2026-10-27 (founder, #1452 D2) — the page carries what is displayed; full content on demand
 
@@ -1863,8 +1982,8 @@ Traces to: User Story 1, Acceptance Scenario 3; User Story 4, Acceptance Scenari
 Category: Error Path.
 **Given** D-Q13's authorized read with an actual pin-X retirement I/O failure plus cancellation/unknown position, or its cleanup-free controls, **When** that request completes read/release processing, **Then** the combined failure is typed storage_error with outcome=storage and both internal errors.Is matches, an active messages request gets D11's exact sanitized storage500 rather than404, and a cancelled transport still records storage diagnostics/normal storage logging without requiring a body. No cause leaks in summary/response, pending cleanup remains retriable, metadata-only detail200/live_only attach remain intact, and pure cancellation stays abort/no response while pure unknown position stays404/invalid_request (R1-1/Z).
 
-### B70–B86 — #1452 amendment scenarios
-Defined in "Amendment 2026-10-27 (founder, #1452 D2)" (B70–B78) and "Amendment 2026-10-27 (founder, #1452 D1)" (B79–B86), with Given/When/Then, categories and test mapping in place.
+### B70–B98 — #1452 amendment scenarios
+Defined in "Amendment 2026-10-27 (founder, #1452 D2)" (B70–B78) and "Amendment 2026-10-27 (founder, #1452 D1)" (B79–B86, and S11's B87–B98 added 2026-10-28), with Given/When/Then, categories and test mapping in place.
 
 ## Test-Driven Development Plan
 
@@ -1925,7 +2044,7 @@ All tests below are **planned**, not written/executed here. QA's RED uses indepe
 | T53 TestHistoryCleanup_StoragePrecedesReadErrorAcrossGateway | Integration | B69 | RED-BE/R1-1: real pinned-generation retirement removal fault combined with cancellation or unknown-position selection; inspect typed storage_error and both errors.Is causes, then exercise real gateway handling and actual logs. Active messages must be exact sanitized500/not404 with one content-free history_page outcome=storage and normal storage log. Cancelled transport must still produce both storage observations; assert no body delivery requirement. Pure cancellation and pure unknown-position controls remain abort/no response and404/invalid_request. Verify pending retry and existing metadata-only detail/live_only outcomes. CHECK plants cancellation-first/404-first classification mutants; no leak or direct-store-only closure. |
 | T54 chatHistorySnapshot.unexpectedExceptionRestoresAndRetries | Integration | B66 | Focused T51/TEST-R1 follow-up in the real component/frame-owner path: freeze prior positions/region, trigger the actual unexpected commit-consumer exception once, require truthful sanitized diagnostics AND exact restoration/visible error, then activate real Retry and assert one bounded request, expected replacement positions, cleared failure and no resend. Removing recovery only for unexpected exceptions must fail; a caught or propagated TypeError alone is not acceptance. |
 | T55 TestHistoryRetention_StableThirdAttemptSucceeds | Integration | B63 | Focused T48/TEST-R2 follow-up: actual two retention sweeps move cuts1/2, cut3 is stable with live context and no cleanup fault. Require success, exactly3 attempts/2 retention retries, independently frozen retained entries/continuation and canonical preservation, with no fourth read. A mutant rejecting every third attempt must fail while the separate three-moved-cut exhaustion control stays valid. |
-| T56–T68 #1452 amendment tests (incl. T62b, T63b, T63c) | Unit/Integration/E2E | B70–B86 | Defined in "Amendment 2026-10-27 (founder, #1452 D1)" (T56–T61, T68) and "Amendment 2026-10-27 (founder, #1452 D2)" (T62–T67, T62b, T63b, T63c; T63 rewrites the near-admission case of T27 by founder authorisation). RED before GREEN; CHECK by a different instance. |
+| T56–T84 #1452 amendment tests (incl. T62b, T63b, T63c) | Unit/Integration/E2E | B70–B98 | Defined in "Amendment 2026-10-27 (founder, #1452 D1)" (T56–T61, T68) and "Amendment 2026-10-27 (founder, #1452 D2)" (T62–T67, T62b, T63b, T63c; T63 rewrites the near-admission case of T27 by founder authorisation). RED before GREEN; CHECK by a different instance. S11 tests T69–T84 (added 2026-10-28) are defined in the same D1 amendment; T84 is a gateway integration test. |
 
 Backend tests live beside `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266/pkg/session/transcript_view_test.go`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266/pkg/session/transcript_effects_test.go`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266/pkg/gateway/clear_view_test.go` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266/pkg/gateway/ws_attach_catchup_test.go`. Proposed command tests: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266/cmd/chat-history-index-repair/main_test.go`; shared-core integration fixtures alongside session tests, prepared-weigher tests alongside gateway tests. Proposed browser file: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266/tests/e2e/chat-history-paging.spec.ts`. QA verifies CI discovery/named execution for every new test, including D13's required job and native Windows T36. A test merely written or an Ubuntu cross-build cannot count as executed/native certification. **2026-10-27 removal note (founder decision):** the proposed command tests went with the removed repair command — greenfield, no upgrade path — so that part of this clause is a historical record.
 
@@ -2141,7 +2260,7 @@ Requirement IDs remain stable; the removed message-target requirement is not rep
 | FR-036 | MUST represent protected-edge deferral as visible non-success with bounded old reader/anchor/focus/boundaries intact and reachable recovery. Retry after protection changes, commit only safe whole-group eviction, and apply D8's preventScroll Conversation history fallback before legitimate focused-row removal; no silent discard/idle success, anchor eviction or hidden retry loop (D8/D9, SFH-F6/TEST-I1). |
 | FR-037 | MUST retain sanitized snapshot-rejection phase/failure-kind diagnostics distinguishing protocol contradiction from unexpected exceptions, without raw cause/stack/frame/content/identity/position. Preserve prior projection and visible failure/Retry; no generic catch that loses both cause categories or log-only recovery (D7, SFH-F8). |
 | FR-038 | MUST permit safe redo of complete checksummed node frames without a commit footer only beyond a validated published mutation end and within D1a's64 combined mutation bound. Never trim canonical/published bytes, accept corrupt/checksum/footer state, replay for free or publish partial success at65+ (D1a, CR-M2). |
-| FR-039 | MUST bind every compatible saved record (same role; same turn and producer when known) whose id is a part of an existing combined display row onto that row, never as a second row, on every carrier and entry point. It MUST choose live or saved text per part by the existing precedence rules, record real joiners, place the row at its last bound position, never rebind a bound position and never merge reused ids across turns ("Amendment 2026-10-27 (founder, #1452 D1)", S1–S9). |
+| FR-039 | MUST bind every compatible saved record (same role; same turn and producer when known) whose id is a part of an existing combined display row onto that row, never as a second row, on every carrier and entry point. It MUST choose live or saved text per part by the existing precedence rules, record real joiners, place a row with parts at its first bound position (changed 2026-10-28 by S8/S11; previously its last), never rebind a bound position and never merge reused ids across turns ("Amendment 2026-10-27 (founder, #1452 D1)", S1–S9). It MUST also bind every source of one turn segment into one row, exactly as live shows it, at every entry point including the J2 live junction and saved-row adoption, with the S11b identity precedence and atomic re-key, recorded-joiner precedence, first-bound-position slot, per-part release and the inner reading-position rule; and the gateway MUST stamp the optional `HistoryEntryOrigin.turn_id` from the persisted source only (S11, S11d, added 2026-10-28). |
 | FR-040 | MUST shorten display content once in the session reader after effect reduction, display only. Tool results over 51,200 encoded bytes become a HistoryResultPreview (first 4,096 bytes on a character boundary plus exact size), with media, child-session and other consumed facts derived from the full value first. Content of ordinary user/assistant message entries (type `message` or omitted) over 65,536 UTF-8 bytes becomes its first ≤ 65,536 bytes plus content_original_size_bytes; structured entry types are never shortened. Archive, positions, writes and model context stay unchanged ("Amendment 2026-10-27 (founder, #1452 D2)", A2.1). |
 | FR-041 | MUST enforce the 8,388,608-byte page selection ceiling with stop_reason byte_ceiling, which may stop below min_rows; a one-group page is returned whole at any size; the client tops up contiguously; no heap or absolute response bound is claimed ("Amendment 2026-10-27 (founder, #1452 D2)", A2.3, A2.6). |
 | FR-042 | MUST serve GET /sessions/{id}/messages/{history_position} with the full public projection after effects, the page's exact access order and 400/404/410 with the stated strings, and MUST validate preview markers at the real server and browser boundaries, including the UTF-8 byte rule ("Amendment 2026-10-27 (founder, #1452 D2)", A2.2). |
@@ -2169,7 +2288,7 @@ Requirement IDs remain stable; the removed message-target requirement is not rep
 | SC-016 | #1420 passes independent provider/accounting/aggregate/carrier/UI checks: live and fresh-reload token values agree with authoritative recorded totals despite omitted pages and duplicate/late events, real0/unknown remain distinct, and the next turn advances once. Named RED/GREEN plus real reload screenshots/network evidence are independently validated. |
 | SC-017 | Gate-fix follow-up B57–B69 has candidate-bound independent RED/GREEN/CHECK evidence for checkpoint/empty-creation integrity, proven expiry, retirement retry, unknown usage, distinct final failures, W's3 total attempts then index_inconsistent, X's error-returning release/every-read-or-reconcile retry/ErrNotExist success, content-free malformed/snapshot diagnostics, protected-edge recovery and bounded unpublished-node redo. R1-1 combined-error primary classification/logging and pure-error controls, T54 unexpected-exception restoration/working Retry and T55 stable-third-attempt success also have independent evidence. TEST-C1/I1/I2/I3 assertion gaps and documentation findings are independently verified closed or explicitly founder-deferred with tracking; this specification records fixes in progress, not that evidence or a gate PASS. |
 | SC-018 | #1452 D2: B70–B78 pass with tests-only RED then GREEN and an independent CHECK. T63/T63b/T63c record attributable peak heap. U-D2-1..7 pass on the exact candidate with an independent validator, each with its setup receipt; a row whose receipt fails is reported NOT EXERCISED, never PASS. U-D2-1/2/6 run on the approved seeded setup and are reported as seeded display/read acceptance (corrected 2026-10-28, grill R2-I6); while any is NOT EXERCISED, SC-018 stays open. DOC-1..3 updates are audited by docs-verifier. |
-| SC-019 | #1452 D1: B79–B86 pass with RED then GREEN and an independent CHECK. R5, r21-a, alias-boundaries, protected-edge and R-J stay green unmodified. U-D1-1..2 pass on the exact candidate with an independent validator; U-D1-3 is a smoke check. |
+| SC-019 | #1452 D1: B79–B86 pass with RED then GREEN and an independent CHECK. R5, r21-a, alias-boundaries, protected-edge and R-J stay green unmodified. U-D1-1..2 pass on the exact candidate with an independent validator; U-D1-3 is a smoke check. S11 (added 2026-10-28): B87–B98 and T69–T84 pass with RED then GREEN and an independent CHECK; the `HistoryEntryOrigin.turn_id` contract change is regenerated and `make verify-contracts` is clean; U-D1-4..6 pass (or are reported NOT EXERCISED per their receipts) with an independent validator; DOC-1 and DOC-3 are updated and audited; llm-agents S-09/S-08 and catch-up c/d/e/f pass unchanged. |
 
 ## Traceability Matrix
 
@@ -2212,7 +2331,7 @@ Requirement IDs remain stable; the removed message-target requirement is not rep
 | FR-036 | US2.5/8 | B65 | T09,T16,T20,T21,T50 + DOC-1/SC-017 |
 | FR-037 | US2.3,US4.7 | B66 | T51,T54 + DOC-2..3/SC-017 |
 | FR-038 | US4.8 | B67 | T29,T52 + DOC-2/4/SC-017 |
-| FR-039 | AC-D1-1..5; US2.1/2/6/7, US4.1 | B79,B80,B81,B82,B83,B84,B85,B86 | T56–T61,T68 + R5/r21-a/alias-boundaries/protected-edge/R-J (unchanged) + U-D1-1..3/SC-019 |
+| FR-039 | AC-D1-1..6; US2.1/2/6/7, US4.1 | B79–B98 | T56–T61,T68,T69–T84 + R5/r21-a/alias-boundaries/protected-edge/R-J/working-on (unchanged) + U-D1-1..6/DOC-1/DOC-3/contract `HistoryEntryOrigin.turn_id`/SC-019 |
 | FR-040 | AC-D2-1..3, AC-D2-6; US1.5, US4.1/6 | B70,B71,B73,B75,B77 | T62,T62b,T63 + U-D2-1,3,4,7/SC-018 |
 | FR-041 | AC-D2-4; US1.5, US2.1, US4.4 | B74,B75 | T63b,T63c,T64,T67,T23 + SC-018 |
 | FR-042 | AC-D2-5; US4.2/3/5 | B72,B76 | T62b,T65 + U-D2-1,2/SC-018 |
