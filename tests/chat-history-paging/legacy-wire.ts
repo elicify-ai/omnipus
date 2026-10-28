@@ -92,7 +92,7 @@ export function wireHistoryPage(
     ...(later && last ? { next_after: last } : {}),
     page_info: {
       mode: 'latest', limit: 40, min_rows: 20, row_count: drawnRows,
-      source_group_count: sources.length, soft_byte_budget: 4194304,
+      source_group_count: sources.length, soft_byte_budget: 4194304, byte_ceiling: 8_388_608,
       projected_bytes: 0, byte_budget_exceeded: false,
       stop_reason: earlier ? 'row_target' : 'end',
       retention_generation: 'legacy-fixture-retained-1',
