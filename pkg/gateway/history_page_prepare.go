@@ -187,10 +187,15 @@ func historyProviderFallbackProfile(message *generated.Message) bool {
 	}
 	return true
 }
+
+const historyPlaceholderText = "This saved message could not be displayed."
+
 func historyMessagePlaceholder(e session.ChatHistoryEntry) (generated.Message, []byte, error) {
 	// Keep the owning occurrence and recorded identity, never a replacement row.
+	// The diagnostic is content-free: no ids, positions, content or causes.
+	logsafeWarn("history: saved item replaced by its placeholder", "event", "history_item_placeholder", "reason", "invalid_message")
 	position := string(e.Position)
-	text := "This saved message could not be displayed."
+	text := historyPlaceholderText
 	role := generated.MessageRoleSystem
 	message := generated.Message{Id: e.Entry.ID, AgentId: e.Entry.AgentID, Timestamp: e.Entry.Timestamp, HistoryPosition: &position, Content: &text, Role: &role}
 	raw, err := json.Marshal(message)
@@ -198,6 +203,18 @@ func historyMessagePlaceholder(e session.ChatHistoryEntry) (generated.Message, [
 }
 func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHistoryPage, e session.ChatHistoryEntry) (historyPreparedGroup, error) {
 	var out historyPreparedGroup
+	// A2.2: a saved result carrying an invalid `_history_preview` marker is a
+	// malformed item on BOTH carriers. The group degrades locally to the D4
+	// placeholder; neither the REST message nor a snapshot frame carries it.
+	malformed, err := historyStoredMarkerInvalid(e.Entry)
+	if err != nil {
+		return out, err
+	}
+	if malformed {
+		logsafeWarn("history: saved item replaced by its placeholder", "event", "history_item_placeholder", "reason", "invalid_preview_marker")
+		e.Entry = historyPlaceholderSource(e.Entry)
+		e.NestedDelegateParents = nil
+	}
 	message, encoded, err := historyWireMessage(r.sessionID, e)
 	if err != nil {
 		return out, err

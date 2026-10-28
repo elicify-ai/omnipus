@@ -59,6 +59,43 @@ func historyMessageMarkersValid(message generated.Message) bool {
 
 var errHistoryPreviewMarker = errors.New("invalid history preview marker")
 
+// historyStoredMarkerInvalid reports a saved (not reader-made) tool result
+// that carries the reserved `_history_preview` key but is not a valid
+// HistoryResultPreview under both the generated schema and the byte rule.
+// Such an item is malformed on every carrier (A2.2): it becomes the D4
+// placeholder, never a sent marker and never a plain result.
+func historyStoredMarkerInvalid(e session.TranscriptEntry) (bool, error) {
+	for _, tc := range e.ToolCalls {
+		if _, preview := tc.HistoryDisplayPreview(); preview {
+			continue
+		}
+		if _, marker := tc.Result["_history_preview"]; !marker {
+			continue
+		}
+		if !historyPreviewBytesValid(tc.Result) {
+			return true, nil
+		}
+		raw, err := json.Marshal(tc.Result)
+		if err != nil {
+			return false, err
+		}
+		msg, serverErr := validateBodyAgainstSchema("HistoryResultPreview", raw)
+		if serverErr {
+			return false, errors.New("history preview schema unavailable")
+		}
+		if msg != "" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// historyPlaceholderSource is the replay source for an item that degraded to
+// the D4 placeholder: identity and the placeholder text only, no saved body.
+func historyPlaceholderSource(e session.TranscriptEntry) session.TranscriptEntry {
+	return session.TranscriptEntry{ID: e.ID, AgentID: e.AgentID, Timestamp: e.Timestamp, Role: "system", Content: historyPlaceholderText}
+}
+
 // historyFrameMarkerValid applies the byte rule to a prepared history-origin
 // tool_call_result frame.
 func historyFrameMarkerValid(raw []byte) error {
