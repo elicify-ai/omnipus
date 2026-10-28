@@ -20,7 +20,7 @@ func TestChatHistoryPage_AdvertisedBudgetSemanticBoundaries(t *testing.T) {
 		valid bool
 	}{{"2097152", true}, {"4194304", true}, {"8388608", true}, {"0", false}, {"-1", false}, {"null", false}, {"1.5", false}} {
 		t.Run(tc.value, func(t *testing.T) {
-			body := []byte(fmt.Sprintf(`{"session_id":"budget-contract","entries":[],"has_earlier":false,"has_later":false,"page_info":{"mode":"latest","limit":40,"min_rows":20,"row_count":0,"source_group_count":0,"soft_byte_budget":%s,"projected_bytes":0,"byte_budget_exceeded":false,"stop_reason":"end","retention_generation":"retained","context":{"spans":[],"duplicate_ids":[]}}}`, tc.value))
+			body := []byte(fmt.Sprintf(`{"session_id":"budget-contract","entries":[],"has_earlier":false,"has_later":false,"page_info":{"mode":"latest","limit":40,"min_rows":20,"row_count":0,"source_group_count":0,"soft_byte_budget":%s,"byte_ceiling":8388608,"projected_bytes":0,"byte_budget_exceeded":false,"stop_reason":"end","retention_generation":"retained","context":{"spans":[],"duplicate_ids":[]}}}`, tc.value))
 			msg, serverErr := validateBodyAgainstSchema("SessionHistoryResponse", body)
 			require.False(t, serverErr, "real schema must compile; this is not an infrastructure refusal")
 			if tc.valid {

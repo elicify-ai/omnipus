@@ -68,7 +68,11 @@ func TestHistoryEntryRead_AccessAndErrors(t *testing.T) {
 		require.NotNil(t, m.HistoryPosition)
 		require.Equal(t, position, *m.HistoryPosition)
 		require.Nil(t, m.ContentOriginalSizeBytes)
-		for _, private := range []string{"model_message", "view_membership", "source", "byte_offset", "partition_key"} {
+		// Message.yaml exposes the effective chat/both membership. This is
+		// a normal chat append, never a private model-only archive record.
+		require.NotNil(t, m.ViewMembership)
+		require.Equal(t, generated.MessageViewMembershipChat, *m.ViewMembership)
+		for _, private := range []string{"model_message", "source", "byte_offset", "partition_key"} {
 			require.NotContains(t, w.Body.String(), `"`+private+`"`)
 		}
 	})

@@ -32,7 +32,14 @@ for (const carrier of ['REST', 'snapshot', 'refresh'] as const) {
     }
     const rows = assistantRows()
     expect(rows.filter(row => row.content === SAVED), 'a distinct saved source remains readable exactly once').toHaveLength(1)
-    for (const old of prior) expect(rows.find(row => row.id === old.id)?.content, 'no incompatible owner loses or absorbs text').toBe(old.content)
+    for (const old of prior) {
+      // D3's closed historical interval excludes a distant current tail. S1a
+      // protects its text/binding, not membership in that historical viewport.
+      // Check both owned collections without changing the shared visible-row
+      // helper (which the other D1 order/duplicate assertions still require).
+      expect(bucket().messagesById[old.id]?.content, 'no incompatible owner loses or absorbs text').toBe(old.content)
+      expect([...bucket().messageOrder, ...(bucket().historyLiveOrder ?? [])].filter(id => id === old.id), 'preserved text has exactly one reader/current-tail placement, never orphaned or duplicated').toHaveLength(1)
+    }
     const owner = bucket().historySourceAliases?.[pos(9)]
     expect(owner, 'the saved position names its actual displayed row').toBeDefined()
     expect(bucket().messagesById[owner!]).toMatchObject({ content: SAVED, turnId: incoming.turn_id, agentId: 'mia' })

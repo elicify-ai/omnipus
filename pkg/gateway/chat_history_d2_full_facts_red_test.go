@@ -45,8 +45,8 @@ func TestHistoryEntryRead_FullProjectionKeepsCancellationAndDisposition(t *testi
 			require.Nil(t, m.ContentOriginalSizeBytes)
 			if kind == "discarded-user" {
 				require.NotNil(t, m.InputDisposition)
-				require.Equal(t, "discarded", m.InputDisposition.State)
-				require.Equal(t, "stopped_before_delivery", m.InputDisposition.Reason)
+				require.Equal(t, generated.MessageInputDispositionStateDiscarded, m.InputDisposition.State)
+				require.Equal(t, generated.MessageInputDispositionReasonStoppedBeforeDelivery, m.InputDisposition.Reason)
 			} else {
 				require.NotNil(t, m.Truncated)
 				require.True(t, *m.Truncated)

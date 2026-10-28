@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -54,6 +55,10 @@ func TestChatHistoryPage_DisplayShorteningText(t *testing.T) {
 			body := `{"text":"` + strings.Repeat("s", 65537) + `"}`
 			entry := TranscriptEntry{ID: "structured", Type: EntryType(kind), Role: "system", AgentID: "mia", Content: body, ViewMembership: ViewMembershipChat}
 			if kind == "context_window_notice" {
+				// The durable diagnostic requires its original turn and timestamp
+				// before AppendTranscriptStrict validates it (Message.yaml type).
+				entry.TurnID = "d2-structured-turn"
+				entry.Timestamp = time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
 				entry.ContextWindowNotice = &generated.ContextWindowNotice{Kind: "mid_turn", Message: "classified notice"}
 			}
 			require.NoError(t, s.AppendTranscriptStrict(sid, entry))
