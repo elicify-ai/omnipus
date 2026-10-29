@@ -18,7 +18,8 @@ export interface TerminalOutcomeProvider {
  * ToolSearch is real infrastructure; loading read_file is harmless and does
  * not actually read a file. Assertions in the caller prove it executed.
  */
-export async function startTerminalOutcomeProvider(): Promise<TerminalOutcomeProvider> {
+export async function startTerminalOutcomeProvider(opts?: { narration?: string }): Promise<TerminalOutcomeProvider> {
+  const narration = opts?.narration && opts.narration.length > 0 ? opts.narration : TERMINAL_NARRATION;
   let calls = 0;
   const failures: string[] = [];
   let release!: () => void;
@@ -69,7 +70,7 @@ export async function startTerminalOutcomeProvider(): Promise<TerminalOutcomePro
         return;
       }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      res.write(chunk({ role: 'assistant', content: TERMINAL_NARRATION }, null));
+      res.write(chunk({ role: 'assistant', content: narration }, null));
       void finish.then(() => {
         res.end(
           chunk({ tool_calls: [{ index: 0, id: 'terminal-acceptance-call', type: 'function',

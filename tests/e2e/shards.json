@@ -214,6 +214,15 @@
       ]
     },
     {
+      "_comment": "Chat links (chat-links spec TDD row 22). One render spec; kept off the solo list and off the ~6-spec render shards.",
+      "group": "ui-chat-links",
+      "key_slot": "a",
+      "port": 6084,
+      "specs": [
+        "tests/e2e/chat-links.spec.ts"
+      ]
+    },
+    {
       "group": "llm-hot-reload",
       "key_slot": "b",
       "port": 6068,
