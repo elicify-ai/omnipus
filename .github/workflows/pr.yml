@@ -2966,11 +2966,14 @@ jobs:
       matrix: ${{ fromJSON(needs.e2e-plan.outputs.matrix) }}
     env:
       OMNIPUS_HOME: /tmp/omnipus-e2e
-      # Per-shard LLM keys — runner-agnostic (secrets inject identically on a GitHub-hosted
-      # or an external/self-hosted runner). _B/_C are OPTIONAL: unset ⇒ the "Resolve shard
-      # LLM key" step falls back to key A, so a repo with only OPENROUTER_API_KEY_CI still
-      # runs (every shard uses key A, i.e. today's single-key behavior). Pinning each
-      # concurrent LLM shard to its own key keeps them off one shared rate-limit window.
+      # The PRIMARY model key (tests/e2e/e2e-model.json primary, the MiniMax plan).
+      # There is ONE MiniMax key for every shard.
+      MINIMAX_KEY: ${{ secrets.MINIMAX_API_KEY_CI }}
+      # Per-shard FALLBACK keys (OpenRouter) — runner-agnostic (secrets inject identically
+      # on a GitHub-hosted or an external/self-hosted runner). _B/_C are OPTIONAL: unset ⇒
+      # the "Resolve shard LLM keys" step falls back to key A, so a repo with only
+      # OPENROUTER_API_KEY_CI still runs. Pinning each concurrent LLM shard to its own key
+      # keeps them off one shared rate-limit window when they run on the fallback.
       OPENROUTER_KEY_A: ${{ secrets.OPENROUTER_API_KEY_CI }}
       OPENROUTER_KEY_B: ${{ secrets.OPENROUTER_API_KEY_CI_B }}
       OPENROUTER_KEY_C: ${{ secrets.OPENROUTER_API_KEY_CI_C }}
@@ -3106,38 +3109,59 @@ jobs:
           fi
           echo "Gateway managed Chrome provisioned under $OMNIPUS_HOME/browser/chromium/"
 
-      - name: Resolve shard LLM key
-        # Map this shard's key_slot (from shards.json) to an OpenRouter key and expose it to
-        # every later step as OPENROUTER_API_KEY_CI via $GITHUB_ENV — so the seed/onboard/
-        # verify/test steps below need no per-step secret wiring. Slots b/c fall back to key A
-        # when their secret is unset, so the workflow still runs with only the primary key
-        # configured (every shard on key A = today's single-key behavior). add-mask keeps the
-        # resolved value out of logs (a/b/c are registered secrets and thus already masked).
+      - name: Resolve shard LLM keys
+        # The primary (MiniMax) key is exposed to every later step as MINIMAX_API_KEY_CI.
+        # This shard's key_slot (from shards.json) picks the FALLBACK OpenRouter key, exposed
+        # as OPENROUTER_API_KEY_CI — so the seed/onboard/verify/test steps below need no
+        # per-step secret wiring. Slots b/c fall back to key A when their secret is unset.
+        # add-mask keeps the resolved values out of logs (the secrets are registered and thus
+        # already masked; the re-mask covers the resolved copy).
         run: |
           set -euo pipefail
+          if [ -z "${MINIMAX_KEY:-}" ]; then
+            echo "::error::MINIMAX_API_KEY_CI secret is not set — it is the primary e2e model key (tests/e2e/e2e-model.json)." >&2
+            exit 1
+          fi
+          echo "::add-mask::$MINIMAX_KEY"
+          echo "MINIMAX_API_KEY_CI=$MINIMAX_KEY" >> "$GITHUB_ENV"
           case "${{ matrix.key_slot }}" in
             b) KEY="${OPENROUTER_KEY_B:-$OPENROUTER_KEY_A}" ;;
             c) KEY="${OPENROUTER_KEY_C:-$OPENROUTER_KEY_A}" ;;
             *) KEY="${OPENROUTER_KEY_A}" ;;
           esac
           if [ -z "$KEY" ]; then
-            echo "::error::No OpenRouter key resolved for slot '${{ matrix.key_slot }}'. Set the OPENROUTER_API_KEY_CI secret (and optionally _B / _C)." >&2
+            echo "::error::No OpenRouter (fallback) key resolved for slot '${{ matrix.key_slot }}'. Set the OPENROUTER_API_KEY_CI secret (and optionally _B / _C)." >&2
             exit 1
           fi
           echo "::add-mask::$KEY"
           echo "OPENROUTER_API_KEY_CI=$KEY" >> "$GITHUB_ENV"
 
       - name: Read central e2e model
-        # One committed source of truth for the real-LLM model id. Every model
-        # literal in live config is banned (scripts/check-no-hardcoded-e2e-model.sh),
-        # so the seeding and onboarding steps below interpolate $OMNIPUS_E2E_MODEL.
+        # One committed source of truth for the real-LLM models (a primary and a fallback
+        # pair). Every model or provider literal in live config is banned
+        # (scripts/check-no-hardcoded-e2e-model.sh); scripts/e2e-model.sh is the one shell
+        # reader and exports E2E_PRIMARY_* / E2E_FALLBACK_* for the steps below.
         run: |
-          m=$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json)
-          if [ -z "$m" ]; then
-            echo "::error::tests/e2e/e2e-model.json: .model is missing, empty, or whitespace-only" >&2
-            exit 1
+          set -euo pipefail
+          bash scripts/e2e-model.sh env >> "$GITHUB_ENV"
+
+      - name: Check the primary LLM (job start)
+        # One 1-token call to the primary (--strict). 429 / 5xx / timeout / no connection ⇒
+        # the WHOLE job runs on the fallback: a ::warning::, a job-summary line, and
+        # OMNIPUS_E2E_PRIMARY_PROVIDER/_MODEL (read by tests/e2e/fixtures/e2e-model.ts) point
+        # at the fallback pair. A rejected key (401/403), a 2xx that is not an Anthropic
+        # message, any other answer, or a missing key fails the step.
+        # Prints only the status and the provider's error type, never the body or the key.
+        run: |
+          set -euo pipefail
+          route=$(bash scripts/e2e-model.sh preflight --strict --route-out "$RUNNER_TEMP/llm-route.json")
+          echo "$route" >> "$GITHUB_ENV"
+          if [ "$route" = "LLM_ROUTE=fallback" ]; then
+            {
+              echo "OMNIPUS_E2E_PRIMARY_PROVIDER=$E2E_FALLBACK_PROVIDER"
+              echo "OMNIPUS_E2E_PRIMARY_MODEL=$E2E_FALLBACK_MODEL"
+            } >> "$GITHUB_ENV"
           fi
-          echo "OMNIPUS_E2E_MODEL=$m" >> "$GITHUB_ENV"
 
       - name: Seed gateway config
         # providers is a flat array of ModelConfig entries (see pkg/config/config.go).
@@ -3160,68 +3184,42 @@ jobs:
         # sandbox.audit_log must be true at BOOT (it is restart-gated) for T26.
         # sandbox.tool_policies.delegate = "allow" is explicit so no migration run can
         # override it (an existing "allow" policy is never downgraded by the migrator).
+        #
+        # The two provider rows (primary + fallback) and default_model come from
+        # scripts/e2e-model.sh seed-config (one template shared with runci.sh); this job
+        # replaces its sandbox.tool_policies with the explicit delegate allow and adds the
+        # disabled whatsapp connector. The channels.whatsapp seed exists because
+        # whatsapp-qr.spec.ts case D enables the connector with an ordinary (bodyless) PUT
+        # /channels/whatsapp/enable, which since the pairing ownership model (151aa3af8)
+        # requires the instance to already exist — an enable never creates a missing or
+        # deleted connector. It is seeded disabled so the test's own precondition
+        # ("initially disabled") holds. After a failed job-start check, --route fallback
+        # makes the fallback pair the default model.
         run: |
           set -euo pipefail
-          : "${OMNIPUS_E2E_MODEL:?OMNIPUS_E2E_MODEL is not set — the 'Read central e2e model' step must run first}"
-          # Unquoted heredoc (interpolating $OMNIPUS_E2E_MODEL) — the same idiom as
-          # the sandbox-uat.yml and runci.sh config seeds; this JSON body carries no
-          # other shell-significant characters. Comments must stay OUTSIDE the
-          # heredoc: the body is written to config.json verbatim.
-          # The channels.whatsapp seed exists because whatsapp-qr.spec.ts case D
-          # enables the connector with an ordinary (bodyless) PUT
-          # /channels/whatsapp/enable, which since the pairing ownership model
-          # (151aa3af8) requires the instance to already exist — an enable never
-          # creates a missing or deleted connector. It is seeded disabled so the
-          # test's own precondition ("initially disabled") holds.
-          cat > /tmp/omnipus-e2e/config.json <<EOF
-          {
-            "version": 1,
-            "gateway": {
-              "port": 6060,
-              "dev_mode_bypass": true
-            },
-            "sandbox": {
-              "audit_log": true,
-              "tool_policies": {
-                "delegate": "allow"
-              }
-            },
-            "channels": {
-              "whatsapp": {
-                "type": "whatsapp",
-                "enabled": false
-              }
-            },
-            "agents": {
-              "defaults": {
-                "default_model": {
-                  "provider": "openrouter",
-                  "model": "${OMNIPUS_E2E_MODEL}"
-                },
-                "auto_recap_enabled": true
-              }
-            },
-            "providers": [
-              {
-                "provider": "openrouter",
-                "model": "${OMNIPUS_E2E_MODEL}",
-                "api_base": "https://openrouter.ai/api/v1",
-                "api_key_ref": "OPENROUTER_API_KEY"
-              }
-            ]
-          }
-          EOF
+          : "${LLM_ROUTE:?LLM_ROUTE is not set — the 'Check the primary LLM' step must run first}"
+          bash scripts/e2e-model.sh seed-config 6060 --route "$LLM_ROUTE" \
+            | jq '.sandbox.tool_policies = {delegate: "allow"}
+                  | .channels = {whatsapp: {type: "whatsapp", enabled: false}}' \
+            > /tmp/omnipus-e2e/config.json
 
-      - name: Seed OpenRouter credential
-        # omnipus credentials set writes the key into credentials.json (AES-256-GCM).
-        # The credential name MUST match the provider's api_key_ref in config.json
-        # (OPENROUTER_API_KEY, uppercase — matches the env-var convention documented
-        # in pkg/config/config.go:924-927).
+      - name: Seed LLM credentials
+        # omnipus credentials set writes each key into credentials.json (AES-256-GCM).
+        # The credential names MUST match the provider rows' api_key_ref in config.json —
+        # E2E_PRIMARY_KEYREF / E2E_FALLBACK_KEYREF from tests/e2e/e2e-model.json. The value
+        # of each is the CI secret named <api_key_ref>_CI (MINIMAX_API_KEY_CI,
+        # OPENROUTER_API_KEY_CI), resolved in "Resolve shard LLM keys".
         run: |
           set -euo pipefail
-          ./omnipus credentials set OPENROUTER_API_KEY "${OPENROUTER_API_KEY_CI}"
+          for ref in "$E2E_PRIMARY_KEYREF" "$E2E_FALLBACK_KEYREF"; do
+            var="${ref}_CI"
+            if [ -z "${!var:-}" ]; then
+              echo "::error::$var is not set — needed for the $ref credential." >&2
+              exit 1
+            fi
+            ./omnipus credentials set "$ref" "${!var}"
+          done
         env:
-          # OPENROUTER_API_KEY_CI is set per-shard in "Resolve shard LLM key" via $GITHUB_ENV.
           OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_CI }}
 
       - name: Start gateway
@@ -3270,25 +3268,29 @@ jobs:
         # exact key ADR-067's GetModelConfig matches on — so the onboarding
         # handler updates the existing entry instead of writing a second,
         # divergent one.
+        # After a failed job-start check the job onboards on the fallback pair and seeds no
+        # agent fallback (there is nothing left to fall back to).
         run: |
           set -euo pipefail
+          if [ "$LLM_ROUTE" = "fallback" ]; then
+            prov="$E2E_FALLBACK_PROVIDER" model="$E2E_FALLBACK_MODEL" ref="$E2E_FALLBACK_KEYREF"
+          else
+            prov="$E2E_PRIMARY_PROVIDER" model="$E2E_PRIMARY_MODEL" ref="$E2E_PRIMARY_KEYREF"
+          fi
+          keyvar="${ref}_CI"
           # -sf DISCARDS the server's answer: on any non-2xx, curl exits 22
           # having printed nothing, so the step fails with no reason anywhere in
-          # the log. Every E2E shard has been failing here on this branch and on
-          # release/v0.1.1 alike, and the log says only that a step failed.
-          # A silent failure in the diagnostic path is the worst kind.
-          #
-          # Capture status and body instead, and print the body on failure. The
-          # key is registered with add-mask, so it stays masked in whatever the
-          # server echoes back.
-          body=$(jq -n --arg key "${OPENROUTER_API_KEY_CI}" --arg model "$OMNIPUS_E2E_MODEL" \
-            '{provider:{id:"openrouter",auth_method:"api_key",api_key:$key,model:$model},admin:{username:"admin",password:"admin123"}}' \
+          # the log. Capture status and body instead, and print the body on
+          # failure. The keys are registered with add-mask, so they stay masked
+          # in whatever the server echoes back.
+          code=$(jq -n --arg id "$prov" --arg key "${!keyvar}" --arg model "$model" \
+            '{provider:{id:$id,auth_method:"api_key",api_key:$key,model:$model},admin:{username:"admin",password:"admin123"}}' \
             | curl -s -o /tmp/onboard-body.txt -w '%{http_code}' \
                 -X POST http://localhost:6060/api/v1/onboarding/complete \
                 -H 'Content-Type: application/json' \
                 -d @-)
-          if [ "$body" != "200" ] && [ "$body" != "204" ]; then
-            echo "::error::onboarding/complete returned HTTP $body" >&2
+          if [ "$code" != "200" ] && [ "$code" != "204" ]; then
+            echo "::error::onboarding/complete returned HTTP $code" >&2
             echo "--- response body ---" >&2
             head -c 2000 /tmp/onboard-body.txt >&2 || true
             echo >&2
@@ -3296,22 +3298,34 @@ jobs:
             tail -40 "${OMNIPUS_HOME:-/tmp/omnipus-e2e}/logs/gateway.log" 2>/dev/null >&2 || echo "(no gateway log at ${OMNIPUS_HOME:-/tmp/omnipus-e2e}/logs/gateway.log)" >&2
             exit 1
           fi
-        # OPENROUTER_API_KEY_CI comes from "Resolve shard LLM key" (per-shard, via $GITHUB_ENV).
+          if [ "$LLM_ROUTE" != "fallback" ]; then
+            # The product falls back per agent only (issue #1340): give every agent the
+            # fallback pair in its fallback_models. The fallback provider row and its
+            # credential were seeded above.
+            tok=$(jq -r '.token // empty' /tmp/onboard-body.txt)
+            if [ -n "$tok" ]; then
+              echo "::add-mask::$tok"
+            fi
+            bash scripts/e2e-model.sh seed-agent-fallbacks http://localhost:6060 "${tok:-dev-mode-bypass}"
+          fi
+        # The keys come from "Resolve shard LLM keys" (per-shard, via $GITHUB_ENV).
 
-      # T0.4: Preflight — fail fast if OPENROUTER_API_KEY_CI is unset.
+      # T0.4: Preflight — fail fast if a live-model key is unset.
       # This catches mis-configured CI runs before any Playwright step executes,
       # giving a clear error message instead of per-test LLM timeout failures.
-      - name: Verify OPENROUTER_API_KEY_CI is set
-        # Resolved per-shard in "Resolve shard LLM key" and inherited via $GITHUB_ENV.
+      - name: Verify the live-model keys are set
+        # Resolved per-shard in "Resolve shard LLM keys" and inherited via $GITHUB_ENV.
         run: |
           set -euo pipefail
-          if [ -z "${OPENROUTER_API_KEY_CI:-}" ]; then
-            echo "ERROR: OPENROUTER_API_KEY_CI secret is not set in this repository." >&2
-            echo "This secret is required for the Playwright E2E suite." >&2
-            echo "Add it under Settings > Secrets and variables > Actions." >&2
-            exit 1
-          fi
-          echo "OPENROUTER_API_KEY_CI is set (${#OPENROUTER_API_KEY_CI} chars)."
+          for var in MINIMAX_API_KEY_CI OPENROUTER_API_KEY_CI; do
+            if [ -z "${!var:-}" ]; then
+              echo "ERROR: $var is not set in this repository." >&2
+              echo "It is required for the Playwright E2E suite (primary and fallback model keys)." >&2
+              echo "Add it under Settings > Secrets and variables > Actions." >&2
+              exit 1
+            fi
+            echo "$var is set."
+          done
 
       - name: Install Playwright browsers
         # Install the engines the shard's playwright.config.ts projects
@@ -3380,10 +3394,11 @@ jobs:
           echo "preview-isolation Playwright binaries verified: firefox-1532, webkit-2311"
 
       - name: Run Playwright tests
-        # OPENROUTER_API_KEY_CI is inherited per-shard from $GITHUB_ENV (Resolve shard LLM key).
-        # Mirror it onto OPENROUTER_API_KEY so self-managed gateways
-        # (tests/e2e/setup.ts startGateway → onboardAdmin) send the same live
-        # key instead of sk-test-placeholder, which OpenRouter 400s.
+        # MINIMAX_API_KEY_CI and OPENROUTER_API_KEY_CI are inherited per-shard from
+        # $GITHUB_ENV (Resolve shard LLM keys), as are OMNIPUS_E2E_PRIMARY_* after a failed
+        # job-start check. Mirror the keys onto MINIMAX_API_KEY / OPENROUTER_API_KEY so
+        # self-managed gateways (tests/e2e/setup.ts startGateway → onboardAdmin) find the
+        # same live keys under the local names too.
         #
         # --reporter=html,list,json ADDS the json reporter on top of
         # playwright.config.ts's own `reporter: [['html'], ['list']]` — the
@@ -3401,6 +3416,7 @@ jobs:
         # step, which reads the json reporter's stats block to catch both.
         env:
           OMNIPUS_URL: http://localhost:6060
+          MINIMAX_API_KEY: ${{ env.MINIMAX_API_KEY_CI }}
           OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY_CI }}
           PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/pw-results.json
         run: |
@@ -3537,6 +3553,31 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
+
+      - name: Count mid-run LLM fallbacks
+        # The job-start check only sees the primary at the start. If it failed DURING the
+        # tests, agents answered from the fallback and the product wrote a transcript note
+        # for each answer. Count them on the shared gateway: any note ⇒ a ::warning::, a
+        # job-summary line, and llm-route.json no longer says "primary"
+        # ("primary_then_fallback", with fallback_notes).
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/llm-route.json" ]; then
+            bash scripts/e2e-model.sh note-fallbacks "${OMNIPUS_HOME:-/tmp/omnipus-e2e}/sessions" \
+              --route-out "$RUNNER_TEMP/llm-route.json"
+          fi
+
+      - name: Upload LLM route
+        # One line per shard ({"route","status","error_type"[,"fallback_notes"]}) so the
+        # week-later report can count the jobs that ran on the fallback, at the start or
+        # mid-run.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: llm-route-${{ matrix.group }}
+          path: ${{ runner.temp }}/llm-route.json
+          if-no-files-found: ignore
 
       - name: Upload Playwright artifacts
         if: failure()

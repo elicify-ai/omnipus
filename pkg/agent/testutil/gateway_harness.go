@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -477,6 +478,11 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 
 	sg.bootUntilReady()
 
+	if err := joinTestAgentsToDefaultWorkspace(sg.homeDir, sg.hc.agents); err != nil {
+		sg.gw.Close()
+		sg.t.Fatalf("testutil.StartTestGateway: join agents to the default workspace: %v", err)
+	}
+
 	sg.t.Cleanup(func() {
 		sg.gw.Close()
 	})
@@ -549,8 +555,11 @@ func (sg *startTestGateway) prepare() {
 	// Done ONCE, before the bind-retry loop below: it writes credentials.json
 	// into homeDir and has nothing to do with which port we end up on, so
 	// re-running it per attempt would be pure waste.
-	if err := seedTestCredentials(sg.homeDir); err != nil {
+	if err := seedTestCredentials(sg.homeDir, sg.hc.credentials); err != nil {
 		sg.t.Fatalf("testutil.StartTestGateway: seed credentials: %v", err)
+	}
+	if err := seedTestAgents(sg.homeDir, sg.hc.agents); err != nil {
+		sg.t.Fatalf("testutil.StartTestGateway: seed agents: %v", err)
 	}
 }
 
@@ -1111,10 +1120,26 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 	// its own Option.
 	cfg.Tools.Browser.ExecPath = filepath.Join(homeDir, "nonexistent-test-chromium")
 
+	// Optional multi-row override (WithProviderRows): the rows replace the
+	// default row and the first one becomes the default model.
+	if len(hc.providerRows) > 0 {
+		cfg.Providers = make([]*config.ModelConfig, 0, len(hc.providerRows))
+		for _, r := range hc.providerRows {
+			cp := *r
+			cfg.Providers = append(cfg.Providers, &cp)
+		}
+		cfg.Agents.Defaults.DefaultModel = config.DefaultModel{
+			Provider: cfg.Providers[0].Provider,
+			Model:    cfg.Providers[0].Model,
+		}
+	}
+
 	// Optional APIBase override (perf tests redirect LLM traffic to a local
 	// mock server — see tests/perf/mock_openrouter_test.go).
 	if hc.apiBase != "" {
 		cfg.Providers[0].APIBase = hc.apiBase
+	}
+	if hc.apiBase != "" || anyLoopbackAPIBase(cfg.Providers) {
 		// ADR-066 D2/D3: the redirected row now points at a loopback
 		// httptest server. Until the gateway installs the served catalog
 		// (ADR-067 T067-07) the resolver classifies it as a custom row at a
@@ -1159,12 +1184,36 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 	return cfg
 }
 
+// anyLoopbackAPIBase reports whether any provider row points at a loopback
+// host (a local httptest stub).
+func anyLoopbackAPIBase(rows []*config.ModelConfig) bool {
+	for _, r := range rows {
+		if r == nil || r.APIBase == "" {
+			continue
+		}
+		u, err := url.Parse(r.APIBase)
+		if err != nil {
+			continue
+		}
+		host := u.Hostname()
+		if host == "localhost" {
+			return true
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return true
+		}
+	}
+	return false
+}
+
 // seedTestCredentials writes credentials.json into homeDir with an
 // OPENROUTER_API_KEY entry encrypted under testMasterKey. The real OpenRouter
 // key is taken from env var OPENROUTER_API_KEY when set (dev/CI exercising real
 // LLM calls); otherwise a placeholder is stored. Tests that drive an LLM path
-// will fail at the OpenRouter API boundary if env was not provided.
-func seedTestCredentials(homeDir string) error {
+// will fail at the OpenRouter API boundary if env was not provided. extra
+// entries (WithCredentials) are written afterwards and overwrite a seeded
+// name; they never come from the environment.
+func seedTestCredentials(homeDir string, extra map[string]string) error {
 	masterKey, err := hex.DecodeString(testMasterKey)
 	if err != nil {
 		return fmt.Errorf("decode testMasterKey: %w", err)
@@ -1183,6 +1232,11 @@ func seedTestCredentials(homeDir string) error {
 	}
 	if err := store.Set("OPENROUTER_API_KEY", apiKey); err != nil {
 		return fmt.Errorf("set OPENROUTER_API_KEY: %w", err)
+	}
+	for name, value := range extra {
+		if err := store.Set(name, value); err != nil {
+			return fmt.Errorf("set %s: %w", name, err)
+		}
 	}
 	return nil
 }

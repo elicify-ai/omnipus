@@ -7,16 +7,30 @@ Add each secret under **Settings > Secrets and variables > Actions > Repository 
 
 ## Playwright E2E (`pr.yml` — `playwright` job)
 
-### `OPENROUTER_API_KEY_CI`
+The models are centralized in `tests/e2e/e2e-model.json` (one committed source of
+truth): a **primary** (currently the MiniMax plan) and a **fallback** (currently a
+DeepSeek model on OpenRouter). The guard `scripts/check-no-hardcoded-e2e-model.sh`
+bans model-id and provider-id literals in live config. Changing a model means editing
+both entries of that file AND adding every new id to the guard's `PATTERN`. Tool-use
+capability and per-run cost should be re-checked when it changes.
 
-Used by the Playwright E2E job to start the Omnipus gateway with a live LLM
-backend so that chat and agent tests receive real (not mocked) responses.
+Fork pull requests receive no secrets, so the e2e job fails at its key check on a
+fork (it never falls back to a placeholder). Never switch the workflow to
+`pull_request_target` to work around that.
 
-**Recommended model:** not set here anymore — the model is centralized in
-`tests/e2e/e2e-model.json` (one committed source of truth, currently a DeepSeek
-model; the guard `scripts/check-no-hardcoded-e2e-model.sh` bans model-id
-literals in live config). Changing the model is a one-line change to that file.
-Tool-use capability and per-run cost should be re-checked when it changes.
+### `MINIMAX_API_KEY_CI`
+
+The **primary** model key (the MiniMax plan subscription key). One key for every e2e
+shard, sandbox-uat, the nightly evals and the job-start check (`scripts/e2e-model.sh
+preflight`). Exported to the jobs as `MINIMAX_API_KEY_CI` and seeded into the test
+gateway's credential store under the product credential name `MINIMAX_API_KEY`.
+
+### `OPENROUTER_API_KEY_CI` (optional `OPENROUTER_API_KEY_CI_B`, `_C`)
+
+The **fallback** model key. Every agent the CI creates carries the fallback model,
+and when the job-start check finds the primary unavailable the whole job runs on it.
+The `_B` / `_C` slots keep concurrent LLM shards on separate OpenRouter rate-limit
+windows; unset, they fall back to `OPENROUTER_API_KEY_CI`.
 
 **Suggested monthly cap:** $5. Set a usage limit in your OpenRouter dashboard
 under the key's settings to prevent runaway spend if a CI job loops.
@@ -28,13 +42,14 @@ reuse a key that has billing-write or organisation-admin scope.
 
 ## Nightly Evals (`evals-nightly.yml`)
 
-### `OPENROUTER_API_KEY_EVAL`
+### `MINIMAX_API_KEY_CI` and `OPENROUTER_API_KEY_EVAL`
 
-Used by the nightly eval runner for two calls per scenario: one to the agent
-model and one to the judge model — both follow the ONE central setting in
-`tests/e2e/e2e-model.json` (currently a DeepSeek model), as does the Playwright
-e2e job. Cost depends on the configured model; the runner fails the workflow
-above $2.00 in a single run.
+The nightly eval runner makes two calls per scenario: one to the agent model and
+one to the judge model — both follow the ONE central setting in
+`tests/e2e/e2e-model.json`, as does the Playwright e2e job. The primary (MiniMax)
+uses `MINIMAX_API_KEY_CI` (there is no separate eval key); the fallback (OpenRouter)
+uses `OPENROUTER_API_KEY_EVAL`. Cost depends on the configured model; the runner
+fails the workflow above $2.00 in a single run.
 
 This can be the same key as `OPENROUTER_API_KEY_CI` or a separate key with a
 higher monthly cap (suggested: $25).
@@ -64,7 +79,7 @@ run. Per-run cost depends on the model configured in `tests/e2e/e2e-model.json`.
 
 ## Rotation policy
 
-Rotate all OpenRouter keys at least every 90 days. After rotation, update
+Rotate all OpenRouter keys and the MiniMax key at least every 90 days. After rotation, update
 the secret value in GitHub Actions and verify the next CI run passes before
 closing the rotation ticket. The `OMNIPUS_MASTER_KEY_EVAL` value is not
 sensitive across rotations — regenerate freely.

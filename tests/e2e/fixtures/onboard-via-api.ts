@@ -1,21 +1,53 @@
-import { type APIRequestContext, request } from '@playwright/test';
-import { E2E_MODEL } from './e2e-model.js';
+import { E2E_FALLBACK, E2E_PRIMARY } from './e2e-model.js';
+import { keyEnvNamesFor, lookupModelKey } from './e2e-model-keys.js';
 
-const DEFAULT_PROVIDER_ID = 'openrouter';
-// The model all e2e tests run on is the ONE central setting,
-// tests/e2e/e2e-model.json, threaded through fixtures/e2e-model.ts (mirrored
-// in the Fly CI runner's runci.sh e2e config). Determinism
-// for "exactly N tool calls" subagent assertions is enforced via the
-// temperature=0 + seed=42 plumbing the suite already passes through to
-// OpenRouter, not by the model alone.
+// The models all e2e tests run on are the ONE central setting,
+// tests/e2e/e2e-model.json (a primary and a fallback pair), threaded through
+// fixtures/e2e-model.ts and, for the shell surfaces (pr.yml, sandbox-uat.yml,
+// the Fly CI runner's runci.sh), scripts/e2e-model.sh.
 //
 // NOTE: the nightly evals (.github/workflows/evals-nightly.yml +
-// evals/cmd/eval-runner/main.go) follow the SAME central setting: both the
-// evals agent and the judge derive AGENT_MODEL/JUDGE_MODEL from
-// tests/e2e/e2e-model.json (founder decision 2026-09-27, wired in
-// evals-nightly's "Read central e2e model" step), so tests and evals
-// cannot drift apart on which model they run.
+// evals/cmd/eval-runner) follow the SAME central setting: the evals agent
+// and the judge default to its primary, with its fallback (founder decision
+// 2026-09-27), so tests and evals cannot drift apart on which model they run.
+// Credentials never travel through Playwright's request client: the Playwright
+// test runner records every request a context sends — JSON bodies included —
+// into the trace, and CI uploads retained traces as artifacts (artifacts are not
+// secret-masked). This file therefore talks to the gateway with Node's own
+// fetch, which no trace observes. tests/e2e/trace-secret-canary.spec.ts pins
+// that a canary key sent through here never appears in a retained trace.
 const DEFAULT_USERNAME = 'admin';
+
+interface PlainResponse {
+  status: number;
+  ok: boolean;
+  text: string;
+}
+
+/** One JSON request with Node fetch (NOT Playwright's request client). */
+async function send(
+  baseURL: string,
+  method: 'GET' | 'POST' | 'PUT',
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): Promise<PlainResponse> {
+  const res = await fetch(new URL(path, baseURL), {
+    method,
+    headers: body === undefined ? headers : { 'Content-Type': 'application/json', ...headers },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  return { status: res.status, ok: res.ok, text };
+}
+
+function parseJSON(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
 const DEFAULT_PASSWORD = 'admin123';
 
 export interface OnboardingOptions {
@@ -38,23 +70,27 @@ export interface OnboardingOptions {
  *   - Body: { provider: {id, api_key, model}, admin: {username, password} }.
  *   - 200 on success, 409 if already complete — both are treated as success.
  *   - Password must be ≥8 characters.
- *   - The backend now PROBES the key against the real provider before
+ *   - The backend PROBES the key against the real provider before
  *     completing onboarding (see the "Provider API-key validation" block in
  *     rest_onboarding.go) and returns 400 when the provider confirms the key
  *     is wrong (`providers.OutcomeInvalidKey`) — no_credit / unreachable /
- *     restricted still proceed with a warning. Onboarding is NO LONGER a pure
- *     "store whatever was typed" write; a fake key is now rejected, not
- *     silently accepted.
+ *     restricted still proceed with a warning.
  *
- * The API key is sourced from OPENROUTER_API_KEY_CI (or falls back to
- * OPENROUTER_API_KEY for local runs). If NEITHER is set, this throws
- * immediately, before making any request — a placeholder key would either get
- * a real 400 from the provider probe (a confusing failure deep inside
- * onboarding) or, worse, if OpenRouter ever starts probe-accepting garbage
- * keys, would silently seed a broken install that fails every subsequent spec
- * one at a time with no indication why. Failing fast, at fixture-build time,
- * with a message that names the two env vars to set, is strictly better than
- * either.
+ * Provider and model default to the central primary (E2E_PRIMARY). The key is
+ * looked up by provider (fixtures/e2e-model-keys.ts): MINIMAX_API_KEY_CI then
+ * MINIMAX_API_KEY for the MiniMax primary, OPENROUTER_API_KEY_CI then
+ * OPENROUTER_API_KEY for OpenRouter. A missing key throws immediately, before
+ * any request, naming both variables — a placeholder key would only fail
+ * later and more confusingly.
+ *
+ * After a fresh onboard (200) it seeds the fallback, because the product falls
+ * back per agent only (issue #1340):
+ *   1. PUT /api/v1/providers/<fallback provider> with the fallback key and model;
+ *   2. GET /api/v1/agents;
+ *   3. PUT /api/v1/agents/<id> {fallback_models:[fallback]} for each agent.
+ * A 409 (onboarded earlier by another caller, which seeded the fallback then)
+ * skips that seeding. When the job already runs on the fallback (job-start
+ * check), there is nothing to fall back to and the seeding is skipped too.
  */
 export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
   // W4-7: validate password length at fixture-build time, not at 400-response time.
@@ -66,55 +102,62 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
     );
   }
 
-  const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY_CI ?? process.env.OPENROUTER_API_KEY;
+  const providerID = opts.providerID ?? E2E_PRIMARY.provider;
+  const model = opts.model ?? E2E_PRIMARY.model;
+  const apiKey = opts.apiKey ?? lookupModelKey(providerID);
   if (!apiKey) {
-    // No placeholder fallback (see the doc comment above): onboarding now
-    // validates the key for real, so a fake key cannot silently seed a
-    // broken install — but running the whole suite against one is still a
-    // waste of a CI shard's worth of time before the same 400 surfaces at
-    // spec #1 instead of here. Fail immediately with the fix.
+    const [ciName, localName] = keyEnvNamesFor(providerID);
     throw new Error(
-      'onboard-via-api: no OpenRouter API key available. Set OPENROUTER_API_KEY_CI ' +
-        '(CI) or OPENROUTER_API_KEY (local), or pass { apiKey } explicitly. Onboarding ' +
-        'now probes the key against the real provider before completing (see ' +
+      `onboard-via-api: no API key for the primary provider "${providerID}". Set ${ciName} ` +
+        `(CI) or ${localName} (local), or pass { apiKey } explicitly. Onboarding ` +
+        'probes the key against the real provider before completing (see ' +
         'pkg/gateway/rest_onboarding.go), so the suite cannot run against a placeholder.'
     );
   }
 
-  const ctx: APIRequestContext = await request.newContext({ baseURL: opts.baseURL });
-  try {
-    const res = await ctx.post('/api/v1/onboarding/complete', {
-      data: {
-        provider: {
-          auth_method: 'api_key',
-          id: opts.providerID ?? DEFAULT_PROVIDER_ID,
-          api_key: apiKey,
-          model: opts.model ?? E2E_MODEL,
-        },
-        admin: {
-          username: opts.username ?? DEFAULT_USERNAME,
-          password,
-        },
+  const seedFallback =
+    !(providerID === E2E_FALLBACK.provider && model === E2E_FALLBACK.model);
+  let fallbackKey: string | undefined;
+  if (seedFallback) {
+    fallbackKey = lookupModelKey(E2E_FALLBACK.provider);
+    if (!fallbackKey) {
+      const [ciName, localName] = keyEnvNamesFor(E2E_FALLBACK.provider);
+      throw new Error(
+        `onboard-via-api: no API key for the fallback provider "${E2E_FALLBACK.provider}". ` +
+          `Set ${ciName} (CI) or ${localName} (local). Every agent gets the fallback model, ` +
+          'so the suite does not turn red when the primary is unavailable.'
+      );
+    }
+  }
+
+  {
+    const res = await send(opts.baseURL, 'POST', '/api/v1/onboarding/complete', {
+      provider: {
+        auth_method: 'api_key',
+        id: providerID,
+        api_key: apiKey,
+        model,
+      },
+      admin: {
+        username: opts.username ?? DEFAULT_USERNAME,
+        password,
       },
     });
 
-    // 200 = fresh onboard.
-    if (res.status() === 200) {
+    // 200 = fresh onboard: seed the fallback row and every agent's fallback.
+    if (res.status === 200) {
+      if (seedFallback && fallbackKey) {
+        const body = (parseJSON(res.text) ?? {}) as { token?: string };
+        await seedAgentFallback(opts.baseURL, body.token, fallbackKey);
+      }
       return;
     }
 
     // 409 = already complete on this $OMNIPUS_HOME (e.g. second test shard
     // hitting the same instance). Accept ONLY when the body confirms the known
     // sentinel — any other 409 is an unexpected error and must be surfaced.
-    // Parse the body to distinguish expected "already complete" from
-    // an unexpected 409 (e.g., partial state, schema mismatch).
-    if (res.status() === 409) {
-      let body: string;
-      try {
-        body = await res.text();
-      } catch {
-        throw new Error('onboard-via-api: 409 response body could not be read');
-      }
+    if (res.status === 409) {
+      const body = res.text;
       // Accept the 409 only when the body contains the expected sentinel.
       // The backend returns {"error":"onboarding_already_complete",...} or similar text.
       if (
@@ -130,16 +173,15 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
     }
 
     // 400 with the key-rejected outcome is a distinct, actionable failure from
-    // any other 400 (malformed body, bad username, etc.): the key that
-    // OPENROUTER_API_KEY_CI/OPENROUTER_API_KEY points at is wrong or revoked.
-    // Surface that plainly instead of letting the raw provider-rejection
-    // message (from providers.BuildMessage) read like a suite bug.
-    if (res.status() === 400) {
-      const body = await res.text();
+    // any other 400 (malformed body, bad username, etc.): the configured key
+    // is wrong or revoked. Surface that plainly instead of letting the raw
+    // provider-rejection message read like a suite bug.
+    if (res.status === 400) {
+      const body = res.text;
       if (body.toLowerCase().includes('rejected')) {
         throw new Error(
-          `onboard-via-api: the configured OpenRouter key was rejected by the provider — ` +
-            `check OPENROUTER_API_KEY_CI/OPENROUTER_API_KEY is a valid, active key. ` +
+          `onboard-via-api: the configured key for "${providerID}" was rejected by the provider — ` +
+            `check ${keyEnvNamesFor(providerID).join('/')} is a valid, active key. ` +
             `Server said: ${body}`,
         );
       }
@@ -148,11 +190,58 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
       );
     }
 
-    const body = await res.text();
     throw new Error(
-      `onboard-via-api: POST /api/v1/onboarding/complete returned ${res.status()}: ${body}`,
+      `onboard-via-api: POST /api/v1/onboarding/complete returned ${res.status}: ${res.text}`,
     );
-  } finally {
-    await ctx.dispose();
+  }
+}
+
+/**
+ * Add the fallback provider row, then give every agent the fallback in its
+ * fallback_models. token is the onboarding response's bearer token (bearer
+ * callers are exempt from the CSRF double-submit); without one the calls rely
+ * on dev-mode bypass, as CI's seeded config sets.
+ */
+async function seedAgentFallback(
+  baseURL: string,
+  token: string | undefined,
+  fallbackKey: string,
+): Promise<void> {
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const providerPath = `/api/v1/providers/${encodeURIComponent(E2E_FALLBACK.provider)}`;
+  const put = await send(
+    baseURL,
+    'PUT',
+    providerPath,
+    { auth_method: 'api_key', api_key: fallbackKey, model: E2E_FALLBACK.model },
+    headers,
+  );
+  if (!put.ok) {
+    throw new Error(
+      `onboard-via-api: PUT ${providerPath} (fallback provider) returned ${put.status}: ${put.text}`,
+    );
+  }
+
+  const list = await send(baseURL, 'GET', '/api/v1/agents', undefined, headers);
+  if (!list.ok) {
+    throw new Error(`onboard-via-api: GET /api/v1/agents returned ${list.status}: ${list.text}`);
+  }
+  const agents = parseJSON(list.text);
+  if (!Array.isArray(agents) || agents.length === 0) {
+    throw new Error('onboard-via-api: GET /api/v1/agents returned no agents to give the fallback');
+  }
+  const fallbackBody = {
+    fallback_models: [{ provider: E2E_FALLBACK.provider, model: E2E_FALLBACK.model }],
+  };
+  for (const agent of agents) {
+    const id = (agent as { id?: unknown }).id;
+    if (typeof id !== 'string' || id === '') {
+      throw new Error('onboard-via-api: GET /api/v1/agents returned an agent with no id');
+    }
+    const path = `/api/v1/agents/${encodeURIComponent(id)}`;
+    const res = await send(baseURL, 'PUT', path, fallbackBody, headers);
+    if (!res.ok) {
+      throw new Error(`onboard-via-api: PUT ${path} (fallback_models) returned ${res.status}: ${res.text}`);
+    }
   }
 }
