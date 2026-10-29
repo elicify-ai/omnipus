@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -225,6 +226,13 @@ func TestMainOwnerActivity_SameOwnerRetryDoesNotWrite(t *testing.T) {
 }
 
 func TestMainOwnerActivity_TwoStoreRaceHasOnePersistedWinner(t *testing.T) {
+	// The cross-store guarantee rests on fileutil.WithFlock, which is a
+	// documented no-op on Windows (see AdoptMainSessionOwner): there only the
+	// single-store shard lock holds, so two stores over one directory can both
+	// win. Every assertion below stays active on Linux and macOS.
+	if runtime.GOOS == "windows" {
+		t.Skip("cross-store single-winner guarantee needs fileutil.WithFlock, which is a no-op on Windows")
+	}
 	// R10 optional cross-instance case is cheap: the existing real-store helper
 	// opens another UnifiedStore over the very same base directory. Both caches
 	// see the unowned identity BEFORE either different-owner caller may start.

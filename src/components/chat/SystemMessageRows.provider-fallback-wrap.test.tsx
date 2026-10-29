@@ -34,6 +34,10 @@ function note(pickNewModelHint = false): ChatMessage {
 function expectFullyReadable(container: HTMLElement, text: string) {
   const textElement = screen.getByText(text)
   expect(textElement.textContent, 'the whole note is rendered, not a shortened copy').toBe(text)
+  // Positive contract: the note line carries the wrapping utility, so removing
+  // it from ProviderFallbackNoteLine turns this test red (absence of clipping
+  // classes alone would stay green).
+  expect(textElement.className, 'the note line must opt in to wrapping long unbroken text').toMatch(/(^|\s)wrap-break-word(\s|$)/)
   const root = screen.getByTestId('provider-fallback-note')
   for (let el: HTMLElement | null = textElement; el && container.contains(el); el = el.parentElement) {
     expect(el.className, `no clipping utility on <${el.tagName.toLowerCase()}> of the note`).not.toMatch(CLIPPING)
