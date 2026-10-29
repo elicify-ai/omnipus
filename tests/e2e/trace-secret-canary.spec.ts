@@ -89,7 +89,7 @@ function startFakeGateway(): Promise<{ url: string; bodies: string[]; close: () 
       bodies.push(Buffer.concat(chunks).toString('utf8'))
       res.setHeader('content-type', 'application/json')
       if (req.method === 'GET' && req.url === '/api/v1/agents') {
-        res.end(JSON.stringify([{ id: 'mia' }]))
+        res.end(JSON.stringify([{ id: 'mia', revision: 'rev-mia' }]))
         return
       }
       res.end(JSON.stringify({ token: 'fake-onboarding-token' }))
