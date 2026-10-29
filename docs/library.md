@@ -11,7 +11,7 @@ Ordinary files belong to the workspace. Mounted folders are your real files, sho
 Files arrive three ways:
 
 - You upload them with the **Upload files** action.
-- You attach them in chat: each attachment also becomes a real file, filed in a hidden `.library` folder and kept for reuse.
+- You attach them in chat, or in a group chat: each attachment also becomes a real file, filed in a hidden `.library` folder and kept for reuse. Files agents return in group chats are filed there too. Deleting a group chat never deletes its files.
 - Agents create them as they work; everything an agent writes shows up here.
 
 ## When you would use it
@@ -97,6 +97,7 @@ Opening an attachment from [Mail](mail.md#attachments) previews it here **tempor
 - **A mount's location is recorded once.** If you move or rename the folder on your Mac, its contents disappear from the workspace. Unmount and add the folder again at its new location.
 - **Broad grants are wide.** Mounting your home folder gives every agent on the workspace write access to everything under it. The warning and the second click exist to catch exactly this mistake.
 - **Ordinary deletes are permanent.** Removing a file from the workspace has no trash to recover from. A note inside a knowledge base moves to that knowledge base's trash instead.
+- **Deleting a chat file deletes it everywhere.** A file you or an agent attached in a chat or a group chat has two copies: the Library file and the copy chats show. Deleting the file in the Library removes both, after a confirmation that says the copy used in chats is deleted too. Every chat that showed the file, normal or group, then shows it as unavailable. This cannot be undone. Deleting a folder does this for every such file inside it. If only part of the deletion succeeds, the file stays listed with an error that names it, and deleting it again finishes the job. Renaming the file, or moving it inside the same workspace, keeps the link between the two copies; a copy of the file is an ordinary new file. A file moved to another workspace becomes an ordinary file there, and its chat copy stays behind in the original workspace. Files attached before this version are linked only when Omnipus can match them unambiguously (same content and name); otherwise deleting them in the Library removes only the Library file.
 - **HTML previews run scripts in a sandbox** that cannot read your Omnipus session or call the API as you.
 
 ## Related pages

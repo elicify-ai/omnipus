@@ -1604,6 +1604,23 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, bool, error
 	return nil, false, nil
 }
 
+// repairLibraryAssociationsOnce runs the #1449 association repair (A-14) for
+// every workspace whose library has not had it yet. Best-effort.
+func (stg *setupAndStartServicesState) repairLibraryAssociationsOnce() {
+	a := stg.agentLoop
+	if a == nil {
+		return
+	}
+	wsFiles, err := listWorkspaceFiles(stg.homePath)
+	if err != nil {
+		slog.Warn("library association repair: list workspaces failed", "error", err)
+		return
+	}
+	for _, ws := range wsFiles {
+		repairLibraryAssociations(stg.homePath, ws.ID, a.GetWorkspaceLibrary(ws.ID))
+	}
+}
+
 // startBackgroundServices starts the shutdown-aware orphan and browser cleanup loops and returns the running services.
 func (stg *setupAndStartServicesState) startBackgroundServices() (*services, error) {
 	// Start the orphan GC scheduler: runs Library.OrphanGC across every
@@ -1615,6 +1632,9 @@ func (stg *setupAndStartServicesState) startBackgroundServices() (*services, err
 		const orphanInterval = 1 * time.Hour
 		ticker := time.NewTicker(orphanInterval)
 		defer ticker.Stop()
+		// #1449 A-14: the one-time association repair for uploads made
+		// before the durable library_path existed, once per workspace.
+		stg.repairLibraryAssociationsOnce()
 		// ctx.Done() must be observed here (not a bare `for range ticker.C`,
 		// which never exits) — this goroutine outlives the process
 		// otherwise. See runCatalogRefreshLoop's doc comment for the shared
@@ -1639,7 +1659,13 @@ func (stg *setupAndStartServicesState) startBackgroundServices() (*services, err
 				continue
 			}
 			for _, ws := range wsFiles {
-				lib, libErr := library.New(stg.homePath, ws.ID)
+				// The process's own library instance when there is one, so
+				// the collector and the chat paths share one manifest view.
+				lib := a.GetWorkspaceLibrary(ws.ID)
+				var libErr error
+				if lib == nil {
+					lib, libErr = library.New(stg.homePath, ws.ID)
+				}
 				if libErr != nil {
 					slog.Warn("orphan-gc: open library", "workspace_id", ws.ID, "error", libErr)
 					continue

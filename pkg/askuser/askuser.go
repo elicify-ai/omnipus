@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // Validation caps (spec §2, M-8; header cap C-enforced per r2).
@@ -123,6 +125,11 @@ type PendingSet struct {
 	// Answers is populated when Status == answered; the collapsed record
 	// (§0.6) renders from THIS record, not the tool result pair.
 	Answers []Answer `json:"answers,omitempty"`
+	// RoomRef and OriginLabel are the question's provenance, captured when
+	// it was created and immutable after (#1449 C-I6, FR-050): a set with a
+	// RoomRef belongs to that group's request and shows in the group too.
+	RoomRef     *generated.RoomRef `json:"room_ref,omitempty"`
+	OriginLabel string             `json:"origin_label,omitempty"`
 }
 
 // Clone returns a deep copy of s.
@@ -145,6 +152,10 @@ func (s *PendingSet) Clone() *PendingSet {
 		}
 	}
 	c.Answers = cloneAnswers(s.Answers)
+	if s.RoomRef != nil {
+		ref := *s.RoomRef
+		c.RoomRef = &ref
+	}
 	return &c
 }
 

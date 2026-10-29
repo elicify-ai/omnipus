@@ -140,6 +140,9 @@ type RoomAnswer struct {
 	// admitted to (where the answer is mirrored).
 	ResponderSessionID string
 	Content            string
+	// Files are the answer's files (#1449 FR-020), resolved by the
+	// answer_request tool from the agent's own reach.
+	Files []tools.ReplyMedia
 }
 
 // RoomReceiverWriter is the named seam on the room receiver-commit path
@@ -206,6 +209,10 @@ type RoomRequestAdmission struct {
 	// server-composed request header.
 	DisplayText string
 	ModelText   string
+	// Media are the request's own files (workspace media references) and
+	// Attachments the same files as display parts (#1449 FR-019, FR-023).
+	Media       []string
+	Attachments []generated.MediaPart
 	// OnAwaitingApproval runs just before the member's approval card is
 	// raised (the room shows awaiting_approval).
 	OnAwaitingApproval func()
@@ -412,6 +419,7 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 		Source:            addressing.Source{Kind: addressing.SourceRoom, RoomID: a.RoomID, RoomName: a.RoomName},
 		AdmittedAt:        now,
 		Text:              composeRoomRequestText(a.DeliveryID, a.SenderLabel, a.RoomName, a.ModelText),
+		Media:             append([]string(nil), a.Media...),
 		Held:              held,
 	}
 	entry := session.TranscriptEntry{
@@ -422,6 +430,7 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 		Timestamp:   now,
 		Participant: participantFromSender(a.Sender, al.agentDisplayName),
 		RoomRef:     &generated.RoomRef{RoomId: a.RoomID, RoomName: a.RoomName, RequestId: a.DeliveryID, Role: "request"},
+		Attachments: roomTranscriptAttachments(a.Attachments),
 	}
 	// The receiver append comes FIRST (WU-15 ruling 06:00Z): a failed append
 	// leaves no capture at all - the member shows "unavailable", no turn runs,
@@ -468,7 +477,7 @@ func (al *AgentLoop) publishRoomRequestWake(ctx context.Context, c addressing.Ca
 		extra[roomRequestMetadataKey] = "1"
 	}
 	al.roomRequests.Store(c.RequestID, c.Source.RoomID)
-	return al.publishRequestWake(ctx, c.Receiver, c.Sender, c.RequestID, c.ReceiverSessionID, c.Text, extra)
+	return al.publishCaptureWake(ctx, c, extra)
 }
 
 // deliverHeldRoomRequest hands a room request that waited (its member was
@@ -508,6 +517,7 @@ func roomWakeMessage(c addressing.Capture) bus.InboundMessage {
 		ChatID:            "request:" + c.RequestID,
 		Sender:            bus.SenderInfo{CanonicalID: "request:" + c.RequestID},
 		Content:           c.Text,
+		Media:             append([]string(nil), c.Media...),
 		SessionID:         c.ReceiverSessionID,
 		TranscriptEntryID: c.RequestID,
 		Metadata: map[string]string{
@@ -527,6 +537,30 @@ func composeRoomRequestText(requestID, senderLabel, roomName, body string) strin
 	return fmt.Sprintf("Request %s from %s in the group chat %q. To answer it, call the answer_request tool with "+
 		"request_id=%q and your answer as text; your answer is posted in the group. A plain reply in this "+
 		"conversation does not reach the group.\n\n%s", requestID, senderLabel, roomName, requestID, body)
+}
+
+// roomTranscriptAttachments shows a group entry's files in the member's main
+// chat the way a normal chat upload is recorded (#1449 FR-023): the Library
+// path the upload staged when it is known, else the media reference.
+func roomTranscriptAttachments(parts []generated.MediaPart) []session.Attachment {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]session.Attachment, 0, len(parts))
+	for _, p := range parts {
+		path := p.Url
+		if rest, ok := strings.CutPrefix(p.Url, "/api/v1/media/workspace/"); ok {
+			ref := "media://workspace/" + rest
+			path = ref
+			if workPath, found := LookupUploadWorkPath(ref); found {
+				path = workPath
+			}
+		}
+		out = append(out, session.Attachment{
+			Type: DetectAttachmentType(p.ContentType, p.Filename), Path: path, MIMEType: p.ContentType,
+		})
+	}
+	return out
 }
 
 func roomStorageRefusal(what string, cause error) error {
@@ -553,7 +587,7 @@ func (al *AgentLoop) replyIntoRoom(ctx context.Context, c addressing.Capture, re
 	}
 	return rt.DeliverRoomAnswer(ctx, RoomAnswer{
 		RoomID: c.Source.RoomID, RequestID: c.RequestID, Responder: responder,
-		ResponderSessionID: c.ReceiverSessionID, Content: req.Content,
+		ResponderSessionID: c.ReceiverSessionID, Content: req.Content, Files: req.Media,
 	})
 }
 
@@ -562,13 +596,19 @@ func (al *AgentLoop) replyIntoRoom(ctx context.Context, c addressing.Capture, re
 // it live. mirrorID is derived by the room from the answer, so a repeated
 // call after a crash writes nothing twice.
 func (al *AgentLoop) MirrorRoomAnswer(mainSessionID, mirrorID string, author addressing.Pair, ref generated.RoomRef, content string) error {
+	return al.MirrorRoomAnswerWithFiles(mainSessionID, mirrorID, author, ref, content, nil)
+}
+
+// MirrorRoomAnswerWithFiles is MirrorRoomAnswer for an answer that carries
+// files: the main-chat copy shows the same files (#1449 FR-023).
+func (al *AgentLoop) MirrorRoomAnswerWithFiles(mainSessionID, mirrorID string, author addressing.Pair, ref generated.RoomRef, content string, files []generated.MediaPart) error {
 	writer, err := al.roomReceiverWriter()
 	if err != nil {
 		return err
 	}
 	entry := session.TranscriptEntry{
 		ID: mirrorID, Role: "assistant", AgentID: author.AgentID, Content: content,
-		Timestamp: time.Now().UTC(), RoomRef: &ref,
+		Timestamp: time.Now().UTC(), RoomRef: &ref, Attachments: roomTranscriptAttachments(files),
 	}
 	wrote, err := writer.AppendTranscriptOnce(mainSessionID, entry)
 	if err != nil {

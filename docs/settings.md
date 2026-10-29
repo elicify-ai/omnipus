@@ -290,7 +290,7 @@ Two limits on what the key does:
 
 When one agent sends a message into another's turn — `delegate` with `action: steer`, `respond`, or `redirect` — the message is bounded by these keys in the `session_messaging` block of `config.json`:
 
-- `steer_body` — the largest message body, in bytes. Default **65,536**.
+- `steer_body` — the largest message body, in bytes. Default **65,536**. Group chats use it only up to 65,536 bytes: a smaller value lowers the group message limit (for people and agents alike), a larger one is clamped to 65,536 for groups. Messages between sessions use the value as it is.
 - `steer_rate` — how many steer, respond or redirect messages one agent may send to the same target per minute. Default **60**.
 - `steer_aggregate_body` — the most message bytes that may be waiting for one conversation at once, added up across its waiting ordinary messages. Default **1,048,576** (1 MiB). A message that would take the waiting total past this is refused with a named error and is never trimmed; the total comes back down as the agent reads what is waiting. At most 200 messages may wait for one conversation, whichever limit is reached first. Wake-ups and other control messages do not count.
 
