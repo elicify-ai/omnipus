@@ -373,15 +373,28 @@ func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err 
 	if err := cs.loadStore(); err != nil {
 		return false, fmt.Errorf("failed to load store: %w", err)
 	}
+	var interrupted []int
 	if physicalBoot {
 		// The prior process has no live lane. Preserve all schedule/history data;
 		// normal Start/reload deliberately retain the same-process overlap flag.
 		for i := range cs.store.Jobs {
+			if interruptedOneTimeFire(&cs.store.Jobs[i]) {
+				interrupted = append(interrupted, i)
+			}
 			cs.store.Jobs[i].State.Running = false
 		}
 	}
 
 	cs.recomputeNextRuns()
+	// Issue #1484: a one-time job whose run the dead process had started but
+	// never finished is still owed that run; it fires on the first tick.
+	for _, i := range interrupted {
+		job := &cs.store.Jobs[i]
+		at := *job.Schedule.AtMS
+		job.State.NextRunAtMS = &at
+		slog.Warn("cron: one-time job was running when the previous process stopped; running it again",
+			"job_id", job.ID, "job", job.Name)
+	}
 	if err := cs.saveStoreUnsafe(); err != nil {
 		return false, fmt.Errorf("failed to save store: %w", err)
 	}
@@ -998,6 +1011,34 @@ func (cs *CronService) recomputeNextRuns() {
 			job.State.NextRunAtMS = cs.computeNextRun(&job.Schedule, now)
 		}
 	}
+}
+
+// interruptedOneTimeFire reports whether job is a one-time ("at") job whose
+// run had STARTED in a process that is now gone, without its outcome saved.
+// Only meaningful at a physical boot, where every persisted Running flag
+// belongs to a dead process.
+//
+// Issue #1484, the window: RunDueJobs persists the cleared NextRunAtMS before
+// the run, executeJobByID persists Running=true when the run starts, and only
+// the outcome save after the run disables or deletes a one-time job. A
+// process that died in between left the job on disk with no next run; the
+// physical-boot restore cleared Running and the recompute gave a past
+// one-time job no next run, so the job sat in the store and never ran again,
+// with nothing recording that its run never finished.
+//
+// A one-time fire the process missed while it was not running is a
+// different case and stays skipped, as the calendar documentation states
+// ("a missed run is skipped, never replayed"): it never had Running set.
+// Running the interrupted job again is at-least-once — a run that finished
+// but died before its outcome was saved runs a second time.
+func interruptedOneTimeFire(job *CronJob) bool {
+	if !job.State.Running || !job.Enabled || job.Schedule.Kind != "at" || job.Schedule.AtMS == nil {
+		return false
+	}
+	if last := job.State.LastRunAtMS; last != nil && *last >= *job.Schedule.AtMS {
+		return false
+	}
+	return true
 }
 
 func (cs *CronService) getNextWakeMS() *int64 {
