@@ -357,6 +357,12 @@ export TMPDIR=/path/to/workspace/tmp
 mkdir -p "$TMPDIR"
 ```
 
+## A shell command is "blocked by safety guard (path outside working dir)"
+
+The shell guard reads the command's text and refuses anything that looks like a path outside the agent's working folder, unless it can tell the reference is harmless. Since 2026-10-29 a stand-alone quoted value whose top folder cannot exist, such as `'/api/v1/users'` in a Python one-liner, is accepted. Text the guard still cannot judge stays refused: `../` anywhere in the command, quoted pieces that are joined or formatted into a path, globs, and every such value on Windows or when Omnipus runs as root.
+
+**Fix:** have the agent write the script to a file in its workspace with `write_file`, then run the file (`python3 script.py`). The guard does not read the file's contents. For a real folder outside the workspace, request a mount. Details: [tools](tools.md#limits-and-things-to-watch).
+
 ## Limits and things to watch
 
 - Sandbox strength depends on the operating system: Linux confines the gateway and everything it starts, macOS confines only the processes Omnipus launches, and Windows uses application-level checks alone. Details: [operations/sandbox-limitations.md](operations/sandbox-limitations.md).

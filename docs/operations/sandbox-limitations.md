@@ -24,6 +24,10 @@ Windows has no kernel sandbox: `selectBackendPlatform` (`pkg/sandbox/sandbox_oth
 
 `/health` and `/api/v1/security/sandbox-status` both report `backend: "fallback"` and `kernel_level: false` in this configuration, and the field `disabled_by: "kernel_unsupported"` may appear when the operator asked for `enforce` but the kernel cannot deliver it.
 
+### Shell path guard: quoted-literal rule is off on Windows and for root
+
+The bash tool's command-text path guard (`pkg/tools/shell_path_guard.go`) accepts a stand-alone quoted absolute literal (for example `'/api/v1/users'`) only when the account running the gateway cannot write the filesystem root and the literal's top folder does not exist (`pkg/tools/shell_standalone_literal.go`). On Windows the root always counts as writable, and a gateway running as root can write it, so on both the rule is off and every such literal stays refused. `../` anywhere in a command is refused on every platform; the guard does not resolve it. The guard reads command text only — a path a program assembles at runtime never reaches it.
+
 ## Landlock rights are gated by kernel version
 
 Omnipus asks the kernel for a set of Landlock rights when it applies the sandbox. Each right arrived with a specific kernel version, so an older kernel may not know all of them. The ABI (application binary interface — here, the version of Landlock's interface your kernel exposes) is reported by the kernel; Omnipus asks only for the rights that version supports.
