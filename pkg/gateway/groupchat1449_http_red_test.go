@@ -77,6 +77,18 @@ func TestGroupChat1449_HTTPMessageRules(t *testing.T) {
 				t.Fatalf("S-26: bad media stored an entry (validation %t, %d -> %d)", validation, before, got)
 			}
 		})
+		t.Run(fmt.Sprintf("validation_%t a 65537-character message is 422 not 400", validation), func(t *testing.T) {
+			// A-12. Every oversized message is the server's 422, with request
+			// validation on and off. A 65,537-character ASCII message is
+			// 65,537 bytes, one past the clamp.
+			h.cfg.Gateway.ValidateInbound = validation
+			before := len(h.snapshot(room.Id).Entries)
+			status, body := h.rawHTTP(http.MethodPost, "/api/v1/rooms/"+room.Id+"/messages", []byte(groupChatMessage("chars-"+fmt.Sprint(validation), strings.Repeat("a", 65537), nil)))
+			groupChatRequireError(t, status, body, http.StatusUnprocessableEntity, "65536")
+			if got := len(h.snapshot(room.Id).Entries); got != before {
+				t.Fatalf("A-12: oversized message stored an entry (validation %t, %d -> %d)", validation, before, got)
+			}
+		})
 		t.Run(fmt.Sprintf("validation_%t seventeen media refs are 400 and store nothing", validation), func(t *testing.T) {
 			h.cfg.Gateway.ValidateInbound = validation
 			refs := make([]string, 17)
