@@ -515,3 +515,45 @@ func TestShowToUser_Audit(t *testing.T) {
 		t.Fatalf("rate-limit chat audited %d calls, want all 6 (FR-020)", len(rateRows))
 	}
 }
+
+// SEC-3: a hard link of an existing secret, placed under the Library under
+// another name, is the same file. It must be the missing-file sentence, an
+// error, no open target and a denial audit. This is not the dangling-symlink
+// case (S-02), which stays uncovered.
+func TestShowToUser_HardLinkAliasMatchesMissing(t *testing.T) {
+	home := t.TempDir()
+	realHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OMNIPUS_HOME", realHome)
+	secret := filepath.Join(realHome, "credentials.json")
+	if err := os.WriteFile(secret, []byte("SECRET-BYTES"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := chatLinksShowToUser(t, "BS-6.9 / SEC-3")
+	ctx, work := chatLinksOwnFile(t)
+	alias := filepath.Join(work, "notes", "alias.md")
+	if err := os.Link(secret, alias); err != nil {
+		t.Fatalf("hard link of credentials.json under the Library: %v", err)
+	}
+	missing := tool.Execute(ctx, map[string]any{"ref": "gone-chat-links.md"})
+	res, rows := chatLinksAuditOnce(t, tool, chatLinksAuditRoot(ctx, "audit-alias"), "notes/alias.md")
+	chatLinksExactRefusal(t, res, chatLinksNotFound, "alias.md", "hard-link alias")
+	if res != nil && (strings.Contains(res.ForLLM, "SECRET-BYTES") || strings.Contains(res.ForLLM, "credentials.json")) {
+		t.Fatalf("alias refusal leaks the secret or its real name: %q", res.ForLLM)
+	}
+	if missing == nil || res == nil || missing.ForLLM != res.ForLLM {
+		got, want := "", ""
+		if res != nil {
+			got = res.ForLLM
+		}
+		if missing != nil {
+			want = missing.ForLLM
+		}
+		t.Errorf("alias %q and missing %q must be byte-identical (BS-6.9 / SEC-3)", got, want)
+	}
+	if !chatLinksAuditMatch(rows, chatLinksAuditDenied) {
+		t.Fatalf("alias audit = %+v, want a denial with reason %q (BS-6.15)", rows, chatLinksAuditDenied)
+	}
+}
