@@ -43,7 +43,7 @@ function startGateway(): Promise<{ url: string; hits: Hit[]; close: () => Promis
         return
       }
       if (req.method === 'GET' && req.url === '/api/v1/agents') {
-        res.end(JSON.stringify([{ id: 'mia' }, { id: 'jim' }]))
+        res.end(JSON.stringify([{ id: 'mia', revision: 'rev-mia' }, { id: 'jim', revision: 'rev-jim' }]))
         return
       }
       res.end(JSON.stringify({ token: 'eval-token' }))
@@ -92,11 +92,10 @@ describe('onboardViaAPI seeds the fallback (design.md §7 R9)', () => {
         api_key: 'test-key-bbbb',
         model: 'deepseek/deepseek-v4.1-flash',
       })
-      const fallbackBody = {
-        fallback_models: [{ provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' }],
-      }
-      expect(gw.hits[4].body).toEqual(fallbackBody)
-      expect(gw.hits[5].body).toEqual(fallbackBody)
+      const fallback_models = [{ provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' }]
+      // Each agent update carries the revision that agent's list entry reported.
+      expect(gw.hits[4].body).toEqual({ revision: 'rev-mia', fallback_models })
+      expect(gw.hits[5].body).toEqual({ revision: 'rev-jim', fallback_models })
     } finally {
       await gw.close()
     }
