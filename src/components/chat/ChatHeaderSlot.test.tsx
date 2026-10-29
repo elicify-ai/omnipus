@@ -231,14 +231,38 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
     // The warning is its OWN element, outside the truncating identity — a
     // clipped identity can never take the warning with it.
     expect(identity?.contains(warning as Node)).toBe(false)
-    // Its VISIBLE form is a compact glyph that fits the capped slot; the
-    // explanation lives in its title and in its screen-reader text.
-    expect(warning?.querySelector('svg')).not.toBeNull()
-    expect(warning?.getAttribute('title')).toBe('agent names unavailable')
+    // Its VISIBLE form is a compact glyph that fits the capped slot; its
+    // WORDS are the region's own accessible name, and the glyph is a separate,
+    // named and focusable trigger beside them.
     expect(warning?.textContent).toContain('agent names unavailable')
+    const trigger = screen.getByTestId('feed-kind-warning')
+    expect(trigger.querySelector('svg')).not.toBeNull()
+    expect(trigger).toHaveAttribute('aria-label', 'Agent names unavailable')
+    expect(trigger.tabIndex).toBe(0)
+    // The trigger is a SIBLING of the labelled words, not a child of them: a
+    // named child would repeat itself in the region's accessible name.
+    expect(warning?.contains(trigger)).toBe(false)
     // The full text stays reachable: the identity's title carries the whole
     // line, warning included.
     expect(identity?.getAttribute('title')).toBe('mia - Main Session — agent names unavailable')
+  })
+
+  it('the warning and the "Add participant" control are separate, individually reachable controls', async () => {
+    // The roster failed (the warning) while the workspace entry settled with
+    // no failure (the control): both sit on the header line at once, and each
+    // must be reachable on its own.
+    setMainChat()
+    vi.mocked(fetchAgents).mockRejectedValue(new Error('roster down'))
+    renderSlot()
+    const trigger = await screen.findByTestId('feed-kind-warning')
+    const control = screen.getByRole('button', { name: 'Add participant' })
+    expect(trigger).toBeVisible()
+    expect(control).toBeVisible()
+    // Two tab stops, in reading order: the warning first, then the control —
+    // the keyboard never lands on one while the other is the target.
+    expect(trigger.tabIndex).toBe(0)
+    expect(control.tabIndex).toBe(0)
+    expect(trigger.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('a ROOM page shows no chat chrome: no label, no Add participant', async () => {

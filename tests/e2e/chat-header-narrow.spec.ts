@@ -8,6 +8,12 @@
 // measured here in Chromium, against the real SPA, the real components and
 // the real CSS. Only the API/WS edges are stubbed (the repo's own layout
 // fixture), so the header under test is the production one.
+//
+// The readiness waits are generous (90s): the check is about GEOMETRY, and on
+// a busy machine the SPA can take a minute to boot and render its shell — a
+// short budget would fail the run on the machine's load, not on the header's
+// layout. No assertion is relaxed: the same elements must appear, with the
+// same measurements.
 import { expect, test } from '@playwright/test';
 import { Session } from '../../src/lib/api/generated/schemas';
 import { backdropMain, backdropWorkspace, installSidebarBackdropEdges } from './fixtures/sidebar-session-backdrop';
@@ -40,15 +46,15 @@ test('the workspace strip keeps the header line at narrow widths; the chat slot 
     await page.goto(`/#/workspaces/${backdropWorkspace.id}/chat`, { waitUntil: 'domcontentloaded' });
 
     const header = page.getByTestId('workspace-top-bar');
-    await expect(header).toBeVisible({ timeout: 30_000 });
+    await expect(header).toBeVisible({ timeout: 90_000 });
 
     // READINESS: the header appears before the roster and the session do.
     // Measuring an empty slot would prove nothing, so wait for the slot's
     // REAL content — the full identity line and the participant control —
     // before every measurement.
     const line = page.locator('[data-testid="feed-kind-label"] span[title]');
-    await expect(line, `the chat identity never appeared at ${width}px`).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole('button', { name: 'Add participant' }), `the participant control never appeared at ${width}px`).toBeVisible({ timeout: 30_000 });
+    await expect(line, `the chat identity never appeared at ${width}px`).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByRole('button', { name: 'Add participant' }), `the participant control never appeared at ${width}px`).toBeVisible({ timeout: 90_000 });
     expect(await line.getAttribute('title'), `the identity is not the full one at ${width}px`).toContain(LONG_AGENT_NAME);
 
     // The workspace navigation is still on the line: the strip may collapse
@@ -93,8 +99,8 @@ test('the failed-roster warning fits the capped slot and never overlaps the part
 
   // The roster failed, so the header shows the honest warning instead of the
   // agent's name. The warning must be on screen before anything is measured.
-  const warning = page.locator('[data-testid="feed-kind-label"] [title="agent names unavailable"]');
-  await expect(warning, 'the failed-roster warning never appeared').toBeVisible({ timeout: 30_000 });
+  const warning = page.getByTestId('feed-kind-warning');
+  await expect(warning, 'the failed-roster warning never appeared').toBeVisible({ timeout: 90_000 });
 
   // The slot is capped, so its CONTENT must fit the cap: a warning that
   // overflowed would push the line sideways.
@@ -108,9 +114,7 @@ test('the failed-roster warning fits the capped slot and never overlaps the part
   expect(warningBox, 'no warning box').not.toBeNull();
   expect(warningBox!.x + warningBox!.width, 'the warning reaches past the header line').toBeLessThanOrEqual(headerBox!.x + headerBox!.width + 1);
 
-  // The explanation stays reachable: the warning's own title, and the
-  // identity's title, which carries the whole line.
-  expect(await warning.getAttribute('title')).toBe('agent names unavailable');
+  // The identity's title carries the whole line, warning included.
   const identity = page.locator('[data-testid="feed-kind-label"] span[title]').first();
   expect(await identity.getAttribute('title')).toContain('agent names unavailable');
 
@@ -119,6 +123,22 @@ test('the failed-roster warning fits the capped slot and never overlaps the part
   // from. That is why the warning and the control can never share the slot —
   // and why the slot's own cap must still hold the warning.
   await expect(page.getByRole('button', { name: 'Add participant' }), 'the control is offered while the entry failed').toHaveCount(0);
+
+  // The explanation is reachable BY KEYBOARD and BY POINTER in a real
+  // browser: the glyph is a named, focusable trigger, hovering or focusing it
+  // opens the explanation, and Escape dismisses it again.
+  expect(await warning.getAttribute('aria-label')).toBe('Agent names unavailable');
+  await warning.hover();
+  const bubble = page.getByRole('tooltip');
+  await expect(bubble, 'the warning never explained itself on hover').toBeVisible();
+  await expect(bubble, 'the explanation does not carry the recovery step').toContainText('Agent names could not be loaded');
+  await expect(bubble, 'the explanation does not carry the recovery step').toContainText('Reload the page');
+  await page.keyboard.press('Escape');
+  await expect(bubble, 'Escape did not dismiss the explanation').toHaveCount(0);
+  await warning.focus();
+  await expect(bubble, 'the warning never explained itself on focus').toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(bubble, 'Escape did not dismiss the explanation').toHaveCount(0);
 
   expect(traffic.unknown, 'a missing API fixture is a backdrop failure').toEqual([]);
   expect(traffic.errors, 'a page crash is a backdrop failure').toEqual([]);
@@ -130,7 +150,7 @@ test('the helper breadcrumb stays on ONE line, caret included', async ({ page })
   await page.goto(`/#/workspaces/${backdropWorkspace.id}/chat?open=${HELPER_ID}`, { waitUntil: 'domcontentloaded' });
 
   const label = page.getByTestId('feed-kind-label');
-  await expect(label).toBeVisible({ timeout: 30_000 });
+  await expect(label).toBeVisible({ timeout: 90_000 });
   await expect(label).toContainText('/');
 
   // The caret and the breadcrumb text share one line. The TEXT's own box is

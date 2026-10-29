@@ -17,8 +17,9 @@
  *     truncating identity, so a clipped identity can never take the warning
  *     with it, and it is a COMPACT glyph rather than the sentence: the
  *     header slot is capped, so the sentence could not fit beside the
- *     identity and the participant control. The glyph's title and its
- *     screen-reader text carry the explanation, and the status region still
+ *     identity and the participant control. The glyph's explanation lives in
+ *     the catalogued Tooltip — a named, focusable trigger that opens on
+ *     focus and on a tap and closes on Escape — and the status region still
  *     names both parts.
  *
  * Words come from feedKindLabel on the workspace descriptor, and only when
@@ -52,6 +53,7 @@ import type { Session } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { feedKindLabel, feedParentLabel } from '@/lib/nav/chatKindLabel'
 import { isMainSession } from '@/lib/nav/sessionCoreSeam'
+import { Tooltip } from '@/components/ui/tooltip'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { ParentCrumbLink } from './ParentCrumbLink'
@@ -149,8 +151,14 @@ export function FeedKindLabel() {
     // The warning's VISIBLE form is a compact glyph, not the sentence: the
     // header slot is capped (a quarter of the header line), so a 27-character
     // sentence cannot fit beside the identity and the participant control —
-    // it overflowed the line at narrow widths. The glyph always fits; its
-    // title and its screen-reader text carry the explanation.
+    // it overflowed the line at narrow widths. The glyph always fits.
+    //
+    // Its EXPLANATION is the catalogued Tooltip's job (design-system rule
+    // 14): the glyph's trigger is named and focusable, so a sighted keyboard
+    // user reaches the same words a screen reader gets — the bubble opens on
+    // focus and on a tap and closes on Escape. The trigger is a SIBLING of
+    // the labelled warning text, never a child of it: a named element inside
+    // the region's name source would repeat itself in the accessible name.
     const identityText = parentCrumb != null ? `${parentCrumb.label} / ${label}` : label
     const warningText = namesUnavailable ? ' — agent names unavailable' : ''
     return (
@@ -170,14 +178,22 @@ export function FeedKindLabel() {
           {parentCrumb == null ? label : null}
         </span>
         {namesUnavailable && (
-          <span
-            id={warningId}
-            title="agent names unavailable"
-            className="flex shrink-0 items-center text-[var(--color-warning)]"
-          >
-            <WarningCircle size={14} aria-hidden="true" />
-            <span className="sr-only">{warningText}</span>
-          </span>
+          <>
+            <span id={warningId} className="sr-only">{warningText}</span>
+            {/* The wrapper keeps the glyph's warning colour and its
+                no-shrink rule: the Tooltip's own span is a plain inline-flex
+                item, and a squeezed header line must never clip the glyph. */}
+            <span className="flex shrink-0 items-center text-[var(--color-warning)]">
+              <Tooltip
+                label="Agent names unavailable"
+                content="Agent names could not be loaded. Reload the page to try again."
+                side="bottom"
+                data-testid="feed-kind-warning"
+              >
+                <WarningCircle size={14} aria-hidden="true" />
+              </Tooltip>
+            </span>
+          </>
         )}
       </div>
     )
