@@ -403,6 +403,15 @@ test.describe('T24 actual journal retention overflow', () => {
       await expectAnchor(page, saved);
       await expect.poll(() => history.traffic.pages.slice(pagesBefore).filter((r) => new URL(r.url).searchParams.has('window_start')).length).toBeGreaterThan(0);
       expect(history.traffic.pages.slice(pagesBefore).every((r) => new URL(r.url).searchParams.has('window_start')), 'refresh addresses only the old held interval, not the omitted middle').toBe(true);
+      // B26: the held-interval refresh settles with the reader still at its
+      // anchor. Asserted BEFORE the cleanup so the Stop/turn events below do
+      // not land in the middle of the refresh (CI run 40913643836 stopped
+      // while the refresh was still committing; see the T24 B26 report).
+      await expect(page.getByText('Refreshing loaded messages…', { exact: true }), 'the held-interval refresh completes').toHaveCount(0);
+      await expect(historyScroller(page), 'refresh busy state clears').not.toHaveAttribute('aria-busy', 'true');
+      // Fail within the expect budget, not the whole test budget, if the row is gone.
+      await expect(historyRow(page, saved.id), 'the anchored row is still rendered after the refresh').toBeVisible();
+      await expectAnchor(page, saved);
       // ACCOMMODATION — revert when #1503 is fixed (founder decision 2026-10-29,
       // option C). Today the fifth filler does not fit the 1-MiB waiting-message
       // cap, is queued as the NEXT turn instead of being refused, and Stop does
@@ -417,6 +426,7 @@ test.describe('T24 actual journal retention overflow', () => {
       await stopHeldControlTurn(history, [controlTurn]);
       await assertSessionStopped(history);
       expect(controlProvider(history).failures()).toEqual([]);
+      await expect(historyRow(page, saved.id), 'the anchored row is still rendered after the cleanup Stops').toBeVisible();
       await expectAnchor(page, saved);
       expect(history.traffic.sends).toEqual([]);
       await history.record('same-boot-retention-exceeded-reader');
