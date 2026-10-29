@@ -60,6 +60,9 @@ export function validateHistoryMetadata(page: Omit<SessionHistoryResponse, 'entr
   if (!positions.length && info.row_count !== 0) fail('row_count')
   if (info.byte_budget_exceeded !== (info.projected_bytes > info.soft_byte_budget)) fail('byte_budget_exceeded')
   if (info.byte_budget_exceeded !== (info.budget_override !== undefined)) fail('budget_override')
+  // #1452 D2 A2.3: the hard ceiling may stop below the floor, but a page above
+  // it must consist of exactly one whole group.
+  if (info.projected_bytes > info.byte_ceiling && info.source_group_count !== 1) fail('byte_ceiling')
   if (info.stop_reason === 'byte_budget' && info.row_count < info.min_rows) fail('stop_reason')
   if (info.stop_reason === 'row_target' && info.row_count < info.limit) fail('stop_reason')
   if (info.stop_reason === 'source_cap' && info.source_group_count !== 100) fail('stop_reason')

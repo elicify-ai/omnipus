@@ -1,4 +1,5 @@
 import { fetchSessionMessages } from '@/lib/api/sessions'
+import { advanceHistoryEntryGenerations, releaseHistoryEntryReads } from '@/lib/historyEntryReads'
 import type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing } from './types'
 import type { SessionHistoryPage, SessionHistoryQuery } from '@/lib/api/history-types'
 import type { ChatStore, ChatMessage } from './types'
@@ -58,6 +59,8 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
           if (!valid()) return
           validateReadDomain(page, query, kind)
           withBucket(sid, b => applyHistoryPageToBucket(b, page, kind, owner.baseline, owner.readTick))
+          // #1452 D2 A2.4: an authoritative commit voids older full-content reads.
+          advanceHistoryEntryGenerations(sid, page.entries.map(entry => entry.historyPosition))
         }
         if (!valid()) return
         failed.get(sid)?.delete(kind)
@@ -114,6 +117,10 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
     if (!valid()) return
     const ordered = old.filter(position => seen.has(position))
     if (ordered.join() !== staged.map(entry => entry.historyPosition).join()) throw new Error('Contradictory refresh order.')
+    commitRefresh(sid, ordered, staged, contexts, recordedTokens, owner, old.length)
+    advanceHistoryEntryGenerations(sid, ordered)
+  }
+  function commitRefresh(sid: string, ordered: string[], staged: SessionHistoryPage['entries'], contexts: SessionHistoryPage['page_info']['context'][], recordedTokens: number | undefined, owner: ReadOwner, oldLength: number): void {
     withBucket(sid, b => {
       // #1452 D1 S6: the same part-aware binding as a page commit, so a
       // combined live row is neither split nor doubled by the refresh.
@@ -136,7 +143,7 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
       return { ...patch, messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: liveOrder,
         spanBySpanId: { ...patch.spanBySpanId, ...spans.index },
         sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, recordedTokens),
-        historyNotice: ordered.length < old.length ? (ordered.length ? 'Some loaded messages have expired.' : 'These loaded messages have expired.') : undefined,
+        historyNotice: ordered.length < oldLength ? (ordered.length ? 'Some loaded messages have expired.' : 'These loaded messages have expired.') : undefined,
         history: { ...patch.history!, serverState: { status: 'available' }, historyLoaded: true,
           olderBoundary: ordered[0] ?? null, newerBoundary: ordered.at(-1) ?? null,
           ...(ordered.length ? {} : { hasEarlier: null, hasLater: null }) } }
@@ -179,16 +186,18 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
       const query = failed.get(sid)?.get(kind)
       return query ? request(sid, kind, query) : kind === 'latest' ? request(sid, 'latest', { limit: 40, min_rows: 20 }) : Promise.resolve()
     },
+    expandHistoryText: (sid, position) => withBucket(sid, b => ({ historyExpandedText: { ...b.historyExpandedText, [position]: true } })),
     enterHistoryReading: sid => withBucket(sid, b => b.history.viewMode === 'historical' || !b.messageOrder.length ? {} : { history: { ...b.history, viewMode: 'historical' } }),
     releaseSessionHistory: sid => {
       abortHistoryReads(sid)
+      releaseHistoryEntryReads(sid)
       releaseHistoryProtection(sid)
       queryClient.removeQueries({ queryKey: ['messages', sid] })
       queryClient.removeQueries({ queryKey: ['session-detail', sid] })
       withBucket(sid, b => {
         const pending = retainedPending(b)
         const clean = historyRowsPatch(b, pending, [])
-        return { ...clean, historyNotice: undefined, historyNeedsSnapshot: true, history: { ...emptyHistoryState(), viewGeneration: b.history.viewGeneration + 1 } }
+        return { ...clean, historyNotice: undefined, historyNeedsSnapshot: true, historyExpandedText: undefined, history: { ...emptyHistoryState(), viewGeneration: b.history.viewGeneration + 1 } }
       })
     },
   }

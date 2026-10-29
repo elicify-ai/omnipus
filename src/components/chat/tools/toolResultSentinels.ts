@@ -46,6 +46,14 @@ import { PermissionDenied as PermissionDeniedSchema } from '@/lib/api/generated/
 import { statusDot, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 /**
+ * #1452 D2 A2.4: the history preview marker (`_history_preview`) is a result
+ * sentinel too. It is not a failure, so it never feeds the status config
+ * below; detection lives in src/lib/historyPreview.ts (shared with the store's
+ * clamp) and is re-exported here for the tool renderers.
+ */
+export { isHistoryResultPreview } from '@/lib/historyPreview'
+
+/**
  * Returns true when the result is the structured delegation-denied sentinel the
  * backend emits when a delegation tool call is refused by policy. Matched
  * against the generated DelegationFailure contract (error: "delegation_denied").

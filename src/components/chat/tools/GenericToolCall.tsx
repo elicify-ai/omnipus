@@ -16,7 +16,8 @@ import {
   isCancelledStatus,
   type ToolBadgeStatusConfig,
 } from '@/lib/toolStatusConfig'
-import { detectToolResultSentinels, isProtectedFileRefusal, isProtectedInternalFileDenial } from './toolResultSentinels'
+import { detectToolResultSentinels, isHistoryResultPreview, isProtectedFileRefusal, isProtectedInternalFileDenial } from './toolResultSentinels'
+import { humanByteSize } from '@/lib/historyPreview'
 import {
   ClientTruncatedDisplay,
   DelegationFailureDisplay,
@@ -196,7 +197,12 @@ export function GenericToolCall({
   const truncated = isTruncatedResult(result) ? result : null
   const clientTruncated = isClientTruncatedResult(result) ? result : null
   const toolRef = isToolResultRef(result) ? result : null
+  // #1452 D2: a history preview marker is a sentinel, never a plain result.
+  // Saved rows route it to HistoryPreviewToolCall; anywhere else only its
+  // preview and true size can be shown.
+  const historyPreview = isHistoryResultPreview(result) ? result : null
   const plainResult =
+    !historyPreview &&
     !truncated &&
     !marshalErr &&
     !clientTruncated &&
@@ -298,6 +304,12 @@ export function GenericToolCall({
               )}
 
               {clientTruncated && <ClientTruncatedDisplay sentinel={clientTruncated} />}
+
+              {historyPreview && (
+                <pre tabIndex={0} role="region" aria-label="Tool output preview" className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+                  {`Preview of ${humanByteSize(historyPreview.original_size_bytes)}\n${historyPreview.preview}`}
+                </pre>
+              )}
 
               {/* G4: ToolResultRef sentinel — server stored full body, fetch on demand */}
               {toolRef && <ToolResultRefDisplay sentinel={toolRef} sessionId={sessionId} />}

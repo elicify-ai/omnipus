@@ -75,7 +75,7 @@ function bashSessionId(result: unknown): string | undefined {
   const json = parseLeadingJson(result)
   if (!json) return undefined
   if (typeof json.sessionId === 'string' && json.sessionId.trim() !== '') return json.sessionId
-  const sentinel = json._truncated === true || json._truncated_client === true || json._ref === true
+  const sentinel = json._truncated === true || json._truncated_client === true || json._ref === true || json._history_preview === true
   if (!sentinel || typeof json.preview !== 'string') return undefined
   return /"sessionId"\s*:\s*"([^"\\]+)"/.exec(json.preview)?.[1]
 }

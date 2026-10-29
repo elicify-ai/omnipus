@@ -442,6 +442,12 @@ export interface SessionChatState {
   /** Body-free source/display aliases and hidden current-tail order, released on leave. */
   historySourceAliases?: Record<string, string>
   historyLiveOrder?: string[]
+  /**
+   * #1452 D2: saved text positions whose full text the user asked to see
+   * ("Show the rest"). Flags only — the full text lives in the query cache,
+   * never here. Released with the reader (D9).
+   */
+  historyExpandedText?: Record<string, true>
   /** Private source hydration only: a synthetic tool owner is not yet narration coverage. */
   historyPendingNarrationId?: string
   // Map-indexed ring buffer. Use getMessages(bucket) to get the ordered array.
@@ -828,6 +834,12 @@ export interface HistoryDisplayPart { // not-wire-format: client-local display b
   joiner: string
   position?: string
   text: 'live' | 'saved'
+  /** S9 (#1452 D2): the full text's UTF-8 size when the part shows a saved display preview. */
+  originalSizeBytes?: number
+  /** S10: tool-call anchors relative to this part, in UTF-16 units (call id -> offset). Body-free. */
+  anchors?: Record<string, number>
+  /** Ids of the tool calls recorded on this part's saved source (fetching a call's full result addresses this position). */
+  callIds?: string[]
 }
 
 /**
@@ -891,6 +903,8 @@ export interface HistorySlice {
   retryHistory(sessionId: string, action: HistoryActionKind): Promise<void>
   enterHistoryReading(sessionId: string): void
   releaseSessionHistory(sessionId: string): void
+  /** #1452 D2: show the full text of one shortened saved message part. */
+  expandHistoryText(sessionId: string, position: string): void
 }
 export type HistorySliceContext = {
   get: StoreApi<import('@/store/chat/types').ChatStore>['getState']

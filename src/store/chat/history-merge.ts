@@ -8,7 +8,7 @@ import { applySpanFrame } from './slices/span-frames'
 import { emptySessionState } from './session'
 import type { HistorySpanFrame } from '@/lib/api/sessions'
 import { fallbackPairKey } from './slices/provider-frames'
-import { compatibleSource, joinParts, localHistoryKey, partTexts, remapToolAnchors, rowSourceIds, singlePart } from './history-parts'
+import { compatibleSource, currentCallOffsets, joinParts, localHistoryKey, partTexts, recordPartAnchors, rowSourceIds, singlePart, stampPartAnchors } from './history-parts'
 import { reportDuplicateMessageId } from './messages'
 
 /** Expected contradiction in a page's relation to the current reader. */
@@ -298,7 +298,7 @@ function boundSourceAt(bucket: SessionChatState, position: string): string | und
  * names the same row (no text dropped or doubled). Returns undefined when the
  * record must not bind (a legacy alias row already holding another position).
  */
-function bindToRow(row: ChatMessage, entry: SessionHistoryEntry, original: ChatMessage | undefined, captured: ChatMessage | undefined): ChatMessage | undefined {
+function bindToRow(row: ChatMessage, entry: SessionHistoryEntry, original: ChatMessage | undefined, captured: ChatMessage | undefined, live: LiveAnchors): ChatMessage | undefined {
   const parts = row.historyParts
   if (!parts) {
     // A row without a part list merges whole, as before part tracking. A
@@ -312,10 +312,32 @@ function bindToRow(row: ChatMessage, entry: SessionHistoryEntry, original: ChatM
   if (!texts) return { ...(original ? mergeHistoryEntry({ ...entry, id: row.id }, original, captured) : { ...entry, id: row.id }), historyParts: undefined }
   const liveWins = !!original && (original !== captured || original.isStreaming === true || original.status === 'streaming')
   const shown = texts.map((text, i) => i === index && !liveWins ? entry.content ?? '' : text)
-  const joined = joinParts(parts.map((part, i) => i === index ? { ...part, position: entry.historyPosition, text: liveWins ? part.text : 'saved' } : part), shown)
+  // S10: anchors become part-relative before any part's text changes.
+  const anchored = recordPartAnchors(parts, texts, currentCallOffsets(row, live.owned(row.id), live.starts))
+  const joined = joinParts(anchored.map((part, i) => i !== index ? part : {
+    ...part, position: entry.historyPosition, callIds: (entry.tool_calls ?? []).map(call => call.id),
+    // S9: a part whose saved text wins carries that text's preview size; live text has none.
+    ...(liveWins ? {} : { text: 'saved' as const, originalSizeBytes: entry.contentOriginalSizeBytes }),
+  }), shown)
   // Undefined baseline: the current row wins; the row itself as baseline: the saved record wins.
-  const merged = mergeHistoryEntry({ ...entry, id: row.id }, row, liveWins ? undefined : row)
-  return remapToolAnchors({ ...merged, content: joined.content, historyParts: joined.historyParts, mergedReplayIds: row.mergedReplayIds, historyPosition: entry.historyPosition }, parts, texts, shown)
+  const merged = inPartOrder(mergeHistoryEntry({ ...entry, id: row.id }, row, liveWins ? undefined : row), row, entry)
+  return stampPartAnchors({ ...merged, content: joined.content, historyParts: joined.historyParts, mergedReplayIds: row.mergedReplayIds,
+    historyPosition: entry.historyPosition, contentOriginalSizeBytes: undefined }, joined.historyParts, shown)
+}
+
+/** A combined row keeps its earlier parts' tool calls first; a later part's calls follow (source order). */
+function inPartOrder(merged: ChatMessage, row: ChatMessage, entry: SessionHistoryEntry): ChatMessage {
+  if (merged.role !== 'assistant' || !merged.tool_calls?.length) return merged
+  const order = [...(row.tool_calls ?? []), ...(entry.tool_calls ?? [])].map(call => call.id)
+  const rank = (id: string) => { const i = order.indexOf(id); return i === -1 ? order.length : i }
+  return { ...merged, tool_calls: [...merged.tool_calls].sort((a, b) => rank(a.id) - rank(b.id)) }
+}
+
+/** The bucket's live (unbaked) tool calls per owning row, and their witnessed start snapshots. */
+interface LiveAnchors { owned: (rowId: string) => string[]; starts: Readonly<Record<string, string>> } // not-wire-format: in-memory binding input
+
+function liveAnchors(bucket: SessionChatState): LiveAnchors {
+  return { owned: rowId => bucket.toolCallOrder.filter(id => bucket.toolCallOwnerMessageId?.[id] === rowId), starts: bucket.textAtToolCallStart }
 }
 
 /**
@@ -343,6 +365,7 @@ export function bindHistoryEntries(bucket: SessionChatState, entries: readonly S
     }
   }
   Object.values(bucket.messagesById).forEach(index)
+  const live = liveAnchors(bucket)
   const rows = entries.map(entry => {
     const bound = boundSourceAt(bucket, entry.historyPosition)
     if (bound !== undefined && bound !== entry.id) throw new HistoryPageProtocolError('History position changed its source.')
@@ -352,7 +375,7 @@ export function bindHistoryEntries(bucket: SessionChatState, entries: readonly S
     const priorRow = prior ? value(prior) : undefined
     const owners = priorRow && rowSourceIds(priorRow).includes(entry.id) && compatibleSource(priorRow, entry) ? [priorRow]
       : (bySource.get(entry.id) ?? []).flatMap(id => value(id) ? [value(id)] : []).filter(row => compatibleSource(row, entry))
-    const merged = owners.length === 1 ? bindToRow(owners[0], entry, bucket.messagesById[owners[0].id], baseline[owners[0].id]) : undefined
+    const merged = owners.length === 1 ? bindToRow(owners[0], entry, bucket.messagesById[owners[0].id], baseline[owners[0].id], live) : undefined
     if (merged) { work.set(merged.id, merged); return merged }
     let row: ChatMessage = entry
     // S3: two claimants of one occurrence both stay, diagnosed, nothing dropped.

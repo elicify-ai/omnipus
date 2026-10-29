@@ -60,7 +60,7 @@ import { stampToolCallOffset } from '@/store/chat/session'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
-import { splitMessageParts } from '@/lib/messageParts'
+import { HistoryShowRest, historyCallPosition, useHistoryDisplayParts, useHistoryUserText } from './historyTextOverlay'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
@@ -912,6 +912,8 @@ export function VirtualUserMessageRow({
   // covered: this one by ChatScreen.goalCommandMarker.test.tsx, the live one
   // by ChatScreen.goalCommandMarker.live.test.tsx.
   const setsGoal = messageSetsGoal(message.content)
+  const userSessionId = useSessionStore((state) => state.activeSessionId) ?? ''
+  const userText = useHistoryUserText(message, userSessionId) // #1452 D2: a shortened saved message
 
   // U8/F15/F17: a user entry carrying a server-stamped participant is a
   // LEFT-side message from another participant (channel input, peer request) —
@@ -955,11 +957,12 @@ export function VirtualUserMessageRow({
             commandLabels,
             () => (
               <div className="rounded-xl rounded-tr-sm bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-                <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                <p className="whitespace-pre-wrap break-words">{userText.content}</p>
               </div>
             ),
           )
         )}
+        {userText.more && <HistoryShowRest sessionId={userSessionId} position={userText.more.position} originalSizeBytes={userText.more.originalSizeBytes} />}
         {message.deliveryStatus && (message.firstSendStatus || message.deliveryStatus !== 'sending') && (
           <RowDeliveryStatus
             content={message.content}
@@ -1135,10 +1138,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
   }, [message.id, message.tool_calls, toolCalls, toolCallOrder, textAtToolCallStart, toolCallOwners, isLastAssistant, pairedReplyToIds])
 
   // Live results must invalidate the split even without a message bake.
-  const messageParts = useMemo(
-    () => splitMessageParts(message.content ?? '', positionedToolCalls),
-    [message.content, positionedToolCalls],
-  )
+  const messageParts = useHistoryDisplayParts(message, positionedToolCalls, activeSessionId ?? '') // #1452 D2 saved-preview text controls
   const delegationSplit = splitAnchoredDelegationEvents(delegationEvents, message.id, {
     spans: message.spans,
     toolCalls: positionedToolCalls,
@@ -1286,6 +1286,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
             if (part.type === 'text') {
               return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
             }
+            if (part.type === 'more') return <HistoryShowRest key={`more-${part.position}`} sessionId={activeSessionId ?? ''} position={part.position} originalSizeBytes={part.originalSizeBytes} />
             const callId = part.call.id
             const tc = toolCalls[callId] ?? part.call
             return <div key={callId} data-history-tool-row={callId}>{renderHistoricalToolCall({
@@ -1296,6 +1297,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
               verboseChatEnabled,
               goalRecordEmpty,
               liteMode,
+              historyPosition: historyCallPosition(message, callId),
             })}</div>
           })}
           {/* Inline indicator — 1b (founder UI feedback 2026-10-11): rendered

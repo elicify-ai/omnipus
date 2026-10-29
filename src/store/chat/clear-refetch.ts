@@ -69,6 +69,7 @@ import { queryClient } from '@/lib/queryClient'
 import { fetchSessionMessages } from '@/lib/api'
 import type { Message, SessionHistoryPage } from '@/lib/api'
 import { applyHistoryPageToBucket } from './history-merge'
+import { advanceHistoryEntryGenerations } from '@/lib/historyEntryReads'
 import { abortHistoryReads } from './history'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
@@ -307,6 +308,7 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: SessionHis
     return
   }
   let deferred = false
+  let committed = false
   try {
     withBucket(sid, (b) => {
       // C4: a busy bucket defers — the projection is HELD on the operation
@@ -319,6 +321,7 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: SessionHis
       const merged = mergeServerProjection(b, fresh.entries, op)
       abortHistoryReads(sid)
       const patch = applyHistoryPageToBucket(b, fresh, 'latest')
+      committed = true
       return { ...patch, messagesById: merged.messagesById, messageOrder: merged.messageOrder,
         history: { ...patch.history!, viewGeneration: b.history.viewGeneration + 1, openedClearPositions: [] } }
     })
@@ -338,6 +341,8 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: SessionHis
     return
   }
   if (deferred) return
+  // #1452 D2 A2.4: an authoritative commit voids older full-content reads.
+  if (committed) advanceHistoryEntryGenerations(sid, fresh.entries.map(entry => entry.historyPosition))
   // C4: the intent clears only now — the projection carried this
   // operation's marker (a marker unknown at arm time) and it is in the
   // view: the fresh view starts at the divider.

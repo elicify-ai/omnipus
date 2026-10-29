@@ -15,6 +15,8 @@ import { WebSearchBlock } from './WebSearchResult'
 import { WebFetchBlock } from './WebFetchPreview'
 import { GoalSetupFailureLine } from './GoalSetupFailureLine'
 import { delegationSlotted } from '../DelegationEventLine'
+import { isHistoryResultPreview } from '@/lib/historyPreview'
+import { HistoryPreviewToolCall } from './HistoryPreviewToolCall'
 
 /**
  * F2: derives the replay MessagePartStatus object from the store's resolved
@@ -40,6 +42,7 @@ export function renderHistoricalToolCall({
   verboseChatEnabled,
   goalRecordEmpty,
   liteMode,
+  historyPosition,
 }: {
   tc: ToolCall
   callId: string
@@ -48,7 +51,19 @@ export function renderHistoricalToolCall({
   verboseChatEnabled: boolean
   goalRecordEmpty: boolean
   liteMode: boolean
+  /** The saved occurrence owning this call (#1452 D2: addresses its full result). */
+  historyPosition?: string
 }): ReactNode {
+  // #1452 D2 A2.4: a result the history page shortened reaches no
+  // tool-specific renderer (they would try to parse the marker as their own
+  // result shape); every tool falls back to the one preview display.
+  // The thread's one visibility filter still applies (toolVisibility.ts).
+  if (isHistoryResultPreview(tc.result)) {
+    const visible = shouldRenderToolCall(tc.tool, tc.params as Record<string, unknown> | undefined, verboseChatEnabled, tc.status === 'error')
+    return delegationSlotted(callId, inlineEvents, visible ? (
+      <HistoryPreviewToolCall key={callId} tc={tc} marker={tc.result} sessionId={activeSessionId ?? ''} historyPosition={historyPosition} />
+    ) : null)
+  }
   // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
   // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
   // here too, so replayed sessions render the preview link (or the malformed

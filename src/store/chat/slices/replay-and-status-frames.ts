@@ -601,6 +601,8 @@ interface ReplayMessageFrameFields {
   replayReplyToMessageId: string | undefined
   replayReplyToParticipant: ReplayMessageFrame['reply_to_participant']
   replayRoomRef: ReplayMessageFrame['room_ref']
+  /** #1452 D2: present only when `text` is a display preview of a longer chat message. */
+  replayContentOriginalSizeBytes: ReplayMessageFrame['content_original_size_bytes']
 }
 
 function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayMessageFrameFields {
@@ -675,6 +677,7 @@ function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayM
     replayReplyToMessageId,
     replayReplyToParticipant,
     replayRoomRef: replayFrame.room_ref,
+    replayContentOriginalSizeBytes: replayFrame.content_original_size_bytes,
   }
 }
 
@@ -795,6 +798,7 @@ function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
     timestamp: messageTimestamp ?? new Date().toISOString(),
     status: 'done' as const,
     ...(role === 'user' && fields.replayClientMessageId ? { clientMessageId: fields.replayClientMessageId } : {}),
+    ...(fields.replayContentOriginalSizeBytes !== undefined && role !== 'system' ? { contentOriginalSizeBytes: fields.replayContentOriginalSizeBytes } : {}),
     ...(replayAgentId ? { agentId: replayAgentId } : {}),
     // Per-turn model record. Only on assistant messages (user/system turns
     // don't carry a producer model). Empty model is treated as

@@ -16,13 +16,15 @@ import { cursorFromTerminalFrame, fenceCursorAcrossBoots, isPendingTailMessage }
 import { findFirstSendMessage } from './first-send'
 import { abortHistoryReads, registerHistoryRelease } from './history'
 import { applyHistoryPageToBucket, bindHistoryEntries, HistoryPageProtocolError, releaseHistorySpanFacts } from './history-merge'
-import { compatibleSource, joinParts, partTexts, remapStartSnapshot, remapToolAnchors } from './history-parts'
-import { ApiSchemaError } from '@/lib/api/http'
+import { compatibleSource, currentCallOffsets, joinParts, partAnchor, partTexts, recordPartAnchors, stampPartAnchors } from './history-parts'
+import { ApiSchemaError, _recordApiSchemaError } from '@/lib/api/http'
+import { isMalformedHistoryPreview } from '@/lib/historyPreview'
+import { advanceHistoryEntryGenerations } from '@/lib/historyEntryReads'
 import { logDiagnostic } from '@/lib/telemetry'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
 import { SessionHistoryResponse as PageSchema } from '@/lib/api/generated/schemas'
 
-type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage>; cancellations: Set<string>; priorBootId: string | undefined } // not-wire-format: transient projection ownership
+type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage>; cancellations: Set<string>; priorBootId: string | undefined; malformed: Set<string> } // not-wire-format: transient projection ownership
 
 /** Local classification only; never carries source data or exception details. */
 class SnapshotProtocolError extends Error {
@@ -170,12 +172,16 @@ function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryP
       const index = parts ? parts.findIndex(part => part.sourceId === entry.id) : -1
       if (parts && texts && (!parts[index].position || parts[index].position === entry.historyPosition)) {
         const shown = texts.map((text, i) => i === index ? entry.content ?? '' : text)
-        const joined = joinParts(parts.map((part, i) => i === index ? { ...part, text: 'saved' as const } : part), shown)
-        messagesById[current.id] = remapToolAnchors({ ...working, content: joined.content, historyParts: joined.historyParts, status: entry.status, isStreaming: false, confirmedUnfinished: undefined }, parts, texts, shown)
-        // S10: a live call still unbaked keeps its anchor in the settled text.
+        // S10: record part-relative anchors from the witnessed text, then derive
+        // every anchor for the settled text; S9: the part carries its preview size.
+        const owned = bucket.toolCallOrder.filter(callId => bucket.toolCallOwnerMessageId?.[callId] === current.id)
+        const anchored = recordPartAnchors(parts, texts, currentCallOffsets(working, owned, textAtToolCallStart))
+        const joined = joinParts(anchored.map((part, i) => i === index ? { ...part, text: 'saved' as const, originalSizeBytes: entry.contentOriginalSizeBytes } : part), shown)
+        messagesById[current.id] = stampPartAnchors({ ...working, content: joined.content, historyParts: joined.historyParts, status: entry.status, isStreaming: false, confirmedUnfinished: undefined }, joined.historyParts, shown)
         const starts = { ...textAtToolCallStart }
-        for (const callId of bucket.toolCallOrder) {
-          if (bucket.toolCallOwnerMessageId?.[callId] === current.id && starts[callId] !== undefined) starts[callId] = remapStartSnapshot(starts[callId], joined.content, parts, texts, shown)
+        for (const callId of owned) {
+          const offset = partAnchor(callId, joined.historyParts, shown)
+          if (offset !== undefined) starts[callId] = joined.content.slice(0, offset)
         }
         textAtToolCallStart = starts
         if (current.turnId) settledTurns.add(current.turnId)
@@ -204,7 +210,7 @@ function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryP
     // Keep the established display/tool-owner identity. The successful saved
     // occurrence replaces this unchanged prefix, not a second rendered row.
     const aligned = current.id === entry.id ? entry : { ...entry, id: current.id }
-    messagesById[current.id] = { ...mergeHistoryEntry(aligned, current, captured), content: entry.content, status: entry.status, isStreaming: false, confirmedUnfinished: undefined }
+    messagesById[current.id] = { ...mergeHistoryEntry(aligned, current, captured), content: entry.content, contentOriginalSizeBytes: entry.contentOriginalSizeBytes, status: entry.status, isStreaming: false, confirmedUnfinished: undefined }
     if (current.turnId) settledTurns.add(current.turnId)
     refreshed = true
     return aligned
@@ -231,6 +237,21 @@ function stageSpanFact(stage: Stage, frame: ServerFrame, entryId: string | undef
   const id = entryId ?? `history-${position}`
   const row: ChatMessage = { id, role: 'assistant', content: '', timestamp: '1970-01-01T00:00:00Z', status: 'done', historyPosition: position, historySpanFrame: frame }
   stage.groups.set(position, { ...previous, messagesById: { [id]: row }, messageOrder: [id] })
+  return true
+}
+
+/** #1452 D2 A2.2: a result carrying the reserved `_history_preview` key that
+ * is not a valid marker makes its source a malformed item: the existing
+ * positioned placeholder and diagnostic, never a marker or a plain result.
+ * Later frames of that source are ignored (stage.malformed). */
+function stageMalformedResult(stage: Stage, frame: ServerFrame, entryId: string | undefined, position: string, previous: SessionChatState): boolean {
+  if (frame.type !== 'tool_call_result' || !isMalformedHistoryPreview(frame.result)) return false
+  _recordApiSchemaError('WS history', 1)
+  stage.malformed.add(position)
+  const id = entryId ?? `unrenderable-${position}`
+  const timestamp = getMessages(previous)[0]?.timestamp ?? '1970-01-01T00:00:00Z'
+  const placeholder: ChatMessage = { id, role: 'system', content: 'This message could not be displayed.', timestamp, status: 'done', historyPosition: position }
+  stage.groups.set(position, { ...previous, messagesById: { [id]: placeholder }, messageOrder: [id], toolCalls: {}, toolCallOrder: [], toolCallOwnerMessageId: {}, textAtToolCallStart: {} })
   return true
 }
 
@@ -308,7 +329,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       // The live cursor's boot before this snapshot (undefined: no cursor yet,
       // so no boot to compare). A different snapshot boot means the gateway
       // restarted, whatever the snapshot reason says.
-      priorBootId: bucket.cursor?.bootId })
+      priorBootId: bucket.cursor?.bootId, malformed: new Set() })
   }
   function collect(frame: ServerFrame, sid: string, stage: Stage, reduce: (frame: ServerFrame) => void): void {
     const origin = 'history_origin' in frame ? frame.history_origin : undefined
@@ -316,7 +337,9 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     let position: string
     try { position = historyPosition(origin.position, 'WS history', ['history_origin', 'position']) } catch { stage.invalid = true; return }
     if (frame.type === 'replay_message' && frame.role === 'turn_canceled') stage.cancellations.add(position)
+    if (stage.malformed.has(position)) return
     const previous = stage.groups.get(position) ?? { ...emptySessionState(), isReplaying: true, awaitingCatchUp: true }
+    if (stageMalformedResult(stage, frame, origin.entry_id, position, previous)) { publishProgressiveProjection(context, sid, stage); return }
     if (stageSpanFact(stage, frame, origin.entry_id, position, previous)) { publishProgressiveProjection(context, sid, stage); return }
     active = { sid, bucket: previous, staging: true }
     // A tool-only owning source is a real non-prose group, not the preceding
@@ -384,8 +407,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
           const needed = new Set(retainedPending(b).map(row => row.id))
           const liveOrder = (b.historyLiveOrder ?? []).filter(id => !stage.baseline[id] || needed.has(id))
           const liveIds = new Set(liveOrder)
-          // #1452 D1 S6: saved records bind to their display rows by part.
-          const bound = bindHistoryEntries(b, completedPage.entries, baseline)
+          const bound = bindHistoryEntries(b, completedPage.entries, baseline) // #1452 D1 S6: bind by part
           const incoming = new Map(bound.map(row => [row.id, row]))
           const rows = [...new Set([...b.messageOrder, ...liveOrder])].flatMap(id => {
             const current = b.messagesById[id]
@@ -401,6 +423,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
         const live = dropDeadWitnessedStreams(b, completedPage)
         return { ...applyHistoryPageToBucket(live, completedPage, 'latest', baseline), ...completion, ...(live !== b ? { isStreaming: live.isStreaming } : {}) }
       })
+      advanceHistoryEntryGenerations(sid, page.entries.map(entry => entry.historyPosition)) // #1452 D2 A2.4 generation rule
       return 'committed'
     } catch (error) {
       const kind = error instanceof SnapshotProtocolError ? error.kind

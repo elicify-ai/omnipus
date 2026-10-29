@@ -19,7 +19,11 @@ export function rowSourceIds(row: ChatMessage): string[] {
  */
 export function recordCombinedPart(row: ChatMessage, sourceId: string, joiner: string): void {
   if (!row.historyParts) {
-    row.historyParts = [{ sourceId: row.id, start: 0, joiner: '', text: row.historyPosition ? 'saved' : 'live', ...(row.historyPosition ? { position: row.historyPosition } : {}) }]
+    row.historyParts = [{ sourceId: row.id, start: 0, joiner: '', text: row.historyPosition ? 'saved' : 'live',
+      ...(row.historyPosition ? { position: row.historyPosition } : {}),
+      // S9: a saved preview's size moves from the row onto its own part.
+      ...(row.contentOriginalSizeBytes !== undefined ? { originalSizeBytes: row.contentOriginalSizeBytes } : {}) }]
+    row.contentOriginalSizeBytes = undefined
   }
   row.historyParts.push({ sourceId, start: (row.content ?? '').length + joiner.length, joiner, text: 'live' })
 }
@@ -55,23 +59,27 @@ export function partTexts(row: ChatMessage): string[] | undefined {
 }
 
 /**
- * S10: the effective anchor of an offset recorded against `oldTexts` once
- * the parts show `newTexts`. An anchor at a part's end, or inside the joiner
- * after it, belongs to that part's end, never to the next part; it is
- * derived as start(part) + min(relative offset, length(part)).
+ * S10 "Record part-relative": the part an offset in the row's text belongs
+ * to, and the offset within that part. An anchor at a part's end, or inside
+ * the joiner after it, belongs to that part's end, never to the next part.
  */
-function remapAnchor(offset: number, parts: readonly HistoryDisplayPart[], oldTexts: readonly string[], newTexts: readonly string[]): number {
-  let oldStart = 0
-  let newStart = 0
+export function locateAnchor(offset: number, parts: readonly HistoryDisplayPart[], texts: readonly string[]): { index: number; relative: number } {
+  let start = 0
   for (let i = 0; i < parts.length; i++) {
-    if (i > 0) { oldStart += parts[i].joiner.length; newStart += parts[i].joiner.length }
-    const oldEnd = oldStart + oldTexts[i].length
-    const nextStart = i + 1 < parts.length ? oldEnd + parts[i + 1].joiner.length : Infinity
-    if (offset <= oldEnd || offset < nextStart || i === parts.length - 1) return newStart + Math.min(Math.max(0, offset - oldStart), newTexts[i].length)
-    oldStart = oldEnd
-    newStart += newTexts[i].length
+    if (i > 0) start += parts[i].joiner.length
+    const end = start + texts[i].length
+    const next = i + 1 < parts.length ? end + parts[i + 1].joiner.length : Infinity
+    if (offset <= end || offset < next || i === parts.length - 1) return { index: i, relative: offset <= end ? Math.max(0, offset - start) : texts[i].length }
+    start = end
   }
-  return offset
+  return { index: 0, relative: 0 }
+}
+
+/** S10 "Derive, never shift": start(part) + min(relative offset, length(part)) for the texts shown now. */
+export function deriveAnchor(index: number, relative: number, parts: readonly HistoryDisplayPart[], texts: readonly string[]): number {
+  let start = 0
+  for (let i = 0; i < index; i++) start += texts[i].length + parts[i + 1].joiner.length
+  return start + Math.min(relative, texts[index].length)
 }
 
 /** The row's text and part offsets for `texts`, joined with each part's recorded joiner (S2/S2a). */
@@ -86,18 +94,43 @@ export function joinParts(parts: readonly HistoryDisplayPart[], texts: readonly 
   return { content, historyParts }
 }
 
-/** The row with its live tool anchors re-derived after its part texts changed (S10). */
-export function remapToolAnchors(row: ChatMessage, parts: readonly HistoryDisplayPart[], oldTexts: readonly string[], newTexts: readonly string[]): ChatMessage {
-  if (row.role !== 'assistant' || !row.tool_calls?.length || oldTexts.every((text, i) => text.length === newTexts[i].length)) return row
+/**
+ * S10: record, body-free, the part-relative anchor of every tool call that
+ * has an offset in the current texts and no recorded anchor yet. `offsets`
+ * are in the coordinates of `texts` (the row's stored text before a change).
+ */
+export function recordPartAnchors(parts: readonly HistoryDisplayPart[], texts: readonly string[], offsets: ReadonlyMap<string, number>): HistoryDisplayPart[] {
+  const recorded = new Set(parts.flatMap(part => Object.keys(part.anchors ?? {})))
+  const next = parts.map(part => ({ ...part, ...(part.anchors ? { anchors: { ...part.anchors } } : {}) }))
+  for (const [callId, offset] of offsets) {
+    if (recorded.has(callId)) continue
+    const { index, relative } = locateAnchor(offset, parts, texts)
+    next[index].anchors = { ...next[index].anchors, [callId]: relative }
+  }
+  return next
+}
+
+/** The derived anchor of a call from its recorded part-relative anchor, for the texts shown. */
+export function partAnchor(callId: string, parts: readonly HistoryDisplayPart[], texts: readonly string[]): number | undefined {
+  const index = parts.findIndex(part => part.anchors?.[callId] !== undefined)
+  return index === -1 ? undefined : deriveAnchor(index, parts[index].anchors![callId], parts, texts)
+}
+
+/** The row with every anchored tool call's stored offset derived for its stored (collapsed) text. */
+export function stampPartAnchors(row: ChatMessage, parts: readonly HistoryDisplayPart[], texts: readonly string[]): ChatMessage {
+  if (row.role !== 'assistant' || !row.tool_calls?.length) return row
   return { ...row, tool_calls: row.tool_calls.map(call => {
-    const offset = (call as PositionedToolCall).textOffset
-    return offset === undefined ? call : { ...call, textOffset: remapAnchor(offset, parts, oldTexts, newTexts) }
+    const offset = partAnchor(call.id, parts, texts)
+    return offset === undefined ? call : { ...call, textOffset: offset } as PositionedToolCall
   }) }
 }
 
-/** Remap a live (unbaked) call's start snapshot into the row's new text (S10). */
-export function remapStartSnapshot(snapshot: string, content: string, parts: readonly HistoryDisplayPart[], oldTexts: readonly string[], newTexts: readonly string[]): string {
-  return content.slice(0, remapAnchor(snapshot.length, parts, oldTexts, newTexts))
+/** The live offsets a combined row's calls are anchored at now: stored offsets, else live start snapshots. */
+export function currentCallOffsets(row: ChatMessage, owned: readonly string[], textAtToolCallStart: Readonly<Record<string, string>>): Map<string, number> {
+  const offsets = new Map<string, number>()
+  for (const call of (row.tool_calls ?? []) as PositionedToolCall[]) if (call.textOffset !== undefined) offsets.set(call.id, call.textOffset)
+  for (const callId of owned) if (!offsets.has(callId) && textAtToolCallStart[callId] !== undefined) offsets.set(callId, textAtToolCallStart[callId].length)
+  return offsets
 }
 
 /**

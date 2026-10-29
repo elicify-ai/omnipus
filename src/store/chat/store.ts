@@ -22,6 +22,7 @@ import { createFrameSlice } from './slices/frames'
 import { createHistorySlice, emptyHistoryState } from './history'
 import { createHistoryFrameOwner } from './history-replay'
 import { applyHistoryPageToBucket } from './history-merge'
+import { advanceHistoryEntryGenerations } from '@/lib/historyEntryReads'
 import { mergeRecordedSessionTokens } from './session-usage'
 import { currentHistoryState, liveProjectionBucket, withLiveHistoryBucket } from './history-live'
 
@@ -278,10 +279,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
     ...createFirstSendActions({ set, get, withBucket }),
     ...createHistorySlice({ set, get, withBucket }),
     history: emptyHistoryState(),
-    acceptHistoryFallback: (sid, page, generation, baseline) => withBucket(sid, b => {
-      if (b.history.viewGeneration !== generation || b.isReplaying || b.history.liveControlsReady || b.history.historyLoaded) return {}
-      return applyHistoryPageToBucket(b, page, 'latest', baseline)
-    }),
+    acceptHistoryFallback: (sid, page, generation, baseline) => {
+      let committed = false
+      withBucket(sid, b => {
+        if (b.history.viewGeneration !== generation || b.isReplaying || b.history.liveControlsReady || b.history.historyLoaded) return {}
+        committed = true
+        return applyHistoryPageToBucket(b, page, 'latest', baseline)
+      })
+      // #1452 D2 A2.4: an authoritative commit voids older full-content reads.
+      if (committed) advanceHistoryEntryGenerations(sid, page.entries.map(entry => entry.historyPosition))
+    },
 
     // Foreground selectors — derived from sessionsById[activeSessionId].
     // Initial values are the empty-session defaults projected through bucketToForeground.
