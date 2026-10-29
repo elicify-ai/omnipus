@@ -133,9 +133,10 @@ type showToUserCall struct {
 	scope       library.ResolveScope
 }
 
-// Execute validates in the spec's order (FR-014): channel, root chat session,
-// workspace present, parse, resolve, own workspace, read policy and
-// carve-out, rate limit. Only a call that passes every check consumes budget.
+// Execute validates in the spec's order (FR-014, as amended by ruling B2):
+// channel, root chat session, workspace present, parse, secret carve-out,
+// resolve, own workspace, read policy (regular files only), rate limit. Only a
+// call that passes every check consumes budget.
 func (t *ShowToUserTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	if ToolChannel(ctx) != webChannelName {
 		return t.refuse(ctx, showToUserReasonChannel, showToUserNoUI)
@@ -153,7 +154,6 @@ func (t *ShowToUserTool) Execute(ctx context.Context, args map[string]any) *Tool
 	call.scope = library.ResolveScope{
 		Home:        config.OmnipusHomeDir(),
 		WorkspaceID: call.workspaceID,
-		TurnWorkDir: TurnWorkspaceDir(ctx),
 	}
 	ref, _ := args["ref"].(string)
 	host, reason, refusal := t.parseRef(call, strings.TrimSpace(ref))
@@ -200,10 +200,13 @@ func (t *ShowToUserTool) openChecked(call showToUserCall, host string) *ToolResu
 	if err != nil {
 		return t.refuse(ctx, showToUserReasonPolicy, showToUserNoPolicy)
 	}
-	// SEC-3: a secret carve-out answers with the not-found bytes even when it
-	// lies outside every Library, so the agent is never told to hand the user
-	// a secret file's path.
-	if real, rerr := filepath.EvalSymlinks(host); rerr == nil && fspolicy.IsCarveOut(real, policy) {
+	// SEC-3 / SEC-9: a secret carve-out answers with the not-found bytes even
+	// when it lies outside every Library, so the agent is never told to hand
+	// the user a secret file's path — and it does so whether or not the
+	// secret EXISTS, or a missing master.key would get the "outside" text
+	// while an existing one gets "not found", telling the agent which is on
+	// disk (architect ruling B2, 2026-10-29).
+	if showToUserCarveOut(host, policy) {
 		return t.refuse(ctx, showToUserReasonDenied, showToUserNotFound)
 	}
 	ref := library.ResolveHostPath(call.scope, host)
@@ -233,6 +236,28 @@ func (t *ShowToUserTool) openChecked(call showToUserCall, host string) *ToolResu
 		"workspace_id": call.workspaceID, "path": ref.Rel,
 	})
 	return res
+}
+
+// showToUserCarveOut reports whether host is a secret carve-out by any of its
+// forms: the real path when it resolves, the real path through the deepest
+// existing ancestor (a missing file under a symlinked directory), and the
+// cleaned lexical path (a missing file whose parents do not resolve either).
+// Checking every form makes a missing secret indistinguishable from an
+// existing one.
+func showToUserCarveOut(host string, policy fspolicy.FSPolicy) bool {
+	candidates := []string{filepath.Clean(host)}
+	if real, err := filepath.EvalSymlinks(host); err == nil {
+		candidates = append(candidates, real)
+	}
+	if deepest, ok := library.RealPathDeepest(host); ok {
+		candidates = append(candidates, deepest)
+	}
+	for _, p := range candidates {
+		if fspolicy.IsCarveOut(p, policy) {
+			return true
+		}
+	}
+	return false
 }
 
 // readable applies the agent's read policy and carve-outs through the same
