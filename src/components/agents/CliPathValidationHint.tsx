@@ -40,6 +40,17 @@ export function CliPathValidationHint({ validation, detectHint, testId }: CliPat
     )
   }
 
+  if (validation.kind === 'forbidden') {
+    // T11 slice A: the server refused the check (403). Not retryable by
+    // editing; saving stays possible (non-blocking, FR-019).
+    return (
+      <p data-testid={testId} data-cli-status="forbidden" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
+        <WarningCircle size={11} weight="fill" />
+        CLI check unavailable: it runs only for a signed-in person, not in development-bypass mode or with the command-line token ({validation.message}). You can still save.
+      </p>
+    )
+  }
+
   if (validation.kind === 'result') {
     const { reason, version } = validation.result
     switch (reason) {

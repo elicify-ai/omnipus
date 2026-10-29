@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchCliValidate } from '@/lib/api'
 import type { CliValidateResponse } from '@/lib/api'
+import { isApiError } from '@/lib/api-error'
 import type { SupportedCli } from '@/lib/cliDetect'
 
 const DEBOUNCE_MS = 400
@@ -26,6 +27,11 @@ export type CliValidationState =
   | { kind: 'pending' }
   | { kind: 'result'; result: CliValidateResponse }
   | { kind: 'error' }
+  // T11 slice A: the server refused the check itself (HTTP 403) — Check CLI
+  // runs only for a signed-in person, not in development-bypass mode or with
+  // the command-line token. Editing the path cannot fix this, so it is not
+  // the transient 'error' state. Non-blocking like 'error' (FR-019).
+  | { kind: 'forbidden'; message: string }
 
 export interface UseCliPathValidation {
   status: CliValidationState
@@ -75,11 +81,17 @@ export function useCliPathValidation(): UseCliPathValidation {
             if (controller.signal.aborted) return
             setStatus({ kind: 'result', result })
           })
-          .catch(() => {
+          .catch((err: unknown) => {
             // Network error, timeout, rate-limited (429), or an aborted
             // request racing this handler — FR-019 requires this to be
-            // non-blocking, never a trap.
+            // non-blocking, never a trap. A 403 is a lasting refusal of the
+            // check itself and gets its own state so it is not presented as
+            // "retry on the next edit".
             if (controller.signal.aborted) return
+            if (isApiError(err) && err.status === 403) {
+              setStatus({ kind: 'forbidden', message: err.userMessage })
+              return
+            }
             setStatus({ kind: 'error' })
           })
       }, DEBOUNCE_MS)
