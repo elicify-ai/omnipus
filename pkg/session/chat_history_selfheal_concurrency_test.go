@@ -96,6 +96,10 @@ func TestChatHistorySelfHeal_AppendDuringRebuildCompletesAndIsIndexed(t *testing
 	case <-time.After(10 * time.Second):
 		t.Fatal("healer did not finish after publication release")
 	}
+	// Design §2 step 7 / CHECK probe d: inspect the published index BEFORE
+	// another demand can repair a skipped proof. All three during-heal rows
+	// must already be present when the FIRST heal reports readiness.
+	healFixRequireAddresses(t, f.store, f.sid, f.addresses)
 	require.NoError(t, f.store.CheckChatHistoryReadiness(context.Background(), f.sid))
 	selfHealRequireIndexed(t, f)
 	selfHealRequirePages(t, f)
