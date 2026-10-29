@@ -100,16 +100,18 @@ func t11CLIToken(t *testing.T, home string) (token string, cfg *config.Config) {
 	return token, cfg
 }
 
-func t11CountSpawns(t *testing.T) *int {
+func t11CountSpawns(t *testing.T) (*int, *[]string) {
 	t.Helper()
 	n := 0
+	var paths []string
 	orig := cliTestConnection
 	cliTestConnection = func(ctx context.Context, cli, cliPath string) runner.ConnectionTestResult {
 		n++
+		paths = append(paths, cliPath)
 		return orig(ctx, cli, cliPath)
 	}
 	t.Cleanup(func() { cliTestConnection = orig })
-	return &n
+	return &n, &paths
 }
 
 func t11PostValidate(t *testing.T, mux *http.ServeMux, cfg *config.Config, token, cliPath, ip string, counter *t11ReadCounter) *httptest.ResponseRecorder {
@@ -234,7 +236,7 @@ func TestCliValidate_NonPersonRefusedZeroSpawn(t *testing.T) {
 	_, mux, home := t11ValidateMux(t)
 	marker := filepath.Join(t.TempDir(), "marker")
 	prog := t11BuildMarkerProgram(t, marker)
-	spawns := t11CountSpawns(t)
+	spawns, _ := t11CountSpawns(t)
 
 	t.Run("cli token is 403 before the body and starts nothing", func(t *testing.T) {
 		t11ClearMarker(t, marker)
@@ -282,7 +284,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "marker")
 	prog := t11BuildMarkerProgram(t, marker)
 	token, cfg := t11Person(t, home)
-	spawns := t11CountSpawns(t)
+	spawns, launched := t11CountSpawns(t)
 	const ip = "198.51.100.70:1"
 
 	refuse := func(t *testing.T, path string, needles ...string) {
@@ -371,6 +373,28 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			refuse(t, dst, "writable")
 		})
 
+		t.Run("parent directory group writable", func(t *testing.T) {
+			// Spec §3.2 / §5: a directory others in the group can replace is refused.
+			// 0775 is group-writable and not other-writable.
+			dir := t.TempDir()
+			require.NoError(t, os.Chmod(dir, 0o775))
+			dst := filepath.Join(dir, "fakecli")
+			t11CopyExe(t, prog, dst, 0o755)
+			refuse(t, dst, "writable")
+		})
+
+		t.Run("link folder group writable", func(t *testing.T) {
+			finalDir := t.TempDir()
+			require.NoError(t, os.Chmod(finalDir, 0o700))
+			final := filepath.Join(finalDir, "fakecli")
+			t11CopyExe(t, prog, final, 0o755)
+			linkDir := t.TempDir()
+			require.NoError(t, os.Chmod(linkDir, 0o775))
+			link := filepath.Join(linkDir, "link")
+			require.NoError(t, os.Symlink(final, link))
+			refuse(t, link, "writable")
+		})
+
 		t.Run("not executable", func(t *testing.T) {
 			dir := t.TempDir()
 			dst := filepath.Join(dir, "fakecli")
@@ -408,6 +432,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 		require.NoError(t, err)
 		t11ClearMarker(t, marker)
 		*spawns = 0
+		*launched = nil
 		w := t11PostValidate(t, mux, cfg, token, dst, ip, nil)
 		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 		resp := t11DecodeValidate(t, w)
@@ -417,6 +442,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 		require.NotNil(t, resp.ResolvedPath)
 		require.Equal(t, final, *resp.ResolvedPath, "callers launch the checked resolved file, not a second path")
 		require.Equal(t, 1, *spawns)
+		require.Equal(t, []string{final}, *launched, "spec FR-5: the handshake is given the checked final file")
 		_, err = os.Stat(marker)
 		require.NoError(t, err, "the launched program must have written the marker")
 	})
@@ -436,6 +462,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			require.NoError(t, err)
 			t11ClearMarker(t, marker)
 			*spawns = 0
+			*launched = nil
 			w := t11PostValidate(t, mux, cfg, token, link, ip, nil)
 			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 			resp := t11DecodeValidate(t, w)
@@ -444,6 +471,49 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			require.NotNil(t, resp.Version)
 			require.Equal(t, t11Version, *resp.Version)
 			require.Equal(t, 1, *spawns)
+			require.Equal(t, []string{final}, *launched,
+				"spec FR-5: the handshake receives the checked final file, not the submitted link")
+			require.NotEqual(t, link, (*launched)[0])
 		})
 	}
+}
+
+// TestCliValidate_EnvTokenRefusedZeroSpawn is S7. The legacy
+// OMNIPUS_BEARER_TOKEN identity is not a signed-in person (spec §3.2 / §5).
+func TestCliValidate_EnvTokenRefusedZeroSpawn(t *testing.T) {
+	_, mux, home := t11ValidateMux(t)
+	const token = "t11-env-token-value"
+	t.Setenv("OMNIPUS_BEARER_TOKEN", token)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{DevModeBypass: false},
+		Agents:  config.AgentsConfig{Defaults: config.AgentDefaults{Home: home}},
+	}
+	marker := filepath.Join(t.TempDir(), "marker")
+	prog := t11BuildMarkerProgram(t, marker)
+	spawns, _ := t11CountSpawns(t)
+	var reads t11ReadCounter
+	w := t11PostValidate(t, mux, cfg, token, prog, "198.51.100.81:1", &reads)
+	require.Equal(t, http.StatusForbidden, w.Code, "spec §3.2: the environment token is 403; body=%s", w.Body.String())
+	require.Zero(t, reads.n, "spec §3.2: 403 before reading the body")
+	t11AssertNotSpawned(t, marker, *spawns)
+}
+
+// TestCliValidate_IncompleteDiscoveryRefuses is S6. If workspace discovery
+// fails, the check refuses before anything starts. An absent workspaces
+// directory is not a failure; a workspaces path that cannot be listed is.
+func TestCliValidate_IncompleteDiscoveryRefuses(t *testing.T) {
+	_, mux, home := t11ValidateMux(t)
+	ws := filepath.Join(home, "workspaces")
+	require.NoError(t, os.RemoveAll(ws))
+	require.NoError(t, os.WriteFile(ws, []byte("not-a-directory"), 0o600))
+	marker := filepath.Join(t.TempDir(), "marker")
+	prog := t11BuildMarkerProgram(t, marker)
+	dir := t.TempDir()
+	require.NoError(t, os.Chmod(dir, 0o700))
+	dst := filepath.Join(dir, "fakecli")
+	t11CopyExe(t, prog, dst, 0o755)
+	token, cfg := t11Person(t, home)
+	spawns, _ := t11CountSpawns(t)
+	w := t11PostValidate(t, mux, cfg, token, dst, "198.51.100.82:1", nil)
+	t11AssertPathRefused(t, w, marker, *spawns, "workspace", "discover", "mount", "incomplete")
 }
