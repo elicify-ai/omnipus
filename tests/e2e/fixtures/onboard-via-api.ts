@@ -240,16 +240,18 @@ async function seedAgentFallback(
   if (!Array.isArray(agents) || agents.length === 0) {
     throw new Error('onboard-via-api: GET /api/v1/agents returned no agents to give the fallback');
   }
-  const fallbackBody = {
-    fallback_models: [{ provider: E2E_FALLBACK.provider, model: E2E_FALLBACK.model }],
-  };
+  const fallbackModels = [{ provider: E2E_FALLBACK.provider, model: E2E_FALLBACK.model }];
   for (const agent of agents) {
-    const id = (agent as { id?: unknown }).id;
+    const { id, revision } = agent as { id?: unknown; revision?: unknown };
     if (typeof id !== 'string' || id === '') {
       throw new Error('onboard-via-api: GET /api/v1/agents returned an agent with no id');
     }
+    // An agent update must carry the revision it read (409/400 otherwise, ADR-091 era).
+    if (typeof revision !== 'string' || revision === '') {
+      throw new Error(`onboard-via-api: GET /api/v1/agents returned no revision for agent ${id}`);
+    }
     const path = `/api/v1/agents/${encodeURIComponent(id)}`;
-    const res = await send(baseURL, 'PUT', path, fallbackBody, headers);
+    const res = await send(baseURL, 'PUT', path, { revision, fallback_models: fallbackModels }, headers);
     if (!res.ok) {
       throw new Error(`onboard-via-api: PUT ${path} (fallback_models) returned ${res.status}: ${res.text}`);
     }
