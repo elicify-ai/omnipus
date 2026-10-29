@@ -58,6 +58,9 @@ run_step vitest-composer 8m \
 run_step vitest-live 8m \
   npx vitest run src/components/rooms/groupchat1449.live.test.tsx
 
+run_step vitest-avatar-stack 8m \
+  npx vitest run src/components/ui/avatar-stack.test.tsx
+
 run_step vitest-history 8m \
   npx vitest run src/store/groupchat1449.history-limit.test.ts
 

@@ -94,7 +94,9 @@ export function snapshot(overrides: Partial<RoomSnapshotFrame> = {}): RoomSnapsh
 const plannedModules = import.meta.glob<Record<string, unknown>>([
   '/src/lib/api/rooms.ts', '/src/store/rooms.ts',
   '/src/components/rooms/RoomScreen.tsx', '/src/components/rooms/SquadDialog.tsx',
+  '/src/components/rooms/ParticipantsPanel.tsx',
   '/src/components/chat/AddParticipant.tsx', '/src/components/chat/RoomTrafficEntry.tsx',
+  '/src/components/chat/ChatHeaderSlot.tsx',
   '/src/components/layout/sidebar/WorkspaceAgentList.tsx',
 ])
 

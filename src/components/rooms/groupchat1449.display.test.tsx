@@ -2,7 +2,8 @@
 // S-01, S-02, S-05, S-07, S-08, S-09, S-41, S-104, S-105, S-106.
 // Real RoomScreen through the l1-room-ui harness. Only the socket and fetch are doubled.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { act } from 'react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/store/chat'
 import {
@@ -55,8 +56,12 @@ describe('group messages use the normal chat renderer (US-1, US-12)', () => {
       })],
     }))
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /copy/i }))
+    // S-02 names the code block's Copy control. A second Copy (the whole
+    // message) must not make the query match two buttons.
+    const copy = screen.getByRole('button', { name: 'Copy code to clipboard' })
+    await user.click(copy)
     expect(await navigator.clipboard.readText()).toBe('echo hi')
+    expect(copy, 'S-02: the control confirms the copy').toHaveTextContent(/copied/i)
   })
 
   it('S-07 shows each agent name and avatar, and the person message has no author label', async () => {
@@ -74,14 +79,17 @@ describe('group messages use the normal chat renderer (US-1, US-12)', () => {
         }),
       ],
     }))
-    const miaRow = screen.getByText('Mia answer').closest('article')
-    const userRow = screen.getByText('status?').closest('article')
-    expect(miaRow).not.toBeNull()
-    expect(within(miaRow!).getByText('Mia')).toBeInTheDocument()
-    expect(within(miaRow!).getByRole('img', { name: /mia/i }), 'S-07: the answer carries the author avatar').toBeInTheDocument()
-    expect(userRow).not.toBeNull()
-    expect(within(userRow!).queryByText(/^You$/), 'S-07: the person message has no author label').toBeNull()
-    expect(userRow!.className).toMatch(/items-end|ml-auto|self-end/)
+    const miaRow = messageRow('Mia answer')
+    const jimRow = messageRow('Jim answer')
+    const userRow = messageRow('status?')
+    expect(within(miaRow).getByText('Mia')).toBeInTheDocument()
+    expect(within(jimRow).getByText('Jim')).toBeInTheDocument()
+    // S-07: the avatar sits beside the visible name. The shared mark is
+    // decorative (not a named image) when the name is already shown.
+    expect(within(miaRow).getByTestId('agent-icon'), 'S-07: Mia has an avatar').toBeInTheDocument()
+    expect(within(jimRow).getByTestId('agent-icon'), 'S-07: Jim has an avatar').toBeInTheDocument()
+    expect(within(userRow).queryByText(/^You$/), 'S-07: the person message has no author label').toBeNull()
+    expect(userRow.className, 'S-07: the person message is right-aligned').toMatch(/flex-row-reverse|items-end|ml-auto|self-end/)
   })
 
   it('S-08 keeps the muted after-pause mark', async () => {
@@ -132,25 +140,32 @@ describe('group messages use the normal chat renderer (US-1, US-12)', () => {
         addressees: [],
       })],
     }))
-    const row = screen.getByText(literal).closest('article')
-    expect(row?.textContent).toContain(literal)
-    expect(row?.querySelector('script'), 'S-104: agent HTML must not become a script element').toBeNull()
+    const row = messageRow(literal)
+    expect(row.textContent).toContain(literal)
+    expect(row.querySelector('script'), 'S-104: agent HTML must not become a script element').toBeNull()
   })
 
-  it('S-105 strikes a script-scheme link and does not make it clickable', async () => {
+  it('S-105 strikes unsafe link schemes and keeps a normal link clickable', async () => {
     await open(snapshot({
       seq: 2,
       entries: [entry({
         id: 'link',
         author: { kind: 'agent', agent_id: 'mia' },
-        text: '[click](javascript:alert(1))',
+        text: '[run](javascript:alert(1))\n\n[payload](data:text/html,x)\n\n[site](https://example.com)',
         client_message_id: undefined,
         addressees: [],
       })],
     }))
-    expect(document.querySelector('a[href^="javascript:"]'), 'S-105: a script-scheme link is not clickable').toBeNull()
-    const shown = screen.getByText(/javascript:alert\(1\)/)
-    expect(window.getComputedStyle(shown).textDecorationLine).toContain('line-through')
+    // jsdom does not compute Tailwind, so the strike is the shared renderer's
+    // line-through class (DS-6 rows 6–7), not getComputedStyle.
+    expectStruck('run')
+    expectStruck('payload')
+    expect(document.querySelector('a[href^="javascript:"]')).toBeNull()
+    expect(document.querySelector('a[href^="data:"]')).toBeNull()
+    const site = screen.getByRole('link', { name: 'site' })
+    expect(site, 'S-105: a normal link stays clickable').toHaveAttribute('href', 'https://example.com')
+    expect(site, 'S-105: a normal link opens in a new tab').toHaveAttribute('target', '_blank')
+    expect(site.getAttribute('rel') ?? '', 'S-105: a normal link opens without referrer access').toMatch(/noreferrer/)
   })
 
   it('S-106 does not request a remote image address', async () => {
@@ -181,8 +196,10 @@ describe('group messages use the normal chat renderer (US-1, US-12)', () => {
 })
 
 describe('group history uses the shared column behaviour (US-6)', () => {
-  it('S-41 offers Return to latest once earlier messages exist', async () => {
-    await open(snapshot({
+  it('S-41 shows Return to latest only while earlier messages are being read', async () => {
+    // S-41 Given is "scrolled far up", not "older entries exist". Opening on
+    // the newest message must not show the control (US-6 AS 3, UAT-18).
+    const harness = await open(snapshot({
       has_older: true,
       seq: 3,
       entries: [
@@ -190,7 +207,14 @@ describe('group history uses the shared column behaviour (US-6)', () => {
         entry({ id: 'e2', seq: 2, text: 'newest visible' }),
       ],
     }))
-    expect(screen.getByRole('button', { name: /^Return to latest$/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Return to latest$/ })).toBeNull()
+    enterEarlierReading(harness.store)
+    const control = await screen.findByRole('button', { name: /^Return to latest$/ })
+    await userEvent.setup().click(control)
+    expect(screen.getByText('newest visible')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /^Return to latest$/ })).toBeNull()
+    })
   })
 
   it('S-39 puts the message box in the same centred column as a normal chat', async () => {
@@ -205,3 +229,42 @@ describe('group history uses the shared column behaviour (US-6)', () => {
     expect(ROOM_ID).toBe('launch')
   })
 })
+
+/** The message row. The shared list uses data-message-id; the old list uses article. */
+function messageRow(text: string): HTMLElement {
+  const node = screen.getByText(text)
+  const row = node.closest('article, [data-message-id]')
+  expect(row, `the message "${text}" is shown in a row`).not.toBeNull()
+  return row as HTMLElement
+}
+
+/** S-105: struck through, and not an anchor. */
+function expectStruck(label: string): void {
+  const node = screen.getByText(label)
+  const marked = node.className.includes('line-through') ? node : node.closest('.line-through')
+  expect(marked, `S-105: "${label}" is struck through`).not.toBeNull()
+  expect(marked!.closest('a'), `S-105: "${label}" is not clickable`).toBeNull()
+}
+
+/**
+ * The shared reader mode that scrolling far up sets (S-41 Given). The room
+ * store's setViewMode is that signal once the group uses the shared list.
+ */
+function enterEarlierReading(store: { getState(): unknown; setState(state: object, replace: true): void }): void {
+  const api = store as unknown as {
+    getState: () => {
+      rooms: Record<string, object>
+      setViewMode?: (roomId: string, mode: 'historical' | 'latest') => void
+    }
+    setState: (partial: object) => void
+  }
+  const state = api.getState()
+  act(() => {
+    if (state.setViewMode) {
+      state.setViewMode(ROOM_ID, 'historical')
+      return
+    }
+    const current = state.rooms[ROOM_ID] ?? {}
+    api.setState({ rooms: { ...state.rooms, [ROOM_ID]: { ...current, viewMode: 'historical' } } })
+  })
+}

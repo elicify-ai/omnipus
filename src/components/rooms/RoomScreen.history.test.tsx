@@ -60,7 +60,7 @@ async function mountRoomWithHistoryHint() {
     complete: true, has_older: true,
   }))
   connection = mounted.connection
-  expect(screen.getByText(/Earlier messages aren't shown/)).toBeInTheDocument()
+  expect(screen.getByText(/Show earlier messages/)).toBeInTheDocument()
   return mounted
 }
 
@@ -108,7 +108,7 @@ describe('T23 — the integrated scroll-up flow (design D6)', () => {
 
     scrollLogToTop()
 
-    await waitFor(() => expect(screen.queryByText(/Earlier messages aren't shown/)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText(/Show earlier messages/)).not.toBeInTheDocument())
     // The whole history is now visible, in order.
     for (const text of ['entry-1', 'entry-2', 'entry-3', 'entry-4', 'entry-5']) {
       expect(screen.getByText(text)).toBeInTheDocument()
@@ -128,7 +128,7 @@ describe('T24 — recoverable earlier-history error (design D6)', () => {
 
     // Inline, recoverable — never a blank transcript: rows and hint remain.
     expect(screen.getByText('entry-5')).toBeInTheDocument()
-    expect(screen.getByText(/Earlier messages aren't shown/)).toBeInTheDocument()
+    expect(screen.getByText(/Show earlier messages/)).toBeInTheDocument()
     const retry = await screen.findByRole('button', { name: 'Retry' })
     expect(retry).toBeVisible()
 
@@ -143,7 +143,7 @@ describe('T24 — recoverable earlier-history error (design D6)', () => {
     // A later valid terminal page clears error and hint.
     fetchRoomHistory.mockResolvedValueOnce(firstPage())
     await userEvent.click(retry)
-    await waitFor(() => expect(screen.queryByText(/Earlier messages aren't shown/)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText(/Show earlier messages/)).not.toBeInTheDocument())
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
     // Sending stays enabled the whole time — no "Loading the conversation…" gate.
     expect(screen.queryByText('Loading the conversation…')).toBeNull()
