@@ -171,8 +171,8 @@ func assertTodosGuidancePrompt(t *testing.T, inst *AgentInstance, enabled, memor
 		"workspace_cache": inst.ContextBuilder.BuildSystemPromptWithCacheForWorkspace("todos-guidance-workspace"),
 	} {
 		lines := q2OperatingRules(t, prompt)
-		// Q2 specifies 63 unconditional rules plus one each for checklist and memory.
-		wantCount := 63
+		// Unconditional operating rules are 69, plus one each for checklist and memory.
+		wantCount := 69
 		if enabled {
 			wantCount++
 		}
