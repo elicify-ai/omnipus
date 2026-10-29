@@ -622,6 +622,13 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 	)
 	agent.Tools.RegisterReplacing(sendFileTool)
 
+	// show_to_user (chat-links US-6): every instance shares the process-wide
+	// limiter (D-limit); the watching bit is read live from the gateway's
+	// presence lookup, the same source as the "User watching" context line.
+	showToUser := tools.NewShowToUserTool(agent.Home, rw.cfg.Agents.Defaults.RestrictToWorkspace, nil)
+	showToUser.SetWatching(rw.rs.al.isUserWatching)
+	agent.Tools.RegisterReplacing(showToUser)
+
 	// Skill discovery and installation tools — always registered.
 	// Runtime failures (ClawHub unreachable, no auth token) surface at call
 	// time with clear errors.

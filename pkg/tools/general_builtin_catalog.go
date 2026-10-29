@@ -152,6 +152,10 @@ func GeneralBuiltinMetadata() []Tool {
 	// central registry and the Constraint #6 tool-policy-coverage universe
 	// (buildKnownBuiltinToolNames) see it, mirroring message_parent exactly.
 	out = append(out, NewAskUserQuestionTool(nil))
+	// --- show_to_user (CategoryCommunication) — chat-links spec US-6: open
+	// the Library in the user's watching web chat. Built on the process-wide
+	// limiter, so every instance shares one budget per chat (D-limit). ---
+	out = append(out, NewShowToUserTool("", false, nil))
 	out = append(out, NewRequestSecretTool(nil, nil))
 	out = append(out, NewListSecretsTool(ListSecretsDeps{}))
 

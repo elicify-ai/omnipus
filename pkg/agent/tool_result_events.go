@@ -1,10 +1,18 @@
 package agent
 
-import "github.com/elicify-ai/omnipus/pkg/session"
+import (
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+)
 
 // emitAdmittedToolResult runs only after the per-result checkpoint succeeds.
 func (ex *agentLoopRunTurnToolsExecute) emitAdmittedToolResult() {
 	endSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+	// chat-links D-seam: the open request rides the payload only on success.
+	var openTarget *tools.LibraryOpenTarget
+	if !ex.toolResult.IsError {
+		openTarget = ex.toolResult.OpenInLibrary
+	}
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecEnd,
 		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.end"),
@@ -24,6 +32,7 @@ func (ex *agentLoopRunTurnToolsExecute) emitAdmittedToolResult() {
 			Result:            ex.contentForLLM,
 			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
 			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
+			OpenInLibrary:     openTarget,
 		},
 	)
 }

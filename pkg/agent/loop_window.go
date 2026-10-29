@@ -121,7 +121,7 @@ func (al *AgentLoop) assembleMessages(
 			userMsg, media = "", nil
 		}
 	}
-	base := ts.agent.ContextBuilder.BuildMessages(ts.depth, nil, userMsg, media,
+	base := ts.agent.ContextBuilder.BuildMessagesForSession(ts.transcriptSessionID, ts.depth, nil, userMsg, media,
 		ts.opts.WorkspaceID, ts.channel, ts.chatID, ts.opts.SenderID,
 		ts.opts.SenderDisplayName, withExpiryNote(breadcrumb, expiryNote), nil, skillNames...)
 	base = withoutVolatileNotes(base)

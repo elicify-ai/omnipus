@@ -312,6 +312,9 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 	}
 	h.hubPublishMetaAlsoTo(evtSID, string(generated.WsFrameTypeToolCallResult),
 		hubFrameMeta{kind: hubKindToolResult, key: string(p.ToolCallID), turnID: evt.Meta.TurnID}, data, nil)
+	// chat-links: a successful show_to_user call also sends the live-only
+	// open_in_library frame (unsequenced, unjournaled; ws_session_hub_live.go).
+	h.hubDeliverOpenInLibrary(evtSID, p)
 }
 
 // ---------------------------------------------------------------------

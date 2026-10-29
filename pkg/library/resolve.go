@@ -69,6 +69,18 @@ type ResolveScope struct {
 	AllWorkspaces bool
 }
 
+// LibraryDir returns the turn workspace's Library directory — the directory a
+// workspace-relative Library path is joined onto — or "" when the scope names
+// no turn workspace or it has no directory.
+func (s ResolveScope) LibraryDir() string {
+	for _, c := range resolveCandidates(s) {
+		if c.workspaceID == s.WorkspaceID {
+			return c.workDir
+		}
+	}
+	return ""
+}
+
 // resolveCandidate is one workspace Library a path may belong to.
 type resolveCandidate struct {
 	workspaceID string

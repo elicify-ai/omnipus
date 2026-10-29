@@ -154,6 +154,10 @@ type ContextBuilder struct {
 	// wired by wireModeNoteInjectors in loop_env.go.
 	modeNoteInjector func() string
 
+	// watchingInjector answers the per-turn "User watching" line (chat-links
+	// D-watch); see context_watching.go.
+	watchingInjector func(sessionID string) bool
+
 	// env carries the environment provider + any per-builder env state. Split
 	// into a nested struct so context_env.go owns the mutation surface without
 	// touching the core ContextBuilder definition.
@@ -1429,7 +1433,7 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 
 // buildDynamicContext renders live metadata in its original system-prefix slot.
 // The clock is rendered separately by buildVolatileContext.
-func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, channel, chatID, senderID, senderDisplayName string) string {
+func (cb *ContextBuilder) buildDynamicContextFor(sessionID string, delegationDepth int, workspaceID, channel, chatID, senderID, senderDisplayName string) string {
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 	var sb strings.Builder
@@ -1437,6 +1441,9 @@ func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, 
 
 	if channel != "" && chatID != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)
+		if line := cb.userWatchingLine(channel, sessionID); line != "" {
+			fmt.Fprintf(&sb, "\n%s", line)
+		}
 	}
 	if senderLine := formatCurrentSenderLine(senderID, senderDisplayName); senderLine != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Sender\n%s", senderLine)
@@ -1472,7 +1479,8 @@ func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, 
 	return sb.String()
 }
 
-// BuildMessages assembles the provider message list for a single agent turn.
+// buildMessagesFor assembles the provider message list for a single agent turn
+// (entry points BuildMessages and BuildMessagesForSession, context_watching.go).
 //
 // Assembly order (FR-006/FR-019):
 //  1. Single system message: static prompt + live metadata + active skills + breadcrumb.
@@ -1500,7 +1508,8 @@ func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, 
 // recall_conversation (FR-019); pass nil when no recall is active. The span
 // is placed after the breadcrumb and before the sliding window so the model
 // sees recalled (old) context before the most-recent window turns.
-func (cb *ContextBuilder) BuildMessages(
+func (cb *ContextBuilder) buildMessagesFor(
+	sessionID string,
 	delegationDepth int,
 	history []providers.Message,
 	currentMessage string,
@@ -1532,7 +1541,7 @@ func (cb *ContextBuilder) BuildMessages(
 
 	// Keep runtime, session, sender and delegation metadata in the system prefix.
 	// workspaceID is threaded so the delegation block reads the same graph the gate enforces.
-	dynamicCtx := cb.buildDynamicContext(delegationDepth, workspaceID, channel, chatID, senderID, senderDisplayName)
+	dynamicCtx := cb.buildDynamicContextFor(sessionID, delegationDepth, workspaceID, channel, chatID, senderID, senderDisplayName)
 
 	// Compose stable system instructions; volatile context is appended at the tail.
 	// Keeping all system content in one message ensures every provider adapter can

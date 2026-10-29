@@ -239,6 +239,10 @@ func wireModeNoteInjectors(al *AgentLoop, registry *AgentRegistry) {
 		if !ok || agentInst == nil || agentInst.ContextBuilder == nil {
 			continue
 		}
+		// chat-links D-watch: every agent's web turns carry the "User
+		// watching" line, read live from the gateway's presence lookup. Wired
+		// here because this runs on every registry build and reload.
+		agentInst.ContextBuilder.WithWatchingInjector(al.isUserWatching)
 		if coreagent.CoreAgentID(agentID) != coreagent.IDOmnipus {
 			agentInst.ContextBuilder.WithModeNoteInjector(nil)
 			continue

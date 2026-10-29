@@ -5,6 +5,7 @@
 package library
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -123,4 +124,34 @@ func writeEncodedSegment(b *strings.Builder, seg string) {
 func isUnreservedByte(c byte) bool {
 	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' ||
 		c == '-' || c == '.' || c == '_' || c == '~'
+}
+
+// ParseLibraryLink is EncodeLibraryLink's inverse for the strict form
+// omnipus://file/<workspace>/<path>: it returns the workspace id and the
+// decoded Library path. ok is false for anything EncodeLibraryLink could not
+// have produced from some valid input — another host, a query or fragment,
+// bad percent-encoding, an empty or non-canonical path, or a rejected
+// character.
+func ParseLibraryLink(link string) (workspaceID, rel string, ok bool) {
+	rest, found := strings.CutPrefix(link, LinkScheme)
+	if !found || strings.ContainsAny(rest, "?#") {
+		return "", "", false
+	}
+	ws, encPath, found := strings.Cut(rest, "/")
+	if !found || !validLinkWorkspace(ws) || encPath == "" {
+		return "", "", false
+	}
+	segs := strings.Split(encPath, "/")
+	for i, seg := range segs {
+		dec, err := url.PathUnescape(seg)
+		if err != nil || strings.Contains(dec, "/") {
+			return "", "", false
+		}
+		segs[i] = dec
+	}
+	rel = strings.Join(segs, "/")
+	if _, valid := EncodeLibraryLink(ws, rel); !valid {
+		return "", "", false
+	}
+	return ws, rel, true
 }
