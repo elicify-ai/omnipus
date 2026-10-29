@@ -259,9 +259,22 @@ func (us *UnifiedStore) reconcileExistingChatHistory(ctx context.Context) error 
 			continue
 		}
 		_, err := us.reconcileChatHistoryIndex(ctx, sid)
-		if err != nil {
+		if err != nil && !historyIndexStateFailure(err) {
 			failures = errors.Join(failures, err)
 		}
 	}
 	return failures
+}
+
+// historyIndexStateFailure reports a per-chat derived-index state failure
+// (catchup_limit, index_inconsistent, index_missing). It is local to that
+// chat and already reported once per episode by the owner's warning, so the
+// boot and retention passes over all chats do not fail because of it. Storage
+// and every other error stay returned.
+func historyIndexStateFailure(err error) bool {
+	switch historyFailureReason(err) {
+	case "catchup_limit", "index_inconsistent", "index_missing":
+		return true
+	}
+	return false
 }
