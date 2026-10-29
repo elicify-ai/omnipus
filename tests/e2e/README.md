@@ -103,18 +103,34 @@ CI runs are in `.github/workflows/pr.yml` under the `playwright` job. The job:
 1. Builds the Go binary with the SPA embedded.
 2. Reads `tests/e2e/e2e-model.json` through `scripts/e2e-model.sh env` (fails closed on a
    missing field, an equal primary/fallback pair, or the old `{"model": ...}` shape).
-3. **Checks the primary at job start** (`scripts/e2e-model.sh preflight`): one 1-token
-   call. If the primary answers 429, 5xx, 401/403, times out or cannot be reached, the
-   WHOLE job runs on the fallback — a `::warning::`, a job-summary line
-   (`LLM: fallback (primary MiniMax unavailable: ...)`), an `llm-route-<shard>` artifact,
-   and `OMNIPUS_E2E_PRIMARY_PROVIDER/_MODEL` pointing the fixtures at the fallback pair.
-   Any other answer, or a missing key, fails the job.
+3. **Checks the primary at job start** (`scripts/e2e-model.sh preflight --strict`): one
+   1-token call to the provider's fixed catalog URL. If the primary answers 429 or 5xx,
+   times out or cannot be reached, the WHOLE job runs on the fallback — a `::warning::`,
+   a job-summary line (`LLM: fallback (primary MiniMax unavailable: ...)`), an
+   `llm-route-<shard>` artifact, and `OMNIPUS_E2E_PRIMARY_PROVIDER/_MODEL` pointing the
+   fixtures at the fallback pair. A rejected key (401/403) is a configuration error and
+   **fails the job** with an `::error::`; so does a 2xx that is not an Anthropic message,
+   any other answer, or a missing key.
 4. Seeds an `OMNIPUS_HOME` whose config.json carries both provider rows
    (`scripts/e2e-model.sh seed-config`) and both credentials.
 5. Starts the gateway, onboards on the primary, and gives every agent the fallback
    (`scripts/e2e-model.sh seed-agent-fallbacks`).
 6. **Verifies both keys are set** (preflight step) before running any test.
 7. Runs `npx playwright test`.
+8. **Counts mid-run fallbacks** (`scripts/e2e-model.sh note-fallbacks`): every answer an
+   agent took from the fallback during the tests leaves a transcript note. Any note gives a
+   `::warning::`, a job-summary line, and an `llm-route` file whose route is
+   `primary_then_fallback` (never "primary").
+
+**Keys never reach Playwright traces.** The test runner records every request a Playwright
+request context sends — JSON bodies included — in the trace, and CI uploads retained traces
+(artifacts are not secret-masked). So every request that carries a real key goes through
+Node's own `fetch` (`fixtures/onboard-via-api.ts`), mock-provider gateways onboard with a
+fixed fake key, and `trace-secret-canary.spec.ts` proves with fake canary keys that neither
+key appears in a retained trace. Never send a real key with `page.request`, `request.newContext()`
+or a `GatewayProcess.apiFetch` call. One known exception remains: the browser onboarding
+wizard (`fixtures/login.ts`) types the primary key into the page, which the trace records;
+it only runs when a spec meets an instance that was not onboarded by API.
 
 Required secrets (Settings > Secrets > Actions):
 - `MINIMAX_API_KEY_CI` — the primary model key (one key for every shard).

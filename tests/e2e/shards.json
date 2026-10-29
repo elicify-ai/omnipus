@@ -163,7 +163,8 @@
         "tests/e2e/profile-fontsize.spec.ts",
         "tests/e2e/providers.spec.ts",
         "tests/e2e/chat-history-paging.reconnect-retention-retry.spec.ts",
-        "tests/e2e/chat-history-paging.cancelled-tool-reload.spec.ts"
+        "tests/e2e/chat-history-paging.cancelled-tool-reload.spec.ts",
+        "tests/e2e/trace-secret-canary.spec.ts"
       ]
     },
     {

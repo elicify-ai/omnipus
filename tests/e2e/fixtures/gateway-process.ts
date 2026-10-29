@@ -40,8 +40,10 @@ import * as path from 'path';
 import { request, type APIRequestContext } from '@playwright/test';
 import { getFreePort, waitForHealth, DEFAULT_OMNIPUS_BINARY } from '../setup.js';
 import { E2E_FALLBACK, E2E_PRIMARY } from './e2e-model.js';
-import { lookupModelKey } from './e2e-model-keys.js';
 import { onboardViaAPI } from './onboard-via-api.js';
+
+/** The fake key every mock-provider gateway onboards with; never a real secret. */
+const MOCK_PROVIDER_KEY = 'sk-test-placeholder';
 
 export interface ApiResult<T> {
   ok: boolean;
@@ -162,9 +164,17 @@ export class GatewayProcess {
       port,
     );
 
-    await gw.spawnProcess();
-    await waitForHealth(gw.baseURL, 15_000, gw.proc ?? undefined);
-    await gw.onboardAndLogin();
+    // A failed boot or onboarding (a missing key, a refused probe) must not
+    // leave the process running or its temp OMNIPUS_HOME behind: the caller
+    // never receives a handle to stop().
+    try {
+      await gw.spawnProcess();
+      await waitForHealth(gw.baseURL, 15_000, gw.proc ?? undefined);
+      await gw.onboardAndLogin();
+    } catch (err) {
+      await gw.stop();
+      throw err;
+    }
     return gw;
   }
 
@@ -223,8 +233,7 @@ export class GatewayProcess {
    * Live gateway (no apiBase): the shared onboardViaAPI — primary provider
    * with its key, then the fallback provider and every agent's
    * fallback_models. Mock gateway (apiBase): the fallback pair (an
-   * OpenAI-compatible provider) pointed at the mock; the mock accepts any key,
-   * so a placeholder is used when no real one is set. */
+   * OpenAI-compatible provider) pointed at the mock with a fixed fake key. */
   private async onboardAndLogin(): Promise<void> {
     if (!this.apiBase) {
       await onboardViaAPI({
@@ -236,7 +245,10 @@ export class GatewayProcess {
       await this.login();
       return;
     }
-    const apiKey = lookupModelKey(E2E_FALLBACK.provider) ?? 'sk-test-placeholder';
+    // A mock provider accepts any key, so a mock gateway never receives a real
+    // one: this request goes through Playwright's request client, which the
+    // trace records (see onboard-via-api.ts).
+    const apiKey = MOCK_PROVIDER_KEY;
     const onboardCtx = await request.newContext({ baseURL: this.baseURL });
     try {
       const res = await onboardCtx.post('/api/v1/onboarding/complete', {

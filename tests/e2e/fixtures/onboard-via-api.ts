@@ -1,4 +1,3 @@
-import { type APIRequestContext, request } from '@playwright/test';
 import { E2E_FALLBACK, E2E_PRIMARY } from './e2e-model.js';
 import { keyEnvNamesFor, lookupModelKey } from './e2e-model-keys.js';
 
@@ -11,7 +10,44 @@ import { keyEnvNamesFor, lookupModelKey } from './e2e-model-keys.js';
 // evals/cmd/eval-runner) follow the SAME central setting: the evals agent
 // and the judge default to its primary, with its fallback (founder decision
 // 2026-09-27), so tests and evals cannot drift apart on which model they run.
+// Credentials never travel through Playwright's request client: the Playwright
+// test runner records every request a context sends — JSON bodies included —
+// into the trace, and CI uploads retained traces as artifacts (artifacts are not
+// secret-masked). This file therefore talks to the gateway with Node's own
+// fetch, which no trace observes. tests/e2e/trace-secret-canary.spec.ts pins
+// that a canary key sent through here never appears in a retained trace.
 const DEFAULT_USERNAME = 'admin';
+
+interface PlainResponse {
+  status: number;
+  ok: boolean;
+  text: string;
+}
+
+/** One JSON request with Node fetch (NOT Playwright's request client). */
+async function send(
+  baseURL: string,
+  method: 'GET' | 'POST' | 'PUT',
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): Promise<PlainResponse> {
+  const res = await fetch(new URL(path, baseURL), {
+    method,
+    headers: body === undefined ? headers : { 'Content-Type': 'application/json', ...headers },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  return { status: res.status, ok: res.ok, text };
+}
+
+function parseJSON(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
 const DEFAULT_PASSWORD = 'admin123';
 
 export interface OnboardingOptions {
@@ -94,28 +130,25 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
     }
   }
 
-  const ctx: APIRequestContext = await request.newContext({ baseURL: opts.baseURL });
-  try {
-    const res = await ctx.post('/api/v1/onboarding/complete', {
-      data: {
-        provider: {
-          auth_method: 'api_key',
-          id: providerID,
-          api_key: apiKey,
-          model,
-        },
-        admin: {
-          username: opts.username ?? DEFAULT_USERNAME,
-          password,
-        },
+  {
+    const res = await send(opts.baseURL, 'POST', '/api/v1/onboarding/complete', {
+      provider: {
+        auth_method: 'api_key',
+        id: providerID,
+        api_key: apiKey,
+        model,
+      },
+      admin: {
+        username: opts.username ?? DEFAULT_USERNAME,
+        password,
       },
     });
 
     // 200 = fresh onboard: seed the fallback row and every agent's fallback.
-    if (res.status() === 200) {
+    if (res.status === 200) {
       if (seedFallback && fallbackKey) {
-        const body = (await res.json().catch(() => ({}))) as { token?: string };
-        await seedAgentFallback(ctx, body.token, fallbackKey);
+        const body = (parseJSON(res.text) ?? {}) as { token?: string };
+        await seedAgentFallback(opts.baseURL, body.token, fallbackKey);
       }
       return;
     }
@@ -123,13 +156,8 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
     // 409 = already complete on this $OMNIPUS_HOME (e.g. second test shard
     // hitting the same instance). Accept ONLY when the body confirms the known
     // sentinel — any other 409 is an unexpected error and must be surfaced.
-    if (res.status() === 409) {
-      let body: string;
-      try {
-        body = await res.text();
-      } catch {
-        throw new Error('onboard-via-api: 409 response body could not be read');
-      }
+    if (res.status === 409) {
+      const body = res.text;
       // Accept the 409 only when the body contains the expected sentinel.
       // The backend returns {"error":"onboarding_already_complete",...} or similar text.
       if (
@@ -148,8 +176,8 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
     // any other 400 (malformed body, bad username, etc.): the configured key
     // is wrong or revoked. Surface that plainly instead of letting the raw
     // provider-rejection message read like a suite bug.
-    if (res.status() === 400) {
-      const body = await res.text();
+    if (res.status === 400) {
+      const body = res.text;
       if (body.toLowerCase().includes('rejected')) {
         throw new Error(
           `onboard-via-api: the configured key for "${providerID}" was rejected by the provider — ` +
@@ -162,12 +190,9 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
       );
     }
 
-    const body = await res.text();
     throw new Error(
-      `onboard-via-api: POST /api/v1/onboarding/complete returned ${res.status()}: ${body}`,
+      `onboard-via-api: POST /api/v1/onboarding/complete returned ${res.status}: ${res.text}`,
     );
-  } finally {
-    await ctx.dispose();
   }
 }
 
@@ -178,27 +203,30 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
  * on dev-mode bypass, as CI's seeded config sets.
  */
 async function seedAgentFallback(
-  ctx: APIRequestContext,
+  baseURL: string,
   token: string | undefined,
   fallbackKey: string,
 ): Promise<void> {
   const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const providerPath = `/api/v1/providers/${encodeURIComponent(E2E_FALLBACK.provider)}`;
-  const put = await ctx.put(providerPath, {
+  const put = await send(
+    baseURL,
+    'PUT',
+    providerPath,
+    { auth_method: 'api_key', api_key: fallbackKey, model: E2E_FALLBACK.model },
     headers,
-    data: { auth_method: 'api_key', api_key: fallbackKey, model: E2E_FALLBACK.model },
-  });
-  if (!put.ok()) {
+  );
+  if (!put.ok) {
     throw new Error(
-      `onboard-via-api: PUT ${providerPath} (fallback provider) returned ${put.status()}: ${await put.text()}`,
+      `onboard-via-api: PUT ${providerPath} (fallback provider) returned ${put.status}: ${put.text}`,
     );
   }
 
-  const list = await ctx.get('/api/v1/agents', { headers });
-  if (!list.ok()) {
-    throw new Error(`onboard-via-api: GET /api/v1/agents returned ${list.status()}: ${await list.text()}`);
+  const list = await send(baseURL, 'GET', '/api/v1/agents', undefined, headers);
+  if (!list.ok) {
+    throw new Error(`onboard-via-api: GET /api/v1/agents returned ${list.status}: ${list.text}`);
   }
-  const agents = (await list.json()) as unknown;
+  const agents = parseJSON(list.text);
   if (!Array.isArray(agents) || agents.length === 0) {
     throw new Error('onboard-via-api: GET /api/v1/agents returned no agents to give the fallback');
   }
@@ -211,9 +239,9 @@ async function seedAgentFallback(
       throw new Error('onboard-via-api: GET /api/v1/agents returned an agent with no id');
     }
     const path = `/api/v1/agents/${encodeURIComponent(id)}`;
-    const res = await ctx.put(path, { headers, data: fallbackBody });
-    if (!res.ok()) {
-      throw new Error(`onboard-via-api: PUT ${path} (fallback_models) returned ${res.status()}: ${await res.text()}`);
+    const res = await send(baseURL, 'PUT', path, fallbackBody, headers);
+    if (!res.ok) {
+      throw new Error(`onboard-via-api: PUT ${path} (fallback_models) returned ${res.status}: ${res.text}`);
     }
   }
 }
