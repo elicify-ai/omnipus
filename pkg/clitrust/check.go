@@ -23,11 +23,12 @@ const agentWritableKinds = "a folder agents can write (the Omnipus home, a works
 // The path must be absolute. The link chain is resolved one link at a time.
 // The candidate is refused when the final file, any link, or any link's
 // folder lies inside one of the forbidden roots (normally
-// AgentWritableRoots), when the final file, its folder or a link's folder is
-// writable by others, or when the final file is not a regular file the
-// gateway user can execute. Platform rules (Windows: drive or UNC path,
-// .exe/.cmd/.bat only, no 8.3 short names, no alternate data streams) are in
-// check_unix.go and check_windows.go.
+// AgentWritableRoots), when another user could replace the final file or any
+// folder or link on the way to it (Unix: checkStep and checkFinalFile in
+// check_unix.go), or when the final file is not a regular file the gateway
+// user can execute. Windows applies its path-shape rules only (drive or UNC
+// path, .exe/.cmd/.bat, no 8.3 short names, no alternate data streams); its
+// permission checks are not implemented yet (check_windows.go).
 //
 // Every refusal is an error naming the failed check and the path concerned;
 // no file content is ever read into it.
@@ -38,7 +39,10 @@ func CheckProgramPath(path string, forbidden []string) (string, error) {
 	if err := checkPathShape(path); err != nil {
 		return "", err
 	}
-	roots := expandRoots(forbidden)
+	roots, err := expandRoots(forbidden)
+	if err != nil {
+		return "", err
+	}
 
 	final, links, err := resolveLinkChain(path)
 	if err != nil {
@@ -48,12 +52,8 @@ func CheckProgramPath(path string, forbidden []string) (string, error) {
 		if root, inside := insideAny(link, roots); inside {
 			return "", fmt.Errorf("the link %q lies inside %q, %s", link, root, agentWritableKinds)
 		}
-		dir := filepath.Dir(link)
-		if root, inside := insideAny(dir, roots); inside {
+		if root, inside := insideAny(filepath.Dir(link), roots); inside {
 			return "", fmt.Errorf("the folder of the link %q lies inside %q, %s", link, root, agentWritableKinds)
-		}
-		if err := checkFolderNotWritableByOthers(dir, "the folder of the link "+quote(link)); err != nil {
-			return "", err
 		}
 	}
 	if root, inside := insideAny(final, roots); inside {
@@ -68,12 +68,12 @@ func CheckProgramPath(path string, forbidden []string) (string, error) {
 	return final, nil
 }
 
-func quote(s string) string { return fmt.Sprintf("%q", s) }
-
 // expandRoots returns each forbidden root in its cleaned form and, when it
 // exists, its symlink-resolved form, so both spellings of a root (macOS
-// /var and /private/var) are matched.
-func expandRoots(forbidden []string) []string {
+// /var and /private/var) are matched. A root that does not exist has no
+// other spelling; any other resolution failure is an error, because the
+// unresolved spelling alone may not match the real location.
+func expandRoots(forbidden []string) ([]string, error) {
 	out := make([]string, 0, len(forbidden)*2)
 	for _, r := range forbidden {
 		if strings.TrimSpace(r) == "" {
@@ -81,11 +81,19 @@ func expandRoots(forbidden []string) []string {
 		}
 		clean := filepath.Clean(r)
 		out = append(out, clean)
-		if resolved, err := filepath.EvalSymlinks(clean); err == nil && resolved != clean {
-			out = append(out, resolved)
+		resolved, err := filepath.EvalSymlinks(clean)
+		switch {
+		case err == nil:
+			if resolved != clean {
+				out = append(out, resolved)
+			}
+		case errors.Is(err, os.ErrNotExist):
+			// Nothing exists there yet; the cleaned spelling is the only one.
+		default:
+			return nil, fmt.Errorf("the agent-writable folder %q could not be resolved, so the program location cannot be checked: %w", clean, err)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // insideAny reports whether p equals or lies below one of roots.
@@ -130,6 +138,9 @@ func resolveLinkChain(path string) (string, []string, error) {
 		fi, err := os.Lstat(next)
 		if err != nil {
 			return "", nil, fmt.Errorf("%q cannot be read: %w", path, err)
+		}
+		if stepErr := checkStep(cur, next, fi); stepErr != nil {
+			return "", nil, stepErr
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
 			cur = next

@@ -26,7 +26,11 @@ import (
 //     bypass state cannot be known;
 //   - the CLI token (ctxkey.CLITokenContextKey) — the token's synthetic user
 //     is not a person;
-//   - no user (ctxkey.UserContextKey absent or empty).
+//   - no user (ctxkey.UserContextKey absent or empty);
+//   - a user that is not one of the request snapshot's Gateway.Users accounts
+//     — for example the synthetic identity the legacy OMNIPUS_BEARER_TOKEN
+//     fallback attaches. Authentication that succeeded without a configured
+//     person account is not a signed-in person.
 //
 // Used as a.withAuth(middleware.RequirePersonSession(h)), so it runs after
 // bearer authentication has attached the user and the CLI-token marker.
@@ -58,8 +62,17 @@ func personSessionRefusal(r *http.Request) string {
 	if viaCLI, _ := ctx.Value(ctxkey.CLITokenContextKey{}).(bool); viaCLI {
 		return "cli_token"
 	}
-	if u, _ := ctx.Value(ctxkey.UserContextKey{}).(*config.UserConfig); u == nil || u.Username == "" {
+	u, _ := ctx.Value(ctxkey.UserContextKey{}).(*config.UserConfig)
+	if u == nil || u.Username == "" {
 		return "no_user"
 	}
-	return ""
+	// Membership by username in the same config snapshot the request was
+	// authenticated against. Pointer identity is not used: cookie
+	// authentication attaches a copy of the account.
+	for i := range cfg.Gateway.Users {
+		if cfg.Gateway.Users[i].Username == u.Username {
+			return ""
+		}
+	}
+	return "not_a_configured_person"
 }

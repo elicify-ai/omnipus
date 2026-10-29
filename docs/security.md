@@ -663,15 +663,20 @@ Three named exceptions:
 
 ## Checking an external command-line program
 
-The CLI check behind an external worker's **CLI path** field (`POST /api/v1/system/cli-validate`) runs the program you typed to read its version. Since 2026-10-29 only a signed-in person can use it: a request made with the command-line token, or while the gateway runs in development-bypass mode, is refused (403) before anything is read or started.
+The check behind an external worker's **CLI path** field (`POST /api/v1/system/cli-validate`) runs the program you typed with `--version` to read its version.
 
-Before starting anything, Omnipus checks the program file itself. The path must be absolute. Omnipus follows every link on the way to the real file and refuses the path — reason **path-not-allowed**, with a message naming the failed check, nothing started — when:
+Only a signed-in person can use it: the request must come from one of the configured user accounts. Requests made with the command-line token, while development-bypass mode is on, or with the legacy `OMNIPUS_BEARER_TOKEN` when no user account exists are refused with HTTP 403 before the request is read or any program starts. In the editor, the hint under the field then says the check is unavailable; saving still works.
 
-- the file, or any link on the way, is inside the Omnipus data folder, a workspace or a workspace mount (places agents can write);
-- the file is writable by its group or by other users, or its folder or a link's folder is writable by other users;
+Before starting anything, Omnipus checks the program file. The path must be absolute. Omnipus follows every link on the way to the real file and refuses the path — reason **path-not-allowed**, with a message naming the failed check, nothing started — when:
+
+- the file, or any link on the way, is inside the Omnipus data folder, an agent's working folder, a workspace or a workspace mount (places agents can write);
+- the list of those places cannot be read completely — for example a workspace's mount record is unreadable — because then the check cannot tell what is safe;
+- on Linux and macOS, another user could replace the program: the file or any folder on the way to it belongs to a user other than root or the account running Omnipus, the file is writable by its group or by other users, or a folder on the way is writable by its group or by other users (a shared folder with the sticky bit, such as `/tmp`, is allowed when the entry inside it belongs to root or to the account running Omnipus);
 - the file is not a regular program the account running Omnipus can execute.
 
-On Windows the path must be a full drive or network (UNC) path to an `.exe`, `.cmd` or `.bat` file, without short `8.3` names (such as `PROGRA~1`) or alternate data streams. When the check passes, Omnipus runs exactly the file it checked.
+On Windows the path must be a full drive or network (UNC) path to an `.exe`, `.cmd` or `.bat` file, without short `8.3` names (such as `PROGRA~1`) or alternate data streams. **Windows permissions and junctions are not checked yet:** a Windows program in a folder other users can write is not refused. Use the check on Windows only for programs installed in protected locations.
+
+When the check passes, Omnipus runs the file it checked. An empty path is reported as **missing-binary**. Passing the check does not sandbox the program: external command-line workers run outside the Omnipus sandbox (see [sandbox limitations](operations/sandbox-limitations.md#external-command-line-workers-run-outside-the-omnipus-sandbox)).
 
 ## Limits and things to watch
 

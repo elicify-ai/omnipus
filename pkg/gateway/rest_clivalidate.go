@@ -176,7 +176,15 @@ func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliV
 	//    agent-writable roots, are not writable by others, and end at a regular
 	//    executable. A refusal is path-not-allowed and starts nothing. A bare
 	//    name is refused (not absolute) rather than resolved on $PATH.
-	finalFile, checkErr := clitrust.CheckProgramPath(cliPath, a.cliTrustForbiddenRoots(ctx))
+	roots, rootsErr := a.cliTrustForbiddenRoots(ctx)
+	if rootsErr != nil {
+		// Fail closed: without the complete agent-writable set the location
+		// check cannot be trusted, so nothing is started.
+		slog.Warn("cli-validate: agent-writable folders could not be listed; refusing the candidate",
+			"error", rootsErr)
+		return pathNotAllowedResponse(rootsErr)
+	}
+	finalFile, checkErr := clitrust.CheckProgramPath(cliPath, roots)
 	if checkErr != nil {
 		return pathNotAllowedResponse(checkErr)
 	}
@@ -207,8 +215,9 @@ func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliV
 // cliTrustForbiddenRoots is the forbidden list for clitrust.CheckProgramPath:
 // the Omnipus home, every workspace folder and mount root, and configured
 // agent working folders. The request's config snapshot is preferred; the
-// live config is the fallback.
-func (a *restAPI) cliTrustForbiddenRoots(ctx context.Context) []string {
+// live config is the fallback. An error means the list is incomplete and the
+// caller must refuse.
+func (a *restAPI) cliTrustForbiddenRoots(ctx context.Context) ([]string, error) {
 	cfg := configFromContext(ctx)
 	if cfg == nil && a.agentLoop != nil {
 		cfg = a.agentLoop.GetConfig()

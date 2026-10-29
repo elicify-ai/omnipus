@@ -6,55 +6,61 @@
 package clitrust
 
 import (
-	"log/slog"
+	"fmt"
 	"path/filepath"
+	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agenthome"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-// AgentWritableRoots returns the folders agents can write and a candidate
+// AgentWritableRoots returns the folders agents can write, which a candidate
 // program must therefore not live in or be linked through: the Omnipus home,
-// every workspace folder and every workspace mount root, plus any agent
-// working folder cfg configures outside the home. Empty entries are skipped.
+// every agent home cfg configures (resolved exactly as the runtime resolves
+// it, through agenthome.Resolve), every workspace folder and every workspace
+// mount root.
 //
-// A workspace listing failure is logged and the home (which contains every
-// workspace folder) still covers the workspaces themselves; only mount roots
-// of unlisted workspaces could be missed, which the log names.
-func AgentWritableRoots(home string, cfg *config.Config) []string {
+// The list is complete or it is an error. A workspace listing that fails, a
+// workspace id that is unsafe, or a mount record that cannot be read or that
+// had entries dropped is an error, never a shorter list: a missing root would
+// silently turn "refuse" into "allow" for whatever it covers. Callers refuse
+// the candidate on error.
+func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
+	if strings.TrimSpace(home) == "" {
+		return nil, fmt.Errorf("the Omnipus data folder is not known, so the folders agents can write cannot be listed")
+	}
 	var roots []string
 	add := func(p string) {
-		if p == "" {
+		if strings.TrimSpace(p) == "" {
 			return
 		}
 		roots = append(roots, filepath.Clean(p))
 	}
 	add(home)
 	if cfg != nil {
-		add(cfg.Agents.Defaults.Home)
-		for _, a := range cfg.Agents.List {
-			add(a.Home)
+		add(agenthome.Resolve(nil, &cfg.Agents.Defaults))
+		for i := range cfg.Agents.List {
+			add(agenthome.Resolve(&cfg.Agents.List[i], &cfg.Agents.Defaults))
 		}
-	}
-	if home == "" {
-		return roots
 	}
 	ids, err := workspace.ListWorkspaceIDs(home)
 	if err != nil {
-		slog.Warn("clitrust: workspace listing failed; mount roots of unlisted workspaces are not in the forbidden set",
-			"home", home, "error", err)
-		return roots
+		return nil, fmt.Errorf("the workspaces could not be listed, so their folders and mounts cannot be excluded: %w", err)
 	}
 	for _, id := range ids {
 		dir, derr := workspace.SafeWorkspaceDir(home, id)
 		if derr != nil {
-			slog.Warn("clitrust: skipping workspace with an unsafe id", "id", id, "error", derr)
-			continue
+			return nil, fmt.Errorf("workspace %q has an unsafe id, so its folders cannot be excluded: %w", id, derr)
 		}
 		add(dir)
-		for _, m := range workspace.AllowedMountRoots(home, id) {
-			add(m)
+		mounts, ok, dropped := workspace.LoadMountsWithDropStatus(home, id)
+		if !ok || dropped {
+			return nil, fmt.Errorf("the mount record of workspace %q could not be read completely, so its mounts cannot be excluded; repair the record and retry (the gateway log names the cause)", id)
+		}
+		for _, m := range mounts {
+			add(m.HostPath)
 		}
 	}
-	return roots
+	return roots, nil
 }
