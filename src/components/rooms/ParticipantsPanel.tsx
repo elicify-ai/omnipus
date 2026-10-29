@@ -20,6 +20,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PanelContentProps } from '@/components/panel-shell/types'
 import type { RoomDeliveryState } from '@/lib/api/generated/asyncapi-types'
+import type { Room } from '@/lib/api/generated/openapi-types'
 import { AgentMark } from '@/components/agents/AgentMark'
 import { AttentionHalo } from '@/components/agents/AttentionHalo'
 import { useAttentionMotion } from '@/components/layout/sidebar/attentionCue'
@@ -35,7 +36,8 @@ import { ROOM_ASK_AGAIN_EVENT, deliveryLabel, formatAllocatedCost, type RoomAskA
 import { DeleteGroup, MainChatLink, MemberMenu, useMembership } from './roomMembership'
 import { needsAttention, useRoomCardRequestIds, useRoomView, type RoomView } from './useRoomView'
 
-type InvitationStatus = 'generating' | 'ready' | 'unavailable' // not-wire-format: mirrors the generated enum for local branching
+/** The generated invitation-context status (Room.invitation_context_status). */
+type InvitationStatus = NonNullable<Room['invitation_context_status']>
 
 function MemberRow({ view, agentId, delivery, groupCards, update, roomId }: {
   view: RoomView
