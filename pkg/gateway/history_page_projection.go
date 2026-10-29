@@ -16,6 +16,9 @@ type historyPageProjectionDeps struct {
 	ToolStore   *toolResultStore
 	TerminalAsk *askuser.PendingSet
 	Lifecycle   lifecycleRecordLoader
+	// Home is the gateway's $OMNIPUS_HOME, for MediaPart.library_ref
+	// (chat-links FR-021); "" falls back to config.OmnipusHomeDir().
+	Home string
 }
 type preparedHistoryPage struct {
 	Page               session.ChatHistoryPage

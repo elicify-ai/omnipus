@@ -19,12 +19,18 @@ import (
 // file, a screenshot in the media store, a symlink out of the work tree), the
 // path is the Library root (the server never emits an empty path), or the
 // name is one the SPA would refuse to render (the link encoder's rules).
-func libraryRefFor(localPath, workspaceID string) *generated.LibraryRef {
+//
+// home is the gateway's $OMNIPUS_HOME (WSHandler.home / the REST home path);
+// "" falls back to config.OmnipusHomeDir().
+func libraryRefFor(home, localPath, workspaceID string) *generated.LibraryRef {
 	if localPath == "" || workspaceID == "" {
 		return nil
 	}
+	if home == "" {
+		home = config.OmnipusHomeDir()
+	}
 	ref := library.ResolveHostPath(library.ResolveScope{
-		Home:        config.OmnipusHomeDir(),
+		Home:        home,
 		WorkspaceID: workspaceID,
 	}, localPath)
 	if !ref.InLibrary() || ref.WorkspaceID != workspaceID || ref.Rel == "" {
@@ -38,7 +44,7 @@ func libraryRefFor(localPath, workspaceID string) *generated.LibraryRef {
 
 // libraryRefForMedia resolves a media ref to its local path and maps it with
 // libraryRefFor. A store that cannot resolve the ref yields no field.
-func libraryRefForMedia(store media.MediaStore, ref, workspaceID string) *generated.LibraryRef {
+func libraryRefForMedia(store media.MediaStore, home, ref, workspaceID string) *generated.LibraryRef {
 	if store == nil || workspaceID == "" {
 		return nil
 	}
@@ -46,5 +52,5 @@ func libraryRefForMedia(store media.MediaStore, ref, workspaceID string) *genera
 	if err != nil {
 		return nil
 	}
-	return libraryRefFor(path, workspaceID)
+	return libraryRefFor(home, path, workspaceID)
 }

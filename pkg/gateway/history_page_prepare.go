@@ -191,7 +191,7 @@ func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHis
 			}
 		}
 	}
-	sr := &streamReplayState{sessionID: r.sessionID, entries: entries, toolStore: r.deps.ToolStore, terminalAsk: r.deps.TerminalAsk, preparedResults: map[session.ToolCallID]any{}, libraryWorkspaceID: r.libraryWorkspaceID}
+	sr := &streamReplayState{sessionID: r.sessionID, entries: entries, toolStore: r.deps.ToolStore, terminalAsk: r.deps.TerminalAsk, preparedResults: map[session.ToolCallID]any{}, libraryWorkspaceID: r.libraryWorkspaceID, libraryHome: r.deps.Home}
 	if r.lifecycle != nil {
 		sr.lifecycle = r.lifecycle
 	}

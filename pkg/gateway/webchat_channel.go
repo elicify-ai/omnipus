@@ -254,7 +254,7 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 			caption := p.Caption
 			part.Caption = &caption
 		}
-		part.LibraryRef = libraryRefForMedia(mediaStore, p.Ref, msg.WorkspaceID)
+		part.LibraryRef = libraryRefForMedia(mediaStore, c.wsHandler.home, p.Ref, msg.WorkspaceID)
 		parts = append(parts, part)
 	}
 	if len(parts) == 0 {

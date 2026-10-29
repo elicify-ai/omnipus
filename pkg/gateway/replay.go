@@ -51,6 +51,7 @@ type streamReplayState struct {
 	// (chat-links FR-021, reload half). Set only by the history-page
 	// preparation; "" omits the field.
 	libraryWorkspaceID          string
+	libraryHome                 string
 	seenPaths                   map[string]struct{}
 	spawnIDsWithChildren        map[string]bool
 	spanRealAgentIDs            map[string]string
@@ -337,7 +338,7 @@ func (sr *streamReplayState) emitSpawnParentToolCall(
 	if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, "")); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
-	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths, sr.libraryWorkspaceID); ok {
+	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths, sr.libraryHome, sr.libraryWorkspaceID); ok {
 		if err2 := emitFrame(mf); err2 != nil {
 			return streamReplayStateReturn, err2
 		}
@@ -381,7 +382,7 @@ func (sr *streamReplayState) emitFlatToolCall(
 	if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
-	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths, sr.libraryWorkspaceID); ok {
+	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths, sr.libraryHome, sr.libraryWorkspaceID); ok {
 		if err2 := emitFrame(mf); err2 != nil {
 			return streamReplayStateReturn, err2
 		}
@@ -1173,7 +1174,7 @@ func buildMediaFrame(
 	tc session.ToolCall,
 	mediaStore media.MediaStore,
 	seenPaths map[string]struct{},
-	libraryWorkspaceID string,
+	libraryHome, libraryWorkspaceID string,
 ) (generated.MediaFrame, bool) {
 	raw, ok := tc.Result["media"]
 	if !ok {
@@ -1219,7 +1220,7 @@ func buildMediaFrame(
 			Url:         mediaRefURL(refStr),
 			Filename:    filename,
 			ContentType: contentType,
-			LibraryRef:  libraryRefForMedia(mediaStore, refStr, libraryWorkspaceID),
+			LibraryRef:  libraryRefForMedia(mediaStore, libraryHome, refStr, libraryWorkspaceID),
 		})
 	}
 	if len(parts) == 0 {
