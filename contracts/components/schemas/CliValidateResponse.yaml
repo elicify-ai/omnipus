@@ -37,8 +37,11 @@ properties:
       - path-not-allowed
     description: >
       Classification of the validation result. "ok": binary runs and reports
-      a version, believed authenticated. "missing-binary": cli_path is empty,
-      absent, or not a regular executable file — blocks Create/Save.
+      a version, believed authenticated. "missing-binary": cli_path is empty, or
+      the checked program could not be found when the version check ran —
+      blocks Create/Save. A non-empty cli_path that is missing, not a regular
+      file, or not executable is refused by the program-file check as
+      "path-not-allowed" instead and is never started.
       "handshake-failed": the target ran but did not return a valid
       version-shaped response within the timeout — blocks Create/Save.
       "unauthenticated": the binary runs and reports a version but has no
