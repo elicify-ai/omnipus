@@ -429,6 +429,34 @@ function keepAttachedOwner(
   return sessionId === state.activeSessionId && state.activeAgentId != null
 }
 
+/**
+ * The descriptor the store ALREADY knows for this session in this workspace,
+ * or null when it knows none.
+ *
+ * A fallback must never overwrite a known, more specific descriptor with the
+ * generic 'chat' (#1449 round 6). Two writers fall back when the caller
+ * carries no session type of its own — the WS-connect reattach
+ * (src/components/chat/OmnipusRuntimeProvider.tsx::reattachActiveSession,
+ * through setActiveSession) and the workspace entry's own resolution
+ * (src/store/session/workspaceEntryFlow.ts::applyEntry). A downgraded MAIN
+ * reads "Extra chat" in the header line, and because the header's honest
+ * "agent names unavailable" warning is gated on the session being a main, it
+ * can never render — the 30s readiness wait of the committed narrow-header
+ * check was structurally unsatisfiable in that state.
+ *
+ * Only the SAME session counts: another session's descriptor must never leak
+ * onto this one.
+ */
+export function knownSessionDescriptor(
+  workspaceId: string | null | undefined,
+  sessionId: string | null | undefined,
+): WorkspaceSessionDescriptor | null {
+  if (!workspaceId || !sessionId) return null
+  const descriptor = useSessionStore.getState().sessionByWorkspace[workspaceId]
+  if (descriptor == null || descriptor.id !== sessionId) return null
+  return descriptor
+}
+
 // One owner of the initial attach: workspace entry (attachToSession) and the
 // connect-time reattachActiveSession both send attach_session, and on sign-in
 // both fired for the same session - the gateway replayed the whole transcript
@@ -508,10 +536,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (sessionId !== null && sessionId !== '__pending') {
       const wsId = useWorkspacesStore.getState().activeWorkspaceId
       if (wsId) {
+        // The caller here re-asserts a session the store may already know
+        // (the WS-connect reattach, the deep-link route's offline fallback)
+        // and carries no session type of its own — so the store's own
+        // descriptor for THAT session is the better answer than the generic
+        // 'chat' (knownSessionDescriptor). A fallback must never downgrade a
+        // known, more specific descriptor: a downgraded MAIN reads "Extra
+        // chat" in the header line and its honest "agent names unavailable"
+        // warning can never render (#1449 round 6).
+        const known = knownSessionDescriptor(wsId, sessionId)
         const descriptor: WorkspaceSessionDescriptor = {
           id: sessionId,
-          type: priorSessionType ?? 'chat',
-          title: priorTaskTitle,
+          type: priorSessionType ?? known?.type ?? 'chat',
+          title: priorTaskTitle ?? known?.title ?? null,
           // The EFFECTIVE agent (post-write, read after the precedence-rule
           // set() above already ran) — not the raw hint. When a user pin
           // rejected the hint, remembering the raw hint would hand the same
