@@ -60,14 +60,9 @@ func (s *Service) PostMessage(roomID string, req generated.RoomMessageRequest, p
 	return nil
 }
 
-func (s *Service) bodyLimit() int {
-	_, body := s.deps.Limits()
-	if body <= 0 {
-		return defaultMessageMaxBytes
-	}
-	return body
-}
-
+// validateMessage applies the message rules with inbound validation on and
+// off (FR-014, FR-024, FR-074): the size limit counts text bytes only, never
+// attachments; a message needs non-blank text or at least one file.
 func validateMessage(req generated.RoomMessageRequest, bodyLimit int) error {
 	cid := req.ClientMessageId
 	if strings.TrimSpace(cid) == "" || len(cid) > 128 || !validID(cid) {
@@ -76,16 +71,40 @@ func validateMessage(req generated.RoomMessageRequest, bodyLimit int) error {
 	if !utf8.ValidString(req.Text) || strings.ContainsRune(req.Text, 0) {
 		return badRequest("text must be valid text")
 	}
-	if strings.TrimSpace(req.Text) == "" {
-		return unprocessable("the message is empty")
-	}
-	if len(req.Text) > bodyLimit {
-		return unprocessable("the message is %d bytes; the limit is %d bytes", len(req.Text), bodyLimit)
+	if err := CheckTextSize(len(req.Text), bodyLimit); err != nil {
+		return err
 	}
 	if len(req.Mentions) > 256 {
 		return badRequest("too many mentions")
 	}
+	media := messageMedia(req)
+	if len(media) > MaxAttachments {
+		return badRequest("a message carries at most %d files; this one has %d", MaxAttachments, len(media))
+	}
+	if strings.TrimSpace(req.Text) == "" && len(media) == 0 {
+		return unprocessable("the message is empty: write some text or attach a file")
+	}
 	return nil
+}
+
+// CheckTextSize refuses text over the group limit in force with the size and
+// the limit (FR-074, FR-075). The REST layer calls it before any schema check
+// so an over-limit message is 422 with inbound validation on and off (A-12).
+func CheckTextSize(size, limit int) error {
+	if size > limit {
+		return unprocessable("the message is %d bytes; a group message can be at most %d bytes", size, limit)
+	}
+	return nil
+}
+
+// TextLimit is the group text limit in force now: min(steer_body, 65,536).
+func (s *Service) TextLimit() int { return s.bodyLimit() }
+
+func messageMedia(req generated.RoomMessageRequest) []string {
+	if req.Media == nil {
+		return nil
+	}
+	return *req.Media
 }
 
 // recordUserMessage records the entry and one delivery per addressee
@@ -99,18 +118,30 @@ func (s *Service) recordUserMessage(r *room, ws WorkspaceInfo, req generated.Roo
 	if err != nil {
 		return nil, err
 	}
+	// FR-018, FR-021: every reference is resolved before anything is
+	// recorded; then retention is acquired; then deliveries and the entry.
+	parts, err := s.resolveMessageMedia(r.rec.WorkspaceID, messageMedia(req))
+	if err != nil {
+		return nil, err
+	}
 	entryID := deriveID("entry", r.rec.ID, req.ClientMessageId)
 	cid := req.ClientMessageId
 	se := storedEntry{Entry: generated.RoomEntry{
 		Id: entryID, RoomId: r.rec.ID, ClientMessageId: &cid, Text: req.Text,
 		Author: generated.RoomEntryAuthor{Kind: "user"}, Addressees: nonNil(addressees),
-		Timestamp: s.now().Format(time.RFC3339Nano),
+		Timestamp: s.now().Format(time.RFC3339Nano), Attachments: parts,
 	}}
+	owner := entryOwner(r.rec.ID, entryID)
+	if err := s.retainParts(r.rec.WorkspaceID, owner, parts); err != nil {
+		return nil, storageError("the attached files could not be kept for the group", err)
+	}
 	var ds []*deliveryRecord
 	if !r.rec.Paused {
 		ds = s.newDeliveries(r, entryID, addressees, "")
 	}
 	if err := s.appendEntry(r, se, ds); err != nil {
+		// FR-076: the ownership is released when the append fails.
+		s.releaseParts(r.rec.WorkspaceID, owner, parts)
 		return nil, err
 	}
 	return deliveryIDs(ds), nil

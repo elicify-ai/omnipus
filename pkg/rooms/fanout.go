@@ -249,8 +249,12 @@ func (s *Service) recordAdmission(r *room, d *deliveryRecord, res AdmitResult, e
 		if !d.Consumed && !terminal(d.State) {
 			s.updateState(r, d, state, reason)
 		}
+		if state == StateCancelled || state == StateRefused {
+			s.noteInviteGone(r, d)
+		}
 		return
 	}
+	s.noteInviteCaptured(r, d)
 	if res.ReceiverSessionID != "" {
 		d.SessionID = res.ReceiverSessionID
 	}
@@ -307,14 +311,20 @@ func (s *Service) buildAdmission(r *room, ws WorkspaceInfo, d *deliveryRecord) A
 	}
 	history := s.roomContext(r, ws, d, idx)
 	display := se.Entry.Text
-	model := fmt.Sprintf("Message from %s:\n%s", author, se.Entry.Text)
+	model := fmt.Sprintf("Message from %s:\n%s%s", author, se.Entry.Text, attachmentNames(se.Entry.Attachments))
 	if history != "" {
 		display += "\n\n" + history
 		model = history + "\n\n" + model
 	}
+	if background := s.invitationPrefix(r, d); background != "" {
+		// FR-043: quoted background for the model only; never displayed,
+		// posted or mirrored (FR-044).
+		model = background + "\n\n" + model
+	}
 	return Admission{
 		Receiver: s.receiver(r, d), DeliveryID: d.RequestID, RoomID: r.rec.ID, RoomName: r.rec.Name,
 		Sender: sender, SenderLabel: label, DisplayText: display, ModelText: model,
+		Media: partRefs(se.Entry.Attachments), Attachments: se.Entry.Attachments,
 	}
 }
 
@@ -343,7 +353,10 @@ func (s *Service) roomContext(r *room, ws WorkspaceInfo, d *deliveryRecord, idx 
 	var lines []string
 	size := 0
 	for i := idx - 1; i >= start; i-- {
-		line := fmt.Sprintf("[%s] %s", authorName(r.entries[i], ws), r.entries[i].Entry.Text)
+		// FR-082: earlier files are named in the quoted context, never handed
+		// to the model again.
+		line := fmt.Sprintf("[%s] %s%s", authorName(r.entries[i], ws), r.entries[i].Entry.Text,
+			attachmentNames(r.entries[i].Entry.Attachments))
 		if size+len(line) > maxContextBytes {
 			break
 		}

@@ -302,6 +302,7 @@ func (a *restAPI) handleLibraryEntriesList(w http.ResponseWriter, r *http.Reques
 	}
 	annotateKnowledgeBaseEntries(root, entries)
 	a.annotateMailDerivedEntries(workspaceID, entries)
+	a.markChatCopies(workspaceID, entries)
 	jsonOK(w, entries)
 }
 

@@ -77,25 +77,24 @@ const PrincipalSystem = "system"
 
 // Fixed user-facing texts (spec copy).
 const (
-	teamRoomName           = "Team room"
-	textTwoAgents          = "a room needs at least two agents"
-	textTwoAgentsDelete    = "a room needs at least two agents — delete the room instead"
-	textReadOnlyTwoAgents  = "This group has fewer than two agents — add another agent to continue."
-	textTeamHidden         = "The team room needs at least two conversation agents in this workspace."
-	textTeamMembership     = "Team room members are the workspace's agents — add the agent to the workspace"
-	textRoomsDontSteer     = "Rooms don't steer agents — use %s main chat"
-	textAmbiguousMention   = "Several members are called %s — pick from the list"
-	textRoomUnavailable    = "the group this request came from is no longer available; the answer was not posted"
-	textMemberLeftRoom     = "you are no longer a member of this group; the answer was not posted"
-	auditEventRoomChange   = "room.changed"
-	maxRoomNameUnits       = 80
-	maxMembers             = 256
-	textNameLength         = "a group name must be 1 to 80 characters"
-	maxContextEntries      = 20
-	maxContextBytes        = 8192
-	maxSnapshotEntries     = 10000
-	rateWindow             = time.Minute
-	defaultMessageMaxBytes = 65536
+	teamRoomName          = "Team room"
+	textTwoAgents         = "a room needs at least two agents"
+	textTwoAgentsDelete   = "a room needs at least two agents — delete the room instead"
+	textReadOnlyTwoAgents = "This group has fewer than two agents — add another agent to continue."
+	textTeamHidden        = "The team room needs at least two conversation agents in this workspace."
+	textTeamMembership    = "Team room members are the workspace's agents — add the agent to the workspace"
+	textRoomsDontSteer    = "Rooms don't steer agents - use %s main chat"
+	textAmbiguousMention  = "Several members are called %s — pick from the list"
+	textRoomUnavailable   = "the group this request came from is no longer available; the answer was not posted"
+	textMemberLeftRoom    = "you are no longer a member of this group; the answer was not posted"
+	auditEventRoomChange  = "room.changed"
+	maxRoomNameUnits      = 80
+	maxMembers            = 256
+	textNameLength        = "a group name must be 1 to 80 characters"
+	maxContextEntries     = 20
+	maxContextBytes       = 8192
+	maxSnapshotEntries    = 10000
+	rateWindow            = time.Minute
 )
 
 // Error is a refusal the REST layer maps to an HTTP status with its text.
@@ -168,6 +167,9 @@ type roomRecord struct { // not-wire-format: the room's on-disk record; the wire
 	// PendingReleases journals handoffs that failed after working was saved.
 	// Replay these BEFORE restart recovery so unstarted work is queued, not interrupted.
 	PendingReleases map[string]bool `json:"pending_releases,omitempty"`
+	// Invitation is the invitation summary of an ad-hoc group started from
+	// a main chat (#1449 FR-039); nil for every other group.
+	Invitation *invitationState `json:"invitation,omitempty"`
 	// Seq is the room stream position when the record was written.
 	Seq int64 `json:"seq"`
 }
@@ -191,6 +193,10 @@ const (
 func (r roomRecord) clone() roomRecord {
 	r.Members = append([]string(nil), r.Members...)
 	r.Muted = append([]string(nil), r.Muted...)
+	if r.Invitation != nil {
+		inv := *r.Invitation
+		r.Invitation = &inv
+	}
 	return r
 }
 
@@ -201,6 +207,9 @@ type storedEntry struct { // not-wire-format: on-disk transcript line wrapping t
 	AnswersRequest string `json:"answers_request,omitempty"`
 	// SenderAgentID is the authoring agent (empty for the user).
 	SenderAgentID string `json:"sender_agent_id,omitempty"`
+	// IntentID is the answer intent an agent answer with files came from
+	// (#1449 FR-078); empty for every other entry.
+	IntentID string `json:"intent_id,omitempty"`
 }
 
 // deliveryRecord is one line of deliveries.jsonl; the latest line per

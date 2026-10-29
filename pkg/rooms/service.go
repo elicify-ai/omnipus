@@ -36,6 +36,13 @@ type Admission struct {
 	SenderLabel string
 	DisplayText string
 	ModelText   string
+	// Media are the workspace references of this request's own files, in
+	// order (FR-019): they are written into the member's durable request so
+	// admission, restart-time rewake and held delivery hand the model the
+	// same files. Attachments are the same files as display parts for the
+	// member's main chat (FR-023).
+	Media       []string
+	Attachments []generated.MediaPart
 	// OnAwaitingApproval and BeforeCommit are the room's hooks into the
 	// admission (see pkg/agent.RoomRequestAdmission).
 	OnAwaitingApproval func()
@@ -63,6 +70,8 @@ type Mirror struct {
 	Author        addressing.Pair
 	Ref           generated.RoomRef
 	Content       string
+	// Attachments are the answer's files, shown in the main chat (FR-023).
+	Attachments []generated.MediaPart
 }
 
 // AuditEvent is one audited room change (FR-172).
@@ -113,19 +122,35 @@ type Effects interface {
 }
 
 // Deps are the gateway-owned facts and side effects the room service uses.
+// Media, Publisher and Summarizer are optional (#1449): without them files
+// and the invitation summary are refused or unavailable, never faked.
 type Deps struct {
 	Directory
 	Receivers
 	Effects
+	Media      Media
+	Publisher  Publisher
+	Summarizer Summarizer
 }
 
-// DepsFrom builds Deps from one value that provides all three parts.
+// DepsFrom builds Deps from one value that provides all three required parts
+// and, when it implements them, the optional ones.
 func DepsFrom(all interface {
 	Directory
 	Receivers
 	Effects
 }) Deps {
-	return Deps{Directory: all, Receivers: all, Effects: all}
+	d := Deps{Directory: all, Receivers: all, Effects: all}
+	if m, ok := all.(Media); ok {
+		d.Media = m
+	}
+	if p, ok := all.(Publisher); ok {
+		d.Publisher = p
+	}
+	if sm, ok := all.(Summarizer); ok {
+		d.Summarizer = sm
+	}
+	return d
 }
 
 // Service is the rooms of one Omnipus home.
@@ -157,7 +182,12 @@ type Service struct {
 	cardMu  sync.Mutex
 	working map[string]map[string]string // session id -> request id -> room id
 	pending map[string]map[string]bool   // session id -> pending card ids
-	rate    rateLimiter
+	// reqCards maps a card that carries a group reference to the one request
+	// it belongs to (#1449 FR-053: such a card flips only that request).
+	reqCards map[string]cardTarget
+	rate     rateLimiter
+	// stagingDir is the private staging root of answer files (TD-3).
+	stagingDir string
 }
 
 // room is one loaded room; mu is the room lock (FR-217).
@@ -181,6 +211,14 @@ type room struct {
 	// commands remembers the client ids of commands already applied in this
 	// process, so a retried /pause does not pause twice.
 	commands map[string]bool
+	// intents are the answer intents (#1449 FR-078), latest line per id.
+	intents     map[string]*intentRecord
+	intentOrder []string
+	// intentsResumed: the accepted intents found on load were handed to
+	// completion once in this process.
+	intentsResumed bool
+	// invites are the invitation-summary decisions per member (FR-080).
+	invites map[string]*inviteRecord
 }
 
 func newRoom() *room {
@@ -188,6 +226,7 @@ func newRoom() *room {
 		byClientID: map[string]int{}, byEntryID: map[string]int{}, byEntry: map[string][]string{},
 		deliveries: map[string]*deliveryRecord{}, mirrored: map[string]bool{}, turns: map[string]bool{},
 		cancels: map[string]context.CancelFunc{}, commands: map[string]bool{},
+		intents: map[string]*intentRecord{}, invites: map[string]*inviteRecord{},
 	}
 }
 
@@ -198,7 +237,8 @@ func New(journal Journal, deps Deps) *Service {
 		journal: journal, deps: deps, now: func() time.Time { return time.Now().UTC() },
 		ctx: ctx, cancel: cancel,
 		rooms: map[string]*room{}, working: map[string]map[string]string{}, pending: map[string]map[string]bool{},
-		rate: rateLimiter{hits: map[string][]time.Time{}},
+		reqCards: map[string]cardTarget{},
+		rate:     rateLimiter{hits: map[string][]time.Time{}},
 	}
 }
 
@@ -298,6 +338,12 @@ func (s *Service) readJournals(roomID string, r *room) error {
 		return err
 	}
 	if err := readStream(s.journal, roomID, StreamMirrors, func(m mirrorRecord) { r.mirrored[m.AnswerID] = true }); err != nil {
+		return err
+	}
+	if err := readStream(s.journal, roomID, StreamIntents, func(in intentRecord) { r.addIntent(&in) }); err != nil {
+		return err
+	}
+	if err := readStream(s.journal, roomID, StreamInvites, func(v inviteRecord) { r.putInvite(&v) }); err != nil {
 		return err
 	}
 	var settlementErr error
@@ -411,6 +457,8 @@ func (s *Service) recover(r *room) error {
 			return fmt.Errorf("request %s could not be moved to %s: %w", d.RequestID, next, err)
 		}
 	}
+	s.repairRetention(r)
+	s.recoverInvitation(r)
 	for _, e := range r.entries {
 		if e.AnswersRequest != "" && !r.mirrored[e.Entry.Id] {
 			if err := s.mirrorAnswer(r, e); err != nil {
@@ -510,6 +558,7 @@ func (s *Service) publishMeta(r *room, ws WorkspaceInfo) error {
 		Members: view.Members, Muted: view.Muted, Paused: view.Paused, Generation: view.Generation,
 		ReadOnlyReason:        view.ReadOnlyReason,
 		AllocatedCostMicroUsd: view.AllocatedCostMicroUsd, AllocatedCostUnpriced: view.AllocatedCostUnpriced,
+		InvitationContextStatus: invitationStatusPtr(r),
 	})
 	return nil
 }
@@ -538,6 +587,8 @@ func (s *Service) roomView(r *room, ws WorkspaceInfo) generated.Room {
 		out.ReadOnlyReason = &reason
 	}
 	out.Hidden = r.rec.Kind == KindTeam && len(r.rec.Members) < 2
+	status := generated.RoomInvitationStatus(invitationStatus(r))
+	out.InvitationContextStatus = &status
 	// Attention is any outstanding decision, not only each member's latest
 	// request: a newer settled request never hides an older pending card.
 	for _, id := range r.order {

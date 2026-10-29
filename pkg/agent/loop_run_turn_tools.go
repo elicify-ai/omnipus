@@ -1381,6 +1381,9 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// minLength:1 on turn_id causes the SPA to silently drop on arrival —
 	// see tools.WithTurnID's doc comment for the full chain.
 	execCtx = tools.WithTurnID(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.turnID)
+	// #1449 C-I6: a question raised now records the turn's origin at
+	// creation (the same origin an approval raised now carries).
+	execCtx = tools.WithApprovalProvenance(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.approvalProvenance)
 	// Carry the turn's EXISTING AutoDenyAsk onto the tool context.
 	// The loop already uses it to auto-deny `ask`-policy calls; a
 	// tool that must refuse one ARGUMENT rather than the whole call

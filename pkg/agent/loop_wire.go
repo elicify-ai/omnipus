@@ -621,6 +621,13 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 		rw.allowReadPaths,
 	)
 	agent.Tools.RegisterReplacing(sendFileTool)
+	// #1449 FR-020: answer_request's files that are not workspace references
+	// are resolved with send_file's own file-access checks.
+	if t, ok := agent.Tools.Get("answer_request"); ok {
+		if answer, isAnswer := t.(*tools.AnswerRequestTool); isAnswer {
+			answer.SetFileResolver(sendFileTool)
+		}
+	}
 
 	// Skill discovery and installation tools — always registered.
 	// Runtime failures (ClawHub unreachable, no auth token) surface at call

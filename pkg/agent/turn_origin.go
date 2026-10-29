@@ -88,7 +88,7 @@ func (al *AgentLoop) recordConsumedInputOrigins(scope string, items []steeringQu
 // approvalFor preserves a captured room-aware origin, or derives the matching
 // channel/peer approval label for an input admitted through the inbound path.
 func (o inputOrigin) approvalFor(al *AgentLoop) approvalOrigin {
-	if o.approval.Label != "" {
+	if o.approval.Label != "" || o.approval.none || o.approval.mixed || o.approval.RoomRef != nil {
 		return o.approval
 	}
 	origin := tools.NewTurnOrigin()
@@ -97,5 +97,7 @@ func (o inputOrigin) approvalFor(al *AgentLoop) approvalOrigin {
 	if origin.ChannelTriggered() {
 		class = originChannel
 	}
+	// An input with no label (a message typed in the agent's own chat, a
+	// task) is still an input: merging it drops a group reference (D23).
 	return approvalOrigin{Label: origin.Label(), Class: class}
 }
