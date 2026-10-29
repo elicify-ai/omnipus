@@ -86,6 +86,10 @@ func TestToolDescriptions_OneSentence(t *testing.T) {
 	if !strings.Contains(mia, "tool:show_to_user") {
 		t.Errorf("mia prompt does not name tool:show_to_user (BS-6.14 / U9)")
 	}
+	jim := coreagent.GetPrompt("jim")
+	if !strings.Contains(jim, "tool:show_to_user") {
+		t.Errorf("jim prompt does not name tool:show_to_user (BS-6.14 / U9)")
+	}
 	if strings.Contains(coreagent.GetPrompt("omnipus"), "tool:show_to_user") {
 		t.Errorf("omnipus prompt names tool:show_to_user (D-F2)")
 	}
@@ -113,5 +117,19 @@ func TestDocsAgents_PathRule(t *testing.T) {
 	const who = "Mia and Jim can open the Library for you and Omnipus cannot"
 	if !strings.Contains(body, who) {
 		t.Errorf("docs/agents.md missing %q (docs TODO / D-F2)", who)
+	}
+
+	toolsDoc := filepath.Join(filepath.Dir(file), "..", "..", "docs", "tools.md")
+	rawTools, err := os.ReadFile(toolsDoc)
+	if err != nil {
+		t.Fatalf("read docs/tools.md: %v", err)
+	}
+	toolsBody := string(rawTools)
+	const omnipusNote = "show_to_user is allowed by default and Omnipus does not have it"
+	if !strings.Contains(toolsBody, omnipusNote) {
+		t.Errorf("docs/tools.md missing %q (docs TODO)", omnipusNote)
+	}
+	if !strings.Contains(toolsBody, "show_to_user") || !strings.Contains(toolsBody, "Main Allow") {
+		t.Errorf("docs/tools.md missing the show_to_user Main Allow row (docs TODO)")
 	}
 }
