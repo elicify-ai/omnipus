@@ -300,3 +300,24 @@ jobs:
             exit 1
           fi
           echo "all eight DS-4 subtests passed on Windows"
+
+      # T11 slice A (spec §8) on Windows. NON-BLOCKING by founder decision
+      # 2026-10-30 ("Windows later"): the Windows permission (ACL) and
+      # junction checks are deferred to a tracked follow-up, so this step
+      # reports but does not fail the job. Remove continue-on-error when the
+      # Windows checks land.
+      - name: T11 slice A tests (Windows, non-blocking until the Windows checks land)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
+          fail=0
+          for sel in "./pkg/tools/|^(TestGuard_.*|TestRootWritableProbe_.*)$" \
+                     "./pkg/clitrust/|^TestCheckProgramPath_Windows$" \
+                     "./pkg/gateway/middleware/|^TestPersonSessionMiddleware_.*$" \
+                     "./pkg/gateway/|^(TestCliValidate_.*|TestValidateCLI_.*)$"; do
+            pkg="${sel%%|*}"; re="${sel#*|}"
+            if go test -tags goolm,stdjson -count=1 -p 1 -v -run "$re" "$pkg"; then :; else echo "::warning::$pkg failed on Windows"; fail=1; fi
+          done
+          exit "$fail"

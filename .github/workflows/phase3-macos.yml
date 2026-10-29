@@ -23,6 +23,14 @@ on:
       - 'scripts/install.sh'
       - 'deploy/macos/**'
       - '.github/workflows/phase3-macos.yml'
+      # T11 slice A (spec §8): the shell guard's quoted-literal rule, the
+      # person-only Check CLI route and the shared program-file check.
+      - 'pkg/tools/shell_path_guard*'
+      - 'pkg/tools/shell_standalone_literal*'
+      - 'pkg/clitrust/**'
+      - 'pkg/agenthome/**'
+      - 'pkg/gateway/middleware/**'
+      - 'pkg/gateway/rest_clivalidate*'
 
 # `tsc -b` (npm run build) has outgrown V8's default old-space heap on this
 # runner class (~2 GB effective on the 7 GB macos-latest arm64 machines):
@@ -67,6 +75,28 @@ jobs:
           npm run build
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
+      # T11 slice A (spec §8): run the named guard, program-file, person-gate
+      # and Check CLI route tests natively. Each selection must actually run
+      # tests — "no tests to run" is a failure, never a silent green.
+      - name: T11 slice A tests (macOS)
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+          run_sel() {
+            local pkg="$1" sel="$2" log="$RUNNER_TEMP/t11-$(echo "$pkg" | tr '/.' '__').log"
+            if go test -tags goolm,stdjson -count=1 -p 1 -v -run "$sel" "$pkg" > "$log" 2>&1; then st=0; else st=$?; fi
+            cat "$log"
+            if [ "$st" -ne 0 ]; then echo "::error::$pkg exited $st"; fail=1; fi
+            if grep -q "no tests to run" "$log" || ! grep -q -- "--- PASS" "$log"; then
+              echo "::error::$pkg selection $sel ran no passing test"; fail=1
+            fi
+          }
+          run_sel ./pkg/tools/ '^(TestGuard_.*|TestRootWritableProbe_.*)$'
+          run_sel ./pkg/clitrust/ '^TestCheckProgramPath_Unix$'
+          run_sel ./pkg/gateway/middleware/ '^TestPersonSessionMiddleware_.*$'
+          run_sel ./pkg/gateway/ '^(TestCliValidate_.*|TestValidateCLI_.*)$'
+          exit "$fail"
       - name: Native darwin/arm64 build — AC-3
         shell: bash
         run: |
