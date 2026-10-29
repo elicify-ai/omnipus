@@ -49,21 +49,32 @@ it('T58 B81: the real closed-window refresh binds both saved parts without split
   expect([bucket().historySourceAliases?.[pos(1)], bucket().historySourceAliases?.[pos(3)]]).toEqual([A, A])
 })
 
-it.each(['one page', 'split pages'] as const)('T59 B83: tool-only T is owned once and drawn before combined A+B (%s)', async delivery => {
-  livePair(); finish()
-  const [a, b] = sources()
-  const tool = entry(2, { id: 'd1-tool-owner', role: 'assistant', content: '', tool_calls: [
-    { id: 'd1-saved-call', tool: 'bash', status: 'success', content_state: 'full', parameters: { command: 'true' }, result: { text: 'saved result' } },
-  ] })
-  if (delivery === 'one page') await rest([a, tool, b])
-  else { await rest(latestTail(b), 'latest', true); await rest([a, tool], 'older', false, true) }
-  const rows = assistantRows()
-  expect(rows.map(row => row.content), 'S8: separate T precedes the bubble at its last bound position B').toEqual(['', SAVED_A + SAVED_B])
-  expect(rows[0].tool_calls?.map(call => call.id)).toEqual(['d1-saved-call'])
-  expect(rows.flatMap(row => row.tool_calls ?? []).filter(call => call.id === 'd1-saved-call')).toHaveLength(1)
-  expect(bucket().toolCallOwnerMessageId?.['d1-saved-call']).toBe('d1-tool-owner')
-  expect(bucket().historySourceAliases?.[pos(2)]).toBe('d1-tool-owner')
-})
+for (const knownTurn of [true, false]) {
+  it.each(['one page', 'split pages'] as const)(`T59 B83/B95: tool-only T turn=${knownTurn} has exact ownership inside or outside A+B (%s)`, async delivery => {
+    livePair(); finish()
+    const [a, b] = sources()
+    const tool = entry(2, { id: 'd1-tool-owner', type: 'tool_call', role: 'assistant', agent_id: 'mia', turn_id: knownTurn ? TURN : undefined, content: '', tool_calls: [
+      { id: 'd1-saved-call', tool: 'bash', status: 'success', content_state: 'full', parameters: { command: 'true' }, result: { text: 'saved result' } },
+    ] })
+    if (delivery === 'one page') await rest([a, tool, b])
+    else { await rest(latestTail(b), 'latest', true); await rest([a, tool], 'older', false, true) }
+    const rows = assistantRows()
+    // Founder Q3/S11 changes only the same-known-turn oracle. livePair's
+    // recorded empty joiner stays immutable despite the newly learned T.
+    expect(rows.map(row => row.content), 'S8: the combined row occupies its first bound position; unknown T stays separate').toEqual(knownTurn ? [SAVED_A + SAVED_B] : [SAVED_A + SAVED_B, ''])
+    expect(rows.flatMap(row => row.tool_calls ?? []).filter(call => call.id === 'd1-saved-call')).toHaveLength(1)
+    const owner = knownTurn ? A : 'd1-tool-owner'
+    expect(bucket().toolCallOwnerMessageId?.['d1-saved-call']).toBe(owner)
+    expect(bucket().historySourceAliases?.[pos(2)]).toBe(owner)
+    expect(bucket().messagesById[owner].tool_calls?.map(call => call.id)).toEqual(['d1-saved-call'])
+    if (knownTurn) {
+      expect(Reflect.get(bucket().messagesById[A].tool_calls![0], 'textOffset')).toBe(SAVED_A.length)
+      expect(bucket().messagesById[A].historyParts?.map(part => part.sourceId)).toEqual([A, 'd1-tool-owner', B])
+      expect(bucket().messagesById[A].mergedReplayIds).toEqual([B])
+      expect(Object.keys(bucket().mergedReplayMessageIds ?? {})).toEqual([B])
+    }
+  })
+}
 
 it.each(['replay paragraph', 'token tool boundary'] as const)('T60 B84: completed settlement preserves the actual recorded joiner (%s)', kind => {
   if (kind === 'token tool boundary') livePair(true)

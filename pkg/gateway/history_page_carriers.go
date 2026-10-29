@@ -26,11 +26,20 @@ func historyAppendZero[T any](values *[]T) *T {
 }
 func historyEmptySlice[T any](_ []T) []T { return make([]T, 0) }
 func historyNewField[T any](p **T) *T    { *p = new(T); return *p }
+
+// historyFactOrigin is the one origin builder for every entry-derived carrier.
+// turn_id is the persisted source record's OWN recorded turn (spec D1 S11d):
+// omitted when the record has none (unknown), never inferred from the active
+// turn, the session or a neighbouring record.
 func historyFactOrigin(e *session.ChatHistoryEntry) *generated.HistoryEntryOrigin {
 	o := &generated.HistoryEntryOrigin{Position: string(e.Position)}
 	if e.Entry.ID != "" {
 		id := e.Entry.ID
 		o.EntryId = &id
+	}
+	if e.Entry.TurnID != "" {
+		turn := e.Entry.TurnID
+		o.TurnId = &turn
 	}
 	return o
 }

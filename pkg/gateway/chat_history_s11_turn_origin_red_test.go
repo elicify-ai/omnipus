@@ -101,6 +101,7 @@ func TestHistoryOrigin_TurnIDFromPersistedSource(t *testing.T) {
 			})
 		}
 	}
+	t.Run("extended_media_and_question_carriers", s11OriginExtendedClasses)
 	t.Run("unknown_source_during_real_other_active_turn", s11UnknownOriginDuringActiveTurn)
 	t.Run("generated_origin_schema_instrument", func(t *testing.T) {
 		valid := generated.HistoryEntryOrigin{Position: pagingPositionOracle("s11", session.ArchiveAddress{PartitionKey: "2026-10-28", EntryID: "s11"})}
