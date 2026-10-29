@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 const (
@@ -264,6 +265,31 @@ func TestShowToUser_MissingCarveOutMatchesExisting(t *testing.T) {
 	chatLinksExactRefusal(t, gotMissing, chatLinksNotFound, "credentials.json.old", "missing carve-out")
 	if gotExisting != nil && gotMissing != nil && gotExisting.ForLLM != gotMissing.ForLLM {
 		t.Errorf("missing %q and existing %q must be byte-identical (BS-6.9 B2)", gotMissing.ForLLM, gotExisting.ForLLM)
+	}
+}
+
+func TestShowToUser_FolderMatchesMissing(t *testing.T) {
+	home := t.TempDir()
+	realHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OMNIPUS_HOME", realHome)
+	work, err := workspace.SafeWorkDir(realHome, "W")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(work, "notes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tool := chatLinksShowToUser(t, "BS-6.9 / B1")
+	ctx, _ := chatLinksOwnFile(t)
+	missing := tool.Execute(ctx, map[string]any{"ref": "gone-chat-links.md"})
+	folder := tool.Execute(ctx, map[string]any{"ref": "notes"})
+	chatLinksExactRefusal(t, missing, chatLinksNotFound, "gone-chat-links", "missing file")
+	chatLinksExactRefusal(t, folder, chatLinksNotFound, "notes", "folder")
+	if missing != nil && folder != nil && missing.ForLLM != folder.ForLLM {
+		t.Errorf("folder %q and missing %q must be byte-identical (BS-6.9)", folder.ForLLM, missing.ForLLM)
 	}
 }
 
