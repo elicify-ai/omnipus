@@ -400,11 +400,10 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 		logger.WarnCF("agent", "verifier: could not read session for window feed", fields)
 		return ""
 	}
-	// FR-105: redact tier-1 tool-call parameters/errors through the SAME
-	// RegisterSensitiveValues path every other tool-result-derived text the
-	// Judge sees already goes through (judge.go's evidenceStore() redact
-	// closure) — this feed puts recipients/tokens/paths in front of a model
-	// that did not previously see them.
+	// FR-105 / issue #721: redact the whole window (narration, tool-call
+	// parameters, errors and output) through the SAME unconditional scrubber
+	// judge.go's evidenceStore() uses — registered credential values plus
+	// the secret-shape patterns, whatever tools.filter_sensitive_data says.
 	return renderVerifierWindowText(entries, budgetTokens, withTierOneRedact(al.tierOneRedactFn()))
 }
 
@@ -527,7 +526,14 @@ func renderTranscriptEntriesForWindow(
 			if role == "" {
 				role = "assistant"
 			}
-			items = append(items, item{msg: providers.Message{Role: role, Content: e.Content}})
+			content := e.Content
+			if redact != nil {
+				// Issue #721: narration is part of the window the Judge
+				// reads; a credential the agent quoted back must not reach
+				// it either.
+				content = redact(content)
+			}
+			items = append(items, item{msg: providers.Message{Role: role, Content: content}})
 		}
 		for _, tc := range e.ToolCalls {
 			content := formatTierOneToolCall(tc, redact)

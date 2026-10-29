@@ -109,9 +109,9 @@ func truncateRunesWithMarker(s string, limit int) string {
 // E9's write-set and outside this wave's) keeps compiling unchanged.
 type tierOneRenderOptions struct {
 	// redact is applied to every rendered parameters/error string before
-	// it reaches the Judge's prompt — the "existing RegisterSensitiveValues
-	// path" FR-105 requires (config.Config.FilterSensitiveData, the same
-	// redactor persistEvidence's EvidenceStore already uses, judge.go). nil
+	// it reaches the Judge's prompt — production passes tierOneRedactFn
+	// (registered values plus secret-shape patterns, issue #721), the same
+	// redactor judge.go's evidenceStore() uses. nil
 	// (the zero-value default, e.g. in every existing test call) means no
 	// redaction — identical to today's behaviour.
 	redact func(string) string
@@ -128,21 +128,15 @@ func withTierOneRedact(fn func(string) string) tierOneRenderOption {
 	return func(o *tierOneRenderOptions) { o.redact = fn }
 }
 
-// tierOneRedactFn returns al's FR-105 redaction hook: config's own
-// sensitive-value filter (RegisterSensitiveValues' consuming side,
-// config.Config.FilterSensitiveData) when a config is reachable, or the
-// identity function otherwise — mirrors judge.go's evidenceStore() redact
-// closure precedent exactly (same source of truth, same fallback).
+// tierOneRedactFn returns al's FR-105 redaction hook: the unconditional
+// Judge-evidence scrubber (judgeEvidenceRedactor, judge_evidence_redact.go —
+// registered credential values plus the secret-shape patterns), the SAME one
+// judge.go's evidenceStore() uses, so both evidence channels in one Judge
+// prompt are scrubbed to one bar (issue #721). It used to call
+// cfg.FilterSensitiveData, which is skipped when tools.filter_sensitive_data
+// is off or the text is short and has no secret-pattern layer at all.
 func (al *AgentLoop) tierOneRedactFn() func(string) string {
-	return func(s string) string {
-		if al == nil {
-			return s
-		}
-		if cfg := al.GetConfig(); cfg != nil {
-			return cfg.FilterSensitiveData(s)
-		}
-		return s
-	}
+	return al.judgeEvidenceRedactor()
 }
 
 // formatTierOneToolCall renders one session.ToolCall as FR-105's

@@ -887,6 +887,10 @@ func (al *AgentLoop) runMachineCheck(
 	result := agentInst.Tools.ExecuteWithContext(callCtx, "bash", args, "system", "", nil)
 
 	timedOut, exitCode, output := interpretBashResult(result)
+	// Issue #721: redact BEFORE this defensive cap, not only inside the
+	// EvidenceStore — a credential straddling the cut would otherwise reach
+	// the store half-scrubbed and match no pattern there.
+	output = al.judgeEvidenceRedactor()(output)
 	if len(output) > machineCheckOutputCap {
 		output = output[:machineCheckOutputCap]
 	}
@@ -1032,16 +1036,18 @@ func (al *AgentLoop) persistEvidence(
 // evidenceStore builds the redacting EvidenceStore on demand. Constructing
 // one is cheap (no I/O — only Record/List/DeleteTaskEvidence touch disk), so
 // there is no need to cache it on AgentLoop; this keeps loop.go's
-// constructor/struct untouched. redact is resolved lazily per call so a
-// config reload's newly-registered sensitive values are always honored.
+// constructor/struct untouched. The redactor resolves the config on every
+// call, so a reload's newly registered sensitive values are always honored.
+//
+// Issue #721: the redactor is the UNCONDITIONAL Judge-evidence scrubber
+// (judgeEvidenceRedactor: registered credential values plus the secret-shape
+// patterns), the same one the transcript window uses. It used to be
+// cfg.FilterSensitiveData, which is skipped when tools.filter_sensitive_data
+// is off or the text is short, and has no pattern layer — so an unregistered
+// credential the check printed went verbatim into the persisted evidence and
+// the Judge's prompt.
 func (al *AgentLoop) evidenceStore() *task.EvidenceStore {
-	redact := func(s string) string {
-		if cfg := al.GetConfig(); cfg != nil {
-			return cfg.FilterSensitiveData(s)
-		}
-		return s
-	}
-	return task.NewEvidenceStore(config.OmnipusHomeDir(), redact)
+	return task.NewEvidenceStore(config.OmnipusHomeDir(), al.judgeEvidenceRedactor())
 }
 
 // --- Prose judge (real verifier-role agent turn, own session) --------------
