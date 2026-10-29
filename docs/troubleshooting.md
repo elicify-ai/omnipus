@@ -87,8 +87,8 @@ A provider can also report an error after it has already started streaming a rep
 
 | What the provider reported | What you see | Retried? |
 |---|---|---|
-| A temporary fault (server error, overloaded, timeout) | The connection-failure message | Yes, inline, like a dropped connection |
-| Rate limit (429) | The rate-limit message | Handed to the fallback chain |
+| A temporary fault (server error, overloaded, timeout) | The connection-failure message | Yes, when nothing of the reply was shown yet — see the next section |
+| Rate limit (429) | The rate-limit message | Yes — see the next section |
 | Billing or credit (402) | The billing message | No |
 | Bad or missing key (401, 403) | The provider-rejected-your-key message | No |
 | The request itself was rejected (400, 422) | The provider-rejected message | No |
@@ -149,6 +149,25 @@ Read the gateway diagnostic log. These cron warnings remain visible at the defau
 | `one-time job was running when the previous process stopped; running it again` | At gateway startup, a one-time schedule of the gateway's own scheduler was found mid-run from the previous process, which stopped before saving the outcome. It runs again once, so it may repeat work the stopped run already did. A one-time time that passed while the gateway was not running is still skipped, not replayed. Scheduled tasks from the Calendar are not covered by this recovery. | Check whether the stopped run already did the work. |
 
 Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed to persist Running reset` diagnostics are logged at **ERROR**, with `job_id` (or `job_ids` for a batch) and the underlying storage error. Work may already have happened even though its latest state was not saved. Resolve the disk, permissions or path problem before relying on the saved state after a restart. The error does not undo completed work, and retrying may repeat earlier actions.
+
+## The model provider can't be reached or is busy
+
+When a request to the model provider fails for a reason that usually passes — the connection drops, the name cannot be looked up, the provider is overloaded (429, 503, 529) or it stops in the middle of an answer — Omnipus tries again automatically. It makes up to **5 more attempts**, waiting about **2, 5, 10, 20 and 40 seconds** in between (about a minute and a half in total). When the provider says how long to wait (a `Retry-After` of up to 120 seconds), that wait is used instead.
+
+While it waits, the chat shows a live line from the first failed attempt on, with the attempt number ("attempt 2 of 6") and a countdown to the next try. **Stop** ends the wait at once. On a channel such as Telegram you get one "Retrying — please wait..." message. A helper's own chat shows the same line for the helper's requests.
+
+If the last attempt also fails, the turn ends with the cause in plain words — for example "We couldn't reach the model provider" — and your message stays in the chat, so you can retry or switch models.
+
+What is not retried:
+
+| Failure | What happens |
+|---|---|
+| A wrong or missing key, or no credit (401, 402, 403) | The error appears at once; every retry would fail the same way |
+| The request itself is rejected (unknown model, conversation too long) | The error appears at once |
+| The provider is slow or silent rather than unreachable | Handled by the per-request time limit and the 5-minute silence limit instead, because each such attempt can already take minutes |
+| Part of the reply was already shown when the failure happened | Not retried, so you never see half an answer followed by a second copy |
+
+When the agent has a fallback model, the first model hands over to the fallback at once on a dropped connection or an overload (a rate limit is retried up to 3 times first). The automatic retries above apply to the last model Omnipus can still try.
 
 ## The provider rejects your model requests
 

@@ -1608,22 +1608,7 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		// retry as one provider_retry frame from named fields only
 		// (C-2 — never an error string).
 		retryCtx := providers.WithWaitBudget(providerCtx, rt.ts.turnWaitBudgetForChain())
-		retryCtx = providers.WithRetryObserver(retryCtx, func(info providers.RetryInfo) {
-			rt.al.emitEvent(
-				EventKindProviderRetry,
-				rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-				LLMRetryPayload{
-					Attempt:     info.Attempt,
-					Reason:      info.Reason,
-					Provider:    info.Provider,
-					Model:       info.Model,
-					RetryAt:     info.RetryAt,
-					SentAt:      info.SentAt,
-					MaxAttempts: info.MaxAttempts,
-					SessionID:   string(rt.ts.routingSessionID),
-				},
-			)
-		})
+		retryCtx = providers.WithRetryObserver(retryCtx, rt.providerRetryObserver())
 		retryCtx = providers.WithStreamedBytesCheck(retryCtx, func() int64 {
 			return rt.providerCallStreamedBytes.Load()
 		})

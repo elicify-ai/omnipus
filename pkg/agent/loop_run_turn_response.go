@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -246,6 +245,13 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 	// the normal ClassifyError → isTimeoutError retry path below.
 	var exhaustedErr *providers.FallbackExhaustedError
 	if errors.As(cr.rr.rq.ri.rf.err, &exhaustedErr) {
+		// Issue #1280: the chain already ran the retry plan (1 call + 5
+		// retries) on its last candidate. Retrying the exhaustion here would
+		// multiply the calls and the wait past the founder's ~1.5 min;
+		// surface the real cause now.
+		if exhaustedRanRetryPlan(exhaustedErr) {
+			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+		}
 		// F1 interaction (§7.4): the chain's in-place retry is rate-limit-only
 		// (C-8), so a single-candidate chain concludes ANY timeout-class
 		// failure — a real deadline, a GOAWAY, an http2 body-closed drop — as
@@ -574,17 +580,8 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		// session's retry notice is never the user's audience.
 		// audienceFor also calls steer.BoundaryObserver.Observe before this
 		// decision is acted on (FR-B-014).
-		retryAudience := cr.rr.rq.ri.rf.rt.al.audienceFor(cr.rr.rq.ri.rf.rt.turnCtx, steer.BoundaryRetryNotice, cr.rr.rq.ri.rf.rt.ts.transcriptSessionID)
-		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) && retryAudience == steer.AudienceUser {
-			if notifyErr := cr.rr.rq.ri.rf.rt.al.bus.PublishOutbound(cr.rr.rq.ri.rf.rt.turnCtx, bus.OutboundMessage{
-				Channel:        cr.rr.rq.ri.rf.rt.ts.channel,
-				ChatID:         cr.rr.rq.ri.rf.rt.ts.chatID,
-				Content:        "Retrying — please wait...",
-				ProgressNotice: true,
-			}); notifyErr != nil {
-				logger.WarnCF("agent", "Failed to send retry indicator",
-					map[string]any{"channel": cr.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
-			}
+		if retry == 0 {
+			cr.rr.rq.ri.rf.rt.publishRetryNotice()
 		}
 		logger.WarnCF("agent", "Timeout error, retrying after backoff", map[string]any{
 			"error":   cr.rr.rq.ri.rf.err.Error(),

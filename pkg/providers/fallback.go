@@ -86,6 +86,16 @@ func (fc *FallbackChain) since(t time.Time) time.Duration {
 	return time.Since(t)
 }
 
+// WithRetryWait returns a shallow copy of the chain whose in-place retry
+// waits go through wait instead of the wall clock. It is the cross-package
+// test seam for the issue #1280 retry plan (waits of up to 40 s): a test
+// substitutes a recorder or an immediate return. Production never calls it.
+func (fc *FallbackChain) WithRetryWait(wait func(ctx context.Context, d time.Duration) error) *FallbackChain {
+	cp := *fc
+	cp.waitFunc = wait
+	return &cp
+}
+
 // sleepCtx waits d, cancellable through ctx (C-12: Stop ends the wait
 // within ~1 s and no further attempt is made). Returns ctx.Err() on
 // cancellation, nil when the full wait elapsed.
@@ -115,6 +125,10 @@ type FallbackResult struct {
 	Provider string
 	Model    string
 	Attempts []FallbackAttempt
+	// Retries is how many in-place retries the ANSWERING candidate needed
+	// before it answered (issue #1280: the "reconnected after N retries"
+	// note). Zero when its first call answered.
+	Retries int
 }
 
 // FallbackAttempt records one attempt in the fallback chain.
@@ -125,6 +139,13 @@ type FallbackAttempt struct {
 	Reason   FailoverReason
 	Duration time.Duration
 	Skipped  bool // true if skipped due to cooldown
+	// Calls is how many provider calls this candidate received (issue #1280).
+	Calls int
+	// RetryPlan is true when the issue #1280 retry plan ran on this
+	// candidate (it was the last one the chain could try and its failure
+	// was a connection, overload or mid-answer failure). The agent loop
+	// must not retry such an exhaustion again.
+	RetryPlan bool
 }
 
 // NewFallbackChain creates a new fallback chain with the given cooldown tracker.
@@ -458,6 +479,8 @@ func (fc *FallbackChain) Execute(
 		candStart := fc.now()
 		var lastErr error
 		skipWithoutMark := false
+		planApplied := false // issue #1280: the retry plan ran on this candidate
+		var calls int
 
 		for attemptNo := 1; ; attemptNo++ {
 			// Fresh per-candidate budget per CALL — a retry is a new call
@@ -469,6 +492,7 @@ func (fc *FallbackChain) Execute(
 			attemptCtx, attemptCancel := fc.candidateBudget(ctx, left, candidate)
 			resp, err := run(attemptCtx, candidate.Provider, candidate.Model)
 			attemptCancel() // release resources immediately; do not defer inside the loop
+			calls = attemptNo
 
 			if err == nil {
 				// Success.
@@ -476,6 +500,7 @@ func (fc *FallbackChain) Execute(
 				result.Response = resp
 				result.Provider = candidate.Provider
 				result.Model = candidate.Model
+				result.Retries = attemptNo - 1
 				return result, nil
 			}
 
@@ -545,45 +570,39 @@ func (fc *FallbackChain) Execute(
 			if fn := streamedBytesFrom(ctx); fn != nil && fn() > 0 {
 				c10Streamed = true
 			}
-			// §7.4: only rate-limit-class failures retry in place.
-			if failErr.Reason == FailoverRateLimit && attemptNo < maxAttemptsPerCandidate && !c10Streamed {
-				ras := retryAfterOf(err)
-				if ras > int(retryAfterCeiling.Seconds()) {
-					// A-4: over-ceiling — skip the retries AND the mark;
-					// the next candidate answers now.
-					skipWithoutMark = true
-					break
-				}
-				wait := nextRetryWait(attemptNo, ras, retryJitter())
-				// D14: reserve the FULL wait before scheduling it — a wait
-				// the budget cannot cover in full is never started, and
-				// this candidate moves on unmarked (never truncated).
-				if !waitBudgetFrom(ctx).Reserve(wait) {
-					skipWithoutMark = true
-					break
-				}
+			// §7.4 C-8 (earlier candidates) / issue #1280 plan (last candidate):
+			// decide whether THIS candidate is called again in place.
+			plan := fc.inPlaceRetry(ctx, candidates, i, attemptNo, err, failErr, c10Streamed)
+			planApplied = planApplied || plan.planCandidate
+			if plan.skip {
+				skipWithoutMark = true
+				break
+			}
+			if plan.retry {
 				if obs := retryObserverFrom(ctx); obs != nil {
 					sentAt := fc.now()
 					obs(RetryInfo{
 						Provider:    candidate.Provider,
 						Model:       candidate.Model,
 						Attempt:     attemptNo + 1,
-						MaxAttempts: maxAttemptsPerCandidate,
-						Reason:      string(failErr.Reason),
+						MaxAttempts: plan.maxAttempts,
+						Reason:      plan.reason,
 						SentAt:      sentAt,
-						RetryAt:     sentAt.Add(wait),
+						RetryAt:     sentAt.Add(plan.wait),
 					})
 				}
-				if werr := fc.sleepCtx(ctx, wait); werr != nil {
+				if werr := fc.sleepCtx(ctx, plan.wait); werr != nil {
 					// C-12: Stop ends the wait promptly; no further attempt
 					// is made and the candidate is not marked (exhaustion
 					// was never concluded).
 					result.Attempts = append(result.Attempts, FallbackAttempt{
-						Provider: candidate.Provider,
-						Model:    candidate.Model,
-						Error:    err,
-						Reason:   failErr.Reason,
-						Duration: fc.since(candStart),
+						Provider:  candidate.Provider,
+						Model:     candidate.Model,
+						Error:     err,
+						Reason:    failErr.Reason,
+						Duration:  fc.since(candStart),
+						Calls:     attemptNo,
+						RetryPlan: planApplied,
 					})
 					return nil, context.Canceled
 				}
@@ -594,11 +613,13 @@ func (fc *FallbackChain) Execute(
 			// candidate failed ONCE and move to the next candidate.
 			fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
-				Provider: candidate.Provider,
-				Model:    candidate.Model,
-				Error:    failErr,
-				Reason:   failErr.Reason,
-				Duration: fc.since(candStart),
+				Provider:  candidate.Provider,
+				Model:     candidate.Model,
+				Error:     failErr,
+				Reason:    failErr.Reason,
+				Duration:  fc.since(candStart),
+				Calls:     attemptNo,
+				RetryPlan: planApplied,
 			})
 			break
 		}
@@ -606,12 +627,14 @@ func (fc *FallbackChain) Execute(
 		if skipWithoutMark {
 			// A-4/D14 skip: recorded for observability, never marked.
 			result.Attempts = append(result.Attempts, FallbackAttempt{
-				Provider: candidate.Provider,
-				Model:    candidate.Model,
-				Error:    lastErr,
-				Reason:   FailoverRateLimit,
-				Skipped:  true,
-				Duration: fc.since(candStart),
+				Provider:  candidate.Provider,
+				Model:     candidate.Model,
+				Error:     lastErr,
+				Reason:    FailoverRateLimit,
+				Skipped:   true,
+				Duration:  fc.since(candStart),
+				Calls:     calls,
+				RetryPlan: planApplied,
 			})
 		}
 

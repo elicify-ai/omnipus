@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // TestMultiKeyFailover tests the complete failover flow with multiple API keys.
@@ -92,6 +93,9 @@ func TestMultiKeyFailoverAllFail(t *testing.T) {
 
 	cooldown := NewCooldownTracker()
 	chain := NewFallbackChain(cooldown)
+	// Issue #1280: the last candidate runs the retry plan (waits of 2-40 s);
+	// this test counts calls, not waits.
+	chain.waitFunc = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 
 	// Mock run function: all calls fail with rate limit
 	callCount := 0
@@ -112,10 +116,12 @@ func TestMultiKeyFailoverAllFail(t *testing.T) {
 	}
 
 	// provider-messages amendment (2026-09-27): under §7.4 C-8 every
-	// rate-limited candidate retries in place up to 3 calls: 3 candidates
-	// x 3 calls = 9 calls, each candidate marked once after its last failure.
-	if callCount != 9 {
-		t.Errorf("expected 9 calls (3 per candidate x 3 candidates), got %d", callCount)
+	// rate-limited EARLIER candidate retries in place up to 3 calls; issue
+	// #1280 (founder decision Q1) gives the LAST candidate the retry plan of
+	// 1 + 5 calls: 3 + 3 + 6 = 12 calls, each candidate marked once after
+	// its last failure.
+	if want := 2*3 + RetryPlanMaxAttempts; callCount != want {
+		t.Errorf("expected %d calls (3 + 3 for the earlier candidates, %d for the last), got %d", want, RetryPlanMaxAttempts, callCount)
 	}
 
 	// Verify error type
