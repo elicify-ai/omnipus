@@ -48,12 +48,24 @@ Board **#3** auto-tracks issues. Relevant fields:
 - **Priority**: mirrors the priority label.
 - **Sprint** (single-select: `Sprint 1`, `Sprint 2`, …): the planning axis. There is **no iteration field** — sprints are this single-select plus Epic bundling. New sprints are added as options to this field.
 - **Estimate**, **Target date**: optional.
+- **Stage** (single-select, founder decision 2026-10-29): where a *feature* really is in its life — `Idea` → `Requirements` → `Design` → `Spec` → `Ready to build` → `Building` → `In landing queue` → `Landed`. Set on feature Epics (see "Feature epics" below); `Status` stays the work-item flow.
+- **Horizon** (single-select, founder decision 2026-10-29): `Now`, `Next`, `Later`. The founder sets or corrects it (the chief proposes a ranking weekly). At most about five feature Epics are `Now` at once.
 
 ### Automation — what you must NOT do by hand
 
 - **New issues auto-add to the board as `Backlog`.** Do not manually add an issue to the board, and do not set its initial status.
 - **Closing an issue auto-moves it to `Done`.** Do not set `Done` by hand.
 - You *do* set: **Sprint** (when planning), and promote **Status** (`Backlog`→`Ready`→`In Progress`→`In Review`) as work proceeds.
+
+## Feature epics, Stage and Horizon (founder decision 2026-10-29)
+
+The board must show every feature, not only work items. Rules for every team except Team C (Team C works in its own repository with its own variant, agreed with the founder):
+
+- **One Epic per product feature.** Type = Epic; the title is a plain name ("Skills are folders"), the first lines give the goal in one sentence in plain words. The Epic body links the requirements document, the ADR or spec, the branch and the PR. Bugs and tasks of the feature are sub-issues.
+- **Nothing is written without its Epic.** A requirements document, design, spec or long-lived feature branch exists only with its Epic. Ideas worth keeping get an Epic with Stage `Idea`.
+- **Stage and Horizon are set on the Epic** and kept current by whoever moves the feature (the chief at each stage change). A design that exists on a branch is Stage `Design` or `Spec`, never `Backlog`.
+- **Weekly check (chief):** list requirements/design/spec documents and branches that have no Epic, and Epics with no Stage; fix the gaps. A plain-English backlog report is generated from the board and shared with the founder.
+- Closing: an Epic is `Landed` only when the feature is on the release branch and a user or agent can use it (Definition of Done: reachable).
 
 ## How to file an issue (agent recipe)
 
