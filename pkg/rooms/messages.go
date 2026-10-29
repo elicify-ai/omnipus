@@ -70,7 +70,7 @@ func (s *Service) bodyLimit() int {
 
 func validateMessage(req generated.RoomMessageRequest, bodyLimit int) error {
 	cid := req.ClientMessageId
-	if strings.TrimSpace(cid) == "" || len(cid) > 128 || !validID(cid) {
+	if strings.TrimSpace(cid) == "" || len(cid) > 128 || strings.ContainsAny(cid, `/\:`) {
 		return badRequest("client_message_id must be 1-128 characters without slashes")
 	}
 	if !utf8.ValidString(req.Text) || strings.ContainsRune(req.Text, 0) {
