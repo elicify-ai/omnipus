@@ -15,6 +15,9 @@ worktree**, so no branch can capture or conflict on it (design 5.9):
 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/
 ```
 
+or `$OMNIPUS_COORDINATION_DIR` (on a pod, the coordination repo checkout
+`/workspace/omnipus-coordination`).
+
 This is a convention, not a hard-coded requirement — the design calls the
 exact path "founder-adjustable" — but it is the default every script in
 this repo assumes unless overridden by an environment variable

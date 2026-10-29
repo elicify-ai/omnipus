@@ -1,6 +1,7 @@
 # Plugin-reviewer dispatch template
 
-Last reviewed: 2026-10-28 — dev-team roster update (ten roles); the dispatcher is always a team-lead session
+Last reviewed: 2026-10-29 — landing branch and cut commit scope; the dispatcher is always a team-lead session
+Process version: 2026-10-29.1
 
 Team-lead: paste the block between the two markers at the **head** of every dispatch to a gate plugin reviewer — `code-reviewer`, `silent-failure-hunter`, `pr-test-analyzer`. Use it for explicitly requested optional plugin reviewers too — `type-design-analyzer`, `comment-analyzer`, `code-simplifier` are optional, not part of the gate. Name the model explicitly in every reviewer dispatch; model selection stays outside repo assets. Fill the two placeholders with a tool that cannot misparse the text (e.g. Python `str.replace`), never `sed` with a delimiter that can occur in the text — a `#` in an issue reference has broken a `sed` fill and a reviewer ran without its rules — then append the task brief below the block, and verify the filled prompt contains the discipline block (the `agent-discipline:shared-traits:start` marker) before dispatching. Two errors this template exists to prevent: dispatching a plugin reviewer without it, and pasting the `omnipus-shared-rules` skill body into the dispatch — the reviewer loads the skill itself; only the discipline block and the load instruction travel with the dispatch.
 
@@ -31,7 +32,7 @@ Every dispatch report ends with this table — including a stop-and-ask, blocked
 | Certainty | **Verified** (the evidence is in this table) / **Inferred** (reasoned, not tested — say why) / **Unknown** |
 | **Self-check** (mandatory final row) | What the final self-check re-read and re-ran against the done-criteria, and its result — the self-check is evidence too, and a missing row fails the report |
 
-A claim without evidence is labelled **Unknown** — plausibility never promotes it to Inferred. **Tests are shown red before green**: a test's evidence row shows the failing run on the pre-change code — proven by **CI on a tests-only commit** or by the **one narrow local run** the local-suite rule permits — and then the passing run, so a green can never stand alone. **Small-size changes are exempt** from red-before-green evidence (they carry no RED step). The table stays terse — one row per claim, the key output line, not the whole log.
+A claim without evidence is labelled **Unknown** — plausibility never promotes it to Inferred. **Tests are shown red before green**: a test's evidence row shows the failing run on the pre-change code — proven by the **saved log of the one narrow local run** the local-suite rule permits (command, exit code, failing assertion; CI on a tests-only commit is not available before the cut and is not a proof route) — and then the passing run, so a green can never stand alone. **Small-size changes are exempt** from red-before-green evidence (they carry no RED step). The table stays terse — one row per claim, the key output line, not the whole log.
 
 ### The four anti-hallucination rules (all four, everyone)
 
@@ -68,6 +69,6 @@ You review a still tree. Report findings rather than editing any file under revi
 
 ## Scope of this dispatch
 
-Review: `<files / diff / PR scope>`. Work branch: `<branch>`. The dispatcher supplies the combined feature diff, or the combined train diff for the items assigned to this reviewer set, under root `CLAUDE.md` ("Change sizes and the review gate"). Review no separate lane/finding gate. For a re-review, verify your fixed findings and affected paths only. Done when every claim in scope carries evidence and the report ends with the evidence table, its self-check row, and the skills acknowledgement.
+Review: `<files / diff / PR scope>`. Landing branch and cut commit: `<branch>@<sha>`. The dispatcher supplies the feature diff at the cut, or the combined train diff for the items assigned to this reviewer set, under root `CLAUDE.md` ("Change sizes and the review gate"). Review no separate per-author/finding gate. For a re-review, verify your fixed findings and affected paths only. Done when every claim in scope carries evidence and the report ends with the evidence table, its self-check row, and the skills acknowledgement.
 
 --- paste to here ---

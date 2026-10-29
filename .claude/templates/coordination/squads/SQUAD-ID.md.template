@@ -1,10 +1,13 @@
 # squads/<squad-id>.md template (design 5.9)
 #
-# Last reviewed: 2026-10-28 — dev-team roster update (ten roles); row format unchanged
+# Last reviewed: 2026-10-29 — branch= names the landing branch; row format unchanged
+# Process version: 2026-10-29.1
 # Current process: root CLAUDE.md (Subagent Workflow), plus the planning skill's
 # knowledge/coordination-ledger.md. The strict row format below is unchanged.
 # Every row uses lead=team-lead: a separate independent stream is a separate
 # team-lead session, and there is no squad-lead role.
+# branch= names the landing branch (landing/<train>, or a standalone
+# feature's own landing branch); there are no work-package branches.
 #
 # One canonical file per feature/train/independent stream (for example
 # squads/security-hardening.md). Updated on every status change by the
@@ -40,4 +43,4 @@
 #
 # Example (illustration only — replace <squad-id> in the filename and every
 # field below):
-# squad=security-hardening | session=separate-session-2 | lead=team-lead | worktree=/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-security-hardening | branch=feature/security-hardening | claim=pkg/auth/, pkg/fspolicy/ | status=in-flight | last-updated=2026-09-25T09:05:00Z by team-lead
+# squad=security-hardening | session=separate-session-2 | lead=team-lead | worktree=/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-security-hardening | branch=landing/security-hardening | claim=pkg/auth/, pkg/fspolicy/ | status=in-flight | last-updated=2026-09-25T09:05:00Z by team-lead
