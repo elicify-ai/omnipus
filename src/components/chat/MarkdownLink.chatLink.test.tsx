@@ -6,9 +6,10 @@
  * Chat message rendering opts in with createLinkRenderer(null, { chatLinks: true }).
  * The default renderer (Mail and Library) must not build a Library anchor (BS-1.18).
  */
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { registerChatView } from '@/store/chatView'
+import { useUiStore } from '@/store/ui'
 import { createLinkRenderer } from './markdown-shared'
 
 const MarkdownLink = createLinkRenderer(null, { chatLinks: true })
@@ -31,6 +32,12 @@ describe('omnipus file links', () => {
     const suffix = document.getElementById(describedBy ?? '')
     expect(suffix?.textContent).toBe('W / secrets/payroll.xlsx')
     expect(suffix?.getAttribute('title')).toBeTruthy()
+    useUiStore.getState().closePanel()
+    fireEvent.click(link)
+    expect(useUiStore.getState().activePanel).toEqual({
+      id: 'library',
+      context: { workspaceId: 'W', path: 'secrets/payroll.xlsx' },
+    })
   })
 
   it('keeps a struck span for schemes that must not become anchors (SEC-4 / SEC-5)', () => {
