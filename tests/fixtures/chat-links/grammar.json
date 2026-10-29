@@ -17,7 +17,13 @@
     "OMNIPUS://file/W/notes/plan.md",
     "omnipus://file//notes/plan.md",
     "omnipus://evil/W/a.md",
-    "omnipus://file/W/notes/plan.md/../x.md"
+    "omnipus://file/W/notes/plan.md/../x.md",
+    "omnipus://file/W/a%5Cb.md",
+    "omnipus://file/W/notes/%zz.md",
+    "omnipus://file/W/notes/%2.md",
+    "omnipus://file/W..x/notes/plan.md",
+    "omnipus://file/bad id/a.md",
+    "omnipus://file/W!/a.md"
   ],
   "rejectPath": [
     {"workspace": "W", "path": "notes/‮plan.md"},

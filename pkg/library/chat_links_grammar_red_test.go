@@ -18,6 +18,7 @@ func TestEncodeLibraryLink_SharedGrammarFixture(t *testing.T) {
 			Path      string `json:"path"`
 			Link      string `json:"link"`
 		} `json:"roundTrip"`
+		RejectHref []string `json:"rejectHref"`
 		RejectPath []struct {
 			Workspace string `json:"workspace"`
 			Path      string `json:"path"`
@@ -30,7 +31,7 @@ func TestEncodeLibraryLink_SharedGrammarFixture(t *testing.T) {
 	if err := json.Unmarshal(raw, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	if len(fixture.RoundTrip) == 0 || len(fixture.RejectPath) == 0 {
+	if len(fixture.RoundTrip) == 0 || len(fixture.RejectPath) == 0 || len(fixture.RejectHref) == 0 {
 		t.Fatal("shared grammar fixture is empty")
 	}
 	for _, row := range fixture.RoundTrip {
@@ -47,10 +48,22 @@ func TestEncodeLibraryLink_SharedGrammarFixture(t *testing.T) {
 			t.Fatalf("Parse(%q) = %s %s %v; want %s %s (BS-1.8)", got, ws, rel, parsed, row.Workspace, row.Path)
 		}
 	}
+	for _, href := range fixture.RejectHref {
+		if _, _, ok := ParseLibraryLink(href); ok {
+			t.Fatalf("Parse accepted %q; the shared reject corpus must not parse (SEC-1 / FR-003)", href)
+		}
+	}
 	for _, row := range fixture.RejectPath {
 		if _, ok := EncodeLibraryLink(row.Workspace, row.Path); ok {
 			t.Fatalf("Encode accepted %q; forbidden characters get no link (SEC-13)", row.Path)
 		}
+	}
+	overlongWS := strings.Repeat("a", 256)
+	if _, _, ok := ParseLibraryLink("omnipus://file/" + overlongWS + "/a.md"); ok {
+		t.Fatal("Parse accepted a 256-character workspace id (BS-1.8)")
+	}
+	if _, ok := EncodeLibraryLink(overlongWS, "a.md"); ok {
+		t.Fatal("Encode accepted a 256-character workspace id (BS-1.8)")
 	}
 	long := strings.Repeat("a", 255)
 	if _, ok := EncodeLibraryLink("W", long); !ok {

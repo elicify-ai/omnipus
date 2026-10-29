@@ -48,6 +48,8 @@ describe('parseChatLink shared grammar (SEC-1 / SEC-13)', () => {
       path: accepted,
     })
     expect(parseChatLink(`omnipus://file/W/${rejected}`, 'W')).toBeNull()
+    const overlongWorkspace = 'a'.repeat(256)
+    expect(parseChatLink(`omnipus://file/${overlongWorkspace}/a.md`, 'W'), 'overlong workspace').toBeNull()
   })
 
   it('resolves a bare file only when the chat has a workspace (BS-1.2 / BS-1.11)', () => {
