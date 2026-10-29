@@ -19,6 +19,10 @@ const artifactPathsLLMNote = "Use `send_file` with one of these paths to send it
 // It provides clear semantics for different types of results and supports
 // async operations, user-facing messages, and error handling.
 type ToolResult struct {
+	// invoked is a live-only registry fact, never a wire/history field. The
+	// registry sets it on its own per-call copy after actual invocation.
+	invoked bool
+
 	// ForLLM is the content sent to the LLM for context.
 	// Required for all results.
 	ForLLM string `json:"for_llm"`

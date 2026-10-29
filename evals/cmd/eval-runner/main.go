@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,8 +124,11 @@ type EvalResult struct {
 	TranscriptExcerpt string       `json:"transcript_excerpt"`
 	AgentModel        string       `json:"agent_model"`
 	JudgeModel        string       `json:"judge_model"`
-	TokenUsage        TokenUsage   `json:"token_usage"`
-	CostUSD           float64      `json:"cost_usd"`
+	// JudgeModelUsed is the judge model that actually answered: the primary
+	// judge model, or the fallback when the primary was unavailable.
+	JudgeModelUsed string     `json:"judge_model_used,omitempty"`
+	TokenUsage     TokenUsage `json:"token_usage"`
+	CostUSD        float64    `json:"cost_usd"`
 	// Error is non-empty when the scenario run failed without a score.
 	Error string `json:"error,omitempty"`
 }
@@ -137,6 +141,8 @@ type cfg struct {
 	reportPath          string
 	agentModel          string
 	judgeModel          string
+	agentFallbackModel  string // empty: no agent fallback
+	judgeFallbackModel  string // empty: no judge fallback
 	timeout             time.Duration
 	dryRun              bool
 	omnipusBin          string
@@ -144,10 +150,12 @@ type cfg struct {
 }
 
 // parseFlags resolves configuration in three tiers: explicit flag, then the
-// AGENT_MODEL / JUDGE_MODEL environment overrides, then — for either knob left
-// empty — the repo's single source of truth tests/e2e/e2e-model.json. It
-// returns an error instead of a hardcoded fallback model when that file cannot
-// supply a value (exit code 3, configuration error).
+// AGENT_MODEL / JUDGE_MODEL (and AGENT_FALLBACK_MODEL / JUDGE_FALLBACK_MODEL)
+// environment overrides, then — for any knob left empty — the repo's single
+// source of truth tests/e2e/e2e-model.json (primary for the model knobs,
+// fallback for the fallback knobs). It returns an error instead of a
+// hardcoded model when that file cannot supply a value (exit code 3,
+// configuration error).
 func parseFlags() (cfg, error) {
 	today := time.Now().UTC().Format("2006-01-02")
 	c := cfg{}
@@ -156,11 +164,19 @@ func parseFlags() (cfg, error) {
 	flag.StringVar(&c.reportPath, "report", filepath.Join("evals", "REPORT.md"), "Markdown report output path")
 	flag.StringVar(
 		&c.agentModel, "agent-model", "",
-		"agent model as an OpenRouter slug (openrouter/<vendor>/<model>); overrides AGENT_MODEL; default: the central tests/e2e/e2e-model.json",
+		"agent model as a <provider>/<model> slug; overrides AGENT_MODEL; default: the primary in tests/e2e/e2e-model.json",
 	)
 	flag.StringVar(
 		&c.judgeModel, "judge-model", "",
-		"judge model as an OpenRouter slug (openrouter/<vendor>/<model>); overrides JUDGE_MODEL; default: the central tests/e2e/e2e-model.json",
+		"judge model as a <provider>/<model> slug; overrides JUDGE_MODEL; default: the primary in tests/e2e/e2e-model.json",
+	)
+	flag.StringVar(
+		&c.agentFallbackModel, "agent-fallback-model", "",
+		"agent fallback model as a <provider>/<model> slug; overrides AGENT_FALLBACK_MODEL; default: the fallback in tests/e2e/e2e-model.json",
+	)
+	flag.StringVar(
+		&c.judgeFallbackModel, "judge-fallback-model", "",
+		"judge fallback model as a <provider>/<model> slug; overrides JUDGE_FALLBACK_MODEL; default: the fallback in tests/e2e/e2e-model.json",
 	)
 	flag.DurationVar(&c.timeout, "timeout", 5*time.Minute, "per-scenario hard cap")
 	flag.BoolVar(&c.dryRun, "dry-run", false, "skip judge call, just collect transcripts")
@@ -191,12 +207,41 @@ func parseFlags() (cfg, error) {
 	if err != nil {
 		return c, fmt.Errorf("resolve judge model: %w", err)
 	}
+	agentFallback, agentFbSrc, err := resolveFallbackModel(c.agentFallbackModel, os.Getenv("AGENT_FALLBACK_MODEL"))
+	if err != nil {
+		return c, fmt.Errorf("resolve agent fallback model: %w", err)
+	}
+	judgeFallback, judgeFbSrc, err := resolveFallbackModel(c.judgeFallbackModel, os.Getenv("JUDGE_FALLBACK_MODEL"))
+	if err != nil {
+		return c, fmt.Errorf("resolve judge fallback model: %w", err)
+	}
 	c.agentModel, c.judgeModel = agentModel, judgeModel
+	c.agentFallbackModel, c.judgeFallbackModel = agentFallback, judgeFallback
 
 	slog.Info("eval: resolved models",
 		"agent_model", c.agentModel, "agent_model_source", agentSrc,
-		"judge_model", c.judgeModel, "judge_model_source", judgeSrc)
+		"agent_fallback_model", c.agentFallbackModel, "agent_fallback_model_source", agentFbSrc,
+		"judge_model", c.judgeModel, "judge_model_source", judgeSrc,
+		"judge_fallback_model", c.judgeFallbackModel, "judge_fallback_model_source", judgeFbSrc)
 	return c, nil
+}
+
+// resolveFallbackModel resolves one fallback knob: flag, then env, then the
+// central file's fallback. A missing central file means "no fallback" (an
+// explicit AGENT_MODEL/JUDGE_MODEL run outside the repo root still works,
+// with a warning); a present but broken file fails closed.
+func resolveFallbackModel(flagValue, envValue string) (string, string, error) {
+	return resolveModel(flagValue, envValue, func() (string, error) {
+		exists, err := centralE2EModelFileExists()
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			slog.Warn("eval: no tests/e2e/e2e-model.json in the working directory and no fallback override; running without a fallback model")
+			return "", nil
+		}
+		return centralE2EFallbackModel()
+	})
 }
 
 func envOrDefault(key, def string) string {
@@ -225,47 +270,6 @@ func resolveModel(flagValue, envValue string, loader func() (string, error)) (st
 		}
 		return m, "file", nil
 	}
-}
-
-// centralE2EModelPath is the repo's ONE committed source of truth for the
-// real-LLM e2e/evals model id ({"model": "<vendor>/<model>"}). Every workflow
-// job, the Fly CI runner (deploy/ci-worker/runci.sh) and this binary resolve
-// their model from it; scripts/check-no-hardcoded-e2e-model.sh fails any
-// model-id literal that appears in live config or code outside it.
-const centralE2EModelPath = "tests/e2e/e2e-model.json"
-
-// openrouterSlugPrefix: the runner and the workflows carry the model as a
-// provider-prefixed OpenRouter slug (openrouter/<vendor>/<model>); the source
-// file stores the bare vendor/model. callJudge strips the prefix before the
-// API call.
-const openrouterSlugPrefix = "openrouter/"
-
-// centralE2EModel reads the repo's single source of truth for the real-LLM
-// e2e/evals model id and returns it as a provider-prefixed OpenRouter slug.
-// Both model knobs (agent and judge) default from it — founder decision
-// 2026-09-27: the judge follows the same central setting instead of being a
-// second hardcoded literal. There is NO hardcoded fallback model anymore: with
-// no flag and no env override, an unreadable or empty source file fails the
-// run loudly rather than silently billing a stale model.
-func centralE2EModel() (string, error) {
-	data, err := os.ReadFile(centralE2EModelPath)
-	if err != nil {
-		return "", fmt.Errorf("read %s: %w — run from the repo root, or set AGENT_MODEL / JUDGE_MODEL explicitly",
-			centralE2EModelPath, err)
-	}
-	var parsed struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return "", fmt.Errorf("parse %s: %w", centralE2EModelPath, err)
-	}
-	// Trim before the emptiness check: a whitespace-only "model" is the same
-	// config corruption as an empty one and must fail the same way (E2).
-	model := strings.TrimSpace(parsed.Model)
-	if model == "" {
-		return "", fmt.Errorf("%s: \"model\" is empty or whitespace-only", centralE2EModelPath)
-	}
-	return openrouterSlugPrefix + model, nil
 }
 
 // ── Scenario discovery ────────────────────────────────────────────────────────
@@ -312,6 +316,10 @@ type gatewayHandle struct {
 	waited    <-chan error
 	token     string // bearer token obtained after onboarding
 	csrfToken string // CSRF token extracted from Set-Cookie on state-changing responses
+	// agentFallback is the explicit agent fallback slug (flag/env override).
+	// Empty: onboard reads the fallback from tests/e2e/e2e-model.json when
+	// that file is present.
+	agentFallback string
 }
 
 // gatewayBootTimeout bounds each phase of gateway startup (port file, then
@@ -338,11 +346,31 @@ func (h *gatewayHandle) extractCSRF(resp *http.Response) {
 // the request with 403. It also sets the Authorization header from h.token
 // when a token is available.
 func (h *gatewayHandle) doStatefulPost(path string, body []byte) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodPost, h.baseURL+path, bytes.NewReader(body))
+	return h.doStateful(http.MethodPost, path, body)
+}
+
+// doStatefulPut is doStatefulPost for PUT.
+func (h *gatewayHandle) doStatefulPut(path string, body []byte) (*http.Response, error) {
+	return h.doStateful(http.MethodPut, path, body)
+}
+
+// doStatefulGet performs a GET with the same CSRF and bearer behaviour.
+func (h *gatewayHandle) doStatefulGet(path string) (*http.Response, error) {
+	return h.doStateful(http.MethodGet, path, nil)
+}
+
+func (h *gatewayHandle) doStateful(method, path string, body []byte) (*http.Response, error) {
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, h.baseURL+path, rdr)
 	if err != nil {
 		return nil, fmt.Errorf("build request for %s: %w", path, err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if h.csrfToken != "" {
 		req.Header.Set("X-Csrf-Token", h.csrfToken)
 		req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: h.csrfToken})
@@ -535,20 +563,37 @@ func startGateway(ctx context.Context, omnipusBin, homeDir string, port int) (*g
 // onboard completes onboarding against the running gateway, setting up the
 // provider entry with the real API key and creating the eval admin account.
 // It stores the returned bearer token in h.token.
+//
+// agentModel is a <provider>/<model> slug; the API key is chosen by that
+// provider (evalKeyEnvs). When a fallback is configured (h.agentFallback, or
+// the fallback of tests/e2e/e2e-model.json in the working directory), onboard
+// then adds the fallback provider row and gives every agent the fallback in
+// its fallback_models — the product falls back per agent only (issue #1340),
+// so without this a primary outage turns every eval red. Both keys are
+// checked before the first request, so a missing key never leaves a
+// half-onboarded gateway.
 func (h *gatewayHandle) onboard(agentModel string) error {
-	apiKey := os.Getenv("OPENROUTER_API_KEY_EVAL")
-	if apiKey == "" {
-		return fmt.Errorf("OPENROUTER_API_KEY_EVAL is not set")
+	providerID, modelPath, ok := strings.Cut(strings.TrimSpace(agentModel), "/")
+	if !ok || providerID == "" || modelPath == "" {
+		return fmt.Errorf("agent model %q is not a <provider>/<model> slug", agentModel)
+	}
+	apiKey, err := lookupEvalKey(providerID, "primary")
+	if err != nil {
+		return err
 	}
 
-	// The provider ID is always "openrouter"; model is the full path after the prefix.
-	providerID := "openrouter"
-	modelPath := agentModel
-	if parts := strings.SplitN(agentModel, "/", 2); len(parts) == 2 {
-		providerID = parts[0]
-		modelPath = parts[1]
+	fallback, hasFallback, err := h.resolveAgentFallback(E2EModelSide{Provider: providerID, Model: modelPath})
+	if err != nil {
+		return err
+	}
+	var fallbackKey string
+	if hasFallback {
+		if fallbackKey, err = lookupEvalKey(fallback.Provider, "fallback"); err != nil {
+			return err
+		}
 	}
 
+	password := "eval-pass-" + time.Now().Format("20060102")
 	body := map[string]any{
 		"provider": map[string]any{
 			"auth_method": "api_key",
@@ -558,7 +603,7 @@ func (h *gatewayHandle) onboard(agentModel string) error {
 		},
 		"admin": map[string]any{
 			"username": "eval-admin",
-			"password": "eval-pass-" + time.Now().Format("20060102"),
+			"password": password,
 		},
 	}
 	bodyBytes, err := json.Marshal(body)
@@ -570,9 +615,9 @@ func (h *gatewayHandle) onboard(agentModel string) error {
 	if err != nil {
 		return fmt.Errorf("onboard POST: %w", err)
 	}
-	defer resp.Body.Close()
 	h.extractCSRF(resp)
 	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("onboard returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
@@ -586,11 +631,117 @@ func (h *gatewayHandle) onboard(agentModel string) error {
 	}
 	// If no token in onboard response, login separately.
 	if h.token == "" {
-		tok, err := h.login("eval-admin", "eval-pass-"+time.Now().Format("20060102"))
+		tok, err := h.login("eval-admin", password)
 		if err != nil {
 			return fmt.Errorf("login after onboard: %w", err)
 		}
 		h.token = tok
+	}
+
+	if !hasFallback {
+		return nil
+	}
+	return h.seedAgentFallback(fallback, fallbackKey)
+}
+
+// resolveAgentFallback picks the agent fallback: the explicit override, else
+// the central file's fallback when the file is present. A fallback equal to
+// the primary is dropped (nothing to fall back to).
+func (h *gatewayHandle) resolveAgentFallback(primary E2EModelSide) (E2EModelSide, bool, error) {
+	var fb E2EModelSide
+	switch {
+	case strings.TrimSpace(h.agentFallback) != "":
+		side, err := sideFromSlug(h.agentFallback)
+		if err != nil {
+			return E2EModelSide{}, false, fmt.Errorf("agent fallback model: %w", err)
+		}
+		fb = side
+	default:
+		exists, err := centralE2EModelFileExists()
+		if err != nil {
+			return E2EModelSide{}, false, err
+		}
+		if !exists {
+			slog.Warn("eval: no agent fallback configured; agents run without fallback_models")
+			return E2EModelSide{}, false, nil
+		}
+		pair, err := centralE2EModelPair()
+		if err != nil {
+			return E2EModelSide{}, false, err
+		}
+		fb = pair.Fallback
+	}
+	if fb.Provider == primary.Provider && fb.Model == primary.Model {
+		slog.Warn("eval: agent fallback equals the agent model; no fallback seeded", "model", primary.Slug())
+		return E2EModelSide{}, false, nil
+	}
+	return fb, true, nil
+}
+
+// seedAgentFallback adds the fallback provider row, then sets
+// fallback_models = [fallback] on every agent the gateway lists.
+func (h *gatewayHandle) seedAgentFallback(fallback E2EModelSide, key string) error {
+	providerBody, err := json.Marshal(map[string]any{
+		"auth_method": "api_key",
+		"api_key":     key,
+		"model":       fallback.Model,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal fallback provider body: %w", err)
+	}
+	if putErr := h.expect2xx(h.doStatefulPut("/api/v1/providers/"+url.PathEscape(fallback.Provider), providerBody)); putErr != nil {
+		return fmt.Errorf("add fallback provider %s: %w", fallback.Provider, putErr)
+	}
+
+	resp, err := h.doStatefulGet("/api/v1/agents")
+	if err != nil {
+		return fmt.Errorf("list agents: %w", err)
+	}
+	h.extractCSRF(resp)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("list agents returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var agents []struct {
+		ID string `json:"id"`
+	}
+	if jsonErr := json.Unmarshal(raw, &agents); jsonErr != nil {
+		return fmt.Errorf("parse agent list: %w", jsonErr)
+	}
+	if len(agents) == 0 {
+		return fmt.Errorf("list agents returned no agents; nothing to give the fallback %s", fallback.Slug())
+	}
+
+	agentBody, err := json.Marshal(map[string]any{
+		"fallback_models": []map[string]string{{"provider": fallback.Provider, "model": fallback.Model}},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal fallback_models body: %w", err)
+	}
+	for _, a := range agents {
+		if a.ID == "" {
+			return fmt.Errorf("agent list contains an agent with no id")
+		}
+		if err := h.expect2xx(h.doStatefulPut("/api/v1/agents/"+url.PathEscape(a.ID), agentBody)); err != nil {
+			return fmt.Errorf("set fallback_models on agent %s: %w", a.ID, err)
+		}
+	}
+	slog.Info("eval: seeded agent fallback", "fallback", fallback.Slug(), "agents", len(agents))
+	return nil
+}
+
+// expect2xx closes resp and turns a transport error or a non-2xx status into
+// an error. The response body is quoted only on failure.
+func (h *gatewayHandle) expect2xx(resp *http.Response, err error) error {
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	h.extractCSRF(resp)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return nil
 }
@@ -771,95 +922,6 @@ func (h *gatewayHandle) createSession(ctx context.Context, agentID string) (stri
 	return sr.ID, nil
 }
 
-// ── Judge call ────────────────────────────────────────────────────────────────
-
-// openRouterRequest is the OpenRouter-compatible chat completion request.
-type openRouterRequest struct {
-	Model    string              `json:"model"`
-	Messages []openRouterMessage `json:"messages"`
-}
-
-type openRouterMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// openRouterResponse captures just the fields we need.
-type openRouterResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage"`
-}
-
-// callJudge sends the rendered prompt to the judge model via OpenRouter and
-// returns the raw text response along with token counts.
-func callJudge(ctx context.Context, model, prompt string) (string, int, error) {
-	apiKey := os.Getenv("OPENROUTER_API_KEY_EVAL")
-	if apiKey == "" {
-		return "", 0, fmt.Errorf("OPENROUTER_API_KEY_EVAL is not set")
-	}
-
-	// Strip "openrouter/" prefix if present — the OpenRouter API uses the
-	// bare model path ("<vendor>/<model>", the exact shape
-	// tests/e2e/e2e-model.json stores; see scripts/check-no-hardcoded-e2e-model.sh).
-	orModel := model
-	if parts := strings.SplitN(model, "/", 2); len(parts) == 2 && parts[0] == "openrouter" {
-		orModel = parts[1]
-	}
-
-	reqBody := openRouterRequest{
-		Model: orModel,
-		Messages: []openRouterMessage{
-			{Role: "user", Content: prompt},
-		},
-	}
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", 0, fmt.Errorf("marshal judge request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://openrouter.ai/api/v1/chat/completions",
-		bytes.NewReader(bodyBytes),
-	)
-	if err != nil {
-		return "", 0, fmt.Errorf("build judge request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Http-Referer", "https://omnipus.ai")
-	req.Header.Set("X-Title", "omnipus-evals")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", 0, fmt.Errorf("judge HTTP call: %w", err)
-	}
-	defer resp.Body.Close()
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", 0, fmt.Errorf("read judge response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("judge returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBytes)))
-	}
-
-	var orResp openRouterResponse
-	if err := json.Unmarshal(respBytes, &orResp); err != nil {
-		return "", 0, fmt.Errorf("parse judge response: %w", err)
-	}
-	if len(orResp.Choices) == 0 || orResp.Choices[0].Message.Content == "" {
-		return "", 0, fmt.Errorf("judge returned empty choices")
-	}
-	totalTokens := orResp.Usage.PromptTokens + orResp.Usage.CompletionTokens
-	return orResp.Choices[0].Message.Content, totalTokens, nil
-}
-
 // estimateCostUSD returns a rough cost estimate. OpenRouter pricing varies;
 // we use a conservative $2.00/M tokens for the judge and $0.20/M for the agent.
 func estimateCostUSD(agentTokens, judgeTokens int) float64 {
@@ -933,6 +995,7 @@ func runScenario(
 	}
 	defer gw.kill()
 
+	gw.agentFallback = c.agentFallbackModel
 	err = gw.onboard(c.agentModel)
 	if err != nil {
 		result.Error = fmt.Sprintf("onboard: %v", err)
@@ -1020,14 +1083,19 @@ func runScenario(
 	judgeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	judgeRaw, judgeTokens, err := callJudge(judgeCtx, c.judgeModel, renderedPrompt)
+	judged, err := callJudge(judgeCtx, c.judgeModel, c.judgeFallbackModel, renderedPrompt)
 	if err != nil {
 		result.Error = fmt.Sprintf("judge call: %v", err)
 		return result
 	}
-	result.TokenUsage.Judge = judgeTokens
+	result.TokenUsage.Judge = judged.Tokens
+	result.JudgeModelUsed = judged.JudgeModelUsed
+	if judged.JudgeModelUsed != c.judgeModel {
+		slog.Warn("eval: judge answered from the fallback model", "scenario", s.ID,
+			"judge_model", c.judgeModel, "judge_model_used", judged.JudgeModelUsed)
+	}
 
-	scores, err := judge.Parse(judgeRaw)
+	scores, err := judge.Parse(judged.Text)
 	if err != nil {
 		result.Error = fmt.Sprintf("parse judge scores: %v", err)
 		return result

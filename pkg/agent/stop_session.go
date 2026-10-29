@@ -236,6 +236,12 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		return res, nil
 	}
 
+	// An explicit Stop also pauses the goal keeper when the last execution
+	// already completed and the durable cascade never calls RequestCancel.
+	// A continuation is not a new Stop and must not move the pause boundary.
+	if req.Continue == nil {
+		al.pauseGoalKeeperForStop(req.SessionID, req.Channel)
+	}
 	var report steer.CancelReport
 	var err error
 	if req.Continue != nil {

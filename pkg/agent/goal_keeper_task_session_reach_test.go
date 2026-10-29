@@ -83,7 +83,6 @@ import (
 // Traces to: GOAL-FR-015, goal-entity-spec.md S-06, JUDGE-FR-097, ADR-086.
 func TestKeeperReachesSessionMintedByARealTaskRun(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
@@ -95,6 +94,7 @@ func TestKeeperReachesSessionMintedByARealTaskRun(t *testing.T) {
 	// record, then the REAL dispatch-path session mint. Nothing here reaches
 	// into a session store by hand.
 	tk, _ := seedDefiningTaskGoal(t, al, "t-keeper-reach-1", agentInst.ID)
+	prepareKeeperTaskRuntimeForTest(t, al)
 	sid, err := al.taskExecutor.createTaskSessionSync(tk)
 	if err != nil {
 		t.Fatalf("createTaskSessionSync: %v", err)
@@ -157,10 +157,10 @@ func TestKeeperReachesSessionMintedByARealTaskRun(t *testing.T) {
 	}
 
 	// Read the counters BACK from pkg/goal's store (C-09): the push was
-	// counted, and no round was burned (the keeper never adjudicates).
+	// not yet assessed as an outcome, and no round was burned (the keeper never adjudicates).
 	after := mustGoalRecord(t, gid)
-	if after.ZeroOutputPushes != 1 {
-		t.Fatalf("goal record ZeroOutputPushes = %d, want 1 — the keeper's push must be counted on the record",
+	if after.ZeroOutputPushes != 0 {
+		t.Fatalf("goal record ZeroOutputPushes = %d, want 0 — R6 counts completed unproductive outcomes, not first publication",
 			after.ZeroOutputPushes)
 	}
 	if after.Round != 0 {

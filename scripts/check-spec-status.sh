@@ -21,7 +21,7 @@
 # DETERMINING THE INTEGRATION BRANCH
 #
 #   The integration branch is never a literal baked into enforcement here
-#   (team-lead.md / squad-lead.md: "it is never hard-coded, it changes over
+#   (team-lead.md: "it is never hard-coded, it changes over
 #   time" — and guard check 10 in check-agent-files.sh separately bans a
 #   hard-coded release/vN... branch literal under .claude/). Resolution
 #   order, first match wins:

@@ -5,7 +5,7 @@ import { Agent, Workspace, Session, SessionDetail } from '../../../src/lib/api/g
 import type { AgentCreateRequestMain, WorkspaceCreateRequest, SessionCreateRequest } from '../../../src/lib/api/generated/openapi-types';
 import { GatewayProcess } from './gateway-process';
 import { chatInput, waitForConnected } from './selectors';
-import { E2E_MODEL } from './e2e-model';
+import { e2eAgentModelFields } from './e2e-agent-model';
 
 // Independent oracle: tool-iteration-limit spec, Machine-Verifiable Constraints,
 // Tool-limit message. Never import the production notice/translation helper.
@@ -15,7 +15,7 @@ export const TERMINAL_REASON = "I've reached this agent's limit of tool steps fo
 export async function createTerminalSession(gw: GatewayProcess) {
   const agentResult = await gw.apiFetch('POST', '/api/v1/agents', {
     type: 'Main', name: 'Terminal acceptance', soul: 'Run the requested tool and report its result.',
-    provider: 'openrouter', model: E2E_MODEL, max_tool_iterations: 1,
+    ...e2eAgentModelFields('mock'), max_tool_iterations: 1,
   } satisfies AgentCreateRequestMain);
   expect(agentResult.ok, agentResult.raw).toBe(true);
   const agent = Agent.parse(agentResult.body);

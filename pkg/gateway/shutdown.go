@@ -70,6 +70,19 @@ func omnipusGracefulShutdown(
 	if runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
 	}
+	// #1490: the task-trigger and /loop schedulers are two more copies of the
+	// cron engine, and both start work when a job comes due (a triggered task
+	// run, a scheduled /loop turn). Stop them here too, before the turn drain,
+	// for the same #265 reason as CronService above. Same order as
+	// stopAndCleanupServices (CronService, PlanEngine, TaskTrigger,
+	// LoopScheduler); each Stop is idempotent, so a later cleanup pass that
+	// stops them again is harmless.
+	if runningServices.TaskTrigger != nil {
+		runningServices.TaskTrigger.Stop()
+	}
+	if runningServices.LoopScheduler != nil {
+		runningServices.LoopScheduler.Stop()
+	}
 	// ADR-066 rung 4 writes $OMNIPUS_HOME/cache/model_limits.json at the tail
 	// of a background fetch that nothing else waits for. Close it here, with
 	// the other background writers, so the write cannot land after RunContext

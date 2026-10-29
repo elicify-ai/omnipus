@@ -5,10 +5,16 @@ Detail behind SKILL.md §3. Design source: section 5.6 of
 a dev-team tool authored under that design; it is deliberately not `check-`-prefixed, so
 the CI guards runner does not adopt it as a gate).
 
-Last reviewed: 2026-10-23 — text contradictions and implemented tooling
+Last reviewed: 2026-10-29 — pod capacity signal
+Process version: 2026-10-29.1
 
 Current safety authority: root `CLAUDE.md` ("Running CLI agents" and "Build, test,
 and quality gates"). The monitor and the worker controller are separate instruments.
+
+**On a pod:** the script's verdict is Mac-only (its thresholds and ledger path describe
+the founder's Mac). On a pod the capacity signal is the `heavy` slot state and
+`drain status`; record those instead of a monitor verdict, and never call a missing
+monitor run an OK.
 
 ## Calling the monitor
 
@@ -24,7 +30,7 @@ one verdict line:
 
 **Where it is run:** before every new dispatch wave, before widening an existing one,
 and as the first step of idle-playbook lane 3 (dispatching an independent team or
-squad). Team-lead and any squad lead widening its own fan-out both run it.
+stream). Every team-lead session widening its own fan-out runs it.
 
 ## Signals
 

@@ -252,7 +252,7 @@ These frames are sent by the backend to the frontend over the WebSocket connecti
 
 When history is unavailable but access and current control delivery succeed, the connection remains bound. The web app shows a persistent history-only ErrorState/Retry while Stop, current approvals/questions and the normal composer remain in their independent owners. Existing question/read-only/connection locks still apply. New output is distinguished as **Live output — earlier history unavailable**, not concatenated into a falsely gap-free history. New sends follow ordinary durable-save rules and are not automatically resent.
 
-History Retry sends `attach_session` **without** `since_seq`/`boot_id`, preserving already-ready current controls and pending input. A repeated history refusal can complete controls as `live_only` again; it does not start a repair poll or lifetime rebuild. An incremental live reconnect while history remains unavailable does not clear that error. Only validated history success clears the matching history error. See [paged REST history](../operations/observability.md#paged-session-api) and the [operator runbook](../operations/chat-history-index.md).
+History Retry sends `attach_session` **without** `since_seq`/`boot_id`, preserving already-ready current controls and pending input. A repeated history refusal can complete controls as `live_only` again; it does not start a repair poll or lifetime rebuild. An incremental live reconnect while history remains unavailable does not clear that error. Only validated history success clears the matching history error. See [paged REST history](../operations/observability.md#paged-session-api).
 
 ### Prepared historical media and readiness
 

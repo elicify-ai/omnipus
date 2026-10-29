@@ -18,7 +18,7 @@ import { createServer } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { E2E_MODEL } from './fixtures/e2e-model.js';
+import { onboardViaAPI } from './fixtures/onboard-via-api.js';
 
 // Default binary used when OMNIPUS_BINARY is not set.
 export const DEFAULT_OMNIPUS_BINARY = '/tmp/omnipus-ci';
@@ -390,40 +390,19 @@ export async function waitForHealth(
  * Seed an admin via POST /api/v1/onboarding/complete.
  * Idempotent: 409 is treated as success.
  * See pkg/gateway/rest_onboarding.go — endpoint is CSRF-exempt.
+ *
+ * One onboarding path for the whole suite: this delegates to onboardViaAPI,
+ * which onboards the central primary (tests/e2e/e2e-model.json) with the key
+ * for that provider and then seeds the fallback provider and every agent's
+ * fallback_models. There is no placeholder key: onboarding probes the key for
+ * real, so a missing key fails here, naming the env vars to set.
  */
 export async function onboardAdmin(
   baseURL: string,
   username: string,
   password: string,
 ): Promise<void> {
-  const res = await fetch(`${baseURL}/api/v1/onboarding/complete`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      provider: {
-        auth_method: 'api_key',
-        id: 'openrouter',
-        // CI injects OPENROUTER_API_KEY_CI (per-shard via GITHUB_ENV). Local
-        // runs and the Go Tests job use OPENROUTER_API_KEY. Either is a real
-        // key; the placeholder is last so a self-managed gateway (hot-reload)
-        // does not onboard with sk-test-placeholder and get a 400 from
-        // OpenRouter.
-        api_key:
-          process.env.OPENROUTER_API_KEY ??
-          process.env.OPENROUTER_API_KEY_CI ??
-          'sk-test-placeholder',
-        // Central e2e model — the one source of truth is
-        // tests/e2e/e2e-model.json, threaded through fixtures/e2e-model.ts.
-        model: E2E_MODEL,
-      },
-      admin: { username, password },
-    }),
-  });
-
-  if (!res.ok && res.status !== 409) {
-    const body = await res.text();
-    throw new Error(`onboardAdmin: onboarding failed ${res.status}: ${body}`);
-  }
+  await onboardViaAPI({ baseURL, username, password });
 }
 
 /**

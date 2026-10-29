@@ -115,7 +115,7 @@ Each tab and neighbor screen has one job.
 | Settings, Data | Session retention, storage numbers, backups, clearing sessions |
 | Settings, Memory | What the team remembers: recap and retrospective settings |
 | Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
-| Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, and the goal completion budget |
+| Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, the goal completion budget, and idle-reminder and stalled-work check-in timers |
 | Settings, Chat | Chat display, including the verbose view of tool calls; the **Verbose chat** toggle shows or hides the context-window retry notice, "Context window exceeded. Compressing history and retrying..." |
 | Settings, About | Version and build information |
 | Profile | Your name, timezone, font size, password, and workspace context |
@@ -142,6 +142,30 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 **Settings → System agents** lists Judge, Plan Supervisor and Omnipus. Judge and Plan Supervisor are internal engine agents and cannot join workspace teams. Omnipus is a hidden member of the default workspace only; open its fixed sidebar entry rather than looking for it in Team. These built-in agents cannot be deleted.
 
 **Edit** opens the shared agent editor, including Omnipus's model setting. You can repair its model here without a working model conversation. Judge and Plan Supervisor also have editable instructions; their capabilities remain fixed. There is no default-agent setting. The editor saves on its own; if the answer to a save is lost, it says **Save not confirmed — it may or may not have been stored.** with **Retry** instead of claiming it saved. The Omnipus chat's gear button opens this tab directly. While the list loads it says **Loading system agents…**; if it cannot load, the tab says **Could not load the system agents.** with **Retry**; if a refresh fails after it loaded, the rows stay with **Could not refresh — this list may be out of date.** and **Retry**.
+
+## Goal timers
+
+The goal timer controls live in **Settings → Performance**, beside the goal completion budget. They govern when the existing keeper can start another work turn, not how long that turn may run.
+
+| Control | Default | Accepted values | What it controls |
+|---|---|---|---|
+| Idle reminder quiet window, in seconds | 60 seconds | Whole numbers from 30 to 3600 | Waiting before an ordinary reminder when a goal is idle. There is no quiet-off switch; zero is invalid. |
+| Stalled-work check-ins | On | On or off | The only off switch for busy-work check-ins. Turning it off does not stop ordinary idle reminders. |
+| Stalled-work check-in interval, in minutes | 30 minutes | Whole numbers from 5 to 1440 | Waiting without new progress while the goal's own background work remains busy. Turning check-ins off disables this input visually but retains its value; the same bounds apply even while off. |
+
+The clocks are independent. A five-minute busy-work check-in can become due inside a 3600-second idle quiet window. Busy observation runs on each sweep, not only after idle quiet expires. Check-ins still follow the one-per-observed-stall and fresh-progress re-arm rules in [Goals](goals.md#one-check-in-for-stalled-background-work). Stop, unanswered questions, claim pauses and the three-failure/five-no-progress brakes continue to take precedence.
+
+A successfully applied change is live for the next keeper sweep without restarting the gateway or replacing the goal. The sweep remains fixed at **30 seconds**: a due reminder or check-in can be noticed up to **30 seconds late**. That is scheduling delay, not a guarantee of response time or completion. Reserving or sending a busy check-in alone does not restart the idle quiet clock; actual activity and the admitted turn use their existing activity rules.
+
+Changing a timer asks you to confirm it first. **Cancelling that confirmation discards the pending change it was for**, so that value is not applied later by a different save. The field then shows the value Omnipus has for that setting: normally the value Omnipus is running with, or the saved value while an earlier save is still waiting to be applied — the page says so in its **saved, but not applied yet** notice.
+
+If you edit a field again while an earlier save is still on its way, the newer value stays on screen and still needs a confirmation of its own before it is sent. The older save finishing does not replace the newer value. On a local install, if a newer valid timer edit has already settled while the earlier save is pending, a fresh password prompt opens automatically after that save finishes, whether it succeeds or fails. The newer value is not sent until you confirm again; it does not reuse the earlier approval.
+
+Each edit queues the setting it changed, but several queued edits can be confirmed and sent together, and a setting that is not part of a request keeps the value it already had.
+
+For scripts, `GET /api/v1/performance` always returns resolved values for `goal_reminder_quiet_seconds`, `goal_stalled_checkin_enabled` and `goal_stalled_checkin_minutes`. `PUT /api/v1/performance` updates only fields supplied in that request and retains every omitted setting. The endpoint still requires administrator access. In local authentication mode it also requires password re-authentication. In platform authentication mode there is no local password step; the web app asks you to confirm the change. An empty update is invalid. The numeric fields reject zero, fractions and out-of-range values, including a minutes value of zero while check-ins are off; the switch accepts a boolean, not text or a number. In the settings file, the keys live under `planning`. Missing or null keys use their defaults, whereas an explicit out-of-range number is a configuration error, not a request to restore the default.
+
+If a save reports **saved, but not applied yet**, do not treat it as a successful live update. The error identifies the fields that request changed. At the **refresh** stage the settings file has the new values but the running configuration—and the keeper's timers—still uses the old values until a successful reload or restart. At the **reload** stage the running configuration has changed but the agent registry could not finish reloading: timer sweeps read that new running configuration, even though other agent settings may remain unapplied. Nothing is rolled back. See [When a save is not applied yet](#when-a-save-is-not-applied-yet).
 
 ## Tool calls per turn
 

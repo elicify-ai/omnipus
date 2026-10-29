@@ -84,6 +84,8 @@ type turnResult struct {
 	// TurnID). Lets a goal claim gather everything the claiming turn wrote
 	// for the parent (goal_upward_answer.go). Empty when not set.
 	turnID string
+	// goalID preserves the producing turn's immutable goal association.
+	goalID string
 }
 
 type turnState struct {

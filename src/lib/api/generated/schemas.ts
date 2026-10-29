@@ -1855,6 +1855,9 @@ type PerformanceSettings = Partial<{
   max_parallel_agents_configured: boolean;
   tools_on_demand: boolean;
   goal_max_rounds: number;
+  goal_reminder_quiet_seconds: number;
+  goal_stalled_checkin_enabled: boolean;
+  goal_stalled_checkin_minutes: number;
   max_tool_iterations: number;
   max_tool_iterations_saved_state: MaxToolIterationsSavedState;
   max_tool_iterations_saved_raw: number;
@@ -1874,6 +1877,9 @@ type PerformancePendingApply = {
     | "max_parallel_agents"
     | "tools_on_demand"
     | "goal_max_rounds"
+    | "goal_reminder_quiet_seconds"
+    | "goal_stalled_checkin_enabled"
+    | "goal_stalled_checkin_minutes"
     | "max_tool_iterations"
   >;
 };
@@ -1881,6 +1887,9 @@ type PerformanceSettingsUpdate = Partial<{
   max_parallel_agents: number;
   tools_on_demand: boolean;
   goal_max_rounds: number;
+  goal_reminder_quiet_seconds: number;
+  goal_stalled_checkin_enabled: boolean;
+  goal_stalled_checkin_minutes: number;
   max_tool_iterations: number;
   confirmed_lowering: Array<MaxToolIterationsConfirmedAgent>;
 }>;
@@ -1903,6 +1912,9 @@ type PerformanceReloadFailedDetails = {
     | "max_parallel_agents"
     | "tools_on_demand"
     | "goal_max_rounds"
+    | "goal_reminder_quiet_seconds"
+    | "goal_stalled_checkin_enabled"
+    | "goal_stalled_checkin_minutes"
     | "max_tool_iterations"
   >;
   lowered_agents: Array<MaxToolIterationAgentChange>;
@@ -2721,7 +2733,7 @@ type NotificationList = {
 };
 type Notification = {
   id: string;
-  type: "schedule_failed" | "knowledge_drift" | "stop_notice";
+  type: "schedule_failed" | "knowledge_drift" | "goal_paused" | "stop_notice";
   title: string;
   body?: string | undefined;
   severity: "info" | "warning" | "error";
@@ -5115,6 +5127,9 @@ export const PerformancePendingApply: z.ZodType<PerformancePendingApply> =
         "max_parallel_agents",
         "tools_on_demand",
         "goal_max_rounds",
+        "goal_reminder_quiet_seconds",
+        "goal_stalled_checkin_enabled",
+        "goal_stalled_checkin_minutes",
         "max_tool_iterations",
       ])
     ),
@@ -5126,6 +5141,9 @@ export const PerformanceSettings: z.ZodType<PerformanceSettings> = z
     max_parallel_agents_configured: z.boolean(),
     tools_on_demand: z.boolean(),
     goal_max_rounds: z.number().int().gte(1),
+    goal_reminder_quiet_seconds: z.number().int().gte(30).lte(3600),
+    goal_stalled_checkin_enabled: z.boolean(),
+    goal_stalled_checkin_minutes: z.number().int().gte(5).lte(1440),
     max_tool_iterations: z.number().int().gte(1).lte(1000),
     max_tool_iterations_saved_state: MaxToolIterationsSavedState,
     max_tool_iterations_saved_raw: z.number().int(),
@@ -5140,6 +5158,9 @@ export const PerformanceSettingsUpdate: z.ZodType<PerformanceSettingsUpdate> = z
     max_parallel_agents: z.number().int().gte(0),
     tools_on_demand: z.boolean(),
     goal_max_rounds: z.number().int().gte(1),
+    goal_reminder_quiet_seconds: z.number().int().gte(30).lte(3600),
+    goal_stalled_checkin_enabled: z.boolean(),
+    goal_stalled_checkin_minutes: z.number().int().gte(5).lte(1440),
     max_tool_iterations: z.number().int().gte(1).lte(1000),
     confirmed_lowering: z.array(MaxToolIterationsConfirmedAgent),
   })
@@ -6129,7 +6150,12 @@ export const ScheduleRunResult = z.object({
 });
 export const Notification: z.ZodType<Notification> = z.object({
   id: z.string(),
-  type: z.enum(["schedule_failed", "knowledge_drift", "stop_notice"]),
+  type: z.enum([
+    "schedule_failed",
+    "knowledge_drift",
+    "goal_paused",
+    "stop_notice",
+  ]),
   title: z.string().min(1),
   body: z.string().optional(),
   severity: z.enum(["info", "warning", "error"]),
@@ -7826,6 +7852,9 @@ export const PerformanceReloadFailedDetails: z.ZodType<PerformanceReloadFailedDe
         "max_parallel_agents",
         "tools_on_demand",
         "goal_max_rounds",
+        "goal_reminder_quiet_seconds",
+        "goal_stalled_checkin_enabled",
+        "goal_stalled_checkin_minutes",
         "max_tool_iterations",
       ])
     ),
@@ -18874,7 +18903,7 @@ export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
     id: z.string().min(1),
-    notification_type: z.enum(["schedule_failed", "knowledge_drift", "stop_notice"]),
+    notification_type: z.enum(["schedule_failed", "knowledge_drift", "goal_paused", "stop_notice"]),
     title: z.string().min(1),
     body: z.string().optional(),
     severity: z.enum(["info", "warning", "error"]),
