@@ -14,18 +14,18 @@
  *     the feed — now un-bordered small muted text in the header line.
  *   - the chat controls: "Add participant" as an icon-only ghost button.
  *
- * The later group chat (frames 3/4 of the approved wireframe: the avatar
- * stack + count as the Participants button) plugs into this same slot; it is
- * deliberately NOT implemented here.
+ * The group chat (frames 3/4 of the approved wireframe: the avatar stack +
+ * count as the Participants button) plugs into this same slot
+ * (GroupHeaderControls, #1449 US-11).
  *
  * TWO rules the slot must keep:
  *
- * 1. It belongs to the SESSION chat. A room page is a different
- *    conversation — the room header owns its own controls until the group
- *    Participants button lands — so the slot stays EMPTY there. Without
- *    this, opening a group after a main chat would show the main chat's
- *    title and an "Add participant" action that creates yet another group
- *    from the remembered main instead of adding to the group on screen.
+ * 1. The session chrome belongs to the SESSION chat. A room page is a
+ *    different conversation, so it shows the GROUP's controls and none of
+ *    the remembered session's: without this, opening a group after a main
+ *    chat would show the main chat's title and an "Add participant" action
+ *    that creates yet another group from the remembered main instead of
+ *    adding to the group on screen.
  *
  * 2. The workspace strip always wins the width. The slot's share of the
  *    header line is capped (max-w) so it can never squeeze the workspace
@@ -36,6 +36,16 @@
 import { useLocation } from '@tanstack/react-router'
 import { FeedKindLabel } from './FeedKindLabel'
 import { MainChatAddParticipant } from './AddParticipant'
+import { GroupHeaderControls } from '@/components/rooms/GroupHeaderControls'
+
+/** The room id of a `/workspaces/<id>/rooms/<roomId>` address, or null. */
+export function roomIdOfPath(pathname: string, workspaceId: string): string | null {
+  const normalized = pathname.replace(/\/+$/, '')
+  const prefix = `/workspaces/${workspaceId}/rooms/`
+  if (!normalized.startsWith(prefix)) return null
+  const rest = normalized.slice(prefix.length)
+  return rest.length > 0 && !rest.includes('/') ? decodeURIComponent(rest) : null
+}
 
 export function ChatHeaderSlot({ workspaceId }: { workspaceId: string }) {
   const { pathname } = useLocation()
@@ -47,6 +57,7 @@ export function ChatHeaderSlot({ workspaceId }: { workspaceId: string }) {
   const normalized = pathname.replace(/\/+$/, '')
   const base = `/workspaces/${workspaceId}`
   const isSessionChat = normalized === base || normalized === `${base}/chat`
+  const roomId = roomIdOfPath(pathname, workspaceId)
 
   return (
     <div
@@ -58,6 +69,8 @@ export function ChatHeaderSlot({ workspaceId }: { workspaceId: string }) {
           <FeedKindLabel />
           <MainChatAddParticipant />
         </>
+      ) : roomId ? (
+        <GroupHeaderControls key={roomId} workspaceId={workspaceId} roomId={roomId} />
       ) : null}
     </div>
   )

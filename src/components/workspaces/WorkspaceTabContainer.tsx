@@ -12,7 +12,7 @@ import { getPanelDefinition } from '@/components/panel-shell/registry'
 import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
 import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 import { ChatControls } from '@/components/chat/ChatControls'
-import { ChatHeaderSlot } from '@/components/chat/ChatHeaderSlot'
+import { ChatHeaderSlot, roomIdOfPath } from '@/components/chat/ChatHeaderSlot'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { Button } from '@/components/ui/button'
 import { SidebarShowButton } from '@/components/layout/SidebarShowButton'
@@ -256,6 +256,9 @@ function WorkspaceTabContainerView({
 }) {
   const location = useLocation()
   const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
+  // #1449 FR-065 / ADR A9.4: "Open browser" acts on the remembered SESSION;
+  // a group page is not that session, so the control is not offered there.
+  const onRoomPage = roomIdOfPath(location.pathname, workspace.id) !== null
 
   return (
     <WorkspaceContext.Provider value={workspace}>
@@ -287,7 +290,7 @@ function WorkspaceTabContainerView({
               and browser controls keep their natural width at every mode. */}
           <WorkspaceTabBar workspaceId={workspace.id} workspaceName={workspace.name} />
 
-          {activeSegment === 'chat' && (
+          {activeSegment === 'chat' && !onRoomPage && (
             <div className="flex shrink-0 items-center justify-end px-[var(--space-2-5)]" data-testid="workspace-chat-controls">
               <ChatControls />
             </div>

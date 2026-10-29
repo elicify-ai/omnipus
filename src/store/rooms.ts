@@ -22,6 +22,15 @@
 // success. One older-page request is in flight per room; a new attach (any
 // room), a truncating snapshot or leaving the room invalidates it, and its
 // late success or failure changes nothing.
+//
+// #1449 (ADR-20261028 A1.3): the shared chat list reads a room through a
+// ConversationSource. For it the store also keeps, per room, the reader's
+// view mode (following the latest entry or reading earlier ones), a view
+// generation that advances when a truncating snapshot replaces the window,
+// the number of attempts of the current older-page request, a page `limit`
+// for older pages, the invitation-context status from `room_meta`, and a
+// count of received snapshots (a re-attach after a reconnect). All new
+// fields are optional and default to the previous behaviour.
 
 import { create } from 'zustand'
 import type {
@@ -74,7 +83,18 @@ export interface RoomLiveState { // not-wire-format: in-browser projection of th
   /** #1332: token of the one in-flight older-page request; undefined when none. */
   historyToken?: number
   deliveries: Record<string, TrackedDelivery>
+  /** #1449: the reader follows the newest entry ('latest', default) or reads earlier ones. */
+  viewMode?: 'latest' | 'historical'
+  /** #1449: advances when a truncating snapshot replaces the window (default 0). */
+  viewGeneration?: number
+  /** #1449: how many snapshots arrived (each attach answers with one); a re-attach advances it. */
+  snapshotCount?: number
+  /** #1449 FR-045: the invitation summary's status, from `room_meta`/the room record. */
+  invitationContextStatus?: InvitationContextStatus
 }
+
+/** #1449 FR-041: the invitation summary lifecycle (generated `Room.invitation_context_status`). */
+export type InvitationContextStatus = NonNullable<RoomMetaFrame['invitation_context_status']>
 
 type RoomFrame = RoomSnapshotFrame | RoomEntryFrame | RoomMemberStateFrame | RoomMetaFrame
 
@@ -83,8 +103,15 @@ interface RoomStore {
   /** Attach a room on the existing hub connection, resuming after its cursor. */
   attachRoom: (roomId: string) => boolean
   applyRoomFrame: (frame: RoomFrame) => void
-  /** #1332: load the page before the earliest displayed entry (one in flight per room). */
-  loadOlder: (roomId: string) => Promise<void>
+  /**
+   * #1332: load the page before the earliest displayed entry (one in flight per room).
+   * #1449: `limit` sizes the page (the shared fill asks for 20-100 entries).
+   */
+  loadOlder: (roomId: string, opts?: { limit?: number }) => Promise<void>
+  /** #1449: the reader follows the latest entry or reads earlier ones (UI state, like a session's). */
+  setViewMode: (roomId: string, mode: 'latest' | 'historical') => void
+  /** #1449: attempts of the current older-page request per room (0 when none failed). */
+  historyAttempts: Record<string, number>
   /** #1332: the room is no longer shown — invalidate its in-flight older-page request. */
   abandonOlder: (roomId: string) => void
 }
@@ -160,7 +187,9 @@ function trackEntryDeliveries(deliveries: Record<string, TrackedDelivery>, entri
 }
 
 function metaOf(frame: RoomSnapshotFrame | RoomMetaFrame): Partial<RoomLiveState> {
+  const invitation = frame.type === 'room_meta' ? frame.invitation_context_status : undefined
   return {
+    ...(invitation ? { invitationContextStatus: invitation } : {}),
     members: frame.members, muted: frame.muted, paused: frame.paused, generation: frame.generation,
     readOnlyReason: frame.read_only_reason,
     allocatedCostMicroUsd: frame.allocated_cost_micro_usd,
@@ -175,7 +204,7 @@ function reduce(room: RoomLiveState, frame: RoomFrame): RoomLiveState {
     case 'room_snapshot': {
       trackEntryDeliveries(deliveries, frame.entries)
       for (const delivery of frame.member_states) track(deliveries, delivery, frame.seq, true)
-      const base = { ...room, ...metaOf(frame), seq, deliveries, snapshotReceived: true }
+      const base = { ...room, ...metaOf(frame), seq, deliveries, snapshotReceived: true, snapshotCount: (room.snapshotCount ?? 0) + 1 }
       if (frame.has_older === true) {
         // Truncation starts a new, gap-free window (Q2): exactly the snapshot,
         // older paging restarts before its first entry, and a page requested
@@ -185,6 +214,8 @@ function reduce(room: RoomLiveState, frame: RoomFrame): RoomLiveState {
           ...withoutHistoryRequest(base), entries, hasOlder: true,
           olderBoundary: entries[0]?.seq, historyFailed: false,
           historyStatus: 'idle', historyToken: undefined,
+          // #1449: the shared list starts a fresh view of the new window.
+          viewGeneration: (room.viewGeneration ?? 0) + 1, viewMode: 'latest',
         }
       }
       if (room.entries.length === 0) {
@@ -210,6 +241,14 @@ function reduce(room: RoomLiveState, frame: RoomFrame): RoomLiveState {
 
 export const useRoomStore = create<RoomStore>()((set, get) => ({
   rooms: {},
+  historyAttempts: {},
+  setViewMode: (roomId, mode) => {
+    set((state) => {
+      const room = state.rooms[roomId]
+      if (!room || (room.viewMode ?? 'latest') === mode) return state
+      return { rooms: { ...state.rooms, [roomId]: { ...room, viewMode: mode } } }
+    })
+  },
   attachRoom: (roomId) => {
     // Keep cached entries/cursor, but wait for this attach's first snapshot
     // before sending. Any attach (this room or another) invalidates every
@@ -229,7 +268,7 @@ export const useRoomStore = create<RoomStore>()((set, get) => ({
       rooms: { ...state.rooms, [frame.room_id]: reduce(state.rooms[frame.room_id] ?? emptyRoom(), frame) },
     }))
   },
-  loadOlder: async (roomId) => {
+  loadOlder: async (roomId, opts) => {
     const room = get().rooms[roomId] ?? emptyRoom()
     if (room.historyToken !== undefined) return // one in flight per room
     // The old end is known reached: nothing to request.
@@ -242,7 +281,11 @@ export const useRoomStore = create<RoomStore>()((set, get) => ({
     let page: RoomHistoryResponse | undefined
     let failed = false
     try {
-      page = await fetchRoomHistory(roomId, beforeSeq === undefined ? {} : { beforeSeq })
+      const limit = opts?.limit
+      page = await fetchRoomHistory(roomId, {
+        ...(beforeSeq === undefined ? {} : { beforeSeq }),
+        ...(limit === undefined ? {} : { limit }),
+      })
       if (!page || !Array.isArray(page.entries)) {
         failed = true
       } else if (pageContradictsContinuation(page, roomId, beforeSeq)) {
@@ -263,11 +306,15 @@ export const useRoomStore = create<RoomStore>()((set, get) => ({
       // Invalidated (attach, truncation, leaving the room): change nothing.
       if (!current || current.historyToken !== token) return state
       if (failed || !page) {
-        return { rooms: { ...state.rooms, [roomId]: { ...current, historyToken: undefined, historyStatus: 'error', historyFailed: true } } }
+        return {
+          rooms: { ...state.rooms, [roomId]: { ...current, historyToken: undefined, historyStatus: 'error', historyFailed: true } },
+          historyAttempts: { ...state.historyAttempts, [roomId]: (state.historyAttempts[roomId] ?? 0) + 1 },
+        }
       }
       const deliveries = { ...current.deliveries }
       trackEntryDeliveries(deliveries, page.entries)
       return {
+        historyAttempts: { ...state.historyAttempts, [roomId]: 0 },
         rooms: {
           ...state.rooms,
           [roomId]: {

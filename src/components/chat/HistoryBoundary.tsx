@@ -4,12 +4,10 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ErrorState } from '@/components/ui/error-state'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useChatStore } from '@/store/chat'
-import { useSessionStore } from '@/store/session'
 import type { HistoryActionKind } from '@/store/chat/types'
 import { historyPageSizing } from '@/lib/chat-history-sizing'
-import { reachedClosedClear } from '@/store/chat/history-merge'
 import { logDiagnostic } from '@/lib/telemetry'
+import { useConversationSource } from './conversationSource'
 
 const loading: Record<HistoryActionKind, string> = {
   older: 'Loading earlier messages…', newer: 'Loading newer messages…', latest: 'Loading latest messages…', refresh: 'Refreshing loaded messages…',
@@ -43,8 +41,10 @@ function historyScroller(element: HTMLElement | null): HTMLElement | null {
  * in-history placement then keeps only the unavailable-history recovery.
  */
 export function HistoryBoundary({ action, average = 80, placement = 'history' }: { action: HistoryActionKind; average?: number; placement?: 'history' | 'floating' }) {
-  const sid = useSessionStore(s => s.activeSessionId)
-  const history = useChatStore(s => s.history)
+  // #1449 FE-1: the normal chat's session or the group on screen.
+  const source = useConversationSource()
+  const sid = source.key
+  const history = source.history
   const request = history.requests[action]
   const ref = useRef<HTMLDivElement>(null)
   const focused = useRef<Element | null>(null)
@@ -58,29 +58,23 @@ export function HistoryBoundary({ action, average = 80, placement = 'history' }:
   })
   const run = () => {
     if (!sid) return
-    const state = useChatStore.getState()
-    const current = state.sessionsById[sid]?.history.requests[action]
+    const current = source.read()?.history.requests[action]
     if (current?.status === 'loading') return
     // Return is an explicit latest read, even while history recovery is unavailable.
-    if (action !== 'latest' && current?.error) { void state.retryHistory(sid, action).catch(logHistoryRejection(action)); return }
+    if (action !== 'latest' && current?.error) { void source.retry(action).catch(logHistoryRejection(action)); return }
     const region = historyScroller(ref.current)
     const size = historyPageSizing(region?.clientHeight || 800, average)
-    if (action === 'older') {
-      state.enterHistoryReading(sid)
-      const bucket = state.sessionsById[sid]
-      const clear = bucket && reachedClosedClear(bucket)
-      void (clear ? state.showEarlierHistory(sid, clear.historyPosition, size) : state.loadOlderHistory(sid, size)).catch(logHistoryRejection(action))
-    } else if (action === 'newer') void state.loadNewerHistory(sid, size).catch(logHistoryRejection(action))
-    else if (action === 'latest') void state.returnToLatestHistory(sid, { ...size, limit: Math.min(100, Math.max(20, Math.ceil(4 * (region?.clientHeight || 800) / average))) }).catch(logHistoryRejection(action))
-    else void state.refreshLoadedHistory(sid).catch(logHistoryRejection(action))
+    if (action === 'older') void source.beginOlder(size).catch(logHistoryRejection(action))
+    else if (action === 'newer') void source.loadNewer(size).catch(logHistoryRejection(action))
+    else if (action === 'latest') void source.returnToLatest({ ...size, limit: Math.min(100, Math.max(20, Math.ceil(4 * (region?.clientHeight || 800) / average))) }).catch(logHistoryRejection(action))
+    else void source.refresh().catch(logHistoryRejection(action))
   }
   const recover = () => {
     if (!sid) return
-    const state = useChatStore.getState()
-    const current = state.sessionsById[sid]?.history
+    const current = source.read()?.history
     if (current?.serverState?.status !== 'unavailable' || current.requests.latest.status === 'loading') return
     // Recovery requests a snapshot; it does not request leaving the older reader.
-    void state.retryHistory(sid, 'latest').catch(logHistoryRejection('latest'))
+    void source.retry('latest').catch(logHistoryRejection('latest'))
   }
   const reading = history.viewMode === 'historical'
   const unavailable = action === 'latest' && history.serverState?.status === 'unavailable'
@@ -156,8 +150,7 @@ export function FloatingReturnToLatest() {
 }
 
 export function HistoryReaderStatus() {
-  const history = useChatStore(s => s.history)
-  const notice = useChatStore(s => s.historyNotice)
+  const { history, historyNotice: notice } = useConversationSource()
   return <>
     <HistoryBoundary action="refresh" />
     {history.requests.refresh.error && <p className="px-[var(--space-3)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Loaded messages may be out of date.</p>}

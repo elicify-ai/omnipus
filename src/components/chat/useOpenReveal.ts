@@ -25,7 +25,7 @@ export const CATCH_UP_SMOOTH: SmoothOptions = { drainMs: 1 }
 /** Upper bound for one opening; reaching it is logged, never silent. */
 export const OPEN_REVEAL_LIMIT_MS = 10_000
 
-type OpenState = 'pending' | 'ready' | 'failed' // not-wire-format: local reveal decision
+export type OpenState = 'pending' | 'ready' | 'failed' // not-wire-format: local reveal decision
 
 function openState(sid: string | null, openFailed: boolean): (state: ReturnType<typeof useChatStore.getState>) => OpenState {
   return (state) => {
@@ -54,11 +54,22 @@ function openState(sid: string | null, openFailed: boolean): (state: ReturnType<
  */
 export function useOpenReveal(sid: string | null, openFailed: boolean): boolean {
   const state = useChatStore(openState(sid, openFailed))
-  const [covered, setCovered] = useState(() => {
+  const [initiallyCovered] = useState(() => {
     if (!sid || sid === '__pending') return false
     const pending = useChatStore.getState().pendingFirstSend
     return !(pending && (pending.sessionId === null || pending.sessionId === sid))
   })
+  return useRevealCover(state, initiallyCovered)
+}
+
+/**
+ * The reveal itself, for any opened conversation (#1449: a group chat reveals
+ * through the same cover once its first live view arrived). Covered from the
+ * first render when `initiallyCovered`; revealed two frames after the state
+ * becomes ready, at once when it fails, and never later than the limit.
+ */
+export function useRevealCover(state: OpenState, initiallyCovered: boolean): boolean {
+  const [covered, setCovered] = useState(initiallyCovered)
   useEffect(() => {
     if (!covered) return
     if (state === 'failed') { setCovered(false); return }

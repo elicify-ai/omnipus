@@ -14,7 +14,6 @@ import {
   User,
   Copy,
   Check,
-  File,
   Lightning,
 } from '@phosphor-icons/react'
 import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
@@ -73,7 +72,6 @@ import {
   useReplySlotPhase,
 } from './AgentStatusIndicator'
 import { useChatAgents } from './useChatAgents'
-import { AttachmentCard } from './AttachmentCard'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
 import {
@@ -84,6 +82,13 @@ import {
 } from './ConnectionStatus'
 import { RowDeliveryStatus } from './RowDeliveryStatus'
 import { useChatHistory, HistoryOpenState } from './useChatHistory'
+import { useConversationKind, useConversationSource } from './conversationSource'
+import { ChatFileAttachment } from './ChatFileAttachment'
+
+// #1449 FR-005: a group row never reads the foreground session's live state.
+const NO_LIVE_TOOL_CALLS: ReturnType<typeof useChatStore.getState>['toolCalls'] = {}
+const NO_LIVE_TOOL_ORDER: string[] = []
+const NO_LIVE_TEXT_OFFSETS: Record<string, string> = {}
 
 export function placementOf(message: ChatMessage): DelegationPlacementMessage {
   return {
@@ -710,15 +715,8 @@ function InlineMedia() {
             )}
           </div>
         ) : (
-          <a tabIndex={0}
-            key={`${m.url}-${i}`}
-            href={m.url}
-            download={m.filename}
-            className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-          >
-            <File size={14} />
-            {m.filename}
-          </a>
+          // FR-081: the same file card as the settled rows.
+          <ChatFileAttachment key={`${m.url}-${i}`} media={m} />
         ),
       )}
     </div>
@@ -886,6 +884,9 @@ export function VirtualUserMessageRow({
   // covered: this one by ChatScreen.goalCommandMarker.test.tsx, the live one
   // by ChatScreen.goalCommandMarker.live.test.tsx.
   const setsGoal = messageSetsGoal(message.content)
+  // #1449: a group row carries no session send state (the group's send
+  // outcome lives in its message box notice area, ADR A3.2).
+  const sessionRow = useConversationKind() === 'session'
 
   // U8/F15/F17: a user entry carrying a server-stamped participant is a
   // LEFT-side message from another participant (channel input, peer request) —
@@ -894,7 +895,7 @@ export function VirtualUserMessageRow({
   if (message.participant) return <ParticipantMessageRow message={message} />
 
   return (
-    <div
+    <article
       data-testid="user-message"
       data-message-role="user"
       data-message-id={message.id}
@@ -917,7 +918,8 @@ export function VirtualUserMessageRow({
                 // toolbar (copy/share/download/enlarge) + click-to-enlarge lightbox.
                 <ChatImage key={`${m.url}-${i}`} src={m.url} alt={m.filename} filename={m.filename} className="max-w-[240px]" />
               ) : (
-                <AttachmentCard key={`${m.url}-${i}`} filename={m.filename} contentType={m.contentType} />
+                // FR-002: a keyboard-operable download with an inline error and Retry.
+                <ChatFileAttachment key={`${m.url}-${i}`} media={m} />
               ),
             )}
           </div>
@@ -934,7 +936,7 @@ export function VirtualUserMessageRow({
             ),
           )
         )}
-        {message.deliveryStatus && (message.firstSendStatus || message.deliveryStatus !== 'sending') && (
+        {sessionRow && message.deliveryStatus && (message.firstSendStatus || message.deliveryStatus !== 'sending') && (
           <RowDeliveryStatus
             content={message.content}
             state={message.deliveryStatus}
@@ -946,9 +948,9 @@ export function VirtualUserMessageRow({
             onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(message.id)}
           />
         )}
-        {(!message.firstSendStatus || message.firstSendStatus === 'saved') && <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />}
+        {sessionRow && (!message.firstSendStatus || message.firstSendStatus === 'saved') && <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />}
       </div>
-    </div>
+    </article>
   )
 }
 
@@ -1022,11 +1024,14 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
   pairedReplyToIds: ReadonlySet<string>
 }) {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  // #1449 FR-005 / ADR A3.2: a group row never shows the live tool calls or
+  // status of whichever chat session is in the foreground.
+  const liveRow = useConversationKind() === 'session'
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
-  const activeSessionId = useSessionStore((s) => s.activeSessionId)
-  const toolCalls = useChatStore((s) => s.toolCalls)
-  const toolCallOrder = useChatStore((s) => s.toolCallOrder)
-  const textAtToolCallStart = useChatStore((s) => s.textAtToolCallStart)
+  const activeSessionId = useSessionStore((s) => (liveRow ? s.activeSessionId : null))
+  const toolCalls = useChatStore((s) => (liveRow ? s.toolCalls : NO_LIVE_TOOL_CALLS))
+  const toolCallOrder = useChatStore((s) => (liveRow ? s.toolCallOrder : NO_LIVE_TOOL_ORDER))
+  const textAtToolCallStart = useChatStore((s) => (liveRow ? s.textAtToolCallStart : NO_LIVE_TEXT_OFFSETS))
   const toolCallOwners = useChatStore((s) =>
     activeSessionId ? s.sessionsById[activeSessionId]?.toolCallOwnerMessageId : undefined,
   )
@@ -1048,6 +1053,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
   const goalPills = useChatStore((s) => s.goalPills)
   const goalRecordEmpty = isGoalRecordEmpty(message.goalId, goalPills)
   const isLastAssistant = useChatStore((s) => {
+    if (!liveRow) return false
     const list = s.messages
     for (let i = list.length - 1; i >= 0; i--) {
       if (list[i]?.role === 'assistant') return list[i]?.id === message.id
@@ -1078,6 +1084,8 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
   // or "(cut off at the output limit)" for a max_output_tokens truncation.
   // getMessageStatusSuffix owns the precedence (interrupted/cancelled wins).
   const statusSuffix = getMessageStatusSuffix(message)
+  // #1449 FR-004 (FR-170/FR-217): a group answer posted after a pause keeps its muted mark.
+  const afterPause = message.roomMarks?.afterPause === true
 
   // Render media attachments.
   const mediaItems = message.media ?? []
@@ -1186,7 +1194,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
   const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || replyStreaming)
 
   const row = (
-    <div
+    <article
       data-testid="assistant-message"
       data-message-role="assistant"
       data-message-id={message.id}
@@ -1217,15 +1225,8 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
                     )}
                   </div>
                 ) : (
-                  <a tabIndex={0}
-                    key={`${m.url}-${i}`}
-                    href={m.url}
-                    download={m.filename}
-                    className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-                  >
-                    <File size={14} />
-                    {m.filename}
-                  </a>
+                  // FR-002: a keyboard-operable download with an inline error and Retry.
+                  <ChatFileAttachment key={`${m.url}-${i}`} media={m} />
                 ),
               )}
             </div>
@@ -1306,6 +1307,9 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
         {statusSuffix && (
           <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-[var(--space-1)]">{statusSuffix}</span>
         )}
+        {afterPause && (
+          <span data-testid="after-pause-mark" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-[var(--space-1)]">after pause</span>
+        )}
 
         {/* ADR-051 — verbose-only "Technical details" disclosure (replay
             path). Extracted verbatim to ErrorDetailDisclosure.tsx; same mount
@@ -1316,9 +1320,9 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
             replay sessions show the same model footer as the live
             AssistantUI render. */}
         {message.role === 'assistant' && <ModelFooter model={message.model} />}
-        <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />
+        {liveRow && <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />}
       </div>
-    </div>
+    </article>
   )
   return (
     <>
@@ -1350,7 +1354,13 @@ export function VirtualizerAutoFollow({
   contentRef: React.RefObject<HTMLDivElement | null>
 }) {
   const viewportStore = useThreadViewportStore()
-  const isReplaying = useChatStore((s) => s.isReplaying)
+  // #1449 FE-1: follow the conversation on screen — a group never replays,
+  // and its reader mode is its own, not the last visited session's.
+  const source = useConversationSource()
+  const sessionList = source.kind === 'session'
+  const isReplaying = useChatStore((s) => s.isReplaying) && sessionList
+  const sourceRef = useRef(source)
+  sourceRef.current = source
   const pin = useRef<number | null>(null)
   const userScrolledUp = useRef(false)
   useEffect(() => {
@@ -1369,7 +1379,8 @@ export function VirtualizerAutoFollow({
     }
     const onPointerDown = () => { pointerActive = isReplaying }
     const onPointerUp = () => { pointerActive = false }
-    const canFollow = () => useChatStore.getState().history.viewMode !== 'historical' && !userScrolledUp.current && (viewportStore.getState().isAtBottom || el.scrollTop === pin.current)
+    const viewMode = () => (sourceRef.current.kind === 'session' ? useChatStore.getState().history.viewMode : sourceRef.current.read()?.history.viewMode)
+    const canFollow = () => viewMode() !== 'historical' && !userScrolledUp.current && (viewportStore.getState().isAtBottom || el.scrollTop === pin.current)
     // Keep explicit upward intent across the replay-completion effect. Row
     // measurement can move scrollTop too, so position changes alone are not
     // evidence of a user scroll. Never prevent any native input here.

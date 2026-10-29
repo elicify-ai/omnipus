@@ -1,101 +1,72 @@
-// RoomScreen — one group chat (omnipus-system-agent US-17; FR-164, FR-171,
-// FR-175, FR-199, FR-201, FR-204, FR-205, FR-207; §6.3, §6.11; K23, K26, K45).
+// RoomScreen — one group chat (omnipus-system-agent US-17; FR-164, FR-175,
+// FR-199, FR-201, FR-204, FR-205, FR-207; §6.3, §6.11; K23, K26, K45).
+//
+// #1449 (ADR-20261028, decision D1): the group is the normal chat with more
+// than one agent in it. The page renders the SHARED chat stack — the message
+// list with its rows, history boundary, Return to latest and opening cover
+// (ChatMessageList), and the message box (ComposerBody, group profile) — in
+// the normal chat's centred columns (D7). It reads the group through a room
+// ConversationSource; the room keeps its own store (FR-199). The group's
+// chrome is the Participants button in the workspace header line
+// (GroupHeaderControls) and the Participants side panel; there is no bar,
+// member list or Stop on this page (D13, D6, D21).
 //
 // A room is a conversation owned by the user, not an agent session (FR-199):
 // this screen attaches the ROOM on the existing hub connection (again after
 // every reconnect, resuming from the room's own cursor) and never creates,
-// attaches or switches an agent session. The room record (REST) gives the
-// header's starting point; live frames (src/store/rooms.ts) keep members,
-// mutes, pause, cost, request states and the transcript current.
-// Sending is blocked — never silently dropped — while the room cannot be
-// read, the first snapshot after (re)attach has not arrived, the connection
-// is down, or the server marked the room read-only (§6.3, FR-204; ruling Q2).
-// The reserved complete flag and omitted older history never block sending.
+// attaches or switches an agent session. Sending is blocked — never silently
+// dropped — while the room cannot be read, the first snapshot after
+// (re)attach has not arrived, the connection is down, or the server marked
+// the room read-only (§6.3, FR-204; ruling Q2).
 
-import { useEffect, useMemo, useState } from 'react'
-import { Link } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
-import type { Room } from '@/lib/api/generated/openapi-types'
-import type { Agent, Workspace } from '@/lib/api'
-import { fetchAgents, fetchWorkspace, workspacesQueryKeys } from '@/lib/api'
-import { fetchRoom, roomsQueryKeys } from '@/lib/api/rooms'
-import { mutationFailureMessage } from '@/lib/mutationOutcome'
-import { Button } from '@/components/ui/button'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AssistantRuntimeProvider, ThreadPrimitive } from '@assistant-ui/react'
 import { QueryErrorState } from '@/components/ui/query-error-state'
+import { mutationFailureMessage } from '@/lib/mutationOutcome'
 import { useConnectionStore } from '@/store/connection'
-import { latestDeliveryByMember, useRoomStore, type RoomLiveState } from '@/store/rooms'
-import { RoomComposer } from './RoomComposer'
-import { RoomHeader } from './RoomHeader'
-import { RoomTranscript } from './RoomTranscript'
-import { isRefusedRoomCommand, memberMainSessionId, refusalLinkMembers } from './roomModel'
-import { useRoomSend, type RoomSend } from './useRoomSend'
+import { useRoomStore } from '@/store/rooms'
+import { useUiStore } from '@/store/ui'
+import { VirtualizedMessageList } from '@/components/chat/ChatMessageList'
+import { ConversationKindContext, ConversationSourceContext } from '@/components/chat/conversationSource'
+import { ToolApprovalThreadTail } from '@/components/agents/ToolApprovalPanel'
+import { AskUserQuestionCard } from '@/components/chat/AskUserQuestionCard'
+import { useRoomConversationSource } from './roomConversationSource'
+import { ROOM_ASK_AGAIN_EVENT, type RoomAskAgainDetail } from './roomModel'
+import { RoomMessageBox, roomBlockedReason } from './RoomMessageBox'
+import { RoomWorkingLines } from './RoomWorkingLines'
+import { useRoomRuntime, type RoomSendBridge } from './useRoomRuntime'
+import { useRoomSend } from './useRoomSend'
+import { useRoomCardRequestIds, useRoomQuestionCards, useRoomView } from './useRoomView'
 
 export interface RoomScreenProps {
   workspaceId: string
   roomId: string
 }
 
-/** The REST record with the live room frames applied over it. */
-function currentRoom(room: Room, live: RoomLiveState | undefined): Room {
-  if (!live || live.seq === 0) return room
-  return {
-    ...room,
-    members: live.members, muted: live.muted, paused: live.paused, generation: live.generation,
-    read_only_reason: live.readOnlyReason,
-    allocated_cost_micro_usd: live.allocatedCostMicroUsd,
-    allocated_cost_unpriced: live.allocatedCostUnpriced,
-  }
-}
-
-function blockedReasonOf(room: Room, live: RoomLiveState | undefined, connected: boolean): string | undefined {
-  if (!connected) return 'Reconnecting… messages can be sent again once the connection is back.'
-  if (room.read_only_reason) return room.read_only_reason
-  if (!live?.snapshotReceived) return 'Loading the conversation…'
-  return undefined
-}
-
-function SendNotice({ send, members, workspace }: { send: RoomSend; members: Agent[]; workspace: Workspace | undefined }) {
-  const { state } = send
-  if (state.status === 'uncertain') {
-    return (
-      <div role="alert" className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
-        <span className="flex-1">Not confirmed — your message may not have been recorded.</span>
-        <Button variant="outline" size="sm" onClick={send.retry}>Retry</Button>
-      </div>
-    )
-  }
-  if (state.status !== 'refused') return null
-  // FR-205: a refused command links to each member's main chat (or the @-named one's).
-  const links = isRefusedRoomCommand(state.request.text) ? refusalLinkMembers(state.request.text, members) : []
+/** FR-048: this group's question cards, one at a time with "+N more" (as the normal chat). */
+function RoomQuestionTail({ roomId }: { roomId: string }) {
+  const cards = useRoomQuestionCards(roomId)
+  const first = cards[0]
+  if (!first) return null
   return (
-    <div role="alert" className="flex flex-col gap-[var(--space-1)] px-[var(--space-3)] text-[length:var(--type-caption-size)]">
-      <p className="text-[var(--color-error)]">{state.message}</p>
-      {links.length > 0 && (
-        <div className="flex flex-wrap gap-x-[var(--space-3)]">
-          {links.map((agent) => {
-            const sessionId = memberMainSessionId(workspace, agent.id)
-            return sessionId ? (
-              <Link key={agent.id} tabIndex={0} to="/sessions/$sessionId" params={{ sessionId }} className="text-[var(--color-accent)] underline-offset-2 hover:underline">
-                Open {agent.name}&apos;s main chat
-              </Link>
-            ) : null
-          })}
-        </div>
+    <div className="w-full max-w-3xl mx-auto px-[var(--space-3)]" data-testid="room-question-tail">
+      <AskUserQuestionCard card={first} />
+      {cards.length > 1 && (
+        <p className="text-center text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-1)]">+{cards.length - 1} more</p>
       )}
     </div>
   )
 }
 
 export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
-  const roomQuery = useQuery({ queryKey: roomsQueryKeys.detail(roomId), queryFn: () => fetchRoom(roomId) })
-  const agentsQuery = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, staleTime: 30_000 })
-  const workspaceQuery = useQuery({ queryKey: workspacesQueryKeys.detail(workspaceId), queryFn: () => fetchWorkspace(workspaceId) })
-  const live = useRoomStore((state) => state.rooms[roomId])
+  const view = useRoomView(roomId, workspaceId)
   const connected = useConnectionStore((state) => state.isConnected)
   const connection = useConnectionStore((state) => state.connection)
+  const liteMode = useConnectionStore((state) => state.liteMode)
   const send = useRoomSend(roomId)
   const [askAgain, setAskAgain] = useState<{ agentId: string; nonce: number }>()
   const [attachedRoomId, setAttachedRoomId] = useState<string>()
+  const groupCards = useRoomCardRequestIds(roomId)
 
   // K45: attach on mount and after every reconnect (the store resumes after
   // the room's own cursor). Never an agent-session attach.
@@ -112,56 +83,93 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
   }, [roomId, connected, connection])
   // #1332 D6: leaving the room invalidates its in-flight older-page request.
   useEffect(() => () => useRoomStore.getState().abandonOlder(roomId), [roomId])
+  // FR-034 / S-58: the Participants panel belongs to this group; leaving it closes the panel.
+  useEffect(() => () => {
+    const panel = useUiStore.getState().activePanel
+    if (panel?.id === 'participants' && panel.context.roomId === roomId) useUiStore.getState().closePanel()
+  }, [roomId])
+  // FR-036: Ask again from the Participants panel fills this box.
+  useEffect(() => {
+    const onAskAgain = (event: Event) => {
+      const detail = (event as CustomEvent<RoomAskAgainDetail>).detail
+      if (detail?.roomId === roomId) setAskAgain({ agentId: detail.agentId, nonce: Date.now() })
+    }
+    window.addEventListener(ROOM_ASK_AGAIN_EVENT, onAskAgain)
+    return () => window.removeEventListener(ROOM_ASK_AGAIN_EVENT, onAskAgain)
+  }, [roomId])
 
-  const agents = agentsQuery.data
-  const agentName = useMemo(() => {
-    const byId = new Map((agents ?? []).map((agent) => [agent.id, agent.name]))
-    return (agentId: string) => byId.get(agentId) ?? agentId
-  }, [agents])
+  const attachedHere = connected && attachedRoomId === roomId
+  const conversation = useRoomConversationSource(roomId, attachedHere, view.roomQuery.isError)
+  const workspaceRef = useRef<string | undefined>(undefined)
+  workspaceRef.current = view.room?.workspace_id
+  const bridge = useRef<RoomSendBridge | null>(null)
+  const runtime = useRoomRuntime(send, () => workspaceRef.current, bridge)
+  const opening = useMemo(() => ({
+    ...conversation.opening,
+    tail: (
+      <RoomWorkingLines
+        memberStates={view.memberStates}
+        agents={view.agents}
+        agentName={view.agentName}
+        workspace={view.workspace}
+        groupCards={groupCards}
+      />
+    ),
+  }), [conversation.opening, view.memberStates, view.agents, view.agentName, view.workspace, groupCards])
 
-  if (roomQuery.isError) {
+  if (view.roomQuery.isError) {
     return (
       <QueryErrorState
         layout="fill"
-        message={`Could not load this group chat — ${mutationFailureMessage(roomQuery.error)}`}
-        onRetry={() => void roomQuery.refetch()}
+        message={`Could not load this group chat — ${mutationFailureMessage(view.roomQuery.error)}`}
+        onRetry={() => void view.roomQuery.refetch()}
       />
     )
   }
-  if (!roomQuery.data) {
+  if (!view.room) {
     return <p role="status" className="m-auto text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading group chat…</p>
   }
 
-  const room = currentRoom(roomQuery.data, live)
-  const members = room.members.flatMap((id) => agents?.find((agent) => agent.id === id) ?? [])
+  const room = view.room
+  const liveViewReceived = attachedHere && view.live?.snapshotReceived === true
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <RoomHeader
-        room={room}
-        workspace={workspaceQuery.data}
-        agentName={agentName}
-        memberStates={latestDeliveryByMember(live)}
-        onAskAgain={(agentId) => setAskAgain({ agentId, nonce: Date.now() })}
-      />
-      <RoomTranscript
-        roomId={roomId}
-        snapshotReceived={connected && attachedRoomId === roomId && live?.snapshotReceived === true}
-        entries={live?.entries ?? []}
-        agentName={agentName}
-        hasOlder={live?.hasOlder}
-        history={{
-          status: live?.historyStatus ?? 'idle',
-          failed: live?.historyFailed ?? false,
-          loadOlder: () => void useRoomStore.getState().loadOlder(roomId),
-        }}
-      />
-      <SendNotice send={send} members={members} workspace={workspaceQuery.data} />
-      <RoomComposer
-        members={members}
-        blockedReason={blockedReasonOf(room, live, connected)}
-        onSend={send.send}
-        prefill={askAgain}
-      />
-    </div>
+    <ConversationSourceContext.Provider value={conversation.source}>
+      <ConversationKindContext.Provider value="room">
+        <AssistantRuntimeProvider runtime={runtime}>
+          <div className="flex flex-col absolute inset-0 overflow-hidden" data-room-id={roomId}>
+            {/* US-11 AS 11.5 / S-102: the group's name is the chat's name for
+                assistive technology (no visible title bar, D13). */}
+            <span role="status" className="sr-only" data-testid="room-header">{room.name}</span>
+            <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">
+              <VirtualizedMessageList
+                key={`room:${roomId}`}
+                messages={conversation.messages}
+                liteMode={liteMode}
+                agentName={room.name}
+                openFailed={view.roomQuery.isError}
+                room={opening}
+              />
+              {/* FR-048, FR-051: only the cards of THIS group's work; secret
+                  and helper cards stay in the agent's own chat. */}
+              <RoomQuestionTail roomId={roomId} />
+              <ToolApprovalThreadTail roomId={roomId} />
+              <div className="relative w-full">
+                <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[var(--space-2)]">
+                  <RoomMessageBox
+                    room={room}
+                    members={view.members}
+                    workspace={view.workspace}
+                    send={send}
+                    blockedReason={roomBlockedReason(room, connected, liveViewReceived)}
+                    prefill={askAgain}
+                    bridge={bridge}
+                  />
+                </div>
+              </div>
+            </ThreadPrimitive.Root>
+          </div>
+        </AssistantRuntimeProvider>
+      </ConversationKindContext.Provider>
+    </ConversationSourceContext.Provider>
   )
 }

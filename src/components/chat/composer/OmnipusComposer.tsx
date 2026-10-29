@@ -129,6 +129,8 @@ export interface ComposerProfile { // not-wire-format: React composition flags
   stop: boolean
   /** The helper/command activity pills below the card. */
   activityBar: boolean
+  /** The workspace-library picker and its staged chips (normal chat only: its staging feeds the session send). */
+  mediaLibrary: boolean
 }
 
 export const SESSION_COMPOSER_PROFILE: ComposerProfile = {
@@ -136,6 +138,7 @@ export const SESSION_COMPOSER_PROFILE: ComposerProfile = {
   unavailableNotice: true,
   stop: true,
   activityBar: true,
+  mediaLibrary: true,
 }
 
 /**
@@ -158,6 +161,10 @@ export interface ComposerConversation { // not-wire-format: React props for the 
   /** The conversation is read-only because its agent was removed (normal chat only). */
   agentRemoved: boolean
   placeholder: string
+  /** The textarea's accessible name (normal chat: "Message input"). */
+  inputLabel?: string
+  /** The attach button's accessible name and tooltip (normal chat: "Add files or context"). */
+  attachLabel?: string
   /** The Stop machine; the group gets an inert one (D21), so Escape cancels nothing there. */
   cancelState: UseCancelStateResult
   /** G1: Stop stays reachable between goal turns (normal chat only). */
@@ -878,8 +885,8 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
             disabled={attachDisabled}
             tabIndex={5}
             className="shrink-0 h-7 w-7 mb-[var(--space-1)] rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            aria-label="Add files or context"
-            title="Add files or context"
+            aria-label={conversation.attachLabel ?? 'Add files or context'}
+            title={conversation.attachLabel ?? 'Add files or context'}
           >
             <Plus size={16} />
           </ComposerPrimitive.AddAttachment>
@@ -887,7 +894,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
           {/* ADR-051 Rev 4 (Slice H) — attach an existing workspace-library
               entry without re-uploading (FR-022). Disabled alongside the file
               attach button in read-only / disconnected sessions. */}
-          <ComposerMediaLibraryButton disabled={attachDisabled} tabIndex={5} />
+          {profile.mediaLibrary && <ComposerMediaLibraryButton disabled={attachDisabled} tabIndex={5} />}
 
           {/* Ghost text wrapper — positioned overlay approach */}
           <div className="relative flex-1 min-w-0">
@@ -933,7 +940,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
                 'focus:outline-none focus:ring-0',
                 (!inputEnabled || isStreaming) ? 'opacity-60 cursor-not-allowed' : undefined,
               )}
-              aria-label="Message input"
+              aria-label={conversation.inputLabel ?? 'Message input'}
               // Deferred item 2 (W3C APG combobox pattern — combobox with
               // listbox popup). Verified against node_modules/@assistant-ui/
               // react/dist/primitives/composer/ComposerInput.js: the real
@@ -1186,7 +1193,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
             (ADR-051 Rev 4 / Slice H) alongside them. */}
         <div className="flex flex-wrap gap-[var(--space-2)] px-[var(--space-2)] empty:hidden [&:has(*)]:pb-[var(--space-2)]">
           <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
-          <LibraryAttachmentChips />
+          {profile.mediaLibrary && <LibraryAttachmentChips />}
         </div>
 
       </div>

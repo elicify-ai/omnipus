@@ -8086,6 +8086,58 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/conversationSource.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ChatFileAttachment.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/agents/AttentionHalo.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/GroupHeaderControls.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/ParticipantsPanel.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomMessageBox.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomWorkingLines.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomAttachmentAdapter.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomConversationSource.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomMembership.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomComposerMenu.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomRuntime.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomView.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/composer/OmnipusComposer.tsx",
       "lane": 3
     }

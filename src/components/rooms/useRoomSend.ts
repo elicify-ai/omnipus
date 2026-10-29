@@ -20,8 +20,11 @@ export type RoomSendState = // not-wire-format: in-browser outcome of one room m
 
 export interface RoomSend {
   state: RoomSendState
-  /** Resolves true when the text may leave the composer (accepted or not confirmed). */
-  send: (text: string, mentions: string[]) => Promise<boolean>
+  /**
+   * Resolves true when the text may leave the composer (accepted or not confirmed).
+   * #1449 US-3: `media` carries the message's workspace media refs (at most 16).
+   */
+  send: (text: string, mentions: string[], media?: string[]) => Promise<boolean>
   retry: () => void
   dismiss: () => void
 }
@@ -46,7 +49,8 @@ export function useRoomSend(roomId: string): RoomSend {
   }, [roomId])
 
   const send = useCallback(
-    (text: string, mentions: string[]) => post({ client_message_id: generateId(), text, mentions }),
+    (text: string, mentions: string[], media: string[] = []) =>
+      post({ client_message_id: generateId(), text, mentions, ...(media.length > 0 ? { media } : {}) }),
     [post],
   )
 

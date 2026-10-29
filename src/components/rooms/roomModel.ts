@@ -66,6 +66,10 @@ export function deliveryNeedsMainChatLink(delivery: RoomDeliveryState): boolean 
   return delivery.state === 'awaiting_approval' || delivery.state === 'waiting_on_user'
 }
 
+/** Ask again (#1449 FR-036): the Participants panel asks the open group's box to address a member. */
+export const ROOM_ASK_AGAIN_EVENT = 'omnipus:room-ask-again'
+export type RoomAskAgainDetail = { roomId: string; agentId: string } // not-wire-format: in-page event payload
+
 /** The six commands a room accepts (FR-205). */
 const ROOM_COMMANDS = new Set(['/pause', '/resume', '/mute', '/unmute', '/members', '/help'])
 

@@ -1511,7 +1511,11 @@ export function LibraryExplorer({
                     ? `"${deleteTarget.name}" will be moved to this knowledge base’s trash. Links to it from other notes will stop resolving until it is restored; an agent can restore it from the trash.`
                     : deleteTarget.is_dir
                       ? `"${deleteTarget.name}" and everything inside it will be permanently deleted. This cannot be undone.`
-                      : `"${deleteTarget.name}" will be permanently deleted. This cannot be undone.`
+                      : deleteTarget.chat_copy === true
+                        // #1449 D26 / FR-087: one Library deletion also removes
+                        // the copy chats show, so the dialog says so first.
+                        ? `"${deleteTarget.name}" will be permanently deleted. The copy used in chats is deleted too, and chats that show this file will show it as unavailable. This cannot be undone.`
+                        : `"${deleteTarget.name}" will be permanently deleted. This cannot be undone.`
                 : ''}
             </AlertDialogDescription>
           </AlertDialogHeader>
