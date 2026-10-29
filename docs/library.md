@@ -38,6 +38,7 @@ When an agent mentions a file in its reply, the file name can be a link. Select 
 - **Unsaved edits.** If the Library or Mail has unsaved changes, you are asked before it moves; **Cancel** leaves everything as it was. While that question is open, further link clicks are ignored.
 - **Missing or not yours.** A file that is gone shows the Library's usual "file not there" landing. A workspace you cannot open shows the Library's usual message and no file content.
 - **Not every path is a link.** Ordinary relative links that do not name a file (such as `README`, `docs/` or `#section`), web links that are not `https`/`http`/`mailto`, and names containing invisible or direction-changing characters stay as plain, struck-through text. A file outside every Library, such as an agent's private folder, is given as its full path with no link. Web links still open in a new tab.
+- **Only in chat.** These links work in agents' chat replies and question cards. A received email, and a document you open in the Library, never turn `omnipus://` or plain file paths into Library links.
 
 ## When an agent opens the Library for you
 

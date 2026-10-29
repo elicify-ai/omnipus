@@ -1237,7 +1237,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
               (incorrectly) rendering the paragraph as one unbroken block. */}
           {messageParts.map((part, idx) => {
             if (part.type === 'text') {
-              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
+              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} chatLinks />
             }
             const callId = part.call.id
             const tc = toolCalls[callId] ?? part.call
