@@ -9,11 +9,9 @@
 // the real CSS. Only the API/WS edges are stubbed (the repo's own layout
 // fixture), so the header under test is the production one.
 //
-// The readiness waits are generous (90s): the check is about GEOMETRY, and on
-// a busy machine the SPA can take a minute to boot and render its shell — a
-// short budget would fail the run on the machine's load, not on the header's
-// layout. No assertion is relaxed: the same elements must appear, with the
-// same measurements.
+// The readiness budget is 30s, the same budget this check always had. A run
+// that misses it is a FINDING to report with its log, not a budget to raise:
+// widening the wait would accept a slow start instead of measuring it.
 import { expect, test } from '@playwright/test';
 import { Session } from '../../src/lib/api/generated/schemas';
 import { backdropMain, backdropWorkspace, installSidebarBackdropEdges } from './fixtures/sidebar-session-backdrop';
@@ -29,6 +27,19 @@ const helper = Session.parse({
   parent_session_id: backdropMain.id,
   workspace_id: backdropWorkspace.id,
 });
+
+// How long the shell may take to render before the run is a finding.
+const READINESS_TIMEOUT_MS = 30_000;
+
+// The touch minimum the design system reserves for a coarse pointer
+// (--target-touch-minimum, 44px).
+const TOUCH_MINIMUM_PX = 44;
+
+// Where the browser remembers which chat a workspace last showed
+// (src/store/session.ts::PERSISTED_SESSION_BY_WORKSPACE_KEY). The workspace
+// entry restores the pointer from it — this is how "the chat this browser
+// remembers" is seeded without a real first visit.
+const REMEMBERED_SESSION_KEY = 'omnipus.sessionByWorkspace.v1';
 
 // The widths a real window reaches: a wide desktop, a laptop, a half-screen
 // window and a narrow side-by-side window.
@@ -46,15 +57,15 @@ test('the workspace strip keeps the header line at narrow widths; the chat slot 
     await page.goto(`/#/workspaces/${backdropWorkspace.id}/chat`, { waitUntil: 'domcontentloaded' });
 
     const header = page.getByTestId('workspace-top-bar');
-    await expect(header).toBeVisible({ timeout: 90_000 });
+    await expect(header).toBeVisible({ timeout: READINESS_TIMEOUT_MS });
 
     // READINESS: the header appears before the roster and the session do.
     // Measuring an empty slot would prove nothing, so wait for the slot's
     // REAL content — the full identity line and the participant control —
     // before every measurement.
     const line = page.locator('[data-testid="feed-kind-label"] span[title]');
-    await expect(line, `the chat identity never appeared at ${width}px`).toBeVisible({ timeout: 90_000 });
-    await expect(page.getByRole('button', { name: 'Add participant' }), `the participant control never appeared at ${width}px`).toBeVisible({ timeout: 90_000 });
+    await expect(line, `the chat identity never appeared at ${width}px`).toBeVisible({ timeout: READINESS_TIMEOUT_MS });
+    await expect(page.getByRole('button', { name: 'Add participant' }), `the participant control never appeared at ${width}px`).toBeVisible({ timeout: READINESS_TIMEOUT_MS });
     expect(await line.getAttribute('title'), `the identity is not the full one at ${width}px`).toContain(LONG_AGENT_NAME);
 
     // The workspace navigation is still on the line: the strip may collapse
@@ -100,7 +111,7 @@ test('the failed-roster warning fits the capped slot and never overlaps the part
   // The roster failed, so the header shows the honest warning instead of the
   // agent's name. The warning must be on screen before anything is measured.
   const warning = page.getByTestId('feed-kind-warning');
-  await expect(warning, 'the failed-roster warning never appeared').toBeVisible({ timeout: 90_000 });
+  await expect(warning, 'the failed-roster warning never appeared').toBeVisible({ timeout: READINESS_TIMEOUT_MS });
 
   // The slot is capped, so its CONTENT must fit the cap: a warning that
   // overflowed would push the line sideways.
@@ -144,13 +155,96 @@ test('the failed-roster warning fits the capped slot and never overlaps the part
   expect(traffic.errors, 'a page crash is a backdrop failure').toEqual([]);
 });
 
+// The two controls that CAN share the header line: the failed-roster warning
+// and "Add participant". The exact-restore path makes them coexist — this
+// browser remembers the workspace's main chat, the session listing still
+// contains it, and the roster read fails.
+// workspaceEntryFlow.ts::loadInputs keeps the exact restore alive when the
+// TEAM could not be loaded (transportFailed = sessionsFailed || (teamFailed
+// && !exactAvailable)), so the entry is the exact main chat with sending
+// enabled: the participant control is offered while the header still warns
+// that the names are unavailable.
+test.describe('at a coarse pointer', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 420, height: 800 } });
+
+  test('the failed-roster warning and "Add participant" are separate touch targets', async ({ page }) => {
+    // This browser remembers the workspace's main chat: the pointer the
+    // workspace entry restores from.
+    await page.addInitScript(([key, value]) => {
+      window.localStorage.setItem(key as string, value as string);
+    }, [REMEMBERED_SESSION_KEY, JSON.stringify({
+      [backdropWorkspace.id]: {
+        id: backdropMain.id,
+        type: 'main',
+        title: backdropMain.title,
+        agentId: backdropMain.agent_id,
+      },
+    })]);
+
+    const traffic = await installSidebarBackdropEdges(page, { agentsError: true });
+    await page.goto(`/#/workspaces/${backdropWorkspace.id}/chat`, { waitUntil: 'domcontentloaded' });
+
+    const warning = page.getByTestId('feed-kind-warning');
+    const participant = page.getByRole('button', { name: 'Add participant' });
+    await expect(warning, 'the failed-roster warning never appeared').toBeVisible({ timeout: READINESS_TIMEOUT_MS });
+    await expect(participant, 'the participant control never appeared').toBeVisible({ timeout: READINESS_TIMEOUT_MS });
+
+    // THE INSTRUMENT: the touch sizing only applies to a coarse pointer. If
+    // the emulation did not take effect, this case would measure a mouse
+    // pointer and pass for the wrong reason.
+    expect(
+      await page.evaluate(() => matchMedia('(pointer: coarse)').matches),
+      'the coarse-pointer emulation did not take effect',
+    ).toBe(true);
+
+    // The warning is a touch-sized target — the token minimum, not the 14px
+    // glyph it draws.
+    const warningBox = await warning.boundingBox();
+    expect(warningBox, 'the warning has no box').not.toBeNull();
+    expect(warningBox!.width, 'the warning is not a touch-sized target').toBeGreaterThanOrEqual(TOUCH_MINIMUM_PX);
+    expect(warningBox!.height, 'the warning is not a touch-sized target').toBeGreaterThanOrEqual(TOUCH_MINIMUM_PX);
+
+    // ... and the two targets never overlap: a tap meant for one control
+    // cannot reach the other.
+    const participantBox = await participant.boundingBox();
+    expect(participantBox, 'the participant control has no box').not.toBeNull();
+    expect(
+      warningBox!.x + warningBox!.width,
+      'the warning reaches into the participant control',
+    ).toBeLessThanOrEqual(participantBox!.x);
+
+    // The slot's cap still holds with the bigger touch box: the controls fit
+    // inside it and the identity truncates instead of pushing the line
+    // sideways.
+    const slotOverflow = await page.getByTestId('chat-header-slot').evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(slotOverflow.scroll, 'the touch-sized warning overflows the capped slot').toBeLessThanOrEqual(slotOverflow.client + 1);
+
+    // A tap on the warning opens ONLY the explanation — never the picker.
+    await warning.tap({ position: { x: warningBox!.width - 2, y: warningBox!.height / 2 } });
+    const explanation = page.getByRole('tooltip').filter({ hasText: 'Agent names could not be loaded' });
+    await expect(explanation, 'the warning never explained itself on a tap').toBeVisible();
+    await expect(page.getByTestId('add-participant-dialog'), 'the warning tap opened the participant picker').toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(explanation, 'Escape did not dismiss the explanation').toHaveCount(0);
+
+    // A tap on the participant control opens ONLY the picker — never the
+    // explanation.
+    await participant.tap({ position: { x: 2, y: participantBox!.height / 2 } });
+    await expect(page.getByTestId('add-participant-dialog'), 'the participant picker never opened').toBeVisible();
+    await expect(explanation, 'the participant tap opened the warning explanation').toHaveCount(0);
+
+    expect(traffic.unknown, 'a missing API fixture is a backdrop failure').toEqual([]);
+    expect(traffic.errors, 'a page crash is a backdrop failure').toEqual([]);
+  });
+});
+
 test('the helper breadcrumb stays on ONE line, caret included', async ({ page }) => {
   const traffic = await installSidebarBackdropEdges(page, { extraSessions: [helper] });
   await page.setViewportSize({ width: 900, height: 800 });
   await page.goto(`/#/workspaces/${backdropWorkspace.id}/chat?open=${HELPER_ID}`, { waitUntil: 'domcontentloaded' });
 
   const label = page.getByTestId('feed-kind-label');
-  await expect(label).toBeVisible({ timeout: 90_000 });
+  await expect(label).toBeVisible({ timeout: READINESS_TIMEOUT_MS });
   await expect(label).toContainText('/');
 
   // The caret and the breadcrumb text share one line. The TEXT's own box is

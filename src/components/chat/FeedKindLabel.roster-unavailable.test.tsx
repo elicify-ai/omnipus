@@ -164,6 +164,21 @@ describe('FeedKindLabel — the compact warning explains itself (review round 2)
     expect(screen.getByRole('tooltip')).toHaveTextContent(EXPLANATION)
   })
 
+  it('the trigger is a real control with a coarse-pointer touch box', async () => {
+    const trigger = await renderFailedRoster()
+    // A real button, not a bare glyph: the keyboard and a finger both need
+    // something to aim at, and a span with a click handler is neither.
+    expect(trigger.tagName).toBe('BUTTON')
+    expect(trigger).toHaveAttribute('type', 'button')
+    // The touch box follows the design system's token (--target-touch-
+    // minimum, 44px) on a coarse pointer. The visible glyph stays 14px —
+    // only the hit box grows, and only for a finger. The GEOMETRY (the box
+    // really is 44px, and the two controls stay apart) is measured in the
+    // browser; jsdom has no layout engine.
+    expect(trigger.className).toContain('pointer-coarse:min-h-[var(--target-touch-minimum)]')
+    expect(trigger.className).toContain('pointer-coarse:min-w-[var(--target-touch-minimum)]')
+  })
+
   it('Escape dismisses the explanation again', async () => {
     const trigger = await renderFailedRoster()
     trigger.focus()

@@ -263,6 +263,13 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
     expect(trigger.tabIndex).toBe(0)
     expect(control.tabIndex).toBe(0)
     expect(trigger.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The slot keeps the two touch targets apart on a coarse pointer: the
+    // warning's box is the touch minimum (44px) and the participant
+    // control's own expanded hit region reaches 6px past its 28px box where
+    // the published package's [data-ds-action] expander applies, so the
+    // ordinary 4px gap would let the later sibling win the overlap. The
+    // GEOMETRY is measured in the browser; here the rule is pinned.
+    expect(screen.getByTestId('chat-header-slot').className).toContain('pointer-coarse:gap-[var(--space-2)]')
   })
 
   it('a ROOM page shows no chat chrome: no label, no Add participant', async () => {

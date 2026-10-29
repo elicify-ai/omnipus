@@ -20,7 +20,8 @@
  *     identity and the participant control. The glyph's explanation lives in
  *     the catalogued Tooltip — a named, focusable trigger that opens on
  *     focus and on a tap and closes on Escape — and the status region still
- *     names both parts.
+ *     names both parts. The trigger is a real icon button, so a finger gets
+ *     the token-sized touch box; the visible glyph stays 14px.
  *
  * Words come from feedKindLabel on the workspace descriptor, and only when
  * that descriptor is the active session. Replay does not change them.
@@ -54,6 +55,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { feedKindLabel, feedParentLabel } from '@/lib/nav/chatKindLabel'
 import { isMainSession } from '@/lib/nav/sessionCoreSeam'
 import { Tooltip } from '@/components/ui/tooltip'
+import { IconButton } from '@/components/ui/icon-button'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { ParentCrumbLink } from './ParentCrumbLink'
@@ -180,17 +182,35 @@ export function FeedKindLabel() {
         {namesUnavailable && (
           <>
             <span id={warningId} className="sr-only">{warningText}</span>
-            {/* The wrapper keeps the glyph's warning colour and its
-                no-shrink rule: the Tooltip's own span is a plain inline-flex
-                item, and a squeezed header line must never clip the glyph. */}
-            <span className="flex shrink-0 items-center text-[var(--color-warning)]">
+            {/* The wrapper keeps the no-shrink rule: the Tooltip's own span is
+                a plain inline-flex item, and a squeezed header line must
+                never clip the warning. */}
+            <span className="flex shrink-0 items-center">
+              {/* The warning is a REAL control, not a bare glyph: the
+                  catalogued IconButton inside the Tooltip's interactive mode
+                  (design-system rule 14) gives it a named, focusable trigger
+                  and a touch-sized box on a coarse pointer — the same
+                  composition the "Add participant" control beside it uses.
+                  The GLYPH stays compact (14px) and the slot's width cap
+                  still holds; only the hit box grows, and only for a finger.
+
+                  The trigger is a SIBLING of the labelled warning text, never
+                  a child of it: a named element inside the region's name
+                  source would repeat itself in the accessible name. */}
               <Tooltip
-                label="Agent names unavailable"
                 content="Agent names could not be loaded. Reload the page to try again."
                 side="bottom"
-                data-testid="feed-kind-warning"
+                interactive
               >
-                <WarningCircle size={14} aria-hidden="true" />
+                <IconButton
+                  aria-label="Agent names unavailable"
+                  data-testid="feed-kind-warning"
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0 text-[var(--color-warning)] hover:text-[var(--color-warning)] active:text-[var(--color-warning)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
+                >
+                  <WarningCircle size={14} aria-hidden="true" />
+                </IconButton>
               </Tooltip>
             </span>
           </>

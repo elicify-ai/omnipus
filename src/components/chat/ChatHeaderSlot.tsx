@@ -51,7 +51,15 @@ export function ChatHeaderSlot({ workspaceId }: { workspaceId: string }) {
   return (
     <div
       data-testid="chat-header-slot"
-      className="flex max-w-[25%] shrink items-center justify-end gap-[var(--space-1)] pr-[var(--space-2-5)]"
+      // The gap grows on a coarse pointer. Two controls CAN share this line:
+      // the failed-roster warning (an icon button whose touch box is the
+      // touch minimum, 44px) and "Add participant" (a 28px icon button).
+      // The published package's [data-ds-action] expander grows the
+      // participant's hit region 6px past its box; with the ordinary 4px gap
+      // the two regions would overlap, and the LATER sibling wins an overlap
+      // — a tap meant for the warning would open the participant picker
+      // instead. 8px keeps them disjoint in the app and in the package.
+      className="flex max-w-[25%] shrink items-center justify-end gap-[var(--space-1)] pointer-coarse:gap-[var(--space-2)] pr-[var(--space-2-5)]"
     >
       {isSessionChat ? (
         <>
