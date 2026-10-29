@@ -74,6 +74,13 @@ const (
 
 	// tierOneTruncationMarker is FR-105's "explicit elision marker".
 	tierOneTruncationMarker = "…[truncated, FR-105]"
+
+	// tierOneOutputRuneLimit bounds ONE tool call's rendered output (issue
+	// #1484). Deliberately far smaller than the machine-check evidence cap
+	// (task.DefaultEvidenceOutputCap): the window holds many calls competing
+	// for the 32 KiB tier-1 block, so every recent call should contribute
+	// something readable rather than one call consuming the lot.
+	tierOneOutputRuneLimit = 2048
 )
 
 // truncateRunesWithMarker returns s truncated to at most limit code points
@@ -140,15 +147,26 @@ func (al *AgentLoop) tierOneRedactFn() func(string) string {
 }
 
 // formatTierOneToolCall renders one session.ToolCall as FR-105's
-// "{tool, parameters, status, error}" — durable fields ONLY (FR-106):
-// Tool, Status, Parameters and Error are never touched by
-// empty_in_place.go's mid-turn Result rewrite (ADR-066 D5), unlike Result
-// itself, which this function never reads. When ContentState records that
-// Result WAS projected away ("emptied"/"capped"), an explicit marker is
-// rendered instead of silence, so the tier-1 fact reads as "this call's
-// result was redacted from view", never as "this tool returned nothing" —
-// the FR-106 failure mode (a rewritten Result read naively as absence,
-// contradicting and vetoing a true claim) this function exists to close.
+// "{tool, parameters, status, error}" plus, since issue #1484, the tool's
+// OUTPUT as the working agent saw it.
+//
+// Issue #1484: a scheduled routine was marked failed although it succeeded.
+// The brief had been written and read back, but the Judge saw only
+// "[tool_call] read_file -> success params=…" and said it was not shown the
+// tool results. A prose criterion about what a tool returned cannot be judged
+// from the call line alone. The output is now rendered from Result["text"] —
+// the model-visible text every tool-result writer in the turn loop stores
+// under that key — bounded to tierOneOutputRuneLimit with an explicit marker,
+// and redacted BEFORE it is cut (a secret straddling the cut must not survive
+// half-scrubbed). Any other Result shape is not rendered: a rendering guess
+// must not become fabricated evidence.
+//
+// FR-106 still holds in its intent: Result is the one field ADR-066's window
+// projection rewrites mid-turn. When ContentState records that projection
+// ("capped"/"emptied"), the explicit marker is rendered as before, so the
+// text that follows reads as "what the agent saw, not the full output", and
+// a call whose result was emptied never reads as "this tool returned
+// nothing" — the failure mode that would wrongly contradict a true claim.
 func formatTierOneToolCall(tc session.ToolCall, redact func(string) string) string {
 	if redact == nil {
 		redact = func(s string) string { return s }
@@ -165,13 +183,29 @@ func formatTierOneToolCall(tc session.ToolCall, redact func(string) string) stri
 	case "emptied", "capped":
 		// FR-106: never rendered as absence — an explicit projection marker,
 		// distinct from "no result was ever produced".
-		fmt.Fprintf(&sb, " result=[projected away from this window — durable fields only, FR-106]")
+		fmt.Fprintf(&sb, " result=[projected away from this window — any output below is the "+
+			"projected text the agent saw, not the full result, FR-106]")
 	}
 	if strings.TrimSpace(tc.Error) != "" {
 		errText := truncateRunesWithMarker(redact(tc.Error), tierOneParamRuneLimit)
 		fmt.Fprintf(&sb, " error=%s", errText)
 	}
+	if out := toolCallOutputText(tc); out != "" {
+		fmt.Fprintf(&sb, "\n[tool_output] %s", truncateRunesWithMarker(redact(out), tierOneOutputRuneLimit))
+	}
 	return sb.String()
+}
+
+// toolCallOutputText returns the model-visible output text of a persisted
+// tool call (Result["text"]), or "" when there is none. Only that key is
+// read: it is the one every tool-result writer in the turn loop uses for the
+// text the model saw (see tool_result_transcript.go's projectRecordedResult).
+func toolCallOutputText(tc session.ToolCall) string {
+	text, ok := tc.Result["text"].(string)
+	if !ok || strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return text
 }
 
 // --- FR-108: the tier-1 contradiction veto ----------------------------------

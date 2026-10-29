@@ -27,6 +27,14 @@ It reads work like a human reviewer: opens the artifact a criterion names, looks
 
 One consequence is deliberate: unproven is not done. A criterion the Judge could not verify counts as unmet, even if the work was finished. The reason names the missing evidence.
 
+**What the Judge is shown.** Besides what it opens itself, each review starts with:
+
+- The recent part of the working chat: the agent's messages and every tool call with its settings, its status, any error, and the result the agent itself saw. Each result is cut to its first 2,048 characters and marked as truncated when longer; when many tool calls together pass 32 KiB, the oldest are left out and the Judge is told how many. When the chat window had already shortened or emptied a result, the call is marked "projected away" and the shortened text is shown as what the agent saw, not as the full output. This applies to scheduled tasks too, so a routine that wrote a file and read it back is judged on that read-back.
+- The result of every machine check (`[check: …]`) that ran on this try, including in a chat goal that has no task, and also when saving the check's record to disk failed.
+- The workspace changes and the agent's own claim.
+
+Credentials are removed from all of it before the Judge sees it (see [security considerations](operations/security-considerations.md#judge-evidence-redaction)).
+
 ## When you would use it
 
 - Work you want verified, not only attempted. The agent keeps working until the Judge is satisfied or the try budget runs out.

@@ -496,8 +496,9 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 //
 // FR-105/FR-106 (ADR-084 revision 9, D14, wave E10): tool calls now render
 // as "{tool, parameters, status, error}" (judge_evidence_tiers.go's
-// formatTierOneToolCall), durable fields only, bounded and optionally
-// redacted per opts — replacing the old name+status-only summary (C26's
+// formatTierOneToolCall) plus, since issue #1484, the model-visible tool
+// output (Result["text"], with the FR-106 projection marker kept when the
+// result was capped or emptied), bounded and redacted per opts — replacing the old name+status-only summary (C26's
 // defect: "the change is at renderTranscriptEntriesForWindow"). Signature
 // stays backward-compatible (opts is a variadic tail) because
 // verifier_adjudication_test.go — E9's write-set, not this wave's — calls
