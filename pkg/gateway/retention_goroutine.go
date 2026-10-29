@@ -171,6 +171,20 @@ func executeSweepTick(store *session.UnifiedStore, getCfg func() *config.Config)
 		}
 	}
 
+	if err != nil {
+		// The session sweep failed (logged above); the other passes still
+		// ran. Say so instead of reporting a healthy completion. No error
+		// text here: the failure line above already carries it.
+		slog.Warn("retention_sweep: completed with session sweep errors",
+			"event", "retention_sweep_partial",
+			"session_sweep_failed", true,
+			"removed", removed,
+			"tool_result_removed", toolResultRemoved,
+			"task_runs_visited", taskRunsVisited,
+			"duration_ms", durationMs,
+		)
+		return
+	}
 	slog.Info("retention_sweep: completed",
 		"event", "retention_sweep",
 		"removed", removed,
