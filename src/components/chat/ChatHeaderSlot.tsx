@@ -31,7 +31,10 @@
  *    header line is capped (max-w) so it can never squeeze the workspace
  *    navigation out of the line; the label inside truncates, and the whole
  *    slot shrinks under pressure. The slot keeps its automatic minimum
- *    width so the icon control is never clipped.
+ *    width so the icon control is never clipped. That minimum leaves the
+ *    label's identity out (its grid column can reach zero), so the identity
+ *    is the width the line takes back first, and the strip counts it as
+ *    room before it steps down from the full row (useWorkspaceHeaderMode).
  */
 import { useLocation } from '@tanstack/react-router'
 import { FeedKindLabel } from './FeedKindLabel'

@@ -265,7 +265,10 @@ function WorkspaceTabContainerView({
             `header` CSS selector. @container enables container-query variants
             on children (used by ChatControls' "Open browser" label).
             WorkspaceTabBar measures the remaining flex slot instead of
-            using a fixed container breakpoint.
+            using a fixed container breakpoint. data-header-line marks this
+            row as the line it measures against: the chat title in the slot
+            at the right end is room the strip may take back
+            (useWorkspaceHeaderMode).
             No secondary breadcrumb row: the tab strip already names the
             workspace + active view, so a second chrome line was redundant and
             broke the flat 44px shell alignment.
@@ -277,6 +280,7 @@ function WorkspaceTabContainerView({
           role="banner"
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
           data-testid="workspace-top-bar"
+          data-header-line=""
         >
           <SidebarShowButton
             testId="workspace-hamburger"

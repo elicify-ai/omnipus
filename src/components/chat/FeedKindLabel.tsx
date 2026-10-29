@@ -12,7 +12,14 @@
  *
  * Two details the narrow header line forced:
  *   - the identity truncates, so its title carries the FULL text (the
- *     breadcrumb, the main title, and the honest-failure warning);
+ *     breadcrumb, the main title, and the honest-failure warning). It is also
+ *     the one part of the slot the workspace strip may take back
+ *     (`data-header-yield`, read by useWorkspaceHeaderMode): the label is a
+ *     grid whose identity track is minmax(0, 1fr), so the identity's width is
+ *     not part of the slot's automatic minimum and the header line shrinks the
+ *     identity, never the strip, the warning or the participant control. A
+ *     flex row of the same items kept the whole text width as that minimum, so
+ *     the slot could not give any width back;
  *   - the honest-failure warning is a SEPARATE element outside the
  *     truncating identity, so a clipped identity can never take the warning
  *     with it, and it is a COMPACT glyph rather than the sentence: the
@@ -169,11 +176,12 @@ export function FeedKindLabel() {
         aria-labelledby={namesUnavailable ? `${labelId} ${warningId}` : labelId}
         aria-atomic="true"
         data-testid="feed-kind-label"
-        className="flex min-w-0 items-center gap-[var(--space-1)]"
+        className="grid min-w-0 grid-flow-col grid-cols-[minmax(0,1fr)] items-center gap-[var(--space-1)]"
       >
         <span
           id={labelId}
           title={`${identityText}${warningText}`}
+          data-header-yield=""
           className="min-w-0 max-w-[32ch] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
         >
           {parentCrumb != null ? <><CaretLeft size={14} className="inline-block align-middle" aria-hidden="true" /><ParentCrumbLink parent={parentCrumb.parent} label={parentCrumb.label} />{` / ${label}`}</> : null}
@@ -240,10 +248,11 @@ export function TaskKindLabel() {
   if (attachedSessionType !== 'task') return null
   const taskText = `Task: ${attachedTaskTitle ?? 'Task Execution'}`
   return (
-    <div className="flex min-w-0 items-center gap-[var(--space-1)]">
-      <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
+    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-[var(--space-1)]">
+      <ListChecks size={14} className="text-[var(--color-accent)]" />
       <span
         title={taskText}
+        data-header-yield=""
         className="min-w-0 max-w-[32ch] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
       >
         {taskText}

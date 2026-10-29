@@ -205,12 +205,28 @@ test('CR-1: pinned short-name icon tooltip is content-sized and readable inside 
   await expect(page.getByTestId('tasks-heading')).toBeVisible()
   await page.evaluate(() => { document.documentElement.style.fontSize = '20px' })
   // Resize the actual divider, not a supplied rectangle or forced header mode.
+  //
+  // The shift is a SETUP value, not an oracle: it only has to leave the strip in the icons
+  // band at this root size (the `icons` mode asserted below, and the tooltip bounds after it,
+  // are unchanged). At 1280px with a 20px root the chat column already sits at its 360px
+  // minimum before any drag (measured: 360px after moving the divider 0, 124 and 180px to the
+  // left), so the earlier leftward drag changed nothing. Without the chat slot that column
+  // left the strip 305px (360 - 55 for the browser controls) against the 276px the icons row
+  // needs. #1449 D13 (founder 2026-10-28; spec US-11 AS6, S-103) gave the chat's own controls
+  // a permanent place at the right end of this same header line: at the 20px root the "Add
+  // participant" icon (40px) plus its gap (4px) and padding (12px) keep 56px that never
+  // truncates (only the chat TITLE gives way), so the strip can have at most 360 - 55 - 56 =
+  // 249px there and the header correctly shows the workspace name menu. Moving the divider to
+  // the RIGHT widens the column (measured: 395px after 40px, 435px after 80px): at 435px the
+  // strip has 435 - 55 - 56 = 324px even with the title shortened to nothing, inside the icons
+  // band (276 <= 324 < 542).
+  const dividerShiftRightPx = 80
   const separator = page.getByTestId('panel-resize-separator')
   const rect = await separator.boundingBox()
   if (!rect) throw new Error('BLOCKED: native panel divider did not render')
   await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2)
   await page.mouse.down()
-  await page.mouse.move(rect.x - 180, rect.y + rect.height / 2, { steps: 12 })
+  await page.mouse.move(rect.x + dividerShiftRightPx, rect.y + rect.height / 2, { steps: 12 })
   await page.mouse.up()
   await expect(page.getByTestId('workspace-header-entries')).toHaveAttribute('data-mode', 'icons')
   await page.getByRole('button', { name: 'Tasks', exact: true }).hover()
