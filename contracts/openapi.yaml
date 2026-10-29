@@ -12992,10 +12992,16 @@ paths:
         runner.TestConnectionWithPath verbatim (the same handshake as
         POST /agents/{id}/runner/test) — the only requirement is that the
         binary runs and returns a valid version-shaped response; no per-CLI
-        identity/name match is performed. Gated withAuth at create-parity
-        (the same authorization as createAgent).
-        Rejects a target that is not a regular, executable file before
-        spawning it (classified "missing-binary", no spawn attempt). Applies
+        identity/name match is performed. A signed-in person only (T11,
+        RequirePersonSession): CLI-token, development-bypass and user-less
+        requests get 403 before the body is read. Before anything starts,
+        the shared program-file check (clitrust.CheckProgramPath against the
+        agent-writable roots) must accept cli_path: an absolute path whose
+        final file and every link lie outside the Omnipus home, workspaces
+        and mounts, are not writable by others, and whose final file is a
+        regular executable. A refusal is classified "path-not-allowed" and
+        nothing is spawned; an accepted candidate launches exactly the
+        checked resolved file. An empty cli_path is "missing-binary". Applies
         a dedicated rate limiter and a small per-caller in-flight
         concurrency cap, and emits one audit event {cli, resolved_path,
         reason} per call — validation spawns a caller-supplied path, unlike
@@ -13025,6 +13031,16 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: >
+            The caller is not a signed-in person: the request authenticated
+            with the CLI token, the gateway is in development-bypass mode, or
+            no user is attached. Refused before the body is read; nothing is
+            started.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '429':
           $ref: '#/components/responses/429TooManyRequests'
   /secret-requests/{id}:

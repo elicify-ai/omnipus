@@ -7443,6 +7443,7 @@ export const CliValidateResponse = z.object({
     "handshake-failed",
     "unauthenticated",
     "unknown-cli",
+    "path-not-allowed",
   ]),
   resolved_path: z.string().nullish(),
   version: z.string().nullish(),
@@ -15218,7 +15219,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "post",
     path: "/system/cli-validate",
     alias: "postSystemCliValidate",
-    description: `Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent). Rejects a target that is not a regular, executable file before spawning it (classified &quot;missing-binary&quot;, no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
+    description: `Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. A signed-in person only (T11, RequirePersonSession): CLI-token, development-bypass and user-less requests get 403 before the body is read. Before anything starts, the shared program-file check (clitrust.CheckProgramPath against the agent-writable roots) must accept cli_path: an absolute path whose final file and every link lie outside the Omnipus home, workspaces and mounts, are not writable by others, and whose final file is a regular executable. A refusal is classified &quot;path-not-allowed&quot; and nothing is spawned; an accepted candidate launches exactly the checked resolved file. An empty cli_path is &quot;missing-binary&quot;. Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
 `,
     requestFormat: "json",
     parameters: [
@@ -15238,6 +15239,12 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `The caller is not a signed-in person: the request authenticated with the CLI token, the gateway is in development-bypass mode, or no user is attached. Refused before the body is read; nothing is started.
+`,
         schema: ErrorResponse,
       },
       {

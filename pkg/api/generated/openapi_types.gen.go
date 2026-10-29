@@ -2035,6 +2035,7 @@ const (
 	CliValidateResponseReasonHandshakeFailed CliValidateResponseReason = "handshake-failed"
 	CliValidateResponseReasonMissingBinary   CliValidateResponseReason = "missing-binary"
 	CliValidateResponseReasonOk              CliValidateResponseReason = "ok"
+	CliValidateResponseReasonPathNotAllowed  CliValidateResponseReason = "path-not-allowed"
 	CliValidateResponseReasonUnauthenticated CliValidateResponseReason = "unauthenticated"
 	CliValidateResponseReasonUnknownCli      CliValidateResponseReason = "unknown-cli"
 )
@@ -2047,6 +2048,8 @@ func (e CliValidateResponseReason) Valid() bool {
 	case CliValidateResponseReasonMissingBinary:
 		return true
 	case CliValidateResponseReasonOk:
+		return true
+	case CliValidateResponseReasonPathNotAllowed:
 		return true
 	case CliValidateResponseReasonUnauthenticated:
 		return true
@@ -15659,25 +15662,25 @@ type CliValidateRequest struct {
 	CliPath string `json:"cli_path"`
 }
 
-// CliValidateResponse Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Blocking is keyed off `reason` alone (never the raw `ok` boolean): the SPA blocks Create/Save on "missing-binary" or "handshake-failed", warns-but-allows on "unauthenticated", and allows on "ok". `detail` is always one of a fixed set of classified messages — never raw stderr from the spawned process.
+// CliValidateResponse Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Blocking is keyed off `reason` alone (never the raw `ok` boolean): the SPA blocks Create/Save on "missing-binary" or "handshake-failed", warns-but-allows on "unauthenticated", and allows on "ok". "path-not-allowed" is shown as a refusal under the path field. `detail` is never raw stderr from the spawned process: it is a fixed classified message per reason, except for "path-not-allowed", where it is the program-file check's own message naming the failed check (never file contents).
 type CliValidateResponse struct {
-	// Detail Fixed, classified human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli").
+	// Detail Human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli"); for "path-not-allowed" it is the program-file check's message naming the failed check and the path concerned.
 	Detail *string `json:"detail,omitempty"`
 
 	// Ok True when the binary is present, runs, and returns a valid version-shaped response (reason "ok" or "unauthenticated"). Retained for convenience only — clients MUST gate blocking on `reason`, not on this field, because "unauthenticated" also reports ok=true but must not be conflated with "ok".
 	Ok bool `json:"ok"`
 
-	// Reason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+	// Reason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. "path-not-allowed": the shared program-file check refused cli_path (not absolute, missing, not a regular executable, inside or linked through the Omnipus home, a workspace or a mount, or writable by others); nothing is spawned. Maps runner.ReasonOK (empty string) to "ok".
 	Reason CliValidateResponseReason `json:"reason"`
 
-	// ResolvedPath Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary" and "unknown-cli".
+	// ResolvedPath Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary", "unknown-cli" and "path-not-allowed".
 	ResolvedPath *string `json:"resolved_path,omitempty"`
 
 	// Version Version string reported by the CLI's `--version` handshake. Populated only for "ok" and "unauthenticated"; null otherwise.
 	Version *string `json:"version,omitempty"`
 }
 
-// CliValidateResponseReason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+// CliValidateResponseReason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. "path-not-allowed": the shared program-file check refused cli_path (not absolute, missing, not a regular executable, inside or linked through the Omnipus home, a workspace or a mount, or writable by others); nothing is spawned. Maps runner.ReasonOK (empty string) to "ok".
 type CliValidateResponseReason string
 
 // ConfigurationActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.

@@ -7,8 +7,10 @@ description: >
   performed. Blocking is keyed off `reason` alone (never the raw `ok`
   boolean): the SPA blocks Create/Save on "missing-binary" or
   "handshake-failed", warns-but-allows on "unauthenticated", and allows on
-  "ok". `detail` is always one of a fixed set of classified messages — never
-  raw stderr from the spawned process.
+  "ok". "path-not-allowed" is shown as a refusal under the path field. `detail` is never raw stderr from
+  the spawned process: it is a fixed classified message per reason, except
+  for "path-not-allowed", where it is the program-file check's own message
+  naming the failed check (never file contents).
 type: object
 required:
   - ok
@@ -32,6 +34,7 @@ properties:
       - handshake-failed
       - unauthenticated
       - unknown-cli
+      - path-not-allowed
     description: >
       Classification of the validation result. "ok": binary runs and reports
       a version, believed authenticated. "missing-binary": cli_path is empty,
@@ -41,7 +44,11 @@ properties:
       "unauthenticated": the binary runs and reports a version but has no
       usable credentials — non-blocking warning, Create/Save allowed.
       "unknown-cli": the `cli` value is not one of the supported executors;
-      no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+      no subprocess is spawned. "path-not-allowed": the shared program-file
+      check refused cli_path (not absolute, missing, not a regular executable,
+      inside or linked through the Omnipus home, a workspace or a mount, or
+      writable by others); nothing is spawned. Maps
+      runner.ReasonOK (empty string) to "ok".
     example: "ok"
   resolved_path:
     type: string
@@ -49,7 +56,8 @@ properties:
     description: >
       Absolute path actually spawned. Populated for "ok" and
       "unauthenticated", and for "handshake-failed" when a target was found
-      to spawn. Null for "missing-binary" and "unknown-cli".
+      to spawn. Null for "missing-binary", "unknown-cli" and
+      "path-not-allowed".
     example: "/usr/local/bin/claude"
   version:
     type: string
@@ -61,8 +69,10 @@ properties:
   detail:
     type: string
     description: >
-      Fixed, classified human-readable message for the reason — never raw
-      stderr from the spawned process. One of a small allowlisted set per
-      reason (e.g. "OK", "installed; not logged in", "not found", "did not
-      run or returned no version", "unsupported cli").
+      Human-readable message for the reason — never raw stderr from the
+      spawned process. One of a small allowlisted set per reason (e.g. "OK",
+      "installed; not logged in", "not found", "did not run or returned no
+      version", "unsupported cli"); for "path-not-allowed" it is the
+      program-file check's message naming the failed check and the path
+      concerned.
     example: "OK"

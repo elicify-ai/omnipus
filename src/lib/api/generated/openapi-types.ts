@@ -3902,7 +3902,7 @@ export interface paths {
         put?: never;
         /**
          * Validate that an external-CLI binary runs at a given path
-         * @description Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent). Rejects a target that is not a regular, executable file before spawning it (classified "missing-binary", no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
+         * @description Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. A signed-in person only (T11, RequirePersonSession): CLI-token, development-bypass and user-less requests get 403 before the body is read. Before anything starts, the shared program-file check (clitrust.CheckProgramPath against the agent-writable roots) must accept cli_path: an absolute path whose final file and every link lie outside the Omnipus home, workspaces and mounts, are not writable by others, and whose final file is a regular executable. A refusal is classified "path-not-allowed" and nothing is spawned; an accepted candidate launches exactly the checked resolved file. An empty cli_path is "missing-binary". Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
          */
         post: operations["postSystemCliValidate"];
         delete?: never;
@@ -14774,7 +14774,7 @@ export interface components {
         };
         /**
          * CliValidateResponse
-         * @description Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Blocking is keyed off `reason` alone (never the raw `ok` boolean): the SPA blocks Create/Save on "missing-binary" or "handshake-failed", warns-but-allows on "unauthenticated", and allows on "ok". `detail` is always one of a fixed set of classified messages — never raw stderr from the spawned process.
+         * @description Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Blocking is keyed off `reason` alone (never the raw `ok` boolean): the SPA blocks Create/Save on "missing-binary" or "handshake-failed", warns-but-allows on "unauthenticated", and allows on "ok". "path-not-allowed" is shown as a refusal under the path field. `detail` is never raw stderr from the spawned process: it is a fixed classified message per reason, except for "path-not-allowed", where it is the program-file check's own message naming the failed check (never file contents).
          */
         CliValidateResponse: {
             /**
@@ -14783,13 +14783,13 @@ export interface components {
              */
             ok: boolean;
             /**
-             * @description Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+             * @description Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. "path-not-allowed": the shared program-file check refused cli_path (not absolute, missing, not a regular executable, inside or linked through the Omnipus home, a workspace or a mount, or writable by others); nothing is spawned. Maps runner.ReasonOK (empty string) to "ok".
              * @example ok
              * @enum {string}
              */
-            reason: "ok" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli";
+            reason: "ok" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli" | "path-not-allowed";
             /**
-             * @description Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary" and "unknown-cli".
+             * @description Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary", "unknown-cli" and "path-not-allowed".
              * @example /usr/local/bin/claude
              */
             resolved_path?: string | null;
@@ -14799,7 +14799,7 @@ export interface components {
              */
             version?: string | null;
             /**
-             * @description Fixed, classified human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli").
+             * @description Human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli"); for "path-not-allowed" it is the program-file check's message naming the failed check and the path concerned.
              * @example OK
              */
             detail?: string;
@@ -27363,6 +27363,15 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description The caller is not a signed-in person: the request authenticated with the CLI token, the gateway is in development-bypass mode, or no user is attached. Refused before the body is read; nothing is started. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             429: components["responses"]["429TooManyRequests"];
         };
     };
