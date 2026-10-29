@@ -1,0 +1,12 @@
+title: RoomInvitationStatus
+description: >
+  State of the invitation summary of a group (#1449 D10, D20, FR-041):
+  generating while it is being written; ready when it is stored;
+  unavailable when it could not be produced (provider error, quota, the
+  45-second limit, a restart while generating, the group deleted or the
+  starting agent removed, or nothing to summarise).
+type: string
+enum:
+  - generating
+  - ready
+  - unavailable

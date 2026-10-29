@@ -116,6 +116,15 @@ properties:
       silently upgrading a known mail-derived file. Absent on entries that
       predate this field = ordinary workspace profile.
     example: "mail_restricted"
+  chat_copy:
+    type: boolean
+    readOnly: true
+    description: >
+      True when this file has an associated chat copy (the copy chats show,
+      in the workspace media library) that deleting this entry also removes
+      (#1449 D26, FR-086, FR-087). Absent or false means no associated chat
+      copy: deleting the entry removes only this file.
+    example: true
   preview_scripts_allowed:
     type: boolean
     description: >

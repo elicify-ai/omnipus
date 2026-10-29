@@ -82,6 +82,19 @@ properties:
     format: date-time
     readOnly: true
     description: RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
+  library_path:
+    type: string
+    minLength: 1
+    readOnly: true
+    description: >
+      Workspace-relative path of this entry's Library file (for example
+      .library/shot.png), with the same path rules as LibraryEntry.path
+      (#1449 D26, FR-086). The durable association between the chat copy and
+      the Library file: written when the file is published, kept across a
+      rename or a move inside the workspace, cleared when the Library file is
+      deleted or moved to another workspace. Absent when the entry has no
+      associated Library file.
+    example: ".library/shot.png"
   status:
     type: string
     enum:

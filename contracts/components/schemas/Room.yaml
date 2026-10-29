@@ -4,6 +4,11 @@ description: >
   FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep
   their required agent_id. Members work in their own main sessions (GC-8).
   Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}.
+  invitation_context_status is present on every room the server returns
+  (#1449 FR-041): only an ad-hoc group started with Add participant from a
+  main chat ever has a summary, every other group reports unavailable.
+  invitation_context (with the text) is returned by GET /api/v1/rooms/{id}
+  only.
 type: object
 required:
   - id
@@ -86,3 +91,9 @@ properties:
     description: >
       Derived: true while any member state is awaiting_approval or
       waiting_on_user.
+  invitation_context_status:
+    $ref: './RoomInvitationStatus.yaml'
+    x-go-type: RoomInvitationStatus
+  invitation_context:
+    $ref: './RoomInvitationContext.yaml'
+    x-go-type: RoomInvitationContext

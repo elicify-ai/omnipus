@@ -2297,6 +2297,10 @@ components:
       $ref: ./components/schemas/SecretOptionsUpdateRequest.yaml
     Room:
       $ref: ./components/schemas/Room.yaml
+    RoomInvitationContext:
+      $ref: ./components/schemas/RoomInvitationContext.yaml
+    RoomInvitationStatus:
+      $ref: ./components/schemas/RoomInvitationStatus.yaml
     RoomCreateRequest:
       $ref: ./components/schemas/RoomCreateRequest.yaml
     RoomMembersUpdateRequest:
@@ -7130,8 +7134,25 @@ paths:
   /upload:
     post:
       operationId: uploadFiles
-      summary: Upload files for a session
-      description: "Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.\nMax file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.\nsession_id may be supplied as a query parameter or as a form field before the file parts.\nReturns HTTP 201 on success.\n"
+      summary: Upload files for a session or into a workspace library
+      description: >
+        Streams multipart file uploads. Max file size per part: 100 MB. Data is
+        streamed directly to disk; the full file is never buffered in memory.
+        Returns HTTP 201 on success.
+
+
+        Two destinations. With workspace_id (query parameter, or a form field
+        before the file parts) each file is stored in that workspace's media
+        library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25,
+        FR-016): the chat copy in workspaces/<id>/media/ (returned as a
+        media://workspace/<id>/<uuid> ref) and the Library file under the
+        workspace's .library folder; no session is used or created. When both
+        workspace_id and session_id are given, workspace_id routes to the
+        library and session_id is ignored. When the workspace library is
+        unavailable the request fails with 503 and never falls back to the
+        session path. Without workspace_id, session_id (query parameter or form
+        field) is required and files go to ~/.omnipus/uploads/{session_id}/
+        (legacy path).
       tags:
       - Upload
       security:
@@ -7142,8 +7163,19 @@ paths:
         required: false
         schema:
           type: string
-        description: Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+        description: Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
         example: 550e8400-e29b-41d4-a716-446655440000
+      - name: workspace_id
+        in: query
+        required: false
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description: >
+          Workspace whose media library receives the files (#1449 C-I1). May
+          also be supplied as a multipart form field before the file parts.
+          Takes precedence over session_id.
       requestBody:
         required: true
         content:
@@ -7154,6 +7186,9 @@ paths:
                 session_id:
                   type: string
                   description: Session ID (alternative to query parameter).
+                workspace_id:
+                  type: string
+                  description: Workspace ID (alternative to the query parameter); must precede the file parts.
                 files:
                   type: array
                   items:
@@ -7171,6 +7206,14 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '503':
+          description: >
+            The workspace media library is unavailable (workspace_id given).
+            Nothing was stored and no session path was used instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '405':
           description: Method not allowed.
           content:
@@ -8974,7 +9017,11 @@ paths:
         semantics), but the 404 message names the specific missing
         directory rather than a bare "not found"; create it first with
         POST /library/{workspace_id}/mkdir. 409 if an entry already exists
-        at to_path.
+        at to_path. Chat copies (#1449 D26): a move inside one workspace keeps
+        a file's chat-copy association (the media entry's library_path follows
+        the file). A move to another workspace drops it: the moved file
+        becomes an ordinary file there and its chat copy stays in the original
+        workspace.
       tags:
       - Library
       security:
@@ -9025,7 +9072,8 @@ paths:
         semantics), but the 404 message names the specific missing
         directory rather than a bare "not found"; create it first with
         POST /library/{workspace_id}/mkdir. 409 if an entry already exists
-        at to_path.
+        at to_path. A copy is a new file with no chat-copy association
+        (#1449 D26): deleting the copy removes only the copy.
       tags:
       - Library
       security:
@@ -9132,6 +9180,21 @@ paths:
         Deleting a directory removes it and everything under it. Returns
         403 if path resolves outside the workspace's work tree; 404 if
         nothing exists at path.
+
+
+        Chat copies (#1449 D26, FR-086): deleting a file that has an
+        associated chat copy (LibraryEntry.chat_copy; the media entry whose
+        library_path names this file, in the same workspace) also deletes
+        that chat copy, bytes and media entry. Deleting a directory does so
+        for every associated file inside it. Retention owners (session
+        reference counts, group retention) never block an explicit deletion,
+        and nothing recreates a deleted copy. Order: chat copy first, Library
+        file last, so a failure leaves the entry listed and a repeat completes
+        the work; a chat copy that is already gone counts as removed. 204
+        when both are removed; 500 ErrorResponse "could not delete <name>
+        completely" when either removal failed (the Library file is then
+        still present). Every chat that showed the file then shows it as
+        unavailable. Deleting a group never deletes files (D19).
       tags:
       - Library
       security:
@@ -9554,7 +9617,8 @@ paths:
         does NOT auto-create missing destination directories — the message
         names the specific missing directory; create it first with
         POST /library/{workspace_id}/mkdir); 409 if an entry already exists
-        at "to".
+        at "to". A rename keeps a file's chat-copy association (#1449 D26):
+        the media entry's library_path follows the file.
       tags:
       - Library
       security:

@@ -126,6 +126,16 @@ export const RoomDeliveryState = z
   })
   .strict();
 
+export const MediaPart = z
+  .object({
+    type: z.enum(["image", "audio", "video", "file"]),
+    url: z.string().min(1),
+    filename: z.string().min(1),
+    content_type: z.string().min(1),
+    caption: z.string().optional(),
+  })
+  .strict();
+
 export const RoomEntry = z
   .object({
     id: z.string().min(1).max(128),
@@ -133,7 +143,8 @@ export const RoomEntry = z
     seq: z.number().int().min(1),
     client_message_id: z.string().min(1).max(128).optional(),
     author: RoomEntryAuthor,
-    text: z.string().max(5242880),
+    text: z.string().max(65536),
+    attachments: z.array(MediaPart).max(16).optional(),
     addressees: z.array(z.string().min(1).max(128)),
     after_pause: z.boolean(),
     deliveries: z.array(RoomDeliveryState),
@@ -198,6 +209,7 @@ export const RoomMetaFrame = z
     read_only_reason: z.string().min(1).max(200).optional(),
     allocated_cost_micro_usd: z.number().int().min(0),
     allocated_cost_unpriced: z.boolean(),
+    invitation_context_status: z.enum(["generating", "ready", "unavailable"]).optional(),
   })
   .strict();
 
@@ -775,16 +787,6 @@ export const LibraryChangedFrame = z
   })
   .strict();
 
-export const MediaPart = z
-  .object({
-    type: z.enum(["image", "audio", "video", "file"]),
-    url: z.string().min(1),
-    filename: z.string().min(1),
-    content_type: z.string().min(1),
-    caption: z.string().optional(),
-  })
-  .strict();
-
 export const MediaFrame = z
   .object({
     history_origin: HistoryEntryOrigin.optional(),
@@ -844,6 +846,8 @@ export const AskUserQuestionCard = z
     card_id: z.string().min(1),
     session_id: z.string().min(1),
     agent_id: z.string(),
+    room_ref: RoomRef.optional(),
+    origin_label: z.string().min(1).max(200).optional(),
     status: z.enum(["pending", "answered", "cancelled"]),
     created_at: z.string(),
     default_safe_at: z.string().optional(),

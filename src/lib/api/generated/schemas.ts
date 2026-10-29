@@ -723,6 +723,7 @@ type LibraryEntry = {
   is_knowledge_base?: boolean | undefined;
   is_text_editable: boolean;
   preview_profile?: ("workspace" | "mail_restricted") | undefined;
+  chat_copy?: boolean | undefined;
   preview_scripts_allowed?: boolean | undefined;
 };
 type LibraryEntryMount = {
@@ -3461,6 +3462,33 @@ type agent = {
   workspace_id: string;
   agent_id: string;
 };
+type Room = {
+  id: string;
+  workspace_id: string;
+  kind: "team" | "squad" | "adhoc";
+  name: string;
+  members: Array<string>;
+  muted: Array<string>;
+  paused: boolean;
+  generation: number;
+  origin_session_id?: string | undefined;
+  read_only_reason?: string | undefined;
+  hidden: boolean;
+  allocated_cost_micro_usd: number;
+  allocated_cost_unpriced: boolean;
+  needs_attention: boolean;
+  invitation_context_status?: RoomInvitationStatus | undefined;
+  invitation_context?: RoomInvitationContext | undefined;
+};
+type RoomInvitationStatus = "generating" | "ready" | "unavailable";
+type RoomInvitationContext = {
+  status: RoomInvitationStatus;
+  text?: string | undefined;
+  author_agent_id: string;
+  generated_at?: string | undefined;
+  cost_micro_usd?: number | undefined;
+  cost_unpriced?: boolean | undefined;
+};
 type AgentDependencyList = {
   agent_id: string;
   dependencies: Array<AgentDependency>;
@@ -5632,7 +5660,11 @@ export const ActivityEvent: z.ZodType<ActivityEvent> = z
   })
   .passthrough();
 export const uploadFiles_Body = z
-  .object({ session_id: z.string(), files: z.array(z.instanceof(File)) })
+  .object({
+    session_id: z.string(),
+    workspace_id: z.string(),
+    files: z.array(z.instanceof(File)),
+  })
   .partial()
   .passthrough();
 export const UploadedFile: z.ZodType<UploadedFile> = z.object({
@@ -6257,6 +6289,7 @@ export const MediaLibraryEntry = z.object({
   source: z.enum(["user_upload", "tool_output"]),
   refcount: z.number().int().gte(0).optional(),
   last_refcount_seen_at: z.string().datetime({ offset: true }).optional(),
+  library_path: z.string().min(1).optional(),
   status: z.enum(["available", "stranded"]),
 }).strict();
 export const MediaAttachmentRequest = z.object({
@@ -6290,6 +6323,7 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   is_knowledge_base: z.boolean().optional(),
   is_text_editable: z.boolean(),
   preview_profile: z.enum(["workspace", "mail_restricted"]).optional(),
+  chat_copy: z.boolean().optional(),
   preview_scripts_allowed: z.boolean().optional(),
 });
 export const LibraryContentResponse = z.object({
@@ -7496,7 +7530,22 @@ export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
 export const SecretOptionsUpdateRequest = z.object({
   available_in_channel_turns: z.boolean(),
 });
-export const Room = z.object({
+export const RoomInvitationStatus = z.enum([
+  "generating",
+  "ready",
+  "unavailable",
+]);
+export const RoomInvitationContext: z.ZodType<RoomInvitationContext> = z.object(
+  {
+    status: RoomInvitationStatus,
+    text: z.string().min(1).max(4096).optional(),
+    author_agent_id: z.string().min(1).max(128),
+    generated_at: z.string().datetime({ offset: true }).optional(),
+    cost_micro_usd: z.number().int().gte(0).optional(),
+    cost_unpriced: z.boolean().optional(),
+  }
+);
+export const Room: z.ZodType<Room> = z.object({
   id: z.string().min(1).max(128),
   workspace_id: z.string().min(1).max(128),
   kind: z.enum(["team", "squad", "adhoc"]),
@@ -7511,6 +7560,8 @@ export const Room = z.object({
   allocated_cost_micro_usd: z.number().int().gte(0),
   allocated_cost_unpriced: z.boolean(),
   needs_attention: z.boolean(),
+  invitation_context_status: RoomInvitationStatus.optional(),
+  invitation_context: RoomInvitationContext.optional(),
 });
 export const RoomCreateRequest = z.object({
   kind: z.enum(["squad", "adhoc"]),
@@ -7533,7 +7584,8 @@ export const RoomHistoryResponse = z.object({
 }).strict();
 export const RoomMessageRequest = z.object({
   client_message_id: z.string().min(1).max(128),
-  text: z.string().min(1).max(5242880),
+  text: z.string().min(0).max(65536),
+  media: z.array(z.string()).max(16).optional(),
   mentions: z.array(z.string().min(1).max(128)).max(256),
 });
 export const KnowledgeMountConflictError = z.object({
@@ -10647,6 +10699,8 @@ Includes session_start events from all agent stores and task lifecycle events.
     path: "/library/:workspace_id/entries",
     alias: "deleteLibraryEntry",
     description: `Deletes the file or directory at the given workspace-relative path. Deleting a directory removes it and everything under it. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at path.
+
+Chat copies (#1449 D26, FR-086): deleting a file that has an associated chat copy (LibraryEntry.chat_copy; the media entry whose library_path names this file, in the same workspace) also deletes that chat copy, bytes and media entry. Deleting a directory does so for every associated file inside it. Retention owners (session reference counts, group retention) never block an explicit deletion, and nothing recreates a deleted copy. Order: chat copy first, Library file last, so a failure leaves the entry listed and a repeat completes the work; a chat copy that is already gone counts as removed. 204 when both are removed; 500 ErrorResponse &quot;could not delete &lt;name&gt; completely&quot; when either removal failed (the Library file is then still present). Every chat that showed the file then shows it as unavailable. Deleting a group never deletes files (D19).
 `,
     requestFormat: "json",
     parameters: [
@@ -11514,7 +11568,7 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
     method: "post",
     path: "/library/:workspace_id/rename",
     alias: "renameLibraryEntry",
-    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; within this single workspace&#x27;s work tree (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id &#x3D;&#x3D; to_workspace_id &#x3D;&#x3D; {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if &quot;to&quot; begins with a &quot;..&quot; segment anywhere in the path (rejected outright as a sanity check — such a name isn&#x27;t a traversal, but this package&#x27;s hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot; OR &quot;to&quot;&#x27;s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at &quot;to&quot;.
+    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; within this single workspace&#x27;s work tree (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id &#x3D;&#x3D; to_workspace_id &#x3D;&#x3D; {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if &quot;to&quot; begins with a &quot;..&quot; segment anywhere in the path (rejected outright as a sanity check — such a name isn&#x27;t a traversal, but this package&#x27;s hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot; OR &quot;to&quot;&#x27;s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at &quot;to&quot;. A rename keeps a file&#x27;s chat-copy association (#1449 D26): the media entry&#x27;s library_path follows the file.
 `,
     requestFormat: "json",
     parameters: [
@@ -11673,7 +11727,7 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
     method: "post",
     path: "/library/copy",
     alias: "copyLibraryEntry",
-    description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;cp&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+    description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;cp&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. A copy is a new file with no chat-copy association (#1449 D26): deleting the copy removes only the copy.
 `,
     requestFormat: "json",
     parameters: [
@@ -11721,7 +11775,7 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
     method: "post",
     path: "/library/move",
     alias: "moveLibraryEntry",
-    description: `Moves the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id &#x3D;&#x3D; to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;mv&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+    description: `Moves the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id &#x3D;&#x3D; to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;mv&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. Chat copies (#1449 D26): a move inside one workspace keeps a file&#x27;s chat-copy association (the media entry&#x27;s library_path follows the file). A move to another workspace drops it: the moved file becomes an ordinary file there and its chat copy stays in the original workspace.
 `,
     requestFormat: "json",
     parameters: [
@@ -15998,10 +16052,9 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "post",
     path: "/upload",
     alias: "uploadFiles",
-    description: `Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.
-Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.
-session_id may be supplied as a query parameter or as a form field before the file parts.
-Returns HTTP 201 on success.
+    description: `Streams multipart file uploads. Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory. Returns HTTP 201 on success.
+
+Two destinations. With workspace_id (query parameter, or a form field before the file parts) each file is stored in that workspace&#x27;s media library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25, FR-016): the chat copy in workspaces/&lt;id&gt;/media/ (returned as a media://workspace/&lt;id&gt;/&lt;uuid&gt; ref) and the Library file under the workspace&#x27;s .library folder; no session is used or created. When both workspace_id and session_id are given, workspace_id routes to the library and session_id is ignored. When the workspace library is unavailable the request fails with 503 and never falls back to the session path. Without workspace_id, session_id (query parameter or form field) is required and files go to ~/.omnipus/uploads/{session_id}/ (legacy path).
 `,
     requestFormat: "form-data",
     parameters: [
@@ -16014,6 +16067,11 @@ Returns HTTP 201 on success.
         name: "session_id",
         type: "Query",
         schema: z.string().optional(),
+      },
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string().min(1).max(128).optional(),
       },
     ],
     response: UploadFilesResponse,
@@ -16031,6 +16089,12 @@ Returns HTTP 201 on success.
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `The workspace media library is unavailable (workspace_id given). Nothing was stored and no session path was used instead.
+`,
         schema: ErrorResponse,
       },
     ],
@@ -17975,6 +18039,16 @@ export const RoomDeliveryState = z
   })
   .strict();
 
+export const MediaPart = z
+  .object({
+    type: z.enum(["image", "audio", "video", "file"]),
+    url: z.string().min(1),
+    filename: z.string().min(1),
+    content_type: z.string().min(1),
+    caption: z.string().optional(),
+  })
+  .strict();
+
 export const RoomEntry = z
   .object({
     id: z.string().min(1).max(128),
@@ -17982,7 +18056,8 @@ export const RoomEntry = z
     seq: z.number().int().min(1),
     client_message_id: z.string().min(1).max(128).optional(),
     author: RoomEntryAuthor,
-    text: z.string().max(5242880),
+    text: z.string().max(65536),
+    attachments: z.array(MediaPart).max(16).optional(),
     addressees: z.array(z.string().min(1).max(128)),
     after_pause: z.boolean(),
     deliveries: z.array(RoomDeliveryState),
@@ -18047,6 +18122,7 @@ export const RoomMetaFrame = z
     read_only_reason: z.string().min(1).max(200).optional(),
     allocated_cost_micro_usd: z.number().int().min(0),
     allocated_cost_unpriced: z.boolean(),
+    invitation_context_status: z.enum(["generating", "ready", "unavailable"]).optional(),
   })
   .strict();
 
@@ -18637,16 +18713,6 @@ export const LibraryChangedFrame = z
   })
   .strict();
 
-export const MediaPart = z
-  .object({
-    type: z.enum(["image", "audio", "video", "file"]),
-    url: z.string().min(1),
-    filename: z.string().min(1),
-    content_type: z.string().min(1),
-    caption: z.string().optional(),
-  })
-  .strict();
-
 export const MediaFrame = z
   .object({
     history_origin: HistoryEntryOrigin.optional(),
@@ -18706,6 +18772,8 @@ export const AskUserQuestionCard = z
     card_id: z.string().min(1),
     session_id: z.string().min(1),
     agent_id: z.string(),
+    room_ref: RoomRef.optional(),
+    origin_label: z.string().min(1).max(200).optional(),
     status: z.enum(["pending", "answered", "cancelled"]),
     created_at: z.string(),
     default_safe_at: z.string().optional(),

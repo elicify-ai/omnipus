@@ -1,0 +1,42 @@
+title: RoomInvitationContext
+description: >
+  The invitation context of an ad-hoc group started with Add participant from
+  an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short
+  background summary written with the starting agent's model and sent once,
+  as quoted background, with each other member's first request. It is never
+  posted into the group or any chat. The text is returned only by
+  GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status
+  only. Best-effort filters remove registered secret values and known
+  credential shapes; a password written in plain prose may not be caught
+  (D18, #1467).
+type: object
+required:
+  - status
+  - author_agent_id
+additionalProperties: false
+properties:
+  status:
+    $ref: './RoomInvitationStatus.yaml'
+    x-go-type: RoomInvitationStatus
+  text:
+    type: string
+    minLength: 1
+    maxLength: 4096
+    description: The summary text. Present only when status is ready.
+  author_agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: The starting agent, whose model wrote the summary.
+  generated_at:
+    type: string
+    format: date-time
+    description: When the summary became ready.
+  cost_micro_usd:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Cost of the summary call in micro-dollars, counted once into the group's cost. Absent when no call ran.
+  cost_unpriced:
+    type: boolean
+    description: True when the summary call ran but reported no price.
