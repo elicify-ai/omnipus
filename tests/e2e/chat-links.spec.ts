@@ -9,7 +9,7 @@ import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { GatewayProcess } from './fixtures/gateway-process';
 import { E2E_MODEL } from './fixtures/e2e-model';
-import { chatInput, waitForConnected } from './fixtures/selectors';
+import { chatInput } from './fixtures/selectors';
 import { startTerminalOutcomeProvider } from './fixtures/terminal-outcome-provider';
 import { createTerminalSession, openTerminalSession } from './fixtures/terminal-outcome-acceptance';
 
