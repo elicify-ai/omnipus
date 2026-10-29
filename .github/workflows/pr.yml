@@ -2125,7 +2125,19 @@ jobs:
           # the WHY comment above for the measurement (2702.664s on run
           # 35432082880) and the headroom rationale. Matches this step's
           # flake-filter re-run below.
-          out=$(go test -tags goolm,stdjson -count=1 -timeout 75m -p 1 ./pkg/gateway/ 2>&1)
+          # Compile-once sharded execution (ADR-067/ADR-076 follow-up, #1487).
+          # One `go test -c` produces a single test binary; N copies run in
+          # parallel, each with a deterministic subset of tests via -run regex.
+          # Partitioning lives in scripts/gateway-test-shards.py (hash % N).
+          # Output is concatenated in shard order for stable flake filter.
+          #
+          # The 75m budget is per-shard here (the script passes it to each
+          # binary). The job still has a 45-minute wall budget in the step
+          # definition; a hang is still bounded.
+          out=$(bash scripts/run-gateway-sharded.sh \
+            --shards 4 \
+            --timeout 75m \
+            --tags goolm,stdjson 2>&1)
           code=$?
           echo "$out"
           # Same DATA RACE carve-out as the previous step. A race that vanishes
