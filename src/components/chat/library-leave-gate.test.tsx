@@ -15,6 +15,12 @@ import {
   resolveDiscardConfirmDialog,
   setLibraryEditorDirty,
 } from '@/components/library/preview/unsavedGuard'
+import {
+  getMailDiscardConfirmDialogOpen,
+  isMailEditorDirty,
+  resolveMailDiscardConfirmDialog,
+  setMailEditorDirty,
+} from '@/components/workspaces/mail/mailUnsavedGuard'
 import { useChatStore } from '@/store/chat'
 import { resetLibraryOpenState, showLibraryOpenNotice, useLibraryOpenStore } from '@/store/chat/libraryOpen'
 import { emptySessionState } from '@/store/chat/session'
@@ -54,7 +60,10 @@ async function cancelKeepsDirtyThenDiscardOpens(
 describe('Library opens honour the leave gate (FR-008)', () => {
   afterEach(() => {
     if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(false)
+    if (getMailDiscardConfirmDialogOpen()) resolveMailDiscardConfirmDialog(false)
     setLibraryEditorDirty(false)
+    setMailEditorDirty('compose', false)
+    setMailEditorDirty('draft', false)
     useUiStore.getState().closePanel()
     resetLibraryOpenState()
   })
@@ -185,5 +194,88 @@ describe('Library opens honour the leave gate (FR-008)', () => {
     } finally {
       release()
     }
+  })
+
+  it('a chat link through dirty Mail stays on Cancel and opens on Discard (FR-008)', async () => {
+    const mail = { id: 'mail' as const, context: { workspaceId: 'W', mailboxId: 'mia' } }
+    useUiStore.getState().openPanel('mail', mail.context)
+    setMailEditorDirty('compose', true)
+    render(<MarkdownLink href="omnipus://file/W/notes/plan.md">plan</MarkdownLink>)
+    const open = () => fireEvent.click(screen.getByTestId('markdown-link'))
+
+    open()
+    expect(getMailDiscardConfirmDialogOpen()).toBe(true)
+    expect(getDiscardConfirmDialogOpen()).toBe(false)
+    expect(useUiStore.getState().activePanel).toEqual(mail)
+
+    resolveMailDiscardConfirmDialog(false)
+    expect(getMailDiscardConfirmDialogOpen()).toBe(false)
+    expect(isMailEditorDirty()).toBe(true)
+    expect(useUiStore.getState().activePanel).toEqual(mail)
+
+    open()
+    expect(getMailDiscardConfirmDialogOpen()).toBe(true)
+    resolveMailDiscardConfirmDialog(true)
+    await waitFor(() => expect(useUiStore.getState().activePanel).toEqual({
+      id: 'library',
+      context: { workspaceId: 'W', path: 'notes/plan.md' },
+    }))
+    expect(isMailEditorDirty()).toBe(false)
+  })
+
+  it('an arrival while Mail is dirty stores a notice, and Open then uses the Mail gate (BS-6.4)', async () => {
+    const mail = { id: 'mail' as const, context: { workspaceId: 'W', mailboxId: 'mia' } }
+    useUiStore.getState().openPanel('mail', mail.context)
+    setMailEditorDirty('draft', true)
+    useSessionStore.getState().setActiveSession('sess-1', 'mia')
+    useChatStore.setState({ sessionsById: { 'sess-1': emptySessionState() } })
+    const release = registerChatView('sess-1', 'W')
+    try {
+      useChatStore.getState().handleFrame({
+        type: 'open_in_library',
+        session_id: 'sess-1',
+        call_id: 'call-mail',
+        request_id: REQUEST,
+        workspace_id: 'W',
+        path: 'notes/plan.md',
+      } as never)
+      expect(getMailDiscardConfirmDialogOpen()).toBe(false)
+      expect(useUiStore.getState().activePanel).toEqual(mail)
+      expect(useLibraryOpenStore.getState().notices['sess-1']?.path).toBe('notes/plan.md')
+
+      render(<LibraryOpenNotice sessionId="sess-1" />)
+      fireEvent.click(screen.getByRole('button', { name: 'Open plan.md in Library' }))
+      expect(getMailDiscardConfirmDialogOpen()).toBe(true)
+      expect(useUiStore.getState().activePanel).toEqual(mail)
+      resolveMailDiscardConfirmDialog(true)
+      await waitFor(() => expect(useUiStore.getState().activePanel).toEqual({
+        id: 'library',
+        context: { workspaceId: 'W', path: 'notes/plan.md' },
+      }))
+      expect(isMailEditorDirty()).toBe(false)
+    } finally {
+      release()
+    }
+  })
+
+  it('a second open while the discard dialog is open keeps the first target (FR-008)', async () => {
+    armDirtyLibrary()
+    render(
+      <>
+        <MarkdownLink href="omnipus://file/W/secrets/payroll.xlsx">payroll</MarkdownLink>
+        <MarkdownLink href="omnipus://file/W/notes/plan.md">plan</MarkdownLink>
+      </>,
+    )
+    const [first, second] = screen.getAllByTestId('markdown-link')
+    fireEvent.click(first)
+    expect(getDiscardConfirmDialogOpen()).toBe(true)
+    fireEvent.click(second)
+    expect(getDiscardConfirmDialogOpen()).toBe(true)
+    expect(useUiStore.getState().activePanel).toEqual(DIRTY)
+    resolveDiscardConfirmDialog(true)
+    await waitFor(() => expect(useUiStore.getState().activePanel).toEqual({
+      id: 'library',
+      context: { workspaceId: 'W', path: 'secrets/payroll.xlsx' },
+    }))
   })
 })
