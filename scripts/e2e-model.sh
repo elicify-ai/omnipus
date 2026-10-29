@@ -345,6 +345,28 @@ route_fallback() { # route_fallback <status> <error_type>
   exit 0
 }
 
+# body_shape <file>: a SAFE one-line description of a JSON response for a
+# failure message: the top-level key names, and the values of .type,
+# .error.type and .base_resp.status_code (the MiniMax status field) when
+# present. Never the body, never free text: a key name or a .type value is
+# shown only when it is a short lowercase identifier (^[a-z_][a-z0-9_]{0,31}$)
+# — a key, a token or a sentence never matches — and the status code only
+# when it is a number. Hidden key names are counted, not shown.
+body_shape() {
+  jq -r '
+    def ident: type == "string" and test("^[a-z_][a-z0-9_]{0,31}$");
+    (keys_unsorted) as $k
+    | ([$k[] | select(ident)]) as $shown
+    | (($k | length) - ($shown | length)) as $hidden
+    | [ "top-level keys: " + (if ($shown | length) > 0 then ($shown[:20] | join(", ")) else "none shown" end)
+          + (if $hidden > 0 then " (+\($hidden) not shown)" else "" end),
+        (.type | select(ident) | ".type=" + .),
+        (.error | objects | .type | select(ident) | ".error.type=" + .),
+        (.base_resp | objects | .status_code | numbers | ".base_resp.status_code=" + tostring)
+      ] | join("; ")
+  ' "$1" 2>/dev/null || echo "response shape unavailable"
+}
+
 cmd_preflight() {
   parse_opts "$@"
   [ ${#POSITIONAL[@]} -eq 0 ] || die 2 "preflight takes no positional arguments"
@@ -429,7 +451,7 @@ cmd_preflight() {
         die 1 "preflight: the primary answered HTTP $status with a body that is not a JSON object — not a working primary, and not an outage either; check the endpoint"
       fi
       if [ "$STRICT" = 1 ] && ! jq -e '.type == "message" and (.content | type == "array")' "$work/body" >/dev/null 2>&1; then
-        die 1 "preflight: the primary answered HTTP $status but not with an Anthropic message (type \"message\" with a content array) — refusing to report it as working"
+        die 1 "preflight: the primary answered HTTP $status but not with an Anthropic message (type \"message\" with a content array) — refusing to report it as working ($(body_shape "$work/body")). An unknown model id is a common cause: check the primary model against the provider catalog"
       fi
       write_route primary "$status" ""
       summary_line "LLM: primary ($P_PROVIDER/$P_MODEL)"

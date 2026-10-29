@@ -33,7 +33,7 @@ bad() {
 spec_json="$tmp/model.json"
 cat >"$spec_json" <<'EOF'
 {
-  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash", "api_key_ref": "MINIMAX_API_KEY" },
+  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" },
   "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
 }
 EOF
@@ -138,9 +138,32 @@ else
   bad "i3 strict-message-200-primary" "want LLM_ROUTE=primary; got $RC" "$ERR"
 fi
 
+# I3 diagnostic: a 2xx that is not a message names only the top-level key
+# names and the .type / .error.type / .base_resp.status_code values — never
+# the body (here status_msg echoes the fake key), and never a key name or a
+# value that is not a plain identifier.
+preflight_case i3-diag 200 '{"base_resp":{"status_code":2013,"status_msg":"invalid model test-key-aaaa"},"id":"r1","type":"weird_reply","error":{"type":"unknown_model","message":"test-key-aaaa"}}' --strict
+if [ "$RC" -eq 1 ] \
+  && grep -q 'top-level keys: base_resp, id, type, error' "$ERR" \
+  && grep -q '\.type=weird_reply' "$ERR" \
+  && grep -q '\.error\.type=unknown_model' "$ERR" \
+  && grep -q '\.base_resp\.status_code=2013' "$ERR" \
+  && ! grep -q 'test-key-aaaa' "$ERR" "$OUT" \
+  && ! grep -q 'invalid model' "$ERR"; then
+  pass "i3 non-message-200-safe-diagnostic"
+else
+  bad "i3 non-message-200-safe-diagnostic" "want exit 1 naming keys, .type, .error.type and .base_resp.status_code only; got $RC" "$ERR"
+fi
+preflight_case i3-diag-hostile 200 '{"test-key-aaaa":1,"type":"has space test-key-aaaa","base_resp":{"status_code":"test-key-aaaa"}}' --strict
+if [ "$RC" -eq 1 ] && ! grep -q 'test-key-aaaa' "$ERR" "$OUT" && grep -q 'top-level keys:' "$ERR"; then
+  pass "i3 hostile-key-names-and-values-dropped"
+else
+  bad "i3 hostile-key-names-and-values-dropped" "want exit 1 and no canary in the diagnostic; got $RC" "$ERR"
+fi
+
 # I1: note-fallbacks.
 sess="$tmp/sessions/s1"; mkdir -p "$sess"
-note='Answered by the Fallback model (deepseek/deepseek-v4.1-flash) because MiniMax-M3.1-Flash was unavailable.'
+note='Answered by the Fallback model (deepseek/deepseek-v4.1-flash) because MiniMax-M3.1-Flash-Preview was unavailable.'
 printf '{"note":"%s"}\n{"x":1}\n{"note":"%s"}\n' "$note" "$note" >"$sess/transcript.jsonl"
 route="$tmp/i1-route.json"
 printf '%s\n' '{"route":"primary","status":"200","error_type":""}' >"$route"
