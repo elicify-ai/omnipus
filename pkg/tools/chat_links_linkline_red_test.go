@@ -220,3 +220,12 @@ func TestSendFile_ChannelNoLink(t *testing.T) {
 		}
 	})
 }
+
+func TestSendFile_DescriptionNamesTheLink(t *testing.T) {
+	// FR-023 / BS-7.2. The spec does not quote the added sentence. It is
+	// present only when the description names the omnipus:// link.
+	tool := NewSendFileTool(t.TempDir(), true, 0, nil)
+	if !strings.Contains(tool.Description(), "omnipus://") {
+		t.Errorf("send_file description = %q, want it to name omnipus:// (FR-023 / BS-7.2)", tool.Description())
+	}
+}
