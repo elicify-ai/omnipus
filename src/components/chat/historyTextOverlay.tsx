@@ -15,6 +15,7 @@ import type { MessagePart, MessageTextPart, MessageToolPart } from '@/lib/messag
 import { humanByteSize } from '@/lib/historyPreview'
 import { useHistoryEntryRead, useHistoryEntryReads } from '@/lib/historyEntryReads'
 import { useChatStore, type ChatMessage, type PositionedToolCall } from '@/store/chat'
+import type { HistoryDisplayPart } from '@/store/chat/types'
 import { deriveAnchor, joinParts, locateAnchor, partAnchor, partTexts } from '@/store/chat/history-parts'
 import { HistoryEntryReadOutcome } from './historyEntryOutcome'
 
@@ -80,8 +81,66 @@ function buildDisplayParts(message: ChatMessage, calls: readonly PositionedToolC
   return splitDisplayParts(content, calls, spans.length && full[0] === undefined ? [{ offset: content.length, part: more(spans[0]) }] : [])
 }
 
-/** The parts a saved or live message renders: its text slices, tool calls and "Show the rest" controls. */
-export function useHistoryDisplayParts(message: ChatMessage, calls: readonly PositionedToolCall[], sessionId: string): DisplayPart[] {
+/** One rendered source part of a row (S11 reading position): its position marker and its display parts. */
+export interface DisplayPartGroup { // not-wire-format: render-layer grouping of one source part
+  key: string
+  position?: string
+  parts: DisplayPart[]
+}
+
+/** The part a call is drawn in, and its offset inside that part's shown text (S10 derivation). */
+function callPlacement(call: PositionedToolCall, parts: readonly HistoryDisplayPart[], stored: readonly string[]): { index: number; relative?: number } {
+  let index = parts.findIndex(part => part.callIds?.includes(call.id) || part.anchors?.[call.id] !== undefined)
+  let relative = index === -1 ? undefined : parts[index].anchors?.[call.id]
+  if (call.textOffset !== undefined && (index === -1 || relative === undefined)) {
+    const located = locateAnchor(call.textOffset, parts, stored)
+    if (index === -1 || located.index === index) ({ index, relative } = located)
+  }
+  if (index === -1) return { index: parts.length - 1 }
+  return { index, relative: stored[index] === '' ? 0 : relative }
+}
+
+/**
+ * #1452 S11 "Reading position": a row's display parts grouped by source part,
+ * each group carrying its source position as the `data-history-part` marker,
+ * so the viewport can hold the reader's point inside a growing row. A row
+ * without a part list is one group for its own source.
+ */
+function groupDisplayParts(message: ChatMessage, calls: readonly PositionedToolCall[], stored: readonly string[] | undefined, spans: readonly ShortenedSpan[], full: readonly (string | undefined)[]): DisplayPartGroup[] {
+  const parts = message.historyParts
+  if (!parts || !stored) return [{ key: message.id, position: message.historyPosition, parts: buildDisplayParts(message, calls, stored, spans, full) }]
+  const shown = stored.map((text, index) => full[spans.findIndex(span => span.index === index)] ?? text)
+  const byPart = parts.map(() => [] as PositionedToolCall[])
+  for (const call of calls) {
+    const { index, relative } = callPlacement(call, parts, stored)
+    const { textOffset: _offset, ...rest } = call
+    void _offset
+    byPart[index].push(relative === undefined ? rest : { ...rest, textOffset: Math.min(relative, shown[index].length) })
+  }
+  // A text part appended with no joiner continues the text before it (a plain
+  // token append, one paragraph live), so it is drawn in that part's block.
+  const blocks: { key: string; position?: string; text: string; calls: PositionedToolCall[]; marks: { offset: number; part: MessageMorePart }[] }[] = []
+  const seen = new Set<string>()
+  parts.forEach((part, index) => {
+    const prior = blocks.at(-1)
+    const continues = !!prior && index > 0 && part.joiner === '' && shown[index] !== '' && shown[index - 1] !== '' && !byPart[index - 1].length
+    const offset = continues ? prior!.text.length : 0
+    const block = continues ? prior! : { key: part.sourceId, position: part.position, text: '', calls: [], marks: [] }
+    if (!continues) {
+      while (seen.has(block.key)) block.key += '#'
+      seen.add(block.key)
+      blocks.push(block)
+    }
+    block.text += shown[index]
+    block.calls.push(...byPart[index].map(call => call.textOffset === undefined ? call : { ...call, textOffset: call.textOffset + offset }))
+    const at = spans.findIndex(span => span.index === index)
+    if (at !== -1 && full[at] === undefined) block.marks.push({ offset: block.text.length, part: { type: 'more', position: spans[at].position, originalSizeBytes: spans[at].size } })
+  })
+  return blocks.map(block => ({ key: block.key, position: block.position, parts: splitDisplayParts(block.text, block.calls, block.marks) }))
+}
+
+/** The shown state of a message's shortened spans: stored part texts, spans and fetched full texts. */
+function useHistoryOverlay(message: ChatMessage, sessionId: string) {
   const stored = useMemo(() => message.historyParts ? partTexts(message) : undefined, [message])
   const spans = useMemo(() => shortenedSpans(message, stored), [message, stored])
   const expandedKey = useChatStore(state => spans.map(span => state.sessionsById[sessionId]?.historyExpandedText?.[span.position] ? '1' : '0').join(''))
@@ -92,8 +151,20 @@ export function useHistoryDisplayParts(message: ChatMessage, calls: readonly Pos
   })
   // Value key over the shown full texts: an equal-length corrected suffix is a different key.
   const fullKey = full.map(text => text === undefined ? '\u0002' : text).join('\u0001')
+  return { stored, spans, full, fullKey }
+}
+
+/** The parts a saved or live message renders: its text slices, tool calls and "Show the rest" controls. */
+export function useHistoryDisplayParts(message: ChatMessage, calls: readonly PositionedToolCall[], sessionId: string): DisplayPart[] {
+  const { stored, spans, full, fullKey } = useHistoryOverlay(message, sessionId)
   // `full` is captured by its value key (fullKey) rather than by array identity.
   return useMemo(() => buildDisplayParts(message, calls, stored, spans, full), [message, calls, stored, spans, fullKey])
+}
+
+/** The same display parts grouped per source part, each with its position marker (S11 B98). */
+export function useHistoryPartGroups(message: ChatMessage, calls: readonly PositionedToolCall[], sessionId: string): DisplayPartGroup[] {
+  const { stored, spans, full, fullKey } = useHistoryOverlay(message, sessionId)
+  return useMemo(() => groupDisplayParts(message, calls, stored, spans, full), [message, calls, stored, spans, fullKey])
 }
 
 const NO_CALLS: readonly PositionedToolCall[] = []

@@ -33,7 +33,16 @@ export function historyLayoutHeight(element: HTMLElement): number {
 }
 type FillDirection = 'older' | 'newer'
 type FillOwner = { frame: number | null; finishLayout: (() => void) | null } // not-wire-format
-type Anchor = { position: string; offset: number; alternatives: { position: string; screenTop: number }[] } // not-wire-format
+type Anchor = { position: string; offset: number; part?: { position: string; offset: number }; alternatives: { position: string; screenTop: number }[] } // not-wire-format
+
+/** A row's drawn source parts (#1452 S11 reading position): the `data-history-part` markers that name a position. */
+function partMarkers(root: ParentNode): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>('[data-history-part]')].filter(part => !!part.dataset.historyPart)
+}
+/** The drawn marker of one source position, if mounted. */
+function partMarker(root: ParentNode, position: string): HTMLElement | undefined {
+  return root.querySelector<HTMLElement>(`[data-history-part="${position.replace(/["\\]/g, '\\$&')}"]`) ?? undefined
+}
 
 /**
  * A discarded history read must never become an unhandled rejection. The
@@ -117,22 +126,45 @@ function captureAnchor(scroller: HTMLElement, rows: HTMLElement[], offset: (elem
   // Only a row actually inside the viewport can anchor the reader. Right
   // after a jump the virtualizer may still show rows far below it.
   const visible = mounted.filter(row => row.getBoundingClientRect().bottom > top && row.getBoundingClientRect().top < top + scroller.clientHeight)
-  const first = visible[0]
+  const within = (element: Element, band: number) => element.getBoundingClientRect().bottom > top && element.getBoundingClientRect().top < top + band
+  // S11: a re-anchor after our own correction keeps the held source part
+  // while it is still in view, instead of whatever row a not yet re-laid-out
+  // list shows first.
+  const heldPart = refs.anchor.current?.part ? partMarker(scroller, refs.anchor.current.part.position) : undefined
+  const kept = heldPart && within(heldPart, scroller.clientHeight) ? heldPart : undefined
+  const keptRow = kept?.closest<HTMLElement>('[data-history-anchor]') ?? undefined
+  const first = keptRow ?? visible[0]
   if (!first) return
   const alternatives = [...visible, ...mounted.filter(row => row.getBoundingClientRect().bottom <= top).reverse()]
   refs.settledTop.current = scroller.scrollTop
-  refs.anchor.current = { position: first.dataset.historyAnchor!, offset: offset(first), alternatives: alternatives.map(row => ({ position: row.dataset.historyAnchor!, screenTop: row.getBoundingClientRect().top - top })) }
-  const protectedPositions = new Set(visible.filter(row => row.dataset.historyPosition && row.getBoundingClientRect().top < top + 2 * scroller.clientHeight).map(row => row.dataset.historyPosition!))
-  const focused = document.activeElement?.closest<HTMLElement>('[data-history-position]')
+  // Inside a row that combines several sources, the reader's point is the
+  // topmost visible source part, not the row's own (first) position.
+  const part = kept ?? partMarkers(first).find(item => within(item, scroller.clientHeight))
+  refs.anchor.current = { position: first.dataset.historyAnchor!, offset: offset(first), ...(part ? { part: { position: part.dataset.historyPart!, offset: offset(part) } } : {}),
+    alternatives: alternatives.map(row => ({ position: row.dataset.historyAnchor!, screenTop: row.getBoundingClientRect().top - top })) }
+  const protectedPositions = new Set(visible.filter(row => row.getBoundingClientRect().top < top + 2 * scroller.clientHeight).flatMap(row => {
+    const parts = partMarkers(row)
+    if (parts.length) return parts.filter(item => within(item, 2 * scroller.clientHeight)).map(item => item.dataset.historyPart!)
+    return row.dataset.historyPosition ? [row.dataset.historyPosition] : []
+  }))
+  const focusedPart = document.activeElement?.closest<HTMLElement>('[data-history-part]')
+  const focused = focusedPart?.dataset.historyPart ? undefined : document.activeElement?.closest<HTMLElement>('[data-history-position]')
+  if (focusedPart?.dataset.historyPart) protectedPositions.add(focusedPart.dataset.historyPart)
   if (focused?.dataset.historyPosition) protectedPositions.add(focused.dataset.historyPosition)
   if (sid) protectHistoryPositions(sid, protectedPositions)
   refs.priorFocus.current = scroller.contains(document.activeElement) ? document.activeElement : null
 }
 
+// A correction's own scroll can synchronously re-render the list, whose
+// layout pass would correct again from the not-yet-advanced anchor and apply
+// the same delta twice. The outer correction settles it instead.
+const correcting = new WeakSet<HTMLElement>()
+
 /** Signed compensation: put the held anchor back where the reader saw it. */
 function correctAnchor(scroller: HTMLElement, rows: () => HTMLElement[], offset: (element: Element) => number, refs: AnchorRefs,
-  anchorOffset: ((position: string) => number | undefined) | undefined, capture: () => void): void {
+  anchorOffset: ((position: string) => number | undefined) | undefined, capture: () => void, partRow?: (position: string) => string | undefined): void {
   const held = refs.anchor.current
+  if (correcting.has(scroller)) return
   // A genuine reader move dropped the old anchor; adopt the first row that
   // is now really visible as soon as the virtualizer has drawn one.
   if (!held) { capture(); return }
@@ -144,16 +176,24 @@ function correctAnchor(scroller: HTMLElement, rows: () => HTMLElement[], offset:
     const moved = scroller.scrollTop - refs.settledTop.current
     if (moved < 0 && scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight - 1) held.offset += moved
   }
-  refs.settledTop.current = scroller.scrollTop
+  const observedTop = scroller.scrollTop
   const mounted = rows()
   let row = mounted.find(item => item.dataset.historyAnchor === held.position)
   let delta = 0
   let estimatedOnly = false
-  if (row) delta = offset(row) - held.offset
+  // S11: a held source part is found wherever it is drawn now, also after a
+  // fold re-keyed or re-slotted the row around it.
+  const part = held.part ? partMarker(scroller, held.part.position) : undefined
+  if (part) { delta = offset(part) - held.part!.offset; row = part.closest<HTMLElement>('[data-history-anchor]') ?? row; if (row) held.position = row.dataset.historyAnchor!; held.offset = row ? offset(row) - delta : held.offset }
+  else if (row) delta = offset(row) - held.offset
   else {
     // A prepend can move the retained anchor outside the mounted range before
     // this layout effect. Use the real virtualizer's current measured/estimated
     // item offset, not total scrollHeight or a guessed source rank.
+    // A held source part outside the mounted range is estimated from the row
+    // that draws it now plus its captured offset inside that row.
+    const owner = held.part ? partRow?.(held.part.position) : undefined
+    if (owner !== undefined) held.position = owner
     const estimated = anchorOffset?.(held.position)
     if (estimated !== undefined && Number.isFinite(estimated)) { delta = estimated - held.offset; estimatedOnly = true }
     else {
@@ -162,22 +202,34 @@ function correctAnchor(scroller: HTMLElement, rows: () => HTMLElement[], offset:
       if (row && fallback) delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - fallback.screenTop
     }
   }
+  // Only a position the held anchor was actually measured at is accounted
+  // for; an estimate-only pass that applies nothing must not claim a reader's
+  // own scroll as ours (its scroll event then re-anchors the reader).
+  if (!estimatedOnly || delta !== 0) refs.settledTop.current = observedTop
   const exact = row !== undefined && row.dataset.historyAnchor === held.position
   let residual = delta
   if (Number.isFinite(delta) && delta !== 0) {
     refs.compensating.current = true
     const before = scroller.scrollTop
     const top = before + delta
-    if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: 'instant' })
-    else scroller.scrollTop = top
+    correcting.add(scroller)
+    try {
+      if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: 'instant' })
+      else scroller.scrollTop = top
+    } finally { correcting.delete(scroller) }
     // Consume only what the browser actually applied, so the next layout
     // pass neither applies this delta twice nor forgets the part a scroll
     // edge clamp or device-pixel snapping held back.
     const applied = scroller.scrollTop - before
     held.offset += applied
+    if (held.part) held.part.offset += applied
     residual = delta - applied
     refs.settledTop.current = scroller.scrollTop
     queueMicrotask(() => { refs.compensating.current = false })
+    // The scroll can re-lay out the list synchronously (a virtual range
+    // re-render with new estimates above). A held part that is not where it
+    // belongs yet is corrected by the next layout pass, never re-anchored here.
+    if (part?.isConnected && held.part) residual = offset(part) - held.part.offset
   }
   if (refs.priorFocus.current && !refs.priorFocus.current.isConnected) scroller.focus({ preventScroll: true })
   // Re-anchor only once the held row sits where it belongs. Re-capturing the
@@ -361,7 +413,10 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const correct = useCallback(() => {
     const scroller = scrollRef.current
     if (!scroller || current.current.history.viewMode !== 'historical') return
-    correctAnchor(scroller, rows, offset, anchorRefs, current.current.anchorOffset, capture)
+    correctAnchor(scroller, rows, offset, anchorRefs, current.current.anchorOffset, capture, position => {
+      const row = current.current.messages.find(message => message.historyPosition === position || message.historyParts?.some(part => part.position === position))
+      return row ? row.historyPosition ?? `live:${row.id}` : undefined
+    })
   }, [anchorRefs, capture, offset, rows, scrollRef])
   const measure = useCallback(() => {
     const scroller = scrollRef.current

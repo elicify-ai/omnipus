@@ -10,6 +10,7 @@ import type { HistorySpanFrame } from '@/lib/api/sessions'
 import { fallbackPairKey } from './slices/provider-frames'
 import { compatibleSource, currentCallOffsets, joinParts, localHistoryKey, partTexts, recordPartAnchors, rowSourceIds, singlePart, stampPartAnchors } from './history-parts'
 import { reportDuplicateMessageId } from './messages'
+import { boundDisplaySlots, foldTurnSegments, rekeyBucketIndexes, rekeyToolOwners } from './history-fold'
 
 /** Expected contradiction in a page's relation to the current reader. */
 export class HistoryPageProtocolError extends Error {}
@@ -322,7 +323,8 @@ function bindToRow(row: ChatMessage, entry: SessionHistoryEntry, original: ChatM
   // Undefined baseline: the current row wins; the row itself as baseline: the saved record wins.
   const merged = inPartOrder(mergeHistoryEntry({ ...entry, id: row.id }, row, liveWins ? undefined : row), row, entry)
   return stampPartAnchors({ ...merged, content: joined.content, historyParts: joined.historyParts, mergedReplayIds: row.mergedReplayIds,
-    historyPosition: entry.historyPosition, contentOriginalSizeBytes: undefined }, joined.historyParts, shown)
+    historyPosition: entry.historyPosition, contentOriginalSizeBytes: undefined,
+    ...(row.historyRenderKey ? { historyRenderKey: row.historyRenderKey } : {}) }, joined.historyParts, shown)
 }
 
 /** A combined row keeps its earlier parts' tool calls first; a later part's calls follow (source order). */
@@ -392,10 +394,8 @@ export function bindHistoryEntries(bucket: SessionChatState, entries: readonly S
   return rows.map(row => row.historyParts ? { ...work.get(row.id)!, historyPosition: row.historyPosition } : row)
 }
 
-/** S8: a row bound at several positions takes its display slot at its last one. */
-export function lastBoundOccurrence(rows: ChatMessage[]): ChatMessage[] {
-  return rows.filter((row, index) => !row.historyParts || !rows.slice(index + 1).some(later => later.id === row.id))
-}
+/** S8 as changed by S11: a row with parts takes its slot at its first bound position (history-fold.ts). */
+export const lastBoundOccurrence = boundDisplaySlots
 
 export function applyHistoryPageToBucket(bucket: SessionChatState, page: SessionHistoryPage, action: HistoryActionKind, baseline: Record<string, ChatMessage> = bucket.messagesById, readTick?: number): Partial<SessionChatState> {
   const history = bucket.history
@@ -429,32 +429,39 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
     if (removed.some(position => protectedSet?.has(position))) throw new HistoryPageDeferredError()
     positions = action === 'older' ? positions.slice(0, 500) : positions.slice(-500)
   }
-  const rows = positions.map(position => byPosition.get(position)!)
+  // #1452 S11: every turn segment of the retained interval is one row; a
+  // released position leaves only its own part (S11c).
+  const positioned = positions.map(position => byPosition.get(position)!)
+  // S11c J2: on a latest read during an active turn, that turn's live row
+  // joins its saved open segment (it trails the interval, unbound).
+  const liveTurn = action === 'latest' ? bucket.activeTurnId : undefined
+  const liveRows = liveTurn ? retainedPending(bucket).filter(row => row.role === 'assistant' && !row.historyPosition && row.turnId === liveTurn && !positioned.some(item => item.id === row.id)) : []
+  const fold = foldTurnSegments([...positioned, ...liveRows], bucket)
+  const rows = fold.rows.filter(row => row.historyPosition)
+  const folded = rekeyBucketIndexes(bucket, fold, rows)
   const rowIds = new Set(rows.map(row => row.id))
   // Canonical duplicate IDs select their last occurrence while source positions
-  // remain distinct; no lexicographic cursor order is inferred.
-  const finalRows = rows.filter((row, index) => !rows.slice(index + 1).some(later => later.id === row.id))
-  const hiddenIds = action === 'latest' ? [] : (bucket.historyLiveOrder ?? [])
+  // remain distinct (S8: a row with parts takes its first); no lexicographic
+  // cursor order is inferred.
+  const finalRows = boundDisplaySlots(rows)
+  const hiddenIds = action === 'latest' ? [] : (folded.historyLiveOrder ?? [])
   const confirmedClients = new Set(finalRows.flatMap(row => row.clientMessageId ? [row.clientMessageId] : []))
   for (const pending of retainedPending(bucket)) {
-    if (!hiddenIds.includes(pending.id) && !rowIds.has(pending.id) && !confirmedClients.has(pending.clientMessageId ?? pending.id)) finalRows.push(pending)
+    if (!hiddenIds.includes(pending.id) && !rowIds.has(pending.id) && !fold.rekeys.has(pending.id) && !confirmedClients.has(pending.clientMessageId ?? pending.id)) finalRows.push(pending)
   }
   if (action === 'latest') {
     for (const current of Object.values(bucket.messagesById)) {
-      if (!current.historyPosition && !baseline[current.id] && !finalRows.some(row => row.id === current.id)) finalRows.push(current)
+      if (!current.historyPosition && !baseline[current.id] && !fold.rekeys.has(current.id) && !finalRows.some(row => row.id === current.id)) finalRows.push(current)
     }
   }
-  const toolOwners = savedToolCallOwners(page.entries, incoming)
+  const toolOwners = rekeyToolOwners(savedToolCallOwners(page.entries, incoming), fold)
   const hidden = applySavedToolOwnership(hiddenIds.flatMap(id => bucket.messagesById[id] ? [bucket.messagesById[id]] : []), toolOwners)
   rememberHistoryReadFacts(page.session_id, incoming, [page.page_info.context], readTick)
   const spans = settleHistorySpans(page.session_id, applySavedToolOwnership(finalRows, toolOwners), hidden, bucket.pendingSpanUpdatesBySpanId)
-  const patch = { ...historyRowsPatch(bucket, [...spans.rows, ...hidden], positions), messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: hiddenIds }
+  const patch = { ...historyRowsPatch(folded, [...spans.rows, ...hidden], positions), messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: hiddenIds }
   patch.toolCallOwnerMessageId = savedToolOwnerPatch(patch.toolCallOwnerMessageId, toolOwners, patch.messagesById)
   patch.spanBySpanId = { ...patch.spanBySpanId, ...spans.index }
-  patch.historySourceAliases = Object.fromEntries(positions.flatMap(position => {
-    const row = byPosition.get(position)
-    return row && patch.messagesById?.[row.id] ? [[position, row.id]] : []
-  }))
+  patch.historySourceAliases = Object.fromEntries(rows.flatMap(row => row.historyPosition && patch.messagesById?.[row.id] ? [[row.historyPosition, row.id]] : []))
   const hasEarlier = action === 'older' || action === 'latest' ? page.has_earlier : (trimmed || history.hasEarlier === true)
   const hasLater = action === 'newer' || action === 'latest' ? page.has_later : (trimmed || history.hasLater === true)
   // PF=A / seams Q4: a REST-loaded fallback note seeds the existing D17

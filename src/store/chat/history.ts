@@ -9,6 +9,7 @@ import { mergeRecordedSessionTokens } from './session-usage'
 import { isPendingTailMessage } from './cursor'
 import { emptyHistoryState, historyRowsPatch, retainedPending } from './history-state'
 import { applySavedToolOwnership, savedToolCallOwners, savedToolOwnerPatch, applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, rememberHistoryReadFacts, settleHistorySpans, beginHistoryReadTick, bindHistoryEntries, lastBoundOccurrence } from './history-merge'
+import { foldTurnSegments, rekeyBucketIndexes, rekeyToolOwners } from './history-fold'
 export { emptyHistoryState } from './history-state'
 export type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing, SessionHistoryState, SessionHistoryRange, HistoryRequestState } from './types'
 
@@ -121,17 +122,21 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
     advanceHistoryEntryGenerations(sid, ordered)
   }
   function commitRefresh(sid: string, ordered: string[], staged: SessionHistoryPage['entries'], contexts: SessionHistoryPage['page_info']['context'][], recordedTokens: number | undefined, owner: ReadOwner, oldLength: number): void {
-    withBucket(sid, b => {
+    withBucket(sid, original => {
       // #1452 D1 S6: the same part-aware binding as a page commit, so a
-      // combined live row is neither split nor doubled by the refresh.
-      const positioned = bindHistoryEntries(b, staged, owner.baseline)
+      // combined live row is neither split nor doubled by the refresh; S11
+      // folds each turn segment and releases an expired part on its own.
+      const bound = bindHistoryEntries(original, staged, owner.baseline)
+      const fold = foldTurnSegments(bound, original)
+      const positioned = fold.rows
+      const b = rekeyBucketIndexes(original, fold, positioned)
       const rows = lastBoundOccurrence(positioned)
       const rowIds = new Set(rows.map(row => row.id))
       const confirmed = new Set(rows.flatMap(row => row.clientMessageId ? [row.clientMessageId] : []))
       const needed = retainedPending(b).filter(row => !rowIds.has(row.id) && !confirmed.has(row.clientMessageId ?? row.id))
       const pending = needed.filter(isPendingTailMessage)
       const liveOrder = [...new Set([...(b.historyLiveOrder ?? []), ...needed.map(row => row.id)])].filter(id => !rowIds.has(id) && !confirmed.has(b.messagesById[id]?.clientMessageId ?? id)).slice(-100)
-      const toolOwners = savedToolCallOwners(staged, positioned)
+      const toolOwners = rekeyToolOwners(savedToolCallOwners(staged, bound), fold)
       const live = applySavedToolOwnership(liveOrder.flatMap(id => b.messagesById[id] ? [b.messagesById[id]] : []), toolOwners)
       // Refreshed saved rows re-settle their spans exactly as a page commit
       // does, or a reconstructed helper row would lose its span (I3).

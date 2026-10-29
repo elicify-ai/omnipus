@@ -809,6 +809,8 @@ function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
     // cancellation entries only) — lets a later turn_canceled
     // replay entry find this exact message.
     ...(replayTurnId && role === 'assistant' ? { turnId: replayTurnId } : {}),
+    // #1452 S11a: a terminal outcome ends its turn segment in paged history.
+    ...(fields.replayTerminalOutcome && role === 'assistant' ? { historyBoundary: 'terminal_outcome' as const } : {}),
     // ADR-087 D2 — only meaningful on assistant messages (the
     // backend only ever stamps this on the last assistant
     // transcript entry of an incomplete turn). D4a: an entry

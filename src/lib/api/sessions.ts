@@ -266,6 +266,12 @@ interface MessageBase { // not-wire-format
   model?: string
   /** Generated classifications whose thread visibility is gated by Verbose chat. */
   type?: Extract<WireMessage['type'], 'judge_verdict' | 'context_window_notice' | 'provider_fallback'>
+  /**
+   * #1452 S11a: a saved source that ends a turn segment although it may look
+   * like ordinary text (a recorded `terminal_outcome` sentence or a
+   * `turn_canceled` entry). Client-local classification, never sent.
+   */
+  historyBoundary?: 'turn_canceled' | 'terminal_outcome'
   /** See ProviderFallbackNoteMarker. Set on live, replayed and REST-loaded fallback notes. */
   providerFallbackNote?: ProviderFallbackNoteMarker
   /** The verdict payload when `type === 'judge_verdict'` (wire `Message.verdict`, same shape as the live `JudgeVerdictFrame` push minus the `type`/`session_id` discriminator fields). */
@@ -509,6 +515,8 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
   /** PF=A: recorded facts of a `type: provider_fallback` note (generated Message fields). */
   unavailable_model?: WireMessage['unavailable_model']
   unavailable_code?: WireMessage['unavailable_code']
+  /** #1452 S11a: a turn's distinct terminal outcome sentence (generated Message field). */
+  terminal_outcome?: WireMessage['terminal_outcome']
   role?: 'user' | 'assistant' | 'system'
   content?: string
   /** #1452 D2: present only when `content` is a display preview (generated Message field). */
@@ -703,6 +711,10 @@ function rawToMessage(raw: RawMessage): Message {
   }
   const role = raw.role ?? 'assistant'
   const baseStatus = raw.status === 'ok' ? ('done' as const) : raw.status
+  // #1452 S11a: a cancellation entry or a turn's terminal outcome ends the
+  // turn segment; nothing else in the normalized row says so.
+  const boundary = raw.type === 'turn_canceled' ? { historyBoundary: 'turn_canceled' as const }
+    : raw.terminal_outcome === true ? { historyBoundary: 'terminal_outcome' as const } : {}
   // #3: construct the correct discriminated variant based on role.
   // Tool calls only appear on assistant messages per the wire schema, so the
   // cast here is correct and the compiler accepts it once role is narrowed.
@@ -738,6 +750,7 @@ function rawToMessage(raw: RawMessage): Message {
       ...(raw.participant ? { participant: raw.participant } : {}),
       ...(raw.room_ref ? { roomRef: raw.room_ref } : {}),
       ...(raw.content_original_size_bytes !== undefined ? { contentOriginalSizeBytes: raw.content_original_size_bytes } : {}),
+      ...boundary,
     } satisfies UserMessage
   }
   if (role === 'system') {
@@ -771,6 +784,7 @@ function rawToMessage(raw: RawMessage): Message {
       // the fallback for scope=plan (no session_id) and for a cold-only
       // load with no live WS connection.
       ...(raw.type === 'judge_verdict' && raw.verdict ? { type: 'judge_verdict' as const, verdict: raw.verdict } : {}),
+      ...boundary,
     } satisfies SystemMessage
   }
   // role === 'assistant' (default)
@@ -812,6 +826,7 @@ function rawToMessage(raw: RawMessage): Message {
     ...(raw.reply_to_message_id ? { replyToMessageId: raw.reply_to_message_id } : {}),
     ...(raw.reply_to_participant ? { replyToParticipant: raw.reply_to_participant } : {}),
     ...(raw.room_ref ? { roomRef: raw.room_ref } : {}),
+    ...boundary,
   } satisfies AssistantMessage
 }
 

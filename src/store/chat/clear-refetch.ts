@@ -318,9 +318,18 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: SessionHis
         op.heldProjection = fresh
         return {}
       }
-      const merged = mergeServerProjection(b, fresh.entries, op)
       abortHistoryReads(sid)
       const patch = applyHistoryPageToBucket(b, fresh, 'latest')
+      // #1452 S11c: the projection's display rows are its folded segment rows.
+      const seen = new Set<string>()
+      const display = fresh.entries.flatMap(entry => {
+        const owner = patch.historySourceAliases?.[entry.historyPosition]
+        const row = owner && owner !== entry.id && patch.messagesById?.[owner] ? patch.messagesById[owner] : patch.messagesById?.[entry.id]?.historyParts ? patch.messagesById[entry.id] : entry
+        if (seen.has(row.id)) return []
+        seen.add(row.id)
+        return [row]
+      })
+      const merged = mergeServerProjection(b, display, op)
       committed = true
       return { ...patch, messagesById: merged.messagesById, messageOrder: merged.messageOrder,
         history: { ...patch.history!, viewGeneration: b.history.viewGeneration + 1, openedClearPositions: [] } }

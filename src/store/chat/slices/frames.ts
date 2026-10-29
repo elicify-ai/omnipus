@@ -536,6 +536,24 @@ function rekeyAssistantPlaceholder(draft: SessionChatState, localId: string, mes
   }
 }
 
+/**
+ * #1452 S11b re-key contract, live half: a saved row adopted by its turn's
+ * first text moves to the token's id in this same update, with every index
+ * that names it (tool and span owners, bound history positions, the hidden
+ * live order). Part source ids and positions never change.
+ */
+function rekeyHistoryRow(draft: SessionChatState, fromId: string, toId: string): void {
+  rekeyAssistantPlaceholder(draft, fromId, toId, true)
+  for (const [position, owner] of Object.entries(draft.historySourceAliases ?? {})) if (owner === fromId) draft.historySourceAliases![position] = toId
+  if (draft.historyLiveOrder) draft.historyLiveOrder = draft.historyLiveOrder.map(id => id === fromId ? toId : id)
+}
+
+/** S11b unrecorded seam: a saved row whose last part is a tool-only source after text gets a paragraph break. */
+function savedToolSeam(row: ChatMessage): boolean {
+  const last = row.historyParts?.at(-1)
+  return !!row.content && !!last && last.start === row.content.length && !!last.callIds?.length
+}
+
 function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: TokenFrameType): void {
   const m = draft.messagesById[bubbleId]
   if (frame.replace) {
@@ -571,6 +589,38 @@ function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: T
   m.isStreaming = true
   m.status = 'streaming'
   draft.isStreaming = true
+}
+
+/**
+ * Step 2's join of a token into the open bubble of its turn segment
+ * (extracted from resolveTokenBubbleByMessageId for its size budget): an
+ * empty local placeholder or a text-less saved row adopts the token's id;
+ * otherwise the id becomes a part and prose alias of the bubble.
+ */
+function joinTurnBubble(draft: SessionChatState, turnBubbleId: string, messageId: string, frame: TokenFrameType): void {
+  const m = draft.messagesById[turnBubbleId]
+  if (m.turnId === undefined) m.turnId = frame.turn_id // now that a token has named the turn
+  m.closedBySteer = false
+  // Empty local placeholders adopt the wire key without replacing a real entry.
+  const rekeyable = !m.content && (m.isStreaming || m.status === 'streaming') && !m.mergedReplayIds?.length && !draft.messagesById[messageId]
+  if (rekeyable) {
+    rekeyAssistantPlaceholder(draft, turnBubbleId, messageId, true)
+    applyTokenContentTo(draft, messageId, frame)
+    return
+  }
+  // #1452 S11c/S11b: a saved row with no text adopts the first text's id
+  // (atomic re-key) instead of listing it as a prose alias.
+  if (m.historyPosition && !m.content && !draft.messagesById[messageId]) {
+    recordCombinedPart(m, messageId, '')
+    rekeyHistoryRow(draft, turnBubbleId, messageId)
+    applyTokenContentTo(draft, messageId, frame)
+    return
+  }
+  if (m.historyPosition && !frame.replace && savedToolSeam(m)) m.pendingTextBoundary = true
+  recordCombinedPart(m, messageId, !frame.replace && m.pendingTextBoundary && m.content ? '\n\n' : '') // #1452 D1 S7/S2a: the joiner the append inserts
+  m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
+  draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
+  applyTokenContentTo(draft, turnBubbleId, frame)
 }
 
 function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFrameType): void {
@@ -679,6 +729,10 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       // stopped looking past the last user message), so matching ANY
       // unstamped bubble here is safe — there is at most one.
       const unstamped = m.turnId === undefined
+      // #1452 S11c saved-row adoption: a saved row joins only under S11a in
+      // full, so a saved row of unknown turn (or one that ends its turn
+      // segment) is never adopted; step 3 then mints a new row.
+      if (m.historyPosition && (unstamped || m.historyBoundary)) continue
       if (!unstamped && m.turnId !== turnId) continue
       if (frame.agent_id && m.agentId && m.agentId !== frame.agent_id) continue
       if (m.status === 'interrupted' || m.status === 'error') continue
@@ -693,20 +747,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       break
     }
     if (turnBubbleId) {
-      const m = draft.messagesById[turnBubbleId]
-      if (m.turnId === undefined) m.turnId = turnId // now that a token has named the turn
-      m.closedBySteer = false
-      // Empty local placeholders adopt the wire key without replacing a real entry.
-      const rekeyable = !m.content && (m.isStreaming || m.status === 'streaming') && !m.mergedReplayIds?.length && !draft.messagesById[messageId]
-      if (rekeyable) {
-        rekeyAssistantPlaceholder(draft, turnBubbleId, messageId, true)
-        applyTokenContentTo(draft, messageId, frame)
-        return
-      }
-      recordCombinedPart(m, messageId, !frame.replace && m.pendingTextBoundary && m.content ? '\n\n' : '') // #1452 D1 S7/S2a: the joiner the append inserts
-      m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
-      draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
-      applyTokenContentTo(draft, turnBubbleId, frame)
+      joinTurnBubble(draft, turnBubbleId, messageId, frame)
       return
     }
   }

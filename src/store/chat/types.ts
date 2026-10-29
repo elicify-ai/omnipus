@@ -272,6 +272,12 @@ export type ChatMessage = Message & {
    */
   historyParts?: HistoryDisplayPart[]
   /**
+   * #1452 S11 reading position: the stable client-local render identity of a
+   * row whose display key or slot moved when a turn segment folded into it
+   * (the drawn row it grew from). Never persisted or sent.
+   */
+  historyRenderKey?: string
+  /**
    * #823 catch-up redesign, Opus review round 3 item N1 (BE-DESIGN.md §6.5):
    * set ONCE, directly, by the `catch_up_complete` reducer's own sweep — NOT
    * recomputed reactively from `turnId !== activeTurnId` on every render.
@@ -840,6 +846,11 @@ export interface HistoryDisplayPart { // not-wire-format: client-local display b
   anchors?: Record<string, number>
   /** Ids of the tool calls recorded on this part's saved source (fetching a call's full result addresses this position). */
   callIds?: string[]
+  /**
+   * S11b: the joiner was derived while no text preceded this part, so it is
+   * not yet a recorded seam and is derived again when earlier text arrives.
+   */
+  joinerOpen?: true
 }
 
 /**

@@ -1,5 +1,5 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
-import { elementScroll, useVirtualizer } from '@tanstack/react-virtual'
+import { defaultRangeExtractor, elementScroll, useVirtualizer, type Range } from '@tanstack/react-virtual'
 import { ThreadPrimitive } from '@assistant-ui/react'
 import type { ChatMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
@@ -53,6 +53,34 @@ function isSilentHistoryRecord(msg: ChatMessage, ownerIds: ReadonlySet<string> |
     && SILENT_STATUSES.has(msg.status) && !msg.confirmedUnfinished && getMessageStatusSuffix(msg) === null
     && !msg.content && !extra.summary && !msg.tool_calls?.length && !extra.attachments?.length && !msg.media?.length && !msg.spans?.length
     && !msg.truncated && !extra.truncationReason && !extra.truncation_reason && !msg.providerFallbackNote && !ownerIds?.has(msg.id)
+}
+
+/**
+ * A row's React and virtualizer identity. A row a turn segment folded into
+ * keeps the identity it was drawn under (#1452 S11 reading position), so its
+ * focused content stays the same connected element.
+ */
+function historyRowKey(msg: ChatMessage): string {
+  return msg.historyRenderKey ?? msg.historyPosition ?? msg.id
+}
+
+/** Rows the focused row may lie outside the drawn range and still be kept mounted. */
+const FOCUS_KEEP_DISTANCE = 50
+
+/**
+ * The drawn range, extended (contiguously, as the single translated list
+ * requires) to the row holding focus while a page commit moves rows around
+ * it, so the focused element stays the same connected node (S11/B98, D8).
+ */
+function keepFocusedRow(range: Range, scroller: HTMLElement | null, keys: readonly string[]): number[] {
+  const drawn = defaultRangeExtractor(range)
+  const active = document.activeElement
+  const key = active && scroller?.contains(active) ? active.closest<HTMLElement>('[data-history-row-key]')?.dataset.historyRowKey : undefined
+  const index = key === undefined ? -1 : keys.indexOf(key)
+  if (index === -1 || drawn.includes(index) || !drawn.length) return drawn
+  const from = Math.min(drawn[0], index), to = Math.max(drawn[drawn.length - 1], index)
+  if (to - from >= drawn.length + FOCUS_KEEP_DISTANCE) return drawn
+  return Array.from({ length: to - from + 1 }, (_, i) => from + i)
 }
 
 /** The message ids that own a tool call — the owner half of the store record. */
@@ -150,7 +178,7 @@ function PlainMessageList({ messages, liteMode, agentName, openFailed }: { messa
           }
           const trailing = delegationEventsOutsideRow(delegationEvents, msg)
           return (
-            <div key={msg.historyPosition ?? msg.id} data-history-position={msg.historyPosition} data-history-anchor={msg.historyPosition ?? `live:${msg.id}`}>
+            <div key={historyRowKey(msg)} data-history-position={msg.historyPosition} data-history-anchor={msg.historyPosition ?? `live:${msg.id}`}>
               {row}
               <DelegationEventLineList events={trailing} />
             </div>
@@ -235,7 +263,8 @@ function VirtualizedMessageListInner({
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
   const historicalMessages = useMemo(() => hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages, [hasStreamingMessage, messages])
-  const getItemKey = useCallback((index: number) => historicalMessages[index]?.historyPosition ?? historicalMessages[index]?.id ?? index, [historicalMessages])
+  const rowKeys = useMemo(() => historicalMessages.map(historyRowKey), [historicalMessages])
+  const getItemKey = useCallback((index: number) => rowKeys[index] ?? index, [rowKeys])
 
   const virtualizer = useVirtualizer({
     count: historicalMessages.length,
@@ -247,6 +276,7 @@ function VirtualizedMessageListInner({
       ? 0
       : Math.max(1, drawnHistoryRows(historicalMessages[index], verboseChatEnabled)) * viewport.average,
     getItemKey,
+    rangeExtractor: range => keepFocusedRow(range, scrollContainerRef.current, rowKeys),
     scrollMargin: viewport.prefix,
     overscan: 5,
     // A virtualizer size adjustment is an application-owned placement: it must
@@ -280,7 +310,7 @@ function VirtualizedMessageListInner({
     }
   }, [virtualizer, viewport.average, viewport.widthGeneration, verboseChatEnabled])
   useLayoutEffect(() => {
-    const kept = new Set(historicalMessages.map(message => message.historyPosition ?? message.id))
+    const kept = new Set(historicalMessages.map(historyRowKey))
     for (const key of virtualizer.itemSizeCache.keys()) if (!kept.has(String(key))) virtualizer.itemSizeCache.delete(key)
   }, [virtualizer, historicalMessages])
   const virtualItems = virtualizer.getVirtualItems()
@@ -374,7 +404,7 @@ function VirtualizedMessageListInner({
               return (
                 <div
                   key={virtualRow.key}
-                  data-index={virtualRow.index}
+                  data-index={virtualRow.index} data-history-row-key={String(virtualRow.key)}
                   data-history-position={msg.historyPosition} data-history-anchor={msg.historyPosition ?? `live:${msg.id}`}
                   ref={virtualizer.measureElement}
                 >

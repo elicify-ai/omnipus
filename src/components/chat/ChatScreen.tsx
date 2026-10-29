@@ -60,7 +60,7 @@ import { stampToolCallOffset } from '@/store/chat/session'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
-import { HistoryShowRest, historyCallPosition, useHistoryDisplayParts, useHistoryUserText } from './historyTextOverlay'
+import { HistoryShowRest, historyCallPosition, useHistoryPartGroups, useHistoryUserText, type DisplayPart } from './historyTextOverlay'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
@@ -1138,7 +1138,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
   }, [message.id, message.tool_calls, toolCalls, toolCallOrder, textAtToolCallStart, toolCallOwners, isLastAssistant, pairedReplyToIds])
 
   // Live results must invalidate the split even without a message bake.
-  const messageParts = useHistoryDisplayParts(message, positionedToolCalls, activeSessionId ?? '') // #1452 D2 saved-preview text controls
+  const partGroups = useHistoryPartGroups(message, positionedToolCalls, activeSessionId ?? '') // #1452 D2 saved-preview text controls; S11 per-part markers
   const delegationSplit = splitAnchoredDelegationEvents(delegationEvents, message.id, {
     spans: message.spans,
     toolCalls: positionedToolCalls,
@@ -1282,7 +1282,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
               text-segment boundary — so the finished view now matches what
               was on screen while it was still streaming, instead of
               (incorrectly) rendering the paragraph as one unbroken block. */}
-          {messageParts.map((part, idx) => {
+          {partGroups.map(group => <div key={group.key} data-history-part={group.position}>{group.parts.map((part: DisplayPart, idx) => {
             if (part.type === 'text') {
               return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
             }
@@ -1299,7 +1299,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
               liteMode,
               historyPosition: historyCallPosition(message, callId),
             })}</div>
-          })}
+          })}</div>)}
           {/* Inline indicator — 1b (founder UI feedback 2026-10-11): rendered
               AFTER the parts, pinned at the bottom of the running reply, in
               the position where the next text/tool will appear. While

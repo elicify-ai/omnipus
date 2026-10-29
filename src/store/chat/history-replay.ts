@@ -16,6 +16,7 @@ import { cursorFromTerminalFrame, fenceCursorAcrossBoots, isPendingTailMessage }
 import { findFirstSendMessage } from './first-send'
 import { abortHistoryReads, registerHistoryRelease } from './history'
 import { applyHistoryPageToBucket, bindHistoryEntries, HistoryPageProtocolError, releaseHistorySpanFacts } from './history-merge'
+import { foldTurnSegments } from './history-fold'
 import { compatibleSource, currentCallOffsets, joinParts, partAnchor, partTexts, recordPartAnchors, stampPartAnchors } from './history-parts'
 import { ApiSchemaError, _recordApiSchemaError } from '@/lib/api/http'
 import { isMalformedHistoryPreview } from '@/lib/historyPreview'
@@ -24,7 +25,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
 import { SessionHistoryResponse as PageSchema } from '@/lib/api/generated/schemas'
 
-type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage>; cancellations: Set<string>; priorBootId: string | undefined; malformed: Set<string> } // not-wire-format: transient projection ownership
+type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage>; cancellations: Set<string>; priorBootId: string | undefined; malformed: Set<string>; turns?: Map<string, string> } // not-wire-format: transient projection ownership
 
 /** Local classification only; never carries source data or exception details. */
 class SnapshotProtocolError extends Error {
@@ -37,7 +38,7 @@ class SnapshotProtocolError extends Error {
  * (pkg/session/chat_history_reduce.go): one row per tool call plus one
  * narration row when it has text or no tools at all -- a content-less turn
  * start still counts -- and none for a cancellation marker. */
-function sourceProjection(groups: Stage['groups'], cancellations: ReadonlySet<string> = new Set()) {
+function sourceProjection(groups: Stage['groups'], cancellations: ReadonlySet<string> = new Set(), turns: ReadonlyMap<string, string> = new Map()) {
   const positions = [...groups.keys()]
   const entries: SessionHistoryEntry[] = []
   let rowCount = 0
@@ -45,7 +46,11 @@ function sourceProjection(groups: Stage['groups'], cancellations: ReadonlySet<st
     for (const row of getMessages(group)) {
       const tools = new Map<string, PositionedToolCall>(row.tool_calls?.map(call => [call.id, call]) ?? [])
       for (const call of Object.values(group.toolCalls)) tools.set(call.id, { ...call, textOffset: group.textAtToolCallStart[call.id]?.length })
-      entries.push({ ...row, historyPosition: position, ...(tools.size ? { tool_calls: [...tools.values()] } : {}) } as SessionHistoryEntry)
+      // #1452 S11d: the source's own recorded turn (history_origin.turn_id);
+      // a cancellation source ends its turn segment (S11a).
+      const turnId = row.role === 'assistant' ? turns.get(position) ?? row.turnId : row.turnId
+      entries.push({ ...row, historyPosition: position, ...(tools.size ? { tool_calls: [...tools.values()] } : {}),
+        ...(turnId ? { turnId } : {}), ...(cancellations.has(position) ? { historyBoundary: 'turn_canceled' as const } : {}) } as SessionHistoryEntry)
       if (!cancellations.has(position)) rowCount += Number(!!row.content || tools.size === 0) + tools.size
     }
   }
@@ -228,6 +233,25 @@ function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryP
   }
 }
 
+/**
+ * #1452 S11c: the 100-group tail cache holds folded segment rows. A new
+ * delivery binds onto the rows the cache already folded, so a source that
+ * left the cache releases only its own part (and its calls) from that row.
+ */
+function restoreTailCache(bucket: SessionChatState, delivered: SessionHistoryEntry[], capacity: number): SessionHistoryEntry[] {
+  if (!capacity) return []
+  const entries = delivered.slice(-capacity)
+  const cached = { ...Object.fromEntries(bucket.history.tailEntries.map(row => [row.id, row as ChatMessage])), ...bucket.messagesById }
+  const view = { ...bucket, messagesById: cached, historySourceAliases: Object.fromEntries(bucket.history.tailEntries.map(row => [row.historyPosition, row.id])) }
+  return foldTurnSegments(bindHistoryEntries(view, entries, cached), view).rows as SessionHistoryEntry[]
+}
+
+/** A source's cancellation marker and its own recorded turn (#1452 S11d: history_origin.turn_id). */
+function noteSourceOrigin(stage: Stage, frame: ServerFrame, position: string, turnId: string | undefined): void {
+  if (frame.type === 'replay_message' && frame.role === 'turn_canceled') stage.cancellations.add(position)
+  if (turnId) (stage.turns ??= new Map()).set(position, turnId)
+}
+
 /** A persisted span fact is its own silent source row. Reducing it alone in
  * its isolated group could never meet the span's start (another position,
  * possibly another page); the page commit settles it onto the start row
@@ -336,7 +360,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     if (!origin) return
     let position: string
     try { position = historyPosition(origin.position, 'WS history', ['history_origin', 'position']) } catch { stage.invalid = true; return }
-    if (frame.type === 'replay_message' && frame.role === 'turn_canceled') stage.cancellations.add(position)
+    noteSourceOrigin(stage, frame, position, origin.turn_id)
     if (stage.malformed.has(position)) return
     const previous = stage.groups.get(position) ?? { ...emptySessionState(), isReplaying: true, awaitingCatchUp: true }
     if (stageMalformedResult(stage, frame, origin.entry_id, position, previous)) { publishProgressiveProjection(context, sid, stage); return }
@@ -382,7 +406,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     if (!bucket || bucket.history.viewGeneration !== stage.generation || (stage.published && bucket.history.historyLoaded)) return 'skipped'
     let beforeCommit: SessionChatState | undefined
     try {
-      const { positions, entries, rowCount } = sourceProjection(stage.groups, stage.cancellations)
+      const { positions, entries, rowCount } = sourceProjection(stage.groups, stage.cancellations, stage.turns)
       const baseline = { ...stage.baseline, ...stage.publishedRows }
       const { frame } = stage
       const parsed = PageSchema.safeParse({ ...frame, entries: [] })
@@ -416,9 +440,9 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
           })
           const patch = historyRowsPatch(b, rows, b.history.readerPositions)
           const capacity = Math.max(0, 100 - liveOrder.length)
-          const tail = completedPage.entries.filter((_, i) => !liveIds.has(bound[i].id))
+          const tail = restoreTailCache(b, completedPage.entries.filter((_, i) => !liveIds.has(bound[i].id)), capacity)
           return { ...patch, ...completion, messageOrder: b.messageOrder, historyLiveOrder: liveOrder, historyNeedsSnapshot: false,
-            history: { ...patch.history!, tailEntries: capacity ? tail.slice(-capacity) : [], pageMetadata: historyMetadata(completedPage), historyLoaded: true } }
+            history: { ...patch.history!, tailEntries: capacity ? tail : [], pageMetadata: historyMetadata(completedPage), historyLoaded: true } }
         }
         const live = dropDeadWitnessedStreams(b, completedPage)
         return { ...applyHistoryPageToBucket(live, completedPage, 'latest', baseline), ...completion, ...(live !== b ? { isStreaming: live.isStreaming } : {}) }

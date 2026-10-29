@@ -20,7 +20,8 @@ export function rowSourceIds(row: ChatMessage): string[] {
 export function recordCombinedPart(row: ChatMessage, sourceId: string, joiner: string): void {
   if (!row.historyParts) {
     row.historyParts = [{ sourceId: row.id, start: 0, joiner: '', text: row.historyPosition ? 'saved' : 'live',
-      ...(row.historyPosition ? { position: row.historyPosition } : {}),
+      // #1452 S11: a saved source's own calls stay addressed to its part.
+      ...(row.historyPosition ? { position: row.historyPosition, callIds: (row.tool_calls ?? []).map(call => call.id) } : {}),
       // S9: a saved preview's size moves from the row onto its own part.
       ...(row.contentOriginalSizeBytes !== undefined ? { originalSizeBytes: row.contentOriginalSizeBytes } : {}) }]
     row.contentOriginalSizeBytes = undefined
