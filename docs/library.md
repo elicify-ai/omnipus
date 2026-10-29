@@ -11,7 +11,7 @@ Ordinary files belong to the workspace. Mounted folders are your real files, sho
 Files arrive three ways:
 
 - You upload them with the **Upload files** action.
-- You attach them in chat: each attachment also becomes a real file, filed in a hidden `.library` folder and kept for reuse.
+- You attach them in chat: each attachment also becomes a real file, filed in a hidden `.library` folder and kept for reuse. This holds for files you send in a [group chat](group-chats.md#images-and-files) and for files agents return in a group too. A file in a chat exists twice: the copy chats show, and this Library file. Deleting a group never deletes either.
 - Agents create them as they work; everything an agent writes shows up here.
 
 ## When you would use it
@@ -97,6 +97,8 @@ Opening an attachment from [Mail](mail.md#attachments) previews it here **tempor
 - **A mount's location is recorded once.** If you move or rename the folder on your Mac, its contents disappear from the workspace. Unmount and add the folder again at its new location.
 - **Broad grants are wide.** Mounting your home folder gives every agent on the workspace write access to everything under it. The warning and the second click exist to catch exactly this mistake.
 - **Ordinary deletes are permanent.** Removing a file from the workspace has no trash to recover from. A note inside a knowledge base moves to that knowledge base's trash instead.
+- **Deleting a chat file deletes it everywhere.** A file that was sent or returned in a chat — a normal chat or a group — is marked **used in chats** in the list. Deleting it in the Library also deletes the copy chats show; the confirmation says so before anything is removed. Every chat that showed the file, normal or group, then shows it as unavailable (the file card's **Retry** keeps failing). This cannot be undone. Deleting a folder does the same for every chat file inside it. If the deletion fails part-way, the Library shows an error naming the file, the file stays listed, and choosing Delete again completes it.
+- **What keeps the link.** Renaming the file or moving it inside the same workspace keeps the link to its chat copy. A copy of the file is a new file with no link. A file moved to another workspace loses the link and leaves its chat copy behind in the original workspace. Files uploaded before this version are linked only when Omnipus can match them to exactly one chat copy (same content and file name); otherwise deleting them removes only the Library file.
 - **HTML previews run scripts in a sandbox** that cannot read your Omnipus session or call the API as you.
 
 ## Related pages
