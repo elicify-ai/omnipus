@@ -4,6 +4,8 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
 import { ChatScreen } from '@/components/chat/ChatScreen'
+import { LibraryOpenNotice } from '@/components/chat/LibraryOpenNotice'
+import { useChatPresence } from '@/hooks/useChatPresence'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/error-state'
@@ -327,12 +329,37 @@ function SessionRoute() {
   // started or ended -- every Sidebar refresh cycle for an archived
   // workspace's chat.
   return (
+    <SessionChatSlot
+      sessionId={sessionId}
+      workspaceId={wsId ?? null}
+      notice={notice}
+      agentRemoved={detail?.agent_removed ?? false}
+    />
+  )
+}
+
+/**
+ * The inline chat view (chat-links spec "Watching"): mounted only while this
+ * route actually shows ChatScreen, so presence and the mounted-view record
+ * never claim a session that is still loading, missing or being redirected.
+ * `workspaceId` is the workspace the session itself recorded (none means bare
+ * chat links stay plain text).
+ */
+function SessionChatSlot({ sessionId, workspaceId, notice, agentRemoved }: {
+  sessionId: string
+  workspaceId: string | null
+  notice: ReactNode
+  agentRemoved: boolean
+}) {
+  useChatPresence(sessionId, workspaceId)
+  return (
     <div className="absolute inset-0 flex flex-col">
       {notice}
       {/* ChatScreen's root is absolute inset-0: give it its own positioned
           slot below the notice so the two never overlap. */}
       <div className="relative min-h-0 flex-1" data-testid="workspace-lookup-chat-slot">
-        <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
+        <ChatScreen agentRemoved={agentRemoved} />
+        <LibraryOpenNotice sessionId={sessionId} />
       </div>
     </div>
   )
