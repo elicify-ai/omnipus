@@ -5,8 +5,9 @@
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { useChatStore } from '@/store/chat'
+import { registerChatView } from '@/store/chatView'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 
@@ -74,9 +75,17 @@ describe('decideLibraryOpen', () => {
 })
 
 describe('open_in_library frame', () => {
+  let releaseView: (() => void) | undefined
   beforeEach(() => {
     useUiStore.getState().closePanel()
     useSessionStore.getState().setActiveSession('sess-1', 'mia')
+    // Watching (spec "Chat view active") needs the session on screen and a
+    // chat view for it mounted. Setting the active session alone is not enough.
+    releaseView = registerChatView('sess-1', 'W')
+  })
+  afterEach(() => {
+    releaseView?.()
+    releaseView = undefined
   })
 
   it('opens the Library at the frame path when this chat is on screen (BS-6.1)', () => {
