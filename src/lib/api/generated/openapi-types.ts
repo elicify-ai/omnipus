@@ -10315,6 +10315,21 @@ export interface components {
              */
             goal_max_rounds?: number;
             /**
+             * @description Idle-only quiet window before an automatic goal reminder, in seconds. Default 60; there is no off value. Always resolved in responses. Live changes apply on the next fixed 30-second sweep without restart.
+             * @example 60
+             */
+            goal_reminder_quiet_seconds?: number;
+            /**
+             * @description Whether stalled busy work can receive a check-in. Default true. This is the only stalled-work off switch; it does not disable idle reminders. Always resolved in responses. Live without restart.
+             * @example true
+             */
+            goal_stalled_checkin_enabled?: boolean;
+            /**
+             * @description Busy-work stall threshold in minutes, independent of the idle quiet window. Default 30. Retained while check-ins are disabled; bounds still apply while disabled. Always resolved in responses. Live without restart.
+             * @example 30
+             */
+            goal_stalled_checkin_minutes?: number;
+            /**
              * @description The global tool-iteration limit IN FORCE ("Max tool calls per turn", issue #904, tool-iteration-limit spec): the ceiling for every agent's turns. An agent's own value may only lower it. When the value saved in config.json is missing or out of range this is the value actually used, not the saved one (see max_tool_iterations_saved_state). Always present in responses.
              * @example 200
              */
@@ -10350,6 +10365,21 @@ export interface components {
              * @example 20
              */
             goal_max_rounds?: number;
+            /**
+             * @description New idle-only quiet window in seconds, 30 through 3600. Default 60 when absent from configuration, not a PUT default. Omitted = unchanged. No off value. Live on the next fixed 30-second sweep without restart.
+             * @example 60
+             */
+            goal_reminder_quiet_seconds?: number;
+            /**
+             * @description Enable or disable stalled busy-work check-ins. Omitted = unchanged; explicit false is saved. Disabling does not disable idle reminders or discard goal_stalled_checkin_minutes. Live without restart.
+             * @example true
+             */
+            goal_stalled_checkin_enabled?: boolean;
+            /**
+             * @description New busy-work stall threshold in minutes, independent of idle quiet. Omitted = unchanged. Reject out-of-range values even when check-ins are disabled; disabling retains the chosen minutes. Live without restart.
+             * @example 30
+             */
+            goal_stalled_checkin_minutes?: number;
             /**
              * @description New global tool-iteration limit (issue #904). Omitted = unchanged (partial update). When the new value is below some agents' own values, confirmed_lowering must list exactly those agents (see below), or the PUT is refused with 409.
              * @example 200
@@ -10459,7 +10489,7 @@ export interface components {
              *       "max_tool_iterations"
              *     ]
              */
-            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "max_tool_iterations")[];
+            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "goal_reminder_quiet_seconds" | "goal_stalled_checkin_enabled" | "goal_stalled_checkin_minutes" | "max_tool_iterations")[];
             /** @description The agents whose own tool-iteration limit this request lowered (spec D11); empty when none. GET /performance does not carry them, so this is the only place the summary survives. */
             lowered_agents: components["schemas"]["MaxToolIterationAgentChange"][];
         };
@@ -10497,7 +10527,7 @@ export interface components {
              *       "max_tool_iterations"
              *     ]
              */
-            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "max_tool_iterations")[];
+            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "goal_reminder_quiet_seconds" | "goal_stalled_checkin_enabled" | "goal_stalled_checkin_minutes" | "max_tool_iterations")[];
         };
         /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
         Provider: {
@@ -15017,7 +15047,7 @@ export interface components {
              *     "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
              * @enum {string}
              */
-            type: "schedule_failed" | "knowledge_drift" | "stop_notice";
+            type: "schedule_failed" | "knowledge_drift" | "goal_paused" | "stop_notice";
             title: string;
             /** @description Optional detail (e.g. the failure reason). */
             body?: string;

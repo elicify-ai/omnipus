@@ -51,6 +51,8 @@ const (
 
 // DefaultConfig returns the default configuration for Omnipus.
 func DefaultConfig() *Config {
+	goalQuietSeconds := DefaultGoalReminderQuietSeconds
+	goalCheckinMinutes := DefaultGoalStalledCheckinMinutes
 	// Determine the base path for the workspace via the single mandatory
 	// home-dir helper (OmnipusHomeDir, pkg/config/home.go) — every subsystem
 	// MUST resolve $OMNIPUS_HOME / ~/.omnipus / the secure-temp-dir fallback
@@ -106,21 +108,25 @@ func DefaultConfig() *Config {
 		// (ADR-049 D7, spec Part A §G). Populated explicitly here (rather than
 		// left zero and default-applied only at boot) so a fresh install's
 		// config.json is self-documenting; validateBootConfig still applies
-		// the same defaults for any field an operator zeroes out later.
+		// the same defaults for existing plain-number fields an operator zeroes
+		// out later. Goal timer pointers default only on absence/nil, not zero.
 		Planning: PlanningConfig{
 			// Two separate limits (founder decision 2026-09-14, issue #710):
 			// TaskMaxAttempts is how many fresh runs a task gets (default 3);
 			// GoalMaxRounds is how many tries a goal gets within one run or one
 			// chat (Settings -> Performance, default 20).
-			TaskMaxAttempts:         DefaultTaskMaxAttempts,
-			GoalMaxRounds:           DefaultGoalMaxRounds,
-			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
-			LoopMaxRuns:             DefaultLoopMaxRuns,
-			IdleExpiryDays:          DefaultIdleExpiryDays,
-			GlobalActiveLoopCap:     DefaultGlobalActiveLoopCap,
-			CheckTimeoutSeconds:     DefaultCheckTimeoutSeconds,
-			VerifierWindowTokens:    DefaultVerifierWindowTokens,
-			GoalCompileWindowTokens: DefaultGoalCompileWindowTokens,
+			TaskMaxAttempts:           DefaultTaskMaxAttempts,
+			GoalMaxRounds:             DefaultGoalMaxRounds,
+			GoalReminderQuietSeconds:  &goalQuietSeconds,
+			GoalStalledCheckinEnabled: boolPtr(DefaultGoalStalledCheckinEnabled),
+			GoalStalledCheckinMinutes: &goalCheckinMinutes,
+			PlanJudgeMaxRounds:        DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:               DefaultLoopMaxRuns,
+			IdleExpiryDays:            DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:       DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:       DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens:      DefaultVerifierWindowTokens,
+			GoalCompileWindowTokens:   DefaultGoalCompileWindowTokens,
 		},
 		// SessionMessaging holds the ADR-053 §8 session-control-plane
 		// operability config (FR-195's 21 keys). Seeded explicitly so a fresh

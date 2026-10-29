@@ -7051,6 +7051,7 @@ func (e NotificationSeverity) Valid() bool {
 
 // Defines values for NotificationType.
 const (
+	NotificationTypeGoalPaused     NotificationType = "goal_paused"
 	NotificationTypeKnowledgeDrift NotificationType = "knowledge_drift"
 	NotificationTypeScheduleFailed NotificationType = "schedule_failed"
 	NotificationTypeStopNotice     NotificationType = "stop_notice"
@@ -7059,6 +7060,8 @@ const (
 // Valid indicates whether the value is a known member of the NotificationType enum.
 func (e NotificationType) Valid() bool {
 	switch e {
+	case NotificationTypeGoalPaused:
+		return true
 	case NotificationTypeKnowledgeDrift:
 		return true
 	case NotificationTypeScheduleFailed:
@@ -7093,6 +7096,7 @@ func (e NotificationListNotificationsSeverity) Valid() bool {
 
 // Defines values for NotificationListNotificationsType.
 const (
+	NotificationListNotificationsTypeGoalPaused     NotificationListNotificationsType = "goal_paused"
 	NotificationListNotificationsTypeKnowledgeDrift NotificationListNotificationsType = "knowledge_drift"
 	NotificationListNotificationsTypeScheduleFailed NotificationListNotificationsType = "schedule_failed"
 	NotificationListNotificationsTypeStopNotice     NotificationListNotificationsType = "stop_notice"
@@ -7101,6 +7105,8 @@ const (
 // Valid indicates whether the value is a known member of the NotificationListNotificationsType enum.
 func (e NotificationListNotificationsType) Valid() bool {
 	switch e {
+	case NotificationListNotificationsTypeGoalPaused:
+		return true
 	case NotificationListNotificationsTypeKnowledgeDrift:
 		return true
 	case NotificationListNotificationsTypeScheduleFailed:
@@ -7210,16 +7216,25 @@ func (e OperationResultValidationOutcome) Valid() bool {
 
 // Defines values for PerformancePendingApplyChangedFields.
 const (
-	PerformancePendingApplyChangedFieldsGoalMaxRounds     PerformancePendingApplyChangedFields = "goal_max_rounds"
-	PerformancePendingApplyChangedFieldsMaxParallelAgents PerformancePendingApplyChangedFields = "max_parallel_agents"
-	PerformancePendingApplyChangedFieldsMaxToolIterations PerformancePendingApplyChangedFields = "max_tool_iterations"
-	PerformancePendingApplyChangedFieldsToolsOnDemand     PerformancePendingApplyChangedFields = "tools_on_demand"
+	PerformancePendingApplyChangedFieldsGoalMaxRounds             PerformancePendingApplyChangedFields = "goal_max_rounds"
+	PerformancePendingApplyChangedFieldsGoalReminderQuietSeconds  PerformancePendingApplyChangedFields = "goal_reminder_quiet_seconds"
+	PerformancePendingApplyChangedFieldsGoalStalledCheckinEnabled PerformancePendingApplyChangedFields = "goal_stalled_checkin_enabled"
+	PerformancePendingApplyChangedFieldsGoalStalledCheckinMinutes PerformancePendingApplyChangedFields = "goal_stalled_checkin_minutes"
+	PerformancePendingApplyChangedFieldsMaxParallelAgents         PerformancePendingApplyChangedFields = "max_parallel_agents"
+	PerformancePendingApplyChangedFieldsMaxToolIterations         PerformancePendingApplyChangedFields = "max_tool_iterations"
+	PerformancePendingApplyChangedFieldsToolsOnDemand             PerformancePendingApplyChangedFields = "tools_on_demand"
 )
 
 // Valid indicates whether the value is a known member of the PerformancePendingApplyChangedFields enum.
 func (e PerformancePendingApplyChangedFields) Valid() bool {
 	switch e {
 	case PerformancePendingApplyChangedFieldsGoalMaxRounds:
+		return true
+	case PerformancePendingApplyChangedFieldsGoalReminderQuietSeconds:
+		return true
+	case PerformancePendingApplyChangedFieldsGoalStalledCheckinEnabled:
+		return true
+	case PerformancePendingApplyChangedFieldsGoalStalledCheckinMinutes:
 		return true
 	case PerformancePendingApplyChangedFieldsMaxParallelAgents:
 		return true
@@ -7252,16 +7267,25 @@ func (e PerformancePendingApplyStage) Valid() bool {
 
 // Defines values for PerformanceReloadFailedDetailsChangedFields.
 const (
-	PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds     PerformanceReloadFailedDetailsChangedFields = "goal_max_rounds"
-	PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents PerformanceReloadFailedDetailsChangedFields = "max_parallel_agents"
-	PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations PerformanceReloadFailedDetailsChangedFields = "max_tool_iterations"
-	PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand     PerformanceReloadFailedDetailsChangedFields = "tools_on_demand"
+	PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds             PerformanceReloadFailedDetailsChangedFields = "goal_max_rounds"
+	PerformanceReloadFailedDetailsChangedFieldsGoalReminderQuietSeconds  PerformanceReloadFailedDetailsChangedFields = "goal_reminder_quiet_seconds"
+	PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinEnabled PerformanceReloadFailedDetailsChangedFields = "goal_stalled_checkin_enabled"
+	PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinMinutes PerformanceReloadFailedDetailsChangedFields = "goal_stalled_checkin_minutes"
+	PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents         PerformanceReloadFailedDetailsChangedFields = "max_parallel_agents"
+	PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations         PerformanceReloadFailedDetailsChangedFields = "max_tool_iterations"
+	PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand             PerformanceReloadFailedDetailsChangedFields = "tools_on_demand"
 )
 
 // Valid indicates whether the value is a known member of the PerformanceReloadFailedDetailsChangedFields enum.
 func (e PerformanceReloadFailedDetailsChangedFields) Valid() bool {
 	switch e {
 	case PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsGoalReminderQuietSeconds:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinEnabled:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinMinutes:
 		return true
 	case PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents:
 		return true
@@ -21481,6 +21505,15 @@ type PerformanceSettings struct {
 	// GoalMaxRounds GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE anywhere in this delivery — GOAL-FR-046 ("a human-editable budget control for a goal's per-goal override") and GOAL-US-8 ("an operator can give a goal more room") are RETIRED in full. This is the ONE control: `Goal.max_rounds` on every goal record resolves from this value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`, unmodified signature — NQ-2). It bounds the tries a goal gets in chat and within one run of a task alike; it does NOT bound how many fresh runs a task gets (`Task.effective_max_attempts`, a separate limit — founder decision 2026-09-14, issue #710). A goal keeps the value in force when it started. Lives under Settings → Performance (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no new settings tab. Always present in responses.
 	GoalMaxRounds *int `json:"goal_max_rounds,omitempty"`
 
+	// GoalReminderQuietSeconds Idle-only quiet window before an automatic goal reminder, in seconds. Default 60; there is no off value. Always resolved in responses. Live changes apply on the next fixed 30-second sweep without restart.
+	GoalReminderQuietSeconds *int `json:"goal_reminder_quiet_seconds,omitempty"`
+
+	// GoalStalledCheckinEnabled Whether stalled busy work can receive a check-in. Default true. This is the only stalled-work off switch; it does not disable idle reminders. Always resolved in responses. Live without restart.
+	GoalStalledCheckinEnabled *bool `json:"goal_stalled_checkin_enabled,omitempty"`
+
+	// GoalStalledCheckinMinutes Busy-work stall threshold in minutes, independent of the idle quiet window. Default 30. Retained while check-ins are disabled; bounds still apply while disabled. Always resolved in responses. Live without restart.
+	GoalStalledCheckinMinutes *int `json:"goal_stalled_checkin_minutes,omitempty"`
+
 	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. There is no longer a computed default: 0 on disk means "not configured", and is surfaced here as the resolved effective value (see effective_max_parallel_agents and max_parallel_agents_configured) because 0 is an internal sentinel that is never a real concurrency value. When nothing is configured, concurrency is bounded by live available memory at the moment each agent turn is admitted, and the number reported here is a PHYSICAL OS-thread-safety backstop rather than an estimate of what this machine can run. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor of 1 applies), including a value above the physical backstop, which is honored in full with a server-side warning logged rather than being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
 
@@ -21513,6 +21546,15 @@ type PerformanceSettingsUpdate struct {
 
 	// GoalMaxRounds New value for the SINGLE, GLOBAL goal-adjudication-round ceiling (GOAL-FR-024/FR-045, D-D/D-E) — governs task goals and chat goals identically; there is no per-goal override anywhere (GOAL-FR-046/ US-8 retired). Rejected below 1. Omitted = unchanged (partial update).
 	GoalMaxRounds *int `json:"goal_max_rounds,omitempty"`
+
+	// GoalReminderQuietSeconds New idle-only quiet window in seconds, 30 through 3600. Default 60 when absent from configuration, not a PUT default. Omitted = unchanged. No off value. Live on the next fixed 30-second sweep without restart.
+	GoalReminderQuietSeconds *int `json:"goal_reminder_quiet_seconds,omitempty"`
+
+	// GoalStalledCheckinEnabled Enable or disable stalled busy-work check-ins. Omitted = unchanged; explicit false is saved. Disabling does not disable idle reminders or discard goal_stalled_checkin_minutes. Live without restart.
+	GoalStalledCheckinEnabled *bool `json:"goal_stalled_checkin_enabled,omitempty"`
+
+	// GoalStalledCheckinMinutes New busy-work stall threshold in minutes, independent of idle quiet. Omitted = unchanged. Reject out-of-range values even when check-ins are disabled; disabling retains the chosen minutes. Live without restart.
+	GoalStalledCheckinMinutes *int `json:"goal_stalled_checkin_minutes,omitempty"`
 
 	// MaxParallelAgents New value for the maximum concurrent task/subagent dispatch cap — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04). Set to 0 to restore the auto-detected default (sized from available memory, floored so a small box still functions). Any other value is honored EXACTLY as given — there is no ceiling; a value is never silently lowered. (Fixed 2026-08-04: this field previously declared `minimum: 2`, which contradicted this very description's "set to 0" instruction and would have rejected 0 under schema validation — corrected alongside the ceiling removal since both are the same field.)
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`

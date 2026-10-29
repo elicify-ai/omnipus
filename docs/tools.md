@@ -205,6 +205,16 @@ narrow the list; the next ordinary request uses the session's loaded list again.
 
 Under Auto-approve, a server tool set to Ask runs without a card only when its server labels it read-only or explicitly not destructive. A tool with no label asks. Most servers send no labels today, so most server tools still ask. Each server tool set to Ask shows its own **Auto: runs** or **Auto: asks** marker.
 
+## Background results
+
+When background work finishes, its notification asks the agent in the originating conversation to continue. Omnipus retries that handoff, **not the tool or command itself**: up to three actual attempts while the caller's existing time window remains open. Each attempt has at most five seconds, with cancellable waits of one and then two seconds between attempts. A shorter caller deadline can end this earlier.
+
+If the handoff still fails, or that caller deadline expires after an unsuccessful attempt, Omnipus tries to save an ordinary system line in that conversation and show it live to viewers allowed to see that session. A saved line remains in history after reopening or reloading the chat. For an actual finished tool, it says **Tool &lt;name&gt; [&lt;short reference&gt;] finished, but the agent was not woken by this notification.** An unsafe tool name becomes **background tool**; the reference is a short digest of the actual tool-call ID, not a new job ID. Other producers use fixed wording such as **This plan update notification did not wake the agent.** That wording does not rule out a separate direct-dispatch fallback.
+
+The notification failure is not proof that work or output was lost, that a tool succeeded, or that it is safe to rerun the command. A direct tool message may already have arrived. Intentional cancellation stops remaining retries and suppresses this new delivery warning; a background tool's natural completion is not itself an intentional cancellation.
+
+Where the original chat platform and its canonical session are safely identified as a user conversation, Omnipus also makes one nonblocking, best-effort warning enqueue to **that original conversation only**, not another chat or account belonging to the same agent. Web chat uses its live/history path instead. Internal tasks, verifier work, steered helpers and unknown origins receive no external copy through this path. There is no network-delivery guarantee or separate outbound retry queue. A full or closed outbound queue can reject the warning even when its history row was saved; a storage error can prevent the history row too. These failures do not turn the original handoff into a successful wake. See [troubleshooting](troubleshooting.md#a-background-result-says-the-agent-was-not-woken).
+
 ## What a change tool reports
 
 When Omnipus (or any agent allowed to) changes something through a tool — an agent, a workspace, a skill, a provider, a connected server or a channel — the result says plainly how far the change got. It is one of four outcomes:
