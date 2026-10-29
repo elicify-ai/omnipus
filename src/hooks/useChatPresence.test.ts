@@ -48,4 +48,45 @@ describe('useChatPresence sends watching (BS-6.16)', () => {
     hook.unmount()
     expect(sent.length).toBe(beforeUnmount)
   })
+
+  // D-presence: refresh is 15s, and a claim expires after 45s (three missed
+  // refreshes). The numbers are the spec's, not CHAT_PRESENCE_REFRESH_MS.
+  it('sends nothing more at 14999ms and watching true at 15000ms', () => {
+    vi.useFakeTimers()
+    mount()
+    expect(sent).toEqual([{ type: 'chat_presence', session_id: SESSION, watching: true }])
+    act(() => { vi.advanceTimersByTime(14_999) })
+    expect(sent).toHaveLength(1)
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(sent).toEqual([
+      { type: 'chat_presence', session_id: SESSION, watching: true },
+      { type: 'chat_presence', session_id: SESSION, watching: true },
+    ])
+  })
+
+  it('sends watching false when a still-visible chat unmounts', () => {
+    vi.useFakeTimers()
+    const hook = mount()
+    expect(sent).toHaveLength(1)
+    hook.unmount()
+    expect(sent).toEqual([
+      { type: 'chat_presence', session_id: SESSION, watching: true },
+      { type: 'chat_presence', session_id: SESSION, watching: false },
+    ])
+  })
+
+  it('sends false when the active session changes, and true again after reconnect', () => {
+    vi.useFakeTimers()
+    mount()
+    act(() => { useSessionStore.getState().setActiveSession('sess-other', 'mia') })
+    expect(sent.at(-1)).toEqual({ type: 'chat_presence', session_id: SESSION, watching: false })
+    act(() => { useSessionStore.getState().setActiveSession(SESSION, 'mia') })
+    expect(sent.at(-1)).toEqual({ type: 'chat_presence', session_id: SESSION, watching: true })
+    const beforeDrop = sent.length
+    act(() => { useConnectionStore.setState({ isConnected: false }) })
+    expect(sent).toHaveLength(beforeDrop)
+    act(() => { useConnectionStore.setState({ isConnected: true }) })
+    expect(sent.at(-1)).toEqual({ type: 'chat_presence', session_id: SESSION, watching: true })
+    expect(sent).toHaveLength(beforeDrop + 1)
+  })
 })
