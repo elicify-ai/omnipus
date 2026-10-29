@@ -39,8 +39,10 @@
 #       Any other status, or a missing secret, exits 1.
 #       --strict (every CI caller passes it): a 401/403 is a broken or revoked
 #       key, not an outage — exit 1 with an ::error:: instead of falling back
-#       for ever; and a 2xx must be an Anthropic message (type "message" with
-#       a content array), else exit 1. Without --strict the contract-pinned
+#       for ever; and a 2xx must be a finished message (type "message", a
+#       string stop_reason, and base_resp.status_code 0 when base_resp is
+#       present), else exit 1. The content is not checked (null with
+#       max_tokens 1 on a reasoning model). Without --strict the contract-pinned
 #       behaviour holds (401/403 fall back; any JSON object is a 2xx answer).
 #       Writes llm-route.json (cwd, or --route-out) and, under GitHub Actions,
 #       one line to the job summary.
@@ -346,9 +348,9 @@ route_fallback() { # route_fallback <status> <error_type>
 }
 
 # body_shape <file>: a SAFE one-line description of a JSON response for a
-# failure message: the top-level key names, and the values of .type,
-# .error.type and .base_resp.status_code (the MiniMax status field) when
-# present. Never the body, never free text: a key name or a .type value is
+# failure message: the top-level key names, the values of .type,
+# .error.type, .base_resp.status_code (the MiniMax status field) and
+# .stop_reason when present, and the jq TYPE (never the value) of .content. Never the body, never free text: a key name or a .type value is
 # shown only when it is a short lowercase identifier (^[a-z_][a-z0-9_]{0,31}$)
 # — a key, a token or a sentence never matches — and the status code only
 # when it is a number. Hidden key names are counted, not shown.
@@ -362,7 +364,9 @@ body_shape() {
           + (if $hidden > 0 then " (+\($hidden) not shown)" else "" end),
         (.type | select(ident) | ".type=" + .),
         (.error | objects | .type | select(ident) | ".error.type=" + .),
-        (.base_resp | objects | .status_code | numbers | ".base_resp.status_code=" + tostring)
+        (.base_resp | objects | .status_code | numbers | ".base_resp.status_code=" + tostring),
+        (if has("content") then "content type: " + (.content | type) else empty end),
+        (.stop_reason | select(ident) | "stop_reason=" + .)
       ] | join("; ")
   ' "$1" 2>/dev/null || echo "response shape unavailable"
 }
@@ -450,8 +454,17 @@ cmd_preflight() {
       if ! jq -e 'type == "object"' "$work/body" >/dev/null 2>&1; then
         die 1 "preflight: the primary answered HTTP $status with a body that is not a JSON object — not a working primary, and not an outage either; check the endpoint"
       fi
-      if [ "$STRICT" = 1 ] && ! jq -e '.type == "message" and (.content | type == "array")' "$work/body" >/dev/null 2>&1; then
-        die 1 "preflight: the primary answered HTTP $status but not with an Anthropic message (type \"message\" with a content array) — refusing to report it as working ($(body_shape "$work/body")). An unknown model id is a common cause: check the primary model against the provider catalog"
+      # A working answer is a message that finished (a stop_reason string)
+      # and, for MiniMax, a zero base_resp status. The content is NOT checked:
+      # with max_tokens 1 a reasoning model answers content null (observed
+      # 2026-10-29 for the CI primary), and that still proves key, model and
+      # endpoint work.
+      if [ "$STRICT" = 1 ] && ! jq -e '
+            .type == "message"
+            and (.stop_reason | type == "string")
+            and ((has("base_resp") | not) or (.base_resp | type == "object" and .status_code == 0))
+          ' "$work/body" >/dev/null 2>&1; then
+        die 1 "preflight: the primary answered HTTP $status but not with a finished message (type \"message\", a stop_reason, base_resp status 0 when present) — refusing to report it as working ($(body_shape "$work/body")). An unknown model id is a common cause: check the primary model against the provider catalog"
       fi
       write_route primary "$status" ""
       summary_line "LLM: primary ($P_PROVIDER/$P_MODEL)"

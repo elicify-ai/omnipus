@@ -29,7 +29,7 @@ import type { AddressInfo } from 'node:net'
 import path from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { expect, request, test } from '@playwright/test'
-import { E2E_FALLBACK, E2E_PRIMARY } from './fixtures/e2e-model'
+import { E2E_FALLBACK } from './fixtures/e2e-model'
 import { keyEnvNamesFor } from './fixtures/e2e-model-keys'
 import { onboardViaAPI } from './fixtures/onboard-via-api'
 
@@ -45,6 +45,9 @@ const RUN = randomUUID().replace(/-/g, '')
 const PRIMARY_CANARY = ['trace', 'canary', 'primary', RUN].join('-')
 const FALLBACK_CANARY = ['trace', 'canary', 'fallback', RUN].join('-')
 const CONTROL_MARKER = ['trace', 'canary', 'control', RUN].join('-')
+// A fake provider and model for the primary side (see the traced test).
+const CANARY_PROVIDER = 'trace-canary-provider'
+const CANARY_MODEL = 'trace-canary-model'
 
 let tracedOutputDir = ''
 
@@ -107,15 +110,22 @@ function startFakeGateway(): Promise<{ url: string; bodies: string[]; close: () 
 test.describe('credential-bearing requests stay out of traces', () => {
   test('onboarding with canary keys (traced)', async () => {
     tracedOutputDir = test.info().outputDir
-    const names = [...keyEnvNamesFor(E2E_PRIMARY.provider), ...keyEnvNamesFor(E2E_FALLBACK.provider)]
+    // The primary side is a FAKE provider/model of this test, never the job's
+    // E2E_PRIMARY. After a failed job-start check CI points E2E_PRIMARY at the
+    // fallback pair (OMNIPUS_E2E_PRIMARY_PROVIDER/_MODEL); both canaries then
+    // landed in the same env var, only one key was sent and this test failed
+    // in CI while passing locally (train 5, shard stubs-2). A distinct fake
+    // primary keeps the two-key path — primary onboarding plus the fallback
+    // provider PUT — under test whatever route the job took.
+    const names = [...keyEnvNamesFor(CANARY_PROVIDER), ...keyEnvNamesFor(E2E_FALLBACK.provider)]
     const saved = new Map(names.map((n) => [n, process.env[n]]))
     const gw = await startFakeGateway()
     try {
       for (const n of names) delete process.env[n]
-      process.env[keyEnvNamesFor(E2E_PRIMARY.provider)[0]] = PRIMARY_CANARY
+      process.env[keyEnvNamesFor(CANARY_PROVIDER)[0]] = PRIMARY_CANARY
       process.env[keyEnvNamesFor(E2E_FALLBACK.provider)[0]] = FALLBACK_CANARY
 
-      await onboardViaAPI({ baseURL: gw.url })
+      await onboardViaAPI({ baseURL: gw.url, providerID: CANARY_PROVIDER, model: CANARY_MODEL })
 
       // The fake gateway received both canaries, so the helper really sent
       // them (a green that never sent a key would prove nothing).
