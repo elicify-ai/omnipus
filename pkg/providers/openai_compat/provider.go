@@ -40,6 +40,10 @@ type Provider struct {
 	httpClient         *http.Client
 	extraBody          map[string]any // Additional fields to inject into request body
 	streamStallTimeout time.Duration  // streaming silence limit; 0 = common.DefaultStreamStallTimeout
+	// explicitRequestTimeout is the operator's request_timeout (issue #1485);
+	// zero when the shipped default applies. Only an explicit value is a
+	// hard ceiling on a non-streaming call that carries a longer deadline.
+	explicitRequestTimeout time.Duration
 
 	// streamTransportOnce/streamTransport hold the streaming client's
 	// transport: the request client's transport plus a response-header
@@ -67,6 +71,7 @@ func WithRequestTimeout(timeout time.Duration) Option {
 	return func(p *Provider) {
 		if timeout > 0 {
 			p.httpClient.Timeout = timeout
+			p.explicitRequestTimeout = timeout
 		}
 	}
 }
@@ -230,7 +235,7 @@ func (p *Provider) Chat(
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := p.nonStreamingClient(ctx).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
@@ -319,6 +324,30 @@ func (p *Provider) ChatStream(
 	defer watch.Stop()
 
 	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch, p.providerID)
+}
+
+// ExplicitRequestTimeout implements providers.RequestTimeoutReporter: the
+// operator's request_timeout, or zero when the shipped default applies.
+func (p *Provider) ExplicitRequestTimeout() time.Duration { return p.explicitRequestTimeout }
+
+// nonStreamingClient returns the client for one non-streaming call (issue
+// #1485). The shipped default request timeout must never undercut a longer
+// deadline the caller granted — the fallback chain's size-scaled
+// per-attempt limit — so when no explicit request_timeout is set and ctx
+// carries a deadline beyond the client timeout, the call is bounded by ctx
+// alone (same transport, same pool). An explicit request_timeout, or a call
+// without a longer deadline, keeps the client timeout unchanged.
+func (p *Provider) nonStreamingClient(ctx context.Context) *http.Client {
+	if p.explicitRequestTimeout > 0 || p.httpClient.Timeout <= 0 {
+		return p.httpClient
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) <= p.httpClient.Timeout {
+		return p.httpClient
+	}
+	c := *p.httpClient
+	c.Timeout = 0
+	return &c
 }
 
 // streamingTransport returns the request client's transport with

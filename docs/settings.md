@@ -265,6 +265,7 @@ Older versions capped a delegated session at 30 minutes. An install that still h
 Two limits stay, because they protect against a broken connection or command rather than limiting work:
 
 - each request to a model provider has its own request timeout (`request_timeout` on the model, 120 seconds when unset); a provider that stops answering is retried or reported as **The model provider didn't answer this request in time** — the turn itself is not stopped by a clock. For a streamed reply the same limit applies only to waiting for the reply to start; once it is streaming, only a total silence (`stream_stall_timeout`, 300 seconds by default) ends it, so a long reply that keeps arriving is never cut off;
+  - when an agent has a fallback model, each attempt on each model has its own limit. With `request_timeout` set on a model, that value is the limit for that model, longer or shorter than the default. Without it, the limit grows with the size of the request: 120 seconds for a request of up to about 100,000 tokens, 60 seconds more for every further 100,000 tokens or part of them, and never more than 10 minutes — for example about 6 minutes for a 440,000-token request. A very large conversation is therefore no longer cut off after 120 seconds on every model. The silence limit (`stream_stall_timeout`) is unchanged;
 - a shell command run by an agent has its own `timeout_seconds` (default 300 seconds), and the environment-setup tool has its own job timeout.
 
 ### Which new agents get a self-line

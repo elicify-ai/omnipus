@@ -178,11 +178,20 @@ func NewFallbackChainWithTimeout(cooldown *CooldownTracker, perCandidateTimeout 
 func (fc *FallbackChain) candidateBudget(
 	ctx context.Context,
 	candidatesLeft int,
+	candidate FallbackCandidate,
 ) (attemptCtx context.Context, attemptCancel context.CancelFunc) {
 	pct := fc.perCandidateTimeout
 	if pct <= 0 {
 		// perCandidateTimeout not set — pass ctx through unchanged (legacy behavior).
 		return ctx, func() {}
+	}
+	// Issue #1485: a caller-attached resolver replaces the static cap for
+	// THIS candidate — the request-size-scaled default, or the model's
+	// explicit request_timeout. A non-positive answer keeps the static cap.
+	if resolve := attemptTimeoutFrom(ctx); resolve != nil {
+		if d := resolve(candidate.Provider, candidate.Model); d > 0 {
+			pct = d
+		}
 	}
 
 	var budget time.Duration
@@ -457,7 +466,7 @@ func (fc *FallbackChain) Execute(
 			if left < 1 {
 				left = 1
 			}
-			attemptCtx, attemptCancel := fc.candidateBudget(ctx, left)
+			attemptCtx, attemptCancel := fc.candidateBudget(ctx, left, candidate)
 			resp, err := run(attemptCtx, candidate.Provider, candidate.Model)
 			attemptCancel() // release resources immediately; do not defer inside the loop
 
@@ -651,7 +660,7 @@ func (fc *FallbackChain) ExecuteImage(
 		if left < 1 {
 			left = 1
 		}
-		attemptCtx, attemptCancel := fc.candidateBudget(ctx, left)
+		attemptCtx, attemptCancel := fc.candidateBudget(ctx, left, candidate)
 		remaining--
 
 		start := time.Now()

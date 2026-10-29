@@ -1627,6 +1627,8 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		retryCtx = providers.WithStreamedBytesCheck(retryCtx, func() int64 {
 			return rt.providerCallStreamedBytes.Load()
 		})
+		// Issue #1485: per-attempt limit fits this request (see attemptTimeoutResolver).
+		retryCtx = providers.WithAttemptTimeout(retryCtx, rt.attemptTimeoutResolver(messagesForCall, toolDefsForCall))
 		// F1 (read paths): one image attach per candidate, reused across the
 		// §7.4 in-place retries of that candidate — the retry must re-send
 		// the same request, and a re-attach re-runs the authorization
