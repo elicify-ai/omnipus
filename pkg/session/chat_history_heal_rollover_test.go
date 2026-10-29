@@ -32,8 +32,8 @@ func TestChatHistoryHeal_DayRolloverIsTransientAndRetryable(t *testing.T) {
 		rolled := false
 		chatHistoryReadHook = func(ctx context.Context, e chatHistoryReadEvent) error {
 			if old != nil {
-				if err := old(ctx, e); err != nil {
-					return err
+				if hookErr := old(ctx, e); hookErr != nil {
+					return hookErr
 				}
 			}
 			// record_closed is after real content I/O and closes the handle

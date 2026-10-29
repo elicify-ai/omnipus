@@ -166,8 +166,8 @@ func selfHealRequireIndexed(t testing.TB, f *selfHealFixture) {
 			return nil
 		}
 		var record historyRecord
-		if err := json.Unmarshal(n.Value, &record); err != nil {
-			return err
+		if decodeErr := json.Unmarshal(n.Value, &record); decodeErr != nil {
+			return decodeErr
 		}
 		addresses = append(addresses, record.Address)
 		return nil
@@ -331,8 +331,8 @@ func selfHealFiles(t testing.TB, root string, excludeIndex bool) map[string]self
 		}
 		h := sha256.New()
 		_, copyErr := io.Copy(h, file)
-		if err := errors.Join(copyErr, file.Close()); err != nil {
-			return err
+		if joinErr := errors.Join(copyErr, file.Close()); joinErr != nil {
+			return joinErr
 		}
 		var digest [sha256.Size]byte
 		copy(digest[:], h.Sum(nil))

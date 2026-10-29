@@ -36,10 +36,10 @@ func TestRetentionHistoryGateway_TickContinuesRealCleanupForUnavailableChat(t *t
 			oldTools := retentionToolResultSweepFn
 			retentionToolResultSweepFn = func(days int) (int, error) {
 				toolDays = append(toolDays, days)
-				removed, err := tools.retentionSweep(days)
+				removed, sweepErr := tools.retentionSweep(days)
 				toolRemoved = append(toolRemoved, removed)
 				retentionGatewayRequireSummaryCount(t, logs, len(toolDays)-1)
-				return removed, err
+				return removed, sweepErr
 			}
 			t.Cleanup(func() { retentionToolResultSweepFn = oldTools })
 
@@ -55,10 +55,10 @@ func TestRetentionHistoryGateway_TickContinuesRealCleanupForUnavailableChat(t *t
 			oldTasks := retentionTaskRunSweepFn
 			retentionTaskRunSweepFn = func(cutoff time.Time) (int, error) {
 				taskCutoffs = append(taskCutoffs, cutoff)
-				visited, err := pruneAllTaskRuns(tasks, cutoff)
+				visited, pruneErr := pruneAllTaskRuns(tasks, cutoff)
 				taskVisited = append(taskVisited, visited)
 				retentionGatewayRequireSummaryCount(t, logs, len(taskCutoffs)-1)
-				return visited, err
+				return visited, pruneErr
 			}
 			t.Cleanup(func() { retentionTaskRunSweepFn = oldTasks })
 
