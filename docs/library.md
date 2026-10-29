@@ -38,14 +38,15 @@ When an agent mentions a file in its reply, the file name can be a link. Select 
 - **Unsaved edits.** If the Library or Mail has unsaved changes, you are asked before it moves; **Cancel** leaves everything as it was. While that question is open, further link clicks are ignored.
 - **Missing or not yours.** A file that is gone shows the Library's usual "file not there" landing. A workspace you cannot open shows the Library's usual message and no file content.
 - **Not every path is a link.** Ordinary relative links that do not name a file (such as `README`, `docs/` or `#section`), web links that are not `https`/`http`/`mailto`, and names containing invisible or direction-changing characters stay as plain, struck-through text. A file outside every Library, such as an agent's private folder, is given as its full path with no link. Web links still open in a new tab.
+- **Only in chat.** These links work in agents' chat replies and question cards. A received email, and a document you open in the Library, never turn `omnipus://` or plain file paths into Library links.
 
 ## When an agent opens the Library for you
 
 An agent can ask to show you a file in its own workspace while it is answering.
 
 - **You are looking at the chat** (the browser tab is visible and this chat is on screen): the Library opens beside the chat on that file. Your typing position stays where it was, and screen readers hear **Opened &lt;name&gt; in Library**. It replaces another side panel such as Calendar or Mail, unless that panel has unsaved changes. On a phone it opens the same way and covers the chat.
-- **You are not looking, or there are unsaved edits** (the tab is in the background, another app is in front, you are on another page such as Settings, or the Library or Mail has unsaved changes): nothing opens. A notice at the top of the chat reads **The agent wants to show you &lt;name&gt;** with **Open** and **Dismiss**. **Open** asks about unsaved edits first, then opens the Library. **Escape** dismisses the notice while your focus is inside it. Each chat shows at most one notice; a newer one replaces the older.
-- **Never later, never on reload.** Notices are not saved: reloading the page clears them, and reloading or reconnecting never opens the Library by itself. A tab that was offline when the agent asked does nothing when it reconnects. A request for a chat other than the one this tab shows does nothing in this tab.
+- **You are not looking, or there are unsaved edits** (the tab is in the background, another app is in front, you are on another page such as Settings or in another chat, or the Library or Mail has unsaved changes): nothing opens. A notice at the top of the chat reads **The agent wants to show you &lt;name&gt;** with **Open** and **Dismiss**. **Open** asks about unsaved edits first, then opens the Library. **Escape** dismisses the notice while your focus is inside it. Each chat shows at most one notice; a newer one replaces the older.
+- **Never later, never on reload.** Notices are not saved: reloading the page clears them, and reloading or reconnecting never opens the Library by itself. A tab that was offline when the agent asked does nothing when it reconnects. A request for another chat leaves its notice in that chat, where you see it when you return.
 
 The tool call behind this is hidden in the conversation when it succeeds; a refusal stays visible, and **Verbose chat** shows every call.
 

@@ -65,7 +65,8 @@ const staticMarkdownComponents = memoizeMarkdownComponents({
   // the backend returned them (createLinkRenderer(null) is the shared
   // "no rewrite" case in markdown-shared.tsx — this can now be a static,
   // module-level component instead of rebuilt per-render from a query result).
-  a: createLinkRenderer(null),
+  // Chat message rendering opts in to chat links (Library anchors).
+  a: createLinkRenderer(null, { chatLinks: true }),
 })
 
 // ── MarkdownText component ────────────────────────────────────────────────────

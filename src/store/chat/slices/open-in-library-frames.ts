@@ -8,7 +8,9 @@
 // the client-side defence in depth. It reads the tab's state at the moment
 // the frame arrives, asks decideLibraryOpen once, and then either opens the
 // docked Library (focus untouched, polite announcement), shows the session's
-// one "Open in Library" notice, or does nothing at all.
+// one "Open in Library" notice, or does nothing at all. A frame for a session
+// this tab is not showing is "not watching": its notice is kept for that
+// session and appears when the user returns to that chat.
 
 import { useSessionStore } from '@/store/session'
 import { isChatViewMounted } from '@/store/chatView'
@@ -48,7 +50,6 @@ export function handleOpenInLibraryFrame(frame: Frame, get: () => ChatStore): bo
     tabWatching: isTabWatchingSession(sessionId),
     guardPending: isLeaveDecisionPending(),
     libraryDirty: outgoingPanelNeedsLeaveConfirmation(),
-    sessionOnScreen: useSessionStore.getState().activeSessionId === sessionId,
     replaying: bucket?.isReplaying === true,
     awaitingCatchUp: bucket?.awaitingCatchUp === true,
     hasSeq: 'seq' in (frame as object),
@@ -65,7 +66,11 @@ export function handleOpenInLibraryFrame(frame: Frame, get: () => ChatStore): bo
     announceLibraryOpen(`Opened ${name} in Library`)
   } else {
     showLibraryOpenNotice(sessionId, { ...target, requestId: frame.request_id })
-    announceLibraryOpen(`The agent wants to show you ${name}`)
+    // Announce only in the chat it belongs to; another chat's notice waits
+    // silently until the user returns there.
+    if (useSessionStore.getState().activeSessionId === sessionId) {
+      announceLibraryOpen(`The agent wants to show you ${name}`)
+    }
   }
   return true
 }

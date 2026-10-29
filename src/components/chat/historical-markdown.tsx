@@ -138,15 +138,26 @@ const historicalMarkdownComponents = {
   a: createLinkRenderer(null),
 }
 
-function HistoricalMessageMarkdownInner({ content }: { content: string }) {
+// Chat message rendering (ChatScreen, AskUserQuestionCard) opts in to chat
+// links: the same map with the Library-anchor link renderer. Every other
+// caller — Mail bodies above all, which are attacker-authored — keeps the map
+// above, where `omnipus://` is blanked and a bare path is never a Library link
+// (chat-links architect ruling F4, BS-1.18).
+const chatHistoricalMarkdownComponents = {
+  ...historicalMarkdownComponents,
+  a: createLinkRenderer(null, { chatLinks: true }),
+}
+
+function HistoricalMessageMarkdownInner({ content, chatLinks = false }: { content: string; chatLinks?: boolean }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex, rehypePhosphorEmoji]}
-      components={historicalMarkdownComponents}
-      // Keep valid omnipus://file links (the default transform would blank them);
-      // everything else still goes through react-markdown's default transform.
-      urlTransform={chatLinkUrlTransform}
+      components={chatLinks ? chatHistoricalMarkdownComponents : historicalMarkdownComponents}
+      // Chat links only: keep valid omnipus://file links (the default transform
+      // would blank them). Without the opt-in, react-markdown's default
+      // transform applies unchanged.
+      urlTransform={chatLinks ? chatLinkUrlTransform : undefined}
     >
       {content}
     </ReactMarkdown>
