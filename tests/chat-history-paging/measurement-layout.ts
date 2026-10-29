@@ -39,8 +39,9 @@ export function installHistoryLayout({ virtual = false, hidden = false, innerPar
   }
   const contentFor = (viewport: Element) => viewport.querySelector<HTMLElement>('[data-history-content]')
   const prefixHeight = (content: HTMLElement) => {
-    const siblings = [...(content.parentElement?.children ?? [])]
-    return siblings.slice(0, siblings.indexOf(content)).reduce((sum, item) => sum + controlBlockHeight(item), 0)
+    let height = 0
+    for (let item = content.parentElement?.firstElementChild; item && item !== content; item = item.nextElementSibling) height += controlBlockHeight(item)
+    return height
   }
   const contentHeight = (content: HTMLElement) => content.style.height
     ? Number.parseFloat(content.style.height)
@@ -48,8 +49,8 @@ export function installHistoryLayout({ virtual = false, hidden = false, innerPar
   const scrollHeight = (viewport: Element) => {
     const content = contentFor(viewport)
     if (!content) return state.height
-    const siblings = [...(content.parentElement?.children ?? [])]
-    const suffix = siblings.slice(siblings.indexOf(content) + 1).reduce((sum, item) => sum + controlBlockHeight(item), 0)
+    let suffix = 0
+    for (let item = content.nextElementSibling; item; item = item.nextElementSibling) suffix += controlBlockHeight(item)
     return Math.max(state.height, prefixHeight(content) + contentHeight(content) + suffix)
   }
   const rowTop = (row: HTMLElement, viewport: HTMLElement) => {
@@ -59,10 +60,14 @@ export function installHistoryLayout({ virtual = false, hidden = false, innerPar
     // Read the REAL virtualizer's physical translation. Do not infer a prefix
     // from data-index, source rank, or the desired average.
     const translate = /translateY\(([-\d.]+)px\)/.exec(parent.style.transform)
-    const before = [...parent.children].slice(0, [...parent.children].indexOf(row))
-    return prefixHeight(content) + Number(translate?.[1] ?? 0)
-      + before.reduce((sum, item) => sum + (item instanceof HTMLElement && item.hasAttribute('data-history-anchor') ? rowHeight(item) : 0), 0)
-      - viewport.scrollTop
+    // jsdom's live HTMLCollection iterator repeatedly scans named properties
+    // for length. Walk DOM links instead: no sibling-array copies per rectangle,
+    // no cached geometry, and the same physical heights in document order.
+    let before = 0
+    for (let item = parent.firstElementChild; item && item !== row; item = item.nextElementSibling) {
+      if (item instanceof HTMLElement && item.hasAttribute('data-history-anchor')) before += rowHeight(item)
+    }
+    return prefixHeight(content) + Number(translate?.[1] ?? 0) + before - viewport.scrollTop
   }
   const rectFor = (element: HTMLElement): DOMRect => {
     const viewport = viewportFor(element)
