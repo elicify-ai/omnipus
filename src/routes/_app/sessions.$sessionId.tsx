@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
 import { ChatScreen } from '@/components/chat/ChatScreen'
+import { TaskKindLabel } from '@/components/chat/FeedKindLabel'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/error-state'
@@ -329,6 +330,17 @@ function SessionRoute() {
   return (
     <div className="absolute inset-0 flex flex-col">
       {notice}
+      {/* #1449 D13: this standalone shell has NO workspace header line, so
+          the chat's identity line lives here instead — small muted text, no
+          bar, no border. A task transcript opened without its workspace
+          still says what it is ("Task: <title>"). Only the task identity is
+          shown: the standalone shell has no workspace, so the main title
+          and the helper breadcrumb have nothing to name. */}
+      {detail?.session?.type === 'task' && (
+        <div className="flex min-w-0 items-center px-[var(--space-3)] py-[var(--space-1)]">
+          <TaskKindLabel />
+        </div>
+      )}
       {/* ChatScreen's root is absolute inset-0: give it its own positioned
           slot below the notice so the two never overlap. */}
       <div className="relative min-h-0 flex-1" data-testid="workspace-lookup-chat-slot">

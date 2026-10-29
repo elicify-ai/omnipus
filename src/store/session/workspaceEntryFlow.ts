@@ -15,7 +15,7 @@ import { ApiError } from '@/lib/api-error'
 import { resolveWorkspaceEntry, workspaceEntryBlocksSend, type EmptyTeamEntry, type EntryResult, type EntryTeam, type FailedAttempt, type PointerVerdict, type WelcomeEntry } from '@/lib/nav/workspaceEntry'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { clearPendingAutoApproveOnSessionChange, readPersistedSessionByWorkspace, useSessionStore } from '@/store/session'
+import { clearPendingAutoApproveOnSessionChange, knownSessionDescriptor, readPersistedSessionByWorkspace, useSessionStore } from '@/store/session'
 
 export type WorkspaceEntryView = (
   | { status: 'exact'; acknowledged: false }
@@ -252,10 +252,17 @@ function applyEntry(
   }
 
   const match = sessions.find((session) => session.id === result.sessionId)
+  // The list may not carry this session: GET /sessions pages over ROOT
+  // sessions, so a team's main can sit on another page. The store may still
+  // KNOW what this session is, and a fallback must never overwrite a known,
+  // more specific descriptor for the SAME session with the generic 'chat' —
+  // a downgraded MAIN reads "Extra chat" in the header line and its honest
+  // "agent names unavailable" warning can never render (#1449 round 6).
+  const known = knownSessionDescriptor(workspaceId, result.sessionId)
   const descriptor = {
     id: result.sessionId,
-    type: match?.type ?? 'chat' as const,
-    title: match?.title ?? null,
+    type: match?.type ?? known?.type ?? 'chat' as const,
+    title: match?.title ?? known?.title ?? null,
     agentId: result.agentId,
   }
   if (!stillViewing) {
