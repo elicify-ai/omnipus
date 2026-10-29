@@ -1,6 +1,5 @@
 /**
  * Follow-up 4: tel: is not a chat link and is not on the markdown allow-list.
- * isSafeHref still lists tel:, so this stays red until that entry is removed.
  * mailto stays allowed (BS-3.2). javascript stays rejected (SEC-4).
  */
 import { render, screen } from '@testing-library/react'
