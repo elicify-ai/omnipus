@@ -5,8 +5,12 @@
 // Main-session owner attribution (founder decision 2026-10-28).
 //
 // Owner on a main is the username of the person the main is attributed to.
-// It is attribution only, never access control: nothing here changes who may
-// read or write a session, and the main's computed id never changes.
+// It is attribution: nothing here changes who may read or write a session
+// (ADR-019), and the main's computed id never changes. It is, however, read
+// by two other places: the channel-pairing ownership check
+// (rest_channel_enable.go) and goal-pause notification routing
+// (goal_pause_notify.go). An ownerless main can therefore cause a 403 on a
+// pairing retry until the next signed-in send adopts it.
 //
 // Two entry points:
 //

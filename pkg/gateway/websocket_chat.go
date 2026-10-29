@@ -990,10 +990,13 @@ func (hcm *wsHandlerHandleChatMessage) persistUserMessage() bool {
 // ordinary send path. A successful adoption is logged at Info.
 //
 // A failed adoption does not fail the message: the message is already saved
-// and the owner is attribution, not access. A session that vanished between
-// the append and this call is logged at Debug only; any other failure is
-// logged at error level with the cause, and the next message from a signed-in
-// person retries it.
+// and the owner is attribution (ADR-019), not a read or write gate. It is
+// still read by the channel-pairing ownership check (rest_channel_enable.go)
+// and by goal_pause_notify.go routing, so an ownerless main can cause a 403 on
+// a pairing retry until the next signed-in send adopts it. A session that
+// vanished between the append and this call is logged at Debug only; any other
+// failure is logged at error level with the cause, and the next message from a
+// signed-in person retries it.
 func (hcm *wsHandlerHandleChatMessage) adoptMainOwnerOnSend() {
 	actor := hcm.wc.userID
 	if actor == "" || actor == config.MachinePrincipalUsername {
