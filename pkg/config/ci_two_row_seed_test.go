@@ -29,8 +29,8 @@ func TestCITwoRowSeed_ScriptMatchesGoldenAndLoads(t *testing.T) {
   "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
 }
 `
-	if err := os.WriteFile(modelFile, []byte(spec), 0o600); err != nil {
-		t.Fatalf("write spec json: %v", err)
+	if writeErr := os.WriteFile(modelFile, []byte(spec), 0o600); writeErr != nil {
+		t.Fatalf("write spec json: %v", writeErr)
 	}
 
 	cmd := exec.Command("bash", script, "seed-config", "19999", "--file", modelFile)
@@ -43,8 +43,8 @@ func TestCITwoRowSeed_ScriptMatchesGoldenAndLoads(t *testing.T) {
 	}
 
 	cfgPath := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(cfgPath, out, 0o600); err != nil {
-		t.Fatalf("write seeded config: %v", err)
+	if writeErr := os.WriteFile(cfgPath, out, 0o600); writeErr != nil {
+		t.Fatalf("write seeded config: %v", writeErr)
 	}
 	cfg, err := LoadConfig(cfgPath)
 	if err != nil {

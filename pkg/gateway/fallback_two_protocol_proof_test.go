@@ -140,15 +140,14 @@ func proofDataRoot(gatewayHome string) string {
 
 func countProofNotes(gatewayHome string) int {
 	n := 0
-	_ = filepath.Walk(proofDataRoot(gatewayHome), func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() || !strings.HasSuffix(path, "transcript.jsonl") {
-			return nil
+	_ = filepath.Walk(proofDataRoot(gatewayHome), func(path string, info os.FileInfo, walkErr error) error {
+		// Unreadable entries are skipped, never fatal: only readable
+		// transcript.jsonl files are counted.
+		if walkErr == nil && info != nil && !info.IsDir() && strings.HasSuffix(path, "transcript.jsonl") {
+			if raw, readErr := os.ReadFile(path); readErr == nil {
+				n += strings.Count(string(raw), proofNote)
+			}
 		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		n += strings.Count(string(raw), proofNote)
 		return nil
 	})
 	return n
@@ -162,16 +161,13 @@ func proofTextHas(frames []map[string]any, gatewayHome, token string) bool {
 		}
 	}
 	found := false
-	_ = filepath.Walk(proofDataRoot(gatewayHome), func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
-			return nil
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		if strings.Contains(string(raw), token) {
-			found = true
+	_ = filepath.Walk(proofDataRoot(gatewayHome), func(path string, info os.FileInfo, walkErr error) error {
+		// Unreadable entries are skipped, never fatal (same rule as
+		// countProofNotes).
+		if walkErr == nil && info != nil && !info.IsDir() {
+			if raw, readErr := os.ReadFile(path); readErr == nil && strings.Contains(string(raw), token) {
+				found = true
+			}
 		}
 		return nil
 	})
@@ -283,7 +279,7 @@ func TestFallbackTwoProtocolProof(t *testing.T) {
 
 			token := "fallback-only-" + tc.name
 			var primary *proofStub
-			primaryURL := ""
+			var primaryURL string
 			if tc.refused {
 				ln, err := net.Listen("tcp", "127.0.0.1:0")
 				require.NoError(t, err)
