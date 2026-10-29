@@ -48,6 +48,8 @@ Selecting a note opens it in the preview pane as a rendered document, not raw ma
 
 The search bar searches whatever folder you are in. Inside a knowledge base it runs the indexed engine and groups results by **All**, **Notes**, **Records**, **Views**, and **Attachments**; elsewhere it runs a live file search by name and content. Results still indexing say plainly that they are incomplete. Name search matches any file; content search skips binaries. Agents search the same engines through the knowledge tools and a grep tool.
 
+**From chat.** When an agent reads a note for you, its reply can link to the note. Selecting the link opens the note in the Library with its side rail; a link to a `.base` file opens the base preview. [Links from chat](library.md#links-from-chat) explains how these links behave.
+
 ## Embedding rich content in a note
 
 A note can show things that live elsewhere with the `![[...]]` embed notation. Embeds load as you scroll, so a dashboard note with many of them stays usable.
