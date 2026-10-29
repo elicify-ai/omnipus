@@ -10,7 +10,7 @@
 // session meta workspace, once per page). A file outside every Library, a
 // session with no workspace, and a path that is the Library root itself omit
 // the field. The root is not a valid target: the frame never carries path "".
-// This file does not call libraryRefFor; that function does not exist yet.
+// libraryRefFor(home, localPath, workspaceID) uses the handler home. Each handler in this test has its own.
 package gateway
 
 import (
@@ -166,13 +166,25 @@ func TestLibraryRef_WorkspaceFileOnLiveSendAndHistory(t *testing.T) {
 	chatLinksRequireRef(t, live.Parts[0], liveRaw)
 
 	fixture := newAttachFixture(t, "libref-turn", "libref-message")
-	chatLinksHome(t, fixture.h)
+	histHome := chatLinksHome(t, fixture.h)
 	fixture.h.agentLoop.SetMediaStore(store)
+	histWork, histErr := workspace.SafeWorkDir(histHome, chatLinksWorkspaceID)
+	require.NoError(t, histErr)
+	histPlan := filepath.Join(histWork, "notes", "plan.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(histPlan), 0o755))
+	require.NoError(t, os.WriteFile(histPlan, []byte("plan"), 0o644))
+	histOutside := filepath.Join(histHome, "outside-plan.md")
+	require.NoError(t, os.WriteFile(histOutside, []byte("out"), 0o644))
+	// libraryRefFor(home, localPath, workspaceID) resolves against THIS
+	// handler's home. The live handler above has a different temp home.
+	histPlanRef := chatLinksStore(t, store, histPlan, "plan.md", "text/markdown", scope)
+	histOutRef := chatLinksStore(t, store, histOutside, "outside.md", "text/markdown", scope)
+	histRootRef := chatLinksStore(t, store, histWork, "library-root", "application/octet-stream", scope)
 	ws := chatLinksWorkspaceID
 	require.NoError(t, fixture.store.SetMeta(fixture.sid, session.MetaPatch{WorkspaceID: &ws}))
-	chatLinksSendFileEntry(t, fixture.store, fixture.sid, "libref-plan", "call-plan", planRef, "plan.md", "text/markdown", "file")
-	chatLinksSendFileEntry(t, fixture.store, fixture.sid, "libref-out", "call-out", outsideRef, "outside.md", "text/markdown", "file")
-	chatLinksSendFileEntry(t, fixture.store, fixture.sid, "libref-root", "call-root", rootRef, "library-root", "application/octet-stream", "file")
+	chatLinksSendFileEntry(t, fixture.store, fixture.sid, "libref-plan", "call-plan", histPlanRef, "plan.md", "text/markdown", "file")
+	chatLinksSendFileEntry(t, fixture.store, fixture.sid, "libref-out", "call-out", histOutRef, "outside.md", "text/markdown", "file")
+	chatLinksSendFileEntry(t, fixture.store, fixture.sid, "libref-root", "call-root", histRootRef, "library-root", "application/octet-stream", "file")
 	parts, raws := chatLinksSnapshotByFilename(t, fixture, fixture.sid, "libref-viewer")
 	planPart, ok := parts["plan.md"]
 	if !ok {
