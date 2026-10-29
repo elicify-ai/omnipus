@@ -120,6 +120,14 @@ func (s *Service) deliverAnswerWithFiles(ctx context.Context, a Answer) (AnswerR
 	if s.stagingDir == "" || s.deps.Media == nil || s.deps.Publisher == nil {
 		return AnswerReceipt{}, fmt.Errorf("%w: files cannot be attached to a group answer here", ErrAnswerFilesRefused)
 	}
+	// TD-3: a file over the per-file limit is a definitive rejection before
+	// acceptance: it is never opened, read or staged.
+	for i, f := range a.Files {
+		if f.Ref == "" && f.Size > MaxAnswerFileBytes {
+			return AnswerReceipt{}, fmt.Errorf("%w: file %d (%s) is %d bytes; a file can be at most %d bytes",
+				ErrAnswerFilesRefused, i+1, f.Filename, f.Size, MaxAnswerFileBytes)
+		}
+	}
 	r, ws, err := s.openRoom(a.RoomID)
 	if err != nil {
 		if StatusOf(err) == 404 {
@@ -141,7 +149,10 @@ func (s *Service) deliverAnswerWithFiles(ctx context.Context, a Answer) (AnswerR
 	r.mu.Lock()
 	in, err := s.acceptIntent(r, a, files, tmp)
 	r.mu.Unlock()
-	removeAll(tmp)
+	if tmp != "" {
+		removeAll(tmp)
+		s.pruneRoomStaging(r.rec.ID)
+	}
 	if err != nil {
 		return AnswerReceipt{}, err
 	}
@@ -170,31 +181,38 @@ func (s *Service) answerAllowed(r *room, a Answer) error {
 // stageSources resolves direct references and reads every other source
 // once into a temporary staging directory, hashing it (FR-078 (1), TD-3).
 // Any failure is definitive: nothing is staged and nothing is posted.
-func (s *Service) stageSources(r *room, a Answer) ([]intentFile, string, error) {
-	tmp := filepath.Join(s.stagingDir, r.rec.ID, "tmp-"+uuid.NewString())
-	if err := os.MkdirAll(tmp, 0o700); err != nil {
-		return nil, "", storageError("the answer's files could not be prepared", err)
+func (s *Service) stageSources(r *room, a Answer) (files []intentFile, tmp string, err error) {
+	// Staging exists only for files that are copied; an answer of workspace
+	// references stages nothing (TD-3).
+	if slices.ContainsFunc(a.Files, func(f AnswerFile) bool { return f.Ref == "" }) {
+		tmp = filepath.Join(s.stagingDir, r.rec.ID, "tmp-"+uuid.NewString())
+		if mkErr := os.MkdirAll(tmp, 0o700); mkErr != nil {
+			return nil, "", storageError("the answer's files could not be prepared", mkErr)
+		}
 	}
+	defer func() {
+		if err != nil && tmp != "" {
+			removeAll(tmp)
+			s.pruneRoomStaging(r.rec.ID)
+		}
+	}()
 	out := make([]intentFile, 0, len(a.Files))
 	for i, f := range a.Files {
 		n := i + 1
 		if f.Ref != "" {
 			if !isWorkspaceRefOf(f.Ref, r.rec.WorkspaceID) {
-				removeAll(tmp)
-				return nil, "", fmt.Errorf("%w: file %d is a file of another workspace; only files of this group's workspace can be attached", ErrAnswerFilesRefused, n)
+				return nil, tmp, fmt.Errorf("%w: file %d is a file of another workspace; only files of this group's workspace can be attached", ErrAnswerFilesRefused, n)
 			}
-			part, err := s.deps.Media.ResolveAttachment(r.rec.WorkspaceID, f.Ref)
-			if err != nil {
-				removeAll(tmp)
-				return nil, "", fmt.Errorf("%w: file %d: %v", ErrAnswerFilesRefused, n, err)
+			part, resolveErr := s.deps.Media.ResolveAttachment(r.rec.WorkspaceID, f.Ref)
+			if resolveErr != nil {
+				return nil, tmp, fmt.Errorf("%w: file %d: %v", ErrAnswerFilesRefused, n, resolveErr)
 			}
 			out = append(out, intentFile{Ref: f.Ref, Filename: part.Filename, Part: &part})
 			continue
 		}
-		staged, err := stageOne(tmp, strconv.Itoa(n), f)
-		if err != nil {
-			removeAll(tmp)
-			return nil, "", fmt.Errorf("%w: file %d (%s): %v", ErrAnswerFilesRefused, n, f.Filename, err)
+		staged, stageErr := stageOne(tmp, strconv.Itoa(n), f)
+		if stageErr != nil {
+			return nil, tmp, fmt.Errorf("%w: file %d (%s): %v", ErrAnswerFilesRefused, n, f.Filename, stageErr)
 		}
 		out = append(out, staged)
 	}
@@ -272,8 +290,10 @@ func (s *Service) acceptIntent(r *room, a Answer, files []intentFile, tmp string
 		}
 	}
 	in.Files = files
-	if err := os.Rename(tmp, s.intentDir(r.rec.ID, in.IntentID)); err != nil {
-		return nil, storageError("the answer's files could not be kept", err)
+	if tmp != "" {
+		if err := os.Rename(tmp, s.intentDir(r.rec.ID, in.IntentID)); err != nil {
+			return nil, storageError("the answer's files could not be kept", err)
+		}
 	}
 	// The intent owns its direct references from acceptance on (FR-078 (1)).
 	if err := s.retainRefs(r.rec.WorkspaceID, intentOwner(r.rec.ID, in.IntentID), directRefs(in)); err != nil {
@@ -384,7 +404,9 @@ func (s *Service) completeIntent(ctx context.Context, r *room, ws WorkspaceInfo,
 		return se.Entry.Id, fmt.Errorf("%w: %w", ErrMirrorFailed, err)
 	}
 	s.admitAll(r, ws, mentions)
+	// TD-3: staged bytes are removed after the commit.
 	removeAll(s.intentDir(r.rec.ID, in.IntentID))
+	s.pruneRoomStaging(r.rec.ID)
 	_ = ctx
 	return se.Entry.Id, nil
 }
@@ -565,6 +587,7 @@ func (s *Service) rejectIntent(r *room, in *intentRecord, reason string) error {
 		}
 	}
 	removeAll(s.intentDir(r.rec.ID, in.IntentID))
+	s.pruneRoomStaging(r.rec.ID)
 	return fmt.Errorf("%w: %s", ErrAnswerFilesRefused, reason)
 }
 
@@ -590,6 +613,24 @@ func (s *Service) resumeIntents(r *room, ws WorkspaceInfo) {
 // repairIntentEntries lets the text-only repair path skip answers that came
 // from an intent (they are matched by intent, not by text, FR-022).
 func (e storedEntry) fromIntent() bool { return e.IntentID != "" }
+
+// pruneRoomStaging removes the room's staging directory once it is empty
+// (TD-3: no staged bytes remain after a commit or a recorded rejection). A
+// directory that still holds another answer's staging stays. os.Remove never
+// removes a non-empty directory, so a concurrent staging that created its
+// own subdirectory in the meantime is never touched; that refusal is the
+// expected outcome and is not an error.
+func (s *Service) pruneRoomStaging(roomID string) {
+	if s.stagingDir == "" || roomID == "" {
+		return
+	}
+	dir := filepath.Join(s.stagingDir, roomID)
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) > 0 {
+		return // absent, unreadable (kept for the next attempt) or still in use
+	}
+	_ = os.Remove(dir) // a concurrent staging may have refilled it: kept then
+}
 
 func removeAll(dir string) {
 	if dir == "" {
