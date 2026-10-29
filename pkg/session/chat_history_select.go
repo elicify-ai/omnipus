@@ -430,8 +430,19 @@ type historySelector func(t *chatHistoryIndexTree, dir string, cp historyCheckpo
 // and single-occurrence readers: cut capture (the cut_captured read event),
 // generation pinning, cleanup-failure precedence and retention re-validation
 // with bounded reselect. Callers validate their own inputs first.
-func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, selectAtCut historySelector) (ChatHistoryPage, error) {
-	var err error
+func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, selectAtCut historySelector) (_ ChatHistoryPage, err error) {
+	// Combined read/retirement failure precedence (spec R1-1 / Z, B69): a
+	// real pending retirement failure outranks a cancellation, wherever in the
+	// attempt the cancellation surfaced, including before any cut is captured.
+	// Both causes stay matchable; the public error stays the sanitized one.
+	defer func() {
+		if err == nil || historyIsStorageFailure(err) || !(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return
+		}
+		if cleanupErr := us.historyOwner(sid).retryRetired(); cleanupErr != nil {
+			err = historyUnavailable("storage_error", errors.Join(err, cleanupErr))
+		}
+	}()
 	for attempt := 1; ; attempt++ {
 		if _, err = us.reconcileChatHistoryIndex(ctx, sid); err != nil {
 			return ChatHistoryPage{}, err

@@ -37,3 +37,9 @@ func (e *ChatHistoryUnavailableError) Is(target error) bool {
 	return target == ErrChatHistoryUnavailable ||
 		(target == ErrHistoryProjection && e.Reason == "projection_error")
 }
+
+// historyIsStorageFailure reports an already typed storage_error.
+func historyIsStorageFailure(err error) bool {
+	var unavailable *ChatHistoryUnavailableError
+	return errors.As(err, &unavailable) && unavailable.Reason == "storage_error"
+}

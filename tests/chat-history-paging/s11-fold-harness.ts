@@ -4,6 +4,7 @@ import { expect, vi } from 'vitest'
 import type { Message } from '@/lib/api/generated/openapi-types'
 import type { JudgeVerdictFrame, ServerFrame, SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore } from '@/store/chat'
+import { __resetFinishedTurnIdsForTests } from '@/store/chat/frames'
 import { entry, expectValidPage, page, pos, replay, snapshot, STAMP } from './fixtures'
 import { AVAILABLE, BOOT, SID, bucket, connect, response, socket } from './final-gate-harness'
 
@@ -46,6 +47,9 @@ export function rowWeight(sources: Message[]) {
 let cut = 100
 export function begin() {
   cut = 100
+  // Independent cases reuse SID/TURN. This intentional production tracker
+  // survives store resets; a prior case's done must not close the next case.
+  __resetFinishedTurnIdsForTests()
   const wire = connect(); wire.attach()
   wire.deliver({ ...snapshot(page([], { info: { limit: 20, min_rows: 1 } })), seq: cut, boot_id: BOOT }, AVAILABLE,
     { type: 'done', session_id: SID }, { type: 'catch_up_complete', session_id: SID, seq: cut, boot_id: BOOT, mode: 'snapshot' })
@@ -80,7 +84,11 @@ export async function rest(sources: Message[], mode: 'latest' | 'older' | 'newer
   expect(bucket().history.requests[mode].status, 'instrument: page committed without a protocol/setup error').toBe('idle')
 }
 export function assistantRows() {
-  return bucket().messageOrder.map(id => bucket().messagesById[id]).filter(row => row.role === 'assistant' && (row.content || row.tool_calls?.length))
+  const current = bucket()
+  // Live calls remain in the flat pending-call collection until done bakes
+  // them onto the row. Count their actual owner, not only saved tool_calls.
+  const pendingOwners = new Set(current.toolCallOrder.filter(id => current.toolCalls[id]).map(id => current.toolCallOwnerMessageId?.[id]))
+  return current.messageOrder.map(id => current.messagesById[id]).filter(row => row.role === 'assistant' && (row.content || row.tool_calls?.length || pendingOwners.has(row.id)))
 }
 export function segment(key: string, text: string, sourceIds: string[], positions: string[], calls: string[], offsets: number[], aliases: string[] = []) {
   expect(assistantRows().map(row => row.id), 'S11: exact drawn assistant row inventory').toEqual([key])

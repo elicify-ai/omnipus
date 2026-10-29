@@ -1,7 +1,7 @@
 // T83 / S11 B98: real list, runtime, paging and sole viewport compensation.
 // Browser metrics are independent physical inputs. No part/store/hook seeding.
-import { afterEach, beforeEach, expect, it } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { AssistantRuntimeProvider, ThreadPrimitive } from '@assistant-ui/react'
@@ -31,11 +31,37 @@ function segmentSources(): Message[] {
 let network: Stage1Network
 let layout: ReturnType<typeof installHistoryLayout> | undefined
 const releases: (() => void)[] = []
-beforeEach(() => { resetStage1App(); network = new Stage1Network() })
+const browserFrames = new Map<number, FrameRequestCallback>()
+let nextFrame = 0
+beforeEach(() => {
+  resetStage1App(); network = new Stage1Network(); nextFrame = 0
+  browserFrames.clear()
+  // Browser edge only. A finite frame barrier must not keep an async act
+  // scope alive after Vitest times out a missing product prerequisite.
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { browserFrames.set(++nextFrame, callback); return nextFrame })
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => browserFrames.delete(id))
+})
 afterEach(async () => {
-  releases.splice(0).forEach(release => release())
-  await stopStage1App(); layout?.restore(); layout = undefined
-  expect(network.unexpected, 'network edges are declared').toEqual([])
+  let watchdog: ReturnType<typeof setTimeout> | undefined
+  try {
+    // Unmount/disconnect observers BEFORE resolving held HTTP work. A failed
+    // assertion must not resume a live component or leave queued browser work.
+    cleanup()
+    browserFrames.clear()
+    releases.splice(0).forEach(release => release())
+    await Promise.race([
+      stopStage1App(),
+      new Promise<never>((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error('T83 fixture teardown did not finish after unmount and HTTP release')), 5000)
+      }),
+    ])
+    expect(network.unexpected, 'network edges are declared').toEqual([])
+  } finally {
+    if (watchdog !== undefined) clearTimeout(watchdog)
+    browserFrames.clear()
+    layout?.restore(); layout = undefined
+    vi.unstubAllGlobals()
+  }
 })
 function RealReader() {
   const runtime = useOmnipusRuntime()
@@ -55,10 +81,16 @@ async function read(sources: Message[], mode: 'latest' | 'older' | 'newer', earl
   })
   expect(bucket().history.requests[mode].status, 'fixture: actual read commits').toBe('idle')
 }
+function browserFrame() {
+  const pending = [...browserFrames.values()]
+  browserFrames.clear()
+  for (const callback of pending) callback(performance.now())
+}
 async function settle() {
   await act(async () => { layout!.flushResize(); fireEvent(window, new Event('resize')) })
-  await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); layout!.flushResize() })
-  await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); layout!.flushResize() })
+  // Exactly the same two frame barriers as before, without an unresolved rAF
+  // promise. A callback queued by a callback belongs to the following frame.
+  for (let frame = 0; frame < 2; frame++) await act(async () => { browserFrame(); layout!.flushResize() })
 }
 function point(region: HTMLElement) {
   const part = region.querySelector<HTMLElement>(`[data-history-part="${pos(3)}"]`)
@@ -69,11 +101,14 @@ function point(region: HTMLElement) {
 }
 const top = (region: HTMLElement) => point(region).getBoundingClientRect().top - region.getBoundingClientRect().top
 async function positionInsideB(region: HTMLElement, direction: 'older' | 'newer') {
-  await settle()
-  // For virtual mode first reveal B using the physical row offset, not a store
-  // rank→virtual-prefix injection. The real virtualizer owns its translation.
-  await act(async () => { region.scrollTop = direction === 'newer' ? region.scrollHeight - region.clientHeight : 0; fireEvent.scroll(region); layout!.flushResize() })
-  await waitFor(() => expect(region.querySelector(`[data-history-part="${pos(3)}"]`), 'BLOCKED: B part marker not implemented — required by S11/T83').not.toBeNull())
+  // Reveal B before waiting on layout. The real virtualizer owns translation;
+  // assert the required marker immediately after its two browser frames, so
+  // missing implementation is a loud product failure, not a six-second DOM
+  // retry that can outlive a timed-out act scope.
+  act(() => { region.scrollTop = direction === 'newer' ? region.scrollHeight - region.clientHeight : 0; fireEvent.scroll(region); layout!.flushResize() })
+  act(() => { browserFrame(); layout!.flushResize() })
+  act(() => { browserFrame(); layout!.flushResize() })
+  expect(region.querySelector(`[data-history-part="${pos(3)}"]`), 'BLOCKED: B part marker not implemented — required by S11/T83').not.toBeNull()
   const marked = point(region)
   const marker = marked.closest<HTMLElement>('[data-history-part]')!
   expect(marked.getBoundingClientRect().top - marker.getBoundingClientRect().top, 'instrument: independent inner geometry sees the second paragraph60px inside B').toBe(60)
@@ -128,6 +163,19 @@ async function setup(direction: 'older' | 'newer', virtual: boolean) {
 }
 
 it('T83 instrument control: inner geometry detects movement that an unchanged row top misses', () => {
+  const delivered: string[] = []
+  const cancelled = requestAnimationFrame(() => delivered.push('cancelled'))
+  cancelAnimationFrame(cancelled)
+  requestAnimationFrame(() => {
+    delivered.push('first')
+    requestAnimationFrame(() => delivered.push('second'))
+  })
+  expect(delivered, 'instrument: scheduling is not delivery').toEqual([])
+  act(browserFrame)
+  expect(delivered, 'instrument: cancellation works and nested work waits one frame').toEqual(['first'])
+  act(browserFrame)
+  expect(delivered).toEqual(['first', 'second'])
+  expect(browserFrames.size, 'instrument: the finite frame barrier leaves no queued work').toBe(0)
   layout = installHistoryLayout({ innerParts: true })
   const viewport = document.createElement('div')
   viewport.setAttribute('aria-label', 'Conversation history')

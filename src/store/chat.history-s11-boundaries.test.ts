@@ -36,11 +36,9 @@ it.each(['REST', 'snapshot', 'live'] as const)('T77 B93: %s same-turn steer is a
   const sources = [prose(1, A, 'First.'), tool(2), steer, prose(4, B, 'Second.')]
   if (carrier === 'live') {
     token(A, 'First.'); liveTool()
-    // A real server-echoed user record, through the public frame handler.
-    const echo = sourceFrames(steer).map(frame => {
-      const copy = { ...frame }; if ('history_origin' in copy) delete copy.history_origin; return copy
-    })
-    socket().deliver(...echo)
+    // The canonical live echo is user_message, not a replay_message outside
+    // an attach. Keep its independent id/text and real public frame handler.
+    socket().deliver({ type: 'user_message', session_id: SID, id: steer.id, content: steer.content!, timestamp: steer.timestamp, agent_id: 'mia' })
     token(B, 'Second.')
   } else if (carrier === 'snapshot') native(sources)
   else await rest(sources)
@@ -124,7 +122,7 @@ it.each(['REST', 'snapshot', 'live', 'page-edge'] as const)('T78 B93: %s silent 
   expect(assistantRows().map(row => [row.id, row.content])).toEqual([[A, 'First.\n\nSecond.']])
   const owner = bucket().messagesById[A]
   if (carrier !== 'live') expect(owner.historyParts?.map(part => part.sourceId)).toEqual([A, T, B])
-  expect(owner.spans?.map(span => [span.spanId, span.status, span.finalResult])).toEqual([['s11-transparent-span', 'success', 'Finished.']])
+  expect(owner.spans?.map(span => [span.spanId, span.status, span.status === 'running' ? undefined : span.finalResult])).toEqual([['s11-transparent-span', 'success', 'Finished.']])
   expect(owner.content).not.toContain('Progress remains a fact.')
 })
 
