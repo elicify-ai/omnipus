@@ -122,7 +122,17 @@ it.each(['REST', 'snapshot', 'live', 'page-edge'] as const)('T78 B93: %s silent 
   expect(assistantRows().map(row => [row.id, row.content])).toEqual([[A, 'First.\n\nSecond.']])
   const owner = bucket().messagesById[A]
   if (carrier !== 'live') expect(owner.historyParts?.map(part => part.sourceId)).toEqual([A, T, B])
-  expect(owner.spans?.map(span => [span.spanId, span.status, span.status === 'running' ? undefined : span.finalResult])).toEqual([['s11-transparent-span', 'success', 'Finished.']])
+  // Team-lead 2026-10-29 Choice A: S11a preserves Q5/Q6's saved
+  // start-row owner. Live still owns the span on A; that parity gap is
+  // explicit, not permission to move a saved helper as a side effect of S11.
+  const spanOwner = carrier === 'live' ? A : start.id
+  expect(bucket().messageOrder.flatMap(id => bucket().messagesById[id].spans?.map(span =>
+    [id, span.spanId, span.status, span.status === 'running' ? undefined : span.finalResult]) ?? []),
+  'exactly one completed span, on its carrier-specific owner; no duplicate or lost fact').toEqual([[spanOwner, 's11-transparent-span', 'success', 'Finished.']])
+  if (carrier !== 'live') {
+    expect(bucket().historySourceAliases?.[pos(4)], 'the persisted start retains its own source-position owner').toBe(start.id)
+    expect(bucket().messagesById[start.id].historyPosition).toBe(pos(4))
+  }
   expect(owner.content).not.toContain('Progress remains a fact.')
 })
 
@@ -132,6 +142,14 @@ it('T78 B93/S11c: actual outbound clear acknowledgements and done refetch use th
   const sent = socket().socket.sent.filter(frame => frame.type === 'message').at(-1)
   expect(sent?.content, 'instrument: real clear operation was sent, no fake pushed clear marker').toBe('/clear')
   expect(sent?.client_message_id).toBeTypeOf('string')
+  // Frozen clear-transcript-refetch V1: keep the unrepresented live tail
+  // after this operation's user row. Capture its identity before the read;
+  // never accept arbitrary extra rows merely because they follow A.
+  const clearIndex = bucket().messageOrder.indexOf(String(sent!.client_message_id))
+  expect(clearIndex, 'instrument: the sent clear has its own local user row').toBeGreaterThanOrEqual(0)
+  const tail = bucket().messageOrder.slice(clearIndex + 1)
+  expect(tail, 'instrument: an idle send minted exactly one assistant placeholder').toHaveLength(1)
+  expect(bucket().messagesById[tail[0]]).toMatchObject({ role: 'assistant', content: '', status: 'streaming', isStreaming: true })
   const marker = prose(0, 's11-new-clear', 'Conversation context cleared', { role: 'system', type: 'system', turn_id: undefined })
   const selected = page([marker, prose(1, A, 'First.'), tool(2), prose(3, B, 'Second.')], { rows: 4, info: { limit: 40, min_rows: 20, latest_clear: { entry_id: marker.id, history_position: pos(0) } } })
   const read = vi.fn(async () => response(selected)); vi.stubGlobal('fetch', read)
@@ -139,7 +157,12 @@ it('T78 B93/S11c: actual outbound clear acknowledgements and done refetch use th
   await vi.waitFor(() => expect(bucket().historySourceAliases?.[pos(3)], 'actual clear-refetch committed the new projection').toBe(A))
   expect(read).toHaveBeenCalledTimes(1)
   expect(assistantRows().map(row => [row.id, row.content])).toEqual([[A, 'First.\n\nSecond.']])
-  expect(bucket().messageOrder).toEqual([marker.id, A])
+  expect(bucket().messageOrder, 'folded server projection, then exactly the captured live tail').toEqual([marker.id, A, tail[0]])
+  const placeholder = bucket().messagesById[tail[0]]
+  expect(placeholder).toMatchObject({ role: 'assistant', content: '', status: 'done', isStreaming: false })
+  expect(placeholder.tool_calls ?? []).toEqual([])
+  expect(placeholder.spans ?? []).toEqual([])
+  expect(placeholder.historyPosition).toBeUndefined()
   expect(bucket().messagesById[A].historyParts?.map(part => part.sourceId)).toEqual([A, T, B])
   expect(bucket().toolCallOwnerMessageId?.['s11-call']).toBe(A)
 })
