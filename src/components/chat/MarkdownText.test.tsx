@@ -62,6 +62,7 @@ describe('isSafeHref — scheme allow-list', () => {
   })
 
   it('rejects tel: (follow-up 4)', () => {
+    // Spec replacement (team-lead ruling, follow-up 4): tel: was on the allow-list; the founder removed it, so this expects false.
     expect(isSafeHref('tel:+1234567890')).toBe(false)
   })
 
