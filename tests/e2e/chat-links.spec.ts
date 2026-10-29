@@ -9,7 +9,7 @@ import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { GatewayProcess } from './fixtures/gateway-process';
 import { E2E_MODEL } from './fixtures/e2e-model';
-import { chatInput, waitForConnected } from './fixtures/selectors';
+import { chatInput } from './fixtures/selectors';
 import { startTerminalOutcomeProvider } from './fixtures/terminal-outcome-provider';
 import { createTerminalSession, openTerminalSession } from './fixtures/terminal-outcome-acceptance';
 
@@ -38,7 +38,9 @@ test('a streamed omnipus file link becomes an in-app Library anchor (BS-1.1)', a
     await chatInput(page).fill('Show me the plan.');
     await chatInput(page).press('Enter');
     const link = page.locator('a[data-testid="markdown-link"]');
-    await expect(link).toHaveAttribute('href', '/library?workspace=W&path=notes%2Fplan.md');
+    // Hash history (src/main.tsx createHashHistory). The spec's page is
+    // /library?workspace=&path=; this app addresses it as /#/library?...
+    await expect(link).toHaveAttribute('href', '/#/library?workspace=W&path=notes%2Fplan.md');
     await expect(link).not.toHaveAttribute('target', '_blank');
     await expect(link).toContainText('W / notes/plan.md');
   } finally {

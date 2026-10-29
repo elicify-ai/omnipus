@@ -1,6 +1,8 @@
 /**
  * RED: chat links in both markdown renderers (BS-1.1, BS-1.8, SEC-4, SEC-5, SEC-6).
- * Expected hrefs come from the spec grammar, not from a render of the current code.
+ * The query (workspace and path) comes from BS-1.15. The hash prefix is the
+ * app's address for that route: main.tsx mounts createHashHistory, and
+ * KnowledgeBacklinks.tsx::libraryNoteHref already writes /#/library?...
  * Both live and historical markdown call createLinkRenderer(null).
  */
 import { render, screen } from '@testing-library/react'
@@ -16,7 +18,7 @@ describe('omnipus file links', () => {
     )
     const link = screen.getByTestId('markdown-link')
     expect(link.tagName).toBe('A')
-    expect(link).toHaveAttribute('href', '/library?workspace=W&path=secrets%2Fpayroll.xlsx')
+    expect(link).toHaveAttribute('href', '/#/library?workspace=W&path=secrets%2Fpayroll.xlsx')
     expect(link).not.toHaveAttribute('target')
     expect(link).toHaveTextContent('click me')
     expect(link).toHaveTextContent('W / secrets/payroll.xlsx')
