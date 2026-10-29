@@ -196,11 +196,36 @@ func TestHubToolExecEnd_ShowToUser_DeliversLiveOnly(t *testing.T) {
 	if reject.rejected != 1 || overflowed != 1 {
 		t.Fatalf("overflow reject=%d onOverflow=%d, want 1 and 1 (FR-016)", reject.rejected, overflowed)
 	}
-	if reg.lookup(evictedSid) != nil {
-		t.Fatal("evicted hub delivery created a hub (FR-016 must not call getOrCreate)")
-	}
+	// hubToolExecEnd publishes tool_call_result through getOrCreate before
+	// the live frame. That existing publish creates a hub, so lookup after
+	// the call is not evidence that deliverLive created one. The evicted
+	// connection must still receive no open_in_library frame.
 	if len(chatLinksOpenFrames(chatLinksFrames(evictedConn))) != 0 {
 		t.Fatal("evicted hub delivered open_in_library (FR-016)")
+	}
+	// deliverLive itself looks up and never creates. An unknown session
+	// stays absent; an evicted hub still in the map drops the frame and
+	// is not replaced.
+	const absentSid = "absent-sess"
+	if n := reg.deliverLive(absentSid, []byte(`{"type":"open_in_library"}`)); n != 0 || reg.lookup(absentSid) != nil {
+		t.Fatalf("deliverLive to a missing hub delivered %d and lookup=%v, want 0 and nil (FR-016)", n, reg.lookup(absentSid))
+	}
+	evictedOnly := reg.getOrCreate("evicted-only")
+	evictedOnlyConn := &wsConn{sendCh: make(chan []byte, 4), doneCh: make(chan struct{})}
+	if _, ok := evictedOnly.bindLive(evictedOnlyConn); !ok {
+		t.Fatal("bindLive evicted-only")
+	}
+	evictedOnly.mu.Lock()
+	evictedOnly.evicted = true
+	evictedOnly.mu.Unlock()
+	if n := reg.deliverLive("evicted-only", []byte(`{"type":"open_in_library","session_id":"evicted-only"}`)); n != 0 {
+		t.Fatalf("deliverLive on an evicted hub delivered %d, want 0 (FR-016)", n)
+	}
+	if reg.lookup("evicted-only") != evictedOnly {
+		t.Fatal("deliverLive replaced an evicted hub via getOrCreate (FR-016)")
+	}
+	if len(chatLinksOpenFrames(chatLinksFrames(evictedOnlyConn))) != 0 {
+		t.Fatal("evicted hub delivered open_in_library via deliverLive (FR-016)")
 	}
 
 	since := int64(headBefore)
