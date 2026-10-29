@@ -33,14 +33,15 @@ export function historyLayoutHeight(element: HTMLElement): number {
 }
 type FillDirection = 'older' | 'newer'
 type FillOwner = { frame: number | null; finishLayout: (() => void) | null } // not-wire-format
-type Anchor = { position: string; offset: number; part?: { position: string; offset: number }; alternatives: { position: string; screenTop: number }[] } // not-wire-format
+type Anchor = { position: string; offset: number; part?: { position: string; offset: number; element?: HTMLElement }; alternatives: { position: string; screenTop: number }[] } // not-wire-format
 
 /** A row's drawn source parts (#1452 S11 reading position): the `data-history-part` markers that name a position. */
 function partMarkers(root: ParentNode): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>('[data-history-part]')].filter(part => !!part.dataset.historyPart)
 }
-/** The drawn marker of one source position, if mounted. */
-function partMarker(root: ParentNode, position: string): HTMLElement | undefined {
+/** The drawn marker of one source position, if mounted: the held element while it still draws it. */
+function partMarker(root: ParentNode, position: string, held?: HTMLElement): HTMLElement | undefined {
+  if (held?.isConnected && held.dataset.historyPart === position) return held
   return root.querySelector<HTMLElement>(`[data-history-part="${position.replace(/["\\]/g, '\\$&')}"]`) ?? undefined
 }
 
@@ -130,7 +131,7 @@ function captureAnchor(scroller: HTMLElement, rows: HTMLElement[], offset: (elem
   // S11: a re-anchor after our own correction keeps the held source part
   // while it is still in view, instead of whatever row a not yet re-laid-out
   // list shows first.
-  const heldPart = refs.anchor.current?.part ? partMarker(scroller, refs.anchor.current.part.position) : undefined
+  const heldPart = refs.anchor.current?.part ? partMarker(scroller, refs.anchor.current.part.position, refs.anchor.current.part.element) : undefined
   const kept = heldPart && within(heldPart, scroller.clientHeight) ? heldPart : undefined
   const keptRow = kept?.closest<HTMLElement>('[data-history-anchor]') ?? undefined
   const first = keptRow ?? visible[0]
@@ -140,7 +141,7 @@ function captureAnchor(scroller: HTMLElement, rows: HTMLElement[], offset: (elem
   // Inside a row that combines several sources, the reader's point is the
   // topmost visible source part, not the row's own (first) position.
   const part = kept ?? partMarkers(first).find(item => within(item, scroller.clientHeight))
-  refs.anchor.current = { position: first.dataset.historyAnchor!, offset: offset(first), ...(part ? { part: { position: part.dataset.historyPart!, offset: offset(part) } } : {}),
+  refs.anchor.current = { position: first.dataset.historyAnchor!, offset: offset(first), ...(part ? { part: { position: part.dataset.historyPart!, offset: offset(part), element: part } } : {}),
     alternatives: alternatives.map(row => ({ position: row.dataset.historyAnchor!, screenTop: row.getBoundingClientRect().top - top })) }
   const protectedPositions = new Set(visible.filter(row => row.getBoundingClientRect().top < top + 2 * scroller.clientHeight).flatMap(row => {
     const parts = partMarkers(row)
@@ -183,7 +184,8 @@ function correctAnchor(scroller: HTMLElement, rows: () => HTMLElement[], offset:
   let estimatedOnly = false
   // S11: a held source part is found wherever it is drawn now, also after a
   // fold re-keyed or re-slotted the row around it.
-  const part = held.part ? partMarker(scroller, held.part.position) : undefined
+  const part = held.part ? partMarker(scroller, held.part.position, held.part.element) : undefined
+  if (part && held.part) held.part.element = part
   if (part) { delta = offset(part) - held.part!.offset; row = part.closest<HTMLElement>('[data-history-anchor]') ?? row; if (row) held.position = row.dataset.historyAnchor!; held.offset = row ? offset(row) - delta : held.offset }
   else if (row) delta = offset(row) - held.offset
   else {
