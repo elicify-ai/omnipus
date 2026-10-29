@@ -43,16 +43,19 @@ const (
 	showToUserNoPolicy    = "show_to_user: the file access policy for this turn could not be resolved; the Library was not opened."
 )
 
-// Audit reason codes (chat-links spec, "Audit").
+// Audit reason codes, worded exactly as the chat-links spec's "Audit" rule
+// lists them; request_id_unavailable is the spec's own code for a failed
+// crypto/rand read. policy_unavailable covers a turn whose file policy could
+// not be resolved at all.
 const (
 	showToUserReasonOK          = "ok"
 	showToUserReasonOutside     = "outside"
-	showToUserReasonOtherWS     = "other_workspace"
-	showToUserReasonDenied      = "denied_or_missing"
-	showToUserReasonNoWorkspace = "no_workspace"
-	showToUserReasonDelegated   = "delegated_session"
-	showToUserReasonChannel     = "wrong_channel"
-	showToUserReasonRateLimit   = "rate_limit"
+	showToUserReasonOtherWS     = "other workspace"
+	showToUserReasonDenied      = "denied-or-missing"
+	showToUserReasonNoWorkspace = "no workspace"
+	showToUserReasonDelegated   = "delegated session"
+	showToUserReasonChannel     = "wrong channel"
+	showToUserReasonRateLimit   = "rate limit"
 	showToUserReasonRequestID   = "request_id_unavailable"
 	showToUserReasonPolicy      = "policy_unavailable"
 )
