@@ -64,7 +64,8 @@ func TestChatHistoryRebuild_MatchesLiveProjectionForEveryEffect(t *testing.T) {
 	_, err = s.RetractToolCallEffects(sid, []ArchiveAddress{emptied})
 	require.NoError(t, err)
 
-	public := []ArchiveAddress{owner}
+	public := make([]ArchiveAddress, 0, 6)
+	public = append(public, owner)
 	for _, e := range []TranscriptEntry{
 		{ID: "discarded", Role: "user", Content: "not delivered", ClientMessageID: "client-u"},
 		{ID: "answer", Role: "assistant", Content: "partial", TurnID: "T2"},
