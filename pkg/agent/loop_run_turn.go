@@ -1568,6 +1568,9 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		providerCancel()
 		rt.ts.clearProviderCancel(providerCancel)
 	}()
+	// Issue #1478: tell the chat when the provider goes silent (provider_status).
+	providerCtx, stopSilenceWatch := rt.startProviderSilenceWatch(providerCtx)
+	defer stopSilenceWatch()
 
 	if !rt.al.beginActiveRequest() {
 		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
@@ -1717,6 +1720,7 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 			// at turn end, after the assistant answer — MIN-103).
 			rt.ts.queueProviderFallbackNote(fbResult.Model, fbResult.Attempts)
 		}
+		rt.noteProviderRecovered(fbResult.Retries) // #1280: "reconnected after N retries"
 		// Phase 1B FR-013: record the model that actually produced
 		// the response (may differ from the agent's primary model
 		// when a fallback candidate was used).

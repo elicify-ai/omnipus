@@ -184,6 +184,12 @@ func WatchStreamStall(ctx context.Context, closeBody func(), silentFor time.Dura
 	timer := time.NewTimer(silentFor)
 	done := make(chan struct{})
 	var fired atomic.Bool
+	// Issue #1478: report the stream start and every consumed event to the
+	// caller's observer, if any (the silence notice; the limit is unchanged).
+	activity := streamActivityFrom(ctx)
+	if activity != nil {
+		activity(silentFor)
+	}
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -205,6 +211,9 @@ func WatchStreamStall(ctx context.Context, closeBody func(), silentFor time.Dura
 				}
 			}
 			timer.Reset(silentFor)
+			if activity != nil {
+				activity(silentFor)
+			}
 		},
 		stop: func() {
 			timer.Stop()

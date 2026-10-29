@@ -38,6 +38,10 @@ func (rt *agentLoopRunTurn) providerRetryObserver() providers.RetryObserver {
 		)
 		// Only the #1280 plan sends it: a C-8 rate-limit retry of an earlier
 		// candidate never did, and the next candidate answers soon anyway.
+		// Issue #1478: the wait is shown by this retry line, never as silence.
+		if w := rt.providerSilence; w != nil {
+			w.retryScheduled(info.RetryAt)
+		}
 		if info.Attempt == 2 && info.MaxAttempts == providers.RetryPlanMaxAttempts {
 			rt.publishRetryNotice()
 		}

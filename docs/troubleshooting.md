@@ -156,6 +156,8 @@ When a request to the model provider fails for a reason that usually passes — 
 
 While it waits, the chat shows a live line from the first failed attempt on, with the attempt number ("attempt 2 of 6") and a countdown to the next try. **Stop** ends the wait at once. On a channel such as Telegram you get one "Retrying — please wait..." message. A helper's own chat shows the same line for the helper's requests.
 
+When a retry succeeds, the chat notes that the connection came back and after how many retries.
+
 If the last attempt also fails, the turn ends with the cause in plain words — for example "We couldn't reach the model provider" — and your message stays in the chat, so you can retry or switch models.
 
 What is not retried:
@@ -168,6 +170,12 @@ What is not retried:
 | Part of the reply was already shown when the failure happened | Not retried, so you never see half an answer followed by a second copy |
 
 When the agent has a fallback model, the first model hands over to the fallback at once on a dropped connection or an overload (a rate limit is retried up to 3 times first). The automatic retries above apply to the last model Omnipus can still try.
+
+## The model has gone quiet
+
+A provider can stop sending anything in the middle of a reply. Omnipus waits up to the silence limit before it ends the call — 5 minutes by default, or the `stream_stall_timeout` set for that model; that limit is unchanged. So you can tell a slow answer from a stalled one, the chat shows a calm notice once the model has said nothing for **30 seconds** ("the model hasn't responded for … seconds, still waiting"). When the model is streaming, the notice also says when the silence limit would end the call. The notice disappears as soon as anything arrives again, and **Stop** stays available the whole time.
+
+Anything the provider sends counts as a sign of life, including the model's hidden reasoning and the provider's keep-alive messages, so a model that is thinking without showing text does not trigger the notice. A reply that is not streamed (an agent's fallback model is called that way) counts as silent until it arrives. A wait between automatic retries is shown by the retry line, not as silence.
 
 ## The provider rejects your model requests
 
