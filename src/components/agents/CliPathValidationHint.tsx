@@ -71,6 +71,16 @@ export function CliPathValidationHint({ validation, detectHint, testId }: CliPat
             Did not run, or returned no version.
           </p>
         )
+      case 'path-not-allowed':
+        // T11 spec §3.2 / C-A2: the server's program-file check refused this
+        // path before anything ran. Its detail names the failed check, so it
+        // is shown as-is.
+        return (
+          <p data-testid={testId} data-cli-status="path-not-allowed" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">
+            <XCircle size={11} weight="fill" />
+            {validation.result.detail || 'This program path is not allowed.'}
+          </p>
+        )
       default:
         // unknown-cli, or any future/stale reason value the SPA bundle
         // doesn't recognize (F-17 stale-bundle safety) — non-blocking.
