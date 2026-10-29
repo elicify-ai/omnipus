@@ -210,7 +210,7 @@ Go reference patterns (`docs/reference/go-implementation/`) do not exist in this
 | E29 | ADR-030 §11 F-01 chose create-parity `withAuth` for `cli-validate` ("not an admin route") | `docs/internal/architecture/ADR-030-external-executor-cli-path-detection.md` §11 | Verified |
 | E30 | The Runtime editor runs `testAgentRunner(agentId)` on the **saved** agent before saving and throws on `!result.ok` ("Fix the runner before saving") | `src/components/agents/AgentProfile.tsx` (autosave callback, `testedExecutorSig`) | Verified |
 | E31 | The claude driver always passes `--dangerously-skip-permissions`; the codex driver uses `--sandbox workspace-write` + `--ask-for-approval never` and deliberately omits `--dangerously-bypass-approvals-and-sandbox`; the operator-args filter drops escalation flags per CLI | `pkg/agent/runner/driver_claude.go` header; `driver_codex.go` (`buildArgs` notes); `argsafety.go::dangerousCLIFlagsByCLI` | Verified |
-| E32 | Codex credential location is resolved from the gateway process environment | `pkg/agent/runner/codex_auth.go::resolveCodexAuthPath` (no environment parameter) | Verified (signature); reads process env: Inferred high |
+| E32 | Codex credential location is resolved from the gateway process environment | `pkg/agent/runner/codex_auth.go` (the runner's Codex credential-path resolver) (no environment parameter) | Verified (signature); reads process env: Inferred high |
 | E33 | T8 rev 5.1 names: `ThirdPartyAgentSettings` `{cli_paths}`, `sandbox.third_party_agents`, `GET`/`PUT /settings/third-party-agents` (replace semantics, absent key clears), `effective_cli_path`, `program_warning`, `cli_path_invalid`; X1 stored-as-typed with chain checks; X2 merge + `env_overrides_remove`; D-17 legacy/PATH fallback | `tool-parity-design.md` §3B D-16, D-17, D-19; §3C D-20 (commit `f2b69d2`) | Verified |
 | E34 | Existing guard tests contain no quoted nonexistent-root literal expectation that the narrow rule would supersede | `git grep "'/api/\|\"/api/\|/%s" pkg/tools/shell_path_guard_test.go` → no match | Verified (grep; only that file checked) |
 
@@ -365,7 +365,7 @@ Saved mode rejects request `cli`, `model`, `cli_args`, `max_tool_iterations` (40
 
 ### AD-13 Truthful outcomes (MAJ-007, R2-MAJ-007)
 
-**Decision.** Connection mode: `program_runs`, `credentials` (`found`/`not_found`/`unknown`, from the snapshot environment including credential directories such as a `CODEX_HOME` override — `codex_auth.go::resolveCodexAuthPath` gains an environment input, E32), `authentication: not_verified`; `ok` = program runs and credentials found. Smoke mode: `outcome` and `authentication` are separate:
+**Decision.** Connection mode: `program_runs`, `credentials` (`found`/`not_found`/`unknown`, from the snapshot environment including credential directories such as a `CODEX_HOME` override — `codex_auth.go::the runner's Codex credential-path resolver` gains an environment input, E32), `authentication: not_verified`; `ok` = program runs and credentials found. Smoke mode: `outcome` and `authentication` are separate:
 
 | `outcome` | `authentication` | When | UI text |
 |---|---|---|---|
