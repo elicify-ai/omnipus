@@ -13,10 +13,14 @@ allowed-tools: Read, Grep, Glob, Bash, Write, Edit
 
 # Plan & Spec (plan-spec)
 
-Last reviewed: 2026-10-28 — dev-team roster update (ten roles)
+Last reviewed: 2026-10-29 — Epic, riders and agent tool field table in the spec header
+Process version: 2026-10-29.1
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (§7.1, the
 feature-size flow); founder decisions:
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`.
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`
+(founder's Mac only; on a pod ask the chief). Every spec header carries its Epic, its
+riders and, for an agent-managed object, the agent tool field table
+(`knowledge/spec-template.md`; root `CLAUDE.md`, "Definition of Done").
 
 ## When this runs, and on what input
 

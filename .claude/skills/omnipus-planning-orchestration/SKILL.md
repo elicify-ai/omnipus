@@ -13,7 +13,8 @@ Topology authority: root `CLAUDE.md` ("Subagent Workflow"). Loading is mandatory
 not cite this skill is a review finding; the skills acknowledgement line (shared-skill
 rule 13) proves the load.
 
-Last reviewed: 2026-10-28 — dev-team roster update (ten roles)
+Last reviewed: 2026-10-29 — trunk-based landing branches, chief meetings
+Process version: 2026-10-29.1
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (sections 5.6–5.9, 7.6, 7.7).
 Read that design with its 2026-10-23 amendment; current rules are in root `CLAUDE.md`
 ("Subagent Workflow", "Build, test, and quality gates", "Running CLI agents").
@@ -56,37 +57,47 @@ Full procedure: `knowledge/parallel-planning.md`. The loop:
    hangs or overreach; resume a stopped or disconnected worker in its own session with
    the same context, rather than replacing it. Never fire-and-forget. Read
    `knowledge/dispatch-and-watch.md` before launching or resuming.
-7. **Name the integration branch** — the founder names it when commissioning; confirm at
-   engagement start, repeat it in every dispatch brief that needs it, re-confirm with the
-   founder at each landing. It is never hard-coded in any repo asset.
+7. **Name the landing branch** — the chief names `landing/<train>` at planning (a
+   standalone feature gets its own, for example `landing/effort`) and repeats it in every
+   dispatch brief; the release branch is the integration target the lock covers. Neither
+   is hard-coded in a repo asset except as an example. Re-confirm the release branch
+   with the founder at each landing.
+8. **Riders and conflicts** — add the open hardening issues that touch the package's
+   files (riders) to its scope, confirmed with the architect before the design is final,
+   and check the coordination repo's file-conflict table (`LANDING-PLAN.md`) before
+   cutting waves (`knowledge/parallel-planning.md`).
 
 ## 2. Coordination — streams, chief, ledger
 
 Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
 
 - The **coordination ledger** — a directory outside every checkout and worktree
-  (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/`) — is the single
-  coordination state. Read `CHIEF.md`, `HOLDS.md` and the stream files at session start
+  (`$OMNIPUS_COORDINATION_DIR`; terms and per-machine paths in
+  `knowledge/coordination-ledger.md`) — is the single coordination state. Read `CHIEF.md`, `HOLDS.md` and the stream files at session start
   and before every landing; update your own stream row on every status change.
 - **Claims record the plan** — check them before assigning an owner; they are not a
   machine lock. Resolve an overlapping area with the chief, not another same-area lane.
-- **Trains and standalone candidates** — read `knowledge/landing-trains.md` for cuts,
-  combined reviews, candidate CI, paired hands-on testing and chief-owned merges.
-  Use `knowledge/coordination-ledger.md` for the approval/lock/push sequence and exact
-  ledger formats. No full lane CI and no per-lane gates.
+- **Trains and standalone landing branches** — read `knowledge/landing-trains.md` for
+  landing branches, direct pushes, the cut, combined reviews, cut CI, paired hands-on
+  testing and chief-owned merges. Use `knowledge/coordination-ledger.md` for the
+  approval/lock/push sequence and exact ledger formats. No PR and no full CI before the
+  cut, and no per-author gates.
 - **Direct coordination** — team-lead dispatches specialists itself for new work. A
-  separate team-lead session manages only its commissioned independent stream and
-  hands evidence to the chief for integration; on a stop, compare its reply with its
+  separate team-lead session manages only its commissioned independent stream (pushing
+  to its train's or standalone feature's landing branch) and hands the cut evidence to
+  the chief for landing; on a stop, compare its reply with its
   recorded GOAL, resume unfinished work in the same session, and route founder
   questions unchanged. There is no separate squad-lead role (founder, 2026-10-27).
-- **A red integration branch stops all landings** — with one exception: a landing that
-  only fixes the red integration branch may land (it takes the lock like any landing and
+- **A red release branch stops all landings; a red landing branch stops its own cut
+  until fixed** — with one exception: a landing that only fixes the red release branch
+  may land (it takes the lock like any landing and
   says so in its announcement).
 - **Stale rows**: a stream row is stale after 2 hours with no update and no live session
   behind it. A live session refreshes its row when it passes the 2-hour mark. Releasing
   or re-assigning a stale claim needs the founder's agreement, asked by the chief.
 - **Chief**: named by the founder ("you are chief"); record it in `CHIEF.md`, refresh
-  on handover/restart, cut candidates and perform mechanical integration directly.
+  on handover/restart, schedule each cut when the team leads say the train is ready, and
+  perform mechanical integration directly.
   Mark a vacancy and ask the founder for a successor; no session appoints itself.
 - After any context compaction or resume: **re-read the ledger directory before the next
   write** — the ledger, not any session's memory, is the coordination state.
@@ -104,7 +115,8 @@ It prints its measurements and one verdict line: `CAPACITY: OK` or
 `CAPACITY: HOLD <reason>`. **HOLD queues the dispatch — it never cancels work**; retry
 after the next check passes or a running lane finishes. A HOLD longer than 20 minutes
 fires an event update to the founder, who can override. Signals, thresholds and
-semantics: `knowledge/capacity-check.md`. An OK is only the monitor
+semantics: `knowledge/capacity-check.md` (the script's verdict is Mac-only; on a pod the
+capacity signal is the `heavy` slot state and `drain status`). An OK is only the monitor
 result; also apply the controller/load requirements in root `CLAUDE.md` ("Running CLI
 agents") before launch or resume.
 
@@ -131,7 +143,9 @@ silently deferring a gate (principle 3).
 ## 5. Status reporting
 
 - **Events only**: an update fires when something lands, fails, or needs the founder —
-  never on a timer, no timed status tables.
+  never on a timer, no timed status tables. Exception: the chief's standup, planning and
+  review meetings (§7) are scheduled by decision (2026-10-29); every other update stays
+  event-driven.
 - Minor event: one line. Bigger event: a status table (done / in progress / pending /
   blocked) plus one line on what comes next.
 - **Batched landing asks**: pending asks go out as one event message listing every
@@ -159,3 +173,15 @@ silently deferring a gate (principle 3).
   fill and the reviewer ran without its rules. Verify the filled prompt contains the
   discipline block (the `agent-discipline:shared-traits:start` marker) before
   dispatching.
+
+## 7. Chief meetings and the three objectives (chief only)
+
+The chief runs the daily standup (Mon–Fri 09:33 Jakarta), weekly planning (Mon 10:07)
+and weekly review (Fri 16:07) with the three objectives the founder set: unblock
+everyone, leave no half-built work behind, accelerate delivery and find free capacity.
+Runbook, mention list and the rule against running a meeting twice:
+`$OMNIPUS_COORDINATION_DIR/meetings/README.md`. A team lead answers a standup in one
+message of four lines (done, doing, blocked or needs the founder, stopped or parked with
+its note), and the first word of the answer is `PV <process version>`, read from the
+`Process version:` line of root `CLAUDE.md`. A priority change triggers a same-day
+parking pass (root `CLAUDE.md`, "Issue & Project Board Conventions").

@@ -14,7 +14,8 @@ description: >
 
 # Spec sync
 
-Last reviewed: 2026-10-28 — dev-team roster update (ten roles)
+Last reviewed: 2026-10-29 — release branch wording
+Process version: 2026-10-29.1
 
 Companion to plan-spec (writes a spec) and grill-spec (reviews a spec). spec-sync
 runs after the fact: it makes sure a spec still describes what the code does, once
@@ -50,7 +51,7 @@ recognise the variants actually on disk (`-spec-review-2.md`, `-review-pass2.md`
 1. Start from the spec's own traceability table and file-scope section — the
    files it says the feature touches.
 2. Confirm against what really changed: `git diff <merge-base>..HEAD --name-status`
-   against the integration branch the feature landed on (never against a stale
+   against the release branch the feature landed on (never against a stale
    local guess).
 3. For each requirement or scenario, check current behaviour with GitNexus —
    `context({name: "<symbol>"})` for what a cited symbol does today, `impact` if a

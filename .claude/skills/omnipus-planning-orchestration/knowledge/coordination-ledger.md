@@ -3,16 +3,28 @@
 Detail behind SKILL.md §2. Design source: sections 5.4, 5.7, 5.9 and 7.6 of
 `docs/internal/design/dev-team-setup-design-2026-09-25.md`.
 
-Last reviewed: 2026-10-28 — dev-team roster update (ten roles)
+Last reviewed: 2026-10-29 — release branch vs landing branch terms, pod ledger path
+Process version: 2026-10-29.1
 
-Process authority: root `CLAUDE.md` ("Subagent Workflow"). Candidate assembly, review,
-CI and UAT procedure: `knowledge/landing-trains.md`.
+Process authority: root `CLAUDE.md` ("Subagent Workflow", "Landing trains"). Landing
+branch, cut, review, CI and UAT procedure: `knowledge/landing-trains.md`.
+
+**Terms (2026-10-29).** *Release branch* = the integration target the founder confirms
+at each landing; the landing lock, holds and the pre-push hook apply to it, and only the
+chief pushes to it. *Landing branch* = `landing/<train>` (or a standalone feature's own
+landing branch); teams push there directly; it has no lock. A hold with
+`what=landing/<train>` is informational (the hook matches only the release branch).
+"Integration branch" in older text and in the hook's variable name
+(`OMNIPUS_INTEGRATION_BRANCH`) means the release branch.
 
 ## Directory layout
 
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/` — a sibling of the
-checkouts and worktrees, **outside every repo checkout**, so no branch can capture or
-conflict on it. The exact path is founder-adjustable; always name it by absolute path.
+`$OMNIPUS_COORDINATION_DIR` — on the founder's Mac
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/`, on a pod the
+coordination repo checkout (`/workspace/omnipus-coordination`). It sits **outside every
+repo checkout**, so no branch can capture or conflict on it. The exact path is
+founder-adjustable; always name it by absolute path. The pre-push hook defaults to the
+Mac path and honours `OMNIPUS_COORDINATION_DIR`, so a pod sets that variable.
 If the directory is missing, cross-session coordination is broken: report it and ask
 the founder before proceeding with cross-session work.
 
@@ -28,7 +40,7 @@ of this prose.
 | `HOLDS.md` | what (branch or tree) · held by · why · since · released-at | Append on hold; edit the line on release |
 | `LANDING-LOCK` | `squad=` · branch · taken-at (absent or empty = free) | Created atomically (one writer wins); released right after the push |
 | `LANDING-LOG.md` | `squad=` · branch · commit · checks evidence · founder-yes note · landed-at | Append only — never edited |
-| `MESSAGES.md` | Urgent calls only ("hold pushes", "integration red") — the durable record of the message channel | Append only |
+| `MESSAGES.md` | Urgent calls only ("hold pushes", "release red") — the durable record of the message channel | Append only |
 
 Stream status vocabulary (exact): `planned` / `in-flight` / `gated` / `handed-back` /
 `waiting-for-founder` / `landed` / `blocked` / `released`.
@@ -126,11 +138,13 @@ session. A separate independent stream is a separate team-lead session, so it al
 writes `lead=team-lead`. Use one canonical ledger file per stream and record its GOAL
 and current evidence.
 
-The chief collects ready branches, makes mechanical merges and prepares candidate
-evidence; workers receive only conflicts needing a code/design choice. A separate
-session hands its branch/evidence to the chief for integration, rather than
-running another verification cycle for each lane. Large standalone candidates retain
-their own landing; coordinate the second-lander merge/re-check through the chief.
+Teams push to the train's landing branch; the chief cuts it when the leads say it is
+ready, makes mechanical merges and prepares the cut evidence; workers receive only
+conflicts needing a code/design choice. A separate team-lead session pushes to its own
+train's or standalone feature's landing branch and hands the cut evidence to the chief
+for landing, rather than running another verification cycle per author. A standalone
+feature retains its own landing branch and landing; coordinate the second-lander
+merge/re-check through the chief.
 
 ## Claims — planning information, not locks
 
@@ -143,7 +157,7 @@ lane/worktree locking is separate controller tooling, not this ledger parser.
 ## Holds — hold and release
 
 - A hold is the one mechanism that genuinely blocks: append a `HOLDS.md` line when a
-  branch or tree must not be touched by others — for example, the integration branch is
+  branch or tree must not be touched by others — for example, the release branch is
   red and nobody may land onto it, or the founder requested a freeze.
 - **The landing lock, not a hold, covers your own landing** — never hold your own branch
   to protect your own push; take the landing lock for that (below). A hold is for
@@ -151,18 +165,19 @@ lane/worktree locking is separate controller tooling, not this ledger parser.
   lock for.
 - Release by editing the line to fill `released-at`.
 - The pre-push hook (`scripts/hooks/pre-push-ledger-check`) mechanically fails a push to
-  the integration branch that an active hold covers. The hook is a backstop, not the
+  the release branch (the branch named by `OMNIPUS_INTEGRATION_BRANCH`) that an active
+  hold covers. The hook is a backstop, not the
   rule: bypassing it is a founder-only act, and a hook block is always visible, never
   silent.
 
-## The landing sequence — candidate evidence first, approval, then lock
+## The landing sequence — cut evidence first, approval, then lock
 
-1. **Prepare the candidate** with the chief: follow `knowledge/landing-trains.md`.
-   Assemble the combined diff and resolve real conflicts before the candidate review,
-   CI and hands-on campaign. Record the exact candidate commit, diff/row scope and
-   receipts in the stream's ledger file. Never run full CI on each incoming work branch.
-2. **Ask.** Present the candidate branch, exact-commit gate/CI/UAT evidence and the
-   confirmed release integration target. Batch pending asks (SKILL.md §5); only an
+1. **Cut the landing branch** with the chief: follow `knowledge/landing-trains.md`.
+   Resolve real conflicts before the cut review, CI and hands-on campaign. Record the
+   exact cut commit, diff/row scope and receipts in the stream's ledger file. No full CI
+   runs before the cut.
+2. **Ask.** Present the landing branch, exact-commit gate/CI/UAT evidence and the
+   confirmed release branch. Batch pending asks (SKILL.md §5); only an
    explicit reply to that specific ask is landing permission. Do not hold the lock
    across checks or the founder's reply. Founder-question rules are unchanged.
 3. **On a yes: take the lock.** Post the landing announcement and message peers; create
@@ -173,17 +188,17 @@ lane/worktree locking is separate controller tooling, not this ledger parser.
    ```
    On a non-zero exit, wait for its owner; never overwrite a live lock.
 4. **Check for target movement.** Fetch and compare with the base in the approved
-   candidate receipt. If unchanged, push that exact verified candidate. If another
+   cut receipt. If unchanged, push that exact verified commit. If another
    train/standalone landed first, the second lander merges it and re-checks affected
    areas and conflict resolutions; delegate only genuine code/design choices. Release
    the lock while checks run, update the exact-version evidence (including touched-row
-   independent UAT for agent-engine changes) and ask on the updated candidate before
-   reacquiring it. Do not repeat every lane gate or every successful CI job.
-5. **Push the verified candidate** to the confirmed integration target, with both hook
-   variables in the command (BRANCH is the candidate branch, not a specialist lane):
+   independent UAT for agent-engine changes) and ask on the updated commit before
+   reacquiring it. Do not repeat every gate or every successful CI job.
+5. **Push the verified cut commit** to the confirmed release branch, with both hook
+   variables in the command (BRANCH is the landing branch):
    ```sh
-   OMNIPUS_INTEGRATION_BRANCH=<integration-branch> OMNIPUS_SQUAD_ID=<train-or-stream-id> \
-     git push origin <candidate-branch>:<integration-branch>
+   OMNIPUS_INTEGRATION_BRANCH=<release-branch> OMNIPUS_SQUAD_ID=<train-or-stream-id> \
+     git push origin landing/<train>:<release-branch>
    ```
    An unset-variable WARNING means the hook checked nothing: stop and correct the
    command, never call the warning a pass. Humans alone merge to `main`.
@@ -191,10 +206,11 @@ lane/worktree locking is separate controller tooling, not this ledger parser.
    notify peers and close resolved issues with commit-citing comments. Finish with
    the two distinct delivery claims and their evidence; a push alone is not done.
 
-**Red integration branch:** nobody lands until it is green again — landing onto red
+**Red release branch:** nobody lands until it is green again — landing onto red
 hides the culprit. The single exception: a **fix-only landing** may land, takes the
 lock like any landing, and says so in its announcement; the fix itself is dispatched
-immediately through the existing area owner, consolidating related red checks.
+immediately through the existing area owner, consolidating related red checks. A red
+landing branch stops only its own cut until the pusher fixes or reverts the break.
 
 **Stuck lock:** a lock held past the stale window (2 hours) is treated like a stale row
 — the chief asks the founder before force-releasing.
@@ -211,8 +227,8 @@ after a session that died without updating its row.
 - **Naming:** the founder names one session chief ("you are chief"); the named session
   writes the `CHIEF.md` line with a timestamp. On succession, the outgoing chief writes
   the line when the founder announces the successor.
-- **Role:** cut the trains and do mechanical merges/integration directly; align
-  standalone candidates and escalate real design/code conflicts to their owners.
+- **Role:** schedule each cut when the team leads say the train is ready and do
+  mechanical merges/integration directly; align standalone landing branches and escalate real design/code conflicts to their owners.
   Escalate unresolved disputes to the founder, rather than inventing a ruling.
 - **Vacancy:** if the chief's session ends without handover, whoever notices first
   marks `VACANT since <ts>` in `CHIEF.md` and the founder is asked to name a successor
@@ -228,7 +244,7 @@ successor session, or marked with its exact state for re-assignment.
 
 ## Messages — urgent calls only
 
-Urgent calls ("hold pushes", "integration red") travel session-to-session over the
+Urgent calls ("hold pushes", "release red") travel session-to-session over the
 `SendMessage` tool, addressed to the peer session named in its stream row's `session=`
 field (or, for the chief, the session named in `CHIEF.md`'s `chief=` field). **Until a
 dry run has actually proven `SendMessage` delivery between two live sessions in this
