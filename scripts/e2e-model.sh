@@ -50,7 +50,7 @@
 #            plain-http loopback URL (http://127.0.0.1, localhost or [::1]),
 #            so the primary key can never be sent off the machine through it;
 #            any other value is refused (exit 2),
-#            E2E_PREFLIGHT_TIMEOUT_SECONDS (default 10),
+#            E2E_PREFLIGHT_TIMEOUT_SECONDS (default 30),
 #            secrets by api_key_ref: MINIMAX_API_KEY -> MINIMAX_API_KEY_CI then
 #            MINIMAX_API_KEY; OPENROUTER_API_KEY -> OPENROUTER_API_KEY_CI then
 #            OPENROUTER_API_KEY (first non-empty wins).
@@ -408,7 +408,7 @@ cmd_preflight() {
     fi
     url="${base%/}/messages"
   fi
-  local timeout="${E2E_PREFLIGHT_TIMEOUT_SECONDS:-10}"
+  local timeout="${E2E_PREFLIGHT_TIMEOUT_SECONDS:-30}"
   if ! [[ "$timeout" =~ ^[0-9]+$ ]] || [ "$timeout" -le 0 ]; then
     die 2 "E2E_PREFLIGHT_TIMEOUT_SECONDS must be a positive integer"
   fi
