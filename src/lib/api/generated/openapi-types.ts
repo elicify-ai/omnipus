@@ -18720,7 +18720,7 @@ export interface components {
             /** @description Echo of RoomMessageRequest.client_message_id for a person's entry. */
             client_message_id?: string;
             author: components["schemas"]["RoomEntryAuthor"];
-            /** @description The message text. One group message size limit applies to a person's message and to an agent's answer (#1449 D24, D27): at most 65,536 UTF-8 bytes (counted in bytes, not characters); an operator can lower this limit with session_messaging.steer_body, never raise it. maxLength states the same 65,536 maximum; the server counts the limit in UTF-8 bytes, which is never less than the character count. May be empty when the entry carries attachments. */
+            /** @description The message text. New messages and agent answers are refused above the group message limit (#1449 D24, D27: at most 65,536 UTF-8 bytes, lowered by session_messaging.steer_body), stated on RoomMessageRequest.text. A stored entry keeps this wider maximum (TD-8): an entry written under an earlier, larger operator setting still opens and shows in full (S-152). May be empty when the entry carries attachments. */
             text: string;
             /** @description Images and files of the entry (#1449 D3, FR-016, FR-020), in the order they were sent. Each part's url is the workspace media URL (/api/v1/media/workspace/<workspace id>/<id>). Absent means none. A file deleted later in the Library keeps its part here; fetching it then fails and the chat shows the file as unavailable (D26). */
             attachments?: components["schemas"]["MediaPart"][];

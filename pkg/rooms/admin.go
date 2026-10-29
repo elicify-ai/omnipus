@@ -6,6 +6,7 @@ package rooms
 
 import (
 	"log/slog"
+	"path/filepath"
 	"slices"
 	"strings"
 	"unicode/utf16"
@@ -53,6 +54,7 @@ func (s *Service) Create(workspaceID string, req generated.RoomCreateRequest, pr
 			return generated.Room{}, unprocessable("the chat this group is started from is not a main chat of %s", workspaceLabel(ws))
 		}
 		rec.OriginSessionID = origin
+		rec.Invitation = s.newInvitation(kind, origin)
 	}
 	if err = s.loadAll(); err != nil {
 		return generated.Room{}, err
@@ -65,6 +67,14 @@ func (s *Service) Create(workspaceID string, req generated.RoomCreateRequest, pr
 	s.rooms[rec.ID] = r
 	s.mu.Unlock()
 	s.deps.Audit(AuditEvent{RoomID: rec.ID, WorkspaceID: ws.ID, Action: "created", AgentIDs: members, Principal: principal})
+	if rec.Invitation != nil && rec.Invitation.Status == InvitationGenerating {
+		// FR-039: outside every room lock; nothing waits for it (D20).
+		s.inflight.Add(1)
+		go func() {
+			defer s.inflight.Done()
+			s.runInvitation(rec.ID)
+		}()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return s.roomView(r, ws), nil
@@ -182,6 +192,11 @@ func (s *Service) finishDeletion(r *room) {
 	}
 	if err := s.journal.Remove(r.rec.ID); err != nil {
 		logRoomError("a deleted group's files could not be removed; the next load retries", r.rec.ID, err)
+	}
+	// The group's journals go; its files stay (D19). Only the private
+	// staging of answers that never posted is removed.
+	if s.stagingDir != "" {
+		removeAll(filepath.Join(s.stagingDir, r.rec.ID))
 	}
 }
 

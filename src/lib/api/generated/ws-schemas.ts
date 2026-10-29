@@ -152,7 +152,7 @@ export const RoomEntry = z
     seq: z.number().int().min(1),
     client_message_id: z.string().min(1).max(128).optional(),
     author: RoomEntryAuthor,
-    text: z.string().max(65536),
+    text: z.string().max(5242880),
     attachments: z.array(MediaPart).max(16).optional(),
     addressees: z.array(z.string().min(1).max(128)),
     after_pause: z.boolean(),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -67,7 +68,26 @@ type ReplyRequest struct {
 	// ResponderSessionID is the responding turn's transcript session — the
 	// session the request must have been admitted to.
 	ResponderSessionID string
+	// Media are the answer's files (#1449 FR-020), resolved by
+	// answer_request; only an answer into a group may carry them.
+	Media []ReplyMedia
 }
+
+// ReplyMedia is one file of an answer. Ref is a workspace media reference
+// posted as it is; otherwise Identity names the original source (a path or a
+// reference of the agent's own chat), Size is its size and Open reads it once.
+type ReplyMedia struct {
+	Ref      string
+	Identity string
+	Filename string
+	Size     int64
+	Open     func() (io.ReadCloser, error)
+}
+
+// ErrReplyCompleting marks a reply that was accepted and is completed by the
+// receiver on its own (a group answer whose files are still being stored,
+// #1449 FR-078 (5)). It is not "nothing was sent".
+var ErrReplyCompleting = errors.New("reply accepted and completing")
 
 // ReplyReceipt reports the accepted-for-send reply.
 type ReplyReceipt struct {
@@ -153,6 +173,12 @@ func (t *MessageTool) executeAddressedForm(ctx context.Context, content string, 
 }
 
 func (t *MessageTool) executeReplyForm(ctx context.Context, content, replyTo string, hasRecipient, hasDestination bool) *ToolResult {
+	return t.executeReplyFormWithMedia(ctx, content, replyTo, hasRecipient, hasDestination, nil)
+}
+
+// executeReplyFormWithMedia is the reply form with an answer's files
+// (#1449 FR-020). An answer that carries files may have empty text.
+func (t *MessageTool) executeReplyFormWithMedia(ctx context.Context, content, replyTo string, hasRecipient, hasDestination bool, media []ReplyMedia) *ToolResult {
 	if hasDestination || hasRecipient {
 		return addrRefuseWith(ErrReplyForm, "a reply is addressed by reply_to alone; do not also supply "+
 			"channel, chat_id, workspace_id or agent_id — the destination comes from the request you are answering")
@@ -162,7 +188,7 @@ func (t *MessageTool) executeReplyForm(ctx context.Context, content, replyTo str
 		return addrRefuseWith(ErrReplyForm, "reply_to is blank: name the request id you are answering. "+
 			"Nothing was sent, and no default destination is used")
 	}
-	if strings.TrimSpace(content) == "" {
+	if strings.TrimSpace(content) == "" && len(media) == 0 {
 		return addrRefuseWith(ErrReplyForm, "a reply needs non-empty content")
 	}
 	if t.replyRouter == nil {
@@ -174,7 +200,14 @@ func (t *MessageTool) executeReplyForm(ctx context.Context, content, replyTo str
 		Content:            content,
 		Author:             author,
 		ResponderSessionID: ToolTranscriptSessionID(ctx),
+		Media:              media,
 	})
+	if err != nil && errors.Is(err, ErrReplyCompleting) {
+		// Accepted: the receiver completes it on its own (#1449 FR-078 (5)).
+		// Honest, not "nothing was sent"; it counts as this round's send.
+		t.sentInRound.Store(true)
+		return &ToolResult{ForLLM: fmt.Sprintf("Reply to %s accepted: %v", replyTo, err), Silent: true}
+	}
 	if err != nil {
 		return &ToolResult{ForLLM: fmt.Sprintf("reply refused, nothing was sent: %v", err), IsError: true, Err: err}
 	}

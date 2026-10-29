@@ -1881,7 +1881,7 @@ func (ts *turnState) currentApprovalOrigin() approvalOrigin {
 // (a joined steering message or a held group request). Approvals already
 // raised keep their label; later ones carry the merged origin.
 func (ts *turnState) noteConsumedOrigin(o approvalOrigin) {
-	if ts == nil || o.Label == "" {
+	if ts == nil || o.none {
 		return
 	}
 	ts.approvalOriginMu.Lock()
