@@ -2674,7 +2674,11 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 3600s -p 1 ./pkg/gateway/... 2>&1)
+          out=$(bash scripts/run-gateway-sharded.sh \
+          --shards 4 \
+          --timeout 3600s \
+          --tags goolm,stdjson \
+          --race 2>&1)
           code=$?
           echo "$out"
           # Same DATA RACE carve-out as the shared step — a race is never

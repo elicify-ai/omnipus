@@ -22,6 +22,7 @@ SHARDS=4
 TIMEOUT="75m"
 TAGS="goolm,stdjson"
 OUT_LOG=""
+RACE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,6 +30,7 @@ while [[ $# -gt 0 ]]; do
     --timeout) TIMEOUT="$2"; shift 2 ;;
     --tags) TAGS="$2"; shift 2 ;;
     --out) OUT_LOG="$2"; shift 2 ;;
+    --race) RACE=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 64 ;;
   esac
 done
@@ -42,7 +44,11 @@ touch pkg/gateway/spa/assets/.keep || true
 
 echo "=== gateway sharded: compile test binary ===" >&2
 COMPILE_START=$(date +%s)
-CGO_ENABLED=0 go test -c -tags "$TAGS" -o /tmp/gateway.test ./pkg/gateway/ 2>&1
+	if [ "$RACE" -eq 1 ]; then
+	  CGO_ENABLED=1 go test -c -race -tags "$TAGS" -o /tmp/gateway.test ./pkg/gateway/ 2>&1
+	else
+	  CGO_ENABLED=0 go test -c -tags "$TAGS" -o /tmp/gateway.test ./pkg/gateway/ 2>&1
+	fi
 COMPILE_END=$(date +%s)
 echo "compile: $((COMPILE_END-COMPILE_START))s" >&2
 
