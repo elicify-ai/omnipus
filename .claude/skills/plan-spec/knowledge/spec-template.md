@@ -1,5 +1,7 @@
 # Spec Output Template
 
+Process version: 2026-10-29.1 (template header only; removed from the final spec with the rest of this block)
+
 Structural template for `docs/internal/specs/<name>-spec.md`. Fill in every section.
 Replace all `[bracketed placeholders]` with actual content. A section marked
 "remove if not applicable" may be dropped, but only with an explicit one-line reason

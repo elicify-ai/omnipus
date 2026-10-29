@@ -1,5 +1,7 @@
 # Canonical developer/reviewer discipline
 
+Process version: 2026-10-29.1
+
 Authoring source only — nothing loads this file at runtime. Every developer-side and
 reviewer-side agent file (and, for plugin reviewers, `.claude/templates/plugin-reviewer-dispatch.md`)
 embeds the section(s) its role needs, **byte-identical**, inside the matching

@@ -1,5 +1,7 @@
 # Coordination ledger — templates
 
+Process version: 2026-10-29.1
+
 Templates for the live coordination ledger (design
 `docs/internal/design/dev-team-setup-design-2026-09-25.md` section 5.9,
 "The coordination ledger (G2)"). **These templates are authoring source
