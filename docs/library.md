@@ -38,6 +38,7 @@ When an agent mentions a file in its reply, the file name can be a link. Select 
 - **Unsaved edits.** If the Library or Mail has unsaved changes, you are asked before it moves; **Cancel** leaves everything as it was. While that question is open, further link clicks are ignored.
 - **Missing or not yours.** A file that is gone shows the Library's usual "file not there" landing. A workspace you cannot open shows the Library's usual message and no file content.
 - **Not every path is a link.** Ordinary relative links that do not name a file (such as `README`, `docs/` or `#section`), web links that are not `https`/`http`/`mailto`, and names containing invisible or direction-changing characters stay as plain, struck-through text. A file outside every Library, such as an agent's private folder, is given as its full path with no link. Web links still open in a new tab.
+- **File rows in chat.** When an agent writes, edits or appends to a workspace file, the file name in that step's row is the same kind of link once the step has succeeded. A step that failed shows the name as plain text.
 - **Chat-link handling is limited to chat.** The file links described here are enabled in agents' chat replies and question-card context. Received email and Library previews do not interpret `omnipus://` links as chat-file links. Existing links between knowledge notes keep their normal note-relative behavior.
 
 ## When an agent opens the Library for you
@@ -52,7 +53,7 @@ The tool call behind this is hidden in the conversation when it succeeds; a refu
 
 ## Open in Library on sent files
 
-When an agent sends you a file from its workspace, the file card has **Open in Library** next to the download link. It opens the docked Library on that file, asking first if there are unsaved edits. Images keep their own toolbar and get no extra button. A file that is not in any Library only downloads. Files sent over other channels, such as Telegram or email, arrive on their own with no Omnipus link.
+When an agent sends you a file from its workspace, the file card has **Open in Library** next to the download link. It opens the docked Library on that file, asking first if there are unsaved edits. A workspace image gets the same button below it; its own image toolbar is unchanged. A file or image that is not in any Library has no extra button. Files sent over other channels, such as Telegram or email, arrive on their own with no Omnipus link.
 
 ## How to add files
 
