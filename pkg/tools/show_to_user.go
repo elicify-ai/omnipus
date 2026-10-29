@@ -40,7 +40,7 @@ const (
 	showToUserNoUI        = "show_to_user: no UI attached to this channel; tell the user the file name instead."
 	showToUserRateLimited = "show_to_user: limit reached (5 calls per minute in this chat); tell the user where the file is instead."
 	showToUserNoRequestID = "show_to_user: could not create a request id; the Library was not opened."
-	showToUserNoPolicy    = "show_to_user: the file access policy for this turn could not be resolved; the Library was not opened."
+	showToUserNoPolicy    = "show_to_user: the file access policy for this turn could not be resolved; the Library was not opened. Retry once; if it keeps failing, ask the operator to check the gateway log."
 )
 
 // Audit reason codes, worded exactly as the chat-links spec's "Audit" rule
@@ -198,7 +198,16 @@ func (t *ShowToUserTool) openChecked(call showToUserCall, host string) *ToolResu
 	ctx := call.ctx
 	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
 	if err != nil {
-		return t.refuse(ctx, showToUserReasonPolicy, showToUserNoPolicy)
+		// SF-4: keep the cause for the operator; the agent still gets the
+		// fixed refusal (no path or system detail in model-facing text).
+		slog.Error("show_to_user: resolve turn file policy failed",
+			"error", err,
+			"agent_id", ToolAgentID(ctx),
+			"session_id", ToolTranscriptSessionID(ctx),
+			"call_id", ToolCallID(ctx))
+		res := t.refuse(ctx, showToUserReasonPolicy, showToUserNoPolicy)
+		res.Err = err
+		return res
 	}
 	// SEC-3 / SEC-9: a secret carve-out answers with the not-found bytes even
 	// when it lies outside every Library, so the agent is never told to hand
@@ -269,8 +278,18 @@ func (t *ShowToUserTool) readable(ctx context.Context, policy fspolicy.FSPolicy,
 		return false
 	}
 	defer handle.Close()
-	info, err := handle.Stat()
-	return err == nil && info.Mode().IsRegular()
+	// SF-1: metadata alone does not prove the Library can show the file. Open
+	// it once for reading through the authorised handle — the same open the
+	// Library's own reader performs — and close it without reading. A file
+	// whose permissions or ACL deny reading is refused with the not-found
+	// text before the limiter is charged. OpenRegularNonBlocking also refuses
+	// anything that is not a regular file.
+	f, err := handle.OpenRegularNonBlocking()
+	if err != nil {
+		return false
+	}
+	_ = f.Close() // read-only probe; a close error cannot undo a successful open
+	return true
 }
 
 func (t *ShowToUserTool) isWatching(sessionID string) bool {

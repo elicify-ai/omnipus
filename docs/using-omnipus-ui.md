@@ -109,9 +109,9 @@ The chat is a conversation with the workspace's agents. When the open conversati
 
 ### Links to files and the Library
 
-File names in an agent's reply can be links. Selecting one (or pressing **Enter** on it) opens the [Library](library.md#links-from-chat) beside the chat on that file; Ctrl-click or Cmd-click opens the full-page Library in a new tab instead. If the link text is not the file's name, the real location is shown after it in muted text. Unsaved Library or Mail edits are always asked about first.
+File names in an agent's reply can be links. Selecting one (or pressing **Enter** on it) opens the [Library](library.md#links-from-chat) beside the chat on that file; Ctrl-click or Cmd-click follows the full-page Library address using your browser's normal modified-click behavior instead of opening the docked panel. If the link text is neither the file's name nor its workspace-relative path, the real location is shown after it in muted text. Unsaved Library or Mail edits are always asked about first.
 
-While you are looking at the chat, an agent can also open the Library on a file it wants to show you, without moving your typing position. If you are not looking at the chat, or there are unsaved edits, the chat shows a quiet **The agent wants to show you &lt;name&gt;** notice with **Open** and **Dismiss** instead; nothing opens by itself, and reloading never opens it. A file an agent sends you has **Open in Library** next to its download link. [Library: when an agent opens the Library for you](library.md#when-an-agent-opens-the-library-for-you) has the details.
+While this tab is visible and showing the chat, an agent can also open the Library on a file it wants to show you, without moving your typing position. If the tab is hidden or showing another page or chat, or there are unsaved edits, the chat shows a quiet **The agent wants to show you &lt;name&gt;** notice with **Open** and **Dismiss** instead; nothing opens by itself, and reloading never opens it. A non-image file card with a Library location has **Open in Library** next to its download link. Images keep their existing toolbar; files without a Library location have no extra Library button. [Library: when an agent opens the Library for you](library.md#when-an-agent-opens-the-library-for-you) has the details.
 
 ### When a fallback model answers
 
