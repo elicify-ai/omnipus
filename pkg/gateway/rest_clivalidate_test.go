@@ -70,8 +70,8 @@ func TestValidateCLI_EmptyPathMissing(t *testing.T) {
 }
 
 // TestValidateCLI_NonRegularOrMissingTarget: a directory, a non-executable
-// regular file, and a nonexistent path all classify missing-binary WITHOUT a
-// spawn (FR-013 pre-spawn guard).
+// regular file, and a nonexistent path are path-not-allowed (T11 spec §3.2).
+// An empty path stays missing-binary; that case is a different test.
 func TestValidateCLI_NonRegularOrMissingTarget(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
@@ -92,20 +92,18 @@ func TestValidateCLI_NonRegularOrMissingTarget(t *testing.T) {
 				t.Skip("exec bit not meaningful on Windows")
 			}
 			resp := api.validateCLI(context.Background(), "claude-code", path)
-			assert.Equal(t, gen.CliValidateResponseReasonMissingBinary, resp.Reason,
-				"%s target must classify missing-binary", name)
+			// T11 spec §3.2: not a regular executable, or missing, is path-not-allowed.
+			// An empty path stays missing-binary; that is a different test.
+			assert.Equal(t, gen.CliValidateResponseReason("path-not-allowed"), resp.Reason,
+				"%s target must be path-not-allowed (spec §3.2 / FR-5)", name)
 			assert.Nil(t, resp.ResolvedPath)
 		})
 	}
 }
 
-// TestValidateCLI_BareNameResolvedViaPATH proves the MAJ-004 fix: a BARE cli
-// name (not an absolute path) that resolves on $PATH must NOT be blocked as
-// missing-binary by the pre-spawn guard — the runtime spawn resolves it the same
-// way (US-4). Before the fix the guard os.Stat'd the raw bare name (a $PATH-less
-// stat) and wrongly classified missing-binary. Here the bare "claude" resolves
-// to a real fake on $PATH, so the guard passes and the spawn lands on
-// unauthenticated (runs + version, no creds) — anything but missing-binary.
+// TestValidateCLI_BareNameResolvedViaPATH: T11 spec §3.2 requires an absolute
+// path. A bare name, even one that would resolve on $PATH, is path-not-allowed
+// and the program does not start. The marker file is the spawn proof.
 func TestValidateCLI_BareNameResolvedViaPATH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fixture is POSIX")
@@ -113,11 +111,12 @@ func TestValidateCLI_BareNameResolvedViaPATH(t *testing.T) {
 	dir := t.TempDir()
 	// A fake "claude" on $PATH that prints a version and exits 0.
 	bin := filepath.Join(dir, "claude")
-	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\necho 'claude 1.2.3'\n"), 0o755))
+	marker := filepath.Join(dir, "marker")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\necho ran > '"+marker+"'\necho 'claude 1.2.3'\n"), 0o755))
 	t.Setenv("PATH", dir)
 
-	// Clear every claude-code credential source so the handshake lands on
-	// unauthenticated deterministically (proving the guard let the spawn happen).
+	// Credential env is cleared so a spawn, if the guard wrongly allowed one,
+	// could not pass for a credential reason. The spec forbids the spawn.
 	empty := t.TempDir()
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
@@ -129,12 +128,12 @@ func TestValidateCLI_BareNameResolvedViaPATH(t *testing.T) {
 
 	// BARE NAME, not an absolute path.
 	resp := api.validateCLI(context.Background(), "claude-code", "claude")
-	assert.NotEqual(t, gen.CliValidateResponseReasonMissingBinary, resp.Reason,
-		"a bare name resolvable on $PATH must NOT be blocked missing-binary (MAJ-004 / US-4)")
-	assert.Equal(t, gen.CliValidateResponseReasonUnauthenticated, resp.Reason,
-		"the bare name resolved, ran, and reported a version but has no creds → unauthenticated")
-	require.NotNil(t, resp.Version)
-	assert.Equal(t, "1.2.3", *resp.Version)
+	// T11 spec §3.2: CheckProgramPath requires an absolute path, so a bare
+	// name is path-not-allowed and the program does not start.
+	assert.Equal(t, gen.CliValidateResponseReason("path-not-allowed"), resp.Reason,
+		"spec §3.2: a non-absolute path is refused before any spawn")
+	_, statErr := os.Stat(marker)
+	assert.True(t, os.IsNotExist(statErr), "the bare name must not have started")
 }
 
 // TestValidateCLI_HandshakeFailed: a runnable target that does not print a
@@ -372,10 +371,9 @@ func TestHandleSystemCliValidate_CreateParity_NonAdminAllowed(t *testing.T) {
 }
 
 // TestHandleSystemCliValidate_RealMux_NotBypassGated exercises the REAL
-// registerAdditionalEndpoints chain: under dev_mode_bypass a high-blast-radius
-// route (sandbox-config) returns 503 via RequireNotBypass, but cli-validate is
-// create-parity (plain withAuth) and returns 200 — proving no RequireNotBypass
-// wrapping at registration.
+// registerAdditionalEndpoints chain. T11 spec §3.2 replaced create-parity:
+// a development-bypass request is 403 from RequirePersonSession. It is still
+// not RequireNotBypass, which answers 503.
 func TestHandleSystemCliValidate_RealMux_NotBypassGated(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	mux := http.NewServeMux()
@@ -393,10 +391,10 @@ func TestHandleSystemCliValidate_RealMux_NotBypassGated(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code,
-		"cli-validate must NOT be RequireNotBypass gated (create-parity); got body: %s", w.Body.String())
-	assert.NotEqual(t, http.StatusServiceUnavailable, w.Code)
-	assert.NotEqual(t, http.StatusForbidden, w.Code)
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"t11 spec §3.2: development-bypass is 403 on cli-validate; got body: %s", w.Body.String())
+	assert.NotEqual(t, http.StatusServiceUnavailable, w.Code,
+		"403 is the person gate, not RequireNotBypass's 503")
 }
 
 // --- Endpoint: dedicated rate limiter ---
@@ -409,19 +407,23 @@ func TestHandleSystemCliValidate_RateLimited(t *testing.T) {
 	mux := http.NewServeMux()
 	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
 
-	// Inject dev-bypass so withAuth admits the request (no users/token in the
-	// harness) and the request reaches the dedicated rate limiter.
-	bypassCfg := &config.Config{}
-	bypassCfg.Gateway.DevModeBypass = true
+	// T11 spec §3.2 refuses development-bypass, so the limiter is reached as
+	// a signed-in person. Empty path stays missing-binary and still counts.
+	personToken := "omnipus_" + strings.Repeat("d", 64)
+	personCfg := &config.Config{}
+	personCfg.Gateway.Users = []config.UserConfig{{
+		Username:  "t11-rate-person",
+		TokenHash: mustBcryptHash(t, personToken),
+	}}
 
 	const ip = "203.0.113.77:5555" // dedicated IP so the window is not shared
 	newReq := func() *http.Request {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/system/cli-validate",
 			strings.NewReader(`{"cli":"claude-code","cli_path":""}`))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer dev-mode-bypass-sentinel")
+		req.Header.Set("Authorization", "Bearer "+personToken)
 		req.RemoteAddr = ip
-		return req.WithContext(context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, bypassCfg))
+		return req.WithContext(context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, personCfg))
 	}
 	fire := func() int {
 		w := httptest.NewRecorder()
