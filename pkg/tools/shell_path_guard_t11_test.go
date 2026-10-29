@@ -245,6 +245,9 @@ func TestGuard_FragmentsConcatenationTraversalRefused(t *testing.T) {
 		{"backslash escape", `python3 -c "print('/api\x2fv1')"`, outside, "backslash"},
 		{"prose around a path", `python3 -c "print('see /api/v1 docs')"`, outside, "not the entire quoted content"},
 		{"format call", `python3 -c "open('/{}'.format('tmp'),'w')"`, outside, "brace and method call"},
+		// Spec §3.1: "{" is forbidden in a stand-alone literal, and a "/"
+		// immediately followed by "{" is an outside path (shell brace form).
+		{"root brace expansion", `cp x /{tmp,etc}/y`, outside, "a slash immediately followed by { is an outside path"},
 		{"raw prefix", `python3 -c "open(r'/tmpx','w')"`, outside, "letter before the quote"},
 		{"line continuation", "python3 -c \"open('/tm' \\\n'p/x','w')\"", outside, "backslash continuation"},
 		{"parent traversal", `python3 -c "print('../shared/x')"`, "path traversal detected", "../ stays refused"},

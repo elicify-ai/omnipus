@@ -25,7 +25,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -156,7 +158,7 @@ func t11AssertNotSpawned(t *testing.T, marker string, spawns int) {
 	t.Helper()
 	require.Zero(t, spawns, "spec FR-4/FR-5: nothing starts")
 	_, err := os.Stat(marker)
-	require.True(t, os.IsNotExist(err), "marker %s must be absent (the program must not have started)", marker)
+	require.ErrorIs(t, err, fs.ErrNotExist, "marker %s must be absent (the program must not have started)", marker)
 }
 
 func t11AssertPathRefused(t *testing.T, w *httptest.ResponseRecorder, marker string, spawns int, needles ...string) {
@@ -220,7 +222,7 @@ func t11CopyExe(t *testing.T, src, dst string, mode os.FileMode) {
 func t11ClearMarker(t *testing.T, marker string) {
 	t.Helper()
 	err := os.Remove(marker)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("clear marker: %v", err)
 	}
 }

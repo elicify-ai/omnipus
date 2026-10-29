@@ -2,14 +2,11 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// RED pack for T11 slice A, RequirePersonSession (slim spec §3.2, §8 FR-4).
+// T11 slice A, RequirePersonSession (slim spec §3.2, §8 FR-4).
 //
-// The function does not exist yet. The route-level proof that a CLI token and
-// a development-bypass request are 403 before the body is read lives in
-// pkg/gateway.TestCliValidate_NonPersonRefusedZeroSpawn, because that is
-// reachable without the new symbol. This file is the direct matrix (person /
-// CLI token / bypass / no user). It fails with BLOCKED until the symbol exists;
-// the assertions below are the spec and are not skipped.
+// Direct matrix (person / CLI token / bypass / no user). The route-level
+// proof is pkg/gateway.TestCliValidate_NonPersonRefusedZeroSpawn. The
+// assertions below are the spec.
 package middleware
 
 import (
@@ -23,14 +20,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 )
 
-// loadRequirePersonSession is the one line test-side reconciliation replaces
-// with `return RequirePersonSession` once person_session.go exists. Until then
-// the test fails loudly (RED rule: t.Fatal, never t.Skip).
+// loadRequirePersonSession is the direct call. The matrix below is the spec.
 func loadRequirePersonSession(t *testing.T) func(http.HandlerFunc) http.HandlerFunc {
 	t.Helper()
-	t.Fatalf("BLOCKED: pkg/gateway/middleware/person_session.go::RequirePersonSession(http.HandlerFunc) http.HandlerFunc " +
-		"not implemented — required by t11 spec §3.2 / FR-4")
-	return nil
+	return RequirePersonSession
 }
 
 type t11BodyCounter struct {

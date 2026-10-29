@@ -9,6 +9,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -133,7 +134,7 @@ func TestValidateCLI_BareNameResolvedViaPATH(t *testing.T) {
 	assert.Equal(t, gen.CliValidateResponseReason("path-not-allowed"), resp.Reason,
 		"spec §3.2: a non-absolute path is refused before any spawn")
 	_, statErr := os.Stat(marker)
-	assert.True(t, os.IsNotExist(statErr), "the bare name must not have started")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the bare name must not have started")
 }
 
 // TestValidateCLI_HandshakeFailed: a runnable target that does not print a

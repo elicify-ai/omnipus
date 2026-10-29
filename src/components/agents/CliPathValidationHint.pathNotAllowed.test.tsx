@@ -19,10 +19,7 @@ describe('CliPathValidationHint shows path-not-allowed', () => {
     const detail = 'refused: the program is inside a workspace'
     const result = {
       ok: false,
-      // C-A2 adds this reason to the generated union. Until that commit, the
-      // value is not a member, so the test names it and narrows for the type
-      // checker. The rendered value is still path-not-allowed.
-      reason: 'path-not-allowed' as unknown as CliValidateResponse['reason'],
+      reason: 'path-not-allowed',
       detail,
       resolved_path: null,
       version: null,
