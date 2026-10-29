@@ -43,16 +43,16 @@ jobs:
           bash scripts/e2e-model.sh env >> "$GITHUB_ENV"
 
       - name: Check the primary LLM (job start)
-        # One 1-token call to the primary. If it is unavailable (429 / 5xx / 401-403 /
+        # One 1-token call to the primary (--strict). If it is unavailable (429 / 5xx /
         # timeout / no connection) the whole run uses the fallback for the agent and
-        # the judge: a ::warning:: and a job-summary line say so. Any other answer, or
-        # a missing key, fails the step. Prints only the status and the error type
-        # the provider names, never the body or the key.
+        # the judge: a ::warning:: and a job-summary line say so. A rejected key
+        # (401/403), any other answer, or a missing key fails the step. Prints only
+        # the status and the error type the provider names, never the body or the key.
         env:
           MINIMAX_API_KEY_CI: ${{ secrets.MINIMAX_API_KEY_CI }}
         run: |
           set -euo pipefail
-          route=$(bash scripts/e2e-model.sh preflight --route-out "$RUNNER_TEMP/llm-route.json")
+          route=$(bash scripts/e2e-model.sh preflight --strict --route-out "$RUNNER_TEMP/llm-route.json")
           echo "$route" >> "$GITHUB_ENV"
 
       - name: Upload LLM route

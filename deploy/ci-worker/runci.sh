@@ -1196,6 +1196,17 @@ EOF
   OMNIPUS_E2E_PRIMARY_PROVIDER="$E2E_OVERRIDE_PROVIDER" \
   OMNIPUS_E2E_PRIMARY_MODEL="$E2E_OVERRIDE_MODEL" \
     npx playwright test $specs $pwargs
+  local pw_rc=$?
+  # Mid-run fallback: the job-start check only saw the primary at the start. Count the
+  # product's fallback notes in this shard's transcripts so a primary that failed DURING
+  # the tests is visible (::warning:: in the log; this shard's llm-route copy no longer
+  # says "primary").
+  if [ "$E2E_LEGACY" != 1 ] && [ -f "$E2E_DIR/llm-route.json" ]; then
+    cp "$E2E_DIR/llm-route.json" "$E2E_DIR/llm-route-$name.json" 2>/dev/null || true
+    bash scripts/e2e-model.sh note-fallbacks "$home/sessions" --route-out "$E2E_DIR/llm-route-$name.json" \
+      || echo "[$name] WARNING: could not count mid-run fallback notes" >&2
+  fi
+  return "$pw_rc"
 }
 
 # _e2e_resolve_models reads tests/e2e/e2e-model.json ONCE for the run (the checkout is the
@@ -1259,8 +1270,8 @@ _e2e_resolve_models() {
   # The job-start check: one 1-token call to the primary. Prints LLM_ROUTE=primary|fallback;
   # the ::warning:: on a fallback names the status and error type only, never a key.
   local route
-  route="$(bash scripts/e2e-model.sh preflight --route-out "$E2E_DIR/llm-route.json")" || {
-    echo "e2e: the job-start check of the primary failed (above) — not an outage, so the run does not fall back" >&2
+  route="$(bash scripts/e2e-model.sh preflight --strict --route-out "$E2E_DIR/llm-route.json")" || {
+    echo "e2e: the job-start check of the primary failed (above) — a rejected key or an unexpected answer is not an outage, so the run does not fall back" >&2
     return 1
   }
   E2E_ROUTE="${route#LLM_ROUTE=}"

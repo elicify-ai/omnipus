@@ -3134,14 +3134,15 @@ jobs:
           bash scripts/e2e-model.sh env >> "$GITHUB_ENV"
 
       - name: Check the primary LLM (job start)
-        # One 1-token call to the primary. 429 / 5xx / 401-403 / timeout / no connection ⇒
+        # One 1-token call to the primary (--strict). 429 / 5xx / timeout / no connection ⇒
         # the WHOLE job runs on the fallback: a ::warning::, a job-summary line, and
         # OMNIPUS_E2E_PRIMARY_PROVIDER/_MODEL (read by tests/e2e/fixtures/e2e-model.ts) point
-        # at the fallback pair. Any other answer, or a missing key, fails the step.
+        # at the fallback pair. A rejected key (401/403), a 2xx that is not an Anthropic
+        # message, any other answer, or a missing key fails the step.
         # Prints only the status and the provider's error type, never the body or the key.
         run: |
           set -euo pipefail
-          route=$(bash scripts/e2e-model.sh preflight --route-out "$RUNNER_TEMP/llm-route.json")
+          route=$(bash scripts/e2e-model.sh preflight --strict --route-out "$RUNNER_TEMP/llm-route.json")
           echo "$route" >> "$GITHUB_ENV"
           if [ "$route" = "LLM_ROUTE=fallback" ]; then
             {
@@ -3149,16 +3150,6 @@ jobs:
               echo "OMNIPUS_E2E_PRIMARY_MODEL=$E2E_FALLBACK_MODEL"
             } >> "$GITHUB_ENV"
           fi
-
-      - name: Upload LLM route
-        # One line per shard ({"route","status","error_type"}) so the week-later report can
-        # count the jobs that ran on the fallback.
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: llm-route-${{ matrix.group }}
-          path: ${{ runner.temp }}/llm-route.json
-          if-no-files-found: ignore
 
       - name: Seed gateway config
         # providers is a flat array of ModelConfig entries (see pkg/config/config.go).
@@ -3550,6 +3541,31 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
+
+      - name: Count mid-run LLM fallbacks
+        # The job-start check only sees the primary at the start. If it failed DURING the
+        # tests, agents answered from the fallback and the product wrote a transcript note
+        # for each answer. Count them on the shared gateway: any note ⇒ a ::warning::, a
+        # job-summary line, and llm-route.json no longer says "primary"
+        # ("primary_then_fallback", with fallback_notes).
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/llm-route.json" ]; then
+            bash scripts/e2e-model.sh note-fallbacks "${OMNIPUS_HOME:-/tmp/omnipus-e2e}/sessions" \
+              --route-out "$RUNNER_TEMP/llm-route.json"
+          fi
+
+      - name: Upload LLM route
+        # One line per shard ({"route","status","error_type"[,"fallback_notes"]}) so the
+        # week-later report can count the jobs that ran on the fallback, at the start or
+        # mid-run.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: llm-route-${{ matrix.group }}
+          path: ${{ runner.temp }}/llm-route.json
+          if-no-files-found: ignore
 
       - name: Upload Playwright artifacts
         if: failure()

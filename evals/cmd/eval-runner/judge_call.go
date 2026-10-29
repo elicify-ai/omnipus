@@ -215,9 +215,34 @@ func postJudge(ctx context.Context, url string, body any, headers map[string]str
 	return respBytes, nil
 }
 
-// providerErrorType extracts error.type (Anthropic) or error.code /
-// error.type (OpenAI-compatible) when it is a short identifier. Free-text
-// messages are never surfaced: a body can echo the API key.
+// knownProviderErrorTypes is the fixed allowlist of provider error
+// identifiers the judge may surface (Anthropic error.type values and the
+// common OpenAI-compatible error.code values). Anything else becomes
+// "other": a provider field is untrusted text and could carry a token or a
+// key fragment into logs and the committed JSONL results.
+var knownProviderErrorTypes = map[string]bool{
+	// Anthropic messages API.
+	"authentication_error":  true,
+	"permission_error":      true,
+	"not_found_error":       true,
+	"rate_limit_error":      true,
+	"overloaded_error":      true,
+	"api_error":             true,
+	"invalid_request_error": true,
+	"request_too_large":     true,
+	// OpenAI-compatible chat completions (OpenRouter).
+	"invalid_api_key":         true,
+	"insufficient_quota":      true,
+	"rate_limit_exceeded":     true,
+	"model_not_found":         true,
+	"server_error":            true,
+	"context_length_exceeded": true,
+}
+
+// providerErrorType returns the provider's error identifier (error.type, or
+// a string error.code) only when it is on knownProviderErrorTypes; any other
+// present value is reported as "other", an absent one as "". Free text is
+// never surfaced: a body can echo the API key.
 func providerErrorType(body []byte) string {
 	var env struct {
 		Error json.RawMessage `json:"error"`
@@ -230,7 +255,7 @@ func providerErrorType(body []byte) string {
 		Code any    `json:"code"`
 	}
 	if json.Unmarshal(env.Error, &obj) != nil {
-		return ""
+		return "other"
 	}
 	t := obj.Type
 	if t == "" {
@@ -238,10 +263,13 @@ func providerErrorType(body []byte) string {
 			t = s
 		}
 	}
-	if len(t) > 64 || strings.ContainsAny(t, " \t\n\"'") {
-		return ""
+	if t == "" {
+		return "other"
 	}
-	return t
+	if knownProviderErrorTypes[t] {
+		return t
+	}
+	return "other"
 }
 
 func postAnthropicMessages(ctx context.Context, url, key, model, prompt string) (string, int, error) {

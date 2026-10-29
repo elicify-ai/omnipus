@@ -30,19 +30,37 @@
 #       GET <base-url>/api/v1/agents, then PUT {"fallback_models":[fallback]}
 #       on every returned agent. Exit 1 on any non-2xx answer.
 #
-#   preflight [--file PATH] [--route-out PATH]
+#   preflight [--file PATH] [--route-out PATH] [--strict]
 #       The job-start check: one 1-token Anthropic-messages call to the
-#       primary. 2xx prints LLM_ROUTE=primary. 429, 5xx, 408, 401/403, a
-#       timeout or a connection failure print LLM_ROUTE=fallback plus a
-#       ::warning:: naming the status and the provider's error type (never the
-#       body or the key). Any other status, or a missing secret, exits 1.
+#       primary, always at the provider's catalog URL. 2xx with a JSON body
+#       prints LLM_ROUTE=primary. 429, 5xx, 408, 401/403, a timeout or a
+#       connection failure print LLM_ROUTE=fallback plus a ::warning:: naming
+#       the status and the provider's error type (never the body or the key).
+#       Any other status, or a missing secret, exits 1.
+#       --strict (every CI caller passes it): a 401/403 is a broken or revoked
+#       key, not an outage — exit 1 with an ::error:: instead of falling back
+#       for ever; and a 2xx must be an Anthropic message (type "message" with
+#       a content array), else exit 1. Without --strict the contract-pinned
+#       behaviour holds (401/403 fall back; any JSON object is a 2xx answer).
 #       Writes llm-route.json (cwd, or --route-out) and, under GitHub Actions,
 #       one line to the job summary.
-#       Env: E2E_PREFLIGHT_URL (exact URL override, for stubs),
+#       Env: E2E_PREFLIGHT_URL — TEST HOOK ONLY: accepted solely when it is a
+#            plain-http loopback URL (http://127.0.0.1, localhost or [::1]),
+#            so the primary key can never be sent off the machine through it;
+#            any other value is refused (exit 2),
 #            E2E_PREFLIGHT_TIMEOUT_SECONDS (default 10),
 #            secrets by api_key_ref: MINIMAX_API_KEY -> MINIMAX_API_KEY_CI then
 #            MINIMAX_API_KEY; OPENROUTER_API_KEY -> OPENROUTER_API_KEY_CI then
 #            OPENROUTER_API_KEY (first non-empty wins).
+#
+#   note-fallbacks <sessions-dir> [--file PATH] [--route-out PATH]
+#       After the tests: count the product's fallback notes ("Answered by the
+#       Fallback model (<fallback model>) ...") in the transcripts under
+#       <sessions-dir>. Any note means agents fell back MID-RUN: a ::warning::,
+#       a job-summary line, and llm-route.json no longer says "primary" — its
+#       route becomes "primary_then_fallback" with "fallback_notes": N (a job
+#       that started on the fallback keeps "fallback"). Prints
+#       FALLBACK_NOTES=<N>. A missing directory counts as 0.
 #
 # Secrets: this script never prints, logs or writes a key. Keys reach curl on
 # stdin (curl --config -), never on the command line.
@@ -144,7 +162,7 @@ load_pair() {
 
 # parse_common_opts sets FILE, LEGACY_OK, ROUTE_OUT, ROUTE from the remaining args;
 # positional args land in POSITIONAL.
-FILE="$DEFAULT_FILE" LEGACY_OK=0 ROUTE_OUT="" ROUTE="primary"
+FILE="$DEFAULT_FILE" LEGACY_OK=0 ROUTE_OUT="" ROUTE="primary" STRICT=0
 POSITIONAL=()
 parse_opts() {
   while [ $# -gt 0 ]; do
@@ -152,6 +170,7 @@ parse_opts() {
       --file) [ $# -ge 2 ] || die 2 "--file needs a path"; FILE="$2"; shift 2 ;;
       --file=*) FILE="${1#--file=}"; shift ;;
       --legacy-ok) LEGACY_OK=1; shift ;;
+      --strict) STRICT=1; shift ;;
       --route-out) [ $# -ge 2 ] || die 2 "--route-out needs a path"; ROUTE_OUT="$2"; shift 2 ;;
       --route-out=*) ROUTE_OUT="${1#--route-out=}"; shift ;;
       --route) [ $# -ge 2 ] || die 2 "--route needs primary or fallback"; ROUTE="$2"; shift 2 ;;
@@ -254,8 +273,10 @@ cmd_seed_agent_fallbacks() {
 
   local work
   work="$(mktemp -d "${TMPDIR:-/tmp}/e2e-model-seed.XXXXXX")" || die 1 "cannot create a temp dir"
+  # EXIT, not RETURN: die() exits the script, which never runs a RETURN trap
+  # and would leave the temp dir (and the agents response) behind.
   # shellcheck disable=SC2064
-  trap "rm -rf '$work'" RETURN
+  trap "rm -rf '$work'" EXIT
   BODY_FILE="$work/body"
 
   local status
@@ -343,12 +364,21 @@ cmd_preflight() {
   fi
 
   local url="${E2E_PREFLIGHT_URL:-}"
-  if [ -z "$url" ]; then
+  if [ -n "$url" ]; then
+    # Test hook only: a loopback stub. Never a remote host, so the real key
+    # cannot be redirected off the machine by an inherited variable.
+    if ! [[ "$url" =~ ^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?(/|$) ]]; then
+      die 2 "preflight: E2E_PREFLIGHT_URL is a test hook for a local stub and must be http://127.0.0.1, localhost or [::1]; refusing to send the primary key to any other address"
+    fi
+  else
     local proto base
     proto="$(catalog_field "$P_PROVIDER" protocol)"
     base="$(catalog_field "$P_PROVIDER" api)"
     if [ "$proto" != "anthropic" ] || [ -z "$base" ]; then
-      die 1 "preflight: provider '$P_PROVIDER' is not an Anthropic-protocol catalog provider; set E2E_PREFLIGHT_URL or extend this check"
+      die 1 "preflight: provider '$P_PROVIDER' is not an Anthropic-protocol catalog provider; extend this check"
+    fi
+    if [[ "$base" != https://* ]]; then
+      die 1 "preflight: the catalog URL for '$P_PROVIDER' is not https; refusing to send the primary key"
     fi
     url="${base%/}/messages"
   fi
@@ -392,11 +422,25 @@ cmd_preflight() {
 
   case "$status" in
     2[0-9][0-9])
+      # A 2xx must be a real answer: at least a JSON object, and under
+      # --strict an Anthropic message. A captive portal or a proxy page
+      # returning 200 is not "the primary works".
+      if ! jq -e 'type == "object"' "$work/body" >/dev/null 2>&1; then
+        die 1 "preflight: the primary answered HTTP $status with a body that is not a JSON object — not a working primary, and not an outage either; check the endpoint"
+      fi
+      if [ "$STRICT" = 1 ] && ! jq -e '.type == "message" and (.content | type == "array")' "$work/body" >/dev/null 2>&1; then
+        die 1 "preflight: the primary answered HTTP $status but not with an Anthropic message (type \"message\" with a content array) — refusing to report it as working"
+      fi
       write_route primary "$status" ""
       summary_line "LLM: primary ($P_PROVIDER/$P_MODEL)"
       printf 'LLM_ROUTE=primary\n'
       exit 0 ;;
     401|403)
+      if [ "$STRICT" = 1 ]; then
+        echo "::error::LLM: the primary key was rejected (HTTP $status ${etype:-unavailable}) — a broken or revoked key is a configuration error, not an outage; fix the secret ($P_KEYREF) instead of running on the fallback" >&2
+        summary_line "LLM: primary key REJECTED (HTTP $status) — job stopped; fix the $P_KEYREF secret"
+        exit 1
+      fi
       route_fallback "$status" "${etype:-unavailable}" ;;
     529)
       if [ "$etype" = "overloaded_error" ]; then
@@ -411,6 +455,44 @@ cmd_preflight() {
 }
 
 # ---------------------------------------------------------------------------
+# note-fallbacks
+# ---------------------------------------------------------------------------
+cmd_note_fallbacks() {
+  parse_opts "$@"
+  [ ${#POSITIONAL[@]} -eq 1 ] || die 2 "note-fallbacks needs exactly one argument: the sessions directory"
+  local dir="${POSITIONAL[0]}"
+  load_pair "$FILE" 0
+  local note="Answered by the Fallback model (${F_MODEL})"
+  local count=0
+  if [ -d "$dir" ]; then
+    count="$(grep -rhoF -- "$note" "$dir" 2>/dev/null | wc -l | tr -d ' ')"
+  fi
+  printf 'FALLBACK_NOTES=%s\n' "$count"
+  [ "$count" -gt 0 ] || return 0
+
+  local out="${ROUTE_OUT:-llm-route.json}" route="primary"
+  if [ -f "$out" ]; then
+    route="$(jq -r '.route // "primary"' "$out" 2>/dev/null || echo primary)"
+  fi
+  if [ "$route" = "primary" ]; then
+    route="primary_then_fallback"
+  fi
+  if [ -f "$out" ] && jq -e 'type == "object"' "$out" >/dev/null 2>&1; then
+    if ! jq -c --arg r "$route" --argjson n "$count" '.route = $r | .fallback_notes = $n' "$out" >"$out.tmp" \
+      || ! mv "$out.tmp" "$out"; then
+      die 1 "cannot update $out"
+    fi
+  else
+    jq -cn --arg r "$route" --argjson n "$count" '{route: $r, status: "", error_type: "", fallback_notes: $n}' >"$out" \
+      || die 1 "cannot write $out"
+  fi
+  local label
+  label="$(provider_label "$P_PROVIDER")"
+  echo "::warning::LLM: $count answer(s) came from the fallback $F_PROVIDER/$F_MODEL mid-run (primary $label failed during the tests)" >&2
+  summary_line "LLM: mid-run fallback — $count answer(s) from $F_PROVIDER/$F_MODEL (route: $route)"
+}
+
+# ---------------------------------------------------------------------------
 [ $# -ge 1 ] || usage
 sub="$1"; shift
 case "$sub" in
@@ -418,6 +500,7 @@ case "$sub" in
   seed-config) cmd_seed_config "$@" ;;
   seed-agent-fallbacks) cmd_seed_agent_fallbacks "$@" ;;
   preflight) cmd_preflight "$@" ;;
+  note-fallbacks) cmd_note_fallbacks "$@" ;;
   -h|--help|help) usage ;;
-  *) die 2 "unknown subcommand '$sub' (env, seed-config, seed-agent-fallbacks, preflight)" ;;
+  *) die 2 "unknown subcommand '$sub' (env, seed-config, seed-agent-fallbacks, preflight, note-fallbacks)" ;;
 esac
