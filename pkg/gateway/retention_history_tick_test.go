@@ -38,6 +38,7 @@ func TestRetentionHistoryGateway_TickContinuesRealCleanupForUnavailableChat(t *t
 				toolDays = append(toolDays, days)
 				removed, err := tools.retentionSweep(days)
 				toolRemoved = append(toolRemoved, removed)
+				retentionGatewayRequireSummaryCount(t, logs, len(toolDays)-1)
 				return removed, err
 			}
 			t.Cleanup(func() { retentionToolResultSweepFn = oldTools })
@@ -56,6 +57,7 @@ func TestRetentionHistoryGateway_TickContinuesRealCleanupForUnavailableChat(t *t
 				taskCutoffs = append(taskCutoffs, cutoff)
 				visited, err := pruneAllTaskRuns(tasks, cutoff)
 				taskVisited = append(taskVisited, visited)
+				retentionGatewayRequireSummaryCount(t, logs, len(taskCutoffs)-1)
 				return visited, err
 			}
 			t.Cleanup(func() { retentionTaskRunSweepFn = oldTasks })
@@ -125,6 +127,7 @@ func TestRetentionHistoryGateway_TickContinuesRealCleanupForUnavailableChat(t *t
 				retentionGatewayRequireP3(t, logs, f, reason)
 				require.Equal(t, index, retentionGatewayFiles(t, f.indexDir()), "the tick must NOT heal the unavailable chat")
 				require.Equal(t, canonical, retentionGatewayCanonical(t, f), "fresh canonical history survives unchanged")
+				retentionGatewayRequireTickSummary(t, logs, reason, repeat)
 			}
 		})
 	}
