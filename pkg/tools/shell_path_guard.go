@@ -680,8 +680,18 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, tu
 		// exec) and the fail-closed withheld-read case keep their refusals; the
 		// protected-file leg, the "../" veto and the expansion refusal ran
 		// earlier and are unaffected.
-		if use.quotedStandAlone && !use.exec && (!readOnly || readPolicyOK) && literalTopCannotExist(p) {
-			return ""
+		if use.quotedStandAlone && !use.exec && (!readOnly || readPolicyOK) {
+			absent, probeErr := literalTopCannotExist(p)
+			if absent {
+				return ""
+			}
+			if probeErr != nil {
+				logger.WarnCF("tools", "bash guard: quoted-literal check could not complete; the reference stays refused",
+					map[string]any{"error": probeErr.Error()})
+				return outsideWorkDirRefusal(p, cwdPath, use, false) +
+					" The guard could not finish checking that this quoted value names no real folder (" + probeErr.Error() +
+					"), so it stays refused. Retry, or write the script with write_file and run the saved file."
+			}
 		}
 
 		// ADR-068 §6: an unexplained denial is what drives operators to switch

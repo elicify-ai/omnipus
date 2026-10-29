@@ -4,7 +4,7 @@ The Omnipus process sandbox is deliberately scoped. It applies Landlock (filesys
 
 ## Platforms with partial or no kernel confinement
 
-Which backend you get is per-platform. On Windows there is no kernel sandbox at all: `sandbox.SelectBackend()` always returns the `FallbackBackend`. On Linux kernels older than 5.13, Landlock is unavailable and the same fallback applies. On macOS, Seatbelt confines the processes Omnipus starts, but the gateway process itself is never confined; the fallback applies there only when `sandbox-exec` is missing or disabled. Whenever the fallback is in force, `applySandbox` follows the graceful-degradation path (`applyNonLinuxSandbox` in `pkg/gateway/sandbox_apply.go`): the gateway logs `sandbox.degraded` at boot and continues serving with application-level path checks only.
+Which backend you get is per-platform. On Windows there is no kernel sandbox at all: `sandbox.SelectBackend()` always returns the `FallbackBackend`. On Linux kernels older than 5.13, Landlock is unavailable and the same fallback applies. On macOS, Seatbelt confines the children Omnipus launches through its sandboxed execution path when enforcement is active, but the gateway process itself is never confined, and external command-line workers are not launched through that path; the fallback applies there only when `sandbox-exec` is missing or disabled. Whenever the fallback is in force, `applySandbox` follows the graceful-degradation path (`applyNonLinuxSandbox` in `pkg/gateway/sandbox_apply.go`): the gateway logs `sandbox.degraded` at boot and continues serving with application-level path checks only.
 
 ### No Landlock filesystem confinement
 
@@ -24,9 +24,17 @@ Windows has no kernel sandbox: `selectBackendPlatform` (`pkg/sandbox/sandbox_oth
 
 `/health` and `/api/v1/security/sandbox-status` both report `backend: "fallback"` and `kernel_level: false` in this configuration, and the field `disabled_by: "kernel_unsupported"` may appear when the operator asked for `enforce` but the kernel cannot deliver it.
 
-### Shell path guard: quoted-literal rule is off on Windows and for root
+### Shell path guard: quoted-literal exception depends on root writability
 
-The bash tool's command-text path guard (`pkg/tools/shell_path_guard.go`) accepts a stand-alone quoted absolute literal (for example `'/api/v1/users'`) only when the account running the gateway cannot write the filesystem root and the literal's top folder does not exist (`pkg/tools/shell_standalone_literal.go`). On Windows the root always counts as writable, and a gateway running as root can write it, so on both the rule is off and every such literal stays refused. `../` anywhere in a command is refused on every platform; the guard does not resolve it. The guard reads command text only — a path a program assembles at runtime never reaches it.
+The bash tool's command-text path guard (`pkg/tools/shell_path_guard.go`) can accept a stand-alone quoted absolute literal, such as `'/api/v1/users'`, when it meets the quote and surrounding-text conditions (including not being part of a shell brace expansion such as `{'/tm',}p`), contains none of the template or glob characters, its top-level folder does not exist, and the gateway's effective user cannot write the filesystem root (`pkg/tools/shell_standalone_literal.go`).
+
+On Windows the root always counts as writable, so this exception is disabled. On Unix the decision uses effective write access, not the account name: root on a writable filesystem disables it, while a read-only root can permit it. If the root check itself fails, the exception is off for that command and the cause is logged.
+
+With the workspace-path guard enabled, `../` text is still refused rather than resolved. Joined, formatted or brace-expanded outside-path fragments do not gain the exception. The guard examines command text, not the contents of a script file or paths assembled by a running program.
+
+### External command-line workers run outside the Omnipus sandbox
+
+External workers (Claude Code, Codex, OpenCode) and the CLI version check (`POST /api/v1/system/cli-validate`) start their program directly, not through the sandboxed execution path, on every platform. They run with a scrubbed environment in their working folder, but a working folder is not an Omnipus filesystem boundary. The CLI check verifies who may start a program and which file may be started (see [security](../security.md#checking-an-external-command-line-program)); it does not confine the program once it runs.
 
 ## Landlock rights are gated by kernel version
 

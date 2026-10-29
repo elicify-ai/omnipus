@@ -23,6 +23,17 @@
 // succeed. Condition 6 keeps the literal from being one fragment of a longer
 // path ('/tm' 'p/x', '/tm' + 'p/x', '/{}'.format(...), r'/x', f'/x').
 //
+// Condition 6 also covers shell brace expansion (T11 fix round 1, security
+// review S5): `touch {'/tm',}p/x` expands to /tmp/x although the literal's own
+// neighbours are "{" and ",". A literal inside a brace group that is glued to
+// text before its "{" or after its "}" — at any nesting depth, and also when
+// the text continues past an enclosing quote, as in `bash -c "touch
+// {'/tm',}p/x"` or `sh -c "...{'/tm',}"p` — is part of a shell concatenation
+// and does not stand alone. Gluing only the characters ( [ , : = { before or
+// ) ] , : } ; after cannot extend the literal's top folder into a real one
+// (they cannot occur in a folder name the guard would accept), so ordinary
+// JSON and Python shapes such as [{"path": "/api"}, ...] still qualify.
+//
 // The guard still reads command text only; this rule does not make it a
 // boundary. What stays refused is recorded in the spec ("Recorded
 // limitation").
@@ -31,6 +42,7 @@ package tools
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -132,7 +144,101 @@ func standAloneQuotedLiteral(cmd string, start, end int) bool {
 	if !ownRegion && outer == nil {
 		return false
 	}
-	return standsAloneBefore(cmd, openQ, outer) && standsAloneAfter(cmd, closeQ, outer)
+	if !standsAloneBefore(cmd, openQ, outer) || !standsAloneAfter(cmd, closeQ, outer) {
+		return false
+	}
+	return !inGluedBraceGroup(cmd, openQ, closeQ, outer)
+}
+
+// braceGroupBoundaryBefore are the characters that may directly precede a
+// brace group's "{" without extending the literal inside it (see the file
+// comment). braceGroupBoundaryAfter is the same for its "}".
+const (
+	braceGroupBoundaryBefore = "([,:={;|&<>"
+	braceGroupBoundaryAfter  = ")],:};|&<>"
+)
+
+// inGluedBraceGroup reports whether the literal between openQ and closeQ sits
+// inside a { } group (at any depth) that is glued to surrounding text, i.e.
+// a shell brace expansion that concatenates text onto the literal. An
+// unbalanced group cannot be judged and counts as glued.
+func inGluedBraceGroup(cmd string, openQ, closeQ int, outer *shellQuoteRegion) bool {
+	left, right := openQ, closeQ
+	for {
+		b := enclosingOpenBrace(cmd, left)
+		if b < 0 {
+			return false
+		}
+		e := matchingCloseBrace(cmd, right)
+		if e < 0 {
+			return true
+		}
+		if braceGlueBefore(cmd, b, outer) || braceGlueAfter(cmd, e, outer) {
+			return true
+		}
+		left, right = b, e
+	}
+}
+
+// enclosingOpenBrace finds the nearest unmatched "{" before index from.
+func enclosingOpenBrace(cmd string, from int) int {
+	depth := 0
+	for i := from - 1; i >= 0; i-- {
+		switch cmd[i] {
+		case '}':
+			depth++
+		case '{':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		}
+	}
+	return -1
+}
+
+// matchingCloseBrace finds the nearest unmatched "}" after index from.
+func matchingCloseBrace(cmd string, from int) int {
+	depth := 0
+	for i := from + 1; i < len(cmd); i++ {
+		switch cmd[i] {
+		case '{':
+			depth++
+		case '}':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		}
+	}
+	return -1
+}
+
+// braceGlueBefore reports whether the "{" at b is glued to the text before
+// it. An enclosing quote directly before it is transparent: the shell joins
+// what precedes that quote to the brace group after quote removal.
+func braceGlueBefore(cmd string, b int, outer *shellQuoteRegion) bool {
+	i := b - 1
+	if outer != nil && i == outer.open {
+		i--
+	}
+	if i < 0 || isShellSpace(cmd[i]) {
+		return false
+	}
+	return strings.IndexByte(braceGroupBoundaryBefore, cmd[i]) < 0
+}
+
+// braceGlueAfter reports whether the "}" at e is glued to the text after it,
+// looking through an enclosing quote that closes directly after it.
+func braceGlueAfter(cmd string, e int, outer *shellQuoteRegion) bool {
+	j := e + 1
+	if outer != nil && j == outer.close {
+		j++
+	}
+	if j >= len(cmd) || isShellSpace(cmd[j]) {
+		return false
+	}
+	return strings.IndexByte(braceGroupBoundaryAfter, cmd[j]) < 0
 }
 
 // standsAloneBefore is condition 6's left side for the opening quote at openQ.
@@ -184,20 +290,31 @@ func shellWordEndsAfter(cmd string, i int) bool {
 
 // literalTopCannotExist is spec §3.1 conditions 4 and 5 for the cleaned
 // absolute path p: the root is not writable for the gateway's effective user
-// and the first component below the root does not exist. Any doubt (an Lstat
-// error other than not-exist, a path with no first component) answers false,
-// which keeps today's refusal.
-func literalTopCannotExist(p string) bool {
+// and the first component below the root does not exist. Any doubt (a path
+// with no first component, an Lstat error other than not-exist) answers
+// false, which keeps today's refusal. An unexpected Lstat error is also
+// returned so the refusal can say the check could not complete, instead of
+// presenting the uncertainty as a real outside write (T11 fix round 1, SF-5).
+// Unexpected root-probe errors are logged by the platform probe itself.
+func literalTopCannotExist(p string) (bool, error) {
 	if rootWritableProbe() {
-		return false
+		return false, nil
 	}
 	if !strings.HasPrefix(p, "/") {
-		return false
+		return false, nil
 	}
 	first, _, _ := strings.Cut(strings.TrimPrefix(p, "/"), "/")
 	if first == "" || first == "." || first == ".." {
-		return false
+		return false, nil
 	}
-	_, err := os.Lstat(filepath.Join("/", first))
-	return errors.Is(err, fs.ErrNotExist)
+	top := filepath.Join("/", first)
+	_, err := os.Lstat(top)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	case err == nil:
+		return false, nil
+	default:
+		return false, fmt.Errorf("could not check whether %q exists: %w", top, err)
+	}
 }

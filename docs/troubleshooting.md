@@ -359,13 +359,13 @@ mkdir -p "$TMPDIR"
 
 ## A shell command is "blocked by safety guard (path outside working dir)"
 
-The shell guard reads the command's text and refuses anything that looks like a path outside the agent's working folder, unless it can tell the reference is harmless. Since 2026-10-29 a stand-alone quoted value whose top folder cannot exist, such as `'/api/v1/users'` in a Python one-liner, is accepted. Text the guard still cannot judge stays refused: `../` anywhere in the command, quoted pieces that are joined or formatted into a path, globs, and every such value on Windows or when Omnipus runs as root.
+The shell guard reads the command's text and refuses anything that looks like a path outside the agent's working folder, unless it can tell the reference is harmless. Since 2026-10-29 a stand-alone quoted value whose top folder cannot exist, such as `'/api/v1/users'` in a Python one-liner, is accepted. Text the guard still cannot judge keeps its existing decision: `../` anywhere in the command, quoted pieces that are joined, formatted or brace-expanded into a path, and globs. The exception is off on Windows and whenever the account running Omnipus can write the filesystem root (normally when it runs as root).
 
-**Fix:** have the agent write the script to a file in its workspace with `write_file`, then run the file (`python3 script.py`). The guard does not read the file's contents. For a real folder outside the workspace, request a mount. Details: [tools](tools.md#limits-and-things-to-watch).
+**Fix:** have the agent write the script to a file in its workspace with `write_file`, then run the file (`python3 script.py`). The guard does not read the file's contents; this avoids only the false refusal and does not grant access to files outside the workspace. For a real folder outside the workspace, request a mount. Details: [tools](tools.md#limits-and-things-to-watch).
 
 ## Limits and things to watch
 
-- Sandbox strength depends on the operating system: Linux confines the gateway and everything it starts, macOS confines only the processes Omnipus launches, and Windows uses application-level checks alone. Details: [operations/sandbox-limitations.md](operations/sandbox-limitations.md).
+- Sandbox strength depends on the operating system: Linux confines the gateway and everything it starts, macOS confines the commands Omnipus runs through its sandboxed execution path (not the gateway itself), and Windows uses application-level checks alone. External command-line workers (Claude Code, Codex, OpenCode) and the CLI version check start directly, outside the Omnipus sandbox on every platform. Details: [operations/sandbox-limitations.md](operations/sandbox-limitations.md).
 - Behind a reverse proxy, set `gateway.public_url` to the address browsers actually reach; preview links and WebSocket origin checks derive from it. See [operations/reverse-proxy.md](operations/reverse-proxy.md).
 
 ## Related pages
