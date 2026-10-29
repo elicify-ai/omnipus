@@ -1,0 +1,28 @@
+{
+  "roundTrip": [
+    {"workspace": "W", "path": "notes/plan.md", "link": "omnipus://file/W/notes/plan.md"},
+    {"workspace": "W", "path": "report (final).md", "link": "omnipus://file/W/report%20%28final%29.md"},
+    {"workspace": "W", "path": "a[1].md", "link": "omnipus://file/W/a%5b1%5d.md"},
+    {"workspace": "W", "path": "100% done #1?.md", "link": "omnipus://file/W/100%25%20done%20%231%3f.md"},
+    {"workspace": "W", "path": "uber/ü ñ.txt", "link": "omnipus://file/W/uber/%c3%bc%20%c3%b1.txt"}
+  ],
+  "rejectHref": [
+    "omnipus://file/W/../secret.md",
+    "omnipus://file/W/./a.md",
+    "omnipus://file/W/a/../../secret.md",
+    "omnipus://file/W/%2e%2e/secret.md",
+    "omnipus://file/W/a%2Fb.md",
+    "omnipus://file/W/notes/plan.md?x=1",
+    "omnipus://file/W/notes/plan.md#frag",
+    "OMNIPUS://file/W/notes/plan.md",
+    "omnipus://file//notes/plan.md",
+    "omnipus://evil/W/a.md",
+    "omnipus://file/W/notes/plan.md/../x.md"
+  ],
+  "rejectPath": [
+    {"workspace": "W", "path": "notes/‮plan.md"},
+    {"workspace": "W", "path": "notes/a​.md"},
+    {"workspace": "W", "path": "notes/a\u007f.md"},
+    {"workspace": "W", "path": "notes/a\u0080.md"}
+  ]
+}
