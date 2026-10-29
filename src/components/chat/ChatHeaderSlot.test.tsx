@@ -270,6 +270,13 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
     // ordinary 4px gap would let the later sibling win the overlap. The
     // GEOMETRY is measured in the browser; here the rule is pinned.
     expect(screen.getByTestId('chat-header-slot').className).toContain('pointer-coarse:gap-[var(--space-2)]')
+    // ... and the slot RESERVES the room the two touch targets need: the 25%
+    // ceiling alone is smaller than the targets at a 320px line (80px vs
+    // 112px), and the slot then overflows — the warning lands on top of the
+    // participant control and a tap meant for the warning opens the picker.
+    expect(screen.getByTestId('chat-header-slot').className).toContain(
+      'pointer-coarse:min-w-[calc(var(--target-touch-minimum)*2+var(--space-1)+var(--space-2)+var(--space-2-5))]',
+    )
   })
 
   it('a ROOM page shows no chat chrome: no label, no Add participant', async () => {

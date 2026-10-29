@@ -119,6 +119,19 @@ describe('Add participant — agents only, one workspace, no main-chat conversio
     expect(net.writes()).toEqual([])
   })
 
+  it('[#1449 D13] the header slot icon keeps the touch minimum on a coarse pointer', async () => {
+    // The header line's icon control sits NEXT to the failed-roster warning.
+    // Two adjacent controls narrower than the touch minimum get overlapping
+    // hit regions and the later sibling wins the overlap (design-system rule
+    // 12): a tap meant for the warning would open this picker instead. The
+    // GEOMETRY is measured in the browser; here the rule is pinned.
+    const IconAddParticipant = await requiredExport<ComponentType<{ target: Target; presentation?: 'label' | 'icon' }>>('/src/components/chat/AddParticipant.tsx', 'AddParticipant', 'FR-207/208; BDD-17.24/25; test row 138')
+    await mountAt(<IconAddParticipant target={main} presentation="icon" />, `/workspaces/${WS}/chat`)
+    const control = await screen.findByRole('button', { name: 'Add participant' })
+    expect(control.className).toContain('pointer-coarse:min-h-[var(--target-touch-minimum)]')
+    expect(control.className).toContain('pointer-coarse:min-w-[var(--target-touch-minimum)]')
+  })
+
   it('[FR-207/208; BDD-17.24/25] the chat body no longer carries its own Add participant row — the control lives in the header slot', async () => {
     net.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json(wireHistoryPage(MAIN_ID, [], 0)))
     net.respond('GET', '/api/v1/skills', () => json([]))

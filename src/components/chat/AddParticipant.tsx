@@ -91,7 +91,14 @@ export function AddParticipant({ target, presentation = 'label' }: { target: Add
             size="sm"
             variant="ghost"
             onClick={() => setOpen(true)}
-            className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)] active:text-[var(--color-accent)]"
+            // The touch minimum on a coarse pointer (design-system rule 12):
+            // this control sits NEXT to the failed-roster warning in the
+            // header line, and two adjacent controls narrower than the touch
+            // minimum get overlapping hit regions — the later sibling wins the
+            // overlap, so a tap meant for the warning would open this picker
+            // instead. The GLYPH stays 16px; only the hit box grows, and only
+            // for a finger.
+            className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)] active:text-[var(--color-accent)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
           >
             <UserPlus aria-hidden="true" size={16} />
           </IconButton>

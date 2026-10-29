@@ -12,7 +12,7 @@
 // The readiness budget is 30s, the same budget this check always had. A run
 // that misses it is a FINDING to report with its log, not a budget to raise:
 // widening the wait would accept a slow start instead of measuring it.
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { Session } from '../../src/lib/api/generated/schemas';
 import { backdropMain, backdropWorkspace, installSidebarBackdropEdges } from './fixtures/sidebar-session-backdrop';
 
@@ -44,6 +44,12 @@ const REMEMBERED_SESSION_KEY = 'omnipus.sessionByWorkspace.v1';
 // The widths a real window reaches: a wide desktop, a laptop, a half-screen
 // window and a narrow side-by-side window.
 const WIDTHS = [1440, 900, 640, 420];
+
+// The widths a COARSE pointer (a finger) reaches: a large phone, a small
+// phone and the narrowest supported phone. The two controls in the header
+// line are touch targets there, and the slot that holds them is capped —
+// these widths are where the cap and the touch minimum meet.
+const COARSE_WIDTHS = [420, 360, 320];
 
 // The API/WS edges are stubbed, so no auth state is needed.
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -167,7 +173,15 @@ test('the failed-roster warning fits the capped slot and never overlaps the part
 test.describe('at a coarse pointer', () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 420, height: 800 } });
 
-  test('the failed-roster warning and "Add participant" are separate touch targets', async ({ page }) => {
+  // The exact-restore path makes the two controls coexist — this browser
+  // remembers the workspace's main chat, the session listing still contains
+  // it, and the roster read fails.
+  // workspaceEntryFlow.ts::loadInputs keeps the exact restore alive when the
+  // TEAM could not be loaded (transportFailed = sessionsFailed || (teamFailed
+  // && !exactAvailable)), so the entry is the exact main chat with sending
+  // enabled: the participant control is offered while the header still warns
+  // that the names are unavailable.
+  async function openCoexistence(page: Page) {
     // This browser remembers the workspace's main chat: the pointer the
     // workspace entry restores from.
     await page.addInitScript(([key, value]) => {
@@ -188,50 +202,131 @@ test.describe('at a coarse pointer', () => {
     const participant = page.getByRole('button', { name: 'Add participant' });
     await expect(warning, 'the failed-roster warning never appeared').toBeVisible({ timeout: READINESS_TIMEOUT_MS });
     await expect(participant, 'the participant control never appeared').toBeVisible({ timeout: READINESS_TIMEOUT_MS });
+    return { traffic, warning, participant };
+  }
 
-    // THE INSTRUMENT: the touch sizing only applies to a coarse pointer. If
-    // the emulation did not take effect, this case would measure a mouse
-    // pointer and pass for the wrong reason.
-    expect(
-      await page.evaluate(() => matchMedia('(pointer: coarse)').matches),
-      'the coarse-pointer emulation did not take effect',
-    ).toBe(true);
+  // The strip picks its mode from the space it measures, so a resize settles
+  // a frame later. Wait until the measured strip stops moving before reading
+  // any geometry.
+  async function settleHeader(page: Page): Promise<void> {
+    const strip = page.getByTestId('workspace-header-entries');
+    let last = -1;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const width = (await strip.boundingBox())?.width ?? -1;
+      if (width > 0 && width === last) return;
+      last = width;
+      await page.waitForTimeout(50);
+    }
+  }
 
-    // The warning is a touch-sized target — the token minimum, not the 14px
-    // glyph it draws.
-    const warningBox = await warning.boundingBox();
-    expect(warningBox, 'the warning has no box').not.toBeNull();
-    expect(warningBox!.width, 'the warning is not a touch-sized target').toBeGreaterThanOrEqual(TOUCH_MINIMUM_PX);
-    expect(warningBox!.height, 'the warning is not a touch-sized target').toBeGreaterThanOrEqual(TOUCH_MINIMUM_PX);
+  test('both controls keep the touch minimum and stay disjoint at every coarse width', async ({ page }) => {
+    const { traffic, warning, participant } = await openCoexistence(page);
 
-    // ... and the two targets never overlap: a tap meant for one control
-    // cannot reach the other.
-    const participantBox = await participant.boundingBox();
-    expect(participantBox, 'the participant control has no box').not.toBeNull();
-    expect(
-      warningBox!.x + warningBox!.width,
-      'the warning reaches into the participant control',
-    ).toBeLessThanOrEqual(participantBox!.x);
+    for (const width of COARSE_WIDTHS) {
+      await page.setViewportSize({ width, height: 800 });
+      await settleHeader(page);
 
-    // The slot's cap still holds with the bigger touch box: the controls fit
-    // inside it and the identity truncates instead of pushing the line
-    // sideways.
-    const slotOverflow = await page.getByTestId('chat-header-slot').evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
-    expect(slotOverflow.scroll, 'the touch-sized warning overflows the capped slot').toBeLessThanOrEqual(slotOverflow.client + 1);
+      // THE INSTRUMENT: the touch sizing only applies to a coarse pointer.
+      // If the emulation did not take effect, this case would measure a
+      // mouse pointer and pass for the wrong reason.
+      expect(
+        await page.evaluate(() => matchMedia('(pointer: coarse)').matches),
+        `the coarse-pointer emulation did not take effect at ${width}px`,
+      ).toBe(true);
 
-    // A tap on the warning opens ONLY the explanation — never the picker.
-    await warning.tap({ position: { x: warningBox!.width - 2, y: warningBox!.height / 2 } });
-    const explanation = page.getByRole('tooltip').filter({ hasText: 'Agent names could not be loaded' });
-    await expect(explanation, 'the warning never explained itself on a tap').toBeVisible();
-    await expect(page.getByTestId('add-participant-dialog'), 'the warning tap opened the participant picker').toHaveCount(0);
-    await page.keyboard.press('Escape');
-    await expect(explanation, 'Escape did not dismiss the explanation').toHaveCount(0);
+      const warningBox = await warning.boundingBox();
+      const participantBox = await participant.boundingBox();
+      const identityBox = await page.locator('[data-testid="feed-kind-label"] span[title]').first().boundingBox();
+      const slotBox = await page.getByTestId('chat-header-slot').boundingBox();
+      const stripBox = await page.getByTestId('workspace-header-entries').boundingBox();
+      expect(warningBox, `the warning has no box at ${width}px`).not.toBeNull();
+      expect(participantBox, `the participant control has no box at ${width}px`).not.toBeNull();
+      expect(slotBox, `the slot has no box at ${width}px`).not.toBeNull();
+      expect(stripBox, `the strip has no box at ${width}px`).not.toBeNull();
 
-    // A tap on the participant control opens ONLY the picker — never the
-    // explanation.
-    await participant.tap({ position: { x: 2, y: participantBox!.height / 2 } });
-    await expect(page.getByTestId('add-participant-dialog'), 'the participant picker never opened').toBeVisible();
-    await expect(explanation, 'the participant tap opened the warning explanation').toHaveCount(0);
+      // The measured geometry, printed so the receipt carries the numbers
+      // and not only the verdicts.
+      console.log(`COARSE ${width}px ${JSON.stringify({
+        warning: { x: warningBox!.x, right: warningBox!.x + warningBox!.width, width: warningBox!.width, height: warningBox!.height },
+        participant: { x: participantBox!.x, right: participantBox!.x + participantBox!.width, width: participantBox!.width, height: participantBox!.height },
+        gap: participantBox!.x - (warningBox!.x + warningBox!.width),
+        identity: identityBox ? { width: identityBox.width } : null,
+        slot: { width: slotBox!.width },
+        strip: { width: stripBox!.width },
+      })}`);
+
+      // BOTH controls are touch-sized targets — the token minimum, not the
+      // glyph they draw.
+      expect.soft(warningBox!.width, `the warning is not a touch-sized target at ${width}px`).toBeGreaterThanOrEqual(TOUCH_MINIMUM_PX);
+      expect.soft(warningBox!.height, `the warning is not a touch-sized target at ${width}px`).toBeGreaterThanOrEqual(TOUCH_MINIMUM_PX);
+      expect.soft(participantBox!.width, `the participant control is not a touch-sized target at ${width}px`).toBeGreaterThanOrEqual(TOUCH_MINIMUM_PX);
+      expect.soft(participantBox!.height, `the participant control is not a touch-sized target at ${width}px`).toBeGreaterThanOrEqual(TOUCH_MINIMUM_PX);
+
+      // ... and the two targets never overlap: a tap meant for one control
+      // cannot reach the other.
+      expect.soft(
+        warningBox!.x + warningBox!.width,
+        `the warning reaches into the participant control at ${width}px`,
+      ).toBeLessThanOrEqual(participantBox!.x);
+
+      // No horizontal overflow: neither the capped slot nor the header line
+      // scrolls sideways.
+      const slotOverflow = await page.getByTestId('chat-header-slot').evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect.soft(slotOverflow.scroll, `the touch-sized controls overflow the capped slot at ${width}px`).toBeLessThanOrEqual(slotOverflow.client + 1);
+      const headerOverflow = await page.getByTestId('workspace-top-bar').evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect.soft(headerOverflow.scroll, `the header line overflows sideways at ${width}px`).toBeLessThanOrEqual(headerOverflow.client + 1);
+
+      // The workspace navigation keeps the line: its entry is still on screen
+      // and still inside the strip's own box.
+      //
+      // The strip is NOT compared with the slot's box here (the fine-pointer
+      // case above still is): two 44px touch targets, the sidebar launcher
+      // and the browser button cannot fit inside a QUARTER of a 320px line —
+      // the cap yields on a coarse pointer, and the workspace keeps its own
+      // share of what is left. What must never happen is the workspace being
+      // squeezed OUT of the line.
+      const nameBox = await page.getByTestId('workspace-name-button').boundingBox();
+      expect(nameBox, `the strip lost the workspace at ${width}px`).not.toBeNull();
+      expect.soft(nameBox!.width, `the workspace entry was crushed at ${width}px`).toBeGreaterThan(0);
+      expect.soft(
+        nameBox!.x + nameBox!.width,
+        `the workspace entry reaches past the strip at ${width}px`,
+      ).toBeLessThanOrEqual(stripBox!.x + stripBox!.width + 1);
+      await expect(page.getByTestId('workspace-name-button'), `the strip lost the workspace at ${width}px`).toBeVisible();
+    }
+
+    expect(traffic.unknown, 'a missing API fixture is a backdrop failure').toEqual([]);
+    expect(traffic.errors, 'a page crash is a backdrop failure').toEqual([]);
+  });
+
+  test('a tap on each control opens only its own thing at every coarse width', async ({ page }) => {
+    const { traffic, warning, participant } = await openCoexistence(page);
+
+    for (const width of COARSE_WIDTHS) {
+      await page.setViewportSize({ width, height: 800 });
+      await settleHeader(page);
+
+      const warningBox = await warning.boundingBox();
+      const participantBox = await participant.boundingBox();
+      expect(warningBox, `the warning has no box at ${width}px`).not.toBeNull();
+      expect(participantBox, `the participant control has no box at ${width}px`).not.toBeNull();
+
+      // A tap on the warning opens ONLY the explanation — never the picker.
+      await warning.tap({ position: { x: warningBox!.width - 2, y: warningBox!.height / 2 }, timeout: 10_000 });
+      const explanation = page.getByRole('tooltip').filter({ hasText: 'Agent names could not be loaded' });
+      await expect(explanation, `the warning never explained itself on a tap at ${width}px`).toBeVisible();
+      await expect(page.getByTestId('add-participant-dialog'), `the warning tap opened the participant picker at ${width}px`).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(explanation, `Escape did not dismiss the explanation at ${width}px`).toHaveCount(0);
+
+      // A tap on the participant control opens ONLY the picker — never the
+      // explanation.
+      await participant.tap({ position: { x: 2, y: participantBox!.height / 2 }, timeout: 10_000 });
+      await expect(page.getByTestId('add-participant-dialog'), `the participant picker never opened at ${width}px`).toBeVisible();
+      await expect(explanation, `the participant tap opened the warning explanation at ${width}px`).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('add-participant-dialog'), `Escape did not close the participant picker at ${width}px`).toHaveCount(0);
+    }
 
     expect(traffic.unknown, 'a missing API fixture is a backdrop failure').toEqual([]);
     expect(traffic.errors, 'a page crash is a backdrop failure').toEqual([]);

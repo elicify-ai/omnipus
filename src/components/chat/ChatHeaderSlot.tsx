@@ -51,15 +51,30 @@ export function ChatHeaderSlot({ workspaceId }: { workspaceId: string }) {
   return (
     <div
       data-testid="chat-header-slot"
-      // The gap grows on a coarse pointer. Two controls CAN share this line:
-      // the failed-roster warning (an icon button whose touch box is the
-      // touch minimum, 44px) and "Add participant" (a 28px icon button).
-      // The published package's [data-ds-action] expander grows the
-      // participant's hit region 6px past its box; with the ordinary 4px gap
-      // the two regions would overlap, and the LATER sibling wins an overlap
-      // — a tap meant for the warning would open the participant picker
-      // instead. 8px keeps them disjoint in the app and in the package.
-      className="flex max-w-[25%] shrink items-center justify-end gap-[var(--space-1)] pointer-coarse:gap-[var(--space-2)] pr-[var(--space-2-5)]"
+      // The gap grows on a coarse pointer, and the slot RESERVES the room
+      // its two touch targets need.
+      //
+      // Two controls CAN share this line: the failed-roster warning (an icon
+      // button whose touch box is the touch minimum, 44px) and "Add
+      // participant" (the same). The published package's [data-ds-action]
+      // expander grows the participant's hit region 6px past its box; with
+      // the ordinary 4px gap the two regions would overlap, and the LATER
+      // sibling wins an overlap — a tap meant for the warning would open the
+      // participant picker instead. 8px keeps them disjoint in the app and in
+      // the package.
+      //
+      // The 25% ceiling alone cannot hold the two touch targets on a phone:
+      // at a 320px line the cap is 80px, smaller than the targets need, so
+      // the slot OVERFLOWS and the warning is painted over the participant
+      // control (measured in Chromium: an 8px real box overlap at 320px, and
+      // a tap meant for the warning opens the picker). A coarse-pointer
+      // MINIMUM width — the two touch targets plus the two gaps and the
+      // right padding — reserves the room instead: the ceiling yields only
+      // where the touch minimum asks for it, the workspace strip keeps the
+      // rest of the line, and the identity truncates (the founder's rule:
+      // the chat slot shrinks and truncates first, the workspace navigation
+      // keeps the header line).
+      className="flex max-w-[25%] shrink items-center justify-end gap-[var(--space-1)] pointer-coarse:gap-[var(--space-2)] pointer-coarse:min-w-[calc(var(--target-touch-minimum)*2+var(--space-1)+var(--space-2)+var(--space-2-5))] pr-[var(--space-2-5)]"
     >
       {isSessionChat ? (
         <>
