@@ -58,7 +58,7 @@ func NewSendFileTool(
 
 func (t *SendFileTool) Name() string { return "send_file" }
 func (t *SendFileTool) Description() string {
-	return "Send a local file (image, document, etc.) to the user on the current chat channel."
+	return "Send a local file (image, document, etc.) to the user on the current chat channel. On web chat, a Library file's result includes a link: line whose omnipus://file/ link is the one to show; do not invent a link, and on any other channel refer to the file by name."
 }
 func (t *SendFileTool) Scope() ToolScope       { return ScopeCore }
 func (t *SendFileTool) Category() ToolCategory { return CategoryCommunication }
