@@ -1,6 +1,6 @@
 // T83 / S11 B98: real list, runtime, paging and sole viewport compensation.
 // Browser metrics are independent physical inputs. No part/store/hook seeding.
-import { writeSync } from 'node:fs'
+import { appendFileSync, writeSync } from 'node:fs'
 import { setTimeout as nativeSetTimeout, clearTimeout as nativeClearTimeout } from 'node:timers'
 import { afterEach, aroundAll, aroundEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -38,6 +38,18 @@ let nextFrame = 0
 let activeCase = 'before the first case'
 let lifecyclePhase = 'before suite hooks'
 const lifecycleLabel = () => `case=${JSON.stringify(activeCase)} phase=${JSON.stringify(lifecyclePhase)} queued_frames=${browserFrames.size} held_responses=${releases.length}`
+function traceT83Phase(phase: string) {
+  lifecyclePhase = phase
+  const directory = process.env.OMNIPUS_QA_T83_DIAGNOSTIC_DIR
+  // Opt-in diagnostic output only: no test, assertion or product path is gated.
+  // A direct file write survives Vitest's console buffering and identifies the
+  // exact worker. The frozen runner creates/owns this synthetic evidence dir.
+  if (directory) appendFileSync(`${directory}/t83-phase-${process.pid}.jsonl`, JSON.stringify({
+    at: new Date().toISOString(), pid: process.pid, case: activeCase, phase,
+    queuedFrames: browserFrames.size, heldResponses: releases.length,
+  }) + '\n')
+}
+traceT83Phase('module: registered phase instrument')
 
 function failT83Lifecycle(message: string): void {
   // Vitest replaces process.exit with a throw, which cannot end a wedged
@@ -65,48 +77,62 @@ async function withinT83CleanupDeadline(work: () => void | Promise<void>, descri
 aroundAll(async runSuite => {
   // Ten minutes for the WHOLE file, generously above 15 cases' existing 30s
   // body budgets plus normal cleanup. No product/hook timeout is increased.
-  // This encloses all hooks/fixtures, including stalls BETWEEN reported cases.
+  // Encloses runSuite's hooks/fixtures, not the runner work after aroundAll.
+  // The opt-in trace distinguishes a cancelled guard from a stalled event loop.
+  traceT83Phase('aroundAll: enter; arm native lifecycle watchdog')
   const cancelWatchdog = armT83LifecycleWatchdog(lifecycleLabel, 10 * 60 * 1000)
-  try { await runSuite() }
-  finally { cancelWatchdog() }
+  try {
+    await runSuite()
+    traceT83Phase('aroundAll: runSuite returned')
+  } finally {
+    traceT83Phase('aroundAll: finally; cancel native lifecycle watchdog')
+    cancelWatchdog()
+    traceT83Phase('aroundAll: leaving hook')
+  }
 })
 aroundEach(async (runTest, { task }) => {
   activeCase = task.name
-  lifecyclePhase = 'beforeEach hooks'
-  await runTest()
-  lifecyclePhase = 'all case hooks finished; between cases'
+  traceT83Phase('aroundEach: before runTest and beforeEach hooks')
+  try {
+    await runTest()
+    traceT83Phase('aroundEach: runTest and case hooks returned')
+  } finally {
+    traceT83Phase('aroundEach: leaving hook')
+  }
 })
 beforeEach(() => {
-  lifecyclePhase = 'beforeEach: resetStage1App'
+  traceT83Phase('beforeEach: resetStage1App')
   resetStage1App(); network = new Stage1Network(); nextFrame = 0
   browserFrames.clear()
   // Browser edge only. A finite frame barrier must not keep an async act
   // scope alive after Vitest times out a missing product prerequisite.
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { browserFrames.set(++nextFrame, callback); return nextFrame })
   vi.stubGlobal('cancelAnimationFrame', (id: number) => browserFrames.delete(id))
-  lifecyclePhase = 'test body'
+  traceT83Phase('beforeEach: complete; test body')
 })
 afterEach(async () => {
+  traceT83Phase('afterEach: enter; arm cleanup deadline')
   try {
     await withinT83CleanupDeadline(async () => {
       // Unmount/disconnect observers BEFORE resolving held HTTP work. A failed
       // assertion must not resume a live component or leave queued browser work.
-      lifecyclePhase = 'cleanup: unmount'
+      traceT83Phase('cleanup: unmount')
       cleanup()
       browserFrames.clear()
-      lifecyclePhase = 'cleanup: release held HTTP'
+      traceT83Phase('cleanup: release held HTTP')
       releases.splice(0).forEach(release => release())
-      lifecyclePhase = 'cleanup: stopStage1App'
+      traceT83Phase('cleanup: stopStage1App')
       await stopStage1App()
-      lifecyclePhase = 'cleanup: network assertions'
+      traceT83Phase('cleanup: network assertions')
       expect(network.unexpected, 'network edges are declared').toEqual([])
     }, lifecycleLabel, 5000)
+    traceT83Phase('cleanup: guarded work returned')
   } finally {
-    lifecyclePhase = 'cleanup: restore browser metrics/globals'
+    traceT83Phase('cleanup: restore browser metrics/globals')
     browserFrames.clear()
     layout?.restore(); layout = undefined
     vi.unstubAllGlobals()
-    lifecyclePhase = 'remaining framework afterEach hooks'
+    traceT83Phase('afterEach: leaving; remaining framework hooks')
   }
 })
 function RealReader() {
@@ -119,7 +145,7 @@ function RealReader() {
 async function read(sources: Message[], mode: 'latest' | 'older' | 'newer', earlier = false, later = false, limit = Math.max(20, sources.length)) {
   const selected = page(sources, { sessionId: MAIN_ID, earlier, later, rows: sources.length, info: { mode, limit, min_rows: 1, stop_reason: (mode === 'newer' ? later : earlier) ? 'row_target' : 'end' } })
   network.respond('GET', path, () => json(selected))
-  lifecyclePhase = `body: await ${mode} page`
+  traceT83Phase(`body: await ${mode} page`)
   await act(async () => {
     const store = useChatStore.getState()
     if (mode === 'latest') await store.loadLatestHistory(MAIN_ID, { limit, min_rows: 1 })
@@ -155,9 +181,9 @@ async function positionInsideB(region: HTMLElement, direction: 'older' | 'newer'
   act(() => { region.scrollTop = direction === 'newer' ? region.scrollHeight - region.clientHeight : 0; fireEvent.scroll(region); layout!.flushResize() })
   act(() => { browserFrame(); layout!.flushResize() })
   act(() => { browserFrame(); layout!.flushResize() })
-  lifecyclePhase = 'body: B part marker prerequisite'
+  traceT83Phase('body: B part marker prerequisite')
   expect(region.querySelector(`[data-history-part="${pos(3)}"]`), 'BLOCKED: B part marker not implemented — required by S11/T83').not.toBeNull()
-  lifecyclePhase = 'body: measure B inner paragraph'
+  traceT83Phase('body: measure B inner paragraph')
   const marked = point(region)
   const marker = marked.closest<HTMLElement>('[data-history-part]')!
   expect(marked.getBoundingClientRect().top - marker.getBoundingClientRect().top, 'instrument: independent inner geometry sees the second paragraph60px inside B').toBe(60)
@@ -205,7 +231,7 @@ async function setup(direction: 'older' | 'newer', virtual: boolean) {
     expect(bucket().history.newerBoundary).toBe(pos(3))
   }
   useChatStore.getState().enterHistoryReading(MAIN_ID)
-  lifecyclePhase = 'body: render RealReader'
+  traceT83Phase('body: render RealReader')
   render(<QueryClientProvider client={queryClient}><RealReader /></QueryClientProvider>)
   const region = screen.getByRole('region', { name: 'Conversation history' })
   const focus = await positionInsideB(region, direction)

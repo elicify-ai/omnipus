@@ -31,8 +31,8 @@ export async function replaceRows(app: PreviewApp, sources: Message[], mode: 'la
   })
   await waitFor(() => expect(useChatStore.getState().sessionsById[MAIN_ID]?.history.requests[mode === 'latest' ? 'latest' : 'refresh'].status).toBe('idle'))
 }
-export async function openPreviewApp(sources: Message[] = [toolSource()]) {
-  const app = await openHistory(page([entry(90, { content: 'D2 application ready' })], { sessionId: MAIN_ID }))
+export async function openPreviewApp(sources: Message[] = [toolSource()], options: Parameters<typeof openHistory>[1] = {}) {
+  const app = await openHistory(page([entry(90, { content: 'D2 application ready' })], { sessionId: MAIN_ID }), options)
   await replaceRows(app, sources)
   return app
 }
