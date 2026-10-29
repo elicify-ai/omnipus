@@ -30,6 +30,9 @@ import { ChatImage } from './ChatImage'
 import { MermaidDiagram } from './mermaid-renderer'
 import { rewriteLegacyURL, resolveEffectivePreview } from '@/lib/preview-url'
 import { isSafeHref } from '@/lib/url-safe'
+import { parseChatLink } from '@/lib/chatLinks'
+import { useChatLinkWorkspace } from '@/store/chatView'
+import { ChatLibraryLink } from './ChatLibraryLink'
 import { mailDeepLinkTarget, openMailDeepLink } from '@/components/workspaces/mail/mailDeepLink'
 import { PHOSPHOR_EMOJI_ICONS } from '@/lib/phosphor-emoji-icons'
 
@@ -72,8 +75,20 @@ export function MarkdownImage({ src, alt }: ComponentPropsWithoutRef<'img'>) {
 // Built per-render because it closes over effectivePreview (from /api/v1/about).
 // Rewrites legacy 0.0.0.0/localhost hosts to the current preview host, opens in a
 // new tab, and renders unsafe schemes as struck-through plain text (no href).
+//
+// Chat links (chat-links spec FR-001) are recognised FIRST, on the raw href:
+// `omnipus://file/<ws>/<path>`, and a bare workspace-relative file path when
+// the chat's session recorded a workspace (useChatLinkWorkspace). Both render
+// as an in-app Library anchor (ChatLibraryLink). Anything that is not an exact
+// chat link falls through unchanged, so `omnipus://` in any other shape, and
+// an ordinary relative href, keep today's struck-through treatment.
 export function createLinkRenderer(effectivePreview: EffectivePreview) {
   return function MarkdownLink({ href, children }: ComponentPropsWithoutRef<'a'>) {
+    const chatWorkspaceId = useChatLinkWorkspace()
+    const chatLink = parseChatLink(href, chatWorkspaceId)
+    if (chatLink !== null) {
+      return <ChatLibraryLink target={chatLink}>{children}</ChatLibraryLink>
+    }
     const rewritten = effectivePreview
       ? rewriteLegacyURL(href ?? '', effectivePreview.hostname, effectivePreview.port)
       : (href ?? '')

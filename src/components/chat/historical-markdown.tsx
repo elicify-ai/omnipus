@@ -15,6 +15,7 @@ import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import { rehypePhosphorEmoji } from '@/lib/rehype-phosphor-emoji'
+import { chatLinkUrlTransform } from '@/lib/chatLinks'
 import { useUiStore } from '@/store/ui'
 import { copyText } from './media-actions'
 import { Button } from '@/components/ui/button'
@@ -143,6 +144,9 @@ function HistoricalMessageMarkdownInner({ content }: { content: string }) {
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex, rehypePhosphorEmoji]}
       components={historicalMarkdownComponents}
+      // Keep valid omnipus://file links (the default transform would blank them);
+      // everything else still goes through react-markdown's default transform.
+      urlTransform={chatLinkUrlTransform}
     >
       {content}
     </ReactMarkdown>
