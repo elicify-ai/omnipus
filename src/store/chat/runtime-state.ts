@@ -184,6 +184,10 @@ export const SESSION_SCOPED_FRAME_TYPES = new Set([
   // onto the span record (frames.ts's `case 'subagent_message'`/
   // `'subagent_state'`). Session-scoped like subagent_start/_end above.
   'subagent_message', 'subagent_state',
+  // chat-links spec (Contract): OpenInLibraryFrame carries a required
+  // session_id (1..255). Live-only and unsequenced; its handler
+  // (slices/open-in-library-frames.ts) acts only for the session on screen.
+  'open_in_library',
 ])
 
 // F-S3: frame types that can carry a turn-cancellation acknowledgment

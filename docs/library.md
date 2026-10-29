@@ -28,6 +28,31 @@ Files arrive three ways:
 2. From a workspace, select its **Library** panel toggle in the workspace bar (or the panels menu on a narrow bar). The panel opens already inside that workspace's files. The sidebar **Library** entry is different: it lists every workspace. There is no Library button in the chat header.
 3. Select **Expand Library panel** in the panel heading for a full-screen Library. In a normal browser tab, this opens a new tab or switches to a tab Omnipus recognises as already showing it. In an installed app or standalone Chrome window, it uses the same window instead; **Back to chat** returns there with Library re-docked. A newly opened tab carries the current workspace and the selected file, if any, in its address. With no file selected, the browsed subfolder is not carried over. The docked panel closes after the handoff. Use **Back to chat** to leave the full-screen view; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how the panel is restored and the same-tab fallback.
 
+## Links from chat
+
+When an agent mentions a file in its reply, the file name can be a link. Select it (or press **Enter** on it) and the Library opens beside the chat on that file. Knowledge notes and bases work the same way: a note opens with its side rail and a `.base` file opens as its preview. The link works the same while the reply is still being written and after it has finished.
+
+- **Which workspace.** A link written as `omnipus://file/<workspace>/<path>` names its own workspace. A plain file path such as `notes/plan.md` opens in the workspace the chat belongs to. In Omnipus's own chat, and in a chat that belongs to no workspace, a plain path stays plain text; full `omnipus://file/` links still work there.
+- **What the link really opens.** If the words you see are not the file's name or path, the real location follows them in muted text, for example **W / secrets/payroll.xlsx**, so you can check it without hovering.
+- **New tab.** Ctrl-click or Cmd-click, Shift-click, or a middle click opens the full-page Library in a new browser tab instead of the panel.
+- **Unsaved edits.** If the Library or Mail has unsaved changes, you are asked before it moves; **Cancel** leaves everything as it was. While that question is open, further link clicks are ignored.
+- **Missing or not yours.** A file that is gone shows the Library's usual "file not there" landing. A workspace you cannot open shows the Library's usual message and no file content.
+- **Not every path is a link.** Ordinary relative links that do not name a file (such as `README`, `docs/` or `#section`), web links that are not `https`/`http`/`mailto`, and names containing invisible or direction-changing characters stay as plain, struck-through text. A file outside every Library, such as an agent's private folder, is given as its full path with no link. Web links still open in a new tab.
+
+## When an agent opens the Library for you
+
+An agent can ask to show you a file in its own workspace while it is answering.
+
+- **You are looking at the chat** (the browser tab is visible and this chat is on screen): the Library opens beside the chat on that file. Your typing position stays where it was, and screen readers hear **Opened &lt;name&gt; in Library**. It replaces another side panel such as Calendar or Mail, unless that panel has unsaved changes. On a phone it opens the same way and covers the chat.
+- **You are not looking, or there are unsaved edits** (the tab is in the background, another app is in front, you are on another page such as Settings, or the Library or Mail has unsaved changes): nothing opens. A notice at the top of the chat reads **The agent wants to show you &lt;name&gt;** with **Open** and **Dismiss**. **Open** asks about unsaved edits first, then opens the Library. **Escape** dismisses the notice while your focus is inside it. Each chat shows at most one notice; a newer one replaces the older.
+- **Never later, never on reload.** Notices are not saved: reloading the page clears them, and reloading or reconnecting never opens the Library by itself. A tab that was offline when the agent asked does nothing when it reconnects. A request for a chat other than the one this tab shows does nothing in this tab.
+
+The tool call behind this is hidden in the conversation when it succeeds; a refusal stays visible, and **Verbose chat** shows every call.
+
+## Open in Library on sent files
+
+When an agent sends you a file from its workspace, the file card has **Open in Library** next to the download link. It opens the docked Library on that file, asking first if there are unsaved edits. Images keep their own toolbar and get no extra button. A file that is not in any Library only downloads. Files sent over other channels, such as Telegram or email, arrive on their own with no Omnipus link.
+
 ## How to add files
 
 1. Open the Library and navigate into the workspace and folder you want the files in.
@@ -85,7 +110,7 @@ The preview pane picks its surface by file type.
 
 ## Mail attachments: temporary previews
 
-Opening an attachment from [Mail](mail.md#attachments) previews it here **temporarily**: no file is created, it has no path, and it vanishes when you go back, close the panel, or reload. A bar reading **From mail: \<subject\>** stays above the preview with **Back to mail** and **Save to Library**; stored-file actions (edit, rename, move, download) are disabled with **Save to Library first.** until you actually save. Saving puts a real copy in the workspace (mail → mailbox → month) and enables **Open in Library**.
+Opening an attachment from [Mail](mail.md#attachments) previews it here **temporarily**: no file is created, it has no path, and it vanishes when you go back, close the panel, or reload. A bar reading **From mail: \<subject\>** stays above the preview with **Back to mail** and **Save to Library**; stored-file actions (edit, rename, move, download) are disabled with **Save to Library first.** until you actually save. Saving puts a real copy in the workspace (mail → mailbox → month) and enables **Open in Library**, which opens the Library on the saved file.
 
 ## Limits and things to watch
 

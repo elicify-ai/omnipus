@@ -24,6 +24,7 @@ import {
 } from '@assistant-ui/react-markdown'
 import { SyntaxHighlighter, CopyCodeHeader } from './shiki-highlighter'
 import { rehypePhosphorEmoji } from '@/lib/rehype-phosphor-emoji'
+import { chatLinkUrlTransform } from '@/lib/chatLinks'
 import { PhosphorEmojiSpan, MarkdownImage, InlineCode, createLinkRenderer, commonMarkdownComponents } from './markdown-shared'
 
 // ── Static component map (all renderers except `a`) ──────────────────────────
@@ -77,6 +78,9 @@ function MarkdownTextImpl() {
       rehypePlugins={[rehypeKatex, rehypePhosphorEmoji]}
       className="prose-sm prose-invert max-w-none text-[var(--color-secondary)] leading-relaxed"
       components={staticMarkdownComponents}
+      // Keep valid omnipus://file links (the default transform would blank them);
+      // everything else still goes through react-markdown's default transform.
+      urlTransform={chatLinkUrlTransform}
       smooth
     />
   )

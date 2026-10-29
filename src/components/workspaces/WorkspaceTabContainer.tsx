@@ -144,8 +144,12 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
       if (latest !== activePanel) return
       if (!isWorkspaceScopedPanel(activePanel.id)) return
       const context = activePanel.context as WorkspacePanelContext
+      // The docked Library honours `path` (chat-links U6), and a path belongs
+      // to the workspace it was opened in: following to another workspace
+      // opens that workspace at its root, never the old workspace's file name.
       useUiStore.getState().openPanel(activePanel.id, {
         ...context,
+        path: undefined,
         workspaceId: decision.workspaceId,
       })
     })
