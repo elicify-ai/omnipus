@@ -7,12 +7,15 @@
 //
 //   drop   — the frame must not act at all, and nothing is shown: it carries a
 //            `seq` (only unsequenced live delivery may act), the session's
-//            bucket is replaying or awaiting catch-up, the frame is for a
-//            session other than the one on screen, its request_id is not 32
-//            lowercase hex, or that request_id was already handled.
+//            bucket is replaying or awaiting catch-up, its request_id is not
+//            32 lowercase hex, or that request_id was already handled.
 //   open   — this tab is watching the chat, no leave decision is pending, and
 //            replacing the open panel would not ask the user (no unsaved edits).
 //   notice — every other arrival: a quiet "Open in Library" notice in the chat.
+//            That includes a frame for a session this tab is not showing (a
+//            tab that is not watching shows the notice — founder Q1-panel,
+//            D-B; architect ruling F1): the notice is kept for that session
+//            and appears when the user returns to it.
 //
 // Deliberately NOT inputs (founder decision 2026-10-15 superseded the phone
 // gate): panel row width and the phone-takeover history entry. A phone the
@@ -27,8 +30,6 @@ export interface LibraryOpenDecisionInput { // not-wire-format: SPA-local decisi
   guardPending: boolean
   /** Replacing the open panel would ask first (unsaved Library — or Mail — edits). */
   libraryDirty: boolean
-  /** The frame's session is the session this tab has on screen. */
-  sessionOnScreen: boolean
   replaying: boolean
   awaitingCatchUp: boolean
   /** The raw frame carried a `seq` key. */
@@ -42,7 +43,7 @@ const REQUEST_ID_RE = /^[0-9a-f]{32}$/
 
 export function decideLibraryOpen(input: LibraryOpenDecisionInput): LibraryOpenDecision {
   if (input.hasSeq || input.replaying || input.awaitingCatchUp) return 'drop'
-  if (!input.sessionOnScreen || input.duplicate) return 'drop'
+  if (input.duplicate) return 'drop'
   if (!REQUEST_ID_RE.test(input.requestId)) return 'drop'
   if (input.tabWatching && !input.guardPending && !input.libraryDirty) return 'open'
   return 'notice'
