@@ -154,3 +154,6 @@ GitHub-hosted run was executed.
 This is developer delivery infrastructure, not product behaviour; no user-facing
 product documentation change is required. The Fly worker's raw verdict and log
 parsing are unchanged; it does not apply GitHub's aggregate exceptions.
+
+## Why a landing runs the full CI twice (founder, 2026-10-29)
+The cut PR runs the full CI once without the paid live-model (llm-*) shards unless the PR carries the `run-e2e` label. The push to the release branch at landing always runs the full CI including those live-model shards. That second run is intended and is the run that exercises the live-model tests: do not suppress it. Both runs are on the same commit when the landing is a fast-forward.
