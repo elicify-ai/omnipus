@@ -67,10 +67,7 @@ describe('decideLibraryOpen', () => {
     expect(decide({ ...base, hasSeq: true })).toBe('drop')
     expect(decide({ ...base, duplicate: true })).toBe('drop')
     expect(decide({ ...base, requestId: 'NOT-HEX' })).toBe('drop')
-    // sessionOnScreen was removed from decideLibraryOpen in 21a75ff2c (F1).
-    // The old assertion expected notice when only that field was false. It is
-    // not a decide input anymore: tabWatching false is notice (asserted above),
-    // and the handler test stores the notice for a session that is not on screen.
+    // Spec replacement (team-lead ruling): sessionOnScreen left decideLibraryOpen in 21a75ff2c; an off-screen chat is tabWatching false → notice, not a separate input.
     // Founder decision supersedes the phone-width gate. Width and historyPushed
     // must not change an otherwise-open decision.
     expect(decide({ ...base, panelRowWidth: 0 })).toBe('open')
@@ -143,6 +140,17 @@ describe('open_in_library frame', () => {
   function hex(n: number): string {
     return n.toString(16).padStart(32, '0')
   }
+
+  it('drops a frame while this session is replaying, with no notice and no announcement (FR-017)', () => {
+    const before = useLibraryOpenStore.getState().announcement
+    useChatStore.setState({
+      sessionsById: { 'sess-1': { ...emptySessionState(), isReplaying: true } },
+    })
+    useChatStore.getState().handleFrame(frame('sess-1', REQUEST))
+    expect(useUiStore.getState().activePanel).toBeNull()
+    expect(useLibraryOpenStore.getState().notices['sess-1']).toBeUndefined()
+    expect(useLibraryOpenStore.getState().announcement).toEqual(before)
+  })
 
   it('drops a frame while this session is awaiting catch-up, with no notice (BS-6.7)', () => {
     useChatStore.setState({
