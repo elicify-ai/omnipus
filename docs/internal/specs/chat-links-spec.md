@@ -80,7 +80,7 @@ Facts (V at `b7d4483c9`): every frame published through `hubPublishMetaAlsoTo` -
 Decision (D-D): the guarantee is **on the server**.
 1. The gateway delivers `open_in_library` through `deliverLive` (Tool-to-hub seam): enqueue to the connections currently bound to the session, without numbering or journaling (V `sessionHub.conns`, `hubConn.enqueue`). The frame therefore has no `seq`, is never in `sendIncremental`'s tail, never in the projection, and never in a snapshot. A precedent for unsequenced delivery is `sendRawFrameBytes` / `hubBroadcastWithSequencedCopy` (V); `deliverLive` does not call them.
 2. History replay cannot produce it: the frame is not persisted, so neither the WebSocket history snapshot nor the REST history page can rebuild it, and the replay emitter (`streamReplayState.replayEntry`, `pkg/gateway/replay.go`) gets no twin. `validateHistorySourceFrame` refuses any frame type it does not list, so an accidental twin would fail history preparation loudly instead of slipping through.
-3. **Client guard (defence in depth, applies to both attach paths):** the SPA acts only on a frame that has no `seq`, arrives while the bucket is not replaying and not awaiting catch-up, belongs to the session on screen, and whose `request_id` is not already in a bounded handled-set. The set stores the last 256 keys of `session_id` + `request_id` for this page load. `call_id` is not a key: two frames that share a `call_id` and differ in `request_id` both act. A repeated `request_id` still in the set is dropped with nothing visible. When a 257th distinct key arrives, the oldest key is forgotten and a later frame with that forgotten key acts again.
+3. **Client guard (defence in depth, applies to both attach paths):** the SPA acts only on a frame that has no `seq`, arrives while the bucket is not replaying and not awaiting catch-up, and whose `request_id` is not already in a bounded handled-set. The set stores the last 256 keys of `session_id` + `request_id` for this page load. `call_id` is not a key: two frames that share a `call_id` and differ in `request_id` both act. A repeated `request_id` still in the set is dropped with nothing visible. When a 257th distinct key arrives, the oldest key is forgotten and a later frame with that forgotten key acts again.
 4. A tab that is disconnected when the call happens never opens anything later. This is intended. A tab that is mid-attach (hold mode) is bound, so it does receive the frame, after catch-up; see "Tool-to-hub seam".
 
 Consequence for claims: SEC-8/SC-003 state **zero Library navigations** on every reload and reconnect path, and **zero `open_in_library` frames in any replayed or journaled output**.
@@ -191,8 +191,8 @@ The base-instruction section and the `show_to_user` description each add one sen
 
 | Step | Condition | Result |
 |---|---|---|
-| 1 | This tab is watching, `guardPending` is false, and the Library leave gate would pass (no unsaved Library edits) | `open` |
-| 2 | Anything else, including not watching, a pending discard dialog, or a dirty Library | `notice` |
+| 1 | This tab is watching, `guardPending` is false, and the outgoing panel's leave gate would pass (no unsaved edits in the open side panel, Library or Mail) | `open` |
+| 2 | Anything else, including not watching, a pending discard dialog, or a side panel with unsaved edits | `notice` |
 
 There is no `drop` for "user not watching": the notice is the founder's otherwise-branch. `guardPending` still stops the notice's Open action from stacking a second dialog.
 
@@ -201,7 +201,7 @@ Consequences of replacing assumption A, recorded so they are not silent:
 | Situation | Result |
 |---|---|
 | User is watching, Calendar or Mail is the side panel, and it is not dirty | The Library opens and replaces that panel. |
-| User is watching, the Library has unsaved edits | Notice. Clicking it runs the leave gate (R6). Nothing is discarded by itself. |
+| User is watching, the Library or Mail panel has unsaved edits | Notice. Clicking it runs the leave gate (R6). Nothing is discarded by itself. |
 | User is watching on a phone | The Library opens, even though it covers the chat. Phone width is not a gate. |
 | User is watching in one tab and a second tab of the same chat is in the background | The session's context line is yes. The visible tab opens. The background tab shows the notice. |
 | No tab is watching | Context line is no. Every attached tab shows the notice. Nothing opens. |
@@ -324,14 +324,14 @@ By default the user sees file names or workspace-relative paths. If the user ask
 
 ### User Story 6 - Agent opens the Library for the user, live only (P0)
 
-While a reply is running, the agent calls `show_to_user`. If the screen is free or a clean Library is open, the Library moves to the file; otherwise the chat shows a quiet "Open in Library" notice. It never happens on reload or reconnect, for a session not on screen, or from a delegated worker.
+While a reply is running, the agent calls `show_to_user`. If the screen is free or a clean Library is open, the Library moves to the file; otherwise the chat shows a quiet "Open in Library" notice. It never happens on reload or reconnect, for a session not on screen (that chat gets a notice instead), or from a delegated worker.
 
 **Why this priority**: R6; riskiest behaviour, most security scenarios.
 **Independent Test**: live run opens the panel; reloading the same session does not.
 
 **Acceptance Scenarios**:
 1. **Given** a live turn and this chat is the visible tab's chat view, **When** the agent calls `show_to_user` on an own-workspace file, **Then** the Library opens on it without taking keyboard focus, including on a phone and including when Calendar is the side panel.
-2. **Given** the tab is hidden, the chat is not the view on screen, or the Library has unsaved edits, **Then** a notice "Open in Library" appears and nothing opens.
+2. **Given** the tab is hidden, the chat is not the view on screen, or the Library or Mail panel has unsaved edits, **Then** a notice "Open in Library" appears and nothing opens.
 3. **Given** the user clicks the notice, **Then** the leave gate runs, then the Library opens.
 4. **Given** reload or incremental reconnect, **Then** nothing opens and no notice appears.
 5. **Given** a target outside any Library, in another workspace, unreadable, missing, a turn with no workspace, a delegated worker session, or a non-web channel, **Then** the tool returns an error and nothing opens.
@@ -366,7 +366,7 @@ While a reply is running, the agent calls `show_to_user`. If the screen is free 
 |---|---|---|
 | Chat link (internal) | resolvable | Anchor with real `href`, visible target hint if text differs |
 | | unparseable / unsafe / no workspace for bare link | The same node `MarkdownLink` already renders for an unsafe href: a struck-through span with `title="Link removed: unsafe URL scheme"` (`markdown-shared.tsx`). Not a raw text node. Tests assert that treatment |
-| | modified click (Ctrl/Cmd/middle/shift) | Browser default: opens the standalone `/library?workspace=&path=` page in a new tab |
+| | modified click (Ctrl/Cmd/middle/shift) | Browser default: opens the standalone `/#/library?workspace=W&path=P` page in a new tab (hash router, `createHashHistory`; parameters `URLSearchParams`-encoded) |
 | Docked Library on a deep address | loading | Library's existing loading state |
 | | file missing | Library's existing "file not there" landing |
 | | workspace not accessible to this user | Library's existing denied/not-found state; no file content shown (test asserts) |
@@ -376,7 +376,7 @@ While a reply is running, the agent calls `show_to_user`. If the screen is free 
 | | Open clicked | Notice removed; the leave gate runs, then the Library opens |
 | | Dismiss clicked, or Escape while focus is inside the notice | Notice removed; nothing opens. Escape while focus is in the composer does not dismiss it (that key already closes panels) |
 | Auto-open | opened | Announced politely; focus unchanged |
-| | dropped (replaying, other session, duplicate `request_id`, `guardPending`) | Nothing visible |
+| | dropped (replaying, awaiting catch-up, `seq` present, duplicate or malformed `request_id`) | Nothing visible |
 
 ## Accessibility and Keyboard
 
@@ -420,7 +420,7 @@ Error flows:
 Boundary conditions:
 - Names with brackets, parentheses, spaces or non-ASCII characters round-trip to the exact file.
 - Names containing DEL, C1, bidirectional-control or zero-width characters get no link anywhere.
-- The frame is ignored while replaying, awaiting catch-up, for another session, on a duplicate `request_id`, or while a discard prompt is pending. A repeated `call_id` with a new `request_id` is not ignored.
+- The frame is ignored while replaying, awaiting catch-up, on a duplicate `request_id`, or while a discard prompt is pending. A repeated `call_id` with a new `request_id` is not ignored.
 - A sixth call in one minute in one chat returns an error.
 
 ---
@@ -450,6 +450,7 @@ Boundary conditions:
 - The system must not add a REST endpoint for the resolver.
 - The system must not give `show_to_user` to Planner, Researcher, General Purpose (`worker`), any custom worker, or Omnipus (D-F2: Omnipus keeps its fixed tool list).
 - The system must not render chat links in group-chat rooms in this feature (`RoomTranscript.tsx` shows agent text as plain text); rooms are out of scope.
+- The system must not turn links in received mail (`MailPreviewPane`) or in Library/knowledge previews (`LibraryMarkdownPreview`, `kbMarkdownBase`) into Library links, because mail is content from outside senders and a note's relative link is relative to the note's own folder, not the workspace root (C2, F4).
 - The system must not add `link:` lines to other tools (D-Q6) or to any non-web channel (D-A), because external recipients would get dead links disclosing the workspace id.
 - The system must not offer any saved-view link, view guidance or view documentation (D-Q4); an `omnipus://kb/...` href is plain text.
 - The system must not reintroduce a fail-closed per-agent policy backfill or hardcoded policy fallback (Hard Constraint 6; guard `scripts/check-no-fail-closed-backfill.sh`).
@@ -498,6 +499,8 @@ Result kinds: workspace, mount, outside. Algorithm from the design note (EvalSym
 
 **Omnipus (D-F2, passive links).** Omnipus's file tools root at its own agent home and may write into any workspace's work directory or mounts through its setup authority (`pkg/tools/resolvepath.go::withSetupAuthority`, built from `workspace.ListWorkspaceIDs`, `workspace.SafeWorkDir` and `workspace.AllowedMountRoots`). When the turn's agent is `omnipus` and the path is not in the turn workspace, the resolver also tries every other workspace in that same list, so a file Omnipus writes into workspace W2 gets `omnipus://file/W2/...` (a passive link the user opens with their own Library permissions) instead of being classified as outside. Files in Omnipus's own agent home stay outside (full path, no link, R4). Other agents keep the turn-workspace-only rule; their file policy cannot reach another workspace anyway. This is an architect choice made in the drift sync to give D-F2's "files in its chat still get passive links" a concrete meaning. `show_to_user` is unaffected (Omnipus does not hold it).
 
+**Shadowing, home exclusion, no turn-directory fallback (C2, B3).** A real work-tree folder that carries a declared mount's name is outside (no link): the Library opens the mount at that name, so a link would open the wrong file. A real path under `$OMNIPUS_HOME` never matches a mount, so a broad mount of the operator's home cannot turn agent-private or Omnipus-internal files into links. The turn workspace's Library is only `workspace.SafeWorkDir`; `TurnWorkDir` is never a substitute, because the Library serves files only from that directory (`pkg/gateway/rest_library_preview.go`, `rest_library_files_search.go`), and a turn whose work directory could not be created falls back to the agent's own folder (`pkg/agent/workspace_reroot.go`). Tests create the work directory under a temporary home instead.
+
 ## Integration Boundaries
 
 | System | Data in/out | Contract | Failure behaviour | Dev approach |
@@ -507,7 +510,7 @@ Result kinds: workspace, mount, outside. Algorithm from the design note (EvalSym
 | react-markdown v10 | `urlTransform` on both renderers | Library docs (V per note) | If the live primitive does not forward the prop, RED test 6 fails and U5 reports; architect decides a hook (U) | Real |
 | Filesystem policy (`ResolveTurnFSPolicy`, `resolveAutoCheckedPath`) | Read check for `show_to_user` | Existing | Denied reported as not found | Real |
 | Outside channels | `send_file` bytes only | Existing | No Omnipus link ever sent | Real |
-| Audit | Call audited with reason code | Existing audit path (event name U) | n/a | Real |
+| Audit | Call audited with reason code | `audit.EventToolCall` (tool `show_to_user`, decision, reason code; success adds workspace and path); `pkg/audit` unchanged (C2, B4) | n/a | Real |
 
 ---
 
@@ -616,7 +619,7 @@ IDs: `BS-<story>.<n>`; `SEC-n`. Categories: HP happy, AP alternate, EP error, EC
 
 #### BS-1.15 Modified click and keyboard (AP, FE)
 **Traces to**: US-1, AS-1
-- **Then** Ctrl/Cmd/middle click opens the standalone `/library?workspace=&path=` page in a new tab; plain click uses the panel; Tab focuses and Enter activates; no `target=_blank` on the internal anchor
+- **Then** Ctrl/Cmd/middle click opens the standalone `/#/library?workspace=W&path=P` page (hash router, `URLSearchParams`-encoded) in a new tab; plain click uses the panel; Tab focuses and Enter activates; no `target=_blank` on the internal anchor
 
 #### BS-1.16 Ordinary relative links stay plain (EC, FE) - outline
 **Traces to**: US-1, AS-7
@@ -628,6 +631,11 @@ IDs: `BS-<story>.<n>`; `SEC-n`. Categories: HP happy, AP alternate, EP error, EC
 - **Given** a mail attachment saved to the Library at `inbox/report.pdf` in W
 - **When** the user activates the Mail panel's "Open in Library" (`MailPanel.tsx` / `MailAttachmentViewer.tsx`, `openPanel('library', { workspaceId, path })`)
 - **Then** the docked Library shows `inbox/report.pdf`, not the workspace root
+
+#### BS-1.18 Links in received mail and Library previews stay as today (EP, FE)
+**Traces to**: US-1, AS-7 (C2, F4)
+- **Given** a received mail body, shown in the Mail panel, containing `[a](omnipus://file/W/x.md)` and `[b](notes/x.md)`, and separately a knowledge note preview containing `[c](other.md)`
+- **Then** none of the three renders as a Library link: the `omnipus://` link is blanked by the default transform, and the relative links keep today's preview handling
 
 ### Feature: Knowledge links (notes and bases only)
 
@@ -699,6 +707,8 @@ IDs: `BS-<story>.<n>`; `SEC-n`. Categories: HP happy, AP alternate, EP error, EC
 | turn agent `omnipus`, `<W2 work>/setup/x.md` | workspace (W2) | `setup/x.md` |
 | turn agent `omnipus`, `<omnipus agent home>/notes.md` | outside | - |
 | turn agent `mia` in W1, `<W2 work>/x.md` | outside | - |
+| real folder `docs/` in W while mount `docs` is declared, `<W work>/docs/x.md` | outside | - |
+| W's work directory missing under the home, file under the turn's work directory | outside | - |
 
 ### Feature: send_file card
 
@@ -744,9 +754,9 @@ IDs: `BS-<story>.<n>`; `SEC-n`. Categories: HP happy, AP alternate, EP error, EC
 - **Given** Calendar, Mail or the live browser is the side panel, and it has no unsaved edits, and this tab is watching
 - **Then** the Library replaces that panel
 
-#### BS-6.4 Dirty Library: notice only (EC, FE)
+#### BS-6.4 Dirty side panel: notice only (EC, FE)
 **Traces to**: US-6, AS-2
-- **Given** this tab is watching and the Library has unsaved edits
+- **Given** this tab is watching and the Library or Mail panel has unsaved edits
 - **Then** no discard prompt opens on its own; the notice appears; clicking it runs the leave gate
 
 #### BS-6.5 Not watching: notice only (EC, FE)
@@ -768,7 +778,7 @@ IDs: `BS-<story>.<n>`; `SEC-n`. Categories: HP happy, AP alternate, EP error, EC
 
 #### BS-6.8 Frame guard cases (EC, FE) - outline
 **Traces to**: US-6, AS-4
-- **Given** `<case>` (replaying; awaiting catch-up; frame carrying a `seq`; other session on screen; duplicate `request_id`; missing or non-hex `request_id`; 257th distinct `request_id` evicts the oldest)
+- **Given** `<case>` (replaying; awaiting catch-up; frame carrying a `seq`; duplicate `request_id`; missing or non-hex `request_id`; 257th distinct `request_id` evicts the oldest)
 - **Then** nothing opens and no notice appears for the dropped frame
 - **And** two frames that share a `call_id` and have different `request_id`s both act
 - **And** after the 257th key evicts the oldest, a later frame with that forgotten `request_id` acts again
@@ -785,6 +795,8 @@ IDs: `BS-<story>.<n>`; `SEC-n`. Categories: HP happy, AP alternate, EP error, EC
 | ref denied by the agent's read policy | identical bytes to missing |
 | ref is a secret carve-out path | identical bytes to missing |
 | ref resolves to the Library root (empty relative path) | not-found/not-permitted text (identical bytes) |
+| ref is a folder | not-found/not-permitted text (identical bytes); only regular files open (C2, B1) |
+| ref names a missing file under a carve-out | not-found/not-permitted text, identical bytes to an existing carve-out file, never the "outside" text (C2, B2) |
 | turn has no workspace (empty `ToolWorkspaceID`) | no-workspace error |
 | turn is a delegated or steered worker session (`ToolTranscriptSessionID` ≠ `ToolRootChatSessionID`; the child's channel is `"webchat"`, so the channel gate does not catch it) | "only the chat the user is in can open the Library" |
 | channel is not web chat | "no UI attached" |
@@ -878,13 +890,13 @@ Local runs: one narrow process at a time; CI is the authority for Go (root `CLAU
 | 1 | `TestEncodeLibraryLink_GoldenVectors` (Go) + `chat-link.golden.test.ts` (same fixture) | Unit | BS-1.8, SEC-13 | Vectors incl. `)`, `[`, space, `%`, unicode, 255/256-char segments, rejected characters |
 | 2 | `TestSPAStrictSubsetOfCleanRelPath` (fixture-driven) + `parseChatLink` table | Unit | SEC-1, SEC-5, BS-1.16 | Every SPA-accepted path accepted by `CleanRelPath` and round-trips; explicit SPA-only rejection list; D2 |
 | 3 | `TestResolveHostPath_*` | Unit | BS-4.4, SEC-2 | Table above, `t.TempDir`, per-OS derivation, mount-symlink rules, the three agent-specific rows (Omnipus into W2, Omnipus home, Mia into W2) |
-| 4 | `MarkdownLink.chatLink.test.tsx` | Unit | BS-1.1, 1.2, 1.11, 1.12, 1.14, 1.15, 1.16, SEC-6, 10 | Anchor, suffix, `aria-describedby`, struck-through unsafe treatment, modified click, keyboard |
-| 5 | `LibraryPanel.docked.test.tsx` (rewrite) | Unit | BS-1.1, 1.3, 1.5, 1.10, 1.13, 1.17 | Docked explorer selects path; re-addresses; missing-file landing; denied state; a context carrying `sessionId` is ignored as today; the Mail "Open in Library" path lands on the file |
+| 4 | `MarkdownLink.chatLink.test.tsx` | Unit | BS-1.1, 1.2, 1.11, 1.12, 1.14, 1.15, 1.16, 1.18, SEC-6, 10 | Anchor, suffix, `aria-describedby`, struck-through unsafe treatment, modified click (hash-form href), keyboard; Mail and Library previews without the chat-links opt-in render no Library link |
+| 5 | `LibraryPanel.docked.test.tsx` (rewrite) | Unit | BS-1.1, 1.3, 1.5, 1.10, 1.13, 1.17 | Docked explorer selects path; re-addresses; missing-file landing; denied state; a context carrying `sessionId` is ignored as today; the Mail "Open in Library" path lands on the file; a workspace switch opens the new workspace at its root |
 | 6 | `MarkdownText.urlTransform.test.tsx` | Unit | BS-1.6, 3.4, SEC-4 | Live and finalized parity; default transform still blanks `javascript:`; settles the prop-forwarding unknown |
 | 7 | `MarkdownImage.omnipus.test.tsx` | Unit | BS-3.3 | |
 | 8 | `TestWriteTools_LinkLine` | Unit | BS-1.7, 1.7b, 1.9, 4.3, SEC-15 | web inside / mount / outside / Telegram / email |
 | 9 | `TestKnowledgeRead_LinkLine`, `TestKnowledgeFindList_NoLink` | Unit | BS-2.1, 2.3, 2.4, 1.7b | |
-| 10 | `TestShowToUser_Refusals` | Unit | BS-6.9, SEC-2, 3, 9, 11 | All rows except the worker proof; byte-equality missing vs denied; no-workspace row. Context values are built by hand, so this test is not the SEC-14 proof |
+| 10 | `TestShowToUser_Refusals` | Unit | BS-6.9, SEC-2, 3, 9, 11 | All rows except the worker proof; byte-equality missing vs denied; byte-equality existing vs missing carve-out file; folder row; no-workspace row. Context values are built by hand, so this test is not the SEC-14 proof |
 | 10b | `TestShowToUser_SteeredChildRefused` | Integration | BS-6.9 worker row, SEC-14 | Through `pkg/agent/testutil.DelegationTree`: a steered child calls `show_to_user`; the result is the worker refusal; the root hub receives zero `open_in_library` frames. No new `pkg/steer.Boundary` and no bump of the pinned `Boundaries` inventory |
 | 11 | `TestShowToUser_RateLimit` (`-race`) | Unit | BS-6.13 | Fake clock, no sleep: calls 4, 5 and 6; concurrent callers; validation refusals do not consume; two instances for two agents with one root chat session id share the budget |
 | 12 | `TestShowToUser_PolicySeed` (model: `ask_user_question_seed_test.go`) + the three count bumps + Reconcile add-without-overwrite | Unit | BS-6.14, SEC-16 | Effective policy: Mia, Jim allow; Omnipus, Planner, Researcher, General Purpose (`worker`), Judge, PlanSupervisor deny; fresh custom Main allow; fresh custom worker deny; fresh and upgraded config. Bump `catalogSizeToday` 119 → 120 and `postMergeAdditions` 18 → 19 (with its comment) in `pkg/coreagent/catalog_count_test.go`, and the 119-entry assertion plus its comment in `pkg/tools/auto_approve_test.go::TestAutoApprove_ClassTableMatchesFounderFile` to 120. Assert `show_to_user` is absent from `FullManifestToolNames()`. Negative controls: remove the `NewCustomAgentToolsCfg` entry (Mia/Jim must go red); remove the `workerTierDeniedTools` entry (Planner/Researcher/worker must go red) |
@@ -907,7 +919,7 @@ Local runs: one narrow process at a time; CI is the authority for Go (root `CLAU
 | D1 Link names | BS-1.8 names; empty; 255/256-char; 4096-char path with expected reject | boundary, unicode | BS-1.8 |
 | D2 Reject set | `..`, `%2e%2e`, backslash, leading `/`, NUL, CR/LF, DEL, C1, RLO, zero-width, over-length ws segment, `..x`, `./a`, `a/./b`, `a//b`, `#x`, `?q`, `//host/x`, `a:b`, SEC-4/5 forms, `omnipus://kb/...` | error | SEC-1, 4, 5, 13, BS-1.16 |
 | D3 Resolver | BS-4.4 rows | edge, error | BS-4.4 |
-| D4 show_to_user | valid; other workspace; outside; missing; denied; secret; empty workspace; worker session; non-web; call 5, 6 (boundary 4/5/6); symlink inside a mount | boundary, error | BS-6.9, 6.13 |
+| D4 show_to_user | valid; other workspace; outside; missing; denied; secret; missing secret path; folder; Library root; empty workspace; worker session; non-web; call 5, 6 (boundary 4/5/6); symlink inside a mount | boundary, error | BS-6.9, 6.13 |
 | D5 Frame handling | watching; hidden tab; other route; dirty Library; Calendar open while watching; replaying; awaiting catch-up; hold mode; has `seq`; other session; duplicate `request_id`; same `call_id` two `request_id`s; 257th key; presence expiry at 45s; two tabs | edge | BS-6.1-6.8, 6.16 |
 | D6 Media | workspace file, mount file, screenshot, symlink-out, re-registered, workspace image, file in another workspace | edge, error | BS-5.x |
 
@@ -921,7 +933,7 @@ Preserved and must pass unchanged unless named: https and mail deep link (`markd
 
 | ID | Requirement |
 |---|---|
-| FR-001 | The SPA MUST render `omnipus://file/<ws>/<path>` and bare relative hrefs (per the Bare-link rule) as clickable links opening the Library at that address (R1). |
+| FR-001 | The SPA MUST render `omnipus://file/<ws>/<path>` and bare relative hrefs (per the Bare-link rule) as clickable links opening the Library at that address (R1). Only chat message rendering (live `MarkdownText`, `HistoricalMessageMarkdown` in `ChatScreen` and `AskUserQuestionCard`) enables chat links, through an explicit opt-in. Mail previews (`MailPreviewPane`) and Library/knowledge previews (`LibraryMarkdownPreview`, `kbMarkdownBase`) keep today's link handling: `omnipus://` is blanked and bare relative links are never turned into Library links (C2, F4). |
 | FR-002 | Live and finalized markdown MUST render those links identically; both MUST use `urlTransform` that preserves valid chat links and delegates everything else to the default transform. |
 | FR-003 | `parseChatLink` MUST accept only the strict grammar (a strict subset of `CleanRelPath`) and return no match for every other form including the `kb` host. |
 | FR-004 | The rendered `href` MUST be rebuilt from parsed fields; when the visible text differs from the decoded target, the target MUST be shown as a visible suffix, set as `title`, and referenced by `aria-describedby`. `aria-description` MUST NOT be set. |
@@ -934,14 +946,14 @@ Preserved and must pass unchanged unless named: https and mail deep link (`markd
 | FR-011 | `write_file`, `edit_file`, `append_file`, `send_file`, `show_to_user`, `knowledge_read` MUST append a `link:` line for Library files on the web channel only, and MUST NOT for outside files or other channels (D-Q6, D-A, R4). |
 | FR-012 | Other tools MUST NOT gain link lines. |
 | FR-013 | Notes and `.base` files MUST link as ordinary Library files; no view-addressed link, guidance or documentation exists (D-Q4). |
-| FR-014 | `show_to_user(ref)` MUST validate in order: channel, root-chat session (`ToolTranscriptSessionID` equals `ToolRootChatSessionID`, both non-empty), workspace present, parse, resolve, own-workspace, read policy and carve-out, rate limit; on success set `OpenInLibrary` (with a new `request_id`) and deliver one `open_in_library` frame. The channel check alone MUST NOT be treated as the worker check. |
+| FR-014 | `show_to_user(ref)` MUST validate in order: channel, root-chat session (`ToolTranscriptSessionID` equals `ToolRootChatSessionID`, both non-empty), workspace present, parse, secret carve-out (on the real path, and on the cleaned path when the real path cannot be resolved), resolve, own-workspace, read policy (regular files only), rate limit; on success set `OpenInLibrary` (with a new `request_id`) and deliver one `open_in_library` frame. The channel check alone MUST NOT be treated as the worker check. |
 | FR-015 | Not-found and not-permitted MUST produce identical error text; the success text MUST be a request, not a claim. |
 | FR-016 | The frame MUST be delivered by `deliverLive` (Tool-to-hub seam): unsequenced, unjournaled, to currently bound connections only, never persisted, never rebuilt by replay. Overflow unbinds like `publishMeta`. An evicted or missing hub drops the frame and MUST NOT call `getOrCreate`. A connection in hold mode receives the frame after `releaseHold`. |
-| FR-017 | The SPA MUST act on the frame only if it has no `seq`, the bucket is not replaying or awaiting catch-up, the session is on screen, and `request_id` is not in the bounded handled-set (last 256 `session_id`+`request_id` keys). `call_id` MUST NOT be the key. |
+| FR-017 | The SPA MUST act on the frame only if it has no `seq`, the bucket is not replaying or awaiting catch-up, and `request_id` is not in the bounded handled-set (last 256 `session_id`+`request_id` keys). `call_id` MUST NOT be the key. A frame for a session that is not the active session is decided as not watching: its notice is stored for that session and shown when the user returns to it (founder Q1-panel, D-B). |
 | FR-018 | Auto-open MUST follow `decideLibraryOpen` (Watching): `open` only when this tab is watching, no discard dialog is pending, and the Library leave gate would pass; every other arrival shows one non-modal notice with Open and Dismiss. The decision MUST NOT read `panelRowWidth` or `historyPushed`, and MUST NOT be repeated when the tab later becomes visible. Auto-open MUST NOT move focus and MUST announce politely. A successful call MUST NOT also show the raw tool card unless verbose chat is on. |
 | FR-019 | `show_to_user` MUST be registered with ceiling `allow`, `AutoRuns`, catalog, and seed entries per BS-6.14: `"show_to_user": allow` in `seed.go::NewCustomAgentToolsCfg` and an entry in `workerTierDeniedTools`, so Mia and Jim allow through the Main core; Omnipus, Planner, Researcher, General Purpose (`worker`), Judge, PlanSupervisor deny; custom Main allow, custom worker deny. `omnipusSupportedTools` MUST NOT change (D-F2). Reconcile adds the ceiling to old installs without overwriting operator values. It MUST NOT be added to `fullManifestToolNames`. The three pinned counts in BS-6.14's test (119 → 120, 18 → 19, 119 → 120) MUST be bumped in the same change. |
 | FR-020 | `show_to_user` MUST be limited to 5 calls/minute/chat (sliding), and every call, success or refusal, MUST be audited with a reason code. |
-| FR-021 | `MediaPart` (both contract copies, plus the inline `LibraryRef`) MUST gain optional `library_ref`. One function `libraryRefFor(localPath, workspaceID)` fills it for workspace and mount files of every media type, including images. Live: `workspaceID` is `bus.OutboundMediaMessage.WorkspaceID` inside `webchat_channel.go::SendMedia`. Reload: the history-page request (`history_page_prepare.go`) reads `UnifiedStore.GetMeta(sessionID).WorkspaceID` once per page and hands it to the `streamReplayState` it builds in `prepareGroup`, so `buildMediaFrame` (reached via `emitFlatToolCall` / `emitSpawnParentToolCall`) can call `libraryRefFor`. The memoised `historyPreparedMedia` subsets keep the field. The persisted descriptor stays `ref, filename, content_type, type` (the ref is not stored). Empty or failed meta means the field is omitted. The REST history page is not a path for this card and is not changed (see "REST history path"). The SPA stores it on `MediaAttachment` and shows the button only on the non-image file card; `ChatImage` ignores it (A7). The server never emits an empty `path`: when the resolved Library path is empty (the workspace or Library root), `libraryRefFor` omits `library_ref`. `CleanRelPath("")` returns the root without error, and the client's strict schema would drop the whole `media` frame on an invalid nested field. |
+| FR-021 | `MediaPart` (both contract copies, plus the inline `LibraryRef`) MUST gain optional `library_ref`. One function `libraryRefFor(home, localPath, workspaceID)` (home defaults to `config.OmnipusHomeDir()`; C2, B6) fills it for workspace and mount files of every media type, including images. Live: `workspaceID` is `bus.OutboundMediaMessage.WorkspaceID` inside `webchat_channel.go::SendMedia`. Reload: the history-page request (`history_page_prepare.go`) reads `UnifiedStore.GetMeta(sessionID).WorkspaceID` once per page and hands it to the `streamReplayState` it builds in `prepareGroup`, so `buildMediaFrame` (reached via `emitFlatToolCall` / `emitSpawnParentToolCall`) can call `libraryRefFor`. The memoised `historyPreparedMedia` subsets keep the field. The persisted descriptor stays `ref, filename, content_type, type` (the ref is not stored). Empty or failed meta means the field is omitted. The REST history page is not a path for this card and is not changed (see "REST history path"). The SPA stores it on `MediaAttachment` and shows the button only on the non-image file card; `ChatImage` ignores it (A7). The server never emits an empty `path`: when the resolved Library path is empty (the workspace or Library root), `libraryRefFor` omits `library_ref`. `CleanRelPath("")` returns the root without error, and the client's strict schema would drop the whole `media` frame on an invalid nested field. |
 | FR-022 | The assistant file item MUST show "Open in Library" (accessible name with the file name) when `library_ref` is present, web chat only; images keep their toolbar. |
 | FR-026 | The SPA MUST report watching with `chat_presence` under the Watching rules, from all three chat views (`sessions.$sessionId.tsx`, `WorkspaceChatTab`, `OmnipusChatScreen`), and a web turn's dynamic context MUST contain exactly `User watching: yes` or `User watching: no` for that turn's own session. Expired, missing, and unauthorised claims MUST count as no. The gateway MUST validate the inbound frame through `wsFrameSchemaName`. |
 | FR-023 | The "### Files and artifacts" group of `<operating_rules>` in `pkg/agent/context.go` MUST be rewritten to cover links, path display and artifacts-over-chat, including when to call `show_to_user` from the watching line, with continuous numbering; `send_file` and `show_to_user` descriptions one added sentence each (R7, D-watch). |
@@ -966,7 +978,7 @@ Preserved and must pass unchanged unless named: https and mail deep link (`markd
 
 | Requirement | Story | Scenarios | Tests (order no.) |
 |---|---|---|---|
-| FR-001 | US-1 | BS-1.1, 1.2, 1.5, 1.11, 1.12, 1.16 | 4, 22 |
+| FR-001 | US-1 | BS-1.1, 1.2, 1.5, 1.11, 1.12, 1.16, 1.18 | 4, 22 |
 | FR-002 | US-1, US-3 | BS-1.6, 3.4 | 6 |
 | FR-003 | US-1 | SEC-1, SEC-5, SEC-13, BS-1.16 | 2 |
 | FR-004 | US-1 | BS-1.14, 1.15, SEC-6, SEC-10 | 4 |
@@ -1013,8 +1025,8 @@ Reported as two lines, never merged: "code correct and tested" and "reachable by
 
 | Page | Update | Owner |
 |---|---|---|
-| `docs/library.md` | New "Links from chat" and "Open in Library on sent files" sections; the agent may open the Library while you are looking at that chat, or leave an "Open in Library" notice when you are not | frontend-lead |
-| `docs/using-omnipus-ui.md` | Chat area and panels: clickable file and note links, the Library opening while you are looking at the chat, the "Open in Library" notice when you are not, unsaved-edit prompt applies, Ctrl/Cmd-click opens the full page | frontend-lead |
+| `docs/library.md` | New "Links from chat" and "Open in Library on sent files" sections; the agent may open the Library while you are looking at that chat, or leave an "Open in Library" notice when you are not. The sentence "A request for a chat other than the one this tab shows does nothing in this tab" becomes "A request for another chat leaves its notice in that chat" (C2, F1) | frontend-lead |
+| `docs/using-omnipus-ui.md` | Chat area and panels: clickable file and note links, the Library opening while you are looking at the chat, the "Open in Library" notice when you are not, unsaved-edit prompt applies, Ctrl/Cmd-click opens the full page (`/#/library?workspace=W&path=P`) | frontend-lead |
 | `docs/knowledge.md` | Notes and bases open from chat (no mention of views) | frontend-lead |
 | `docs/reference/built-in-tools.md` | New `show_to_user` row; amend `send_file` row | backend-lead |
 | `docs/tools.md` | One row in "Default tool sets for main agents and workers": `show_to_user` Main Allow, Worker Off; and one sentence near the `send_file` Auto-approve text: `show_to_user` is allowed by default and Omnipus does not have it | backend-lead |
@@ -1031,10 +1043,10 @@ Reported as two lines, never merged: "code correct and tested" and "reachable by
 | U0 Contract | backend-lead | Contract section incl. both copies, `LibraryRef`, CHECK items | none |
 | U1 Resolver + encoder | backend-lead | BS-4.4, 1.8, SEC-2, 13; step 0 import-cycle check (U); `impact` runs | none |
 | U2 Tool-result links | backend-lead | BS-1.7, 1.7b, 1.9, 2.1, 2.3, 2.4, 4.3, SEC-15. One `pkg/tools.LinkLine` for all six producers | U1 |
-| U3 show_to_user | backend-lead | BS-6.1, 6.7, 6.9-6.16, SEC-3, 7, 8, 9, 11, 14, 16. `deliverLive`, the typed `OpenInLibrary` field, and the in-memory presence store (injected func; nil means not watching; model the connection binding and disconnect teardown on `mail_presence.go`). `chat_presence` handler plus the `wsFrameSchemaName` case. Policy: `NewCustomAgentToolsCfg` allow + `workerTierDeniedTools` entry; no per-role grant; `omnipusSupportedTools` untouched. No `manifest.go` edit. No `loop.go` edit. The context line goes through a per-turn injector or a new `buildDynamicContext` parameter that carries the turn's session id (keep `context.go` growth minimal; it is over the 2,000-line warn). Process-wide limiter with an injectable clock. Publish only when `!IsError && !Cancelled` | U0, U1 |
+| U3 show_to_user | backend-lead | BS-6.1, 6.7, 6.9-6.16, SEC-3, 7, 8, 9, 11, 14, 16. `deliverLive`, the typed `OpenInLibrary` field, and the in-memory presence store (injected func; nil means not watching; model the connection binding and disconnect teardown on `mail_presence.go`). `chat_presence` handler plus the `wsFrameSchemaName` case. Policy: `NewCustomAgentToolsCfg` allow + `workerTierDeniedTools` entry; no per-role grant; `omnipusSupportedTools` untouched. No `manifest.go` edit. No `loop.go` edit. The presence lookup is a package-level registry keyed by `*AgentLoop` (precedents `pkg/agent/admission.go::steerAdmissionRegistry`, `pkg/agent/execution_identity.go::bootEpochRegistry`), set from `loop_env.go` wiring; `loop.go` and the `AgentLoop` struct are not edited (C2, B5). The context line goes through a per-turn injector or a new `buildDynamicContext` parameter that carries the turn's session id (keep `context.go` growth minimal; it is over the 2,000-line warn). Process-wide limiter with an injectable clock. Publish only when `!IsError && !Cancelled` | U0, U1 |
 | U4 Media part target | backend-lead | BS-5.1-5.4, 5.6, SEC-12. `libraryRefFor` from `SendMedia` (live, `OutboundMediaMessage.WorkspaceID`) and from the history-page preparation (`history_page_prepare.go::prepareGroup` → `streamReplayState` → `buildMediaFrame`; workspace id from `UnifiedStore.GetMeta` once per page). No `Attachment.yaml` or REST history change | U0, U1 |
 | U5 SPA parser + renderer | frontend-lead | BS-1.1, 1.2, 1.5, 1.6, 1.11, 1.12, 1.14-1.16, 3.x, SEC-1, 4, 5, 6, 10, 13; names the workspace selector (returns no workspace for Omnipus's chat). Link opens pass a workspace panel context without `sessionId` | none |
-| U6 Docked Library fix | frontend-lead | BS-1.3, 1.10, 1.13, 1.17 (also fixes Mail's existing "Open in Library") | none; sequence against L1 (L1 status not re-checked in the drift sync, U) |
+| U6 Docked Library fix | frontend-lead | BS-1.3, 1.10, 1.13, 1.17 (also fixes Mail's existing "Open in Library"). When the docked panel follows a workspace switch (`WorkspaceTabContainer.tsx`), `path` is cleared: a Library path belongs to the workspace it was opened in (C2, F2) | none; sequence against L1 (L1 status not re-checked in the drift sync, U) |
 | U7 `open_in_library` handler + notice + presence hook | frontend-lead | BS-6.1-6.8, 6.12, 6.16. New handler file (`decideLibraryOpen`) plus one dispatch line in `handleFrame`. `useChatPresence` on `sessions.$sessionId.tsx`, `WorkspaceChatTab` and `OmnipusChatScreen` only (model: `mailPanelPresence.ts`). Do not edit `SidePanelShell` or `ChatScreen.tsx`. Notice uses `Button` and `IconButton`. `shouldRenderToolCall` gains the `show_to_user` case | U0, U5, U6 |
 | U8 Assistant media item | frontend-lead | First **extract** the assistant media rendering (the two inline `download` blocks in `ChatScreen.tsx`, plus any third site found; net shrink of `ChatScreen.tsx`) into one component, then add the action. Also: `MediaAttachment` gains optional `libraryRef`, and the `case 'media'` body of `handleReplayAndStatusFrame` moves to a sibling so that pinned function does not grow. Images: field stored, button not shown. BS-5.1, 5.2, 5.5, 5.6 | U0, U5, U6 |
 | U9 Prompt text | prometheus-prompt-engineer | BS-7.1, 7.2, FR-027. Rewrite the "### Files and artifacts" group of `<operating_rules>` (rules 25 to 27 today), remove the rule 27 absolute-path sentence, keep numbering continuous. Role prompts for `mia` and `jim` name `tool:show_to_user`; the `omnipus` prompt does not. The tool is `ManifestLazy`, so the prompt must tell the model to load it; do not ask for a full-manifest edit | U2, U3 names fixed |
@@ -1185,3 +1197,4 @@ Source: `(maintainer-local path)`. Code baseline moved from `b45fd6f16` (2026-10
 | S3 | `docs/tools.md` gains a row in "Default tool sets for main agents and workers" (Main Allow, Worker Off) and the Omnipus note | Docs TODO |
 | S4 | Founder questions answered; ambiguity list updated; A2 superseded; A9 added; Clarifications 2026-10-29; status history | Open Questions, Ambiguity Warnings, Assumptions, Clarifications, Status history |
 | C1 | Contract clarifications A1/A2 (2026-10-29, after U0 7b4629f69): path minLength 1 on LibraryRef and OpenInLibraryFrame; session_id 1–255 on both frames; WsFrameType.yaml file-copy drift out of scope | Contract, CHECK (c), FR-021, BS-6.9 |
+| C2 | Implementation rulings (2026-10-29, on feat/chat-links 48a508ec9; uncontested by the leads). F1: a frame for a session not on screen leaves a notice in that chat, not a drop (founder Q1-panel, D-B). F2: a workspace switch clears the Library `path` (`WorkspaceTabContainer.tsx`), kept in U6. F3: unsaved edits in any open side panel (Library or Mail) block auto-open. F4: chat links only in chat message rendering; Mail and Library/knowledge previews keep today's links (BS-1.18). F5: modified-click href is the hash form `/#/library?workspace=W&path=P`. B1: regular files only; folder and Library root get the not-found text. B2: carve-out before resolve, also on the cleaned path when the real path cannot be resolved (no existence oracle). B3: mount-shadowed work-tree folder is outside; no mount match under `$OMNIPUS_HOME`; `TurnWorkDir` fallback removed. B4: audit through `audit.EventToolCall`, `pkg/audit` unchanged. B5: presence lookup in a package-level registry keyed by `*AgentLoop`; no `AgentLoop` field. B6: `libraryRefFor(home, localPath, workspaceID)` | Replay guarantee item 3, FR-001, FR-014, FR-017, FR-021, UI States, Behavioral Contract, Explicit Non-Behaviors, "What the screen does", US-6, BS-1.15, BS-1.18 (new), BS-4.4, BS-6.4, BS-6.8, BS-6.9, Resolver Rules, Integration Boundaries, tests 4, 5, 10, D4, U3, U6, Docs TODO, traceability |

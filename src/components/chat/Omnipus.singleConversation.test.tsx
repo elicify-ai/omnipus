@@ -244,7 +244,8 @@ describe('Omnipus one-conversation guarantee at its reachable UI', () => {
       expect(within(menu).queryByRole('menuitem', { name: NEW_CHAT })).not.toBeInTheDocument()
     }
     expectSameSessionNoCreation()
-    expect(frames).toEqual([])
+    // FR-026: this screen may send chat_presence. That is not a new conversation.
+    expect(frames.filter((frame) => frame.type !== 'chat_presence')).toEqual([])
   })
   it.each(['pointer', 'Enter', 'Space'] as const)('OC-AK %s opens only the existing main, never an extra conversation', async (input) => {
     useSessionStore.setState({ activeSessionId: SALES_MAIN, activeAgentId: 'mia' })
@@ -275,7 +276,8 @@ describe('Omnipus one-conversation guarantee at its reachable UI', () => {
       await user.keyboard('{Escape}')
     }
     expectSameSessionNoCreation()
-    expect(frames).toEqual([])
+    // FR-026: OmnipusChatScreen reports watching. That is not a new conversation.
+    expect(frames.filter((frame) => frame.type !== 'chat_presence')).toEqual([])
   })
   it.each(['Enter', 'send button'] as const)('OC-C-new /new by %s is visibly refused without any send or new session', async (input) => {
     const { composer } = await mountScreen()
@@ -291,7 +293,8 @@ describe('Omnipus one-conversation guarantee at its reachable UI', () => {
     // a command dispatch; every other new request, including any write, fails.
     expect(requests.slice(requestCount).filter((request) =>
       !(request.method === 'GET' && request.path === '/api/v1/agents/omnipus/activity-runs'))).toEqual([])
-    expect(frames).toEqual([])
+    // FR-026: watching is reported on the existing main. It is not a send and not a new session.
+    expect(frames.filter((frame) => frame.type !== 'chat_presence')).toEqual([])
     expectSameSessionNoCreation()
   })
   it('OC-C-clear real composer sends /clear on the existing main and renders its confirmed context boundary in place', async () => {

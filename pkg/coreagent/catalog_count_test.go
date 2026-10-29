@@ -178,7 +178,8 @@ import (
 // set_agent_permissions, read_conversation, list_mailboxes — classified in
 // the catalogue, ceiling, role inventories, custom constructor and Auto table
 // in one commit.
-const catalogSizeToday = 119
+// 119 -> 120 (chat-links spec test 12, US-6 / FR-019): +1 show_to_user.
+const catalogSizeToday = 120
 
 // currentKnowledgeToolNames is every knowledge_* tool presently in the
 // catalog: ADR-068 D15.3's original six (the replacement for ADR-067's
@@ -389,7 +390,7 @@ func TestCatalog_MergeArithmetic(t *testing.T) {
 		// alongside (the two knowledge names) their own implementation.
 		// Bump this alongside catalogSizeToday, in the same commit,
 		// whenever a tool is added post-merge.
-		postMergeAdditions = 18 // +9 omnipus-system-agent §6.5 tools (WU-2, 2026-10-13); +1 answer_request (founder Gap 5, 2026-10-11); +3 goal-flow; +2 ADR-090 readback; +1 environment_setup; +1 create_email_draft (email-mail-view spec §2.7 point 6); +3 mail attachment tools (ADR-20261001 F3, w4 spec US-3, founder Q4=A); -4 four *_in_workspace task tools (U9/DEL-23); -1 switch_agent (U8/DEL-07)
+		postMergeAdditions = 19 // +9 omnipus-system-agent §6.5 tools (WU-2, 2026-10-13); +1 answer_request (founder Gap 5, 2026-10-11); +3 goal-flow; +2 ADR-090 readback; +1 environment_setup; +1 create_email_draft (email-mail-view spec §2.7 point 6); +3 mail attachment tools (ADR-20261001 F3, w4 spec US-3, founder Q4=A); -4 four *_in_workspace task tools (U9/DEL-23); -1 switch_agent (U8/DEL-07); +1 show_to_user (chat-links spec test 12, US-6 / FR-019)
 	)
 	// Checked against the FROZEN adr068OriginalSixKnowledgeToolNames, not
 	// currentKnowledgeToolNames — this arithmetic is a fact about what the

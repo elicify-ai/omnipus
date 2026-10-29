@@ -30,9 +30,16 @@ import (
 const (
 	chatLinksAsked       = "Asked the Library to open plan.md."
 	chatLinksNotWatching = `The user is not watching this chat. Left an "Open in Library" notice; the Library was not opened.`
-	chatLinksOutside     = "not in a Library, give the user the full path in text"
-	chatLinksWorker      = "only the chat the user is in can open the Library"
-	chatLinksNoUI        = "no UI attached"
+	// Full sentences for the BS-6.9 rows. The spec quotes the distinctive
+	// clause; the tool prefix and the rest of the sentence are the wording
+	// pinned for that row. None of them may contain the rejected path.
+	chatLinksOutside     = "show_to_user: this file is not in a Library, give the user the full path in text."
+	chatLinksOtherWS     = "show_to_user: that file belongs to another workspace; this chat can only open files in its own workspace."
+	chatLinksNotFound    = "show_to_user: there is no file the Library can open at that reference."
+	chatLinksNoWorkspace = "show_to_user: this chat has no workspace, so there is no Library to open."
+	chatLinksWorker      = "show_to_user: only the chat the user is in can open the Library."
+	chatLinksNoUI        = "show_to_user: no UI attached to this channel; tell the user the file name instead."
+	chatLinksRate        = "show_to_user: limit reached (5 calls per minute in this chat); tell the user where the file is instead."
 	chatLinksPlanLink    = "link: omnipus://file/W/notes/plan.md"
 )
 
@@ -169,27 +176,12 @@ func TestShowToUser_Refusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	outRes := tool.Execute(ctx, map[string]any{"ref": outside})
-	if outRes == nil || !outRes.IsError || !strings.Contains(outRes.ForLLM, chatLinksOutside) {
-		got := ""
-		if outRes != nil {
-			got = outRes.ForLLM
-		}
-		t.Errorf("outside = %q, want it to contain %q (BS-6.9)", got, chatLinksOutside)
-	}
-	if outRes != nil && strings.Contains(outRes.ForLLM, "OUTSIDE-TOKEN") {
-		t.Errorf("outside error echoes the raw path: %q", outRes.ForLLM)
-	}
+	chatLinksExactRefusal(t, outRes, chatLinksOutside, "OUTSIDE-TOKEN", "outside")
 
 	worker := WithTranscriptSessionID(ctx, "child-show")
 	worker = WithToolRootChatSessionID(worker, "root-show")
 	wres := tool.Execute(worker, map[string]any{"ref": "notes/plan.md"})
-	if wres == nil || !wres.IsError || !strings.Contains(wres.ForLLM, chatLinksWorker) {
-		got := ""
-		if wres != nil {
-			got = wres.ForLLM
-		}
-		t.Errorf("worker = %q, want %q (BS-6.9)", got, chatLinksWorker)
-	}
+	chatLinksExactRefusal(t, wres, chatLinksWorker, "notes/plan.md", "worker")
 
 	tg := WithToolContext(context.Background(), "telegram", "chat-ext")
 	tg = WithWorkspaceID(tg, "W")
@@ -197,41 +189,30 @@ func TestShowToUser_Refusals(t *testing.T) {
 	tg = WithTranscriptSessionID(tg, "root-show")
 	tg = WithToolRootChatSessionID(tg, "root-show")
 	tres := tool.Execute(tg, map[string]any{"ref": "notes/plan.md"})
-	if tres == nil || !tres.IsError || !strings.Contains(tres.ForLLM, chatLinksNoUI) {
-		got := ""
-		if tres != nil {
-			got = tres.ForLLM
-		}
-		t.Errorf("non-web = %q, want %q (BS-6.9)", got, chatLinksNoUI)
-	}
+	chatLinksExactRefusal(t, tres, chatLinksNoUI, "notes/plan.md", "non-web")
 
-	// Exact sentences for other-workspace and no-workspace are not in the spec.
-	// Assert an error that is distinct from the three quoted refusals and does
-	// not echo the raw path.
 	other := tool.Execute(ctx, map[string]any{"ref": "omnipus://file/OTHER/notes/plan.md"})
-	chatLinksUnquotedRefusal(t, other, "OTHER", "other workspace")
+	chatLinksExactRefusal(t, other, chatLinksOtherWS, "OTHER", "other workspace")
 	noWS := WithWorkspaceID(context.Background(), "")
 	noWS = WithToolContext(noWS, "webchat", "chat-1")
 	noWS = WithTurnWorkspaceDir(noWS, dir)
 	noWS = WithTranscriptSessionID(noWS, "root-show")
 	noWS = WithToolRootChatSessionID(noWS, "root-show")
-	chatLinksUnquotedRefusal(t, tool.Execute(noWS, map[string]any{"ref": "notes/plan.md"}), "notes/plan.md", "no workspace")
+	chatLinksExactRefusal(t, tool.Execute(noWS, map[string]any{"ref": "notes/plan.md"}), chatLinksNoWorkspace, "notes/plan.md", "no workspace")
 }
 
-func chatLinksUnquotedRefusal(t *testing.T, res *ToolResult, raw, label string) {
+func chatLinksExactRefusal(t *testing.T, res *ToolResult, want, raw, label string) {
 	t.Helper()
-	if res == nil || !res.IsError || res.ForLLM == "" {
+	if res == nil || !res.IsError {
 		got := ""
 		if res != nil {
 			got = res.ForLLM
 		}
-		t.Errorf("%s: want an error, got %q", label, got)
+		t.Errorf("%s: want error %q, got %q", label, want, got)
 		return
 	}
-	for _, quoted := range []string{chatLinksOutside, chatLinksWorker, chatLinksNoUI} {
-		if strings.Contains(res.ForLLM, quoted) {
-			t.Errorf("%s reused quoted refusal %q: %q", label, quoted, res.ForLLM)
-		}
+	if res.ForLLM != want {
+		t.Errorf("%s = %q, want %q (BS-6.9)", label, res.ForLLM, want)
 	}
 	if raw != "" && strings.Contains(res.ForLLM, raw) {
 		t.Errorf("%s echoes the raw path: %q", label, res.ForLLM)
@@ -255,8 +236,8 @@ func TestShowToUser_LibraryRootMatchesMissing(t *testing.T) {
 			t.Fatalf("refusal echoes the raw path: %q", res.ForLLM)
 		}
 	}
-	if missing.ForLLM != root.ForLLM || missing.ForLLM != empty.ForLLM {
-		t.Fatalf("missing %q, root %q, empty %q must be byte-identical (BS-6.9)", missing.ForLLM, root.ForLLM, empty.ForLLM)
+	if missing.ForLLM != chatLinksNotFound || root.ForLLM != chatLinksNotFound || empty.ForLLM != chatLinksNotFound {
+		t.Fatalf("missing %q, root %q, empty %q, want byte-identical %q (BS-6.9)", missing.ForLLM, root.ForLLM, empty.ForLLM, chatLinksNotFound)
 	}
 }
 
@@ -284,12 +265,12 @@ func TestShowToUser_RateLimit_SharedBudget(t *testing.T) {
 		t.Fatalf("calls allowed before the sixth = %d, want 5 (BS-6.13)", allowed)
 	}
 	sixth := b.Execute(ctx, map[string]any{"ref": "notes/plan.md"})
-	if sixth == nil || !sixth.IsError {
+	if sixth == nil || !sixth.IsError || sixth.ForLLM != chatLinksRate {
 		got := ""
 		if sixth != nil {
 			got = sixth.ForLLM
 		}
-		t.Fatalf("sixth call = %q, want a rate-limit error (BS-6.13)", got)
+		t.Fatalf("sixth call = %q, want %q (BS-6.13)", got, chatLinksRate)
 	}
 	if strings.Contains(sixth.ForLLM, "notes/plan.md") {
 		t.Errorf("rate-limit error echoes the path: %q", sixth.ForLLM)

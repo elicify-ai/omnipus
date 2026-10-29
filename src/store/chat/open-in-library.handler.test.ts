@@ -5,8 +5,10 @@
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { useChatStore } from '@/store/chat'
+import { registerChatView } from '@/store/chatView'
+import { resetLibraryOpenState, useLibraryOpenStore } from '@/store/chat/libraryOpen'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 
@@ -65,6 +67,9 @@ describe('decideLibraryOpen', () => {
     expect(decide({ ...base, hasSeq: true })).toBe('drop')
     expect(decide({ ...base, duplicate: true })).toBe('drop')
     expect(decide({ ...base, requestId: 'NOT-HEX' })).toBe('drop')
+    // A frame for a session that is not on screen is not watching, not a drop
+    // (BS-6.5, spec r3 F1). The notice is stored for when the user returns.
+    expect(decide({ ...base, sessionOnScreen: false })).toBe('notice')
     // Founder decision supersedes the phone-width gate. Width and historyPushed
     // must not change an otherwise-open decision.
     expect(decide({ ...base, panelRowWidth: 0 })).toBe('open')
@@ -74,9 +79,18 @@ describe('decideLibraryOpen', () => {
 })
 
 describe('open_in_library frame', () => {
+  let releaseView: (() => void) | undefined
   beforeEach(() => {
     useUiStore.getState().closePanel()
     useSessionStore.getState().setActiveSession('sess-1', 'mia')
+    // Watching (spec "Chat view active") needs the session on screen and a
+    // chat view for it mounted. Setting the active session alone is not enough.
+    releaseView = registerChatView('sess-1', 'W')
+  })
+  afterEach(() => {
+    releaseView?.()
+    releaseView = undefined
+    resetLibraryOpenState()
   })
 
   it('opens the Library at the frame path when this chat is on screen (BS-6.1)', () => {
@@ -91,6 +105,24 @@ describe('open_in_library frame', () => {
     expect(useUiStore.getState().activePanel).toEqual({
       id: 'library',
       context: { workspaceId: 'W', path: 'notes/plan.md' },
+    })
+  })
+
+  it('stores a notice for a session that is not on screen and does not open the Library (BS-6.5)', () => {
+    resetLibraryOpenState()
+    useChatStore.getState().handleFrame({
+      type: 'open_in_library',
+      session_id: 'sess-away',
+      call_id: 'call-away',
+      request_id: REQUEST,
+      workspace_id: 'W',
+      path: 'notes/plan.md',
+    } as never)
+    expect(useUiStore.getState().activePanel?.id).not.toBe('library')
+    expect(useLibraryOpenStore.getState().notices['sess-away']).toEqual({
+      workspaceId: 'W',
+      path: 'notes/plan.md',
+      requestId: REQUEST,
     })
   })
 })
