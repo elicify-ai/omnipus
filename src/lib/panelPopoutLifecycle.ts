@@ -97,7 +97,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isPanelId(value: unknown): value is PanelId {
-  return typeof value === 'string' && ['library', 'browser', 'mail', 'tasks', 'team', 'calendar'].includes(value)
+  return typeof value === 'string' && ['library', 'browser', 'mail', 'tasks', 'team', 'calendar', 'participants'].includes(value)
 }
 
 function isContextForPanel(panelId: PanelId, value: unknown): value is PanelContext {
@@ -119,7 +119,8 @@ function isContextForPanel(panelId: PanelId, value: unknown): value is PanelCont
     optionalNonEmptyString(value.path) &&
     (value.folder === undefined || value.folder === null ||
       value.folder === 'inbox' || value.folder === 'sent' || value.folder === 'drafts') &&
-    optionalOpaqueString(value.messageRef)
+    optionalOpaqueString(value.messageRef) &&
+    optionalNonEmptyString(value.roomId)
 }
 
 function acceptMessage(value: unknown): value is PanelPopoutMessage {

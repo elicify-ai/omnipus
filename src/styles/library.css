@@ -14,6 +14,7 @@
 @source "../components/ui/agent-icon.tsx";
 @source "../components/ui/alert-dialog.tsx";
 @source "../components/ui/avatar.tsx";
+@source "../components/ui/avatar-stack.tsx";
 @source "../components/ui/badge.tsx";
 @source "../components/ui/button.tsx";
 @source "../components/ui/calendar.tsx";

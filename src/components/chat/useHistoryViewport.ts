@@ -2,12 +2,12 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { useRouter } from '@tanstack/react-router'
 import type { ChatMessage } from '@/store/chat'
-import { emptyHistoryState, useChatStore } from '@/store/chat'
-import { useSessionStore } from '@/store/session'
+import { emptyHistoryState } from '@/store/chat'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { HistoryRowMeasurements, historyPageSizing, historyPixelTrigger, recordHistoryGeometry, forgetHistoryGeometry } from '@/lib/chat-history-sizing'
+import { HistoryRowMeasurements, historyPageSizing, historyPixelTrigger } from '@/lib/chat-history-sizing'
 import { shouldRenderJudgeVerdictInThread, shouldRenderToolCall } from '@/lib/toolVisibility'
-import { protectHistoryPositions, releaseHistoryProtection } from '@/store/chat/history-merge'
+import { logDiagnostic } from '@/lib/telemetry'
+import { useConversationSource, type ConversationSource } from './conversationSource'
 
 export function drawnHistoryRows(message: ChatMessage, verbose: boolean): number {
   if (message.type === 'judge_verdict') return Number(shouldRenderJudgeVerdictInThread(verbose) && !!message.verdict)
@@ -34,20 +34,48 @@ type FillDirection = 'older' | 'newer'
 type FillOwner = { frame: number | null; finishLayout: (() => void) | null } // not-wire-format
 type Anchor = { position: string; offset: number; alternatives: { position: string; screenTop: number }[] } // not-wire-format
 
-function bindReaderIntent(scroller: HTMLElement, enterReading: () => void, dragging: { current: boolean }): () => void {
+/**
+ * A discarded history read must never become an unhandled rejection. The
+ * store's read shows its own action-specific error and Retry first and then
+ * re-throws a raw TypeError (an internal fault, not a transport error); the
+ * viewport discards these promises, so the fault is reported here instead of
+ * vanishing.
+ */
+function logViewportReadRejection(action: FillDirection | 'latest', error: unknown): void {
+  logDiagnostic('chatHistoryReadRejected', { action, error: error instanceof Error ? error.name : 'unknown' })
+}
+
+/**
+ * Reader intent from real input. `downward` is armed by the reader's own
+ * downward input (wheel, ArrowDown/PageDown/End/Space, a touch swipe up) and
+ * disarmed by upward input: only an armed reader may resume follow-latest by
+ * reaching the end of the loaded window. A scroll with no reader input behind
+ * it (the list's own placement, a measurement re-anchor, a restore) never
+ * counts as the reader returning to the bottom.
+ */
+function bindReaderIntent(scroller: HTMLElement, enterReading: () => void, dragging: { current: boolean }, downward: { current: boolean }): () => void {
   // Intent to read earlier content means something only when there is earlier
   // content to scroll to: a conversation that fits never leaves the live end,
   // so it must not show Return to latest (final-gate architect item A).
   const enter = () => { if (scroller.scrollHeight > scroller.clientHeight) enterReading() }
+  const up = () => { downward.current = false; enter() }
   let touchY: number | null = null
-  const wheel = (event: WheelEvent) => { if (event.deltaY < 0 && !event.ctrlKey) enter() }
+  const wheel = (event: WheelEvent) => {
+    if (event.ctrlKey) return
+    if (event.deltaY < 0) up()
+    else if (event.deltaY > 0) downward.current = true
+  }
   const key = (event: KeyboardEvent) => {
-    if (!event.defaultPrevented && ['ArrowUp', 'PageUp', 'Home'].includes(event.key) && !(event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"], [role="combobox"]'))) enter()
+    if (event.defaultPrevented || (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"], [role="combobox"]'))) return
+    if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) up()
+    else if (event.key === ' ' && event.shiftKey) downward.current = false
+    else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) downward.current = true
   }
   const touchStart = (event: TouchEvent) => { touchY = event.touches.length === 1 ? event.touches[0].clientY : null }
   const touchMove = (event: TouchEvent) => {
     const y = event.touches.length === 1 ? event.touches[0].clientY : null
-    if (y !== null && touchY !== null && y > touchY) enter()
+    if (y !== null && touchY !== null && y > touchY) up()
+    else if (y !== null && touchY !== null && y < touchY) downward.current = true
     touchY = y
   }
   const pointerDown = (event: PointerEvent) => { dragging.current = event.target === scroller }
@@ -74,6 +102,8 @@ type AnchorRefs = { // not-wire-format: the viewport's anchor bookkeeping refs
 }
 type ViewportState = { // not-wire-format: the latest rendered inputs, read by async fill/settle work
   sid: string | null; history: ReturnType<typeof emptyHistoryState>; messages: ChatMessage[]; verbose: boolean; anchorOffset?: (position: string) => number | undefined
+  /** #1449 FE-1: the conversation (session or group) the viewport reads and pages. */
+  source: ConversationSource | null
 }
 type FillEnv = { // not-wire-format
   scroller: HTMLElement; current: RefObject<ViewportState>; fills: RefObject<Record<FillDirection, FillOwner | null>>
@@ -82,7 +112,7 @@ type FillEnv = { // not-wire-format
 }
 
 /** Hold the first row really inside the viewport as the reader's anchor. */
-function captureAnchor(scroller: HTMLElement, rows: HTMLElement[], offset: (element: Element) => number, refs: AnchorRefs, sid: string | null): void {
+function captureAnchor(scroller: HTMLElement, rows: HTMLElement[], offset: (element: Element) => number, refs: AnchorRefs, source: ConversationSource | null): void {
   const top = scroller.getBoundingClientRect().top
   const mounted = rows.filter(row => row.getBoundingClientRect().height > 0)
   // Only a row actually inside the viewport can anchor the reader. Right
@@ -96,7 +126,7 @@ function captureAnchor(scroller: HTMLElement, rows: HTMLElement[], offset: (elem
   const protectedPositions = new Set(visible.filter(row => row.dataset.historyPosition && row.getBoundingClientRect().top < top + 2 * scroller.clientHeight).map(row => row.dataset.historyPosition!))
   const focused = document.activeElement?.closest<HTMLElement>('[data-history-position]')
   if (focused?.dataset.historyPosition) protectedPositions.add(focused.dataset.historyPosition)
-  if (sid) protectHistoryPositions(sid, protectedPositions)
+  source?.protectPositions(protectedPositions)
   refs.priorFocus.current = scroller.contains(document.activeElement) ? document.activeElement : null
 }
 
@@ -202,7 +232,8 @@ function sampleHistoryRows(scroller: HTMLElement, rows: HTMLElement[], messages:
 async function runHistoryFill(env: FillEnv, direction: FillDirection, initial: boolean): Promise<void> {
   const { scroller, current, fills, heights, samples, opening, evaluateFill, measure } = env
   const sessionId = current.current.sid
-  if (!sessionId || fills.current[direction] || document.hidden || scroller.clientHeight <= 0) return
+  const source = current.current.source
+  if (!sessionId || !source || fills.current[direction] || document.hidden || scroller.clientHeight <= 0) return
   const generation = current.current.history.viewGeneration
   const starting = new Set(current.current.history.readerPositions)
   const owner: FillOwner = { frame: null, finishLayout: null }
@@ -210,9 +241,8 @@ async function runHistoryFill(env: FillEnv, direction: FillDirection, initial: b
   let committed = false
   try {
     for (;;) {
-      const state = useChatStore.getState()
-      const kept = state.sessionsById[sessionId]
-      if (fills.current[direction] !== owner || current.current.sid !== sessionId || document.hidden || scroller.clientHeight <= 0 || !kept || kept.isReplaying || kept.awaitingCatchUp || kept.history.viewGeneration !== generation || kept.history.requests.refresh.status !== 'idle' || kept.history.requests[direction].status === 'error') break
+      const kept = source.read()
+      if (fills.current[direction] !== owner || current.current.sid !== sessionId || document.hidden || scroller.clientHeight <= 0 || !kept || kept.catchingUp || kept.history.viewGeneration !== generation || kept.history.requests.refresh.status !== 'idle' || kept.history.requests[direction].status === 'error') break
       const selected = current.current.messages.filter(message => message.historyPosition && (!starting.has(message.historyPosition) || initial))
       const added = selected.reduce((sum, message) => sum + (heights.current.get(message.historyPosition!) ?? drawnHistoryRows(message, current.current.verbose) * samples.current.average), 0)
       const remaining = Math.max(0, (initial ? 4 : 2) * scroller.clientHeight - added)
@@ -222,7 +252,7 @@ async function runHistoryFill(env: FillEnv, direction: FillDirection, initial: b
       const size = historyPageSizing(scroller.clientHeight, samples.current.average)
       size.limit = Math.min(100, Math.max(20, Math.ceil(remaining / samples.current.average)))
       size.min_rows = Math.min(size.limit, size.min_rows)
-      await (direction === 'older' ? state.loadOlderHistory(sessionId, size) : state.loadNewerHistory(sessionId, size))
+      await (direction === 'older' ? source.loadOlder(size) : source.loadNewer(size))
       if (fills.current[direction] !== owner || document.hidden) break
       // External-store commits must reach layout before newly drawn heights
       // can decide whether this same fill owner needs a contiguous top-up.
@@ -231,7 +261,7 @@ async function runHistoryFill(env: FillEnv, direction: FillDirection, initial: b
         owner.frame = requestAnimationFrame(() => { owner.frame = null; owner.finishLayout = null; resolve() })
       })
       if (fills.current[direction] !== owner || current.current.sid !== sessionId || document.hidden) break
-      const after = useChatStore.getState().sessionsById[sessionId]
+      const after = source.read()
       if (!after || after.history.viewGeneration !== generation || after.history.requests[direction].status !== 'idle' || before === (direction === 'older' ? after.history.olderBoundary : after.history.newerBoundary)) break
       committed = true
       measure()
@@ -275,9 +305,11 @@ function observeHistoryLayout(scroller: HTMLElement, rows: () => HTMLElement[], 
 
 /** One signed compensation/fill owner for virtual and plain layouts. */
 export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, messages: ChatMessage[], anchorOffset?: (position: string) => number | undefined) {
-  const sid = useSessionStore(s => s.activeSessionId)
-  const history = useChatStore(s => s.history)
-  const catchingUp = useChatStore(s => s.isReplaying || (sid ? s.sessionsById[sid]?.awaitingCatchUp === true : false))
+  // #1449 FE-1: the normal chat's session or the group on screen.
+  const source = useConversationSource()
+  const sid = source.key
+  const history = source.history
+  const catchingUp = source.catchingUp
   const verbose = useChatPreferencesStore(s => s.verboseChatEnabled)
   const samples = useRef(new HistoryRowMeasurements())
   const heights = useRef(new Map<string, number>())
@@ -286,6 +318,8 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const priorWidth = useRef(0)
   const lastTop = useRef(0)
   const dragging = useRef(false)
+  // Armed by the reader's own downward input; see bindReaderIntent.
+  const downward = useRef(false)
   const compensating = useRef(false)
   // scrollTop the anchor bookkeeping last accounted for (capture or correction).
   const settledTop = useRef<number | null>(null)
@@ -293,6 +327,12 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   // virtualizer adjustment). Such movement never ends follow-latest.
   const ownedTop = useRef<number | null>(null)
   const opening = useRef(true)
+  // Armed when the reader LEAVES follow-latest (the view mode changes from
+  // latest to historical) and cleared when follow-latest resumes. Only a
+  // reader who left follow-latest can come back to it by reaching the end of
+  // the loaded window: a reader who was placed into history reading without
+  // ever following the latest has no end to return to.
+  const leftFollowLatest = useRef(false)
   const anchorRefs = useMemo<AnchorRefs>(() => ({ anchor, settledTop, compensating, priorFocus }), [])
   // D5: one fill owner per view AND per direction. A single shared owner let
   // an in-flight older fill refuse the newer fill of a reader who jumped to the
@@ -303,8 +343,15 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const [average, setAverage] = useState(80)
   const [prefix, setPrefix] = useState(0)
   const [widthGeneration, bumpWidthGeneration] = useState(0)
-  const current = useRef({ sid, history, messages, verbose, anchorOffset })
-  useLayoutEffect(() => { current.current = { sid, history, messages, verbose, anchorOffset } })
+  const current = useRef<ViewportState>({ sid, history, messages, verbose, anchorOffset, source })
+  useLayoutEffect(() => {
+    const previousMode = current.current.history.viewMode
+    if (previousMode !== history.viewMode) {
+      if (history.viewMode === 'latest') leftFollowLatest.current = false
+      else if (previousMode === 'latest') leftFollowLatest.current = true
+    }
+    current.current = { sid, history, messages, verbose, anchorOffset, source }
+  })
   const rows = useCallback(() => [...(scrollRef.current?.querySelectorAll<HTMLElement>('[data-history-anchor]') ?? [])], [scrollRef])
   const offset = useCallback((element: Element) => {
     const scroller = scrollRef.current!
@@ -312,7 +359,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   }, [scrollRef])
   const capture = useCallback(() => {
     const scroller = scrollRef.current
-    if (scroller) captureAnchor(scroller, rows(), offset, anchorRefs, current.current.sid)
+    if (scroller) captureAnchor(scroller, rows(), offset, anchorRefs, current.current.source)
   }, [anchorRefs, offset, rows, scrollRef])
   const correct = useCallback(() => {
     const scroller = scrollRef.current
@@ -328,13 +375,23 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     setAverage(value => value === next ? value : next)
     const content = scroller.querySelector('[data-history-content]')
     setPrefix(content ? offset(content) : 0)
-    recordHistoryGeometry(state.sid, scroller.clientHeight, next)
+    state.source?.recordGeometry(scroller.clientHeight, next)
   }, [offset, rows, scrollRef])
 
   const requestFill = useCallback(async (direction: FillDirection, initial = false) => {
     const scroller = scrollRef.current
     if (scroller) await runHistoryFill({ scroller, current, fills, heights, samples, opening, evaluateFill, measure }, direction, initial)
   }, [measure, scrollRef])
+
+  /**
+   * Every discarded fill goes through here: the promise is caught and the
+   * rejection is reported, so a read that fails after showing its error and
+   * Retry never leaves an unhandled rejection behind (D8: an action ends in a
+   * visible recoverable error, never a stranded loading state).
+   */
+  const fill = useCallback((direction: FillDirection, initial = false) => {
+    void requestFill(direction, initial).catch(error => logViewportReadRejection(direction, error))
+  }, [requestFill])
 
   const cancelFill = useCallback(() => {
     for (const direction of ['older', 'newer'] as const) {
@@ -351,10 +408,10 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
       const state = current.current
       if (!scroller || !state.sid || state.history.requests.refresh.status !== 'idle') return
       if (direction === 'older') {
-        if (historyPixelTrigger(scroller.scrollTop, scroller.clientHeight, !document.hidden)) void requestFill('older', opening.current)
-      } else if (state.history.hasLater && historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden)) void requestFill('newer')
+        if (historyPixelTrigger(scroller.scrollTop, scroller.clientHeight, !document.hidden)) fill('older', opening.current)
+      } else if (state.history.hasLater && historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden)) fill('newer')
     }
-  }, [requestFill, scrollRef])
+  }, [fill, scrollRef])
   const onScroll = useCallback(() => {
     const scroller = scrollRef.current
     const state = current.current
@@ -364,15 +421,36 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     // the application placed the viewport itself. Content growth leaves
     // scrollTop unchanged and fires no scroll, so it never ends following.
     const owned = ownedTop.current !== null && Math.abs(scroller.scrollTop - ownedTop.current) < 1
-    const awayFromEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 1
-    if (state.history.viewMode === 'latest' && !owned && awayFromEnd && (scroller.scrollTop < lastTop.current - 1 || dragging.current)) {
-      useChatStore.getState().enterHistoryReading(state.sid)
-    }
-    lastTop.current = scroller.scrollTop
+    // The same at-bottom threshold the viewport already uses: one pixel of
+    // slack, so a reader who reaches the real end counts as at the end. The
+    // overflow test is the one reader intent already uses (316e7f309): a
+    // conversation that does not overflow has no bottom to return from.
+    const distanceToEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+    const awayFromEnd = distanceToEnd > 1
+    const overflowing = scroller.scrollHeight > scroller.clientHeight
     // Our own correction's scroll event arrives a frame later, when a row
     // measurement may already have moved the content again: keep holding the
     // same anchor then. Any other position is genuine reader movement.
     const own = settledTop.current !== null && Math.abs(scroller.scrollTop - settledTop.current) < 0.5
+    if (state.history.viewMode === 'latest' && !owned && awayFromEnd && (scroller.scrollTop < lastTop.current - 1 || dragging.current)) {
+      state.source?.enterReading()
+    } else if (state.history.viewMode === 'historical' && leftFollowLatest.current && overflowing && !awayFromEnd && !own && !owned
+      && (downward.current || dragging.current) && scroller.scrollTop > lastTop.current + 1) {
+      // The reader scrolled back to the END of the loaded window by hand --
+      // with their own input (downward wheel/keys/swipe or a scrollbar drag).
+      // An application-owned or input-less scroll that lands at the end is
+      // not the reader returning, and never triggers this read.
+      downward.current = false
+      // Re-enter follow-latest exactly as the Return-to-latest control does:
+      // a fresh latest READ. It LOADS the true latest page, so it never
+      // silently claims a window whose end is not the live end (a window with
+      // newer pages beyond it is corrected by that same read). Passive page,
+      // live and reconnect updates never reach this branch: they do not move
+      // the reader downward, and our own anchor correction is excluded.
+      const size = historyPageSizing(scroller.clientHeight, samples.current.average, 4)
+      void state.source?.returnToLatest(size).catch(error => logViewportReadRejection('latest', error))
+    }
+    lastTop.current = scroller.scrollTop
     if (own && state.history.viewMode === 'historical') correct()
     else {
       // Reader movement replaces the anchor. If no row is drawn at the new
@@ -383,31 +461,36 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     if (state.history.requests.refresh.status !== 'idle') return
     // D5 Dtop: distance from the viewport top to the earliest loaded content
     // boundary INCLUDING the prefix controls above the first row, i.e. scrollTop.
-    if (historyPixelTrigger(scroller.scrollTop, scroller.clientHeight, !document.hidden)) void requestFill('older', opening.current)
-    else if (historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden) && state.history.hasLater) void requestFill('newer')
-  }, [capture, correct, requestFill, scrollRef])
+    if (historyPixelTrigger(scroller.scrollTop, scroller.clientHeight, !document.hidden)) fill('older', opening.current)
+    else if (historyPixelTrigger(distanceToEnd, scroller.clientHeight, !document.hidden) && state.history.hasLater) fill('newer')
+  }, [capture, correct, fill, scrollRef])
+  // The source of THIS opened conversation, for the reset's cleanup below.
+  const sourceRef = useRef(source)
+  sourceRef.current = source
   useLayoutEffect(() => {
     samples.current.reset(); heights.current.clear(); anchor.current = null; settledTop.current = null; ownedTop.current = null; opening.current = true
-    priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; setAverage(80); setPrefix(0)
+    priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; leftFollowLatest.current = false; downward.current = false; setAverage(80); setPrefix(0)
+    const opened = sourceRef.current
     return () => {
       cancelFill(); samples.current.reset(); heights.current.clear(); anchor.current = null; priorFocus.current = null
-      current.current = { sid: null, history: emptyHistoryState(), messages: [], verbose, anchorOffset: undefined }
-      if (sid) { forgetHistoryGeometry(sid); releaseHistoryProtection(sid) }
+      current.current = { sid: null, history: emptyHistoryState(), messages: [], verbose, anchorOffset: undefined, source: null }
+      if (sid) { opened.forgetGeometry(); opened.releaseProtection() }
     }
   }, [sid, verbose, cancelFill])
   useLayoutEffect(() => {
     const scroller = scrollRef.current
     if (!scroller || !sid) return
-    return bindReaderIntent(scroller, () => useChatStore.getState().enterHistoryReading(sid), dragging)
+    const opened = sourceRef.current
+    return bindReaderIntent(scroller, () => opened.enterReading(), dragging, downward)
   }, [sid, scrollRef])
   useLayoutEffect(() => {
     const visibility = () => {
       if (document.hidden) cancelFill()
-      else { measure(); if (opening.current && current.current.history.viewMode === 'latest' && samples.current.count > 0) void requestFill('older', true) }
+      else { measure(); if (opening.current && current.current.history.viewMode === 'latest' && samples.current.count > 0) fill('older', true) }
     }
     document.addEventListener('visibilitychange', visibility)
     return () => document.removeEventListener('visibilitychange', visibility)
-  }, [cancelFill, measure, requestFill])
+  }, [cancelFill, fill, measure])
   useLayoutEffect(() => {
     cancelFill()
     if (current.current.history.viewMode === 'latest') opening.current = true
@@ -422,7 +505,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
       capture()
       // A layoutless/plain fallback stays manually reachable rather than
       // fetching invisible content on a guessed height.
-      if (opening.current && samples.current.count > 0) void requestFill('older', true)
+      if (opening.current && samples.current.count > 0) fill('older', true)
     }
   })
   useLayoutEffect(() => {

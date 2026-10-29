@@ -1,4 +1,4 @@
-// AddParticipant — "Add participant" at the top-left of a chat
+// AddParticipant — "Add participant" for a chat
 // (omnipus-system-agent FR-207, FR-208; K24; BDD-17.24/25; test row 138).
 //
 // Offers agents only: the conversation agents of the chat's workspace, never
@@ -9,6 +9,11 @@
 //   - In a squad or ad-hoc group, it adds the chosen agent (FR-208).
 //   - In the team room it is disabled with the explanation (FR-208).
 //   - It is absent in Omnipus's chat (MainChatAddParticipant below).
+//
+// #1449 D13 (founder 2026-10-28): in the chat header line the main-chat
+// control is an icon-only ghost button with a tooltip (the 'icon'
+// presentation); the room header keeps the labelled button until the group
+// chat lands. The picker behind both is the same.
 
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
@@ -20,7 +25,11 @@ import { fetchAgents, fetchWorkspace, workspacesQueryKeys } from '@/lib/api'
 import { createRoom, fetchWorkspaceRooms, roomsQueryKeys, updateRoomMembers } from '@/lib/api/rooms'
 import { classifyMutationFailure, mutationFailureMessage } from '@/lib/mutationOutcome'
 import { isOmnipusAgentId } from '@/lib/omnipus'
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
+import { ROOMS_ENABLED } from '@/lib/featureSwitches'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { Tooltip } from '@/components/ui/tooltip'
 import { Command, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { QueryErrorState } from '@/components/ui/query-error-state'
@@ -52,7 +61,7 @@ function sameAdhoc(room: Room, request: RoomCreateRequest): boolean {
     && request.agent_ids.every((id) => room.members.includes(id))
 }
 
-export function AddParticipant({ target }: { target: AddParticipantTarget }) {
+export function AddParticipant({ target, presentation = 'label' }: { target: AddParticipantTarget; presentation?: 'label' | 'icon' }) {
   const [open, setOpen] = useState(false)
   if (target.kind === 'room' && target.room.kind === 'team') {
     return (
@@ -67,6 +76,28 @@ export function AddParticipant({ target }: { target: AddParticipantTarget }) {
         <UserPlus aria-hidden="true" size={14} />
         Add participant
       </Button>
+    )
+  }
+  if (presentation === 'icon') {
+    // #1449 D13 (founder 2026-10-28): in the chat header line the control is
+    // an icon-only ghost button with a tooltip — no label, no border, no
+    // background of its own. The picker behind it is unchanged.
+    return (
+      <>
+        <Tooltip content="Add participant" side="bottom" className="w-max" interactive>
+          <IconButton
+            aria-label="Add participant"
+            data-testid="add-participant"
+            size="sm"
+            variant="ghost"
+            onClick={() => setOpen(true)}
+            className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)] active:text-[var(--color-accent)]"
+          >
+            <UserPlus aria-hidden="true" size={16} />
+          </IconButton>
+        </Tooltip>
+        {open && <AddParticipantDialog target={target} onClose={() => setOpen(false)} />}
+      </>
     )
   }
   return (
@@ -152,7 +183,7 @@ function AddParticipantDialog({ target, onClose }: { target: AddParticipantTarge
         ) : candidates.length === 0 ? (
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">No other agents in this workspace</p>
         ) : (
-          <Command label="Agents" className="rounded-lg border border-[var(--color-border)]">
+          <Command label="Agents" className="rounded-lg">
             <CommandInput autoFocus placeholder="Search agents" />
             <CommandList>
               {candidates.map((agent) => (
@@ -181,16 +212,29 @@ function AddParticipantDialog({ target, onClose }: { target: AddParticipantTarge
  * The main-chat placement (FR-207): the open chat must be a member's main
  * chat in a workspace. Absent in Omnipus's chat (FR-208) and in any chat that
  * is not a main.
+ *
+ * #1449 D13 (founder 2026-10-28): it renders in the workspace header line's
+ * right-end slot (ChatHeaderSlot) as an icon-only ghost button — its own row
+ * above the chat is gone. The visibility rules are unchanged.
+ *
+ * The workspace-entry gate (workspaceEntryBlocksSend) applies here too: the
+ * control lives in the HEADER, above the chat, so it must not be offered
+ * while the workspace is still being entered. During a workspace switch the
+ * store keeps the PREVIOUS workspace's session until the new one resolves —
+ * without this gate the button would pair the new workspace's id with the old
+ * workspace's session and create a group from a chat the user is not
+ * looking at.
  */
 export function MainChatAddParticipant() {
   const sessionId = useSessionStore((state) => state.activeSessionId)
   const agentId = useSessionStore((state) => state.activeAgentId)
   const isMain = useSessionStore((state) => state.attachedSessionType === 'main')
   const workspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
+  const entryBlocked = useSessionStore((state) => workspaceEntryBlocksSend(state, workspaceId))
+  if (!ROOMS_ENABLED) return null
+  if (entryBlocked) return null
   if (!sessionId || sessionId === '__pending' || !agentId || !workspaceId || !isMain || isOmnipusAgentId(agentId)) return null
   return (
-    <div className="flex items-center px-[var(--space-3)] pt-[var(--space-1)]">
-      <AddParticipant target={{ kind: 'main', workspaceId, agentId, sessionId }} />
-    </div>
+    <AddParticipant target={{ kind: 'main', workspaceId, agentId, sessionId }} presentation="icon" />
   )
 }

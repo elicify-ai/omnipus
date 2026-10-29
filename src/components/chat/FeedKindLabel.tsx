@@ -1,7 +1,26 @@
 /**
- * Persistent above-feed kind (FR-008, BDD-07.1 — mains as amended by the
- * founder decision 2026-10-11: a main's header line reads the main's title
- * "<Agent name> - Main Session", not the bare "Main chat" kind).
+ * The chat's kind label, rendered in the workspace header line's right-end
+ * slot (FR-008, BDD-07.1 — mains as amended by the founder decision
+ * 2026-10-11: a main's header line reads the main's title "<Agent name> -
+ * Main Session", not the bare "Main chat" kind).
+ *
+ * #1449 D13 (founder 2026-10-28): the grey bar this used to render above the
+ * feed — with its background and its bottom border — is GONE. The label now
+ * renders as small muted text inside ChatHeaderSlot, in the same header line
+ * as the workspace strip. The role, the accessible name and the test hook are
+ * unchanged, so the line still reads the same to a screen reader.
+ *
+ * Two details the narrow header line forced:
+ *   - the identity truncates, so its title carries the FULL text (the
+ *     breadcrumb, the main title, and the honest-failure warning);
+ *   - the honest-failure warning is a SEPARATE element outside the
+ *     truncating identity, so a clipped identity can never take the warning
+ *     with it, and it is a COMPACT glyph rather than the sentence: the
+ *     header slot is capped, so the sentence could not fit beside the
+ *     identity and the participant control. The glyph's explanation lives in
+ *     the catalogued Tooltip — a named, focusable trigger that opens on
+ *     focus and on a tap and closes on Escape — and the status region still
+ *     names both parts.
  *
  * Words come from feedKindLabel on the workspace descriptor, and only when
  * that descriptor is the active session. Replay does not change them.
@@ -28,12 +47,13 @@
  */
 import { useId } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ListChecks } from '@phosphor-icons/react'
+import { CaretLeft, ListChecks, WarningCircle } from '@phosphor-icons/react'
 import { fetchAgents, fetchSessions } from '@/lib/api'
 import type { Session } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { feedKindLabel, feedParentLabel } from '@/lib/nav/chatKindLabel'
 import { isMainSession } from '@/lib/nav/sessionCoreSeam'
+import { Tooltip } from '@/components/ui/tooltip'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { ParentCrumbLink } from './ParentCrumbLink'
@@ -49,11 +69,11 @@ function noteHeaderUnavailable(sessionId: string): void {
 
 export function FeedKindLabel() {
   const labelId = useId()
+  const warningId = useId()
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const sessionByWorkspace = useSessionStore((s) => s.sessionByWorkspace)
   const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
-  const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
 
   // Live agents roster — current display names only; the derivation happens
   // per render in feedKindLabel/sessionDisplayTitle.
@@ -104,11 +124,12 @@ export function FeedKindLabel() {
     const rosterNameResolved = descriptor.agentId != null
       && agents.some((agent) => agent.id === descriptor.agentId && agent.name.trim() !== '')
     const namesUnavailable = main && agentsError && !rosterNameResolved
-    // Founder decision 2026-10-20 ("Breadcrumb"): a child chat reads
-    // "<parent title> › Helper" and the parent part opens the parent. The
-    // direct parent only. Any gap — no parent_session_id, a parent that is
-    // gone or not loaded, a main parent whose roster name is still loading —
-    // keeps the plain kind label with no link; a name is never fabricated.
+    // Founder decision 2026-10-20 ("Breadcrumb"), re-shaped by #1449 D13
+    // (2026-10-28): a child chat reads "‹ <parent title> / Helper" and the
+    // parent part opens the parent. The direct parent only. Any gap — no
+    // parent_session_id, a parent that is gone or not loaded, a main parent
+    // whose roster name is still loading — keeps the plain kind label with no
+    // link; a name is never fabricated.
     let parentCrumb: { parent: Session, label: string } | null = null
     if (activeIsChild) {
       const parentId = allSessions?.find((s) => s.id === descriptor.id)?.parent_session_id
@@ -121,32 +142,92 @@ export function FeedKindLabel() {
         if (parentLabel != null) parentCrumb = { parent, label: parentLabel }
       }
     }
+    // The identity line and the honest-failure warning are SEPARATE elements:
+    // the identity truncates, the warning must never be clipped away with it.
+    // The warning carries its own id, so the status region's accessible name
+    // still reads the whole line ("<id> - Main Session — agent names
+    // unavailable"), and the identity's title carries the full text too.
+    //
+    // The warning's VISIBLE form is a compact glyph, not the sentence: the
+    // header slot is capped (a quarter of the header line), so a 27-character
+    // sentence cannot fit beside the identity and the participant control —
+    // it overflowed the line at narrow widths. The glyph always fits.
+    //
+    // Its EXPLANATION is the catalogued Tooltip's job (design-system rule
+    // 14): the glyph's trigger is named and focusable, so a sighted keyboard
+    // user reaches the same words a screen reader gets — the bubble opens on
+    // focus and on a tap and closes on Escape. The trigger is a SIBLING of
+    // the labelled warning text, never a child of it: a named element inside
+    // the region's name source would repeat itself in the accessible name.
+    const identityText = parentCrumb != null ? `${parentCrumb.label} / ${label}` : label
+    const warningText = namesUnavailable ? ' — agent names unavailable' : ''
     return (
       <div
         role="status"
-        aria-labelledby={labelId}
+        aria-labelledby={namesUnavailable ? `${labelId} ${warningId}` : labelId}
         aria-atomic="true"
         data-testid="feed-kind-label"
-        className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]"
+        className="flex min-w-0 items-center gap-[var(--space-1)]"
       >
-        <span id={labelId} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
-          {parentCrumb != null ? <><ParentCrumbLink parent={parentCrumb.parent} label={parentCrumb.label} />{` › ${label}`}</> : null}
-          {parentCrumb == null ? (namesUnavailable ? `${label} — agent names unavailable` : label) : null}
+        <span
+          id={labelId}
+          title={`${identityText}${warningText}`}
+          className="min-w-0 max-w-[32ch] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+        >
+          {parentCrumb != null ? <><CaretLeft size={14} className="inline-block align-middle" aria-hidden="true" /><ParentCrumbLink parent={parentCrumb.parent} label={parentCrumb.label} />{` / ${label}`}</> : null}
+          {parentCrumb == null ? label : null}
         </span>
+        {namesUnavailable && (
+          <>
+            <span id={warningId} className="sr-only">{warningText}</span>
+            {/* The wrapper keeps the glyph's warning colour and its
+                no-shrink rule: the Tooltip's own span is a plain inline-flex
+                item, and a squeezed header line must never clip the glyph. */}
+            <span className="flex shrink-0 items-center text-[var(--color-warning)]">
+              <Tooltip
+                label="Agent names unavailable"
+                content="Agent names could not be loaded. Reload the page to try again."
+                side="bottom"
+                data-testid="feed-kind-warning"
+              >
+                <WarningCircle size={14} aria-hidden="true" />
+              </Tooltip>
+            </span>
+          </>
+        )}
       </div>
     )
   }
 
   if (attachedSessionType === 'task') {
-    return (
-      <div className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]">
-        <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
-        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
-          Task: {attachedTaskTitle ?? 'Task Execution'}
-        </span>
-      </div>
-    )
+    return <TaskKindLabel />
   }
 
   return null
+}
+
+/**
+ * The task transcript's identity line ("Task: <title>"), on its own.
+ *
+ * Split out so a surface that needs ONLY this identity — the standalone
+ * session shell (the /sessions/{id} fallback, which has no workspace header
+ * line) — can say what the transcript is without starting the roster and
+ * session-list queries the full label needs. No query, no dangling work.
+ */
+export function TaskKindLabel() {
+  const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
+  const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
+  if (attachedSessionType !== 'task') return null
+  const taskText = `Task: ${attachedTaskTitle ?? 'Task Execution'}`
+  return (
+    <div className="flex min-w-0 items-center gap-[var(--space-1)]">
+      <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
+      <span
+        title={taskText}
+        className="min-w-0 max-w-[32ch] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+      >
+        {taskText}
+      </span>
+    </div>
+  )
 }

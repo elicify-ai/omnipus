@@ -79,12 +79,13 @@ func newWorkspaceLibraryTestAPI(t *testing.T) *restAPI {
 	}
 }
 
-// TestUpload_WorkspaceLibraryLoadFailure_Returns500NotSilentFallback plants
+// TestUpload_WorkspaceLibraryLoadFailure_Returns503NotSilentFallback plants
 // a corrupt manifest.json so library.New (re-derived inside HandleUpload
 // when the cached accessor returns nil) deterministically fails with a real
-// error rather than "not configured". The upload must hard-fail with 500,
-// never silently degrade to a 201 in the legacy uploads dir.
-func TestUpload_WorkspaceLibraryLoadFailure_Returns500NotSilentFallback(t *testing.T) {
+// error rather than "not configured". The upload must answer 503 (S-22,
+// machine-verifiable constraints: library unavailable), never silently
+// degrade to a 201 in the legacy uploads dir.
+func TestUpload_WorkspaceLibraryLoadFailure_Returns503NotSilentFallback(t *testing.T) {
 	api := newWorkspaceLibraryTestAPI(t)
 	workspaceID := "ws-corrupt-manifest"
 
@@ -123,9 +124,9 @@ func TestUpload_WorkspaceLibraryLoadFailure_Returns500NotSilentFallback(t *testi
 
 	require.Equal(
 		t,
-		http.StatusInternalServerError,
+		http.StatusServiceUnavailable,
 		rr.Code,
-		"a workspace library that exists but fails to load must be a hard error, not a silent legacy fallback; body: %s",
+		"a workspace library that exists but fails to load must be 503, not a silent legacy fallback; body: %s",
 		rr.Body.String(),
 	)
 

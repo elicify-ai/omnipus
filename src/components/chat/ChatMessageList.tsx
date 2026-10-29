@@ -4,7 +4,6 @@ import { ThreadPrimitive } from '@assistant-ui/react'
 import type { ChatMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import { useChatStore } from '@/store/chat'
-import { useSessionStore } from '@/store/session'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
 import { ROOMS_ENABLED } from '@/lib/featureSwitches'
@@ -19,6 +18,10 @@ import { placementOf, useSkillChipData, VirtualUserMessageRow, VirtualAssistantM
 import { FloatingReturnToLatest, HistoryBoundary, HistoryReaderStatus } from './HistoryBoundary'
 import { drawnHistoryRows, historyLayoutHeight, useHistoryViewport } from './useHistoryViewport'
 import { getMessageStatusSuffix } from '@/lib/truncation'
+import { cn } from '@/lib/utils'
+import { Skeleton } from '@/components/ui/skeleton'
+import { ThreadRevealContext, useOpenReveal, useRevealCover } from './useOpenReveal'
+import { useConversationSource, type ConversationSource } from './conversationSource'
 
 function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
   // The assistant row owns both inline and trailing events using its live-call
@@ -37,26 +40,82 @@ function delegationEventsOutsideRow(events: readonly DelegationEvent[], message:
  * other empty row keeps its explanation.
  */
 const SILENT_STATUSES: ReadonlySet<string | undefined> = new Set([undefined, 'ok', 'done'])
-function isSilentHistoryRecord(msg: ChatMessage, owners: Record<string, string> | undefined): boolean {
+/**
+ * `ownerIds` is the set of message ids that OWN a tool call (the values of the
+ * store's toolCallOwnerMessageId record). A set, not the record: the virtual
+ * estimate asks this question for EVERY row on EVERY measurement, so the
+ * lookup has to stay O(1) per row.
+ */
+function isSilentHistoryRecord(msg: ChatMessage, ownerIds: ReadonlySet<string> | undefined): boolean {
   // Not every Message variant declares these optional fields; absent is "none".
   const extra = msg as { summary?: string; attachments?: unknown[]; truncationReason?: string; truncation_reason?: string }
   return msg.role === 'assistant' && msg.type !== 'judge_verdict' && !!msg.historyPosition && !msg.isStreaming
     && SILENT_STATUSES.has(msg.status) && !msg.confirmedUnfinished && getMessageStatusSuffix(msg) === null
     && !msg.content && !extra.summary && !msg.tool_calls?.length && !extra.attachments?.length && !msg.media?.length && !msg.spans?.length
-    && !msg.truncated && !extra.truncationReason && !extra.truncation_reason && !msg.providerFallbackNote && !Object.values(owners ?? {}).includes(msg.id)
+    && !msg.truncated && !extra.truncationReason && !extra.truncation_reason && !msg.providerFallbackNote && !ownerIds?.has(msg.id)
+}
+
+/** The message ids that own a tool call — the owner half of the store record. */
+function toolCallOwnerIds(owners: Record<string, string> | undefined): Set<string> {
+  return new Set(Object.values(owners ?? {}))
+}
+
+/**
+ * The opening cover and the chat's one "Loading messages…" status. While an
+ * opened chat is not ready the conversation is hidden (still laid out, so rows
+ * measure) and this cover shows instead; without a cover it still announces a
+ * chat that has no loaded page and nothing to show yet.
+ */
+function useOpenCover(openFailed: boolean, source: ConversationSource, room: RoomListOpening | undefined) {
+  // #1449 FE-1: a normal chat reveals by its session's state (unchanged); a
+  // group reveals once this opening's first live view arrived (room source).
+  const sid = source.kind === 'session' ? source.sessionId : null
+  const sessionHidden = useOpenReveal(sid, openFailed)
+  const roomHidden = useRevealCover(room ? (openFailed ? 'failed' : room.openState) : 'ready', room !== undefined)
+  const unloaded = useChatStore((s) => !!sid && !s.history.historyLoaded && s.messages.length === 0
+    && s.history.serverState?.status !== 'unavailable' && !s.history.requests.latest.error)
+  const hidden = room ? roomHidden : sessionHidden
+  return { covered: hidden, status: hidden || ((room ? room.unloaded : unloaded) && !openFailed) }
+}
+
+/**
+ * #1449: what a group page adds to the shared list — its opening state for
+ * the cover, and the tail block (the "… is working" lines, ADR A3.3) that
+ * sits where a normal chat's streaming reply sits.
+ */
+export interface RoomListOpening { // not-wire-format: React props for the shared list on a group page
+  openState: 'pending' | 'ready' | 'failed'
+  /** No entry and no live view yet. */
+  unloaded: boolean
+  tail?: React.ReactNode
+}
+
+function OpenCover() {
+  return (
+    <div data-testid="chat-open-cover" className="absolute inset-0 pointer-events-none">
+      <div className="max-w-4xl mx-auto w-full p-[var(--space-3)]">
+        <Skeleton className="h-8 w-full" />
+        <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Loading messages…</p>
+      </div>
+    </div>
+  )
 }
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
-function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMessage[]; liteMode: boolean; agentName: string }) {
+function PlainMessageList({ messages, liteMode, agentName, openFailed, room }: { messages: ChatMessage[]; liteMode: boolean; agentName: string; openFailed: boolean; room?: RoomListOpening }) {
+  const source = useConversationSource()
+  const { covered, status: openStatus } = useOpenCover(openFailed, source, room)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const viewport = useHistoryViewport(scrollContainerRef, messages)
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default,
   // verbose-only inline) — same store read as every other verbose-gated row.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
-  const sessionId = useSessionStore((s) => s.activeSessionId)
+  // A group has no session: no delegation events and no tool-call owners (FR-005).
+  const sessionId = source.sessionId
   const delegationEvents = useChatDelegationEvents(sessionId)
   const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
+  const ownerIds = useMemo(() => toolCallOwnerIds(toolCallOwners), [toolCallOwners])
   const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
   // F17 (1): the reply_to ids that have a reply bubble in the thread —
@@ -65,12 +124,14 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
   const replyPairKey = messages.map((m) => (m.replyToMessageId ? '1' : '0')).join('')
   const pairedReplyToIds = useMemo(() => collectPairedReplyToIds(messages), [replyPairKey])
   return (
+    <ThreadRevealContext.Provider value={!covered}>
+    <div className="relative flex flex-col flex-1 min-h-0">
     <div
       ref={scrollContainerRef}
       onScroll={viewport.onScroll}
       role="region" aria-label="Conversation history" tabIndex={-1} aria-busy={viewport.busy || undefined}
       data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] pt-[var(--space-3)] pb-[var(--space-2)]"
+      className={cn('flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] pt-[var(--space-3)] pb-[var(--space-2)]', covered ? 'invisible' : '')}
     >
       <div className="max-w-4xl mx-auto w-full">
         <HistoryReaderStatus />
@@ -102,7 +163,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
             )
           } else if (msg.role === 'system') {
             row = <VirtualSystemMessageRow message={msg} />
-          } else if (!isSilentHistoryRecord(msg, toolCallOwners)) {
+          } else if (!isSilentHistoryRecord(msg, ownerIds)) {
             row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
           }
           const trailing = delegationEventsOutsideRow(delegationEvents, msg)
@@ -114,11 +175,15 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
           )
         })}
         </div>
+        {room?.tail}
         <HistoryBoundary action="newer" average={viewport.average} />
         {!viewport.historical && <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />}
         <FloatingReturnToLatest />
       </div>
     </div>
+    {openStatus && <OpenCover />}
+    </div>
+    </ThreadRevealContext.Provider>
   )
 }
 
@@ -132,10 +197,16 @@ export function VirtualizedMessageList({
   messages,
   liteMode,
   agentName,
+  openFailed = false,
+  room,
 }: {
   messages: ChatMessage[]
   liteMode: boolean
   agentName: string
+  /** The opening read failed outside the store (REST fallback): reveal, never cover forever. */
+  openFailed?: boolean
+  /** #1449: set on a group page (with its ConversationSource provided). */
+  room?: RoomListOpening
 }) {
   // Feature-detect ResizeObserver at render time (not module load) so test
   // environments that stub it in beforeEach are detected correctly.
@@ -146,31 +217,39 @@ export function VirtualizedMessageList({
       _resizeObserverWarnEmitted = true
       console.warn('[chat] ResizeObserver unavailable — rendering full message list without virtualization')
     }
-    return <PlainMessageList messages={messages} liteMode={liteMode} agentName={agentName} />
+    return <PlainMessageList messages={messages} liteMode={liteMode} agentName={agentName} openFailed={openFailed} room={room} />
   }
-  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} agentName={agentName} />
+  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} agentName={agentName} openFailed={openFailed} room={room} />
 }
 
 function VirtualizedMessageListInner({
   messages,
   liteMode,
   agentName,
+  openFailed,
+  room,
 }: {
   messages: ChatMessage[]
   liteMode: boolean
   agentName: string
+  openFailed: boolean
+  room?: RoomListOpening
 }) {
-  const isStreaming = useChatStore((s) => s.isStreaming)
+  const source = useConversationSource()
+  const { covered, status: openStatus } = useOpenCover(openFailed, source, room)
+  // A group never streams: the last visited chat's stream must not split a group row out (FR-005).
+  const isStreaming = useChatStore((s) => s.isStreaming) && source.capabilities.liveToolCalls
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const viewport = useHistoryViewport(scrollContainerRef, messages, virtualAnchorOffset)
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
-  const sessionId = useSessionStore((s) => s.activeSessionId)
+  const sessionId = source.sessionId
   const delegationEvents = useChatDelegationEvents(sessionId)
   const textAtToolCallStart = useChatStore((s) => s.textAtToolCallStart)
   const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
+  const ownerIds = useMemo(() => toolCallOwnerIds(toolCallOwners), [toolCallOwners])
   const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
   // F17 (1): the reply_to ids that have a reply bubble in the thread —
@@ -187,7 +266,12 @@ function VirtualizedMessageListInner({
   const virtualizer = useVirtualizer({
     count: historicalMessages.length,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: index => Math.max(1, drawnHistoryRows(historicalMessages[index], verboseChatEnabled)) * viewport.average,
+    // A positively silent saved record draws nothing (rowForMessage returns
+    // null), so before it is ever measured it reserves no canvas either:
+    // a full-row guess would be blank space the reader can land on (D8).
+    estimateSize: index => isSilentHistoryRecord(historicalMessages[index], ownerIds)
+      ? 0
+      : Math.max(1, drawnHistoryRows(historicalMessages[index], verboseChatEnabled)) * viewport.average,
     getItemKey,
     scrollMargin: viewport.prefix,
     overscan: 5,
@@ -248,7 +332,7 @@ function VirtualizedMessageListInner({
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
-    if (isSilentHistoryRecord(msg, toolCallOwners)) return null
+    if (isSilentHistoryRecord(msg, ownerIds)) return null
     return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
   }
 
@@ -276,6 +360,8 @@ function VirtualizedMessageListInner({
   // this, the tail of a finalized/diagram message sits below the fold on slower
   // devices (iPad). It re-pins only when the engine still reports isAtBottom.
   return (
+    <ThreadRevealContext.Provider value={!covered}>
+    <div className="relative flex flex-col flex-1 min-h-0">
     <ThreadPrimitive.Viewport
       ref={scrollContainerRef}
       autoScroll={!viewport.historical}
@@ -285,7 +371,7 @@ function VirtualizedMessageListInner({
       onScroll={viewport.onScroll}
       role="region" aria-label="Conversation history" tabIndex={-1} aria-busy={viewport.busy || undefined}
       data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] pt-[var(--space-3)] pb-[var(--space-2)]"
+      className={cn('flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] pt-[var(--space-3)] pb-[var(--space-2)]', covered ? 'invisible' : '')}
       style={{ position: 'relative' }}
     >
       <VirtualizerAutoFollow scrollRef={scrollContainerRef} contentRef={contentRef} />
@@ -353,10 +439,14 @@ function VirtualizedMessageListInner({
             </div>
           </StreamingDelegation>
         )}
+        {room?.tail}
         <HistoryBoundary action="newer" average={viewport.average} />
         {!viewport.historical && <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />}
         <FloatingReturnToLatest />
       </div>
     </ThreadPrimitive.Viewport>
+    {openStatus && <OpenCover />}
+    </div>
+    </ThreadRevealContext.Provider>
   )
 }

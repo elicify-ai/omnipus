@@ -4,14 +4,25 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ErrorState } from '@/components/ui/error-state'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useChatStore } from '@/store/chat'
-import { useSessionStore } from '@/store/session'
 import type { HistoryActionKind } from '@/store/chat/types'
 import { historyPageSizing } from '@/lib/chat-history-sizing'
-import { reachedClosedClear } from '@/store/chat/history-merge'
+import { logDiagnostic } from '@/lib/telemetry'
+import { useConversationSource } from './conversationSource'
 
 const loading: Record<HistoryActionKind, string> = {
   older: 'Loading earlier messages…', newer: 'Loading newer messages…', latest: 'Loading latest messages…', refresh: 'Refreshing loaded messages…',
+}
+
+/**
+ * A discarded history read must never become an unhandled rejection. The
+ * store's read shows its own error and Retry first and then re-throws a raw
+ * TypeError (an internal fault, not a transport error); this hook discards
+ * the promise, so the fault is reported here instead of vanishing.
+ */
+function logHistoryRejection(action: HistoryActionKind): (error: unknown) => void {
+  return (error: unknown) => {
+    logDiagnostic('chatHistoryReadRejected', { action, error: error instanceof Error ? error.name : 'unknown' })
+  }
 }
 /** Boundary state composes catalog controls; it owns no competing read controller. */
 /** The labelled history scroller that contains this boundary. */
@@ -23,14 +34,17 @@ function historyScroller(element: HTMLElement | null): HTMLElement | null {
  * `placement="floating"` (action latest only) is the founder-ruled Return to
  * latest: a floating arrow button stuck to the bottom of the chat area, above
  * the composer, so it is always visible while reading
- * older history and focusing or activating it never scrolls the reader. It
- * owns that action's loading/error/Retry states. The in-history placement then
- * keeps only the unavailable-history recovery, plus latest-read states while
- * not reading older history.
+ * older history and focusing or activating it never scrolls the reader. The
+ * floating placement also OWNS that action's loading/error/Retry states, in
+ * both reading modes: it stays mounted while the reader enters or leaves
+ * older history, so one request attempt keeps one polite status (D8). The
+ * in-history placement then keeps only the unavailable-history recovery.
  */
 export function HistoryBoundary({ action, average = 80, placement = 'history' }: { action: HistoryActionKind; average?: number; placement?: 'history' | 'floating' }) {
-  const sid = useSessionStore(s => s.activeSessionId)
-  const history = useChatStore(s => s.history)
+  // #1449 FE-1: the normal chat's session or the group on screen.
+  const source = useConversationSource()
+  const sid = source.key
+  const history = source.history
   const request = history.requests[action]
   const ref = useRef<HTMLDivElement>(null)
   const focused = useRef<Element | null>(null)
@@ -44,39 +58,36 @@ export function HistoryBoundary({ action, average = 80, placement = 'history' }:
   })
   const run = () => {
     if (!sid) return
-    const state = useChatStore.getState()
-    const current = state.sessionsById[sid]?.history.requests[action]
+    const current = source.read()?.history.requests[action]
     if (current?.status === 'loading') return
     // Return is an explicit latest read, even while history recovery is unavailable.
-    if (action !== 'latest' && current?.error) { void state.retryHistory(sid, action); return }
+    if (action !== 'latest' && current?.error) { void source.retry(action).catch(logHistoryRejection(action)); return }
     const region = historyScroller(ref.current)
     const size = historyPageSizing(region?.clientHeight || 800, average)
-    if (action === 'older') {
-      state.enterHistoryReading(sid)
-      const bucket = state.sessionsById[sid]
-      const clear = bucket && reachedClosedClear(bucket)
-      void (clear ? state.showEarlierHistory(sid, clear.historyPosition, size) : state.loadOlderHistory(sid, size))
-    } else if (action === 'newer') void state.loadNewerHistory(sid, size)
-    else if (action === 'latest') void state.returnToLatestHistory(sid, { ...size, limit: Math.min(100, Math.max(20, Math.ceil(4 * (region?.clientHeight || 800) / average))) })
-    else void state.refreshLoadedHistory(sid)
+    if (action === 'older') void source.beginOlder(size).catch(logHistoryRejection(action))
+    else if (action === 'newer') void source.loadNewer(size).catch(logHistoryRejection(action))
+    else if (action === 'latest') void source.returnToLatest({ ...size, limit: Math.min(100, Math.max(20, Math.ceil(4 * (region?.clientHeight || 800) / average))) }).catch(logHistoryRejection(action))
+    else void source.refresh().catch(logHistoryRejection(action))
   }
   const recover = () => {
     if (!sid) return
-    const state = useChatStore.getState()
-    const current = state.sessionsById[sid]?.history
+    const current = source.read()?.history
     if (current?.serverState?.status !== 'unavailable' || current.requests.latest.status === 'loading') return
     // Recovery requests a snapshot; it does not request leaving the older reader.
-    void state.retryHistory(sid, 'latest')
+    void source.retry('latest').catch(logHistoryRejection('latest'))
   }
   const reading = history.viewMode === 'historical'
   const unavailable = action === 'latest' && history.serverState?.status === 'unavailable'
   const unavailableMessage = unavailable ? history.serverState?.message : undefined
   const floating = action === 'latest' && placement === 'floating'
-  // While reading older history the floating control owns Return and its read states.
-  const latestStatesHere = action !== 'latest' || floating || !reading
-  if (floating && !reading) return null
-  const visible = action === 'older' ? history.hasEarlier : action === 'newer' ? history.hasLater : action === 'latest' ? floating || unavailable : request.status !== 'idle'
-  if (!visible && !(latestStatesHere && (request.error || request.status === 'loading'))) return null
+  // ONE owner for the latest read's OWN states — its polite loading status and
+  // its failure alert: the floating placement. It stays mounted while the
+  // reader enters or leaves older history, so ONE request attempt keeps ONE
+  // polite status node (D8: one polite status per request attempt). Handing
+  // the states over between the two placements inserted a SECOND status for
+  // the SAME attempt: the reader scrolling into history while a latest
+  // recovery was still loading.
+  const latestStatesHere = action !== 'latest' || floating
   const states = latestStatesHere && <>
     {request.error && <div key="history-read-error" role="group" aria-label={action === 'latest' ? 'Latest messages read' : 'History read'}>
       <ErrorState message={`${request.error}${request.status === 'error' && request.attempt > 1 ? ` Retry ${request.attempt} failed.` : ''}`} onRetry={run} retryDisabled={request.status === 'loading'} className="py-[var(--space-1)]" />
@@ -86,18 +97,25 @@ export function HistoryBoundary({ action, average = 80, placement = 'history' }:
       <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{loading[action]}</p>
     </>}
   </>
-  if (floating) return (
-    <div ref={ref} className="pointer-events-auto flex flex-col items-center gap-[var(--space-1)] rounded-[var(--radius-medium)] bg-[var(--color-surface-1)] p-[var(--space-1)] shadow-[var(--elevation-floating)]" onFocusCapture={event => { focused.current = event.target }} onBlurCapture={event => {
-      if (event.relatedTarget && !ref.current?.contains(event.relatedTarget)) focused.current = null
-    }} onClickCapture={event => {
-      if (request.status === 'loading') { event.preventDefault(); event.stopPropagation() }
-    }}>
-      {states}
-      <IconButton aria-label="Return to latest" variant="outline" aria-disabled={request.status === 'loading' || undefined} onClick={run}>
-        <ArrowDown size={16} aria-hidden="true" />
-      </IconButton>
-    </div>
-  )
+  if (floating) {
+    // The arrow belongs to the paused reader; the read's states belong to the
+    // request and stay put whether or not the reader is paused.
+    if (!reading && !request.error && request.status !== 'loading') return null
+    return (
+      <div ref={ref} className="pointer-events-auto flex flex-col items-center gap-[var(--space-1)] rounded-[var(--radius-medium)] bg-[var(--color-surface-1)] p-[var(--space-1)] shadow-[var(--elevation-floating)]" onFocusCapture={event => { focused.current = event.target }} onBlurCapture={event => {
+        if (event.relatedTarget && !ref.current?.contains(event.relatedTarget)) focused.current = null
+      }} onClickCapture={event => {
+        if (request.status === 'loading') { event.preventDefault(); event.stopPropagation() }
+      }}>
+        {states}
+        {reading && <IconButton aria-label="Return to latest" variant="outline" aria-disabled={request.status === 'loading' || undefined} onClick={run}>
+          <ArrowDown size={16} aria-hidden="true" />
+        </IconButton>}
+      </div>
+    )
+  }
+  const visible = action === 'older' ? history.hasEarlier : action === 'newer' ? history.hasLater : action === 'latest' ? unavailable : request.status !== 'idle'
+  if (!visible && !(latestStatesHere && (request.error || request.status === 'loading'))) return null
   return (
     <div ref={ref} className="flex flex-col items-center gap-[var(--space-2)] py-[var(--space-2)]" onFocusCapture={event => { focused.current = event.target }} onBlurCapture={event => {
       if (event.relatedTarget && !ref.current?.contains(event.relatedTarget)) focused.current = null
@@ -132,8 +150,7 @@ export function FloatingReturnToLatest() {
 }
 
 export function HistoryReaderStatus() {
-  const history = useChatStore(s => s.history)
-  const notice = useChatStore(s => s.historyNotice)
+  const { history, historyNotice: notice } = useConversationSource()
   return <>
     <HistoryBoundary action="refresh" />
     {history.requests.refresh.error && <p className="px-[var(--space-3)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Loaded messages may be out of date.</p>}

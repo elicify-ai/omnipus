@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "component": "AvatarStack",
+  "exports": ["AvatarStack", "AvatarStackItem", "AvatarStackProps"],
+  "category": "composite",
+  "source": "src/components/ui/avatar-stack.tsx",
+  "documentation": "docs/internal/design/components/avatar-stack.md",
+  "owner": "design-system",
+  "themes": ["dark"],
+  "variants": ["no-overflow", "overflow"],
+  "sizes": ["sm", "md"],
+  "states": ["default"],
+  "stories": [{
+    "file": "src/components/ui/avatar-stack.stories.tsx",
+    "exports": ["Default", "Two", "Three", "Ten", "Medium", "NarrowViewport"]
+  }],
+  "checks": [
+    { "id": "avatar-stack-unit", "kind": "unit", "file": "src/components/ui/avatar-stack.test.tsx", "test": "AvatarStack draws up to max avatars and a +N marker for the rest", "applicable": true },
+    { "id": "avatar-stack-interaction-not-applicable", "kind": "interaction", "applicable": false, "reason": "AvatarStack is presentational. The control that contains it (for example the Participants button) owns every interaction." },
+    { "id": "avatar-stack-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "AvatarStack [check:avatar-stack-axe] axe", "story": "Default", "applicable": true },
+    { "id": "avatar-stack-keyboard-not-applicable", "kind": "keyboard", "applicable": false, "reason": "The stack is not focusable and has no keyboard operation; the containing control owns focus." },
+    { "id": "avatar-stack-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "AvatarStack [check:avatar-stack-browser] browser", "story": "Default", "requiredTargets": [{ "selector": "[data-avatar-stack-overflow]", "text": "+1" }], "applicable": true },
+    { "id": "avatar-stack-pointer-not-applicable", "kind": "pointer", "applicable": false, "reason": "The stack is not a hit target; the containing control carries the touch-minimum target." },
+    { "id": "avatar-stack-reduced-motion-not-applicable", "kind": "reduced-motion", "applicable": false, "reason": "AvatarStack has no motion of its own." },
+    { "id": "avatar-stack-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "AvatarStack [check:avatar-stack-forced-colors] forced-colors", "story": "Default", "applicable": true },
+    { "id": "avatar-stack-root-size", "kind": "root-size", "file": "tests/design-system/browser.spec.ts", "test": "AvatarStack [check:avatar-stack-root-size] root-size", "story": "Default", "applicable": true },
+    { "id": "avatar-stack-zoom", "kind": "zoom", "file": "tests/design-system/browser.spec.ts", "test": "AvatarStack [check:avatar-stack-zoom] zoom", "story": "Default", "applicable": true },
+    { "id": "avatar-stack-reflow", "kind": "reflow", "file": "tests/design-system/browser.spec.ts", "test": "AvatarStack [check:avatar-stack-reflow] reflow", "story": "NarrowViewport", "applicable": true }
+  ]
+}

@@ -37,6 +37,9 @@ type fakeDeps struct {
 	audits    []AuditEvent
 	rate      int
 	body      int
+	// extraSessions are main-session ids this fixture accepts as chats of
+	// the workspace, besides the legacy "main-mia" id. Nil keeps the old behaviour.
+	extraSessions map[string]bool
 	// rewakes counts admissions of a delivery the member already had (the
 	// real AdmitRoomRequest writes nothing then and only wakes the member).
 	rewakes []string
@@ -138,10 +141,17 @@ func (f *fakeDeps) Audit(e AuditEvent) {
 	f.audits = append(f.audits, e)
 }
 
-func (f *fakeDeps) SessionInWorkspace(sessionID, _ string) bool { return sessionID == "main-mia" }
-func (f *fakeDeps) Limits() (int, int)                          { return f.rate, f.body }
-func (f *fakeDeps) AgentName(id string) (string, bool)          { n, ok := f.names[id]; return n, ok }
-func (f *fakeDeps) CancelApproval(string)                       {}
+func (f *fakeDeps) SessionInWorkspace(sessionID, _ string) bool {
+	if sessionID == "main-mia" {
+		return true
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.extraSessions[sessionID]
+}
+func (f *fakeDeps) Limits() (int, int)                 { return f.rate, f.body }
+func (f *fakeDeps) AgentName(id string) (string, bool) { n, ok := f.names[id]; return n, ok }
+func (f *fakeDeps) CancelApproval(string)              {}
 
 func (f *fakeDeps) admittedTo() []string {
 	f.mu.Lock()
@@ -542,11 +552,11 @@ func TestCommands_SteeringRefused(t *testing.T) {
 	miaMain, _ := session.MainSessionID("sales", "mia")
 	jimMain, _ := session.MainSessionID("sales", "jim")
 	err := f.post(room.Id, "x1", "/model gpt-x")
-	if StatusOf(err) != 422 || err.Error() != "Rooms don't steer agents — use Mia's or Jim's main chat: "+miaMain+", "+jimMain {
+	if StatusOf(err) != 422 || err.Error() != "Rooms don't steer agents - use Mia's or Jim's main chat: "+miaMain+", "+jimMain {
 		t.Fatalf("/model: %v", err)
 	}
 	err = f.post(room.Id, "x2", "/goal @Jim ship it")
-	if StatusOf(err) != 422 || err.Error() != "Rooms don't steer agents — use Jim's main chat: "+jimMain {
+	if StatusOf(err) != 422 || err.Error() != "Rooms don't steer agents - use Jim's main chat: "+jimMain {
 		t.Fatalf("/goal @Jim: %v", err)
 	}
 	if len(f.deps.admittedTo()) != 0 {
