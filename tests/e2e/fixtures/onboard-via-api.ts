@@ -148,7 +148,7 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
     if (res.status === 200) {
       if (seedFallback && fallbackKey) {
         const body = (parseJSON(res.text) ?? {}) as { token?: string };
-        await seedAgentFallback(opts.baseURL, body.token, fallbackKey);
+        await seedAgentFallback(opts.baseURL, body.token, fallbackKey, password);
       }
       return;
     }
@@ -206,15 +206,25 @@ async function seedAgentFallback(
   baseURL: string,
   token: string | undefined,
   fallbackKey: string,
+  password: string,
 ): Promise<void> {
   const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const providerPath = `/api/v1/providers/${encodeURIComponent(E2E_FALLBACK.provider)}`;
+  // Saving a provider key is a sensitive change: the server wants a re-auth consent token
+  // (POST /api/v1/auth/reauth, Spec-6 FR-12.2) in X-Reauth-Token, minted from the admin password.
+  const reauth = await send(baseURL, 'POST', '/api/v1/auth/reauth', { password }, headers);
+  const reauthToken = (parseJSON(reauth.text) as { token?: string } | undefined)?.token;
+  if (!reauth.ok || !reauthToken) {
+    throw new Error(
+      `onboard-via-api: POST /api/v1/auth/reauth returned ${reauth.status}: ${reauth.text}`,
+    );
+  }
   const put = await send(
     baseURL,
     'PUT',
     providerPath,
     { auth_method: 'api_key', api_key: fallbackKey, model: E2E_FALLBACK.model },
-    headers,
+    { ...headers, 'X-Reauth-Token': reauthToken },
   );
   if (!put.ok) {
     throw new Error(
