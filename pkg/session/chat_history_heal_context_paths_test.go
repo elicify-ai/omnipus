@@ -137,6 +137,7 @@ func healFixPinnedAliasReader(t *testing.T, root string) {
 // FIX-ROUND-1 row 5 / cr CR-3 / pta F1: client lifetime and internal rebuild
 // lifetime are separate. A later recoverable gap exposes any hidden hard latch.
 func TestChatHistoryHeal_ClientCancellationDoesNotLatchDetachedRebuild(t *testing.T) {
+	trace := &healFixCancellationTiming{started: time.Now()}
 	logs := selfHealCaptureLogs(t)
 	f := newSelfHealFixture(t)
 	canonical := partitionBytes(t, f.store, f.sid)
@@ -145,15 +146,23 @@ func TestChatHistoryHeal_ClientCancellationDoesNotLatchDetachedRebuild(t *testin
 	f.store.historyHealNow = func() time.Time { return now }
 	entered, release := make(chan context.Context, 1), make(chan struct{})
 	var block, free sync.Once
-	unblock := func() { free.Do(func() { close(release) }) }
+	unblock := func() {
+		free.Do(func() {
+			trace.mark("release", nil, nil)
+			close(release)
+		})
+	}
 	old := chatHistoryReadHook
 	chatHistoryReadHook = func(ctx context.Context, e chatHistoryReadEvent) error {
 		if e.SessionID == f.sid && e.Purpose == "suffix" && e.Phase == "record_opened" && e.Address != nil && e.Address.ByteOffset == 0 {
 			block.Do(func() {
+				trace.mark("barrier", nil, ctx)
 				entered <- ctx
 				select {
 				case <-release:
+					trace.mark("barrier_released", nil, ctx)
 				case <-ctx.Done():
+					trace.mark("barrier_context_done", nil, ctx)
 				}
 			})
 		}
@@ -163,42 +172,56 @@ func TestChatHistoryHeal_ClientCancellationDoesNotLatchDetachedRebuild(t *testin
 		return ctx.Err()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	trace.mark("request_created", ctx, nil)
 	done := make(chan healFixPageResult, 1)
 	joined := false
 	go func() {
 		page, err := f.store.ReadChatHistoryPage(ctx, f.sid, historyOptions(100))
+		trace.mark("worker_before_done_send", nil, nil)
 		done <- healFixPageResult{page, err}
 	}()
 	t.Cleanup(func() {
+		trace.mark("cleanup_begin", nil, nil)
 		cancel()
 		unblock()
 		if !joined {
 			select {
 			case <-done:
+				trace.mark("cleanup_join_received", nil, nil)
 			case <-time.After(10 * time.Second):
+				trace.mark("cleanup_join_watchdog", nil, nil)
 				t.Error("cancelled requesting page failed to join after builder release")
 			}
+		} else {
+			trace.mark("cleanup_join_already_received", nil, nil)
 		}
 		chatHistoryReadHook = old
+		trace.log(t)
 	})
 	var buildCtx context.Context
 	select {
 	case buildCtx = <-entered:
+		trace.mark("barrier_received", nil, buildCtx)
 	case result := <-done:
 		joined = true
+		trace.mark("request_returned_before_barrier", nil, nil)
 		t.Fatalf("request returned before the real full-build barrier: %v", result.err)
 	case <-time.After(10 * time.Second):
+		trace.mark("barrier_watchdog", nil, nil)
 		t.Fatal("real full builder never reached its cancellation barrier")
 	}
 	cancel()
+	trace.mark("client_cancelled", nil, nil)
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	assert.NoError(t, buildCtx.Err(), "client cancellation must not cancel the detached internal build")
 	unblock()
 	select {
 	case result := <-done:
 		joined = true
+		trace.mark("receive", nil, nil)
 		assert.ErrorIs(t, result.err, context.Canceled, "the abandoned page keeps normal request cancellation semantics")
 	case <-time.After(10 * time.Second):
+		trace.mark("watchdog", nil, nil)
 		t.Fatal("detached heal/request did not finish after the builder barrier released")
 	}
 	chatHistoryReadHook = old
