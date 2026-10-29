@@ -46,6 +46,22 @@ var ErrLadderFloor = errors.New("resize: ladder floor reached, image too large f
 // offloaded per the spec.
 const MinLongEdge = 256
 
+// patchEdgePx is the tile size of vision-patch accounting (issue #1435): a
+// provider counts ceil(width/32) * ceil(height/32) patches in an image, so a
+// ResizeLimits.MaxPatches cap is evaluated on this grid.
+const patchEdgePx = 32
+
+// PatchCount reports how many 32x32-pixel patches a width x height image
+// occupies under the OpenAI vision-patch formula ceil(w/32) * ceil(h/32)
+// (issue #1435; the incident image's 2560x15424 -> 80*482 = 38560 matched
+// the provider's rejection verbatim).
+func PatchCount(width, height int) int {
+	if width <= 0 || height <= 0 {
+		return 0
+	}
+	return ((width + patchEdgePx - 1) / patchEdgePx) * ((height + patchEdgePx - 1) / patchEdgePx)
+}
+
 // shrinkFactor is the FR-015 ladder step: 0.75× per shrink.
 const shrinkFactor = 0.75
 
@@ -74,8 +90,12 @@ type Result struct {
 // The budget shape is pkg/providers/catalog.ResizeLimits — the
 // canonical per-model resize budget. LongEdgePx is the long-edge
 // ceiling; MaxBytes (int64) is the byte ceiling after the PNG→JPEG
-// quality ladder. Both must be positive; non-positive values surface
-// as an error (no silent truncation, no implicit cap).
+// quality ladder; MaxPatches (issue #1435) is the ceiling on 32px
+// vision patches, ceil(w/32)*ceil(h/32). LongEdgePx and MaxBytes must
+// be positive; non-positive values surface as an error (no silent
+// truncation, no implicit cap). MaxPatches is optional: zero (or
+// negative) means the provider's patch accounting is unknown and only
+// the edge/byte ceilings apply — exactly the pre-#1435 behavior.
 //
 // Pure-Go: uses stdlib image/jpeg, image/png, and golang.org/x/image/draw.
 // No CGo.
@@ -100,6 +120,20 @@ func ResizeToFit(img image.Image, budget catalog.ResizeLimits) (Result, error) {
 		// (FR-014). The ladder cannot return an image whose long edge
 		// exceeds the budget — the budget is a hard ceiling on dimensions.
 		if longEdge > budget.LongEdgePx {
+			var floor bool
+			curW, curH, floor = shrinkOrFloor(curW, curH)
+			if floor {
+				return Result{}, ErrLadderFloor
+			}
+			continue
+		}
+
+		// Issue #1435: the same hard-ceiling treatment for the patch budget.
+		// A candidate whose 32px patch grid exceeds budget.MaxPatches is
+		// never encoded — the provider would reject it — so the ladder
+		// shrinks first, exactly as it does for the long edge. Zero
+		// MaxPatches keeps the unlimited (pre-#1435) behavior.
+		if budget.MaxPatches > 0 && PatchCount(curW, curH) > budget.MaxPatches {
 			var floor bool
 			curW, curH, floor = shrinkOrFloor(curW, curH)
 			if floor {

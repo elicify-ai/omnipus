@@ -55,6 +55,13 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 		if imageErr != nil {
 			return nil, imageErr
 		}
+		// Issue #1435 R1: ordinary inline image media (fresh tool results
+		// and history replays alike) must fit THIS candidate's budget at
+		// the actual send boundary — admission fitting used the tool
+		// round's selection, which can be looser than the candidate now
+		// being attempted. Request-local copy; canonical history bytes are
+		// untouched (the R1 send matrix pins that).
+		messagesForCall = fitOrdinaryImageMediaToBudget(messagesForCall, budget)
 		if rt.providerCallAttachCache != nil {
 			rt.providerCallAttachCache[attachKey] = messagesForCall
 		}

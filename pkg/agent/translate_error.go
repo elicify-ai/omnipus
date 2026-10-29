@@ -46,6 +46,17 @@ const (
 	// (model has vision, but the supplied format is not acceptable).
 	CodeMediaUnsupported LLMErrorCode = "media_unsupported"
 
+	// CodeMediaTooLarge (issue #1435): the provider rejected an IMAGE for
+	// its SIZE — OpenAI's "requires 38560 patches … exceeding the limit of
+	// 30000" 400, or an image-specific HTTP 413. This is its own cause,
+	// never media_unsupported: the model accepts the format, the payload is
+	// just too big, and Omnipus resizes automatically before sending. The
+	// media strip-retry must NOT fire for this code (a size failure strips
+	// the image and then mislabels the cause as unsupported-format); both
+	// TryMediaDowngrade trigger paths only fire for CodeMediaUnsupported /
+	// CodeUnknown, which this code deliberately is not.
+	CodeMediaTooLarge LLMErrorCode = "media_too_large"
+
 	// CodeProviderRejected: a genuine model refusal — the model declined to
 	// answer for a reason that is neither media, policy, size, nor auth.
 	//
@@ -475,6 +486,33 @@ func isImageRejectionMessage(body string) bool {
 	return false
 }
 
+// imageTooLargeSubstrings are the body substrings that identify a
+// provider rejection as an IMAGE-SIZE failure — the image was received
+// and understood, but exceeds the provider/model's size budget (issue
+// #1435). Match is case-insensitive. The patch phrase is OpenAI's
+// verbatim shape ("requires 38560 patches after processing, exceeding
+// the limit of 30000"); the "image … too large" pair covers generic
+// image-size rejections including HTTP 413 bodies. Deliberately NOT
+// matched by isImageRejectionMessage: a size failure classifies as
+// CodeMediaTooLarge, never as the unsupported-format advice.
+var imageTooLargeSubstrings = []string{
+	"patches after processing", // OpenAI/ChatGPT patch-limit rejection (verbatim shape)
+	"image is too large",       // generic image-size rejection (HTTP 413 shape)
+	"image too large",          // variant without the copula
+}
+
+// isImageTooLargeMessage reports whether body carries any pinned
+// image-size substring.
+func isImageTooLargeMessage(body string) bool {
+	lower := strings.ToLower(body)
+	for _, s := range imageTooLargeSubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // capabilityAbsenceSubstrings match the "model has no vision / no PDF
 // capability" family. These phrases are NOT errors — they are the model
 // telling the operator what it can do. Mapped to CodeMediaUnsupported
@@ -662,6 +700,13 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 	case status >= 500 && status <= 599:
 		return CodeNetwork
 	case status == 413:
+		// Issue #1435: a 413 whose body names an image is an image-size
+		// rejection, not a generic oversized request — the honest cause is
+		// the image, so classify it as CodeMediaTooLarge before the
+		// request-shape fallback can label it.
+		if isImageTooLargeMessage(body) {
+			return CodeMediaTooLarge
+		}
 		// 413 → request_too_large (NOT context_too_long). The model never
 		// weighed the conversation; the request payload itself is oversized,
 		// and WE assembled it — the copy for this code says so rather than
@@ -716,6 +761,14 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		if isPDFRejectionMessage(body) {
 			return CodeMediaUnsupported
 		}
+		// Issue #1435: an image-SIZE rejection is its own cause, checked
+		// before the format-rejection shapes. It must NOT fall through to
+		// CodeUnknown here — CodeUnknown is exactly what armed the outcome
+		// fallback that stripped the image and relabelled the size failure
+		// as media_unsupported in the incident.
+		if isImageTooLargeMessage(body) {
+			return CodeMediaTooLarge
+		}
 		if isImageRejectionMessage(body) {
 			return CodeMediaUnsupported
 		}
@@ -761,6 +814,12 @@ func classifyByMessage(body string) LLMErrorCode {
 	}
 	if isPDFRejectionMessage(body) {
 		return CodeMediaUnsupported
+	}
+	// Issue #1435: image-size rejections keep their own cause even when no
+	// HTTP status is available (classifyByProviderError routes status-0
+	// provider errors here).
+	if isImageTooLargeMessage(body) {
+		return CodeMediaTooLarge
 	}
 	if isImageRejectionMessage(body) {
 		return CodeMediaUnsupported
