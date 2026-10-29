@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { useChatStore } from './chat'
 import { reset, cleanup } from '../../tests/chat-history-paging/final-gate-harness'
-import { A, B, P, T, TURN, SID, assistantRows, begin, bucket, done, empty, liveTool, native, pos, prose, rest, segment, snapshotStart, token, tool } from '../../tests/chat-history-paging/s11-fold-harness'
+import { A, B, P, T, TURN, SID, assistantRows, begin, bucket, done, empty, liveTool, native, pos, prose, rest, segment, snapshotStart, socket, token, tool } from '../../tests/chat-history-paging/s11-fold-harness'
 
 beforeEach(() => { reset(); begin() })
 afterEach(cleanup)
@@ -16,9 +16,25 @@ for (const shape of ['tool-first', 'prose-first'] as const) {
     // a post-commit live token is a normal delta. These are deliberate legal
     // orders, not a claim to have collected an unavailable CI frame trace.
     if (arrival === 'token-before-complete') {
-      token(textID, 'Answer.', { replace: true })
-      expect(assistantRows(), 'B88: exactly one row during the pre-completion projection; earliest A may already be progressively known').toHaveLength(1)
-      commit()
+      // The real transport holds the attach response until its boundary. See
+      // the token's actual reducer transition after that ordered batch is
+      // released, not an empty bucket while the input is still undelivered.
+      const priorCursor = bucket().cursor?.seq
+      const projectedRows: string[][] = []
+      const unsubscribe = useChatStore.subscribe(state => {
+        const current = state.sessionsById[SID]
+        if (current && current.cursor?.seq === priorCursor && Object.values(current.messagesById).some(row => row.content.includes('Answer.'))) {
+          projectedRows.push(assistantRows().map(row => row.id))
+        }
+      })
+      const deliveredBefore = socket().frames.length
+      try { token(textID, 'Answer.', { replace: true }); commit() } finally { unsubscribe() }
+      const delivered = socket().frames.slice(deliveredBefore)
+      const tokenIndex = delivered.findIndex(frame => frame.type === 'token')
+      expect(tokenIndex, 'instrument: the real transport actually delivered the projected token').toBeGreaterThanOrEqual(0)
+      expect(delivered.findIndex(frame => frame.type === 'catch_up_complete'), 'instrument: the projected token reached the reducer before the actual completion').toBeGreaterThan(tokenIndex)
+      expect(projectedRows.length, 'instrument: observed the actual pre-commit token transition').toBeGreaterThan(0)
+      for (const ids of projectedRows) expect(ids, 'B88: exactly one row during the delivered pre-completion projection').toHaveLength(1)
     } else {
       commit()
       expect(assistantRows().map(row => row.id), 'tool-first uses a provisional key until the first text arrives').toEqual([shape === 'tool-first' ? T : A])

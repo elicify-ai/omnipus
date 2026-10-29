@@ -5,7 +5,7 @@ import type { Message } from '@/lib/api/generated/openapi-types'
 import { useChatStore } from './chat'
 import { reset, cleanup, response } from '../../tests/chat-history-paging/final-gate-harness'
 import { page } from '../../tests/chat-history-paging/fixtures'
-import { A, B, P, T, SID, assistantRows, begin, bucket, native, pos, prose, rest, token, tool } from '../../tests/chat-history-paging/s11-fold-harness'
+import { A, B, P, SID, assistantRows, begin, bucket, native, pos, prose, rest, token, tool } from '../../tests/chat-history-paging/s11-fold-harness'
 
 beforeEach(() => { reset(); begin() })
 afterEach(cleanup)

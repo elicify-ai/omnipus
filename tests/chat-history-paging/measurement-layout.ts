@@ -76,7 +76,7 @@ export function installHistoryLayout({ virtual = false, hidden = false, innerPar
         const parts = partsFor(row)
         const prefix = parts.slice(0, parts.indexOf(part)).reduce((sum, prior) => sum + partHeight(prior), 0)
         const paragraph = element.matches('p') ? element : element.closest<HTMLElement>('p')
-        const paragraphs = [...part.querySelectorAll('p')]
+        const paragraphs = [...part.querySelectorAll<HTMLElement>('p')]
         const paragraphOffset = paragraph ? Math.max(0, paragraphs.indexOf(paragraph)) * state.paragraphHeight : 0
         const tool = element.closest<HTMLElement>('[data-history-tool-row]')
         const toolOffset = tool ? state.partHeights.get(part.dataset.historyPart ?? '') ?? state.rowHeight : 0
