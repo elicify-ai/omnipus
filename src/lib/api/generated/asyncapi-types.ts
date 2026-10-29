@@ -33,6 +33,7 @@ export type WsFrameType =
   | "replay_provider_fallback"
   | "rate_limit"
   | "provider_retry"
+  | "provider_status"
   | "context_window_notice"
   | "provider_fallback"
   | "media"
@@ -672,6 +673,18 @@ export interface ProviderRetryFrame {
   attempt: number;
   max_attempts: number;
   error_code: string;
+  seq?: number;
+}
+
+export interface ProviderStatusFrame {
+  type: "provider_status";
+  session_id: string;
+  turn_id: string;
+  state: "waiting" | "responding" | "recovered";
+  sent_at: string;
+  silent_since?: string;
+  stall_at?: string;
+  retries?: number;
   seq?: number;
 }
 
@@ -1495,6 +1508,7 @@ export type WsFrame =
   | ToolResultProjectionFrame
   | RateLimitFrame
   | ProviderRetryFrame
+  | ProviderStatusFrame
   | ContextWindowNoticeFrame
   | ProviderFallbackFrame
   | ProviderFallbackNote
@@ -1607,6 +1621,7 @@ export type ServerFrame =
   | ToolResultProjectionFrame
   | RateLimitFrame
   | ProviderRetryFrame
+  | ProviderStatusFrame
   | ContextWindowNoticeFrame
   | ProviderFallbackFrame
   | ProviderFallbackNote
