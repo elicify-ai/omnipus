@@ -5,6 +5,9 @@ import { useChatStore } from '@/store/chat'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { cn } from '@/lib/utils'
+import { parseChatLink, type ChatLinkTarget } from '@/lib/chatLinks'
+import { useChatLinkWorkspace } from '@/store/chatView'
+import { ChatLibraryLink } from '../ChatLibraryLink'
 
 interface WriteFileArgs {
   path?: string
@@ -74,6 +77,7 @@ function FileOpBlock({
   isError,
   isCancelled,
   isRefusal,
+  libraryTarget,
 }: {
   label: string
   path: string
@@ -83,6 +87,8 @@ function FileOpBlock({
   isError?: boolean
   isCancelled?: boolean
   isRefusal?: boolean
+  /** Where the written file lives in the Library — set only for a finished, successful write (follow-up 2). */
+  libraryTarget?: ChatLinkTarget | null
 }) {
   // A precondition refusal gets its own label, matching GenericToolCall (the
   // REPLAY renderer for this same tool). Without this the identical event read
@@ -126,7 +132,9 @@ function FileOpBlock({
       {statusConfig.indicator}
       <span className="text-[var(--color-muted)] shrink-0">{label}</span>
       <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
-        {basename(path)}
+        {libraryTarget
+          ? <ChatLibraryLink target={libraryTarget}>{basename(path)}</ChatLibraryLink>
+          : basename(path)}
       </span>
       {detail && !isRunning && (
         <span className="text-[var(--color-muted)] shrink-0">{detail}</span>
@@ -200,6 +208,13 @@ function FileOpRow({
   // the hook for `reason` (storeCall?.error), which has no equivalent on
   // that boolean, so there is no simplification to gain by reading both.
   const isError = !isCancelled && storeCall?.status === 'error'
+  // Follow-up 2: a successful write's file name becomes the same Library link
+  // a chat reply would render (same opener, same leave gate, chat-only rules).
+  const chatWorkspaceId = useChatLinkWorkspace()
+  const succeeded = !isRunning && !isError && !isCancelled && !isRefusal
+  const libraryTarget = succeeded
+    ? writtenFileLibraryTarget(storeCall?.result ?? result, path, chatWorkspaceId)
+    : null
 
   // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
   // hides this row when shouldRenderToolCall says so, unless verbose chat is
@@ -223,8 +238,28 @@ function FileOpRow({
       isError={isError}
       isCancelled={isCancelled}
       isRefusal={isRefusal}
+      libraryTarget={libraryTarget}
     />
   )
+}
+
+const LINK_LINE_RE = /^link: (omnipus:\/\/file\/\S+)$/m
+
+/**
+ * The Library location of a written file, or null. Preferred source: the
+ * tool result's `link:` line, which the server's resolver produces on web
+ * chat for Library files only (FR-011) and which covers absolute paths and
+ * mounts. Otherwise the written path itself, read as a bare chat link against
+ * the chat's own workspace (the Bare-link rule: relative, file-like, strict
+ * path check; never in Omnipus's chat or a chat without a workspace).
+ */
+function writtenFileLibraryTarget(result: unknown, path: string, chatWorkspaceId: string | null): ChatLinkTarget | null {
+  if (typeof result === 'string') {
+    const line = LINK_LINE_RE.exec(result)
+    const fromServer = line ? parseChatLink(line[1], null) : null
+    if (fromServer) return fromServer
+  }
+  return parseChatLink(path, chatWorkspaceId)
 }
 
 function makeWriteFileUI(toolName: string) {
