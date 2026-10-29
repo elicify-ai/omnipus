@@ -30,21 +30,19 @@ export interface RoomSendBridge { // not-wire-format: in-browser hand-off betwee
   onAccepted: () => void
 }
 
-const NO_MESSAGES: never[] = []
-const convertMessage = (): ThreadMessageLike => ({ role: 'user', content: [] })
+const NO_MESSAGES: ThreadMessageLike[] = []
 
 export function useRoomRuntime(send: RoomSend, workspaceId: () => string | undefined, bridge: { current: RoomSendBridge | null }) {
   const runtimeRef = useRef<ReturnType<typeof useExternalStoreRuntime> | null>(null)
   const adapter = useMemo(
     () => createRoomAttachmentAdapter(workspaceId, () => runtimeRef.current?.thread.composer.getState().attachments.length ?? 0),
     // The workspace getter reads the current record each time.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   )
-  const runtime = useExternalStoreRuntime({
+  const runtime = useExternalStoreRuntime<ThreadMessageLike>({
     messages: NO_MESSAGES,
     isRunning: false,
-    convertMessage,
+    convertMessage: (message: ThreadMessageLike) => message,
     adapters: { attachments: adapter },
     onNew: async (message: AppendMessage) => {
       const text = message.content

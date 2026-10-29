@@ -79,7 +79,7 @@ export function createRoomAttachmentAdapter(workspaceId: () => string | undefine
         yield { ...pending, status: { type: 'requires-action', reason: 'composer-send' } }
       } catch (error) {
         // US-3 AS 3.3 / S-22: the error stays ON the chip; nothing falls back to a session.
-        yield { ...pending, status: { type: 'incomplete', reason: 'error', message: getErrorMessage(error) } }
+        yield { ...pending, status: { type: 'incomplete', reason: 'error', message: getErrorMessage(error, 'the upload failed') } }
       }
     },
     async send(attachment): Promise<CompleteAttachment> {

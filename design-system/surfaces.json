@@ -8086,6 +8086,14 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/ChatHeaderSlot.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useOpenReveal.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/conversationSource.ts",
       "lane": 3
     },

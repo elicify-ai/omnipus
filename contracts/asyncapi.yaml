@@ -2292,15 +2292,15 @@ components:
           $ref: '#/components/schemas/RoomEntryAuthor'
         text:
           type: string
-          maxLength: 65536
+          maxLength: 5242880
           description: >
-            The message text. One group message size limit applies to a person's
-            message and to an agent's answer (#1449 D24, D27): at most 65,536 UTF-8
-            bytes (counted in bytes, not characters); an operator can lower this
-            limit with session_messaging.steer_body, never raise it. maxLength
-            states the same 65,536 maximum; the server counts the limit in UTF-8
-            bytes, which is never less than the character count. May be empty
-            when the entry carries attachments.
+            The message text. New messages and agent answers are refused above
+            the group message limit (#1449 D24, D27: at most 65,536 UTF-8 bytes,
+            lowered by session_messaging.steer_body), stated on
+            RoomMessageRequest.text. A stored entry keeps this wider maximum
+            (TD-8): an entry written under an earlier, larger operator setting
+            still opens and shows in full (S-152). May be empty when the entry
+            carries attachments.
         attachments:
           type: array
           maxItems: 16
