@@ -7,44 +7,57 @@ package rooms
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 // Contract oracles from docs/internal/specs/1449-group-chat-spec.md
-// "Contract Changes" and T-55. Both copies of a room schema must state the
-// same 65,536-byte maximum. These read the YAML; they do not execute a handler.
+// "Contract Changes", T-55 and TD-8. RoomMessageRequest.text is 65,536.
+// RoomEntry.text keeps the 5,242,880 read bound and has no 65,536 maximum.
+// These read the YAML; they do not execute a handler.
 
 func TestGroupChat1449_ContractStatesTheClampedTextLimit(t *testing.T) {
 	root := groupChatRepoRoot(t)
 	request := groupChatRead(t, filepath.Join(root, "contracts/components/schemas/RoomMessageRequest.yaml"))
 	entry := groupChatRead(t, filepath.Join(root, "contracts/components/schemas/RoomEntry.yaml"))
-	async := groupChatSchemaSection(t, filepath.Join(root, "contracts/asyncapi.yaml"), "RoomEntry:")
+	asyncEntry := groupChatSchemaSection(t, filepath.Join(root, "contracts/asyncapi.yaml"), "RoomEntry:")
+	ref := groupChatSchemaSection(t, filepath.Join(root, "contracts/openapi.yaml"), "RoomMessageRequest:")
+	if !strings.Contains(ref, "./components/schemas/RoomMessageRequest.yaml") {
+		t.Fatalf("openapi RoomMessageRequest is not the component schema: %s", ref)
+	}
 
 	for _, src := range []struct{ name, body string }{
 		{"RoomMessageRequest.yaml", request},
-		{"RoomEntry.yaml", entry},
-		{"asyncapi RoomEntry", async},
 	} {
-		if !strings.Contains(src.body, "maxLength: 65536") {
-			t.Errorf("%s: text maxLength is not 65536 (D24, D27, T-55). Current schema still states a different maximum.", src.name)
-		}
-		if strings.Contains(src.body, "maxLength: 5242880") {
-			t.Errorf("%s: still states maxLength 5242880; the spec replaces that with 65,536 UTF-8 bytes", src.name)
+		if got := groupChatFieldMaxLength(t, src.body, "text:"); got != MaxGroupMessageBytes {
+			t.Errorf("%s text maxLength = %d, want %d (T-55, the server clamp)", src.name, got, MaxGroupMessageBytes)
 		}
 	}
-	textProp := groupChatProperty(request, "text:")
+	for _, src := range []struct{ name, body string }{
+		{"RoomEntry.yaml", entry},
+		{"asyncapi RoomEntry", asyncEntry},
+	} {
+		got := groupChatFieldMaxLength(t, src.body, "text:")
+		if got != 5242880 {
+			t.Errorf("%s text maxLength = %d, want 5242880 (TD-8 read bound)", src.name, got)
+		}
+		if got == 65536 {
+			t.Errorf("%s puts the 65536 write limit on stored entries (TD-8)", src.name)
+		}
+	}
+	textProp := groupChatFieldBlock(request, "text:")
 	if textProp == "" {
 		t.Fatal("RoomMessageRequest.yaml has no text property to check against S-21")
 	}
 	if strings.Contains(textProp, "minLength: 1") {
 		t.Error("RoomMessageRequest.text must be minLength 0 so an attachment-only message is not a schema rejection (S-21)")
 	}
-	media := groupChatProperty(request, "media:")
+	media := groupChatFieldBlock(request, "media:")
 	if !strings.Contains(media, "maxItems: 16") {
 		t.Error("RoomMessageRequest.media must be an array with maxItems 16 (US-3, S-24)")
 	}
-	attachments := groupChatProperty(entry, "attachments:")
+	attachments := groupChatFieldBlock(entry, "attachments:")
 	if !strings.Contains(attachments, "maxItems: 16") {
 		t.Error("RoomEntry.attachments must be an array of MediaPart with maxItems 16 (contract table)")
 	}
@@ -118,18 +131,19 @@ func groupChatRead(t *testing.T, path string) string {
 	return string(body)
 }
 
-// groupChatSchemaSection returns the asyncapi component that starts at marker
-// (for example "RoomEntry:") through the next sibling key at the same indent.
+// groupChatSchemaSection returns the component whose key is exactly marker
+// (for example "RoomEntry:"), not a key that merely contains that text.
+// "receiveRoomEntry:" must not be read as "RoomEntry:".
 func groupChatSchemaSection(t *testing.T, path, marker string) string {
 	t.Helper()
 	body := groupChatRead(t, path)
-	start := strings.Index(body, marker)
+	needle := "\n    " + marker
+	start := strings.Index(body, needle)
 	if start < 0 {
 		t.Fatalf("%s has no %s section", path, marker)
 	}
-	rest := body[start+len(marker):]
-	// The next components.schemas key is a line of four spaces, an identifier
-	// and a colon. Nested properties are indented further.
+	start++ // keep the indented key, drop the preceding newline
+	rest := body[start+len("    "+marker):]
 	searchFrom := 0
 	for {
 		i := strings.Index(rest[searchFrom:], "\n    ")
@@ -142,14 +156,9 @@ func groupChatSchemaSection(t *testing.T, path, marker string) string {
 			lineEnd = len(rest) - (i + 1)
 		}
 		line := rest[i+1 : i+1+lineEnd]
-		if strings.HasSuffix(strings.TrimRight(line, " "), ":") && !strings.Contains(line, " ") {
-			// "    RoomEntryFrame:" has a space before the colon name... the
-			// line includes the indent. Treat a line of four spaces plus an
-			// identifier and a colon as the next schema.
-			trimmed := strings.TrimSpace(line)
-			if strings.HasSuffix(trimmed, ":") && !strings.Contains(trimmed, " ") && trimmed != ":" {
-				return body[start : start+len(marker)+i]
-			}
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "     ") && strings.HasSuffix(trimmed, ":") && !strings.Contains(trimmed, " ") {
+			return body[start : start+len("    "+marker)+i]
 		}
 		searchFrom = i + 1
 		if searchFrom >= len(rest) {
@@ -158,36 +167,50 @@ func groupChatSchemaSection(t *testing.T, path, marker string) string {
 	}
 }
 
-func groupChatProperty(body, key string) string {
-	i := strings.Index(body, "\n  "+key)
-	if i < 0 {
-		i = strings.Index(body, "\n    "+key)
-	}
-	if i < 0 {
-		return ""
-	}
-	rest := body[i+1:]
-	// Next property at the same indent, or end.
-	nl := strings.Index(rest, "\n")
-	if nl < 0 {
-		return rest
-	}
-	indent := rest[:nl]
-	pad := indent[:len(indent)-len(strings.TrimLeft(indent, " "))]
-	// A following property starts a line with the same indent and no extra indent.
-	from := nl + 1
-	for from < len(rest) {
-		lineEnd := strings.Index(rest[from:], "\n")
-		if lineEnd < 0 {
-			return rest
+// groupChatFieldBlock is the YAML of one property, at whatever indent it uses.
+func groupChatFieldBlock(body, field string) string {
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != field {
+			continue
 		}
-		line := rest[from : from+lineEnd]
-		if strings.HasPrefix(line, pad) && !strings.HasPrefix(line, pad+" ") && strings.Contains(line, ":") {
-			return rest[:from]
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		var block []string
+		block = append(block, line)
+		for _, next := range lines[i+1:] {
+			if strings.TrimSpace(next) == "" {
+				block = append(block, next)
+				continue
+			}
+			nextIndent := len(next) - len(strings.TrimLeft(next, " "))
+			if nextIndent <= indent {
+				break
+			}
+			block = append(block, next)
 		}
-		from += lineEnd + 1
+		return strings.Join(block, "\n")
 	}
-	return rest
+	return ""
+}
+
+func groupChatFieldMaxLength(t *testing.T, body, field string) int {
+	t.Helper()
+	block := groupChatFieldBlock(body, field)
+	if block == "" {
+		t.Fatalf("no %s property", field)
+	}
+	for _, line := range strings.Split(block, "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "maxLength:") {
+			n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(trim, "maxLength:")))
+			if err != nil {
+				t.Fatalf("%s maxLength: %v", field, err)
+			}
+			return n
+		}
+	}
+	t.Fatalf("%s has no maxLength", field)
+	return 0
 }
 
 func groupChatOperation(t *testing.T, openapi, marker string) string {

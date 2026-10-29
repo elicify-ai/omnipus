@@ -141,7 +141,16 @@ func TestAnswerRequest_SchemaIsMinimalAndExact(t *testing.T) {
 	if !ok {
 		t.Fatalf("properties is %T, want map[string]any", tool.Parameters()["properties"])
 	}
-	if len(props) != 2 || props["request_id"] == nil || props["text"] == nil {
-		t.Fatalf("properties = %v, want exactly request_id and text", props)
+	// #1449 FR-020: media is the third parameter. request_id and text stay required.
+	if len(props) != 3 || props["request_id"] == nil || props["text"] == nil || props["media"] == nil {
+		t.Fatalf("properties = %v, want exactly request_id, text and media", props)
+	}
+	media, _ := props["media"].(map[string]any)
+	if media["type"] != "array" || media["maxItems"] != 16 {
+		t.Fatalf("media = %v, want an array of at most 16 (TD-3)", props["media"])
+	}
+	required, _ := tool.Parameters()["required"].([]string)
+	if len(required) != 2 || required[0] != "request_id" || required[1] != "text" {
+		t.Fatalf("required = %v, want request_id and text (media stays optional)", required)
 	}
 }

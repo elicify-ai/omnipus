@@ -33,21 +33,45 @@ run_step() {
   fi
 }
 
-run_step rooms-red 8m \
-  env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 6m \
+run_step rooms-red 15m \
+  env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 12m \
   -run '^TestGroupChat1449_' ./pkg/rooms/
+
+run_step rooms-steer-red 8m \
+  env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 6m \
+  -run '^TestCommands_SteeringRefused$' ./pkg/rooms/
 
 run_step tools-red 10m \
   env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 8m \
   -run '^TestGroupChat1449_' ./pkg/tools/
 
-run_step agent-origin-red 20m \
-  env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 15m \
-  -run '^TestGroupChat1449_RoomOriginOnlyWhenTheStepAnswersThatGroupAlone$' ./pkg/agent/
+run_step tools-answer-schema-red 8m \
+  env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 6m \
+  -run '^TestAnswerRequest_SchemaIsMinimalAndExact$' ./pkg/tools/
+
+run_step agent-origin-red 25m \
+  env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 20m \
+  -run '^TestGroupChat1449_' ./pkg/agent/
 
 run_step gateway-http-red 20m \
   env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 15m \
   -run '^TestGroupChat1449_HTTPMessageRules$' ./pkg/gateway/
+
+run_step gateway-steer-red 12m \
+  env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 8m \
+  -run '^TestWU15Rooms_SteeringAndMembershipCommandsRefuseWithMainLinks$' ./pkg/gateway/
+
+run_step gateway-upload-red 12m \
+  env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 8m \
+  -run '^TestUpload_WorkspaceLibraryLoadFailure_Returns503NotSilentFallback$' ./pkg/gateway/
+
+run_step gateway-joined-origin-red 15m \
+  env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 12m \
+  -run '^TestTrain3Fix1_HeldGroupRequestJoiningAWebTurnDropsTheGroupReference$' ./pkg/gateway/
+
+run_step generated-stored-entry-red 8m \
+  env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -timeout 6m \
+  -run '^TestGroupChat1449_' ./pkg/api/generated/
 
 run_step vitest-display 8m \
   npx vitest run src/components/rooms/groupchat1449.display.test.tsx
@@ -66,6 +90,9 @@ run_step vitest-history 8m \
 
 run_step vitest-library 8m \
   npx vitest run src/components/library/groupchat1449.delete-confirm.test.tsx
+
+run_step vitest-header-slot 8m \
+  npx vitest run src/components/chat/ChatHeaderSlot.test.tsx
 
 # Typecheck once per clean tree. A dirty tree is not cached.
 if [[ -z "$(git status --porcelain)" ]]; then

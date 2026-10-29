@@ -14,8 +14,9 @@
  *     only, never Omnipus's chat, never a helper/task chat — and stays
  *     hidden while the workspace entry is still being resolved (a switch
  *     keeps the PREVIOUS workspace's session until the new one lands);
- *   - a ROOM page shows no chat chrome at all: the room owns its own
- *     controls until the group Participants button lands;
+ *   - a ROOM page shows the Participants button once the room loads
+ *     (S-98): one control, no Add participant, no feed-kind label, and
+ *     no border or background on the slot;
  *   - the old bar's replacement carries no border and no background, and the
  *     honest "agent names unavailable" warning is never clipped away with
  *     the truncating identity;
@@ -30,8 +31,10 @@ import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchAgents, fetchSessions, fetchWorkspaces } from '@/lib/api'
 import type { Agent, Session } from '@/lib/api'
+import type { Room } from '@/lib/api/generated/openapi-types'
 
 const selectSession = vi.hoisted(() => vi.fn())
+const fetchRoom = vi.hoisted(() => vi.fn())
 vi.mock('./useSelectSession', () => ({ useSelectSession: () => selectSession }))
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -43,6 +46,11 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 // The slot reads the ROUTE to decide whether the chat on screen is this
 // workspace's session chat. Only the location primitive is needed here.
 let mockPathname = '/workspaces/ws_slot_test/chat'
+vi.mock('@/lib/api/rooms', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/rooms')>()
+  return { ...actual, fetchRoom }
+})
+
 vi.mock('@tanstack/react-router', () => ({
   useLocation: () => ({ pathname: mockPathname, search: {} }),
   useNavigate: () => vi.fn(),
@@ -110,6 +118,7 @@ beforeEach(() => {
   vi.mocked(fetchAgents).mockReset().mockResolvedValue([mia])
   vi.mocked(fetchWorkspaces).mockReset().mockResolvedValue([])
   vi.mocked(fetchSessions).mockReset().mockResolvedValue([])
+  fetchRoom.mockReset()
 })
 
 describe('ChatHeaderSlot — the chat controls in the header line', () => {
@@ -265,16 +274,50 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
     expect(trigger.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('a ROOM page shows no chat chrome: no label, no Add participant', async () => {
+  it('a room page shows the Participants button once the room loads', async () => {
+    // S-98. The remembered main chat must not keep its label or Add participant.
+    // The button is hidden until the room record arrives, then it names the count.
     mockPathname = `/workspaces/${WORKSPACE_ID}/rooms/room-1`
     setMainChat()
+    if (typeof window.matchMedia !== 'function') {
+      window.matchMedia = (query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+        onchange: null,
+      }) as MediaQueryList
+    }
+    let resolveRoom: (room: Room) => void = () => {}
+    fetchRoom.mockReturnValue(new Promise<Room>((resolve) => {
+      resolveRoom = resolve
+    }))
     renderSlot()
-    // The slot region exists (the group Participants button plugs in here
-    // later) but carries nothing of the PREVIOUS main chat.
-    expect(screen.getByTestId('chat-header-slot')).toBeInTheDocument()
-    expect(screen.getByTestId('chat-header-slot').textContent).toBe('')
-    expect(screen.queryByTestId('feed-kind-label')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Participants/ })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull()
+    expect(screen.queryByTestId('feed-kind-label')).toBeNull()
+    resolveRoom({
+      id: 'room-1',
+      workspace_id: WORKSPACE_ID,
+      kind: 'squad',
+      name: 'Launch',
+      members: ['mia', 'jim'],
+      muted: [],
+      paused: false,
+      generation: 1,
+      allocated_cost_micro_usd: 0,
+      allocated_cost_unpriced: false,
+      hidden: false,
+    } as Room)
+    const button = await screen.findByRole('button', { name: 'Participants, 2 members' })
+    expect(button).toBeVisible()
+    expect(screen.getByTestId('chat-header-slot').contains(button)).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull()
+    expect(screen.queryByTestId('feed-kind-label')).toBeNull()
+    const slot = screen.getByTestId('chat-header-slot')
+    expect(slot.className).not.toMatch(/\bborder\b/)
+    expect(slot.className).not.toMatch(/\bbg-/)
   })
 
   it('hides "Add participant" while the workspace entry is still being resolved', () => {
