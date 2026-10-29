@@ -64,7 +64,8 @@ func TestChatHistoryRebuild_MatchesLiveProjectionForEveryEffect(t *testing.T) {
 	_, err = s.RetractToolCallEffects(sid, []ArchiveAddress{emptied})
 	require.NoError(t, err)
 
-	public := []ArchiveAddress{owner}
+	public := make([]ArchiveAddress, 0, 6)
+	public = append(public, owner)
 	for _, e := range []TranscriptEntry{
 		{ID: "discarded", Role: "user", Content: "not delivered", ClientMessageID: "client-u"},
 		{ID: "answer", Role: "assistant", Content: "partial", TurnID: "T2"},
@@ -147,9 +148,11 @@ func requireSixEffectEntries(t *testing.T, entries []TranscriptEntry) {
 
 	discarded := entries[1].InputDisposition
 	require.NotNil(t, discarded, "discarded input")
+	// Literals, not production constants. Message.yaml input_disposition enums
+	// fix state "discarded" and reason "stopped_before_delivery" (D-P1).
 	require.Equal(t, InputDisposition{
 		MessageID: "discarded", ClientMessageID: "client-u",
-		State: InputStateDiscarded, Reason: InputReasonStoppedBeforeDelivery,
+		State: "discarded", Reason: "stopped_before_delivery",
 	}, *discarded)
 	require.Nil(t, entries[0].InputDisposition, "a settled tool call is not a discarded input")
 	require.Nil(t, entries[4].InputDisposition, "the older duplicate is not discarded")
