@@ -4,6 +4,8 @@
 import { afterEach, expect, it } from 'vitest'
 import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { createHashHistory } from '@tanstack/react-router'
+import { MAIN_PATH } from '../../../tests/l1-room-ui/stage1-harness'
 import { useChatStore } from '@/store/chat'
 import { deferred } from '../../../tests/chat-history-paging/fixtures'
 import { stopHistory } from '../../../tests/chat-history-paging/application'
@@ -11,7 +13,18 @@ import { FULL_SOURCE, FULL_TEXT, MAIN_ID, MARKER, TOOL_ID, fullPath, fullReads, 
 
 let app: PreviewApp | undefined
 const releases: (() => void)[] = []
-afterEach(async () => { releases.splice(0).forEach(release => release()); await stopHistory(app); app = undefined })
+let restoreOwnedHashHistory: (() => void) | undefined
+afterEach(async () => {
+  try {
+    releases.splice(0).forEach(release => release())
+    await stopHistory(app)
+  } finally {
+    app = undefined
+    const restore = restoreOwnedHashHistory
+    restoreOwnedHashHistory = undefined
+    restore?.()
+  }
+})
 
 it('T66: opening two tool disclosures for one occurrence coalesces one full read and never stores full content', async () => {
   const two = toolSource()
@@ -61,22 +74,40 @@ for (const failure of ['network', 'timeout', '500', 'malformed JSON', 'schema in
 it.each([404, 410] as const)('T66: permanent HTTP%i keeps preview without Retry or a request loop', async status => {
   app = await openPreviewApp()
   app.network.respond('GET', fullPath(), () => json({ error: status === 410 ? 'history entry expired' : 'history position not found' }, status))
+  const expectPermanentOutcome = async () => {
+    // Sidebar attention has its own unrelated Retry. Inspect the actual tool
+    // occurrence, and reject a detached/stale wrapper before a negative query.
+    const row = document.querySelector<HTMLElement>(`[data-history-tool-row="${TOOL_ID}"]`)
+    expect(row, 'permanent outcome belongs to the connected target tool row').toBeInTheDocument()
+    await within(row!).findByText(status === 410 ? /expired/i : /no longer available/i)
+    expect(row, 'no-Retry check cannot inspect a detached row').toBeInTheDocument()
+    expect(within(row!).queryByRole('button', { name: /^Retry$/ })).not.toBeInTheDocument()
+  }
   const user = userEvent.setup()
   await user.click(previewToggle())
   await waitFor(() => expect(fullReads(app!)).toHaveLength(1))
-  await screen.findByText(status === 410 ? /expired/i : /no longer available/i)
+  await expectPermanentOutcome()
   expect(document.body.textContent).toContain(MARKER.preview)
-  expect(screen.queryByRole('button', { name: /^Retry$/ })).not.toBeInTheDocument()
   await user.click(previewToggle()); await user.click(previewToggle())
-  await screen.findByText(status === 410 ? /expired/i : /no longer available/i)
-  expect(screen.queryByRole('button', { name: /^Retry$/ })).not.toBeInTheDocument()
+  await expectPermanentOutcome()
   // Two explicit openings permit at most two user-initiated reads. The spec
   // does not require caching a permanent error; it forbids autonomous loops.
   expect(fullReads(app).length).toBeLessThanOrEqual(2)
 })
 
 it('T66: HTTP401 invokes existing sign-in handling without silent retries', async () => {
-  app = await openPreviewApp()
+  const previousURL = window.location.href
+  const previousState = window.history.state
+  let history: ReturnType<typeof createHashHistory> | undefined
+  restoreOwnedHashHistory = () => {
+    try { history?.destroy() }
+    finally { window.history.replaceState(previousState, '', previousURL) }
+  }
+  // Production forceLogout redirects through window.location.hash. Only this
+  // fixture opts into the same real history; it never redirects on auth's behalf.
+  window.history.replaceState({}, '', `/#${MAIN_PATH}`)
+  history = createHashHistory()
+  app = await openPreviewApp(undefined, { history })
   app.network.respond('GET', fullPath(), () => json({ error: 'unauthorized' }, 401))
   app.network.respond('GET', '/api/v1/auth/validate', () => json({ error: 'unauthorized' }, 401))
   await userEvent.setup().click(previewToggle())

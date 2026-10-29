@@ -1,6 +1,7 @@
 // REAL full application route tree, ChatScreen, AssistantUI runtime, generated
 // adapter and stores. HTTP/WebSocket are the ONLY application doubles.
 import { act, screen, waitFor } from '@testing-library/react'
+import type { RouterHistory } from '@tanstack/react-router'
 import { expect, vi } from 'vitest'
 import type { Message, SessionHistoryResponse } from '@/lib/api/generated/openapi-types'
 import type { ServerFrame } from '@/lib/api/generated/asyncapi-types'
@@ -20,7 +21,7 @@ export const WELCOME_HEADING = { level: 1, name: /^Welcome to\b/ } as const
 const originalClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
 const originalRect = HTMLElement.prototype.getBoundingClientRect
 
-export async function openHistory(initial: SessionHistoryResponse, options: { plain?: boolean; path?: string } = {}) {
+export async function openHistory(initial: SessionHistoryResponse, options: { plain?: boolean; path?: string; history?: RouterHistory } = {}) {
   resetStage1App()
   // The generic room fixture preselects MAIN_ID while disconnected. A fresh
   // history opening must instead let the real route select/attach it once.
@@ -47,7 +48,7 @@ export async function openHistory(initial: SessionHistoryResponse, options: { pl
   // The socket opens with NO selected session, so it sends no bootstrap
   // attach. One real member click then opens the session; its first response
   // is the desired page below, never an empty success followed by a re-open.
-  const mounted = await mountStage1App(options.path, { initialAttachResponse: 'caller' })
+  const mounted = await mountStage1App(options.path, { initialAttachResponse: 'caller', history: options.history })
   if (!options.path) await settledMainChat(mounted.socket, { initialAttachResponse: 'caller' })
   const sessionId = useSessionStore.getState().activeSessionId
   if (sessionId !== MAIN_ID) throw new Error(`Fixture instrument: expected main session ${MAIN_ID}, got ${sessionId}`)
