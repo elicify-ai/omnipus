@@ -67,6 +67,10 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
   const [askAgain, setAskAgain] = useState<{ agentId: string; nonce: number }>()
   const [attachedRoomId, setAttachedRoomId] = useState<string>()
   const groupCards = useRoomCardRequestIds(roomId)
+  // ADR §11 C-I4: the box is locked only by a pending question of THIS
+  // group's work (as the normal chat locks for its own question), never by
+  // another chat's question (US-13 AS 13.4).
+  const questionPending = useRoomQuestionCards(roomId).length > 0
 
   // K45: attach on mount and after every reconnect (the store resumes after
   // the room's own cursor). Never an agent-session attach.
@@ -160,7 +164,8 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
                     members={view.members}
                     workspace={view.workspace}
                     send={send}
-                    blockedReason={roomBlockedReason(room, connected, liveViewReceived)}
+                    blockedReason={roomBlockedReason(room, connected, liveViewReceived)
+                      ?? (questionPending ? 'Answer the question card above, or cancel it, to write again.' : undefined)}
                     prefill={askAgain}
                     bridge={bridge}
                   />

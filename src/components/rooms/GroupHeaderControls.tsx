@@ -5,8 +5,8 @@
 // member count — the Participants button. No UsersThree icon (it would read
 // as the Team toggle), no bar, no border, no surface fill. It toggles the
 // registered `participants` side panel; `aria-pressed` reports the panel.
-// The group's name is announced as the chat's name through a visually
-// hidden status node, the same pattern the main chat's title uses (D13).
+// The group's name is announced as the chat's name by the group page
+// (RoomScreen: a visually hidden status node, the main chat title pattern, D13).
 // While the group record is unknown the button is not shown.
 
 import { useUiStore } from '@/store/ui'
@@ -14,7 +14,6 @@ import { AgentMark } from '@/components/agents/AgentMark'
 import { AttentionHalo } from '@/components/agents/AttentionHalo'
 import { useAttentionMotion } from '@/components/layout/sidebar/attentionCue'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
-import { PANEL_TRIGGER_ATTR } from '@/components/panel-shell/panelFocus'
 import { AvatarStack } from '@/components/ui/avatar-stack'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -52,13 +51,12 @@ export function GroupHeaderControls({ workspaceId, roomId }: { workspaceId: stri
   })
   return (
     <>
-      <span role="status" className="sr-only" data-testid="group-chat-name">{room.name}</span>
       <Tooltip content="Participants" side="bottom" className="w-max" interactive>
         <Button
           variant="ghost"
           size="sm"
           data-testid="participants-button"
-          {...{ [PANEL_TRIGGER_ATTR]: 'participants' }}
+          data-panel-trigger="participants"
           aria-pressed={pressed}
           aria-label={`Participants, ${count} ${count === 1 ? 'member' : 'members'}`}
           onClick={() => toggleParticipantsPanel(workspaceId, roomId)}
