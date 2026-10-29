@@ -108,7 +108,6 @@ export function useRoomComposerMenu({
     picks.current = [{ id: member.id, token }]
     setText(`${token} `, token.length + 1)
     // Only a new Ask again re-addresses; a roster refresh must not.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill?.nonce])
 
   const commandQuery = /^\/(\S*)$/.exec(inputValue)?.[1]

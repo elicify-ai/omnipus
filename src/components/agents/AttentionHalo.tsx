@@ -15,12 +15,10 @@ export function AttentionHalo({
   halo,
   motion,
   children,
-  className,
 }: {
   halo: boolean
   motion: AttentionMotion
   children: ReactNode
-  className?: string
 }) {
   return (
     <span
@@ -29,7 +27,6 @@ export function AttentionHalo({
         'inline-flex shrink-0 rounded-full',
         halo && 'sidebar-attention-halo',
         halo && motion === 'loop' && 'sidebar-attention-halo-loop',
-        className,
       )}
     >
       {children}

@@ -8,7 +8,7 @@ export interface AvatarStackItem {
   node: React.ReactNode
 }
 
-export interface AvatarStackProps extends React.HTMLAttributes<HTMLSpanElement> {
+export interface AvatarStackProps extends Omit<React.HTMLAttributes<HTMLSpanElement>, 'className' | 'children'> {
   items: readonly AvatarStackItem[]
   /** How many avatars are drawn before the overflow marker (default 3). */
   max?: number
@@ -35,7 +35,7 @@ const overlap = {
  * the stack itself is hidden from assistive technology.
  */
 const AvatarStack = React.forwardRef<HTMLSpanElement, AvatarStackProps>(
-  ({ items, max = 3, total, size = 'sm', className, ...props }, ref) => {
+  ({ items, max = 3, total, size = 'sm', ...props }, ref) => {
     const shown = items.slice(0, Math.max(0, max))
     const overflow = Math.max(0, (total ?? items.length) - shown.length)
     return (
@@ -44,8 +44,8 @@ const AvatarStack = React.forwardRef<HTMLSpanElement, AvatarStackProps>(
         aria-hidden="true"
         data-avatar-stack=""
         data-overflow={overflow > 0 ? overflow : undefined}
-        className={cn('inline-flex shrink-0 items-center', overlap[size], className)}
         {...props}
+        className={cn('inline-flex shrink-0 items-center', overlap[size])}
       >
         {shown.map((item) => (
           <span key={item.key} data-avatar-stack-item="" className="inline-flex rounded-full ring-2 ring-[var(--color-surface-1)]">

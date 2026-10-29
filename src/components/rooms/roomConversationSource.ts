@@ -113,7 +113,6 @@ export function useRoomConversationSource(roomId: string, attachedHere: boolean,
     () => roomHistory(room, attempt, attachedHere),
     // Only the fields the history view reads: delivery and metadata frames
     // do not rebuild it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [entries, room?.hasOlder, room?.olderBoundary, room?.historyStatus, room?.historyFailed, room?.viewMode, room?.viewGeneration, room?.snapshotReceived, attempt, attachedHere],
   )
   const live = attachedHere && room?.snapshotReceived === true
