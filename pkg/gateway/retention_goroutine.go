@@ -130,12 +130,13 @@ func executeSweepTick(store *session.UnifiedStore, getCfg func() *config.Config)
 	durationMs := time.Since(start).Milliseconds()
 
 	if err != nil {
+		// Logged, but not a reason to skip the cleanup passes below: they
+		// are independent of the session sweep (#1470 fix round 3).
 		slog.Error("retention_sweep: sweep failed",
 			"event", "retention_sweep_failed",
 			"error", err,
 			"duration_ms", durationMs,
 		)
-		return
 	}
 
 	// Sweep tool-result files (offloaded > 50 KiB bodies) on the same schedule
