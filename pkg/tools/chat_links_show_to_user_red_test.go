@@ -241,6 +241,32 @@ func TestShowToUser_LibraryRootMatchesMissing(t *testing.T) {
 	}
 }
 
+func TestShowToUser_MissingCarveOutMatchesExisting(t *testing.T) {
+	home := t.TempDir()
+	realHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OMNIPUS_HOME", realHome)
+	existing := filepath.Join(realHome, "credentials.json")
+	if err := os.WriteFile(existing, []byte(`{"v":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(realHome, "credentials.json.old")
+	tool := chatLinksShowToUser(t, "BS-6.9 / B2")
+	ctx, _ := chatLinksOwnFile(t)
+	gotExisting := tool.Execute(ctx, map[string]any{"ref": existing})
+	gotMissing := tool.Execute(ctx, map[string]any{"ref": missing})
+	// An existing secret and a missing path under the same carve-out are the
+	// same not-found sentence. The missing one must not fall through to the
+	// outside sentence (BS-6.9, C2 B2).
+	chatLinksExactRefusal(t, gotExisting, chatLinksNotFound, "credentials.json", "existing carve-out")
+	chatLinksExactRefusal(t, gotMissing, chatLinksNotFound, "credentials.json.old", "missing carve-out")
+	if gotExisting != nil && gotMissing != nil && gotExisting.ForLLM != gotMissing.ForLLM {
+		t.Errorf("missing %q and existing %q must be byte-identical (BS-6.9 B2)", gotMissing.ForLLM, gotExisting.ForLLM)
+	}
+}
+
 func TestShowToUser_RateLimit_SharedBudget(t *testing.T) {
 	a := chatLinksShowToUser(t, "BS-6.13 / FR-020")
 	b := chatLinksShowToUser(t, "BS-6.13 / FR-020")
