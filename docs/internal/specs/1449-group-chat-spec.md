@@ -77,7 +77,7 @@ Order of work: BE-0 edits these before any Go or TypeScript (5-step procedure, r
 
 | Schema / operation | New / Changed | File | Notes |
 |---|---|---|---|
-| `RoomEntry` | changed | `contracts/components/schemas/RoomEntry.yaml` + inline in `asyncapi.yaml` | + optional `attachments`: array of `MediaPart`, `maxItems: 16`. Absent = none. Journal change is additive; no version field. **D24/D27:** `text` states the one group message size limit with the same wording as the `RoomMessageRequest` row (at most 65,536 UTF-8 bytes; a smaller operator setting `session_messaging.steer_body` lowers it); today the schema says 5 MiB while the server enforces the operator setting. |
+| `RoomEntry` | changed | `contracts/components/schemas/RoomEntry.yaml` + inline in `asyncapi.yaml` | + optional `attachments`: array of `MediaPart`, `maxItems: 16`. Absent = none. Journal change is additive; no version field. **D24/D27, read side (TD-8, 2026-10-29):** `text` keeps today's read bound `maxLength: 5242880` unchanged and gets **no** 65,536 maximum, because entries stored before this version may be longer (an operator could raise `steer_body`, and the old request schema allowed 5 MiB); the SPA's generated validators must keep accepting them. Its description states that new entries obey the request limit (at most 65,536 UTF-8 bytes; a smaller `session_messaging.steer_body` lowers it) and that older entries may be longer. The limit is enforced on writes only: `RoomMessageRequest`, the server check and `answer_request`. |
 | `RoomMessageRequest` | changed | `RoomMessageRequest.yaml` + inline copy | + optional `media`: array of strings, `maxItems: 16`, each `media://workspace/<workspace id>/<id>`. `text` becomes `minLength: 0`. **D24/D27: one size limit.** The contract text (5 MiB today) is corrected to: "at most 65,536 UTF-8 bytes; an operator can lower this limit with `session_messaging.steer_body`, never raise it" (counted in bytes, not characters). The server's effective limit is `min(steer_body, 65,536)`: a larger operator value is clamped to 65,536, a smaller one is honoured, the default is 65,536. The same effective limit applies to an agent's answer text (`answer_request`, entry `text`). Rule enforced by the handler with inbound validation on and off: text not blank **or** media non-empty. |
 | `uploadFiles` (`POST /upload`) | changed | `contracts/openapi.yaml` | Closes existing drift: `workspace_id` (query or form field) already crosses the boundary undocumented. Document it and the conflict rule (both given: `workspace_id` routes to the library, `session_id` ignored). Add a `503` response for "workspace library unavailable". |
 | `AskUserQuestionCard` | changed | `AskUserQuestionCard.yaml` + inline copy in `asyncapi.yaml` | + optional `room_ref` (`RoomRef`) and `origin_label` (string 1-200), same shapes and limits as on `ToolApprovalRequiredFrame`. This one card is embedded in `AskUserQuestionFrame` (live) and `SessionStateFrame.pending_asks` (reconnect snapshot); the frame envelope gets no separate copy. |
@@ -1776,6 +1776,13 @@ The founder chose Option A (D26); the Option B scenario is removed and its id is
 - **When** the message is inspected
 - **Then** it is saved in the group, was not sent to agents while paused, and is not sent by `/resume`
 
+#### Scenario: S-152 An entry stored before this version that is longer than today's limit still opens
+**Traces to**: User Story 15, Acceptance Scenario 3
+**Category**: Edge Case
+- **Given** a group entry of 100,000 bytes stored while an operator had `steer_body` set to 131,072 under the previous version
+- **When** the group is opened, paged and receives live updates
+- **Then** the entry is accepted by the generated validators and shown in full, no read is refused, and only new messages and answers are held to the limit of D27 (TD-8)
+
 #### Scenario: S-116 Group updates never create or replace a normal chat's transcript
 **Traces to**: User Story 15, Acceptance Scenario 3
 **Category**: Edge Case
@@ -1878,10 +1885,10 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-18 | `invitation_state_machine` | Unit (Go) | S-61, S-63, S-64, S-65, S-66 | generating to ready/unavailable; 44/45/46 s; restart; deletion; late discard; output over 4,096 characters cut at a word boundary or hard-cut, still `ready` (TD-1); zero usable entries gives `unavailable` with no model call (TD-2) |
 | T-19 | `invitation_filters_and_exclusions` | Unit (Go) | S-67 | Registered value and pattern removed; secret entries/tool results excluded; prose password NOT asserted (#1467) |
 | T-20 | `invitation_delivery_rules` | Unit (Go) | S-62, S-69, S-131, S-132, S-138, S-139 | First request only; skipped when not ready; never held; origin never receives; reservation transitions; failed write then retry; composed R1 fails / R2 arrives / R1 retries; stored capture with failed acknowledgement; facts-read error; cancellation racing the commit; concurrent first requests; restart |
-| T-21 | `invitation_cost_once` | Unit (Go) | S-68 | One cost line; unpriced flag; dedupe; no cost line when no model call was made (TD-2) |
+| T-21 | `invitation_cost_once` | Unit (Go) | S-68 | One cost line in the group and one call-accounting record for the origin agent; the origin chat's stored usage and transcript are unchanged (TD-9); unpriced flag; dedupe; no cost line when no model call was made (TD-2) |
 | T-22 | `invitation_invisible_and_group_starts_empty` | Integration | S-60, S-70 | Amended add-participant test: record exists, no entry, origin unchanged; summary absent from entries/frames/mirror |
 | T-23 | `approval_frames_reach_group_page` | Integration (real hub) | S-81 | Cards for this group reach a client with no chat attached |
-| T-30 (QA-R4) | `room_source_projection` | Unit | S-07, S-08, S-09, S-116 | Row identity stable under delivery frames; no foreign tool calls; after-pause mark; no session bucket touched |
+| T-30 (QA-R4) | `room_source_projection` | Unit | S-07, S-08, S-09, S-116, S-152 | Row identity stable under delivery frames; no foreign tool calls; after-pause mark; no session bucket touched |
 | T-31 | `shared_rendering_rich_content` | Unit | S-01, S-02, S-03, S-04, S-05, S-06, S-113 | Markdown, code copy, diagram, math, images, files, broken state through the shared pipeline |
 | T-32 | `agent_text_is_display_only` | Unit | S-104, S-105, S-107 | Raw HTML, script/data links, "/pause" text (the remote-image guarantee is T-56) |
 | T-33 | `working_lines_and_attention` | Unit | S-35, S-36, S-37, S-38, S-151 | One line per member; replaced by answers; attention + link; no partial text; terminal labels; attention in each group whose request waits on a card held in the agent's chat (D28) |
@@ -1901,7 +1908,7 @@ Names are placeholders; qa-lead names the real tests in RED. Order follows the A
 | T-52 | `docs_verifier_audit` | Audit | (DOC-001..DOC-008) | docs-verifier audits the drafts against actual behaviour, including the normal-chat file-card download and Retry text in DOC-005 |
 | T-53 | `vitest_coverage_group_guard` | CI gate | (process) | Every new vitest file matches a CI group pattern |
 | T-54 | `message_size_limit` | Unit (Go) | S-118, S-119 | 65,536 / 65,537 bytes at the default setting; multi-byte boundary; agent answer over the limit posts nothing and copies no file; same result with inbound validation on and off |
-| T-55 | `contract_text_limit_agrees_with_server` | CI gate | S-118, S-150 | The 65,536-byte maximum stated in the contract schemas (both copies, request and entry) equals the server's clamp constant; fails if either drifts (D24, D27) |
+| T-55 | `contract_text_limit_agrees_with_server` | CI gate | S-118, S-150, S-152 | The 65,536-byte maximum stated for `RoomMessageRequest.text` (both copies) equals the server's clamp constant; `RoomEntry.text` (both copies) carries no 65,536 maximum and keeps its read bound of 5,242,880; fails if either drifts (D24, D27, TD-8) |
 | T-56 | `e2e_remote_image_blocked_in_browser` | E2E (real browser, embedded SPA) | S-106 | Controlled remote image endpoint, a positive control proving the instrument sees an allowed request, and the blocked image's policy violation or failure recorded |
 | T-57 | `quoted_context_attachments_by_filename` | Unit (Go) | S-120, S-121 | Text at 65,536/65,537 bytes with 5 MB media; quoted history names earlier files as text only; only the current request's files reach the model |
 | T-58 | `invitation_detail_refresh_transport` | Unit + integration (frontend transport) | S-61, S-122, S-123 | Status-only frame, then the detail fetch, then the rendered text; disconnect during generation; fetch failure with Retry |
@@ -2223,7 +2230,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 - **FR-043**: System MUST deliver a `ready` summary once, as quoted background, on each non-origin member's first request, and MUST NOT give it to the origin agent. The include-or-skip decision is a reservation bound to the request id with the transitions of FR-080.
 - **FR-044**: System MUST expose the summary text only through the group read used by the panel, and MUST NOT put it into any entry, live update or mirrored chat.
 - **FR-045**: System MUST publish summary status changes (not text) on the group's live metadata, and the open panel MUST refetch the group record on a `ready` change and after every reconnect while its detail may be stale (FR-079), showing "generating", the text, or "Invitation context: unavailable".
-- **FR-046**: System MUST count the summary's cost once into the group's allocated cost and the origin agent's usage, only when the call ran.
+- **FR-046**: System MUST count the summary's cost once into the group's allocated cost ("Cost so far") and record it once in the call-accounting log attributed to the origin agent and its model, only when the call ran. It MUST NOT write any entry, visible or hidden, into the origin chat to carry this cost (D9: the original chat stays unchanged), so per-agent usage totals that are summed from chat sessions do not include it (TD-9, 2026-10-29).
 - **FR-047**: System MUST NOT state in the UI, documentation or tests that passwords written in plain prose are removed from the summary (D18).
 
 **Approvals and questions**
@@ -2272,7 +2279,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 
 ## Success Criteria
 
-- **SC-001**: Every scenario S-01 to S-151 (S-11 and S-84 to S-97 retired by D21; S-145 retired by D26) is covered by at least one test in the Test Implementation Order, and every UAT row UAT-1 to UAT-36 (UAT-8, UAT-9, UAT-22 retired by D21) is executed on the exact candidate commit (AE rows by `uat-tester` plus independent `uat-validator`).
+- **SC-001**: Every scenario S-01 to S-152 (S-11 and S-84 to S-97 retired by D21; S-145 retired by D26) is covered by at least one test in the Test Implementation Order, and every UAT row UAT-1 to UAT-36 (UAT-8, UAT-9, UAT-22 retired by D21) is executed on the exact candidate commit (AE rows by `uat-tester` plus independent `uat-validator`).
 - **SC-002**: The existing chat history and composer suites pass with zero edited test files at the FE-0 and FE-1 gates.
 - **SC-003**: `make verify-contracts` and `scripts/check-no-handwritten-wire-types.sh` pass on the candidate; no hand-written wire type exists for the new fields.
 - **SC-005**: The summary job causes 0 seconds of deliberate wait for any group message (S-69, S-63).
@@ -2281,7 +2288,7 @@ Retired by D21 (stop request and stop outcome datasets); ids are not reused.
 - **SC-008**: On a group whose opening view fills the screen, the number of `getRoomHistory` calls on open is 0 (S-43).
 - **SC-009**: docs-verifier passes DOC-001 to DOC-008 against the actual behaviour.
 - **SC-013**: With a controlled clock 31 days ahead, the real orphan cleanup removes 0 referenced group files (paused group, held request, deleted group, after restart) and still removes the chat media copy of an upload that was never posted while its Library file stays listed (S-124, S-125, S-126, S-28).
-- **SC-012**: The contract's 65,536-byte maximum for the group message request and entry equals the server's clamp constant, and the server applies `min(steer_body, 65,536)`, checked by T-55 and T-65 (S-118, S-150).
+- **SC-012**: The contract's 65,536-byte maximum for the group message request equals the server's clamp constant (the entry schema is not tightened on reads, TD-8), and the server applies `min(steer_body, 65,536)`, checked by T-55 and T-65 (S-118, S-150).
 - **SC-014**: After one explicit Library deletion of a chat file, 0 copies of it remain (Library file and chat media copy), also after a restart and an orphan-cleanup run, for group files and normal chat uploads (S-136, S-146, T-60, T-63).
 - **SC-010**: The old `RoomTranscript`, `RoomComposer` and `RoomHeader` components are deleted only after the replacement tests pass in CI with red-before-green evidence.
 
@@ -2321,7 +2328,7 @@ Existing pages read before naming destinations: `docs/group-chats.md` (current t
 | TODO | UI / behaviour change | User-facing page | Matching update |
 |---|---|---|---|
 | DOC-001 | The group is the normal chat: formatting, images and files both ways, same message box without session-only controls, 16 attachments, files kept after deletion, agent text is display-only | `docs/group-chats.md` (intro, "Who receives your message", "How agents answer", new "Images and files", "Deleting a group", "Limits in this version") | Describe the screen and message box; replace the statement that a deleted group's files are removed with the D19 rule (journal only; library files stay); remove "Secret requests are not handled" or restate it as "a link to the agent's chat" |
-| DOC-002 | Participants button and panel; Add participant moved to the right end; starting a group; invitation context | `docs/group-chats.md` ("Add participant", "Member states", new "Participants panel" and "Invitation context") | Replace "top-left"; document panel contents, Ask again, cost; invitation context: what it is, never posted, readable in the panel, shown as generating or "Invitation context: unavailable", **and the plain statement that anything written in the original chat except recognised keys may appear in it (D18, #1467)** |
+| DOC-002 | Participants button and panel; Add participant moved to the right end; starting a group; invitation context | `docs/group-chats.md` ("Add participant", "Member states", new "Participants panel" and "Invitation context") | Replace "top-left"; document panel contents, Ask again, cost; "Cost so far" includes the summary's cost, which is not added to the origin agent's chat usage (TD-9); invitation context: what it is, never posted, readable in the panel, shown as generating or "Invitation context: unavailable", **and the plain statement that anything written in the original chat except recognised keys may appear in it (D18, #1467)** |
 | DOC-003 | Cards for this group's work appear in the group, only for work that answers the group; helper, unrelated, mixed-input and two-group cards stay in the agent's chat; attention avatar; stopping happens in the agent's own chat | `docs/group-chats.md` ("Approvals and questions", "How agents answer") | Replace "belong to its main chat, not to the group" with the D8/D15/D23/D28 rule (when one step of an agent answers two groups, the card is in the agent's own chat and both groups show the attention cue and link); say there is no Stop in the group and point to the agent's own chat; document Ask again |
 | DOC-004 | A card can be answered in a group, only for work that answers the group | `docs/security.md` ("Approve a request") | Same decision and grant scope wherever answered; one decision wins; a step that also handles other input keeps its cards in the agent's chat |
 | DOC-005 | Minimal header: no bar or border; controls at the right end; helper breadcrumb; group Participants control; shared history behaviour; **file cards in every chat** | `docs/using-omnipus-ui.md` ("The chat area", "Who each message is from", "Reading earlier messages", "Sessions", and the existing Retry guidance) | Describe the header controls per chat kind; state that groups use the same list, history, Return to latest and message box; **add: a file card (yours or an agent's, any file type) downloads by mouse or keyboard (Enter); if the file cannot be fetched the card shows an error with Retry, which repeats the same file fetch and is not a message resend or a repeat of the agent's work** |
@@ -2401,7 +2408,7 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-071 | US-15 | S-114 | T-45 | - (unchanged; covered by regression) | none - unchanged |
 | FR-072 | US-15 | S-115 | T-46 | UAT-6 | DOC-001 |
 | FR-073 | US-15 | S-117 | T-24, T-25 | UAT-18 | none - behaviour unchanged |
-| FR-074 | US-2 | S-118, S-150 | T-54, T-55, T-29, T-65 | UAT-31, UAT-35 | DOC-001, DOC-007 |
+| FR-074 | US-2, US-15 | S-118, S-150, S-152 | T-54, T-55, T-29, T-65, T-30 | UAT-31, UAT-35 | DOC-001, DOC-007 |
 | FR-075 | US-4 | S-119, S-150 | T-54, T-65 | UAT-31, UAT-35 | DOC-001, DOC-007 |
 | FR-076 | US-14 | S-124, S-125, S-126, S-28, S-143 | T-59, T-62 | UAT-26 | DOC-008 |
 | FR-077 | US-3, US-4 | S-127, S-128, S-136 | T-60, T-63 | UAT-33, UAT-34 | DOC-008 |
@@ -2416,7 +2423,7 @@ Columns: requirement, user story, BDD scenarios, tests (placeholders, see Test I
 | FR-086 | US-14 | S-136, S-146, S-148, S-149 | T-60, T-63 | UAT-34 | DOC-008 |
 | FR-087 | US-14 | S-147, S-148 | T-64 | UAT-34 | DOC-008 |
 
-**Completeness check**: FR-001 to FR-087 (FR-009 and FR-055 to FR-062 retired by D21; ids are not reused) each have at least one scenario and one test; scenarios S-01 to S-151 (S-11 and S-84 to S-97 retired by D21, S-145 retired by D26) each appear in the matrix and in the Test Implementation Order (verified by script, see the evidence table of the hand-off); DOC-001 to DOC-008 each appear at least once; each UI or behaviour change traces to a DOC TODO or states why none applies. Contract-first (Hard Constraint #8) is tracked by SC-003 and test T-51 rather than an FR because it has no user-visible scenario.
+**Completeness check**: FR-001 to FR-087 (FR-009 and FR-055 to FR-062 retired by D21; ids are not reused) each have at least one scenario and one test; scenarios S-01 to S-152 (S-11 and S-84 to S-97 retired by D21, S-145 retired by D26) each appear in the matrix and in the Test Implementation Order (verified by script, see the evidence table of the hand-off); DOC-001 to DOC-008 each appear at least once; each UI or behaviour change traces to a DOC TODO or states why none applies. Contract-first (Hard Constraint #8) is tracked by SC-003 and test T-51 rather than an FR because it has no user-visible scenario.
 
 ---
 
@@ -2441,6 +2448,8 @@ Recorded 2026-10-28 on the coordinator's instruction; none needs the founder. TD
 | TD-3 (A-13) | Bounds of the private staging of an answer's original bytes | At most 16 files, 100 MB per file (the upload limit); over-limit is a definitive rejection before acceptance; staging outside agent-reachable trees; removed after commit or recorded rejection; kept while accepted, across restarts and the orphan cleanup | Architect decision. Rationale: same bounds as a person's upload; no new limit to document | FR-078 (1), DS-12 rows 17-19, T-62 |
 | TD-4 (A-4, A-9) | The same file listed twice in a message or answer | Accepted as listed and shown once per listed reference; retention counted once per (entry, reference) | Default, owner may refine during RED with evidence (backend-lead) | DS-1 row 32, DS-12 row 16, T-03, T-06 |
 | TD-6 (A-6) | Participants tooltip wording | "Participants" | Default, owner may refine during RED with evidence (frontend-lead) | S-100, T-37 |
+| TD-8 (Q-BE-1, 2026-10-29) | Size bound on stored group entries (`RoomEntry.text`) | No 65,536 maximum on the entry schema; today's read bound of 5,242,880 stays; the 65,536-byte limit (D27) applies to writes only (`RoomMessageRequest`, the server check, `answer_request`) | Architect decision on contract shape. Rationale: a read schema tighter than what was once accepted makes old groups unreadable; D24's "one limit" governs what may be submitted | Contract table (`RoomEntry`), S-152, T-30, T-55, SC-012, FR-074 |
+| TD-9 (Q-BE-2, 2026-10-29) | Where the summary's cost is counted | The group's "Cost so far" plus one call-accounting record for the origin agent; no hidden usage entry in the origin chat; per-agent usage totals summed from chat sessions therefore leave it out | Architect decision. Rationale: D9 and FR-038 keep the original chat unchanged; the cost is small (one call per started group) and stays visible in the group | FR-046, T-21, DOC-002 |
 | TD-7 (A-7) | Participants panel on narrow widths | Same as the other registered side panels; no new behaviour | Default, owner may refine during RED with evidence (frontend-lead) | S-49, T-35 |
 
 ## Grill Round 1 Dispositions
