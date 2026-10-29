@@ -176,6 +176,8 @@ History **Retry** never repeats a user send. For an unavailable index it request
 
 Each loading attempt is announced once: an automatic load of earlier messages and a separate **Show earlier messages** request are announced separately, and pressing the button again while that same load is running adds no announcement. New failures are announced as alerts. Loading older answers does not announce them as new responses. If a successful action removes the focused control, focus moves to **Conversation history** without scrolling to a new message or the composer. Reduced motion does not disable paging or require smooth scrolling.
 
+For recurring instructions in this chat, use [chat loops](loops.md). Send bare `/loop` to see this chat's loop status and run count.
+
 ### Answering a question card
 
 When an agent asks you questions, a card docks above the message box with one tab per question. Every question can be answered with the keyboard alone:

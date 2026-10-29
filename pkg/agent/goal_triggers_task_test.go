@@ -135,6 +135,7 @@ func mintTaskRunGoal(
 	}
 
 	// The production mint. This is the line the old helper faked.
+	prepareKeeperTaskRuntimeForTest(t, al)
 	sid, serr := al.taskExecutor.createTaskSessionSync(tk)
 	if serr != nil {
 		t.Fatalf("mintTaskRunGoal: createTaskSessionSync: %v", serr)
@@ -295,7 +296,6 @@ func (h *taskKeeperHarness) swapJudgeProvider(cp *fakeJudgeProvider) *fakeJudgeP
 func newTaskKeeperHarness(t *testing.T, condition string, criteria []task.AcceptanceCriterion) *taskKeeperHarness {
 	t.Helper()
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 	if !ok {
@@ -388,8 +388,8 @@ func TestKeeperSweepsTaskOwnedGoals(t *testing.T) {
 	}
 
 	after := h.record(t)
-	if after.ZeroOutputPushes != 1 {
-		t.Fatalf("GOAL-FR-015: goal record ZeroOutputPushes = %d, want 1 (read back from pkg/goal's store)", after.ZeroOutputPushes)
+	if after.ZeroOutputPushes != 0 {
+		t.Fatalf("GOAL-FR-015: goal record ZeroOutputPushes = %d, want 0 before first assessed outcome (R6; read back from pkg/goal's store)", after.ZeroOutputPushes)
 	}
 	if after.Round != 0 {
 		t.Fatalf("JUDGE-FR-097: a keeper re-post must consume NO round; rounds_used = %d, want 0", after.Round)
@@ -517,13 +517,13 @@ func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
 			matrix: "JUDGE-FR-096 #7 (settleRecordlessGoal / goalNudgePrompt) / GOAL-FR-020 / S-11",
 			// No suppression: the point is which BRANCH the keeper takes.
 			arrange:        func(_ *testing.T, _ *taskKeeperHarness) func() { return nil },
-			wantDispatches: 1, wantPushes: 1, wantContent: continuePushFor(taskGoalCondition),
+			wantDispatches: 1, wantPushes: 0, wantContent: continuePushFor(taskGoalCondition),
 		},
 		{
 			name:           "with nothing suppressing it the keeper dispatches the bounded continue-push",
 			matrix:         "JUDGE-FR-096 #8 (settleZeroOutputRecordedGoal / goalContinuePushPrompt) / GOAL-FR-017",
 			arrange:        func(_ *testing.T, _ *taskKeeperHarness) func() { return nil },
-			wantDispatches: 1, wantPushes: 1, wantContent: continuePushFor(taskGoalCondition),
+			wantDispatches: 1, wantPushes: 0, wantContent: continuePushFor(taskGoalCondition),
 		},
 	}
 
@@ -604,77 +604,50 @@ func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
 
 // =================== FR-017 / S-09, S-10: the push ladder on tasks ========
 
-// TestZeroOutputPushAppliesToTasks proves GOAL-FR-017 and S-09: the bounded
-// zero-output continue-push applies to a TASK-owned goal, and it is genuinely
-// bounded.
-//
-// Given a running task producing no transcript output, no scoped diff and no
-//
-//	tool evidence
-//
-// When the keeper sweeps twice within the push bound
-// Then it dispatches a continue-push each time and consumes no round.
-//
-// And the third sweep, past the bound: the ladder stops. It does NOT fall
-// through to an adjudication (JUDGE-FR-097 is explicit that the
-// `if pushes >= max { settleGoalNormally(…) }` fall-through is deleted, not
-// merely reached less often) and it does NOT end the goal (D-A: the ladder
-// gets no terminator of its own).
-//
-// Traces to: goal-entity-spec.md line 430 (FR-017), line 650 (S-09), line 656
-// (S-10); judge-active-reviewer-spec.md line 2517 (FR-097).
+// TestZeroOutputPushAppliesToTasks retains task-owned parity under R6:
+// five real unproductive reminder outcomes cause a visible pause before a
+// sixth dispatch, never a timer Judge call or a false terminal goal state.
 func TestZeroOutputPushAppliesToTasks(t *testing.T) {
 	h := newTaskKeeperHarness(t, taskGoalCondition, recordedGoalCriteria(taskGoalCondition))
+	grPrepareLegacyReminderRuntime(t, h.al)
 	wantContent := continuePushFor(taskGoalCondition)
-
-	for cycle := 1; cycle <= goalZeroOutputPushMax; cycle++ {
+	for dispatch := 1; dispatch <= 5; dispatch++ {
 		h.al.goalQuietWindowSettle(time.Now())
-
-		evts := h.dispatch.all()
-		if len(evts) != cycle {
-			t.Fatalf("GOAL-FR-017/S-09 cycle %d: cumulative keeper dispatches = %d, want %d. Contents: %q",
-				cycle, len(evts), cycle, h.dispatch.contents())
+		events := h.dispatch.all()
+		if len(events) != dispatch {
+			t.Fatalf("R6 task dispatch %d: actual dispatches=%d, want %d; contents=%q", dispatch, len(events), dispatch, h.dispatch.contents())
 		}
-		if evts[cycle-1].Content != wantContent {
-			t.Fatalf("cycle %d: dispatched content = %q, want the bounded continue-push %q",
-				cycle, evts[cycle-1].Content, wantContent)
+		if events[dispatch-1].Content != wantContent {
+			t.Fatalf("dispatch %d: content=%q, want the ordinary continue-push %q", dispatch, events[dispatch-1].Content, wantContent)
 		}
-		after := h.record(t)
-		if after.ZeroOutputPushes != cycle {
-			t.Fatalf("cycle %d: goal record ZeroOutputPushes = %d, want %d", cycle, after.ZeroOutputPushes, cycle)
+		rec := h.record(t)
+		if rec.ZeroOutputPushes != dispatch-1 || rec.Round != 0 {
+			t.Fatalf("R6 task dispatch %d: assessed outcomes=%d rounds=%d, want %d/0", dispatch, rec.ZeroOutputPushes, rec.Round, dispatch-1)
 		}
-		if after.Round != 0 {
-			t.Fatalf("cycle %d: JUDGE-FR-097: a push consumes NO round; rounds_used = %d, want 0", cycle, after.Round)
-		}
+		grDrivePublishedReminder(t, h.al, h.sid)
 		if h.judge.callCount() != 0 {
-			t.Fatalf("cycle %d: JUDGE-FR-095: Judge calls = %d, want 0", cycle, h.judge.callCount())
+			t.Fatalf("task reminder %d invoked the Judge %d times, want 0", dispatch, h.judge.callCount())
 		}
-		// Re-arm exactly the way a completed dispatched turn would: push the
-		// activity clock back and clear the fire-once marker.
-		rewindGoalActivity(t, h.al, h.store, h.sid)
+		rewindGoalActivityTimeOnly(t, h.store, h.sid)
 	}
-
-	// Past the bound.
 	h.al.goalQuietWindowSettle(time.Now())
-
-	if got := len(h.dispatch.all()); got != goalZeroOutputPushMax {
-		t.Fatalf("S-10/JUDGE-FR-097: past the push bound the ladder must stop; cumulative dispatches = %d, want %d. Contents: %q",
-			got, goalZeroOutputPushMax, h.dispatch.contents())
+	grNoPublishedReminder(t, h.al)
+	if got := len(h.dispatch.all()); got != 5 {
+		t.Fatalf("R6 task sixth reminder must be suppressed; dispatches=%d, want 5", got)
 	}
 	after := h.record(t)
-	if after.ZeroOutputPushes != goalZeroOutputPushMax {
-		t.Fatalf("past the bound: ZeroOutputPushes = %d, want it capped at %d", after.ZeroOutputPushes, goalZeroOutputPushMax)
+	if after.ZeroOutputPushes != 5 || after.Round != 0 || after.State != generated.GoalStateActive {
+		t.Fatalf("R6 task pause: streak=%d rounds=%d state=%s, want 5/0/active", after.ZeroOutputPushes, after.Round, after.State)
 	}
-	if after.Round != 0 {
-		t.Fatalf("JUDGE-FR-097: past the push bound the ladder MUST NOT fall through to an adjudication; "+
-			"rounds_used = %d, want 0 (the `if pushes >= max { settleGoalNormally(…) }` fall-through is deleted)", after.Round)
+	view, err := h.store.ReadTranscriptView(h.sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := grHasSystemLine(view.Entries, "No progress after 5 reminders — goal paused. Reply to continue."); got != 1 {
+		t.Fatalf("R6 task visible system pause lines=%d, want exactly 1", got)
 	}
 	if h.judge.callCount() != 0 {
-		t.Fatalf("JUDGE-FR-095/FR-097: past the push bound the Judge was invoked %d times, want 0", h.judge.callCount())
-	}
-	if after.State != generated.GoalStateActive {
-		t.Fatalf("D-A: past the push bound the goal stays ACTIVE (the seven-day idle-expiry sweep is the sole "+
-			"terminator); state = %q", after.State)
+		t.Fatalf("task pause invoked the Judge %d times, want 0", h.judge.callCount())
 	}
 }
 
@@ -716,8 +689,8 @@ func TestQuietWindowReArmAppliesToTasks(t *testing.T) {
 		t.Fatalf("GOAL-FR-018/S-12: a second tick inside the SAME quiet spell dispatched again; cumulative dispatches = %d, "+
 			"want still 1. Contents: %q", got, h.dispatch.contents())
 	}
-	if got := h.record(t).ZeroOutputPushes; got != 1 {
-		t.Fatalf("GOAL-FR-018/S-12: ZeroOutputPushes = %d, want still 1 inside one quiet spell", got)
+	if got := h.record(t).ZeroOutputPushes; got != 0 {
+		t.Fatalf("GOAL-FR-018/S-12: ZeroOutputPushes = %d, want still 0 before any assessed outcome (R6)", got)
 	}
 
 	// Genuine external activity: a dispatched turn completed and cleared the
@@ -864,7 +837,7 @@ func TestNudgeLadderUnreachableForTaskGoal(t *testing.T) {
 		// Run well past the ladder's own bound: were the ladder reachable,
 		// nudge 1 and 2 would have fired and cycle 3 would have run the
 		// engine fallback compile.
-		for cycle := 0; cycle < goalZeroOutputPushMax+2; cycle++ {
+		for cycle := 0; cycle < 7; cycle++ { // beyond the literal five-outcome R6 brake
 			h.al.goalQuietWindowSettle(time.Now())
 			rewindGoalActivity(t, h.al, h.store, h.sid)
 		}
@@ -893,7 +866,6 @@ func TestNudgeLadderUnreachableForTaskGoal(t *testing.T) {
 
 	t.Run("a recordless chat goal DOES enter the nudge ladder", func(t *testing.T) {
 		resetGoalTriggerStateForTest()
-		withShortIdleWindow(t, 2*time.Second)
 		al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 		_, sid := newGoalTestSession(t, al, agentInst.ID)

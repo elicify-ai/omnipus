@@ -42,12 +42,14 @@
 package agent
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // registerWedgedTurn registers a turnState for sessionID that is alive and
@@ -106,9 +108,9 @@ func TestWedgedTurnDoesNotDisarmTheGoalIdleExpirySweep(t *testing.T) {
 	// Sanity: the arrange really is past the quiet window, so every sweep
 	// below genuinely reaches the live-turn branch rather than returning early
 	// at the window check. Without this the test could pass vacuously.
-	if now.Sub(h.armedAt) <= goalIdleQuietWindow {
+	if now.Sub(h.armedAt) <= DefaultGoalReminderQuietWindow {
 		t.Fatalf("arrange: goal armed %s ago, quiet window is %s — the keeper would never reach the live-turn branch",
-			now.Sub(h.armedAt), goalIdleQuietWindow)
+			now.Sub(h.armedAt), DefaultGoalReminderQuietWindow)
 	}
 
 	for i := 0; i < 8; i++ {
@@ -120,10 +122,45 @@ func TestWedgedTurnDoesNotDisarmTheGoalIdleExpirySweep(t *testing.T) {
 		now = now.Add(sweepEvery)
 	}
 
-	// The turn ends (Stop, or it finally returns). The keeper never re-armed
-	// the clock for a turn that did no work, so the quiet goal now expires on
-	// the very next sweep.
+	// End the synthetic registered-turn premise, then settle the genuine
+	// queued task session through the same single-session Stop a user invokes.
+	// Removing only the memory handle would leave independent queued work.
+	beforeStop := h.record(t)
+	lifecycle := h.al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		t.Fatal("arrange: the real queued task must have its lifecycle store")
+	}
+	queued, err := lifecycle.Load(h.sid)
+	if err != nil || queued == nil || queued.State != session.LifecycleQueued || queued.Origin == nil || queued.Origin.TaskID != h.taskID {
+		t.Fatalf("arrange: expected the real task's queued session before settlement: record=%+v err=%v", queued, err)
+	}
 	h.al.activeTurnStates.Delete(h.sid)
+	fired, armed, err := h.al.StopSessionTurn(context.Background(), h.sid, "wedged-fixture-owner", "webchat")
+	if err != nil || !fired || armed {
+		t.Fatalf("settle queued task session with single Stop: fired=%t armed=%t err=%v", fired, armed, err)
+	}
+	stopped, err := lifecycle.Load(h.sid)
+	if err != nil || stopped == nil || stopped.State != session.LifecycleStopped || stopped.Stop != nil || stopped.StopNote == nil ||
+		stopped.StopNote.Cause != session.StopCauseStop || stopped.Generation != queued.Generation ||
+		stopped.Origin == nil || stopped.Origin.TaskID != h.taskID {
+		t.Fatalf("queued Stop must durably settle the same task session: record=%+v err=%v", stopped, err)
+	}
+	settledGoal := h.record(t)
+	if settledGoal.State != generated.GoalStateActive || settledGoal.OwnerKind != generated.GoalOwnerKindTask ||
+		settledGoal.OwnerID != h.taskID || settledGoal.GoalID != beforeStop.GoalID ||
+		settledGoal.Round != beforeStop.Round || !settledGoal.LastActivityAt.Equal(beforeStop.LastActivityAt) {
+		t.Fatalf("session Stop must preserve the active task goal and its original expiry clock: before=%+v after=%+v", beforeStop, settledGoal)
+	}
+	pendingTask, err := h.al.taskStore.Get(h.taskID)
+	if err != nil || pendingTask == nil || pendingTask.Status != task.StatusNext {
+		t.Fatalf("settling the queued session must not start or finish the task: task=%+v err=%v", pendingTask, err)
+	}
+	if busy, why := h.al.goalWorkInFlight(settledGoal, h.sid); busy {
+		t.Fatalf("arrange: all work must actually be settled before expiry, not bypassed: %s", why)
+	}
+
+	// The keeper never re-armed the goal clock merely for registration, and
+	// Stop did not reset it. The unchanged next sweep can now expire the goal.
 	h.al.goalIdleExpirySweep(cfg, now)
 	after := h.record(t)
 	if after.State != generated.GoalStateExpired {

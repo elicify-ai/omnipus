@@ -1960,11 +1960,23 @@ jobs:
           # failure by design (raise the budget with new evidence, never by
           # tying this step back to pkg/gateway). The per-package ceiling
           # applies uniformly across every non-gateway package.
+          #
+          # Agent-shard exception, -timeout 20m (founder decision 2026-10-28,
+          # new evidence as required above): pkg/agent took 485.165s on the
+          # release run (job 121703770561 @ 75d48f041) and exceeded 10m on
+          # 73b2902e7 (run 40715877890, job 122914104172: "test timed out
+          # after 10m0s" with no hung test). The added time is the documented
+          # ~18s async-notify publish retry (3 attempts x 5s + 1s + 2s waits,
+          # docs/tools.md) that the B3 and gate-fix delivery tests exercise on
+          # a full or closed bus: retry in 47bda1463, tests in 57a7d0280 and
+          # 4fc5692fd. Every other non-gateway shard keeps 10m. The primary
+          # run and the isolated re-run below both use $go_timeout.
           packages=$(python3 scripts/go-test-shards.py test "$SHARD") || exit 1
           mapfile -t pkgs <<< "$packages"
           parallel=()
-          if [ "$SHARD" = "agent" ]; then parallel=(-p 1); fi
-          out=$(go test -tags goolm,stdjson -count=1 -timeout 10m "${parallel[@]}" "${pkgs[@]}" 2>&1)
+          go_timeout=10m
+          if [ "$SHARD" = "agent" ]; then parallel=(-p 1); go_timeout=20m; fi
+          out=$(go test -tags goolm,stdjson -count=1 -timeout "$go_timeout" "${parallel[@]}" "${pkgs[@]}" 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
@@ -2042,7 +2054,7 @@ jobs:
             # race step's pattern: success requires BOTH a clean exit AND no
             # DATA RACE marker in the re-run log; failure prints both kinds of
             # evidence. The two flake-filters stay in lockstep.
-            if go test -tags goolm,stdjson -count=1 -timeout 10m -p 1 "$p" >/tmp/rr.log 2>&1 \
+            if go test -tags goolm,stdjson -count=1 -timeout "$go_timeout" -p 1 "$p" >/tmp/rr.log 2>&1 \
                && ! grep -aq "DATA RACE" /tmp/rr.log; then
               echo "FLAKE (passed isolated): $p"
             else

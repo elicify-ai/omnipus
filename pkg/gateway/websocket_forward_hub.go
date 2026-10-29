@@ -38,6 +38,10 @@ import (
 // emitted while no connection is open is not lost (gate r1 SFH T2-SF-06).
 func (h *WSHandler) hubSyncTap(evt agent.Event) {
 	switch evt.Kind {
+	case agent.EventKindTurnStart:
+		if p, ok := evt.Payload.(agent.TurnStartPayload); ok && p.ChatNotice != nil {
+			h.hubPublishFrame(p.ChatNotice.SessionId, string(generated.WsFrameTypeReplayMessage), *p.ChatNotice, nil)
+		}
 	case agent.EventKindTurnEnd:
 		h.hubTurnEnd(evt)
 	case agent.EventKindSubTurnSpawn:
@@ -360,6 +364,11 @@ func (h *WSHandler) hubError(evt agent.Event) {
 	if !ok {
 		return
 	}
+	if notice := p.ChatNotice; notice != nil && p.SessionID != "" && notice.SessionId == p.SessionID &&
+		notice.Type == string(generated.WsFrameTypeReplayMessage) && notice.Role == "system" && notice.Id != nil && *notice.Id != "" {
+		h.hubPublishFrame(p.SessionID, string(generated.WsFrameTypeReplayMessage), *notice, nil)
+		return
+	}
 	errSID := p.SessionID
 	if errSID == "" {
 		errSID = h.hubResolveSessionIDForChat(p.ChatID)
@@ -549,6 +558,9 @@ func (h *WSHandler) hubGoalStatusChanged(evt agent.Event) {
 	p, ok := evt.Payload.(agent.GoalStatusChangedPayload)
 	if !ok {
 		return
+	}
+	if p.ChatNotice != nil {
+		h.hubPublishFrame(p.ChatNotice.SessionId, string(generated.WsFrameTypeReplayMessage), *p.ChatNotice, nil)
 	}
 	goalF := generated.GoalStatusFrame{
 		Type:         string(generated.WsFrameTypeGoalStatus),
