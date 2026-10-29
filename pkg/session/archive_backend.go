@@ -53,6 +53,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -104,22 +105,20 @@ func (b *archiveBackend) store(key string) (*ArchiveDayStore, error) {
 
 // owningSessionID maps an agent routing key to the immutable owning session id
 // the model content belongs to (ARCHITECT-ANSWER-CUTOVER-SLICE4.md, "Identity";
-// Decision D "no current-agent/active-agent guessing"). The agent routing key
-// "agent:<agentID>:session:<sessionID>" embeds the store-backed owning session
-// id, so the archive then lives in <baseDir>/<sessionID>/ — the same files as the
-// chat transcript, so a session delete removes both. Any other key (a plain
-// session id, or a chat-scoped key whose owning session is not encoded) is left
-// unchanged.
+// Decision D "no current-agent/active-agent guessing"). Only the strict grammar
+// "agent:<agentID>:session:<nonempty id>" names a session; every other key kind
+// (a plain session id, a chat-scoped key, or a compound key that merely contains
+// ":session:" in a non-canonical position) is left unchanged. This uses the same
+// strict parser as steering.go's sessionIDFromScopeKey.
 func owningSessionID(key string) string {
-	rest, ok := strings.CutPrefix(key, "agent:")
+	parsed := routing.ParseAgentSessionKey(key)
+	if parsed == nil {
+		return key
+	}
+	id, ok := strings.CutPrefix(parsed.Rest, "session:")
 	if !ok {
 		return key
 	}
-	i := strings.Index(rest, ":session:")
-	if i < 0 {
-		return key
-	}
-	id := rest[i+len(":session:"):]
 	if id == "" {
 		return key
 	}
