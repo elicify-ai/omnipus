@@ -2956,7 +2956,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
           description: Chat session this tab is (or stopped) watching.
         watching:
           type: boolean
@@ -5570,9 +5570,11 @@ components:
           description: Workspace whose Library holds the file.
         path:
           type: string
+          minLength: 1
           description: >
             Library path of the file, relative to the workspace Library root. For a
-            file in a mounted folder the mount name comes first.
+            file in a mounted folder the mount name comes first. Never empty: the
+            Library root is not a valid target.
     MediaPart:
       title: MediaPart
       description: One media attachment.
@@ -5674,6 +5676,7 @@ components:
         session_id:
           type: string
           minLength: 1
+          maxLength: 255
           description: Chat session the show_to_user call ran in.
         call_id:
           type: string
@@ -5696,9 +5699,11 @@ components:
           description: Workspace whose Library should open.
         path:
           type: string
+          minLength: 1
           description: >
             Library path of the file, relative to the workspace Library root. For a
-            file in a mounted folder the mount name comes first.
+            file in a mounted folder the mount name comes first. Never empty: the
+            Library root is not a valid target.
     CommandSegmentInfo:
       title: CommandSegmentInfo
       description: >

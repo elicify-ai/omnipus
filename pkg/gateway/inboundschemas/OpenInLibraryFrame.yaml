@@ -25,6 +25,7 @@ properties:
   session_id:
     type: string
     minLength: 1
+    maxLength: 255
     description: Chat session the show_to_user call ran in.
   call_id:
     type: string
@@ -47,6 +48,8 @@ properties:
     description: Workspace whose Library should open.
   path:
     type: string
+    minLength: 1
     description: >
       Library path of the file, relative to the workspace Library root. For a
-      file in a mounted folder the mount name comes first.
+      file in a mounted folder the mount name comes first. Never empty: the
+      Library root is not a valid target.

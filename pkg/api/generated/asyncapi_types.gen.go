@@ -851,7 +851,7 @@ type LibraryChangedFrame struct {
 
 // LibraryRef — Address of a file in a workspace Library (chat-links spec, Contract section). Navigation data only: it never grants access; opening the file still goes through the viewer's own Library access. Mirrors contracts/components/schemas/LibraryRef.yaml — keep both copies in sync by hand. Declared before MediaPart because the generated Zod consts are emitted in declaration order.
 type LibraryRef struct {
-	// Library path of the file, relative to the workspace Library root. For a file in a mounted folder the mount name comes first.
+	// Library path of the file, relative to the workspace Library root. For a file in a mounted folder the mount name comes first. Never empty: the Library root is not a valid target.
 	Path string `json:"path"`
 	// Workspace whose Library holds the file.
 	WorkspaceId string `json:"workspace_id"`
@@ -988,7 +988,7 @@ type NotificationFrame struct {
 type OpenInLibraryFrame struct {
 	// Tool call id of the show_to_user call. Correlates the frame with its tool card only; it is not unique and is never a de-duplication key.
 	CallId string `json:"call_id"`
-	// Library path of the file, relative to the workspace Library root. For a file in a mounted folder the mount name comes first.
+	// Library path of the file, relative to the workspace Library root. For a file in a mounted folder the mount name comes first. Never empty: the Library root is not a valid target.
 	Path string `json:"path"`
 	// Server-minted identity of this open request: 16 random bytes as 32 lowercase hex characters. The client de-duplicates on session_id plus request_id.
 	RequestId string `json:"request_id"`
