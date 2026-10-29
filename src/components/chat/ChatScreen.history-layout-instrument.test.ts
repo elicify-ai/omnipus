@@ -108,6 +108,80 @@ it('layout instrument: inner parts, paragraphs and delayed tool growth are not r
   expect(point.getBoundingClientRect().top, 'only the browser scroll offset changes screen coordinates').toBe(645)
 })
 
+it('layout cache: unchanged physical snapshots reuse DOM discovery across rectangle reads', () => {
+  layout = installHistoryLayout()
+  const { viewport, content } = fixture()
+  const rows = Array.from({ length: 12 }, (_, index) => row(String(index)))
+  content.append(...rows)
+  const discovery = vi.spyOn(viewport, 'querySelector')
+  const expected = rows.map((_, index) => 32 + index * 80)
+  expect(rows.map(element => element.getBoundingClientRect().top), 'independent physical prefix for every row').toEqual(expected)
+  expect(rows.map(element => element.getBoundingClientRect().top), 'unchanged browser inputs retain exact geometry').toEqual(expected)
+  expect(discovery, 'one content discovery per unchanged physical snapshot, not per rectangle').toHaveBeenCalledTimes(1)
+})
+
+it('layout cache: a DOM mutation invalidates synchronously before observer delivery', () => {
+  layout = installHistoryLayout()
+  const { content } = fixture()
+  const first = row('first'), target = row('target')
+  content.append(first, target)
+  expect(target.getBoundingClientRect().top, 'status32 + first80').toBe(112)
+  content.insertBefore(row('inserted'), target)
+  // No await: the observer callback has not run. takeRecords must see this.
+  expect(target.getBoundingClientRect().top, 'status32 + first80 + inserted80').toBe(192)
+  first.hidden = true
+  expect(target.getBoundingClientRect().top, 'a hidden predecessor contributes zero immediately').toBe(112)
+})
+
+it('layout cache: replacing an input map invalidates measured prefixes immediately', () => {
+  layout = installHistoryLayout()
+  const { content } = fixture()
+  const first = row('first'), target = row('target')
+  content.append(first, target)
+  layout.state.rowHeights = new Map([['first', 40]])
+  expect(target.getBoundingClientRect().top, 'status32 + first40').toBe(72)
+  layout.state.rowHeights = new Map([['first', 120]])
+  expect(target.getBoundingClientRect().top, 'replacement map supplies first120, not cached40').toBe(152)
+})
+
+it('layout cache: external map mutations, deletion and clear cannot leave stale heights', () => {
+  layout = installHistoryLayout()
+  const { content } = fixture()
+  const first = row('first'), target = row('target')
+  content.append(first, target)
+  const external = new Map([['first', 40]])
+  layout.state.rowHeights = external
+  expect(target.getBoundingClientRect().top, 'status32 + externally supplied first40').toBe(72)
+  external.set('first', 160)
+  expect(target.getBoundingClientRect().top, 'same-size external update changes first to160').toBe(192)
+  external.delete('first')
+  expect(target.getBoundingClientRect().top, 'delete restores the independent default80').toBe(112)
+  external.set('first', 40)
+  expect(target.getBoundingClientRect().top).toBe(72)
+  external.clear()
+  expect(target.getBoundingClientRect().top, 'clear cannot retain the old explicit40').toBe(112)
+})
+
+it('layout cache: scalar inputs and real transform/spacer attributes remain live', () => {
+  layout = installHistoryLayout({ virtual: true })
+  const { viewport, content } = fixture()
+  const translated = document.createElement('div')
+  translated.style.transform = 'translateY(100px)'
+  content.style.height = '2000px'
+  const first = row('first'), target = row('target')
+  translated.append(first, target); content.append(translated)
+  expect(target.getBoundingClientRect().top, 'status32 + translation100 + first80').toBe(212)
+  layout.state.rowHeight = 40
+  expect(target.getBoundingClientRect().top, 'a default-height scalar change is a new physical snapshot').toBe(172)
+  translated.style.transform = 'translateY(200px)'
+  expect(target.getBoundingClientRect().top, 'the real DOM translation changes by100').toBe(272)
+  expect(viewport.scrollHeight).toBe(2064)
+  content.style.height = '3000px'
+  expect(viewport.scrollHeight, 'new actual spacer3000 plus two32px controls').toBe(3064)
+  viewport.scrollTop = 100
+  expect(target.getBoundingClientRect().top, 'scroll is read fresh even when physical inputs stay fixed').toBe(172)
+})
+
 it('layout instrument: restore returns the original browser metrics between cases', () => {
   layout = installHistoryLayout({ virtual: true, innerParts: true })
   expect(HTMLElement.prototype.getBoundingClientRect, 'installed edge really differs').not.toBe(originalRect)
