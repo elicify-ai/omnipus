@@ -22,9 +22,22 @@ function asLibraryAddress(context: WorkspacePanelContext): LibraryAddress {
   }
 }
 
-/** The Library content shared by the docked shell and its chrome-less route. */
+/**
+ * The Library content shared by the docked shell and its chrome-less route.
+ *
+ * Both presentations drive the explorer in its ADDRESSED mode, so the docked
+ * Library opens at the path it was given (a chat link, "Open in Library" on a
+ * sent file or on a saved mail attachment) instead of the workspace root
+ * (chat-links spec FR-007, BS-1.17). Docked, every `openPanel('library', …)`
+ * re-addresses the explorer — `panelIntentRevision` is part of the key — so a
+ * second click on the same link brings the user back to that file even after
+ * they browsed elsewhere. The explorer's own navigation is reported back
+ * through `onAddressChange` and stays local until the next supplied context.
+ */
 export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
   const activePanel = useUiStore((state) => state.activePanel)
+  const panelIntentRevision = useUiStore((state) => state.panelIntentRevision)
+  const fullscreen = shellProps?.presentation === 'fullscreen'
   const suppliedContext = asWorkspaceContext(
     shellProps?.context ?? (activePanel?.id === 'library' ? activePanel.context : null),
   )
@@ -32,7 +45,7 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     suppliedContext ?? {},
   )
   const suppliedKey = suppliedContext
-    ? JSON.stringify([suppliedContext.workspaceId, suppliedContext.path])
+    ? JSON.stringify([fullscreen ? 0 : panelIntentRevision, suppliedContext.workspaceId, suppliedContext.path])
     : ''
   const lastSuppliedKeyRef = useRef(suppliedKey)
 
@@ -58,7 +71,7 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     workspaceId: next.workspaceId,
     path: next.path,
   })
-  const explorer = shellProps?.presentation === 'fullscreen'
+  const explorer = fullscreen
     ? (
         <LibraryExplorer
           address={asLibraryAddress(currentContext)}
@@ -71,6 +84,8 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
         <LibraryExplorer
           key={suppliedContext.workspaceId ?? 'root'}
           initialWorkspaceId={suppliedContext.workspaceId}
+          address={asLibraryAddress(currentContext)}
+          onAddressChange={updateAddress}
           onWorkspaceChange={(workspaceId) => {
             setCurrentContext((current) => ({
               ...current,
