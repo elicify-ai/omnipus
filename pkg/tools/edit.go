@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
 
@@ -120,7 +121,7 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if err := editFile(handle, oldText, newText); err != nil {
 		return ErrorResult(err.Error())
 	}
-	return SilentResult(fmt.Sprintf("File edited: %s", path))
+	return SilentResult(withLinkLine(fmt.Sprintf("File edited: %s", path), handleLinkLine(ctx, handle)))
 }
 
 type AppendFileTool struct {
@@ -219,7 +220,17 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if err := appendFile(handle, content); err != nil {
 		return ErrorResult(err.Error())
 	}
-	return SilentResult(fmt.Sprintf("Appended to %s", path))
+	return SilentResult(withLinkLine(fmt.Sprintf("Appended to %s", path), handleLinkLine(ctx, handle)))
+}
+
+// handleLinkLine is LinkLine for a resolved path handle: the handle's real
+// path (advisory, used only to compute the link) decides the Library.
+func handleLinkLine(ctx context.Context, handle *PathHandle) string {
+	real, err := handle.RealPath()
+	if err != nil || real == "" {
+		return ""
+	}
+	return LinkLine(ctx, config.OmnipusHomeDir(), real)
 }
 
 // editFile reads the file via handle, performs the replacement, and writes

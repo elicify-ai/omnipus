@@ -1655,7 +1655,16 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if rerr != nil {
 		return tools.ErrorResult("knowledge_read: " + rerr.Error())
 	}
-	return tools.NewToolResult(RenderRead(*data))
+	out := RenderRead(*data)
+	// chat-links FR-011 / BS-2.1: on web chat a note (or .base file) in a
+	// workspace Library gets the shared link line. data.Path is
+	// collection-relative and col.Root is the collection's real path, so the
+	// join is the note's host path; LinkLine maps it to the Library address
+	// (mount name first for a mounted collection, BS-2.3).
+	if line := tools.LinkLine(ctx, t.deps.Home, filepath.Join(col.Root, filepath.FromSlash(data.Path))); line != "" {
+		out = strings.TrimRight(out, "\n") + "\n" + line + "\n"
+	}
+	return tools.NewToolResult(out)
 }
 
 // gather does the reads: containment, the file itself, the section split, the
