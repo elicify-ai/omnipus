@@ -13,6 +13,7 @@ import { FileReadBlock } from './FileReadPreview'
 import { FileTreeBlock } from './FileTreeView'
 import { WebSearchBlock } from './WebSearchResult'
 import { WebFetchBlock } from './WebFetchPreview'
+import { FileOpReplayBlock, isFileOpToolName } from './FileWriteConfirm'
 import { GoalSetupFailureLine } from './GoalSetupFailureLine'
 import { delegationSlotted } from '../DelegationEventLine'
 
@@ -30,6 +31,31 @@ import { delegationSlotted } from '../DelegationEventLine'
  */
 function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled'): MessagePartStatus {
   return status === 'cancelled' ? { type: 'incomplete', reason: 'cancelled' } : { type: 'complete' }
+}
+
+/**
+ * write/edit/append on a finished or reloaded reply: the same FileOpBlock row
+ * the live registrations render (FileWriteConfirm.tsx), so the row keeps its
+ * status, failure reason and server link:-line Library link (code-reviewer
+ * C2). Kept outside renderHistoricalToolCall for its line budget.
+ */
+function renderFileOpReplay(
+  tc: ToolCall,
+  callId: string,
+  inlineEvents: readonly DelegationEvent[] | undefined,
+  verboseChatEnabled: boolean,
+): ReactNode {
+  return delegationSlotted(callId, inlineEvents, (
+    <FileOpReplayBlock
+      key={callId}
+      toolName={tc.tool}
+      params={tc.params as Record<string, unknown> | undefined}
+      result={tc.result}
+      status={tc.status}
+      error={tc.error}
+      verboseChatEnabled={verboseChatEnabled}
+    />
+  ))
 }
 
 export function renderHistoricalToolCall({
@@ -156,6 +182,8 @@ export function renderHistoricalToolCall({
       />
     ))
   }
+  // write/edit/append: the live FileOpBlock row (code-reviewer C2).
+  if (isFileOpToolName(tc.tool)) return renderFileOpReplay(tc, callId, inlineEvents, verboseChatEnabled)
   if (tc.tool === 'read_file' || tc.tool === 'file.read') {
     return delegationSlotted(callId, inlineEvents, (
       <FileReadBlock
