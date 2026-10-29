@@ -6,7 +6,6 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { cn } from '@/lib/utils'
 import { parseChatLink, type ChatLinkTarget } from '@/lib/chatLinks'
-import { useChatLinkWorkspace } from '@/store/chatView'
 import { ChatLibraryLink } from '../ChatLibraryLink'
 
 interface WriteFileArgs {
@@ -210,11 +209,8 @@ function FileOpRow({
   const isError = !isCancelled && storeCall?.status === 'error'
   // Follow-up 2: a successful write's file name becomes the same Library link
   // a chat reply would render (same opener, same leave gate, chat-only rules).
-  const chatWorkspaceId = useChatLinkWorkspace()
   const succeeded = !isRunning && !isError && !isCancelled && !isRefusal
-  const libraryTarget = succeeded
-    ? writtenFileLibraryTarget(storeCall?.result ?? result, path, chatWorkspaceId)
-    : null
+  const libraryTarget = succeeded ? writtenFileLibraryTarget(storeCall?.result ?? result) : null
 
   // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
   // hides this row when shouldRenderToolCall says so, unless verbose chat is
@@ -246,20 +242,16 @@ function FileOpRow({
 const LINK_LINE_RE = /^link: (omnipus:\/\/file\/\S+)$/m
 
 /**
- * The Library location of a written file, or null. Preferred source: the
- * tool result's `link:` line, which the server's resolver produces on web
- * chat for Library files only (FR-011) and which covers absolute paths and
- * mounts. Otherwise the written path itself, read as a bare chat link against
- * the chat's own workspace (the Bare-link rule: relative, file-like, strict
- * path check; never in Omnipus's chat or a chat without a workspace).
+ * The Library location of a written file, or null. The ONLY source is the
+ * tool result's `link:` line: the server adds it on web chat for a Library
+ * file only (FR-011), so a write without one is not a Library file (US-4
+ * AS-4, R4). The written path itself is never guessed into a Library address
+ * — the turn's working directory is not a Library root (BS-4.4).
  */
-function writtenFileLibraryTarget(result: unknown, path: string, chatWorkspaceId: string | null): ChatLinkTarget | null {
-  if (typeof result === 'string') {
-    const line = LINK_LINE_RE.exec(result)
-    const fromServer = line ? parseChatLink(line[1], null) : null
-    if (fromServer) return fromServer
-  }
-  return parseChatLink(path, chatWorkspaceId)
+function writtenFileLibraryTarget(result: unknown): ChatLinkTarget | null {
+  if (typeof result !== 'string') return null
+  const line = LINK_LINE_RE.exec(result)
+  return line ? parseChatLink(line[1], null) : null
 }
 
 function makeWriteFileUI(toolName: string) {
