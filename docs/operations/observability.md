@@ -123,7 +123,7 @@ A saved `provider_fallback` note appears in `entries` — and in available detai
 
 The browser measures actual drawn height and tops up contiguous pages toward four screens on opening and two new screens during prefetch, stopping at a clear boundary, retained end or visible failure. Range refreshes may need more than five physical pages. A shorter byte-limited page is not by itself proof that the screen-height goal was met.
 
-The canonical [OpenAPI contract](https://github.com/elicify-ai/omnipus/blob/main/contracts/openapi.yaml) defines the complete generated shapes. For offline index preparation and restoration, follow [Repairing a saved chat history index](https://github.com/elicify-ai/omnipus/blob/main/docs/operations/chat-history-index.md). This is a separate operator procedure, not an automatic API repair loop.
+The canonical [OpenAPI contract](https://github.com/elicify-ai/omnipus/blob/main/contracts/openapi.yaml) defines the complete generated shapes. Offline index preparation and restoration is not a shipped procedure: the standalone repair command was removed by founder decision on 2026-10-27 (greenfield, no upgrade path). Recovery stays inside the product's bounded reconciliation of a known prefix, never an automatic API repair loop.
 
 ### Content-free history diagnostics
 

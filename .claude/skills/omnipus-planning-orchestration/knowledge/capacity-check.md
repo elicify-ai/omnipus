@@ -5,7 +5,7 @@ Detail behind SKILL.md §3. Design source: section 5.6 of
 a dev-team tool authored under that design; it is deliberately not `check-`-prefixed, so
 the CI guards runner does not adopt it as a gate).
 
-Last reviewed: 2026-10-23 — text contradictions and implemented tooling
+Last reviewed: 2026-10-28 — dev-team roster update (ten roles)
 
 Current safety authority: root `CLAUDE.md` ("Running CLI agents" and "Build, test,
 and quality gates"). The monitor and the worker controller are separate instruments.
@@ -24,7 +24,7 @@ one verdict line:
 
 **Where it is run:** before every new dispatch wave, before widening an existing one,
 and as the first step of idle-playbook lane 3 (dispatching an independent team or
-squad). Team-lead and any squad lead widening its own fan-out both run it.
+stream). Every team-lead session widening its own fan-out runs it.
 
 ## Signals
 

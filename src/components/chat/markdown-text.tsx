@@ -14,6 +14,7 @@
 // (historical-markdown.tsx) so the live and reloaded views stay in parity.
 
 import { memo } from 'react'
+import type { SmoothOptions } from '@assistant-ui/react'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -69,15 +70,17 @@ const staticMarkdownComponents = memoizeMarkdownComponents({
 
 // ── MarkdownText component ────────────────────────────────────────────────────
 // Usage: <MarkdownText /> inside MessagePrimitive.Parts (reads text from context).
+// `smooth` tunes the typewriter reveal (default pacing when true); the live
+// reply part passes catch-up pacing while an opened chat is still covered.
 
-function MarkdownTextImpl() {
+function MarkdownTextImpl({ smooth = true }: { smooth?: boolean | SmoothOptions }) {
   return (
     <MarkdownTextPrimitive
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex, rehypePhosphorEmoji]}
       className="prose-sm prose-invert max-w-none text-[var(--color-secondary)] leading-relaxed"
       components={staticMarkdownComponents}
-      smooth
+      smooth={smooth}
     />
   )
 }

@@ -1520,14 +1520,7 @@ run_all_no_e2e() {
   return 0
 }
 
-# Standalone command/native evidence gates stay sequential within the Go tier.
-# Keep this additive seam separate from the worker lifecycle/locking code.
-run_history_index_repair() {
-  python3 -I deploy/ci-worker/chat-history-ci.py repair
-}
-
 case "$GATE" in
-  history-index-repair) step history-index-repair run_history_index_repair ;;
   gofmt)           step gofmt run_gofmt ;;
   go-build)        step go-build run_gobuild ;;
   go-vet)          step go-vet run_govet ;;

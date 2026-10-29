@@ -36,7 +36,7 @@ coordination/
 ├── LANDING-LOG.md        append-only landed-commit record
 ├── MESSAGES.md           append-only durable record of urgent cross-session calls
 └── squads/
-    └── <squad-id>.md    one file per squad: its row, plus a pending landing
+    └── <squad-id>.md    one file per stream: its row, plus a pending landing
                           announcement when one is in flight
 ```
 
@@ -49,7 +49,7 @@ coordination/
 | `LANDING-LOCK.template` | `LANDING-LOCK` (start absent — do not create it with content; the file's mere existence-with-content is the lock) |
 | `LANDING-LOG.md.template` | `LANDING-LOG.md` (start empty) |
 | `MESSAGES.md.template` | `MESSAGES.md` (start empty) |
-| `squads/SQUAD-ID.md.template` | `squads/<real-squad-id>.md`, one per squad, created when the squad starts |
+| `squads/SQUAD-ID.md.template` | `squads/<real-squad-id>.md`, one per stream, created when the stream starts |
 
 Each template's header comment documents its exact line format and cites
 the design section that specifies its fields. Two of those formats are also
@@ -61,13 +61,13 @@ must land together with a matching code change in the same commit:
 - `squads/*.md` `status=in-flight` field — counted by
   `scripts/dev-machine-capacity.sh` (active-dispatch signal, design 5.6).
 
-## Current process (amended 2026-10-23)
+## Current process (amended 2026-10-28)
 
 Root `CLAUDE.md` ("Subagent Workflow") is the authority;
 `.claude/skills/omnipus-planning-orchestration/knowledge/coordination-ledger.md` gives
 the current procedure. Existing row formats stay unchanged: `squads/` also holds
 directly coordinated feature and train rows with `lead=team-lead`; it does not
-require a new in-session squad lead. Put one canonical ledger file per stream here.
+require a separate lead role. Put one canonical ledger file per stream here.
 
 ## Claims are information, not machine locks (design 5.9, as amended)
 
