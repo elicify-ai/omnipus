@@ -18,7 +18,6 @@ type Decide = (input: {
   tabWatching: boolean
   guardPending: boolean
   libraryDirty: boolean
-  sessionOnScreen: boolean
   replaying: boolean
   awaitingCatchUp: boolean
   hasSeq: boolean
@@ -50,7 +49,6 @@ describe('decideLibraryOpen', () => {
       tabWatching: true,
       guardPending: false,
       libraryDirty: false,
-      sessionOnScreen: true,
       replaying: false,
       awaitingCatchUp: false,
       hasSeq: false,
@@ -67,9 +65,9 @@ describe('decideLibraryOpen', () => {
     expect(decide({ ...base, hasSeq: true })).toBe('drop')
     expect(decide({ ...base, duplicate: true })).toBe('drop')
     expect(decide({ ...base, requestId: 'NOT-HEX' })).toBe('drop')
-    // A frame for a session that is not on screen is not watching, not a drop
-    // (BS-6.5, spec r3 F1). The notice is stored for when the user returns.
-    expect(decide({ ...base, sessionOnScreen: false })).toBe('notice')
+    // Not-on-screen is not a separate decide input. The handler sets
+    // tabWatching from the active session, and the frame test below stores
+    // the notice (BS-6.5, F1). tabWatching false is already notice above.
     // Founder decision supersedes the phone-width gate. Width and historyPushed
     // must not change an otherwise-open decision.
     expect(decide({ ...base, panelRowWidth: 0 })).toBe('open')

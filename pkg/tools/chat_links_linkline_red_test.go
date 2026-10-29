@@ -72,7 +72,7 @@ func chatLinksWebCtx(dir string) context.Context {
 func TestEncodeLibraryLink_GoldenVectors(t *testing.T) {
 	// BS-1.8 / FR-010. Observed through write_file, which must append the one
 	// encoder's link line on web chat (FR-011). A hand-built unencoded link fails.
-	dir := t.TempDir()
+	dir := chatLinksLibraryWork(t)
 	tool := NewWriteFileTool(dir, true)
 	ctx := chatLinksWebCtx(dir)
 
@@ -112,7 +112,7 @@ func TestEncodeLibraryLink_GoldenVectors(t *testing.T) {
 }
 
 func TestWriteTools_LinkLine(t *testing.T) {
-	dir := t.TempDir()
+	dir := chatLinksLibraryWork(t)
 	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestWriteTools_LinkLine(t *testing.T) {
 }
 
 func TestSendFile_ChannelNoLink(t *testing.T) {
-	dir := t.TempDir()
+	dir := chatLinksLibraryWork(t)
 	path := filepath.Join(dir, "notes.md")
 	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)

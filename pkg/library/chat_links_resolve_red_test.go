@@ -50,9 +50,11 @@ func TestResolveHostPath_TurnWorkDirIsNotTheLibrary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ref := ResolveHostPath(ResolveScope{Home: home, WorkspaceID: "W", TurnWorkDir: turn}, file)
+	// TurnWorkDir is not a resolver input. A file that is not under the
+	// workspace work directory is outside even when a turn directory holds it.
+	ref := ResolveHostPath(ResolveScope{Home: home, WorkspaceID: "W"}, file)
 	if ref.InLibrary() || ref.Kind != HostRefOutside {
-		t.Fatalf("file under TurnWorkDir with no workspace work dir = %+v, want outside (BS-4.4 B3)", ref)
+		t.Fatalf("file outside the workspace work dir = %+v, want outside (BS-4.4 B3)", ref)
 	}
 }
 

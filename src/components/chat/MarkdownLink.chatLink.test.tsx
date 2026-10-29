@@ -3,13 +3,16 @@
  * The query (workspace and path) comes from BS-1.15. The hash prefix is the
  * app's address for that route: main.tsx mounts createHashHistory, and
  * KnowledgeBacklinks.tsx::libraryNoteHref already writes /#/library?...
- * Both live and historical markdown call createLinkRenderer(null).
+ * Chat message rendering opts in with createLinkRenderer(null, { chatLinks: true }).
+ * The default renderer (Mail and Library) must not build a Library anchor (BS-1.18).
  */
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { registerChatView } from '@/store/chatView'
 import { createLinkRenderer } from './markdown-shared'
 
-const MarkdownLink = createLinkRenderer(null)
+const MarkdownLink = createLinkRenderer(null, { chatLinks: true })
+const PlainLink = createLinkRenderer(null)
 
 describe('omnipus file links', () => {
   it('renders an internal Library anchor with a visible target suffix (BS-1.1 / SEC-6)', () => {
@@ -54,3 +57,24 @@ describe('omnipus file links', () => {
     }
   })
 })
+
+describe('default renderer has no chat links (BS-1.18)', () => {
+  let release: (() => void) | undefined
+  afterEach(() => {
+    release?.()
+    release = undefined
+  })
+
+  it('does not turn omnipus:// or a bare path into a Library anchor', () => {
+    release = registerChatView('sess-mail', 'W')
+    for (const href of ['omnipus://file/W/x.md', 'notes/x.md']) {
+      const { unmount, container } = render(<PlainLink href={href}>a</PlainLink>)
+      const library = [...container.querySelectorAll('a')].filter((anchor) =>
+        (anchor.getAttribute('href') ?? '').includes('/#/library'),
+      )
+      expect(library, href).toEqual([])
+      unmount()
+    }
+  })
+})
+

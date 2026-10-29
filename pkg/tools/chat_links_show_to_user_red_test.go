@@ -55,9 +55,33 @@ func chatLinksShowToUser(t *testing.T, spec string) Tool {
 	return nil
 }
 
+// chatLinksLibraryWork is the workspace Library: a temp OMNIPUS_HOME and
+// workspace.SafeWorkDir for W. A home already set by the test is kept, so a
+// carve-out file created under that home stays on the same root.
+func chatLinksLibraryWork(t *testing.T) string {
+	t.Helper()
+	home := os.Getenv("OMNIPUS_HOME")
+	if home == "" {
+		real, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("OMNIPUS_HOME", real)
+		home = real
+	}
+	work, err := workspace.SafeWorkDir(home, "W")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return work
+}
+
 func chatLinksOwnFile(t *testing.T) (context.Context, string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := chatLinksLibraryWork(t)
 	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
