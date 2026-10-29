@@ -661,6 +661,18 @@ Three named exceptions:
 - **External CLI workers.** The external command-line workers (Claude Code, Codex, opencode runs inside an isolated workspace) also receive the provider login values their CLI needs — for example `ANTHROPIC_API_KEY` or `CODEX_HOME` — because their job is to authenticate to your model provider. This is the documented runner credential path; the general gateway secrets stay excluded there too.
 - **God Mode.** While God Mode is on (Settings → Gateway → Danger zone), the programs your agent's `bash` commands start — foreground or background — and the runs of the `environment_setup` tool receive your **full gateway environment** instead of the allowlist. That includes your saved provider API keys and mailbox passwords. This is an accepted risk: God Mode means full trust, and its documentation says that God Mode programs see your keys. One limit survives even here: the three gateway boot values — the master-key and key-file variables and the web token — are still withheld from these programs. When God Mode is off, and for every other starter (browser, hooks, git, MCP servers, transcoders, the launcher), the allowlist is all a child ever gets.
 
+## Checking an external command-line program
+
+The CLI check behind an external worker's **CLI path** field (`POST /api/v1/system/cli-validate`) runs the program you typed to read its version. Since 2026-10-29 only a signed-in person can use it: a request made with the command-line token, or while the gateway runs in development-bypass mode, is refused (403) before anything is read or started.
+
+Before starting anything, Omnipus checks the program file itself. The path must be absolute. Omnipus follows every link on the way to the real file and refuses the path — reason **path-not-allowed**, with a message naming the failed check, nothing started — when:
+
+- the file, or any link on the way, is inside the Omnipus data folder, a workspace or a workspace mount (places agents can write);
+- the file is writable by its group or by other users, or its folder or a link's folder is writable by other users;
+- the file is not a regular program the account running Omnipus can execute.
+
+On Windows the path must be a full drive or network (UNC) path to an `.exe`, `.cmd` or `.bat` file, without short `8.3` names (such as `PROGRA~1`) or alternate data streams. When the check passes, Omnipus runs exactly the file it checked.
+
 ## Limits and things to watch
 
 - Security controls reduce risk but do not make every agent action safe. Read approval details before allowing a request.

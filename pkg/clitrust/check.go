@@ -1,0 +1,167 @@
+package clitrust
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// maxLinkHops bounds link-chain resolution (the same order of magnitude as
+// the kernel's own ELOOP limit) so a link cycle is refused, not followed.
+const maxLinkHops = 40
+
+// agentWritableKinds names what the forbidden roots are in every refusal, so
+// a person can tell why a location is refused without a list of paths.
+const agentWritableKinds = "a folder agents can write (the Omnipus home, a workspace folder or a workspace mount)"
+
+// CheckProgramPath decides whether path may be started as a third-party CLI
+// (T11 spec §3.2). It returns the resolved final file; callers launch exactly
+// that file and never resolve path a second time.
+//
+// The path must be absolute. The link chain is resolved one link at a time.
+// The candidate is refused when the final file, any link, or any link's
+// folder lies inside one of the forbidden roots (normally
+// AgentWritableRoots), when the final file, its folder or a link's folder is
+// writable by others, or when the final file is not a regular file the
+// gateway user can execute. Platform rules (Windows: drive or UNC path,
+// .exe/.cmd/.bat only, no 8.3 short names, no alternate data streams) are in
+// check_unix.go and check_windows.go.
+//
+// Every refusal is an error naming the failed check and the path concerned;
+// no file content is ever read into it.
+func CheckProgramPath(path string, forbidden []string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", errors.New("no program path was given; enter the absolute path of the program")
+	}
+	if err := checkPathShape(path); err != nil {
+		return "", err
+	}
+	roots := expandRoots(forbidden)
+
+	final, links, err := resolveLinkChain(path)
+	if err != nil {
+		return "", err
+	}
+	for _, link := range links {
+		if root, inside := insideAny(link, roots); inside {
+			return "", fmt.Errorf("the link %q lies inside %q, %s", link, root, agentWritableKinds)
+		}
+		dir := filepath.Dir(link)
+		if root, inside := insideAny(dir, roots); inside {
+			return "", fmt.Errorf("the folder of the link %q lies inside %q, %s", link, root, agentWritableKinds)
+		}
+		if err := checkFolderNotWritableByOthers(dir, "the folder of the link "+quote(link)); err != nil {
+			return "", err
+		}
+	}
+	if root, inside := insideAny(final, roots); inside {
+		if len(links) > 0 {
+			return "", fmt.Errorf("%q is a link chain ending at %q, which lies inside %q, %s", path, final, root, agentWritableKinds)
+		}
+		return "", fmt.Errorf("%q lies inside %q, %s", final, root, agentWritableKinds)
+	}
+	if err := checkFinalFile(final); err != nil {
+		return "", err
+	}
+	return final, nil
+}
+
+func quote(s string) string { return fmt.Sprintf("%q", s) }
+
+// expandRoots returns each forbidden root in its cleaned form and, when it
+// exists, its symlink-resolved form, so both spellings of a root (macOS
+// /var and /private/var) are matched.
+func expandRoots(forbidden []string) []string {
+	out := make([]string, 0, len(forbidden)*2)
+	for _, r := range forbidden {
+		if strings.TrimSpace(r) == "" {
+			continue
+		}
+		clean := filepath.Clean(r)
+		out = append(out, clean)
+		if resolved, err := filepath.EvalSymlinks(clean); err == nil && resolved != clean {
+			out = append(out, resolved)
+		}
+	}
+	return out
+}
+
+// insideAny reports whether p equals or lies below one of roots.
+func insideAny(p string, roots []string) (string, bool) {
+	for _, r := range roots {
+		if pathWithin(r, p) {
+			return r, true
+		}
+	}
+	return "", false
+}
+
+func pathWithin(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	// filepath.Rel compares path elements case-insensitively on Windows.
+	if rel == "." {
+		return true
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+// resolveLinkChain walks path one component at a time from its volume root,
+// replacing every symbolic link by its target. It returns the final resolved
+// file and every link met on the way (as resolved link locations).
+func resolveLinkChain(path string) (string, []string, error) {
+	vol := filepath.VolumeName(path)
+	pending := splitComponents(path[len(vol):])
+	cur := vol + string(filepath.Separator)
+	var links []string
+	hops := 0
+	for len(pending) > 0 {
+		c := pending[0]
+		pending = pending[1:]
+		if c == ".." {
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, c)
+		fi, err := os.Lstat(next)
+		if err != nil {
+			return "", nil, fmt.Errorf("%q cannot be read: %w", path, err)
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			cur = next
+			continue
+		}
+		hops++
+		if hops > maxLinkHops {
+			return "", nil, fmt.Errorf("%q has more than %d links in its chain", path, maxLinkHops)
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			return "", nil, fmt.Errorf("the link %q cannot be read: %w", next, err)
+		}
+		links = append(links, next)
+		if filepath.IsAbs(target) {
+			tvol := filepath.VolumeName(target)
+			cur = tvol + string(filepath.Separator)
+			pending = append(splitComponents(target[len(tvol):]), pending...)
+		} else {
+			pending = append(splitComponents(target), pending...)
+		}
+	}
+	return cur, links, nil
+}
+
+func splitComponents(p string) []string {
+	parts := strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == filepath.Separator })
+	out := parts[:0]
+	for _, part := range parts {
+		if part != "." && part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}

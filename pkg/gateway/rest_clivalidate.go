@@ -7,25 +7,31 @@
 // read-only cli-detect probe, it is therefore hardened as a privileged
 // diagnostic (F-01, CRITICAL):
 //
-//   - Auth: withAuth at CREATE-PARITY — the SAME gating as createAgent (plain
-//     withAuth, NOT admin, NOT RequireNotBypass). Anyone who can add the
-//     subagent can validate it; wired in registerAdditionalEndpoints.
+//   - Auth: a signed-in person only (T11 spec §3.2, ADR-030 §11 as amended
+//     2026-10-29): withAuth then middleware.RequirePersonSession, which
+//     answers 403 before the body is read for CLI-token, development-bypass
+//     and user-less requests. Wired in registerAdditionalEndpoints.
 //   - Rate limit: a DEDICATED per-IP limiter (cliValidateLimiter), tighter than
 //     the read-only endpoints, applied via withRateLimit at registration.
 //   - Concurrency: a per-caller in-flight cap (cliValidateInflight) so a single
 //     principal cannot fan out unbounded concurrent spawns (self-DoS). It is
 //     per-caller, not a global slot — a global cap would let one caller starve
 //     everyone else.
-//   - Pre-spawn guard: the target MUST be a regular, executable file, else it is
-//     classified missing-binary WITHOUT a spawn. An empty path short-circuits to
-//     missing-binary (never a silent $PATH fallback — FR-014). Per the operator
-//     decision there is NO basename/identity check — a runnable binary that
-//     returns a version passes even if mis-pointed (F-03).
+//   - Pre-spawn guard: the shared program-file check
+//     (clitrust.CheckProgramPath against clitrust.AgentWritableRoots) must
+//     accept the target, else it is classified path-not-allowed WITHOUT a
+//     spawn; the checked resolved file is the one launched. An empty path
+//     short-circuits to missing-binary (never a silent $PATH fallback —
+//     FR-014). Per the operator decision there is NO basename/identity check —
+//     a runnable binary that returns a version passes even if mis-pointed
+//     (F-03).
 //   - Audit: exactly one audit event {cli, resolved_path, reason} per call
 //     (EventCliValidate), including the no-spawn classifications.
 //   - Response hygiene: `detail` is a fixed classified message per reason — NEVER
-//     raw stderr from the spawned process (FR-017). The classified-message set is
-//     closed, so process output cannot be smuggled through the response.
+//     raw stderr from the spawned process (FR-017). The one non-fixed detail is
+//     path-not-allowed's, which is the program-file check's own message (a
+//     path and the failed check, produced before anything runs), so process
+//     output still cannot be smuggled through the response.
 
 package gateway
 
@@ -35,7 +41,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -44,6 +49,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/clitrust"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -165,40 +171,63 @@ func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliV
 	if cliPath == "" {
 		return buildCliValidateResponse(gen.CliValidateResponseReasonMissingBinary, nil, nil)
 	}
-	// 3. Pre-spawn target constraint (FR-013 / MAJ-004): resolve the spawn target
-	//    the SAME way the runtime spawn does before guarding it, so the guard is
-	//    authoritative over what would actually be exec'd. exec.LookPath handles
-	//    BOTH a bare name (resolved via $PATH — the US-4 override case a raw
-	//    os.Stat wrongly rejected) AND an absolute/relative path (stat'd as-is).
-	//    A LookPath miss OR a resolved target that is not a REGULAR executable
-	//    file (e.g. a FIFO or device the OS reports X_OK on) classifies
-	//    missing-binary WITHOUT a spawn. No basename / identity check (F-03).
-	resolvedTarget, lpErr := exec.LookPath(cliPath)
-	if lpErr != nil || !isRegularExecutableFile(resolvedTarget) {
-		return buildCliValidateResponse(gen.CliValidateResponseReasonMissingBinary, nil, nil)
+	// 3. Shared program-file check BEFORE any spawn (T11 spec §3.2, FR-5): an
+	//    absolute path whose link chain and final file stay out of the
+	//    agent-writable roots, are not writable by others, and end at a regular
+	//    executable. A refusal is path-not-allowed and starts nothing. A bare
+	//    name is refused (not absolute) rather than resolved on $PATH.
+	finalFile, checkErr := clitrust.CheckProgramPath(cliPath, a.cliTrustForbiddenRoots(ctx))
+	if checkErr != nil {
+		return pathNotAllowedResponse(checkErr)
 	}
-	// 4. Delegate to the shared connection test AS-IS (no identity extension). It
-	//    re-resolves cliPath itself with the identical precedence, so passing the
-	//    raw cliPath keeps Test validating exactly what a real run would exec.
-	res := cliTestConnection(ctx, cli, cliPath)
+	// 4. Delegate to the shared connection test AS-IS (no identity extension),
+	//    on exactly the checked resolved file — never a second resolution.
+	res := cliTestConnection(ctx, cli, finalFile)
 	reason := mapValidateReason(res.Reason)
 
 	var resolved, version *string
 	switch reason {
 	case gen.CliValidateResponseReasonOk, gen.CliValidateResponseReasonUnauthenticated:
-		resolved = strPtr(absResolvePath(cliPath))
+		resolved = strPtr(finalFile)
 		if res.CLIVersion != "" {
 			version = strPtr(res.CLIVersion)
 		}
 	case gen.CliValidateResponseReasonHandshakeFailed:
 		// A target was found and spawned but did not report a version — surface
 		// the resolved path (no version).
-		resolved = strPtr(absResolvePath(cliPath))
-	case gen.CliValidateResponseReasonMissingBinary, gen.CliValidateResponseReasonUnknownCli:
+		resolved = strPtr(finalFile)
+	case gen.CliValidateResponseReasonMissingBinary, gen.CliValidateResponseReasonUnknownCli,
+		gen.CliValidateResponseReasonPathNotAllowed:
 		// No binary was found/spawned for these reasons, so there is nothing
 		// to resolve — resolved and version stay nil.
 	}
 	return buildCliValidateResponse(reason, resolved, version)
+}
+
+// cliTrustForbiddenRoots is the forbidden list for clitrust.CheckProgramPath:
+// the Omnipus home, every workspace folder and mount root, and configured
+// agent working folders. The request's config snapshot is preferred; the
+// live config is the fallback.
+func (a *restAPI) cliTrustForbiddenRoots(ctx context.Context) []string {
+	cfg := configFromContext(ctx)
+	if cfg == nil && a.agentLoop != nil {
+		cfg = a.agentLoop.GetConfig()
+	}
+	home := a.homePath
+	if home == "" {
+		home = config.OmnipusHomeDir()
+	}
+	return clitrust.AgentWritableRoots(home, cfg)
+}
+
+// pathNotAllowedResponse is the path-not-allowed classification: not ok,
+// nothing resolved or run, and the check's own message naming the failed
+// check (spec §3.2 C-A2). The message comes from a filesystem check made
+// before any spawn, never from process output.
+func pathNotAllowedResponse(checkErr error) gen.CliValidateResponse {
+	resp := buildCliValidateResponse(gen.CliValidateResponseReasonPathNotAllowed, nil, nil)
+	resp.Detail = strPtr("not allowed: " + checkErr.Error())
+	return resp
 }
 
 // isSupportedCLI reports whether cli is one of the recognized external CLIs.
@@ -319,6 +348,8 @@ func classifiedDetail(reason gen.CliValidateResponseReason) string {
 		return "did not run or returned no version"
 	case gen.CliValidateResponseReasonUnknownCli:
 		return "unsupported cli"
+	case gen.CliValidateResponseReasonPathNotAllowed:
+		return "not allowed"
 	default:
 		return "validation failed"
 	}

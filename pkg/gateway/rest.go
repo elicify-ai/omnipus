@@ -677,14 +677,16 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	rae.cm.RegisterHTTPHandler("/api/v1/system/folders", rae.a.withAuth(rae.a.HandleSystemFolders))
 	// POST /api/v1/system/cli-validate — spawns a caller-supplied path
 	// (<cli> --version), so it is hardened as a privileged diagnostic (ADR-030
-	// §11 F-01). CREATE-PARITY auth: plain withAuth, exactly like createAgent /
-	// HandleAgents below — NOT admin, NOT RequireNotBypass (anyone who can add
-	// the subagent can validate it). A DEDICATED rate limiter (cliValidateLimiter,
+	// §11 F-01, amended by T11 spec §3.2): a signed-in person only —
+	// RequirePersonSession answers 403 before the body is read for CLI-token,
+	// development-bypass and user-less requests (it is not RequireNotBypass,
+	// which would answer 503). A DEDICATED rate limiter (cliValidateLimiter,
 	// distinct from validateLimiter) throttles the spawn endpoint; the handler
-	// additionally enforces a per-caller in-flight cap and audits each call.
+	// runs clitrust.CheckProgramPath before any spawn, enforces a per-caller
+	// in-flight cap and audits each call.
 	rae.cm.RegisterHTTPHandler(
 		"/api/v1/system/cli-validate",
-		rae.a.withAuth(withRateLimit(cliValidateLimiter, rae.a.HandleSystemCliValidate)),
+		rae.a.withAuth(middleware.RequirePersonSession(withRateLimit(cliValidateLimiter, rae.a.HandleSystemCliValidate))),
 	)
 	rae.cm.RegisterHTTPHandler("/api/v1/status", rae.a.withAuth(rae.a.HandleStatus))
 	// GET /api/v1/tasks/occurrences — Calendar Recurrence Redesign occurrence
