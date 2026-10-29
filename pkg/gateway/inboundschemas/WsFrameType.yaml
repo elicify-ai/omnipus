@@ -12,6 +12,7 @@ enum:
   - attach_session
   - device_pairing_response
   - ask_user_answer
+  - chat_presence
   # ── Server → client ─────────────────────────────────────────────────────────
   - session_started
   - message_status
@@ -35,6 +36,7 @@ enum:
   - cancel_stage
   - pong
   - ask_user_question
+  - open_in_library
   # ── Server → client (internal / ack) ────────────────────────────────────────
   - device_pairing_request
   - browser_input_offer
