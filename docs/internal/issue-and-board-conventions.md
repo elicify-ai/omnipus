@@ -59,7 +59,7 @@ Board **#3** auto-tracks issues. Relevant fields:
 
 ## Feature epics, Stage and Horizon (founder decision 2026-10-29)
 
-The board must show every feature, not only work items. Rules for every team except Team C (Team C works in its own repository with its own variant, agreed with the founder):
+The board must show every feature, not only work items. Rules for every team except Team C (Team C keeps its own backlog with the cloud team and is outside this process):
 
 - **One Epic per product feature.** Type = Epic; the title is a plain name ("Skills are folders"), the first lines give the goal in one sentence in plain words. The Epic body links the requirements document, the ADR or spec, the branch and the PR. Bugs and tasks of the feature are sub-issues.
 - **Nothing is written without its Epic.** A requirements document, design, spec or long-lived feature branch exists only with its Epic. Ideas worth keeping get an Epic with Stage `Idea`.
