@@ -2,11 +2,11 @@
   "version": 1,
   "gateway": { "port": 19999, "dev_mode_bypass": true },
   "sandbox": { "audit_log": true, "tool_policies": { "spawn": "allow" } },
-  "agents": { "defaults": { "default_model": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash" }, "auto_recap_enabled": true } },
+  "agents": { "defaults": { "default_model": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview" }, "auto_recap_enabled": true } },
   "providers": [
     {
       "provider": "minimax-coding-plan",
-      "model": "MiniMax-M3.1-Flash",
+      "model": "MiniMax-M3.1-Flash-Preview",
       "api_base": "https://api.minimax.io/anthropic/v1",
       "api_key_ref": "MINIMAX_API_KEY"
     },

@@ -23,7 +23,7 @@ const (
 )
 
 const centralModelFixture = `{
-  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash", "api_key_ref": "MINIMAX_API_KEY" },
+  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" },
   "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
 }
 `
@@ -140,7 +140,7 @@ func TestOnboardUsesTheProviderKeyAndSeedsTheFallback(t *testing.T) {
 
 	srv, got := newOnboardGateway(t)
 	h := &gatewayHandle{baseURL: srv.URL}
-	if err := h.onboard("minimax-coding-plan/MiniMax-M3.1-Flash"); err != nil {
+	if err := h.onboard("minimax-coding-plan/MiniMax-M3.1-Flash-Preview"); err != nil {
 		t.Fatalf("onboard() error = %v\nrequests:\n%s", err, callSummary(*got))
 	}
 	if len(*got) != 5 {
@@ -152,7 +152,7 @@ func TestOnboardUsesTheProviderKeyAndSeedsTheFallback(t *testing.T) {
 		"auth_method": "api_key",
 		"id":          "minimax-coding-plan",
 		"api_key":     fakeMinimaxKey,
-		"model":       "MiniMax-M3.1-Flash",
+		"model":       "MiniMax-M3.1-Flash-Preview",
 	})
 	admin, _ := onboard.Body["admin"].(map[string]any)
 	if admin["username"] != "eval-admin" {
@@ -189,7 +189,7 @@ func TestOnboardMissingMinimaxKeyNamesBothEnvVars(t *testing.T) {
 
 	srv, got := newOnboardGateway(t)
 	h := &gatewayHandle{baseURL: srv.URL}
-	err := h.onboard("minimax-coding-plan/MiniMax-M3.1-Flash")
+	err := h.onboard("minimax-coding-plan/MiniMax-M3.1-Flash-Preview")
 	if err == nil {
 		t.Fatalf("onboard() error = nil, want an error naming MINIMAX_API_KEY_CI and MINIMAX_API_KEY_EVAL\nrequests:\n%s", callSummary(*got))
 	}
@@ -211,7 +211,7 @@ func TestOnboardMissingFallbackKeyNamesTheFallback(t *testing.T) {
 
 	srv, got := newOnboardGateway(t)
 	h := &gatewayHandle{baseURL: srv.URL}
-	err := h.onboard("minimax-coding-plan/MiniMax-M3.1-Flash")
+	err := h.onboard("minimax-coding-plan/MiniMax-M3.1-Flash-Preview")
 	if err == nil {
 		t.Fatalf("onboard() error = nil, want an error naming the fallback key OPENROUTER_API_KEY_EVAL\nrequests:\n%s", callSummary(*got))
 	}

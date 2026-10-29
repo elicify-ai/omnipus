@@ -6,12 +6,12 @@
 import { describe, expect, it } from 'vitest'
 
 const SPEC = `{
-  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash", "api_key_ref": "MINIMAX_API_KEY" },
+  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" },
   "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
 }`
 
 const PARSED = {
-  primary: { provider: 'minimax-coding-plan', model: 'MiniMax-M3.1-Flash', apiKeyRef: 'MINIMAX_API_KEY' },
+  primary: { provider: 'minimax-coding-plan', model: 'MiniMax-M3.1-Flash-Preview', apiKeyRef: 'MINIMAX_API_KEY' },
   fallback: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash', apiKeyRef: 'OPENROUTER_API_KEY' },
 }
 
@@ -46,7 +46,7 @@ describe('parseE2EModel (design.md §4.1)', () => {
   it('trims every field', async () => {
     const { parseE2EModel } = await loadModelModule()
     const raw = `{
-      "primary": { "provider": " minimax-coding-plan ", "model": " MiniMax-M3.1-Flash ", "api_key_ref": " MINIMAX_API_KEY " },
+      "primary": { "provider": " minimax-coding-plan ", "model": " MiniMax-M3.1-Flash-Preview ", "api_key_ref": " MINIMAX_API_KEY " },
       "fallback": { "provider": " openrouter ", "model": " deepseek/deepseek-v4.1-flash ", "api_key_ref": " OPENROUTER_API_KEY " }
     }`
     expect(parseE2EModel!(raw)).toEqual(PARSED)
@@ -68,7 +68,7 @@ describe('parseE2EModel (design.md §4.1)', () => {
 
   it('rejects a document with no fallback object', async () => {
     const { parseE2EModel } = await loadModelModule()
-    const raw = '{"primary":{"provider":"minimax-coding-plan","model":"MiniMax-M3.1-Flash","api_key_ref":"MINIMAX_API_KEY"}}'
+    const raw = '{"primary":{"provider":"minimax-coding-plan","model":"MiniMax-M3.1-Flash-Preview","api_key_ref":"MINIMAX_API_KEY"}}'
     expect(() => parseE2EModel!(raw)).toThrow(/\.fallback/)
   })
 
@@ -98,7 +98,7 @@ describe('applyPrimaryEnvOverride (design.md §4.2)', () => {
     expect(joined).toContain('minimax-coding-plan')
     expect(joined).toContain('OMNIPUS_E2E_PRIMARY_MODEL')
     expect(joined).toContain('env-model')
-    expect(joined).toContain('MiniMax-M3.1-Flash')
+    expect(joined).toContain('MiniMax-M3.1-Flash-Preview')
     expect(joined).toContain('environment variable won')
   })
 

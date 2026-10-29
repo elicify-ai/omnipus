@@ -52,7 +52,7 @@ func captureJudge(t *testing.T, status int, body string) (*httptest.Server, *[]c
 }
 
 func judgeSides() (E2EModelSide, E2EModelSide) {
-	primary := E2EModelSide{Provider: "minimax-coding-plan", Model: "MiniMax-M3.1-Flash", KeyRef: "MINIMAX_API_KEY"}
+	primary := E2EModelSide{Provider: "minimax-coding-plan", Model: "MiniMax-M3.1-Flash-Preview", KeyRef: "MINIMAX_API_KEY"}
 	fallback := E2EModelSide{Provider: "openrouter", Model: "deepseek/deepseek-v4.1-flash", KeyRef: "OPENROUTER_API_KEY"}
 	return primary, fallback
 }
@@ -103,8 +103,8 @@ func TestCallJudgeFallsBackFromAnthropic429(t *testing.T) {
 	if (*primaryHits)[0].AnthropicVersion != "2023-06-01" {
 		t.Errorf("primary anthropic-version = %q, want 2023-06-01", (*primaryHits)[0].AnthropicVersion)
 	}
-	if (*primaryHits)[0].Body["model"] != "MiniMax-M3.1-Flash" {
-		t.Errorf("primary model = %v, want MiniMax-M3.1-Flash", (*primaryHits)[0].Body["model"])
+	if (*primaryHits)[0].Body["model"] != "MiniMax-M3.1-Flash-Preview" {
+		t.Errorf("primary model = %v, want MiniMax-M3.1-Flash-Preview", (*primaryHits)[0].Body["model"])
 	}
 	if len(*fallbackHits) != 1 {
 		t.Fatalf("fallback stub received %d requests, want 1", len(*fallbackHits))

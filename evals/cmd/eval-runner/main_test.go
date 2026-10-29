@@ -388,12 +388,12 @@ func writeCentralModel(t *testing.T, body string) {
 }
 
 const newShapeFixture = `{
-  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash", "api_key_ref": "MINIMAX_API_KEY" },
+  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" },
   "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
 }`
 
 // TestCentralE2EModelReadsTheSingleSourceFile: the new shape parses into the
-// primary slug minimax-coding-plan/MiniMax-M3.1-Flash and the fallback slug
+// primary slug minimax-coding-plan/MiniMax-M3.1-Flash-Preview and the fallback slug
 // openrouter/deepseek/deepseek-v4.1-flash. design.md §4.2.
 func TestCentralE2EModelReadsTheSingleSourceFile(t *testing.T) {
 	writeCentralModel(t, newShapeFixture)
@@ -402,8 +402,8 @@ func TestCentralE2EModelReadsTheSingleSourceFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("centralE2EModelPair() error = %v", err)
 	}
-	if got.Primary.Slug() != "minimax-coding-plan/MiniMax-M3.1-Flash" {
-		t.Errorf("primary slug = %q, want minimax-coding-plan/MiniMax-M3.1-Flash", got.Primary.Slug())
+	if got.Primary.Slug() != "minimax-coding-plan/MiniMax-M3.1-Flash-Preview" {
+		t.Errorf("primary slug = %q, want minimax-coding-plan/MiniMax-M3.1-Flash-Preview", got.Primary.Slug())
 	}
 	if got.Fallback.Slug() != "openrouter/deepseek/deepseek-v4.1-flash" {
 		t.Errorf("fallback slug = %q, want openrouter/deepseek/deepseek-v4.1-flash", got.Fallback.Slug())
@@ -417,7 +417,7 @@ func TestCentralE2EModelReadsTheSingleSourceFile(t *testing.T) {
 // of a provider, model or key ref. design.md §4.1 "non-empty trimmed strings".
 func TestCentralE2EModelPairTrimsEveryField(t *testing.T) {
 	writeCentralModel(t, `{
-	  "primary": { "provider": " minimax-coding-plan ", "model": " MiniMax-M3.1-Flash ", "api_key_ref": " MINIMAX_API_KEY " },
+	  "primary": { "provider": " minimax-coding-plan ", "model": " MiniMax-M3.1-Flash-Preview ", "api_key_ref": " MINIMAX_API_KEY " },
 	  "fallback": { "provider": " openrouter ", "model": " deepseek/deepseek-v4.1-flash ", "api_key_ref": " OPENROUTER_API_KEY " }
 	}`)
 
@@ -425,7 +425,7 @@ func TestCentralE2EModelPairTrimsEveryField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("centralE2EModelPair() error = %v", err)
 	}
-	if got.Primary != (E2EModelSide{Provider: "minimax-coding-plan", Model: "MiniMax-M3.1-Flash", KeyRef: "MINIMAX_API_KEY"}) {
+	if got.Primary != (E2EModelSide{Provider: "minimax-coding-plan", Model: "MiniMax-M3.1-Flash-Preview", KeyRef: "MINIMAX_API_KEY"}) {
 		t.Errorf("primary = %+v, want the trimmed MiniMax side", got.Primary)
 	}
 	if got.Fallback != (E2EModelSide{Provider: "openrouter", Model: "deepseek/deepseek-v4.1-flash", KeyRef: "OPENROUTER_API_KEY"}) {
@@ -526,7 +526,7 @@ func TestCentralE2EModelPairRejectsPrimaryEqualFallback(t *testing.T) {
 // TestCentralE2EModelPairRejectsAMissingFallbackObject. design.md §4.1.
 func TestCentralE2EModelPairRejectsAMissingFallbackObject(t *testing.T) {
 	writeCentralModel(t, `{
-	  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash", "api_key_ref": "MINIMAX_API_KEY" }
+	  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" }
 	}`)
 
 	_, err := centralE2EModelPair()

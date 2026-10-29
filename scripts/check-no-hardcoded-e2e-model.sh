@@ -33,7 +33,9 @@
 # Banned literals (old ids that must never return, plus the current ids):
 #   z-ai/glm-5.2, z-ai/glm-5.3-flash, z-ai/glm-5-turbo,
 #   deepseek/deepseek-v4.1-flash (current fallback),
-#   MiniMax-M3.1-Flash (current primary; also matches the -Preview id),
+#   MiniMax-M3.1-Flash-Preview (current primary — the id the provider catalog
+#     serves) and the earlier MiniMax-M3.1-Flash, which no catalog lists and the
+#     endpoint does not answer as a model: ONE prefix pattern bans both,
 #   minimax-coding-plan (current primary provider),
 #   google/gemini-2.0-flash-001, google/gemini-2.5-flash,
 #   openai/gpt-4o, anthropic/claude-sonnet-4.6, claude-sonnet-4-6

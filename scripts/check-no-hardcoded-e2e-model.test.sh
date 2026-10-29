@@ -115,7 +115,7 @@ trap 'rm -rf "$tmp"' EXIT
 legal_model_json() {
   cat <<'EOF'
 {
-  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash", "api_key_ref": "MINIMAX_API_KEY" },
+  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" },
   "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
 }
 EOF
@@ -495,7 +495,7 @@ fi
 # design.md §4.5 (20).
 t20="$tmp/missing-fallback"
 make_tree "$t20"
-printf '%s\n' '{"primary":{"provider":"minimax-coding-plan","model":"MiniMax-M3.1-Flash","api_key_ref":"MINIMAX_API_KEY"}}' > "$t20/tests/e2e/e2e-model.json"
+printf '%s\n' '{"primary":{"provider":"minimax-coding-plan","model":"MiniMax-M3.1-Flash-Preview","api_key_ref":"MINIMAX_API_KEY"}}' > "$t20/tests/e2e/e2e-model.json"
 rc=0
 REPO_ROOT="$t20" bash "$GUARD" >"$tmp/c20.out" 2>&1 || rc=$?
 if [ "$rc" -eq 2 ]; then

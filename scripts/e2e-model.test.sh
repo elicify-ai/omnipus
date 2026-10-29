@@ -27,7 +27,7 @@ fail=0
 spec_json() {
   cat <<'EOF'
 {
-  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash", "api_key_ref": "MINIMAX_API_KEY" },
+  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" },
   "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
 }
 EOF
@@ -74,7 +74,7 @@ t_env="$tmp/env.json"
 spec_json >"$t_env"
 rc=0
 run_reader "$tmp/env.out" "$tmp/env.err" env --file "$t_env" || rc=$?
-want_env=$'E2E_PRIMARY_PROVIDER=minimax-coding-plan\nE2E_PRIMARY_MODEL=MiniMax-M3.1-Flash\nE2E_PRIMARY_KEYREF=MINIMAX_API_KEY\nE2E_FALLBACK_PROVIDER=openrouter\nE2E_FALLBACK_MODEL=deepseek/deepseek-v4.1-flash\nE2E_FALLBACK_KEYREF=OPENROUTER_API_KEY\n'
+want_env=$'E2E_PRIMARY_PROVIDER=minimax-coding-plan\nE2E_PRIMARY_MODEL=MiniMax-M3.1-Flash-Preview\nE2E_PRIMARY_KEYREF=MINIMAX_API_KEY\nE2E_FALLBACK_PROVIDER=openrouter\nE2E_FALLBACK_MODEL=deepseek/deepseek-v4.1-flash\nE2E_FALLBACK_KEYREF=OPENROUTER_API_KEY\n'
 if [ "$rc" -eq 0 ] && file_eq "$tmp/env.out" "$want_env"; then
   echo "case-env new-shape-lines: PASS"
 else
@@ -90,7 +90,7 @@ fi
 t_trim="$tmp/trim.json"
 cat >"$t_trim" <<'EOF'
 {
-  "primary": { "provider": " minimax-coding-plan ", "model": " MiniMax-M3.1-Flash ", "api_key_ref": " MINIMAX_API_KEY " },
+  "primary": { "provider": " minimax-coding-plan ", "model": " MiniMax-M3.1-Flash-Preview ", "api_key_ref": " MINIMAX_API_KEY " },
   "fallback": { "provider": " openrouter ", "model": " deepseek/deepseek-v4.1-flash ", "api_key_ref": " OPENROUTER_API_KEY " }
 }
 EOF
@@ -125,7 +125,7 @@ fi
 
 # Missing fallback object. design.md §4.1.
 t_nofb="$tmp/no-fallback.json"
-printf '%s\n' '{"primary":{"provider":"minimax-coding-plan","model":"MiniMax-M3.1-Flash","api_key_ref":"MINIMAX_API_KEY"}}' >"$t_nofb"
+printf '%s\n' '{"primary":{"provider":"minimax-coding-plan","model":"MiniMax-M3.1-Flash-Preview","api_key_ref":"MINIMAX_API_KEY"}}' >"$t_nofb"
 rc=0
 run_reader "$tmp/nofb.out" "$tmp/nofb.err" env --file "$t_nofb" || rc=$?
 if [ "$rc" -eq 2 ] && grep -q '\.fallback' "$tmp/nofb.err"; then

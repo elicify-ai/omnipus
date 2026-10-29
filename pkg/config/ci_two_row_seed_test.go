@@ -11,7 +11,7 @@ import (
 // TestCITwoRowSeed_ScriptMatchesGoldenAndLoads pins design.md §7 R5.
 // scripts/e2e-model.sh seed-config must print the golden two-row document,
 // and that document must load with default_model equal to the primary pair
-// (minimax-coding-plan / MiniMax-M3.1-Flash) and both provider rows valid.
+// (minimax-coding-plan / MiniMax-M3.1-Flash-Preview) and both provider rows valid.
 // The golden's field order and the port 19999 are the contract in
 // /workspace/ci-minimax/api-contract.md §2.
 func TestCITwoRowSeed_ScriptMatchesGoldenAndLoads(t *testing.T) {
@@ -25,7 +25,7 @@ func TestCITwoRowSeed_ScriptMatchesGoldenAndLoads(t *testing.T) {
 
 	modelFile := filepath.Join(t.TempDir(), "e2e-model.json")
 	const spec = `{
-  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash", "api_key_ref": "MINIMAX_API_KEY" },
+  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" },
   "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
 }
 `
@@ -55,8 +55,8 @@ func TestCITwoRowSeed_ScriptMatchesGoldenAndLoads(t *testing.T) {
 	}
 
 	primary := cfg.Providers[0]
-	if primary.Provider != "minimax-coding-plan" || primary.Model != "MiniMax-M3.1-Flash" || primary.APIKeyRef != "MINIMAX_API_KEY" {
-		t.Errorf("providers[0] = %+v, want minimax-coding-plan / MiniMax-M3.1-Flash / MINIMAX_API_KEY", primary)
+	if primary.Provider != "minimax-coding-plan" || primary.Model != "MiniMax-M3.1-Flash-Preview" || primary.APIKeyRef != "MINIMAX_API_KEY" {
+		t.Errorf("providers[0] = %+v, want minimax-coding-plan / MiniMax-M3.1-Flash-Preview / MINIMAX_API_KEY", primary)
 	}
 	if primary.APIBase != "https://api.minimax.io/anthropic/v1" {
 		t.Errorf("providers[0].APIBase = %q, want the MiniMax Anthropic base", primary.APIBase)
@@ -76,7 +76,7 @@ func TestCITwoRowSeed_ScriptMatchesGoldenAndLoads(t *testing.T) {
 		t.Errorf("providers[1].Validate() = %v, want nil", err)
 	}
 
-	wantDefault := DefaultModel{Provider: "minimax-coding-plan", Model: "MiniMax-M3.1-Flash"}
+	wantDefault := DefaultModel{Provider: "minimax-coding-plan", Model: "MiniMax-M3.1-Flash-Preview"}
 	if cfg.Agents.Defaults.DefaultModel != wantDefault {
 		t.Errorf("agents.defaults.default_model = %+v, want %+v", cfg.Agents.Defaults.DefaultModel, wantDefault)
 	}

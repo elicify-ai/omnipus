@@ -8,7 +8,7 @@ type Fields = { provider: string; model: string; fallback_models?: { provider: s
 
 const LIVE: Fields = {
   provider: 'minimax-coding-plan',
-  model: 'MiniMax-M3.1-Flash',
+  model: 'MiniMax-M3.1-Flash-Preview',
   fallback_models: [{ provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' }],
 }
 

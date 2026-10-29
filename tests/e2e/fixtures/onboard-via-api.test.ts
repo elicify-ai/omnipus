@@ -69,7 +69,7 @@ describe('onboardViaAPI seeds the fallback (design.md §7 R9)', () => {
           auth_method: 'api_key',
           id: 'minimax-coding-plan',
           api_key: 'test-key-aaaa',
-          model: 'MiniMax-M3.1-Flash',
+          model: 'MiniMax-M3.1-Flash-Preview',
         },
       })
       expect(gw.hits[1].body).toEqual({
@@ -95,7 +95,7 @@ describe('onboardViaAPI seeds the fallback (design.md §7 R9)', () => {
     try {
       await onboardViaAPI({ baseURL: gw.url })
       expect(gw.hits[0].body).toMatchObject({
-        provider: { id: 'minimax-coding-plan', api_key: 'test-key-aaaa', model: 'MiniMax-M3.1-Flash' },
+        provider: { id: 'minimax-coding-plan', api_key: 'test-key-aaaa', model: 'MiniMax-M3.1-Flash-Preview' },
       })
     } finally {
       await gw.close()

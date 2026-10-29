@@ -31,9 +31,9 @@ import (
 // clients and the transcript are real. This is not a mock of the agent.
 
 const (
-	proofPrimaryModel  = "MiniMax-M3.1-Flash"
+	proofPrimaryModel  = "MiniMax-M3.1-Flash-Preview"
 	proofFallbackModel = "deepseek/deepseek-v4.1-flash"
-	proofNote          = "Answered by the Fallback model (deepseek/deepseek-v4.1-flash) because MiniMax-M3.1-Flash was unavailable."
+	proofNote          = "Answered by the Fallback model (deepseek/deepseek-v4.1-flash) because MiniMax-M3.1-Flash-Preview was unavailable."
 )
 
 type proofHit struct {
