@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -315,7 +316,7 @@ func TestCronService_Stop_CancelsRunsAndKeepsItsDrainBound(t *testing.T) {
 	if elapsed := time.Since(begin); elapsed < 100*time.Millisecond {
 		t.Errorf("Stop returned in %v, before the in-flight job had a chance to drain (bound 150ms)", elapsed)
 	}
-	if err, _ := runner.ctxErr.Load().(error); err != context.Canceled {
+	if err, _ := runner.ctxErr.Load().(error); !errors.Is(err, context.Canceled) {
 		t.Errorf("Stop must cancel the running job's context; got %v", err)
 	}
 	if leaked := newRunLoopLeaks(before); len(leaked) != 0 {

@@ -36,7 +36,7 @@ const timerTestLoopSessionID = "timer-step0-loop-session"
 
 // timerStoreSnapshot is the part of a cron store the tests compare.
 type timerStoreSnapshot struct {
-	Jobs []cron.CronJob
+	Jobs []cron.CronJob `json:"jobs"`
 }
 
 func readTimerStore(t *testing.T, path string) timerStoreSnapshot {
