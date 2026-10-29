@@ -43,6 +43,10 @@ type historyPageRequest struct {
 	lifecycle *historyReadOnlyLifecycle
 	// Captured once before selection, included in every actual carrier weight.
 	sessionTokensTotal *int
+	// libraryWorkspaceID is the session's workspace, read once per page from
+	// its meta, for MediaPart.library_ref (chat-links FR-021). Empty or failed
+	// meta leaves it "" and the field is omitted.
+	libraryWorkspaceID string
 }
 
 func newHistoryPageRequest(sessionID string, opts session.ChatHistoryPageOptions, deps historyPageProjectionDeps) (*historyPageRequest, error) {
@@ -115,6 +119,10 @@ func (r *historyPageRequest) Read(ctx context.Context, store *session.UnifiedSto
 	defer func() { r.memo = nil; r.media = nil; r.lifecycle = nil }()
 	r.reset("")
 	r.sessionTokensTotal = store.ReadSessionTokensTotal(r.sessionID)
+	r.libraryWorkspaceID = ""
+	if meta, metaErr := store.GetMeta(r.sessionID); metaErr == nil && meta != nil {
+		r.libraryWorkspaceID = meta.WorkspaceID
+	}
 	opts := r.opts
 	opts.Weigh = r.weigh
 	page, err := store.ReadChatHistoryPage(ctx, r.sessionID, opts)

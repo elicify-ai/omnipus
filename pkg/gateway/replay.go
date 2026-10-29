@@ -42,11 +42,15 @@ type lifecycleRecordLoader interface {
 
 // streamReplayState carries the shared state of streamReplay across its stages.
 type streamReplayState struct {
-	sessionID                   string
-	entries                     []session.TranscriptEntry
-	toolStore                   *toolResultStore
-	terminalAsk                 *askuser.PendingSet
-	terminalAskEmitted          bool
+	sessionID          string
+	entries            []session.TranscriptEntry
+	toolStore          *toolResultStore
+	terminalAsk        *askuser.PendingSet
+	terminalAskEmitted bool
+	// libraryWorkspaceID is the session's workspace for MediaPart.library_ref
+	// (chat-links FR-021, reload half). Set only by the history-page
+	// preparation; "" omits the field.
+	libraryWorkspaceID          string
 	seenPaths                   map[string]struct{}
 	spawnIDsWithChildren        map[string]bool
 	spanRealAgentIDs            map[string]string
@@ -333,7 +337,7 @@ func (sr *streamReplayState) emitSpawnParentToolCall(
 	if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, "")); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
-	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths); ok {
+	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths, sr.libraryWorkspaceID); ok {
 		if err2 := emitFrame(mf); err2 != nil {
 			return streamReplayStateReturn, err2
 		}
@@ -377,7 +381,7 @@ func (sr *streamReplayState) emitFlatToolCall(
 	if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
-	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths); ok {
+	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths, sr.libraryWorkspaceID); ok {
 		if err2 := emitFrame(mf); err2 != nil {
 			return streamReplayStateReturn, err2
 		}
@@ -1169,6 +1173,7 @@ func buildMediaFrame(
 	tc session.ToolCall,
 	mediaStore media.MediaStore,
 	seenPaths map[string]struct{},
+	libraryWorkspaceID string,
 ) (generated.MediaFrame, bool) {
 	raw, ok := tc.Result["media"]
 	if !ok {
@@ -1214,6 +1219,7 @@ func buildMediaFrame(
 			Url:         mediaRefURL(refStr),
 			Filename:    filename,
 			ContentType: contentType,
+			LibraryRef:  libraryRefForMedia(mediaStore, refStr, libraryWorkspaceID),
 		})
 	}
 	if len(parts) == 0 {
