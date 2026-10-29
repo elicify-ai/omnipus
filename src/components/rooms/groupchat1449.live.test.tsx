@@ -1,10 +1,11 @@
 // RED — #1449 US-5, US-7, US-11.
 // Oracles: docs/internal/specs/1449-group-chat-spec.md S-35, S-36, S-50, S-98.
 // Real RoomScreen. Only the socket and fetch are doubled.
+import type { ComponentType } from 'react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import {
-  Network, delivery, entry, openRoom, resetRealStores, snapshot, stopHarness,
+  Network, ROOM_ID, WS, delivery, entry, mountAt, openRoom, requiredExport, resetRealStores, room, snapshot, stopHarness,
 } from '../../../tests/l1-room-ui/harness'
 import type { WsConnection } from '@/lib/ws'
 
@@ -67,11 +68,45 @@ describe('calm live view and the participants control (US-5, US-7, US-11)', () =
     expect(screen.getByText('Mia is working...')).toBeInTheDocument()
   })
 
-  it('S-50 and S-98 show one Participants button with the avatar stack and count, not the member list', async () => {
-    const harness = await openRoom(net)
-    connection = harness.connection
-    const button = screen.getByRole('button', { name: /participants/i })
-    expect(button).toHaveAccessibleName(/3/)
-    expect(screen.queryByRole('button', { name: /^mute$/i }), 'S-98: mute stays in the panel, not the header').toBeNull()
+  // S-50 examples. avatars is min(members, 3); overflow is members-3 or none.
+  it.each([
+    { members: ['mia', 'jim'], avatars: 2, overflow: null },
+    { members: ['mia', 'jim', 'researcher2'], avatars: 3, overflow: null },
+    { members: ['mia', 'jim', 'researcher2', 'gp'], avatars: 3, overflow: '+1' },
+    { members: ['m0', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9'], avatars: 3, overflow: '+7' },
+  ])('S-50 shows $avatars avatars and $overflow for $members.length members', async ({ members, avatars, overflow }) => {
+    await mountParticipantsHeader(members)
+    const button = await screen.findByRole('button', { name: /participants/i })
+    expect(button, 'S-50: the count reads the full member number').toHaveAccessibleName(
+      new RegExp(`Participants,\\s*${members.length}\\s+members`),
+    )
+    expect(within(button).getAllByTestId('agent-icon'), 'S-50: at most three avatars').toHaveLength(avatars)
+    if (overflow) expect(within(button).getByText(overflow, { exact: true })).toBeInTheDocument()
+    else expect(button.textContent ?? '').not.toMatch(/\+\d+/)
+    expect(screen.queryByRole('button', { name: /^mute$/i }), 'mute stays in the panel, not the header').toBeNull()
+  })
+
+  it('S-98 puts the Participants button in the header slot with no bar or border', async () => {
+    await mountParticipantsHeader(['mia', 'jim', 'researcher2'])
+    const button = await screen.findByRole('button', { name: /participants/i })
+    expect(screen.getAllByRole('button', { name: /participants/i })).toHaveLength(1)
+    const slot = button.closest('[data-testid="chat-header-slot"]')
+    expect(slot, 'S-98: the button is in the header slot').not.toBeNull()
+    expect(slot!.className, 'S-98: no border').not.toMatch(/\bborder\b/)
+    expect(slot!.className, 'S-98: no surface fill').not.toMatch(/\bbg-/)
+    expect(screen.queryByRole('button', { name: /^mute$/i })).toBeNull()
   })
 })
+
+/** The header slot on a group address. The button is not inside RoomScreen (US-11, FR-033). */
+async function mountParticipantsHeader(members: string[]): Promise<void> {
+  const ChatHeaderSlot = await requiredExport<ComponentType<{ workspaceId: string }>>(
+    '/src/components/chat/ChatHeaderSlot.tsx',
+    'ChatHeaderSlot',
+    'S-50; S-98; US-11',
+  )
+  net.currentRoom = room({ members })
+  const mounted = await mountAt(<ChatHeaderSlot workspaceId={WS} />, `/workspaces/${WS}/rooms/${ROOM_ID}`)
+  connection = undefined
+  void mounted
+}

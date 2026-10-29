@@ -45,17 +45,19 @@ describe("panel registry — wave-2/3 registrations (§12 #1, SC-002)", () => {
     expect(panels).not.toBeNull();
   });
 
-  it("registers exactly the six panels — library, browser, mail (wave 2) plus tasks, team, calendar (wave 3) (spec §10 Wave 2/3 + FR-014; supersedes the wave-2 exactly-three pin)", async () => {
+  it("registers the wave-2/3 panels plus participants (spec §10 Wave 2/3 + FR-014; #1449 FR-034)", async () => {
     // Oracle: spec §10 "Wave 3 — Team, Tasks, Calendar become panels (SP-6)"
-    // and FR-014 (a new panel is one registry entry). The wave-2
-    // exactly-three pin is superseded: the registered set is the six panels
-    // named in the spec, alphabetically sorted here only for a stable compare.
+    // and FR-014 (a new panel is one registry entry). #1449 FR-034 adds
+    // participants. Alphabetically sorted here only for a stable compare.
     const { panels } = await loadRegistry();
+    // #1449 FR-034 adds the Participants panel. It is a registered side panel.
+    // It is not a strip entry: types.policy.test.ts asserts WORKSPACE_TABS.
     expect(panels.map((p) => p.id).sort()).toEqual([
       "browser",
       "calendar",
       "library",
       "mail",
+      "participants",
       "tasks",
       "team",
     ]);

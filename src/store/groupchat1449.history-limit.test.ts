@@ -31,7 +31,9 @@ beforeEach(() => {
 })
 
 describe('group history pages (US-6, DS-9)', () => {
-  it('S-44 requests a page whose limit is between 20 and 100', async () => {
+  it.each([20, 100])('S-44 sends the fill page size %i with the earlier cursor', async (limit) => {
+    // S-44: each fill page has limit between 20 and 100. The store sends the
+    // size the shared fill asks for. Omitting the size is not this oracle.
     fetchRoomHistory.mockResolvedValue({ entries: [entry(1)], has_older: false })
     act(() => useRoomStore.getState().applyRoomFrame({
       type: 'room_snapshot', room_id: ROOM, seq: 5,
@@ -41,14 +43,16 @@ describe('group history pages (US-6, DS-9)', () => {
       complete: true, has_older: true,
     }))
 
-    await useRoomStore.getState().loadOlder(ROOM)
+    const loadOlder = useRoomStore.getState().loadOlder as (
+      roomId: string,
+      opts?: { limit?: number },
+    ) => Promise<void>
+    await loadOlder(ROOM, { limit })
 
     expect(fetchRoomHistory).toHaveBeenCalledTimes(1)
     const opts = fetchRoomHistory.mock.calls[0]?.[1]
     expect(opts?.beforeSeq, 'S-44: the cursor is the earliest displayed seq').toBe(5)
-    expect(typeof opts?.limit).toBe('number')
-    expect(opts!.limit!).toBeGreaterThanOrEqual(20)
-    expect(opts!.limit!).toBeLessThanOrEqual(100)
+    expect(opts?.limit, 'S-44: the request carries the fill page size').toBe(limit)
   })
 
   it('S-43 makes no history call when the server says there is nothing older', async () => {

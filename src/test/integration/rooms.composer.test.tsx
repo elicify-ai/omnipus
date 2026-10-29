@@ -155,9 +155,10 @@ describe('FR-205 reduced command set — room requests never call main-chat comm
     const harness = await open()
     // Transport refusal is the process edge. A local refusal is equally valid;
     // neither path may invoke a main-chat command or mutate membership.
-    net.respond('POST', `/api/v1/rooms/${ROOM_ID}/messages`, () => json({ error: "Rooms don't steer agents — use Jim's main chat" }, 422))
+    // S-13 / Q1: the spec sentence uses a hyphen, not an em dash.
+    net.respond('POST', `/api/v1/rooms/${ROOM_ID}/messages`, () => json({ error: "Rooms don't steer agents - use Jim's main chat" }, 422))
     await sendText(command)
-    expect(await screen.findByText(/Rooms don't steer agents — use .*main chat/)).toBeVisible()
+    expect(await screen.findByText(/Rooms don't steer agents - use .*main chat/)).toBeVisible()
     for (const member of members) {
       const link = screen.getByRole('link', { name: new RegExp(`${member}.*main chat|main chat.*${member}`, 'i') })
       expect(link.getAttribute('href')).toMatch(new RegExp(`main-${member.toLowerCase()}-sales|agent_id=${member.toLowerCase()}`))

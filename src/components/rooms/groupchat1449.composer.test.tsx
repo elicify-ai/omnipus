@@ -49,8 +49,18 @@ describe('the group message box is the normal message box (US-2)', () => {
     await open()
     const user = userEvent.setup()
     await user.type(screen.getByRole('textbox', { name: /message the group/i }), '/')
-    const options = screen.queryAllByRole('option').map((option) => (option.textContent ?? '').trim().toLowerCase())
-    expect([...options].sort()).toEqual(['help', 'members', 'mute', 'pause', 'resume', 'unmute'])
+    // S-12: the menu lists exactly these six commands. A description beside
+    // the command name is allowed; a seventh command is not.
+    const commands = ['help', 'members', 'mute', 'pause', 'resume', 'unmute']
+    const options = screen.getAllByRole('option')
+    expect(options, 'S-12: six commands and no seventh').toHaveLength(commands.length)
+    const names = options.map((option) => {
+      const text = (option.textContent ?? '').toLowerCase()
+      const hits = commands.filter((name) => new RegExp(`\\b${name}\\b`).test(text))
+      expect(hits, `S-12: one command per row, got "${text}"`).toHaveLength(1)
+      return hits[0]
+    })
+    expect([...names].sort()).toEqual([...commands].sort())
   })
 
   it('S-17 disables sending and shows waiting for the group before the first live view', async () => {
