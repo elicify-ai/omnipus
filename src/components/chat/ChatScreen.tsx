@@ -53,6 +53,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { isClearCommandText } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
 import { AgentReplyLabel, ParticipantMessageRow, useParticipantLabelParts } from './ParticipantLabels'
+import { assistantRowCorrelationAttributes } from './assistantRowAttributes'
 import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
 import { pendingRedirectSids } from '@/store/chat/runtime-state'
@@ -1216,6 +1217,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
       data-testid="assistant-message"
       data-message-role="assistant"
       data-message-id={message.id}
+      {...assistantRowCorrelationAttributes(message)}
       data-status="complete"
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
@@ -1559,6 +1561,7 @@ export function AssistantMessage() {
     <MessagePrimitive.Root
       data-testid="assistant-message"
       data-message-id={message.id}
+      {...assistantRowCorrelationAttributes(storeMsg)}
       data-status={message.status?.type ?? 'complete'}
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
