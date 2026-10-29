@@ -1,6 +1,8 @@
 // T83 / S11 B98: real list, runtime, paging and sole viewport compensation.
 // Browser metrics are independent physical inputs. No part/store/hook seeding.
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { writeSync } from 'node:fs'
+import { setTimeout as nativeSetTimeout, clearTimeout as nativeClearTimeout } from 'node:timers'
+import { afterEach, aroundAll, aroundEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -33,34 +35,78 @@ let layout: ReturnType<typeof installHistoryLayout> | undefined
 const releases: (() => void)[] = []
 const browserFrames = new Map<number, FrameRequestCallback>()
 let nextFrame = 0
+let activeCase = 'before the first case'
+let lifecyclePhase = 'before suite hooks'
+const lifecycleLabel = () => `case=${JSON.stringify(activeCase)} phase=${JSON.stringify(lifecyclePhase)} queued_frames=${browserFrames.size} held_responses=${releases.length}`
+
+function failT83Lifecycle(message: string): void {
+  // Vitest replaces process.exit with a throw, which cannot end a wedged
+  // lifecycle. This repo uses isolated forks: stop ONLY this worker, after a
+  // synchronous diagnostic. A watchdog stop is an INCOMPLETE FAILED file,
+  // never a product verdict for cases the runner did not finish.
+  writeSync(2, `${message}\nT83 file is INCOMPLETE; watchdog stopped its own worker, not a product PASS.\n`)
+  process.kill(process.pid, 'SIGKILL')
+}
+function armT83LifecycleWatchdog(describe: () => string, milliseconds: number, fail: (message: string) => void = failT83Lifecycle) {
+  const timer = nativeSetTimeout(() => fail(`T83 LIFECYCLE WATCHDOG after ${milliseconds}ms: ${describe()}`), milliseconds)
+  return () => nativeClearTimeout(timer)
+}
+async function withinT83CleanupDeadline(work: () => void | Promise<void>, describe: () => string, milliseconds: number) {
+  let timer!: ReturnType<typeof nativeSetTimeout>
+  // Arm BEFORE invoking any cleanup, not after an unguarded unmount. Native
+  // Node timers are independent of browser stubs and vi.unstubAllGlobals().
+  const expired = new Promise<never>((_, reject) => {
+    timer = nativeSetTimeout(() => reject(new Error(`T83 CLEANUP WATCHDOG after ${milliseconds}ms: ${describe()}`)), milliseconds)
+  })
+  try { await Promise.race([Promise.resolve().then(work), expired]) }
+  finally { nativeClearTimeout(timer) }
+}
+
+aroundAll(async runSuite => {
+  // Ten minutes for the WHOLE file, generously above 15 cases' existing 30s
+  // body budgets plus normal cleanup. No product/hook timeout is increased.
+  // This encloses all hooks/fixtures, including stalls BETWEEN reported cases.
+  const cancelWatchdog = armT83LifecycleWatchdog(lifecycleLabel, 10 * 60 * 1000)
+  try { await runSuite() }
+  finally { cancelWatchdog() }
+})
+aroundEach(async (runTest, { task }) => {
+  activeCase = task.name
+  lifecyclePhase = 'beforeEach hooks'
+  await runTest()
+  lifecyclePhase = 'all case hooks finished; between cases'
+})
 beforeEach(() => {
+  lifecyclePhase = 'beforeEach: resetStage1App'
   resetStage1App(); network = new Stage1Network(); nextFrame = 0
   browserFrames.clear()
   // Browser edge only. A finite frame barrier must not keep an async act
   // scope alive after Vitest times out a missing product prerequisite.
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { browserFrames.set(++nextFrame, callback); return nextFrame })
   vi.stubGlobal('cancelAnimationFrame', (id: number) => browserFrames.delete(id))
+  lifecyclePhase = 'test body'
 })
 afterEach(async () => {
-  let watchdog: ReturnType<typeof setTimeout> | undefined
   try {
-    // Unmount/disconnect observers BEFORE resolving held HTTP work. A failed
-    // assertion must not resume a live component or leave queued browser work.
-    cleanup()
-    browserFrames.clear()
-    releases.splice(0).forEach(release => release())
-    await Promise.race([
-      stopStage1App(),
-      new Promise<never>((_, reject) => {
-        watchdog = setTimeout(() => reject(new Error('T83 fixture teardown did not finish after unmount and HTTP release')), 5000)
-      }),
-    ])
-    expect(network.unexpected, 'network edges are declared').toEqual([])
+    await withinT83CleanupDeadline(async () => {
+      // Unmount/disconnect observers BEFORE resolving held HTTP work. A failed
+      // assertion must not resume a live component or leave queued browser work.
+      lifecyclePhase = 'cleanup: unmount'
+      cleanup()
+      browserFrames.clear()
+      lifecyclePhase = 'cleanup: release held HTTP'
+      releases.splice(0).forEach(release => release())
+      lifecyclePhase = 'cleanup: stopStage1App'
+      await stopStage1App()
+      lifecyclePhase = 'cleanup: network assertions'
+      expect(network.unexpected, 'network edges are declared').toEqual([])
+    }, lifecycleLabel, 5000)
   } finally {
-    if (watchdog !== undefined) clearTimeout(watchdog)
+    lifecyclePhase = 'cleanup: restore browser metrics/globals'
     browserFrames.clear()
     layout?.restore(); layout = undefined
     vi.unstubAllGlobals()
+    lifecyclePhase = 'remaining framework afterEach hooks'
   }
 })
 function RealReader() {
@@ -73,6 +119,7 @@ function RealReader() {
 async function read(sources: Message[], mode: 'latest' | 'older' | 'newer', earlier = false, later = false, limit = Math.max(20, sources.length)) {
   const selected = page(sources, { sessionId: MAIN_ID, earlier, later, rows: sources.length, info: { mode, limit, min_rows: 1, stop_reason: (mode === 'newer' ? later : earlier) ? 'row_target' : 'end' } })
   network.respond('GET', path, () => json(selected))
+  lifecyclePhase = `body: await ${mode} page`
   await act(async () => {
     const store = useChatStore.getState()
     if (mode === 'latest') await store.loadLatestHistory(MAIN_ID, { limit, min_rows: 1 })
@@ -108,7 +155,9 @@ async function positionInsideB(region: HTMLElement, direction: 'older' | 'newer'
   act(() => { region.scrollTop = direction === 'newer' ? region.scrollHeight - region.clientHeight : 0; fireEvent.scroll(region); layout!.flushResize() })
   act(() => { browserFrame(); layout!.flushResize() })
   act(() => { browserFrame(); layout!.flushResize() })
+  lifecyclePhase = 'body: B part marker prerequisite'
   expect(region.querySelector(`[data-history-part="${pos(3)}"]`), 'BLOCKED: B part marker not implemented — required by S11/T83').not.toBeNull()
+  lifecyclePhase = 'body: measure B inner paragraph'
   const marked = point(region)
   const marker = marked.closest<HTMLElement>('[data-history-part]')!
   expect(marked.getBoundingClientRect().top - marker.getBoundingClientRect().top, 'instrument: independent inner geometry sees the second paragraph60px inside B').toBe(60)
@@ -156,6 +205,7 @@ async function setup(direction: 'older' | 'newer', virtual: boolean) {
     expect(bucket().history.newerBoundary).toBe(pos(3))
   }
   useChatStore.getState().enterHistoryReading(MAIN_ID)
+  lifecyclePhase = 'body: render RealReader'
   render(<QueryClientProvider client={queryClient}><RealReader /></QueryClientProvider>)
   const region = screen.getByRole('region', { name: 'Conversation history' })
   const focus = await positionInsideB(region, direction)
@@ -190,6 +240,32 @@ it('T83 instrument control: inner geometry detects movement that an unchanged ro
     expect(row.getBoundingClientRect().top).toBe(rowBefore)
     expect(marked.getBoundingClientRect().top - pointBefore, 'positive sensitivity: independent A growth moves B inside the same unchanged row').toBe(160)
   } finally { viewport.remove() }
+})
+
+it('T83 watchdog control: stalled cleanup rejects loudly and original failures are preserved', async () => {
+  const original = new Error('synthetic unmount failure')
+  await expect(withinT83CleanupDeadline(() => { throw original }, () => 'unmount', 1000)).rejects.toBe(original)
+  await expect(withinT83CleanupDeadline(() => new Promise<void>(() => {}), () => 'held HTTP response', 1))
+    .rejects.toThrow('T83 CLEANUP WATCHDOG after 1ms: held HTTP response')
+  let completed = false
+  await withinT83CleanupDeadline(() => { completed = true }, () => 'healthy cleanup', 1000)
+  expect(completed, 'instrument: successful cleanup is actually invoked').toBe(true)
+})
+it('T83 watchdog control: native lifecycle timer reports the current phase and cancellation disarms it', async () => {
+  const messages: string[] = []
+  let phase = 'before cleanup'
+  let cancel!: () => void
+  const fired = new Promise<void>(resolve => {
+    cancel = armT83LifecycleWatchdog(() => phase, 1, message => { messages.push(message); resolve() })
+  })
+  phase = 'remaining framework hooks'
+  await fired
+  cancel()
+  expect(messages).toEqual(['T83 LIFECYCLE WATCHDOG after 1ms: remaining framework hooks'])
+  const cancelHealthy = armT83LifecycleWatchdog(() => 'healthy file', 1, message => messages.push(message))
+  cancelHealthy()
+  await new Promise<void>(resolve => nativeSetTimeout(resolve, 5))
+  expect(messages, 'instrument: a finished file cannot fire its cancelled watchdog').toEqual(['T83 LIFECYCLE WATCHDOG after 1ms: remaining framework hooks'])
 })
 
 for (const virtual of [false, true]) {
