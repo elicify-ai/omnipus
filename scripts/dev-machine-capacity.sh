@@ -3,7 +3,7 @@
 #
 # Dev-team capacity monitor (design 5.6, N1/S3, G1; L10). Deliberately NOT
 # check-*.sh: scripts/guards.sh auto-discovers scripts/check-*.sh as CI
-# gates, and this is a dev-team tool for team-lead / squad leads to run
+# gates, and this is a dev-team tool for team-lead sessions to run
 # before widening dispatch fan-out, not a gate.
 #
 # WHAT IT PRINTS

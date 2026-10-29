@@ -13,10 +13,14 @@ allowed-tools: Read, Grep, Glob, Bash, Write, Edit
 
 # Plan & Spec (plan-spec)
 
-Last reviewed: 2026-10-23 — approved delivery-process rollout
+Last reviewed: 2026-10-29 — Epic, riders and agent tool field table in the spec header
+Process version: 2026-10-29.1
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (§7.1, the
 feature-size flow); founder decisions:
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`.
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`
+(founder's Mac only; on a pod ask the chief). Every spec header carries its Epic, its
+riders and, for an agent-managed object, the agent tool field table
+(`knowledge/spec-template.md`; root `CLAUDE.md`, "Definition of Done").
 
 ## When this runs, and on what input
 
@@ -257,7 +261,7 @@ not extra product acceptance criteria. Name stable rows suitable for later autom
 5. Report to whoever dispatched this skill: the spec path, section counts (user stories,
    BDD scenarios by category, FR-xxx count, dataset row count), any Ambiguity Warnings
    still open, and the explicit hand-off: **this spec is ready for grill-spec, round 1.**
-   Do not invoke grill-spec yourself — that dispatch belongs to team-lead/squad-lead.
+   Do not invoke grill-spec yourself — that dispatch belongs to team-lead.
 
 ## Quality checks before reporting done
 

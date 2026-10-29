@@ -109,7 +109,7 @@ there is no guessed default weight in the session package.
 | New identity | Publish the verified empty baseline before making a new session identity readable. Never infer an empty conversation from missing or inconsistent derived state. |
 | Online recovery | Reconcile at most 64 combined archive/disposition/deletion facts from a valid checkpoint; the 65th refuses. Do not retry-walk a larger gap in batches or automatically build an index for historical unindexed data. |
 | Retention | Preserve only opaque token/rank tombstones for expired occurrences. Rich generation retirement waits for old reader pins; genuine Windows sharing-busy is not proof that a partition disappeared. |
-| Offline repair | The explicit `PrepareChatHistoryIndex` builder and shipped repair command share the reducer. They are not an application-startup or ordinary-send fallback and must not invoke the gateway/projector/model to reconstruct the index. |
+| Offline repair | The explicit `PrepareChatHistoryIndex` builder reconstructs the derived index from retained canonical bytes with the same reducer as the online path. The standalone repair command that once shipped beside it was removed by founder decision 2026-10-27 (greenfield, no upgrade path). The builder is not an application-startup or ordinary-send fallback and must not invoke the gateway/projector/model to reconstruct the index. |
 
 Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_select.go::readChatHistoryPage`
 and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::historyPublish`.
@@ -129,10 +129,20 @@ component, so two distinct pairs can never collide on one id. Each component
 keeps its own 128-byte bound; the computed id is capped at 255 UTF-8 bytes
 (the directory-name limit) and above it the store REFUSES with a visible
 error, storing nothing — no hash, truncation or replacement id.
-`unified.go::GetOrCreateMainSession` is the only creator, and it treats a
+`unified.go::getOrCreateMainSession` (behind `GetOrCreateMainSession` and
+`GetOrCreateMainSessionOwned`) is the only creator, and it treats a
 read error on that id as the BDD-01.4 refusal, NOT as a cache miss: only a
 genuinely absent record creates. A stored record whose owner, workspace or
 type does not match the pair is refused untouched, never adopted or repaired.
+
+Main owner (a person's username, attribution only — never access control):
+`unified_main_owner.go::GetOrCreateMainSessionOwned` stamps it only in the
+creating write and returns an existing main unchanged (the plain
+`GetOrCreateMainSession` creates ownerless). `AdoptMainSessionOwner` gives an
+ownerless main its first owner as one compare-and-set under the session shard
+plus the meta.json sidecar flock, re-reading meta.json inside that hold, and
+changes ONLY `owner` — meta.json's own `updated_at` and stats.json are kept,
+so adoption is not activity and never re-orders session lists.
 
 ## A meta.json that fails to parse stays invisible
 

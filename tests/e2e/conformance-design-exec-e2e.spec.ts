@@ -26,6 +26,7 @@ import { expect } from '@playwright/test'
 import { SessionDetail, SessionPage } from '../../src/lib/api/generated/schemas'
 import { test } from './fixtures/plan-cleanup'
 import { GatewayProcess } from './fixtures/gateway-process.js'
+import { e2eAgentModelFields } from './fixtures/e2e-agent-model'
 import { attachStandaloneTaskFailureDiagnostic } from './fixtures/conformance-task-diagnostic'
 import {
   BASE_URL,
@@ -439,6 +440,8 @@ test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep rec
       type: 'Main',
       name: 'bootsweep-worker',
       soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
+      // Live model plus fallback_models (see createMainAgent).
+      ...e2eAgentModelFields('live'),
     })
     expect(agentRes.ok, `bootsweep: POST /agents failed ${agentRes.status}: ${agentRes.raw}`).toBe(true)
     expect(
