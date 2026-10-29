@@ -83,7 +83,10 @@ preflight_case() {
   OUT="$d/out" ERR="$d/err" ROUTE="$d/route.json"
 }
 
-MSG='{"type":"message","role":"assistant","content":[{"type":"text","text":"p"}]}'
+MSG='{"type":"message","role":"assistant","content":[{"type":"text","text":"p"}],"stop_reason":"end_turn"}'
+# The shape MiniMax really answers for the CI primary with max_tokens 1
+# (train 5, run 40807096998): a message whose content is NOT an array.
+MINIMAX_MSG='{"id":"r1","type":"message","role":"assistant","model":"m","content":null,"usage":{"input_tokens":3,"output_tokens":1},"stop_reason":"max_tokens","base_resp":{"status_code":0,"status_msg":""}}'
 
 # F3: a remote override is refused before any request.
 for url in "http://10.255.255.1:9/messages" "https://example.invalid/messages" "http://127.0.0.1.evil.example/m"; do
@@ -136,6 +139,44 @@ if [ "$RC" -eq 0 ] && [ "$(cat "$OUT")" = "LLM_ROUTE=primary" ]; then
   pass "i3 strict-message-200-primary"
 else
   bad "i3 strict-message-200-primary" "want LLM_ROUTE=primary; got $RC" "$ERR"
+fi
+
+# --strict accepts the real MiniMax answer: type message, a stop_reason, and
+# base_resp.status_code 0 — content null is fine (max_tokens 1).
+preflight_case i3-strict-minimax-null-content 200 "$MINIMAX_MSG" --strict
+if [ "$RC" -eq 0 ] && [ "$(cat "$OUT")" = "LLM_ROUTE=primary" ] && ! grep -q '::warning::' "$ERR"; then
+  pass "i3 strict-minimax-message-null-content-primary"
+else
+  bad "i3 strict-minimax-message-null-content-primary" "want LLM_ROUTE=primary for the real MiniMax shape; got $RC" "$ERR"
+fi
+
+# --strict still refuses a 2xx error body, a non-zero base_resp status and a
+# message without stop_reason; the diagnostic names the content TYPE and the
+# stop_reason value only.
+preflight_case i3-strict-error-body 200 '{"type":"error","error":{"type":"invalid_request_error","message":"test-key-aaaa"}}' --strict
+if [ "$RC" -eq 1 ] && ! grep -q 'LLM_ROUTE' "$OUT" && grep -q '\.type=error' "$ERR" && ! grep -q 'test-key-aaaa' "$ERR"; then
+  pass "i3 strict-200-error-body-fails"
+else
+  bad "i3 strict-200-error-body-fails" "want exit 1 naming .type=error; got $RC" "$ERR"
+fi
+preflight_case i3-strict-base-resp-nonzero 200 '{"type":"message","content":null,"stop_reason":"end_turn","base_resp":{"status_code":2013,"status_msg":"invalid model test-key-aaaa"}}' --strict
+if [ "$RC" -eq 1 ] && ! grep -q 'LLM_ROUTE' "$OUT" && grep -q '\.base_resp\.status_code=2013' "$ERR" \
+  && grep -q 'content type: null' "$ERR" && grep -q 'stop_reason=end_turn' "$ERR" && ! grep -q 'test-key-aaaa' "$ERR"; then
+  pass "i3 strict-base-resp-nonzero-fails"
+else
+  bad "i3 strict-base-resp-nonzero-fails" "want exit 1 naming the status, content type and stop_reason; got $RC" "$ERR"
+fi
+preflight_case i3-strict-no-stop-reason 200 '{"type":"message","content":"text","base_resp":{"status_code":0}}' --strict
+if [ "$RC" -eq 1 ] && ! grep -q 'LLM_ROUTE' "$OUT" && grep -q 'content type: string' "$ERR"; then
+  pass "i3 strict-missing-stop-reason-fails"
+else
+  bad "i3 strict-missing-stop-reason-fails" "want exit 1 naming content type string; got $RC" "$ERR"
+fi
+preflight_case i3-strict-hostile-stop-reason 200 '{"type":"message","content":{"x":1},"stop_reason":"Stop test-key-aaaa","base_resp":{"status_code":7}}' --strict
+if [ "$RC" -eq 1 ] && ! grep -q 'test-key-aaaa' "$ERR" "$OUT" && grep -q 'content type: object' "$ERR" && ! grep -q 'stop_reason=' "$ERR"; then
+  pass "i3 strict-hostile-stop-reason-not-shown"
+else
+  bad "i3 strict-hostile-stop-reason-not-shown" "want exit 1, content type object and no stop_reason value; got $RC" "$ERR"
 fi
 
 # I3 diagnostic: a 2xx that is not a message names only the top-level key
