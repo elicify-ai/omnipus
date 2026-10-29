@@ -3,13 +3,13 @@
 // U8, where the live (InlineMedia) and finalized (VirtualAssistantMessageRow)
 // paths each carried an identical inline copy of this markup.
 //
-//   image: ChatImage (lightbox + its own toolbar) with an optional caption.
-//          A Library location, when present, is ignored here — images keep
-//          their existing toolbar and gain no new action (spec A7, BS-5.6).
+//   image: ChatImage (lightbox + its own toolbar, unchanged) with an optional
+//          caption, plus "Open in Library" below it when the media part carried
+//          a `library_ref` (follow-up 3, replacing assumption A7).
 //   file:  the download link, plus "Open in Library" when the media part
-//          carried a `library_ref` (FR-022, BS-5.1). The button opens the
-//          docked Library through the leave gate (BS-5.5); its accessible
-//          name names the file.
+//          carried a `library_ref` (FR-022, BS-5.1).
+// Either button opens the docked Library through the leave gate (BS-5.5); its
+// accessible name names the file.
 
 import { File, FolderOpen } from '@phosphor-icons/react'
 import type { LibraryRef } from '@/lib/api/generated/asyncapi-types'
@@ -26,6 +26,22 @@ export interface AssistantMediaItemProps {
   libraryRef?: LibraryRef
 }
 
+function OpenInLibraryButton({ filename, libraryRef }: { filename: string; libraryRef: LibraryRef }) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      aria-label={`Open ${filename} in Library`}
+      data-testid="assistant-media-open-in-library"
+      onClick={() => openLibraryAt({ workspaceId: libraryRef.workspace_id, path: libraryRef.path })}
+    >
+      <FolderOpen size={14} aria-hidden="true" />
+      Open in Library
+    </Button>
+  )
+}
+
 export function AssistantMediaItem({ kind, url, filename, caption, libraryRef }: AssistantMediaItemProps) {
   if (kind === 'image') {
     return (
@@ -37,6 +53,11 @@ export function AssistantMediaItem({ kind, url, filename, caption, libraryRef }:
         />
         {caption && (
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{caption}</p>
+        )}
+        {libraryRef && (
+          <div className="mt-[var(--space-1)]">
+            <OpenInLibraryButton filename={filename} libraryRef={libraryRef} />
+          </div>
         )}
       </div>
     )
@@ -57,17 +78,7 @@ export function AssistantMediaItem({ kind, url, filename, caption, libraryRef }:
   return (
     <div className="flex flex-wrap items-center gap-[var(--space-2)]">
       {download}
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        aria-label={`Open ${filename} in Library`}
-        data-testid="assistant-media-open-in-library"
-        onClick={() => openLibraryAt({ workspaceId: libraryRef.workspace_id, path: libraryRef.path })}
-      >
-        <FolderOpen size={14} aria-hidden="true" />
-        Open in Library
-      </Button>
+      <OpenInLibraryButton filename={filename} libraryRef={libraryRef} />
     </div>
   )
 }
