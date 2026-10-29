@@ -8084,6 +8084,10 @@
     {
       "source": "src/routes/_app/workspaces.$workspaceId.rooms.$roomId.tsx",
       "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/OmnipusComposer.tsx",
+      "lane": 3
     }
   ]
 }
