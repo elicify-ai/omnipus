@@ -134,6 +134,68 @@ func TestGuard_StandAloneQuotedLiteralsNotRefused(t *testing.T) {
 	}
 }
 
+// TestGuard_RootWritableProbeBothWays is FR-3 with the probe forced both
+// ways, so the result does not depend on this host. CHECK M03 (the veto
+// compiled out) must fail the writable-root case on a normal non-root Mac.
+func TestGuard_RootWritableProbeBothWays(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	absent := t11AbsentTop(t)
+	cmd := fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent)
+	concat := `python3 -c "open('/tm' 'p/x','w')"`
+
+	t.Run("writable root refuses the stand-alone literal", func(t *testing.T) {
+		restore := t11ForceRootWritable(t, true)
+		defer restore()
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Contains(t, got, "path outside working dir",
+			"spec §3.1 condition 5: when the root is writable the stand-alone rule is off")
+	})
+	t.Run("unwritable root allows the stand-alone literal and still refuses concatenation", func(t *testing.T) {
+		restore := t11ForceRootWritable(t, false)
+		defer restore()
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Empty(t, got,
+			"spec §3.1 / FR-1: with the root not writable, a stand-alone absent literal is not refused\nrefusal: %s", got)
+		t11RequireRefused(t, tool, cwd, concat, "path outside working dir", "adjacent literals stay refused when the exemption is on")
+	})
+}
+
+// t11ForceRootWritable sets the production probe for one test and returns
+// the restore func. Tests that use it must not run in parallel.
+func t11ForceRootWritable(t *testing.T, writable bool) func() {
+	t.Helper()
+	old := rootWritableProbe
+	rootWritableProbe = func() bool { return writable }
+	return func() { rootWritableProbe = old }
+}
+
+// TestGuard_BraceConcatenationStillRefused is S5. A quoted fragment inside a
+// shell word that brace-expands into a real outside path stays refused,
+// including when that word is nested under bash -c or sh -c. The commands are
+// the ones from the gate receipt. The probe is forced off so a writable root
+// cannot hide a broken text check, and a plain stand-alone literal stays allowed.
+func TestGuard_BraceConcatenationStillRefused(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	absent := t11AbsentTop(t)
+	plain := fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent)
+	got := tool.guardCommand(context.Background(), plain, cwd)
+	require.Empty(t, got, "spec §3.1: a plain stand-alone literal stays allowed\nrefusal: %s", got)
+
+	refused := []string{
+		`touch {'/tm',}p/t11-proof`,
+		`bash -c "touch {'/tm',}p/t11-proof"`,
+		`sh -c "touch {'/tm',}p/t11-proof"`,
+		`touch '/tmp/t11-proof'`,
+	}
+	for _, cmd := range refused {
+		t.Run(cmd, func(t *testing.T) {
+			t11RequireRefused(t, tool, cwd, cmd, "path outside working dir", "shell concatenation or a real outside path")
+		})
+	}
+}
+
 // TestGuard_RuleOffWhenRootWritable is FR-3. On a non-root Unix host the
 // spec's "root is writable" input is not this process, so the assertion is
 // the complementary one the same sentence requires: the rule stays on.

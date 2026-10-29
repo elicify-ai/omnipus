@@ -7,6 +7,7 @@
 package clitrust_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,4 +148,70 @@ func t11WriteExe(t *testing.T, dir, name string, mode os.FileMode) string {
 	require.NoError(t, os.WriteFile(p, []byte("#!/bin/sh\necho ok\n"), mode))
 	require.NoError(t, os.Chmod(p, mode))
 	return p
+}
+
+// TestCheckProgramPath_GroupWritableDirectory is S4 / IMP-1. A file that is
+// itself not group-writable is still refused when its directory, or the
+// directory of a link to it, is group-writable (mode 0775). Spec §3.2 / §5.
+func TestCheckProgramPath_GroupWritableDirectory(t *testing.T) {
+	check, _ := loadT11CLITrust(t)
+
+	t.Run("parent directory group writable", func(t *testing.T) {
+		dir := t.TempDir()
+		p := t11WriteExe(t, dir, "fakecli", 0o755)
+		require.NoError(t, os.Chmod(dir, 0o775))
+		resolved, err := check(p, nil)
+		require.Error(t, err, "spec §3.2: a group-writable directory can replace the program")
+		require.Empty(t, resolved)
+		require.Contains(t, strings.ToLower(err.Error()), "writable")
+	})
+
+	t.Run("link folder group writable", func(t *testing.T) {
+		finalDir := t.TempDir()
+		final := t11WriteExe(t, finalDir, "fakecli", 0o755)
+		require.NoError(t, os.Chmod(finalDir, 0o700))
+		linkDir := t.TempDir()
+		require.NoError(t, os.Chmod(linkDir, 0o775))
+		link := filepath.Join(linkDir, "link")
+		require.NoError(t, os.Symlink(final, link))
+		resolved, err := check(link, nil)
+		require.Error(t, err, "spec §3.2: a group-writable link folder can retarget the program")
+		require.Empty(t, resolved)
+		require.Contains(t, strings.ToLower(err.Error()), "writable")
+	})
+}
+
+// TestAgentWritableRoots_RuntimeHomeSpelling is S3. The forbidden root is the
+// home the runtime actually uses: "~/" expands to the user home, and
+// surrounding whitespace is trimmed. A program at that location is refused.
+func TestAgentWritableRoots_RuntimeHomeSpelling(t *testing.T) {
+	check, roots := loadT11CLITrust(t)
+
+	t.Run("tilde spelling", func(t *testing.T) {
+		userHome, err := os.UserHomeDir()
+		require.NoError(t, err)
+		name := fmt.Sprintf("t11-s3-%d", os.Getpid())
+		dir := filepath.Join(userHome, name)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		t.Cleanup(func() { _ = os.RemoveAll(dir) })
+		prog := t11WriteExe(t, dir, "fakecli", 0o755)
+		cfg := &config.Config{}
+		cfg.Agents.List = []config.AgentConfig{{ID: "t11s3", Home: "~/" + name}}
+		resolved, err := check(prog, roots("", cfg))
+		require.Error(t, err, "spec §3.2: ~/ spelling is the same writable home")
+		require.Empty(t, resolved)
+		require.Contains(t, strings.ToLower(err.Error()), "home")
+	})
+
+	t.Run("surrounding whitespace", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.Chmod(dir, 0o700))
+		prog := t11WriteExe(t, dir, "fakecli", 0o755)
+		cfg := &config.Config{}
+		cfg.Agents.Defaults.Home = "  " + dir + "  "
+		resolved, err := check(prog, roots("", cfg))
+		require.Error(t, err, "spec §3.2: whitespace around a home is not a different directory")
+		require.Empty(t, resolved)
+		require.Contains(t, strings.ToLower(err.Error()), "home")
+	})
 }
