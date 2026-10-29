@@ -28,7 +28,8 @@ type Decide = (input: {
 
 async function loadDecide(): Promise<Decide> {
   try {
-    const mod = await import('./decideLibraryOpen') as { decideLibraryOpen?: Decide }
+    const spec = './decideLibraryOpen'
+    const mod = await import(/* @vite-ignore */ spec) as { decideLibraryOpen?: Decide }
     if (typeof mod.decideLibraryOpen !== 'function') {
       throw new Error('missing export')
     }

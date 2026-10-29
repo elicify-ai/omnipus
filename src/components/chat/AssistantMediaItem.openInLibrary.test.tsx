@@ -15,7 +15,8 @@ describe('AssistantMediaItem Open in Library', () => {
       kind: 'file' | 'image'
     }) => ReactNode
     try {
-      const mod = await import('./AssistantMediaItem') as { AssistantMediaItem?: typeof Item }
+      const spec = './AssistantMediaItem'
+      const mod = await import(/* @vite-ignore */ spec) as { AssistantMediaItem?: typeof Item }
       if (typeof mod.AssistantMediaItem !== 'function') throw new Error('missing export')
       Item = mod.AssistantMediaItem
     } catch (err) {
