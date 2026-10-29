@@ -1108,7 +1108,8 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	emitFileWriteAudit(ctx, t.auditLogger, t.Name(), canonicalPath)
 
-	return SilentResult(fmt.Sprintf("File written: %s", path) + clobberNote)
+	return SilentResult(withLinkLine(fmt.Sprintf("File written: %s", path)+clobberNote,
+		LinkLine(ctx, config.OmnipusHomeDir(), canonicalPath)))
 }
 
 type ListDirTool struct {
