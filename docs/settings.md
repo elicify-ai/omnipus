@@ -294,7 +294,9 @@ When one agent sends a message into another's turn — `delegate` with `action: 
 - `steer_rate` — how many steer, respond or redirect messages one agent may send to the same target per minute. Default **60**.
 - `steer_aggregate_body` — the most message bytes that may be waiting for one conversation at once, added up across its waiting ordinary messages. Default **1,048,576** (1 MiB). A message that would take the waiting total past this is refused with a named error and is never trimmed; the total comes back down as the agent reads what is waiting. At most 200 messages may wait for one conversation, whichever limit is reached first. Wake-ups and other control messages do not count.
 
-All are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. A message beyond any bound is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these keys.
+**Messages you type into a chat while its agent is working behave differently today.** They wait in that chat's queue and reach the agent at its next step. The same 1 MiB total and 200-message limit apply to that queue, but a message that does not fit is not refused: it runs as the next turn, after the current one ends. Stop does not cancel it — Stop ends the current turn, the messages that were waiting in the queue are dropped with a "please resend" notice, and the message that did not fit then starts running. This is tracked in [#1503](https://github.com/elicify-ai/omnipus/issues/1503), which will make such a message refused visibly instead.
+
+All are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. Apart from the chat case above, a message beyond any bound is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these keys.
 
 ### Safety stops that are not settings
 
