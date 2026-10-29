@@ -54,7 +54,9 @@ type AskUserQuestionCard struct {
 	CreatedAt    string   `json:"created_at"`
 	// When the set carries at least one default_safe question: the instant those questions auto-resolve to their recommendation (created_at + the fixed 30 minutes). Drives the countdown line.
 	DefaultSafeAt *string `json:"default_safe_at,omitempty"`
-	Questions     []struct {
+	// Server-derived origin label captured when the question was created (#1449 C-I6, FR-050), e.g. "for group <name>". Immutable once the card exists. Present together with room_ref when the question was raised by work that answers exactly one group's request (D23, D28); the group then shows the card too. Absent for every other question.
+	OriginLabel *string `json:"origin_label,omitempty"`
+	Questions   []struct {
 		Context     *string `json:"context,omitempty"`
 		DefaultSafe *bool   `json:"default_safe,omitempty"`
 		Header      string  `json:"header"`
@@ -66,6 +68,7 @@ type AskUserQuestionCard struct {
 		Question    string  `json:"question"`
 		Recommended *string `json:"recommended,omitempty"`
 	} `json:"questions"`
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
 	// Transcript session id the set is parked on (session-scoped).
 	SessionId string `json:"session_id"`
 	Status    string `json:"status"`
@@ -1157,8 +1160,10 @@ type RoomEntry struct {
 	// Resolved addressee agent ids. Never null.
 	Addressees []string `json:"addressees"`
 	// True for an answer to work consumed before a /pause; such an answer never forwards its mentions (§6.11).
-	AfterPause bool            `json:"after_pause"`
-	Author     RoomEntryAuthor `json:"author"`
+	AfterPause bool `json:"after_pause"`
+	// Images and files of the entry (#1449 D3, FR-016, FR-020), in the order they were sent. Each part's url is the workspace media URL (/api/v1/media/workspace/<workspace id>/<id>). Absent means none. A file deleted later in the Library keeps its part here; fetching it then fails and the chat shows the file as unavailable (D26).
+	Attachments []MediaPart     `json:"attachments,omitempty"`
+	Author      RoomEntryAuthor `json:"author"`
 	// Echo of RoomMessageRequest.client_message_id for a person's entry.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	// Per-member delivery states for this entry. Never null.
@@ -1166,7 +1171,8 @@ type RoomEntry struct {
 	Id         string              `json:"id"`
 	RoomId     string              `json:"room_id"`
 	// Position in the room transcript; strictly increasing.
-	Seq       int64  `json:"seq"`
+	Seq int64 `json:"seq"`
+	// The message text. One group message size limit applies to a person's message and to an agent's answer (#1449 D24, D27): at most 65,536 UTF-8 bytes (counted in bytes, not characters); an operator can lower this limit with session_messaging.steer_body, never raise it. maxLength states the same 65,536 maximum; the server counts the limit in UTF-8 bytes, which is never less than the character count. May be empty when the entry carries attachments.
 	Text      string `json:"text"`
 	Timestamp string `json:"timestamp"`
 }
@@ -1197,16 +1203,18 @@ type RoomMemberStateFrame struct {
 
 // RoomMetaFrame — Server → client (spec omnipus-system-agent K45). The room's members, mutes, pause state, allocated cost or read-only state changed. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
 type RoomMetaFrame struct {
-	AllocatedCostMicroUsd int64    `json:"allocated_cost_micro_usd"`
-	AllocatedCostUnpriced bool     `json:"allocated_cost_unpriced"`
-	Generation            int64    `json:"generation"`
-	Members               []string `json:"members"`
-	Muted                 []string `json:"muted"`
-	Paused                bool     `json:"paused"`
-	ReadOnlyReason        *string  `json:"read_only_reason,omitempty"`
-	RoomId                string   `json:"room_id"`
-	Seq                   int64    `json:"seq"`
-	Type                  string   `json:"type"`
+	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
+	AllocatedCostUnpriced bool  `json:"allocated_cost_unpriced"`
+	Generation            int64 `json:"generation"`
+	// Invitation summary state (#1449 FR-045). The text itself never travels on a frame: on ready, an open Participants panel refetches getRoom.
+	InvitationContextStatus *string  `json:"invitation_context_status,omitempty"`
+	Members                 []string `json:"members"`
+	Muted                   []string `json:"muted"`
+	Paused                  bool     `json:"paused"`
+	ReadOnlyReason          *string  `json:"read_only_reason,omitempty"`
+	RoomId                  string   `json:"room_id"`
+	Seq                     int64    `json:"seq"`
+	Type                    string   `json:"type"`
 }
 
 // RoomRef — Reference from a main-session entry (or an approval) to the room (group chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215, FR-251). Display and navigation data only: it never grants access to the room. `role` says whether the entry is the room's request to this agent or this agent's answer into the room; a room pre-admission approval card (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomRef) — keep both copies in sync by hand.

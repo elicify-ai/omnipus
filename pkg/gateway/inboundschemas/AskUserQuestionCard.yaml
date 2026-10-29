@@ -30,6 +30,18 @@ properties:
   agent_id:
     type: string
     description: Agent that asked — names the card's "needs your input" header.
+  room_ref:
+    $ref: './RoomRef.yaml'
+  origin_label:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: >
+      Server-derived origin label captured when the question was created
+      (#1449 C-I6, FR-050), e.g. "for group <name>". Immutable once the card
+      exists. Present together with room_ref when the question was raised by
+      work that answers exactly one group's request (D23, D28); the group
+      then shows the card too. Absent for every other question.
   status:
     type: string
     enum:

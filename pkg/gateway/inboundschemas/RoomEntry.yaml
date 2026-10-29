@@ -39,7 +39,26 @@ properties:
     $ref: './RoomEntryAuthor.yaml'
   text:
     type: string
-    maxLength: 5242880
+    maxLength: 65536
+    description: >
+      The message text. One group message size limit applies to a person's
+      message and to an agent's answer (#1449 D24, D27): at most 65,536 UTF-8
+      bytes (counted in bytes, not characters); an operator can lower this
+      limit with session_messaging.steer_body, never raise it. maxLength
+      states the same 65,536 maximum; the server counts the limit in UTF-8
+      bytes, which is never less than the character count. May be empty
+      when the entry carries attachments.
+  attachments:
+    type: array
+    maxItems: 16
+    items:
+      $ref: './MediaPart.yaml'
+    description: >
+      Images and files of the entry (#1449 D3, FR-016, FR-020), in the order
+      they were sent. Each part's url is the workspace media URL
+      (/api/v1/media/workspace/<workspace id>/<id>). Absent means none. A
+      file deleted later in the Library keeps its part here; fetching it then
+      fails and the chat shows the file as unavailable (D26).
   addressees:
     type: array
     items:

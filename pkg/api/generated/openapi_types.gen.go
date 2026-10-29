@@ -9452,6 +9452,27 @@ func (e RoomCreateRequestKind) Valid() bool {
 	}
 }
 
+// Defines values for RoomInvitationStatus.
+const (
+	RoomInvitationStatusGenerating  RoomInvitationStatus = "generating"
+	RoomInvitationStatusReady       RoomInvitationStatus = "ready"
+	RoomInvitationStatusUnavailable RoomInvitationStatus = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the RoomInvitationStatus enum.
+func (e RoomInvitationStatus) Valid() bool {
+	switch e {
+	case RoomInvitationStatusGenerating:
+		return true
+	case RoomInvitationStatusReady:
+		return true
+	case RoomInvitationStatusUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RoomMembersUpdateRequestAction.
 const (
 	RoomMembersUpdateRequestActionAdd    RoomMembersUpdateRequestAction = "add"
@@ -18846,6 +18867,9 @@ type LibraryContentResponse struct {
 
 // LibraryEntry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
 type LibraryEntry struct {
+	// ChatCopy True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+	ChatCopy *bool `json:"chat_copy,omitempty"`
+
 	// IsDir True when this entry is a directory.
 	IsDir bool `json:"is_dir"`
 
@@ -19206,6 +19230,9 @@ type MailAttachmentSaveResponse struct {
 
 	// Entry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
 	Entry struct {
+		// ChatCopy True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+		ChatCopy *bool `json:"chat_copy,omitempty"`
+
 		// IsDir True when this entry is a directory.
 		IsDir bool `json:"is_dir"`
 
@@ -20438,6 +20465,9 @@ type MediaLibraryEntry struct {
 
 	// LastRefcountSeenAt RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
 	LastRefcountSeenAt *time.Time `json:"last_refcount_seen_at,omitempty"`
+
+	// LibraryPath Workspace-relative path of this entry's Library file (for example .library/shot.png), with the same path rules as LibraryEntry.path (#1449 D26, FR-086). The durable association between the chat copy and the Library file: written when the file is published, kept across a rename or a move inside the workspace, cleared when the Library file is deleted or moved to another workspace. Absent when the entry has no associated Library file.
+	LibraryPath *string `json:"library_path,omitempty"`
 
 	// Mime MIME type sniffed from the stored bytes.
 	Mime *string `json:"mime,omitempty"`
@@ -23502,7 +23532,7 @@ type RevisionEntry struct {
 // RevisionEntryVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 type RevisionEntryVerb string
 
-// Room A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}.
+// Room A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}. invitation_context_status is present on every room the server returns (#1449 FR-041): only an ad-hoc group started with Add participant from a main chat ever has a summary, every other group reports unavailable. invitation_context (with the text) is returned by GET /api/v1/rooms/{id} only.
 type Room struct {
 	// AllocatedCostMicroUsd Allocated cost in micro-dollars (§6.14).
 	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
@@ -23514,9 +23544,15 @@ type Room struct {
 	Generation int64 `json:"generation"`
 
 	// Hidden Team room below two conversation agents: hidden, history kept.
-	Hidden bool     `json:"hidden"`
-	Id     string   `json:"id"`
-	Kind   RoomKind `json:"kind"`
+	Hidden bool   `json:"hidden"`
+	Id     string `json:"id"`
+
+	// InvitationContext The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+	InvitationContext *RoomInvitationContext `json:"invitation_context,omitempty"`
+
+	// InvitationContextStatus State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+	InvitationContextStatus *RoomInvitationStatus `json:"invitation_context_status,omitempty"`
+	Kind                    RoomKind              `json:"kind"`
 
 	// Members Member agent ids. Never null.
 	Members []string `json:"members"`
@@ -23568,6 +23604,30 @@ type RoomHistoryResponse struct {
 	NextBeforeSeq *int64 `json:"next_before_seq,omitempty"`
 }
 
+// RoomInvitationContext The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+type RoomInvitationContext struct {
+	// AuthorAgentId The starting agent, whose model wrote the summary.
+	AuthorAgentId string `json:"author_agent_id"`
+
+	// CostMicroUsd Cost of the summary call in micro-dollars, counted once into the group's cost. Absent when no call ran.
+	CostMicroUsd *int64 `json:"cost_micro_usd,omitempty"`
+
+	// CostUnpriced True when the summary call ran but reported no price.
+	CostUnpriced *bool `json:"cost_unpriced,omitempty"`
+
+	// GeneratedAt When the summary became ready.
+	GeneratedAt *time.Time `json:"generated_at,omitempty"`
+
+	// Status State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+	Status RoomInvitationStatus `json:"status"`
+
+	// Text The summary text. Present only when status is ready.
+	Text *string `json:"text,omitempty"`
+}
+
+// RoomInvitationStatus State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+type RoomInvitationStatus string
+
 // RoomMembersUpdateRequest Body of PATCH /api/v1/rooms/{id}/members (spec omnipus-system-agent K24; FR-204, FR-207). The team room accepts only mute and unmute; removing a member below two agents follows the two-agent rule (FR-204).
 type RoomMembersUpdateRequest struct {
 	Action   RoomMembersUpdateRequestAction `json:"action"`
@@ -23581,9 +23641,14 @@ type RoomMembersUpdateRequestAction string
 type RoomMessageRequest struct {
 	ClientMessageId string `json:"client_message_id"`
 
+	// Media Files attached to the message (#1449 D3, FR-018): each a media://workspace/<this room's workspace id>/<id> reference returned by POST /upload with workspace_id. Every reference is resolved before anything is recorded; a reference that is not a file of this room's workspace, is missing or is stranded refuses the whole message with 422 and nothing is posted. More than 16 is a 400. The same reference listed twice is kept as listed. Attachments never count toward the text size limit.
+	Media *[]string `json:"media,omitempty"`
+
 	// Mentions Agent ids picked in the @-picker, or the reserved value `all`.
 	Mentions []string `json:"mentions"`
-	Text     string   `json:"text"`
+
+	// Text The message text: at most 65,536 UTF-8 bytes (counted in bytes, not characters); an operator can lower this limit with session_messaging.steer_body, never raise it (#1449 D24, D27). The server enforces the limit in force in UTF-8 bytes before any schema check, with inbound validation on and off, and answers 422 naming the size and the limit; maxLength states the same 65,536 maximum (a byte count is never less than the character count, so the server check always answers first). Text may be empty only when media is not empty: a message with neither non-blank text nor media is refused with 422.
+	Text string `json:"text"`
 }
 
 // RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
@@ -28737,12 +28802,18 @@ type UploadFilesMultipartBody struct {
 
 	// SessionId Session ID (alternative to query parameter).
 	SessionId *string `json:"session_id,omitempty"`
+
+	// WorkspaceId Workspace ID (alternative to the query parameter); must precede the file parts.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // UploadFilesParams defines parameters for UploadFiles.
 type UploadFilesParams struct {
-	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
 	SessionId *string `form:"session_id,omitempty" json:"session_id,omitempty"`
+
+	// WorkspaceId Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Takes precedence over session_id.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // TranscribeAudioMultipartBody defines parameters for TranscribeAudio.

@@ -18,8 +18,32 @@ properties:
     maxLength: 128
   text:
     type: string
-    minLength: 1
-    maxLength: 5242880
+    minLength: 0
+    maxLength: 65536
+    description: >
+      The message text: at most 65,536 UTF-8 bytes (counted in bytes, not
+      characters); an operator can lower this limit with
+      session_messaging.steer_body, never raise it (#1449 D24, D27). The
+      server enforces the limit in force in UTF-8 bytes before any schema
+      check, with inbound validation on and off, and answers 422 naming the
+      size and the limit; maxLength states the same 65,536 maximum (a byte
+      count is never less than the character count, so the server check
+      always answers first). Text may be empty only when media is not empty:
+      a message with neither non-blank text nor media is refused with 422.
+  media:
+    type: array
+    maxItems: 16
+    items:
+      type: string
+    description: >
+      Files attached to the message (#1449 D3, FR-018): each a
+      media://workspace/<this room's workspace id>/<id> reference returned by
+      POST /upload with workspace_id. Every reference is resolved before
+      anything is recorded; a reference that is not a file of this room's
+      workspace, is missing or is stranded refuses the whole message with
+      422 and nothing is posted. More than 16 is a 400. The same reference
+      listed twice is kept as listed. Attachments never count toward the
+      text size limit.
   mentions:
     type: array
     maxItems: 256
