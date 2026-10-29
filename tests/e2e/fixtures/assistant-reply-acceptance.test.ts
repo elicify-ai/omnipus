@@ -96,7 +96,7 @@ describe('matchingHansReplyCompletions — the Hans browser checker selection ga
   })
 
   it('preserves acceptance when optional completion stats are absent', () => {
-    const { stats: _stats, ...withoutStats } = done
+    const withoutStats = Object.fromEntries(Object.entries(done).filter(([key]) => key !== 'stats'))
     expect(matchingHansReplyCompletions(wire([withoutStats]), sessionId, row)).toEqual([withoutStats])
   })
 })
@@ -156,7 +156,9 @@ describe('matchingHansReplyTranscriptEntries — the real disk-poll predicate', 
   })
 
   it('rejects missing content instead of accepting an identity-only entry', () => {
-    const { content: _content, ...withoutContent } = { ...answer, id: row.messageId }
+    const withoutContent = Object.fromEntries(
+      Object.entries({ ...answer, id: row.messageId }).filter(([key]) => key !== 'content'),
+    )
     expect(matchingHansReplyTranscriptEntries(jsonl([withoutContent]), row, agentId, row.turnId, nonce)).toEqual([])
   })
 
