@@ -37,7 +37,6 @@ func LinkLine(ctx context.Context, home, hostPath string) string {
 	ref := library.ResolveHostPath(library.ResolveScope{
 		Home:          home,
 		WorkspaceID:   ToolWorkspaceID(ctx),
-		TurnWorkDir:   TurnWorkspaceDir(ctx),
 		AllWorkspaces: coreagent.HasCrossWorkspaceSetupAuthority(ToolAgentID(ctx)),
 	}, hostPath)
 	if !ref.InLibrary() {

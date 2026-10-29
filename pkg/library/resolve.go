@@ -60,11 +60,6 @@ type ResolveScope struct {
 	// WorkspaceID is the turn's workspace. May be empty only with
 	// AllWorkspaces.
 	WorkspaceID string
-	// TurnWorkDir is the turn's re-rooted work directory, when the loop set
-	// one. It stands in for the turn workspace's work directory only when that
-	// directory does not exist under Home. Ignored with AllWorkspaces, where
-	// the turn root is the agent's own home.
-	TurnWorkDir string
 	// AllWorkspaces enables the cross-workspace fallback.
 	AllWorkspaces bool
 }
@@ -122,11 +117,12 @@ func ResolveHostPath(scope ResolveScope, hostPath string) HostRef {
 
 // resolveCandidates lists the Libraries to try, turn workspace first.
 //
-// The turn workspace's Library is its work directory under $OMNIPUS_HOME. The
-// loop's TurnWorkDir stands in for it only when that directory does not exist
-// under Home (an install or harness whose work tree lives elsewhere); when both
-// exist and differ, the Library's own directory wins, so a turn rooted in an
-// agent's private home can never make that home look like the workspace.
+// A workspace's Library is exactly its work directory under $OMNIPUS_HOME
+// (workspace.SafeWorkDir) — the only tree the Library serves files from. The
+// turn's own re-rooted directory is deliberately NOT a candidate: a file found
+// only there would get a dead link (R4), and when workspace-dir creation fails
+// the turn falls back to the agent's private folder, whose files must never be
+// labelled with a workspace link (architect ruling B3 (c), 2026-10-29).
 func resolveCandidates(scope ResolveScope) []resolveCandidate {
 	var out []resolveCandidate
 	if scope.WorkspaceID != "" {
@@ -137,9 +133,6 @@ func resolveCandidates(scope ResolveScope) []resolveCandidate {
 					dir = safe
 				}
 			}
-		}
-		if dir == "" && !scope.AllWorkspaces {
-			dir = scope.TurnWorkDir
 		}
 		if dir != "" {
 			out = append(out, resolveCandidate{workspaceID: scope.WorkspaceID, workDir: dir})
@@ -235,6 +228,11 @@ func shadowedByMount(home, workspaceID, rel string) bool {
 	}
 	return false
 }
+
+// RealPathDeepest is evalDeepest for callers outside this package: p's real
+// path through its deepest existing ancestor, with the missing tail
+// re-attached. ok is false when some existing component cannot be evaluated.
+func RealPathDeepest(p string) (string, bool) { return evalDeepest(p) }
 
 // evalDeepest resolves p's real path through its deepest existing ancestor,
 // re-attaching the missing tail. A component that exists but cannot be
