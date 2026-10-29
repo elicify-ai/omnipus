@@ -777,7 +777,7 @@ func (al *AgentLoop) runMachineCheck(
 			assigneeAgentID,
 		)
 		verdict.Reason = reason
-		return verdict, al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
+		return verdict, al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
 			NonVerdictUnableToVerify
 	}
 
@@ -793,7 +793,7 @@ func (al *AgentLoop) runMachineCheck(
 			policy, assigneeAgentID,
 		)
 		verdict.Reason = reason
-		return verdict, al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, true),
+		return verdict, al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, true),
 			NonVerdictUnableToVerify
 	}
 
@@ -868,7 +868,7 @@ func (al *AgentLoop) runMachineCheck(
 				workspaceID, assigneeAgentID, wsErr.Error(),
 			)
 			verdict.Reason = reason
-			return verdict, al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
+			return verdict, al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
 				NonVerdictUnableToVerify
 		}
 		callCtx = tools.WithTurnWorkspaceDir(callCtx, wsDir)
@@ -894,7 +894,7 @@ func (al *AgentLoop) runMachineCheck(
 	if len(output) > machineCheckOutputCap {
 		output = output[:machineCheckOutputCap]
 	}
-	ev := al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, output, exitCode, timedOut, false)
+	ev := al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, output, exitCode, timedOut, false)
 
 	// G-3/FR-116/FR-137 (blocked-check honesty, the M1 predicate): the
 	// verification MECHANISM ran to completion only when bash returned a
@@ -1009,26 +1009,53 @@ func interpretBashResult(result *tools.ToolResult) (timedOut bool, exitCode int,
 	return false, -1, output
 }
 
-// persistEvidence writes an EvidenceRecord via the redacting EvidenceStore.
-// Returns nil (no on-disk record) when taskID is empty — a plan-scope round
-// (Wave 2-B) has no task to correlate evidence under in this wave; the
-// verdict itself is still computed correctly in-memory regardless.
-func (al *AgentLoop) persistEvidence(
+// machineCheckEvidence produces the EvidenceRecord for ONE machine-check
+// attempt, redacted and size-capped by the EvidenceStore's own rules, and
+// persists it when there is a task to file it under.
+//
+// The record is returned in BOTH cases (issue #722). The on-disk evidence
+// layout is partitioned by task id; the prose Judge's evidence bundle is not.
+// A chat goal adjudication carries no TaskID (JudgeCriteriaInput.validate
+// allows goal scope without one), and a plan-scope round has none either.
+// This used to return nil whenever taskID was empty, so such a Judge was told
+// "(no machine-check results on this attempt)" even when its check had just
+// passed, and every prose criterion that leaned on that output — including
+// the built-in floor items — was fail-closed. The verdict maths never
+// depended on this record (runMachineCheck computes the criterion verdict
+// itself); only the Judge's VIEW of the evidence did.
+//
+// A persistence failure is logged and degrades to the unpersisted record
+// rather than to nil: the audit trail is missing this attempt, but the Judge
+// still sees what actually ran. EvidenceStore.Record hands back the built
+// record alongside a write error (nil only on a validation error), so the
+// Judge sees the SAME record whose write failed.
+func (al *AgentLoop) machineCheckEvidence(
 	taskID, criterionID string,
 	attempt int,
 	command, output string,
 	exitCode int,
 	timedOut, policyDenied bool,
 ) *task.EvidenceRecord {
-	if taskID == "" {
-		return nil
-	}
 	es := al.evidenceStore()
+	if taskID == "" {
+		rec, err := es.Build("", criterionID, attempt, command, output, exitCode, timedOut, policyDenied)
+		if err != nil {
+			logger.WarnCF("agent", "judge: could not build machine-check evidence for a task-less adjudication; "+
+				"the Judge sees no record for this check",
+				map[string]any{"criterion_id": criterionID, "attempt": attempt, "error": err.Error()})
+			return nil
+		}
+		return rec
+	}
 	rec, err := es.Record(taskID, criterionID, attempt, command, output, exitCode, timedOut, policyDenied)
 	if err != nil {
-		logger.WarnCF("agent", "judge: failed to persist machine-check evidence",
-			map[string]any{"task_id": taskID, "criterion_id": criterionID, "attempt": attempt, "error": err.Error()})
-		return nil
+		logger.WarnCF("agent", "judge: failed to persist machine-check evidence; "+
+			"the Judge is fed the unpersisted record, the audit trail is missing this attempt",
+			map[string]any{
+				"task_id": taskID, "criterion_id": criterionID, "attempt": attempt,
+				"error": err.Error(), "record_recovered": rec != nil,
+			})
+		return rec
 	}
 	return rec
 }
