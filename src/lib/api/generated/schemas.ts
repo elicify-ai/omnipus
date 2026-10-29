@@ -18145,7 +18145,7 @@ export const PongFrame = z
 export const ChatPresenceFrame = z
   .object({
     type: z.literal("chat_presence"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     watching: z.boolean(),
   })
   .strict();
@@ -18648,7 +18648,7 @@ export const LibraryChangedFrame = z
 export const LibraryRef = z
   .object({
     workspace_id: z.string().min(1),
-    path: z.string(),
+    path: z.string().min(1),
   })
   .strict();
 
@@ -18676,11 +18676,11 @@ export const MediaFrame = z
 export const OpenInLibraryFrame = z
   .object({
     type: z.literal("open_in_library"),
-    session_id: z.string().min(1),
+    session_id: z.string().min(1).max(255),
     call_id: z.string().min(1),
     request_id: z.string().min(32).max(32).regex(/^[0-9a-f]{32}$/),
     workspace_id: z.string().min(1),
-    path: z.string(),
+    path: z.string().min(1),
   })
   .strict();
 

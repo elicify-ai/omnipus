@@ -17,6 +17,8 @@ properties:
     description: Workspace whose Library holds the file.
   path:
     type: string
+    minLength: 1
     description: >
       Library path of the file, relative to the workspace Library root. For a
-      file in a mounted folder the mount name comes first.
+      file in a mounted folder the mount name comes first. Never empty: the
+      Library root is not a valid target.
