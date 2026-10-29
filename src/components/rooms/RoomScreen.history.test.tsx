@@ -45,10 +45,18 @@ const firstPage = () => olderPage([
 let connection: ReturnType<typeof import('../../../tests/l1-room-ui/harness').connectSocket>['connection']
 
 function scrollLogToTop(): void {
-  const log = screen.getByRole('log', { name: 'Group conversation' })
-  Object.defineProperty(log, 'scrollTop', { configurable: true, value: 0 })
+  const log = screen.getByRole('region', { name: 'Conversation history' })
+  // A value-only scrollTop is read-only. The shared list assigns it while
+  // opening, and that assignment must not crash the page.
+  let scrollTop = 0
+  Object.defineProperty(log, 'scrollTop', {
+    configurable: true,
+    get: () => scrollTop,
+    set: (value: number) => { scrollTop = value },
+  })
   Object.defineProperty(log, 'scrollHeight', { configurable: true, value: 800 })
   Object.defineProperty(log, 'clientHeight', { configurable: true, value: 400 })
+  scrollTop = 0
   fireEvent.scroll(log)
 }
 
@@ -92,10 +100,13 @@ describe('T23 — the integrated scroll-up flow (design D6)', () => {
     await waitFor(() => expect(fetchRoomHistory).toHaveBeenCalledTimes(1))
     // Oldest DISPLAYED entry seq — never the live room high-water (5), never
     // seq - 1 (4): the design's D6 cursor rule.
-    expect(fetchRoomHistory).toHaveBeenCalledWith(ROOM_ID, { beforeSeq: 3 })
-    // Default limit: the param is omitted entirely (server default 100).
-    const call = fetchRoomHistory.mock.calls[0] as unknown as [string, { limit?: number }]
-    expect(call[1]).not.toHaveProperty('limit')
+    // Oldest displayed seq stays 3. The page size is the shared history rule:
+    // limit between 20 and 100 (spec, history pages of 20..100), not "omitted".
+    const call = fetchRoomHistory.mock.calls[0] as unknown as [string, { beforeSeq?: number; limit?: number }]
+    expect(call[0]).toBe(ROOM_ID)
+    expect(call[1].beforeSeq, 'oldest displayed seq, not the live high-water').toBe(3)
+    expect(call[1].limit, 'history page size is between 20 and 100').toBeGreaterThanOrEqual(20)
+    expect(call[1].limit, 'history page size is between 20 and 100').toBeLessThanOrEqual(100)
     // One in-flight request per room: scrolling again while it resolves
     // issues no second request.
     scrollLogToTop()

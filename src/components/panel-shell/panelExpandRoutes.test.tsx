@@ -47,9 +47,11 @@ const routeExpectations: Record<PanelId, RouteExpectation> = {
   tasks: { context: { workspaceId: 'workspace-current' }, surfaceTestId: 'tasks-heading' },
   team: { context: { workspaceId: 'workspace-current' }, surfaceTestId: 'team-panel-fullscreen' },
   calendar: { context: { workspaceId: 'workspace-current' }, surfaceTestId: 'calendar-toolbar' },
+  // #1449 FR-034: participants is not a strip tab. Its full-screen search is the workspace and the room.
+  participants: { context: { workspaceId: 'workspace-current', roomId: 'room-current' }, surfaceTestId: 'participants-loading' },
 }
-// Spec §8.1 is the inventory oracle, never the production array itself.
-const exactSix = ['browser', 'calendar', 'library', 'mail', 'tasks', 'team']
+// The inventory is the six workspace panels plus participants (FR-034), never the production array itself.
+const exactPanels = ['browser', 'calendar', 'library', 'mail', 'participants', 'tasks', 'team']
 
 beforeAll(async () => {
   await Promise.all([
@@ -77,6 +79,17 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
+
+/** The participants panel with no room record: the waiting placeholder, or its load error. */
+function participantsSurface(): Promise<HTMLElement> {
+  return waitFor(() => {
+    const waiting = screen.queryByTestId('participants-loading')
+    if (waiting) return waiting
+    const failed = screen.queryByText(/Could not load this group/)
+    if (failed) return failed
+    throw new Error('participants panel has not mounted')
+  })
+}
 
 async function assertActualContent(id: PanelId) {
   // Concrete content + concrete context consumption replace mock-prop echoes.
@@ -111,6 +124,10 @@ async function assertActualContent(id: PanelId) {
     expect(await screen.findByRole('heading', { name: /^Team & delegation$/ })).toBeInTheDocument()
     expect(apiEdges.fetchWorkspace).toHaveBeenCalledWith('workspace-current')
     expect(apiEdges.fetchWorkspaceDelegation).toHaveBeenCalledWith('workspace-current')
+  } else if (id === 'participants') {
+    // No room record is served. The panel is mounted either while that read is
+    // in flight or once it has failed. Either is the panel, not app chrome.
+    expect(await participantsSurface(), 'the participants route mounts the panel').toBeTruthy()
   } else {
     expect(screen.getByTestId('calendar-grid')).toBeInTheDocument()
     expect(apiEdges.fetchTasks).toHaveBeenCalledWith({ workspace_id: 'workspace-current' })
@@ -121,8 +138,8 @@ async function assertActualContent(id: PanelId) {
 
 describe('SP-38 shell-owned full-screen routes retained by PE1', () => {
   it('round-trips every registered panel context through its search codec', () => {
-    expect(Object.keys(routeExpectations).sort(), 'PE1 needs all exact SIX independent route expectations').toEqual(exactSix)
-    expect(panels.map((definition) => definition.id).sort(), 'no missing or extra registered route').toEqual(exactSix)
+    expect(Object.keys(routeExpectations).sort(), 'every registered panel needs its own route expectation').toEqual(exactPanels)
+    expect(panels.map((definition) => definition.id).sort(), 'no missing or extra registered route').toEqual(exactPanels)
     for (const definition of panels) {
       const expected = routeExpectations[definition.id]
       expect(expected, `${definition.id} needs a full-screen route expectation`).toBeDefined()
@@ -131,7 +148,7 @@ describe('SP-38 shell-owned full-screen routes retained by PE1', () => {
   })
 
   it('renders every registered panel at #/panel/<id> without application chrome', async () => {
-    expect(panels.map((definition) => definition.id).sort()).toEqual(exactSix)
+    expect(panels.map((definition) => definition.id).sort()).toEqual(exactPanels)
     for (const definition of panels) {
       const expected = routeExpectations[definition.id]
       expect(expected, `${definition.id} needs a full-screen route expectation`).toBeDefined()
@@ -144,7 +161,11 @@ describe('SP-38 shell-owned full-screen routes retained by PE1', () => {
       const mounted = render(<RouterProvider router={router} />, { wrapper })
       await waitFor(() => expect(router.state.status).toBe('idle'), { timeout: 5_000 })
       expect(router.state.matches.map((match) => match.routeId)).toContain('/_fullscreen/panel/$panelId')
-      expect(await screen.findByTestId(expected.surfaceTestId)).toBeInTheDocument()
+      if (definition.id === 'participants') {
+        expect(await participantsSurface(), 'the participants route mounts the panel').toBeTruthy()
+      } else {
+        expect(await screen.findByTestId(expected.surfaceTestId)).toBeInTheDocument()
+      }
       expect(router.state.location.pathname).toBe(`/panel/${definition.id}`)
       expect(router.state.location.search).toEqual({ ...Object.fromEntries(search), ...expected.settledSearch })
       expect(screen.getByRole('button', { name: /^Back to chat$/ })).toBeInTheDocument()

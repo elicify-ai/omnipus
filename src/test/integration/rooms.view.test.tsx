@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { RoomDeliveryState, RoomEntryFrame, RoomMetaFrame } from '@/lib/api/generated/asyncapi-types'
@@ -46,16 +47,19 @@ async function showParticipants(): Promise<void> {
     registerExpandContext() {},
     onWidthSettle() {},
   }
+  // MainChatLink and membership use the router. A bare root never mounts the panel (S-52).
+  const root = createRootRoute({ component: () => <QueryClientProvider client={queryClient}><Outlet /></QueryClientProvider> })
+  const route = createRoute({ getParentRoute: () => root, path: '/', component: () => <Panel shellProps={shellProps} /> })
+  const router = createRouter({
+    routeTree: root.addChildren([route]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+    defaultPendingMinMs: 0,
+  })
+  await act(async () => { await router.load() })
   panelHolder = document.createElement('div')
   document.body.appendChild(panelHolder)
   panelRoot = createRoot(panelHolder)
-  await act(async () => {
-    panelRoot?.render(
-      <QueryClientProvider client={queryClient}>
-        <Panel shellProps={shellProps} />
-      </QueryClientProvider>,
-    )
-  })
+  await act(async () => { panelRoot?.render(<RouterProvider router={router} />) })
 }
 
 async function open(state = snapshot()) {
@@ -75,7 +79,7 @@ function meta(overrides: Partial<RoomMetaFrame> = {}): RoomMetaFrame {
 
 async function compose(text: string) {
   const user = userEvent.setup()
-  const input = screen.getByRole('textbox')
+  const input = screen.getByRole('combobox', { name: 'Message the group' })
   await user.type(input, text)
   await user.click(screen.getByRole('button', { name: /^send(?: message)?$/i }))
   return user
@@ -305,7 +309,7 @@ function sendButton() {
 }
 
 function composer() {
-  return screen.getByRole('textbox', { name: 'Message the group' })
+  return screen.getByRole('combobox', { name: 'Message the group' })
 }
 
 async function mountUnresolved() {
@@ -320,7 +324,7 @@ async function mountUnresolved() {
       throw new Error('K45: RoomScreen must attach its room before the snapshot')
     }
   })
-  await screen.findByRole('textbox', { name: 'Message the group' })
+  await screen.findByRole('combobox', { name: 'Message the group' })
   return linked
 }
 

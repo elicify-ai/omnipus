@@ -32,7 +32,18 @@ type Target = { kind: 'main'; workspaceId: string; agentId: string; sessionId: s
 
 const main: Target = { kind: 'main', workspaceId: WS, agentId: 'mia', sessionId: MAIN_ID }
 let net: Network
-beforeEach(() => { resetRealStores(); net = new Network() })
+beforeEach(() => {
+  resetRealStores()
+  // cmdk's picker constructs ResizeObserver. The shared room harness leaves it
+  // absent on purpose (the message list then draws every row). This file only
+  // needs the constructor so the dialog can open; it does not measure a list.
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  })
+  net = new Network()
+})
 afterEach(() => stopHarness())
 
 async function show(target: Target = main) {
@@ -144,6 +155,8 @@ describe('Add participant — agents only, one workspace, no main-chat conversio
     net.respond('GET', '/api/v1/providers', () => json([]))
     const created = room({ id: 'new-adhoc', kind: 'adhoc', members: ['mia', 'jim'], origin_session_id: MAIN_ID })
     net.respond('POST', `/api/v1/workspaces/${WS}/rooms`, () => json(created, 201))
+    // S-98: arriving on the new group loads its record into the header. Both reads are that load.
+    net.respond('GET', '/api/v1/rooms/new-adhoc', () => json(created))
 
     const mounted = await mountAt(<ChatHeaderSlot workspaceId={WS} />, `/workspaces/${WS}/chat`)
     const control = await screen.findByRole('button', { name: 'Add participant' })

@@ -59,15 +59,28 @@ function contentTopOf(el: Element): number {
 }
 
 function contentHeightOf(log: Element): number {
-  return [...log.children].reduce((sum, child) => sum + entryHeightOf(child), 0)
+  // The shared list wraps rows. Height is still the known entries (3 × 300 = 900),
+  // not the wrapper. Direct RoomTranscript children stay the fallback.
+  const rows = [...log.querySelectorAll('article')].filter((row) => (row.querySelector('p')?.textContent ?? '') in HEIGHTS)
+  const measured = rows.length > 0 ? rows : [...log.children]
+  return measured.reduce((sum, child) => sum + entryHeightOf(child), 0)
 }
 
 function rect(top: number, height: number): DOMRect {
   return { top, height, bottom: top + height, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) } as unknown as DOMRect
 }
 
+let readingLog = false
 function isLog(el: Element): boolean {
-  return el.getAttribute?.('role') === 'log'
+  // The shared list is a region. RoomTranscript's own log stays a log.
+  // getAttribute from the scrollTop getter re-enters; the flag stops that loop.
+  if (readingLog) return false
+  readingLog = true
+  try {
+    return el.getAttribute?.('data-testid') === 'virtualized-message-list' || el.getAttribute?.('role') === 'log'
+  } finally {
+    readingLog = false
+  }
 }
 
 function installScrollGeometry(): void {
@@ -89,7 +102,7 @@ function installScrollGeometry(): void {
   originalRect = Element.prototype.getBoundingClientRect
   Element.prototype.getBoundingClientRect = function (this: Element) {
     if (isLog(this)) return rect(0, LOG_VIEWPORT)
-    if (this.closest?.('[role="log"]')) return rect(contentTopOf(this) - scrollTopValue, entryHeightOf(this))
+    if (this.closest?.('[role="log"], [data-testid="virtualized-message-list"]')) return rect(contentTopOf(this) - scrollTopValue, entryHeightOf(this))
     return originalRect.call(this)
   }
 }

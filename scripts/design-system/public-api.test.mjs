@@ -96,6 +96,8 @@ const reviewedControls = new Set([
   'RunningIndicator',
   // W1-1: the published, data-supplied AgentIcon is a kit composite.
   'agent-icon',
+  // #1449 FR-067: AvatarStack is a published composite, not application code.
+  'avatar-stack',
   // T7's founder-approved public composites: exact files, never a ui-folder admission.
   'filter-menu', 'view-switch', 'hover-card', 'word-boundary-text',
 ].map((name) => `src/components/ui/${name}.tsx`))

@@ -12,8 +12,9 @@ import { resolve, join, relative } from 'path'
 const cssPath = resolve(process.cwd(), 'src/styles/globals.css')
 const cssContent = readFileSync(cssPath, 'utf-8')
 
-const chatScreenPath = resolve(process.cwd(), 'src/components/chat/ChatScreen.tsx')
-const chatScreenContent = readFileSync(chatScreenPath, 'utf-8')
+// FR-073: the shared message box lives in OmnipusComposer, not ChatScreen.
+const composerPath = resolve(process.cwd(), 'src/components/chat/composer/OmnipusComposer.tsx')
+const composerContent = readFileSync(composerPath, 'utf-8')
 
 describe('globals.css — central focus-ring doctrine', () => {
   it('defines the central :focus-visible:not([data-no-focus-ring]) rule with 1px solid accent + 2px offset', () => {
@@ -30,12 +31,13 @@ describe('globals.css — central focus-ring doctrine', () => {
     expect(cssContent).toContain('[data-no-focus-ring]')
   })
 
-  it('ChatScreen.tsx carries BOTH halves of the composer opt-out — data-no-focus-ring on the textarea AND the focus-within:border replacement cue on its card', () => {
+  it('OmnipusComposer.tsx carries BOTH halves of the composer opt-out — data-no-focus-ring on the textarea AND the focus-within:border replacement cue on its card', () => {
     // Only one half existing (the textarea opting out of the ring without a
     // replacement cue on the card, or vice versa) is the exact past bug:
     // the composer would render with no visible focus indicator at all.
-    expect(chatScreenContent).toContain('data-no-focus-ring')
-    expect(chatScreenContent).toContain('focus-within:border-[var(--color-accent)]')
+    // FR-073 moved this pair with the shared message box.
+    expect(composerContent).toContain('data-no-focus-ring')
+    expect(composerContent).toContain('focus-within:border-[var(--color-accent)]')
   })
 })
 

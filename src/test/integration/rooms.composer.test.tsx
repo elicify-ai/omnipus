@@ -26,7 +26,7 @@ async function open(state = snapshot()) {
 
 async function sendText(text: string) {
   const user = userEvent.setup()
-  await user.type(screen.getByRole('textbox'), text)
+  await user.type(screen.getByRole('combobox', { name: 'Message the group' }), text)
   await user.click(screen.getByRole('button', { name: /^send(?: message)?$/i }))
 }
 
@@ -52,7 +52,7 @@ describe('Room composer — user addressing, not main-chat steering', () => {
   it('[FR-175; §6.13; BDD-17.3] the @ picker offers @all and exactly the current room members, not the entire workspace', async () => {
     net.currentRoom = room({ members: ['mia', 'jim'] })
     await open(snapshot({ members: ['mia', 'jim'] }))
-    await userEvent.setup().type(screen.getByRole('textbox'), '@')
+    await userEvent.setup().type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
     expect(await screen.findByRole('option', { name: /^@?all$/i })).toBeVisible()
     expect(screen.getByRole('option', { name: /Mia/ })).toBeVisible()
     expect(screen.getByRole('option', { name: /Jim/ })).toBeVisible()
@@ -66,9 +66,9 @@ describe('Room composer — user addressing, not main-chat steering', () => {
     net.currentRoom = room({ muted: ['jim'] })
     await open(snapshot({ muted: ['jim'] }))
     const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox'), '@')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
     await user.click(await screen.findByRole('option', { name: /Jim/ }))
-    await user.type(screen.getByRole('textbox'), ' anything?')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), ' anything?')
     await user.click(screen.getByRole('button', { name: /^send(?: message)?$/i }))
     expect((await posted()).mentions).toEqual(['jim'])
   })
@@ -76,9 +76,9 @@ describe('Room composer — user addressing, not main-chat steering', () => {
   it('[FR-164; §6.13; K26] choosing @all carries the reserved all token, not member display names', async () => {
     await open()
     const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox'), '@')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
     await user.click(await screen.findByRole('option', { name: /^@?all$/i }))
-    await user.type(screen.getByRole('textbox'), ' go')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), ' go')
     await user.click(screen.getByRole('button', { name: /^send(?: message)?$/i }))
     const request = await posted()
     expect(request.mentions).toEqual(['all'])
@@ -89,9 +89,9 @@ describe('Room composer — user addressing, not main-chat steering', () => {
     net.roster = agents.map((agent) => agent.id === 'jim' ? { ...agent, name: 'Jim Smith' } : agent)
     await open()
     const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox'), '@')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
     await user.click(await screen.findByRole('option', { name: /Jim Smith/ }))
-    await user.type(screen.getByRole('textbox'), ' review this')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), ' review this')
     net.roster = net.roster.map((agent) => agent.id === 'jim' ? { ...agent, name: 'James' } : agent)
     await act(async () => { await queryClient.invalidateQueries({ queryKey: ['agents'] }) })
     expect(await screen.findByText('James', { exact: true })).toBeVisible()
@@ -121,7 +121,7 @@ describe('Room composer — user addressing, not main-chat steering', () => {
   it('[§6.13; K26] deleting a picked mention cannot keep addressing that agent invisibly', async () => {
     await open()
     const user = userEvent.setup()
-    const input = screen.getByRole('textbox')
+    const input = screen.getByRole('combobox', { name: 'Message the group' })
     await user.type(input, '@')
     await user.click(await screen.findByRole('option', { name: /Jim/ }))
     await user.clear(input)

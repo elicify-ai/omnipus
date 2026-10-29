@@ -30,8 +30,16 @@ function logHeight(log: Element): number {
   return log.querySelectorAll('article').length * ROW_HEIGHT
 }
 
+let readingLog = false
 function isLog(element: Element): boolean {
-  return element.getAttribute('role') === 'log'
+  // getAttribute from a scrollTop getter re-enters itself. The flag stops that loop.
+  if (readingLog) return false
+  readingLog = true
+  try {
+    return element.getAttribute('data-testid') === 'virtualized-message-list'
+  } finally {
+    readingLog = false
+  }
 }
 
 function message(seq: number) {
@@ -70,7 +78,7 @@ async function mountCachedRoom(initialRoomId = ROOM_ID) {
 }
 
 function logElement(): HTMLElement {
-  return screen.getByRole('log', { name: 'Group conversation' })
+  return screen.getByRole('region', { name: 'Conversation history' })
 }
 
 function visibleBottomOf(text: string): number {

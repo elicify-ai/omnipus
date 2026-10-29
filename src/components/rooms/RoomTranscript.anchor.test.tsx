@@ -103,7 +103,7 @@ async function mountRoom() {
     allocated_cost_micro_usd: 1_000, allocated_cost_unpriced: false,
     complete: true, has_older: true,
   }))
-  installLogGeometry(screen.getByRole('log', { name: 'Group conversation' }))
+  installLogGeometry(screen.getByRole('region', { name: 'Conversation history' }))
   return mounted
 }
 

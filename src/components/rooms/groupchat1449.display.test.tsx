@@ -107,7 +107,7 @@ describe('group messages use the normal chat renderer (US-1, US-12)', () => {
     expect(screen.getByText(/after pause/i)).toBeInTheDocument()
   })
 
-  it('S-09 does not show another chat's tool calls on a group row', async () => {
+  it("S-09 does not show another chat's tool calls on a group row", async () => {
     useChatStore.setState({
       messages: {
         'foreign-session': [{
@@ -171,10 +171,15 @@ describe('group messages use the normal chat renderer (US-1, US-12)', () => {
   it('S-106 does not request a remote image address', async () => {
     const hits: string[] = []
     const original = window.fetch
-    window.fetch = (async (input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url.includes('tracker.example')) hits.push(url)
-      return new Response('', { status: 404 })
+    // S-106 watches the remote image only. The room record is also loaded
+    // through fetch; answering every request with 404 never reaches the image.
+    window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.includes('tracker.example')) {
+        hits.push(url)
+        return new Response('', { status: 404 })
+      }
+      return original(input, init)
     }) as typeof fetch
     try {
       await open(snapshot({
@@ -219,7 +224,7 @@ describe('group history uses the shared column behaviour (US-6)', () => {
 
   it('S-39 puts the message box in the same centred column as a normal chat', async () => {
     await open()
-    const box = screen.getByRole('textbox', { name: /message the group/i })
+    const box = screen.getByRole('combobox', { name: 'Message the group' })
     expect(
       box.closest('.max-w-3xl'),
       'S-39: the group message box uses the normal chat centred column (max-w-3xl)',

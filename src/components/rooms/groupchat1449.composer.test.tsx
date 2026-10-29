@@ -42,13 +42,13 @@ describe('the group message box is the normal message box (US-2)', () => {
 
   it('S-19 shows the group placeholder on an empty box', async () => {
     await open()
-    expect(screen.getByRole('textbox', { name: /message the group/i })).toHaveAttribute('placeholder', GROUP_PLACEHOLDER)
+    expect(screen.getByRole('combobox', { name: 'Message the group' })).toHaveAttribute('placeholder', GROUP_PLACEHOLDER)
   })
 
   it('S-12 lists exactly the six group commands', async () => {
     await open()
     const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox', { name: /message the group/i }), '/')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), '/')
     // S-12: the menu lists exactly these six commands. A description beside
     // the command name is allowed; a seventh command is not.
     const commands = ['help', 'members', 'mute', 'pause', 'resume', 'unmute']
@@ -81,7 +81,7 @@ describe('the group message box is the normal message box (US-2)', () => {
   it('S-108 sends to the group and does not create a chat', async () => {
     await open()
     const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox', { name: /message the group/i }), 'hello group')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), 'hello group')
     await user.click(screen.getByRole('button', { name: /^send/i }))
     const writes = net.writes()
     expect(writes.some((write) => write.path.includes('/sessions') && write.method === 'POST'), 'S-108: no chat is created').toBe(false)

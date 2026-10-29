@@ -63,7 +63,7 @@ const MAIN_ID = 'sid-main'
 const CHILD_ID = 'sid-child'
 const PARENT_ID = 'sid-parent'
 
-const mia = { id: 'mia', name: 'Mia', type: 'core', locked: true, figure: {}, role: {}, revision: {} } as unknown as Agent
+const mia = { id: 'mia', name: 'Mia', type: 'core', locked: true, figure: 'Omnipus', role: 'general', revision: {} } as unknown as Agent
 
 function session(overrides: Partial<Session>): Session {
   return { id: 'x', type: 'chat', title: '', status: 'active', agent_id: 'mia', ...overrides } as Session

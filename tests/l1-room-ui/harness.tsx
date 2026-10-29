@@ -21,6 +21,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
+import { useRoomStore } from '@/store/rooms'
 
 export const WS = 'sales'
 export const ROOM_ID = 'launch'
@@ -246,10 +247,13 @@ export function resetRealStores(): void {
     addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {},
     dispatchEvent: () => true,
   }))
-  vi.stubGlobal('ResizeObserver', class {
-    observe() {} unobserve() {} disconnect() {}
-  })
+  // Do not install ResizeObserver. An observer that reports nothing gives the
+  // shared list a zero viewport, so it draws no rows (S-36). An observer that
+  // reports a size makes the list's auto-scroll call element.scrollTo, which
+  // jsdom does not implement, and the page never attaches. The list's own
+  // fallback, used when ResizeObserver is absent, draws every row.
   vi.stubGlobal('scrollTo', () => {})
+  if (typeof HTMLElement.prototype.scrollTo !== 'function') HTMLElement.prototype.scrollTo = () => {}
   if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {}
   localStorage.clear()
   act(() => {
@@ -258,6 +262,7 @@ export function resetRealStores(): void {
     useSessionStore.setState(useSessionStore.getInitialState(), true)
     useWorkspacesStore.setState(useWorkspacesStore.getInitialState(), true)
     useUiStore.setState(useUiStore.getInitialState(), true)
+    useRoomStore.setState(useRoomStore.getInitialState(), true)
     useWorkspacesStore.setState({ activeWorkspaceId: WS })
     useSessionStore.setState({ activeSessionId: MAIN_ID, activeAgentId: 'mia', activeAgentType: 'core' })
   })
