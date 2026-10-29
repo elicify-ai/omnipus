@@ -2,7 +2,7 @@
 
 A group chat (also called a room) is one conversation between you and two or more conversation agents of the same workspace. You write once, and Omnipus creates a request for each addressed member, subject to that member's permissions and availability. Agents answer from their own main chats and can address other members in their answers. Addressing an agent does not guarantee an answer; the member states below show what happened.
 
-**Where to find them.** Each workspace in the sidebar has a **Group chats** section under its agents, listing its groups (team room first, then squads, then ad-hoc rooms). Its **+** menu offers **New squad…** and **New quick group…** (an ad-hoc room). Selecting a group opens its room page. **Add participant** at the top-left of an agent's main chat starts an ad-hoc room from there. Features marked **not implemented** still need more work. Scripts and integrations can use the same groups through the REST API ([API summary](#api-summary) at the end).
+**Where to find them.** Each workspace in the sidebar has a **Group chats** section under its agents, listing its groups (team room first, then squads, then ad-hoc rooms). Its **+** menu offers **New squad…** and **New quick group…** (an ad-hoc room). Selecting a group opens its room page. **Add participant** — an icon at the right end of an agent's main chat header — starts an ad-hoc room from there. Features marked **not implemented** still need more work. Scripts and integrations can use the same groups through the REST API ([API summary](#api-summary) at the end).
 
 **Glossary.** A group-chat room is not a memory room. The *shared* and *private* memory rooms of the `remember` and `recall_memory` tools are where agents keep notes ([memory](memory.md)). They have nothing to do with group chats.
 
@@ -164,7 +164,7 @@ Only you can use commands in a group. An agent's text is never a command.
 
 ## Add participant
 
-"Add participant" sits at the top-left of a chat header and adds agents only. It never adds people from your chat platforms.
+"Add participant" adds agents only. It never adds people from your chat platforms. In an agent's main chat it is an icon at the right end of the workspace header line; in a group's own room header it is a labelled button.
 
 | Where you use it | What happens |
 |---|---|

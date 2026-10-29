@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Named, fail-closed CI receipts for the separately built history tools.
+"""Named, fail-closed CI receipts for the chat-history fixture and measurement tools.
 
 Run on CI workers, not as a local whole-suite command. Neither tool is a
 product release artifact. Go's own exits and named JSON events are authoritative.
+
+The standalone history-index repair command and the receipts that built and
+tested it were removed by founder decision 2026-10-27 (greenfield, no upgrade
+path). The product-side receipts below are unaffected.
 """
 import argparse
 import json
@@ -58,24 +62,6 @@ def named_tests(package, pattern, log, required, env=None):
     return outcomes
 
 
-def build_repair():
-    TOOLS.mkdir(parents=True, exist_ok=True)
-    run_logged(["go", "build", "-tags", "goolm,stdjson", "-o",
-                str(TOOLS / ("chat-history-index-repair" + SUFFIX)),
-                "./cmd/chat-history-index-repair"], TOOLS / "history-repair-build.log")
-
-
-def test_command():
-    named_tests("./cmd/chat-history-index-repair", None,
-                TOOLS / "history-repair-command.log", [
-                    "TestHistoryRepairCommand_PreflightManifestAndIdempotence",
-                    "TestHistoryRepairCommand_BuiltPhasesCutoverAndManifest",
-                    "TestHistoryRepairCommand_SharedConstructorAndRealReader",
-                    "TestHistoryRepairCommand_GuardedCLIApplyReadsAndRepeats",
-                    "TestHistoryRepairCommand_StoppedReceiptRequiresActualReapedInstance",
-                ])
-
-
 def test_core():
     required = ["TestChatHistoryRecovery_PublicationCrashBoundAndIdempotence",
                 "TestChatHistoryRetention_ActualRetainedContinuation",
@@ -85,7 +71,7 @@ def test_core():
                      "TestChatHistoryRetention_ActualRetainedContinuation_NativeWindows",
                      "TestChatHistoryReadCut_SlowReadDoesNotHoldAppendLocks_NativeWindows"]
     named_tests("./pkg/session", "^TestChatHistory(Index|Recovery|ReadCut|Retention)_",
-                TOOLS / "history-repair-core.log", required)
+                TOOLS / "history-core.log", required)
 
 
 def build_fixtures():
@@ -168,14 +154,10 @@ def validate_measurement_receipt(receipt, commit):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=["build", "command", "core", "fixtures", "measurement", "repair"])
+    parser.add_argument("phase", choices=["core", "fixtures", "measurement"])
     parser.add_argument("--receipt", type=Path)
     args = parser.parse_args()
-    if args.phase in ("build", "repair"):
-        build_repair()
-    if args.phase in ("command", "repair"):
-        test_command()
-    if args.phase in ("core", "repair"):
+    if args.phase == "core":
         test_core()
     if args.phase == "fixtures":
         build_fixtures()

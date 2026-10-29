@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import React, { useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { VirtualizedMessageList } from './ChatMessageList'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -31,7 +31,6 @@ import { resolvedToolPartStatus } from '@/lib/assistant-tool-status'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { renderHistoricalToolCall } from './tools/HistoricalToolCallBlock'
 import { classifySetGoalCall } from './tools/SetGoalToolUI'
-import { FeedKindLabel } from './FeedKindLabel'
 import { UnavailableChatNotice } from './UnavailableChatNotice'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ProviderRetryIndicator } from './ProviderRetryIndicator'
@@ -45,6 +44,7 @@ import { ModelPicker } from './composer/ModelPicker'
 import { AutoApprovePicker } from './composer/AutoApprovePicker'
 import { TokenCounter } from './composer/TokenCounter'
 import { MarkdownText } from './markdown-text'
+import { CATCH_UP_SMOOTH, ThreadRevealContext } from './useOpenReveal'
 import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
@@ -80,8 +80,7 @@ import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { fetchAgents, fetchCommands, fetchSkills } from '@/lib/api'
-import { MainChatAddParticipant } from './AddParticipant'
-import { INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
+import { INLINE_TOOL_APPROVALS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
@@ -500,10 +499,14 @@ class TextPartErrorBoundary extends React.Component<{ children: React.ReactNode 
 }
 
 function AssistantTextPart() {
+  // A reply already in progress when the chat opened must show its text so
+  // far, not re-type it from empty (the open flicker): catch-up pacing while
+  // the opened conversation is covered, normal pacing after the reveal.
+  const revealed = useContext(ThreadRevealContext)
   return (
     <TextPartErrorBoundary>
       <div>
-        <MarkdownText />
+        <MarkdownText smooth={revealed ? true : CATCH_UP_SMOOTH} />
       </div>
     </TextPartErrorBoundary>
   )
@@ -2824,11 +2827,10 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         </div>
       )}
 
-      {/* FR-207: "Add participant" at the top-left of a member's main chat (absent for Omnipus) — hidden until WU-15 (stage 3), #1314. */}
-      {ROOMS_ENABLED && <MainChatAddParticipant />}
-
-      {/* Above-feed kind. FeedKindLabel also keeps the old Task: line when no descriptor matches. */}
-      <FeedKindLabel />
+      {/* #1449 D13 (founder 2026-10-28): the chat's own chrome — the kind
+          label / helper breadcrumb and "Add participant" — lives in the
+          workspace header line's right-end slot (ChatHeaderSlot), not in a
+          row above the feed. */}
 
         <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">
           {/* ARIA live region: announces new assistant messages to screen readers.
@@ -2848,7 +2850,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           ) : (
             /* key = active session: each chat gets a fresh scroll engine, so switching
                 chats lands at the bottom instead of keeping the previous chat's offset. */
-            <VirtualizedMessageList key={activeSessionId ?? '__none'} messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} />
+            <VirtualizedMessageList key={activeSessionId ?? '__none'} messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} openFailed={historyRead.isError} />
           )}
 
           <ChatConnectionNotice />
