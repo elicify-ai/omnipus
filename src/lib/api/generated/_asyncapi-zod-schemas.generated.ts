@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "helper_event", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "helper_event", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta", "open_in_library", "chat_presence"]);
 
 export const HistoryEntryOrigin = z
   .object({
@@ -277,6 +277,14 @@ export const PingFrame = z
 export const PongFrame = z
   .object({
     type: z.literal("pong"),
+  })
+  .strict();
+
+export const ChatPresenceFrame = z
+  .object({
+    type: z.literal("chat_presence"),
+    session_id: z.string().min(1).max(128),
+    watching: z.boolean(),
   })
   .strict();
 
@@ -775,6 +783,13 @@ export const LibraryChangedFrame = z
   })
   .strict();
 
+export const LibraryRef = z
+  .object({
+    workspace_id: z.string().min(1),
+    path: z.string(),
+  })
+  .strict();
+
 export const MediaPart = z
   .object({
     type: z.enum(["image", "audio", "video", "file"]),
@@ -782,6 +797,7 @@ export const MediaPart = z
     filename: z.string().min(1),
     content_type: z.string().min(1),
     caption: z.string().optional(),
+    library_ref: LibraryRef.optional(),
   })
   .strict();
 
@@ -792,6 +808,17 @@ export const MediaFrame = z
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
     seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const OpenInLibraryFrame = z
+  .object({
+    type: z.literal("open_in_library"),
+    session_id: z.string().min(1),
+    call_id: z.string().min(1),
+    request_id: z.string().min(32).max(32).regex(/^[0-9a-f]{32}$/),
+    workspace_id: z.string().min(1),
+    path: z.string(),
   })
   .strict();
 
@@ -1692,6 +1719,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   RedirectFrame,
   PingFrame,
   PongFrame,
+  ChatPresenceFrame,
   AttachSessionFrame,
   DevicePairingResponseFrame,
   SessionStartedFrame,
@@ -1717,6 +1745,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   ProviderFallbackNote,
   LibraryChangedFrame,
   MediaFrame,
+  OpenInLibraryFrame,
   ToolApprovalRequiredFrame,
   ToolApprovalResolvedFrame,
   AskUserQuestionFrame,

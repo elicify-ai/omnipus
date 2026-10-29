@@ -1,0 +1,22 @@
+title: LibraryRef
+description: >
+  Address of a file in a workspace Library (chat-links spec, Contract
+  section). Navigation data only: it never grants access; opening the file
+  still goes through the viewer's own Library access. Mirrored inline in
+  contracts/asyncapi.yaml (components.schemas.LibraryRef), which is the copy
+  the generated Go and Zod types come from — keep both copies in sync by hand.
+type: object
+required:
+  - workspace_id
+  - path
+additionalProperties: false
+properties:
+  workspace_id:
+    type: string
+    minLength: 1
+    description: Workspace whose Library holds the file.
+  path:
+    type: string
+    description: >
+      Library path of the file, relative to the workspace Library root. For a
+      file in a mounted folder the mount name comes first.
