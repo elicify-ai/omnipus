@@ -25,10 +25,12 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -167,6 +169,51 @@ func t11ForceRootWritable(t *testing.T, writable bool) func() {
 	old := rootWritableProbe
 	rootWritableProbe = func() bool { return writable }
 	return func() { rootWritableProbe = old }
+}
+
+// TestGuard_ProbeErrorNamesItsCause is SF-5. The slim spec does not word this
+// refusal. The requirement is the silent-failure finding: an unexpected root
+// probe stays refused, the refusal names that probe's cause, and it says the
+// safety check could not complete, the command remains blocked, and to retry,
+// with the write_file workaround. A nil error is a genuinely writable root and
+// stays the ordinary refusal. Those words come from the finding, not from the
+// current refusal text.
+func TestGuard_ProbeErrorNamesItsCause(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	absent := t11AbsentTop(t)
+	cmd := fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent)
+	const cause = "t11-sf5-probe-cause"
+
+	oldProbe := rootWritableProbe
+	oldFn := rootWritabilityFn
+	t.Cleanup(func() {
+		rootWritableProbe = oldProbe
+		rootWritabilityFn = oldFn
+	})
+	rootWritableProbe = func() bool { return true }
+
+	t.Run("a genuine writable root stays a quiet ordinary refusal", func(t *testing.T) {
+		rootWritabilityFn = func() (bool, error) { return true, nil }
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Contains(t, got, "path outside working dir",
+			"SF-5: a nil probe error means the root is writable, so the stand-alone rule stays off")
+		require.NotContains(t, got, "could not complete",
+			"SF-5: an expected writable-root decision must not be reported as a failed check")
+		require.NotContains(t, got, cause)
+	})
+
+	t.Run("a failed probe names its cause and says the check could not complete", func(t *testing.T) {
+		rootWritabilityFn = func() (bool, error) { return true, errors.New(cause) }
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.NotEmpty(t, got, "SF-5: uncertainty stays refused, never an exemption")
+		require.Contains(t, got, cause, "SF-5: the refusal must name the probe cause\ngot: %s", got)
+		require.Contains(t, got, "write_file", "SF-5: offer the documented script workaround\ngot: %s", got)
+		require.Contains(t, strings.ToLower(got), "retry", "SF-5: the finding says to offer retry\ngot: %s", got)
+		require.Contains(t, strings.ToLower(got), "could not complete",
+			"SF-5 finding: the refusal must say the safety check could not complete\ngot: %s", got)
+		require.Contains(t, strings.ToLower(got), "blocked",
+			"SF-5 finding: the refusal must say the command remains blocked\ngot: %s", got)
+	})
 }
 
 // TestGuard_BraceConcatenationStillRefused is S5. A quoted fragment inside a
