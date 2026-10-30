@@ -155,7 +155,7 @@ Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed t
 
 When a request to the model provider fails for a reason that usually passes — the connection drops, the name cannot be looked up, the provider is overloaded (429, 503, 529) or it stops in the middle of an answer — Omnipus tries again automatically. It makes up to **5 more attempts**, waiting about **2, 5, 10, 20 and 40 seconds** in between (about a minute and a half in total). When the provider says how long to wait (a `Retry-After` of up to 120 seconds), that wait is used instead.
 
-While it waits, the chat shows a live line from the first failed attempt on, with the attempt number ("attempt 2 of 6") and a countdown to the next try. **Stop** ends the wait at once. On a channel such as Telegram you get one "Retrying — please wait..." message. A helper's own chat shows the same line for the helper's requests.
+While it waits, the chat shows a live line from the first failed attempt on, saying what went wrong in plain words — a rate limit ("is rate-limiting requests right now"), a connection problem ("could not be reached"), an overloaded or erroring provider ("is overloaded or returning server errors"), a reply that stopped midway ("stopped responding mid-answer") or a general "ran into a problem" — together with the attempt number ("attempt 2 of 6") and a countdown to the next try. **Stop** ends the wait at once. On a channel such as Telegram you get one "Retrying — please wait..." message. A helper's own chat shows the same line for the helper's requests.
 
 When a retry succeeds, the chat notes that the connection came back and after how many retries.
 

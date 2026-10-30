@@ -34,9 +34,42 @@ export interface ProviderRetryIndicatorProps {
   receivedAt: string
   attempt: number
   maxAttempts: number
+  /**
+   * The retry cause class the backend classified the failure under — the
+   * `provider_retry` frame's `error_code` (issues #1280/#1478 wording
+   * round). The line says WHAT IS WRONG in plain English per code and never
+   * renders the code text itself; a missing or unrecognized code (a newer
+   * backend, an older frame) gets the generic clause.
+   */
+  errorCode?: string
   /** The chain's previous candidate — present only on a within-provider move (MIN-104). */
   previousProvider?: string
   previousModel?: string
+}
+
+/**
+ * Plain-English cause clause per `provider_retry` `error_code`. The code set
+ * is the backend's own retry-cause vocabulary (pkg/providers/retry_plan.go):
+ * `network` (DNS, refused, reset, TLS, connection lost, 408), `rate_limited`
+ * (429; the gateway's providerRetryErrorCode maps the C-8 `rate_limit`
+ * spelling onto this before the frame ships), `overloaded` (5xx/529) and
+ * `stream_interrupted` (provider error mid-answer). Anything else — a code a
+ * newer backend adds that this build doesn't know, or an older frame without
+ * the field — gets the generic clause. NEVER the raw code text.
+ */
+export function retryProblemClause(errorCode: string | undefined): string {
+  switch (errorCode) {
+    case 'rate_limited':
+      return 'is rate-limiting requests right now'
+    case 'network':
+      return 'could not be reached (network problem)'
+    case 'overloaded':
+      return 'is overloaded or returning server errors'
+    case 'stream_interrupted':
+      return 'stopped responding mid-answer'
+    default:
+      return 'ran into a problem'
+  }
 }
 
 /** C-15 mm:ss — "2:00", "1:59", "0:20". Negative clamps to "0:00". */
@@ -67,14 +100,17 @@ export function remainingRetrySeconds(
 }
 
 function buildWaitingLine(props: ProviderRetryIndicatorProps, remainingSecondsValue: number): string {
-  const { provider, model, previousProvider, previousModel, attempt, maxAttempts } = props
+  const { provider, model, previousProvider, previousModel, attempt, maxAttempts, errorCode } = props
   // MIN-104 — the model-switch qualifier applies only when the chain moved
   // within ONE provider (openrouter/model-a → openrouter/model-b). A
   // same-model retry or a cross-provider move renders the plain provider line.
   const showModelQualifier =
     previousProvider === provider && previousModel !== undefined && previousModel !== model
   const displayName = showModelQualifier ? `${provider} (${model})` : provider
-  return `${displayName} is busy. Retrying automatically in ${formatRetryCountdown(remainingSecondsValue)} (attempt ${attempt} of ${maxAttempts}).`
+  // Issues #1280/#1478 wording round — the cause in plain words per
+  // error_code (retryProblemClause), never the blanket "is busy" and never
+  // the raw code.
+  return `${displayName} ${retryProblemClause(errorCode)}. Retrying automatically in ${formatRetryCountdown(remainingSecondsValue)} (attempt ${attempt} of ${maxAttempts}).`
 }
 
 // MAJ-016 — one {key, text} pair for the frozen announcement: the key
@@ -83,15 +119,15 @@ function buildWaitingLine(props: ProviderRetryIndicatorProps, remainingSecondsVa
 // now(). Shared by the initial state and the attempt-change effect so the
 // two never drift.
 function computeAnnouncement(props: ProviderRetryIndicatorProps): { key: string; text: string } {
-  const { provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts } = props
+  const { provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, errorCode } = props
   return {
-    key: `${provider}|${model}|${retryAt}|${attempt}|${maxAttempts}`,
+    key: `${provider}|${model}|${retryAt}|${attempt}|${maxAttempts}|${errorCode ?? ''}`,
     text: buildWaitingLine(props, remainingRetrySeconds(retryAt, sentAt, receivedAt, Date.now())),
   }
 }
 
 export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
-  const { provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, previousProvider, previousModel } = props
+  const { provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, previousProvider, previousModel, errorCode } = props
   const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
@@ -118,7 +154,7 @@ export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
     const next = computeAnnouncement(props)
     if (announcement.key === next.key) return
     setAnnouncement(next)
-  }, [provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, previousProvider, previousModel, announcement.key, props])
+  }, [provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, previousProvider, previousModel, errorCode, announcement.key, props])
 
   const announcementText = waiting ? announcement.text : 'Retrying now…'
   const visibleText = waiting ? buildWaitingLine(props, remaining) : 'Retrying now…'

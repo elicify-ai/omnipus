@@ -56,6 +56,7 @@ function providerRetryFrame(fields: {
   provider?: string
   model?: string
   attempt?: number
+  errorCode?: string
 }): ServerFrame {
   return {
     type: 'provider_retry',
@@ -68,7 +69,7 @@ function providerRetryFrame(fields: {
     sent_at: '2026-09-27T00:00:00Z',
     attempt: fields.attempt ?? 2,
     max_attempts: 3,
-    error_code: 'rate_limited',
+    error_code: fields.errorCode ?? 'rate_limited',
     seq: fields.seq,
   } as unknown as ServerFrame
 }
@@ -125,6 +126,7 @@ describe('provider_retry — fact threading (§7.1 item 3 / §8 item 2)', () => 
       receivedAt: expect.any(String),
       attempt: 2,
       maxAttempts: 3,
+      errorCode: 'rate_limited',
     })
     // C-11: the receipt anchor exists and parses as an instant (client clock
     // at reducer entry — its exact value is nondeterministic by design).
@@ -144,6 +146,7 @@ describe('provider_retry — fact threading (§7.1 item 3 / §8 item 2)', () => 
       receivedAt: expect.any(String),
       attempt: 2,
       maxAttempts: 3,
+      errorCode: 'rate_limited',
       previousProvider: 'openrouter',
       previousModel: 'glm-5.3-flash',
     })
@@ -162,6 +165,7 @@ describe('provider_retry — fact threading (§7.1 item 3 / §8 item 2)', () => 
       receivedAt: expect.any(String),
       attempt: 2,
       maxAttempts: 3,
+      errorCode: 'rate_limited',
     })
   })
 
@@ -178,6 +182,7 @@ describe('provider_retry — fact threading (§7.1 item 3 / §8 item 2)', () => 
       receivedAt: expect.any(String),
       attempt: 2,
       maxAttempts: 3,
+      errorCode: 'rate_limited',
     })
   })
 
@@ -194,6 +199,7 @@ describe('provider_retry — fact threading (§7.1 item 3 / §8 item 2)', () => 
       receivedAt: expect.any(String),
       attempt: 3,
       maxAttempts: 3,
+      errorCode: 'rate_limited',
     })
   })
 })
@@ -342,6 +348,139 @@ describe('replay_provider_fallback — persisted-note carrier (FB-2)', () => {
     expect(vi.mocked(logDiagnostic)).toHaveBeenCalledWith('chatProviderFallbackNoteSkipped', {
       sessionId: SID,
       entryId: 'e-skip',
+    })
+  })
+})
+
+describe('provider_retry — error_code threading (issues #1280/#1478 wording round)', () => {
+  it('threads the frame error_code into ProviderRetryEventData (the indicator words the cause from it)', () => {
+    useChatStore.getState().handleFrame(providerRetryFrame({ seq: 1, errorCode: 'network' }))
+
+    expect(bucket().providerRetryEvent).toEqual(
+      expect.objectContaining({ errorCode: 'network' }),
+    )
+  })
+
+  it('threads rate_limited (the gateway maps the C-8 "rate_limit" reason before the frame ships)', () => {
+    useChatStore.getState().handleFrame(providerRetryFrame({ seq: 1, errorCode: 'rate_limited' }))
+
+    expect(bucket().providerRetryEvent).toEqual(expect.objectContaining({ errorCode: 'rate_limited' }))
+  })
+})
+
+describe('provider_status — waiting shows the notice, responding clears it, recovered clears it and notes recovery (issues #1478/#1280)', () => {
+  function providerStatusFrame(fields: {
+    seq: number
+    state: 'waiting' | 'responding' | 'recovered'
+    turnId?: string
+    silentSince?: string
+    stallAt?: string
+    retries?: number
+  }): ServerFrame {
+    return {
+      type: 'provider_status',
+      session_id: SID,
+      turn_id: fields.turnId ?? 'turn-1',
+      state: fields.state,
+      sent_at: '2026-09-27T00:00:40Z',
+      ...(fields.silentSince != null ? { silent_since: fields.silentSince } : {}),
+      ...(fields.stallAt != null ? { stall_at: fields.stallAt } : {}),
+      ...(fields.retries != null ? { retries: fields.retries } : {}),
+      seq: fields.seq,
+    } as unknown as ServerFrame
+  }
+
+  it('waiting stores the notice facts; receivedAt is a real client-clock instant (C-11)', () => {
+    useChatStore.getState().handleFrame(
+      providerStatusFrame({
+        seq: 1,
+        state: 'waiting',
+        silentSince: '2026-09-27T00:00:10Z',
+        stallAt: '2026-09-27T00:05:10Z',
+      }),
+    )
+
+    const ev = bucket().providerStatusEvent
+    expect(ev).toEqual({
+      state: 'waiting',
+      turnId: 'turn-1',
+      silentSince: '2026-09-27T00:00:10Z',
+      stallAt: '2026-09-27T00:05:10Z',
+      sentAt: '2026-09-27T00:00:40Z',
+      receivedAt: expect.any(String),
+    })
+    expect(Number.isNaN(Date.parse(ev!.receivedAt))).toBe(false)
+  })
+
+  it('waiting with no known silence limit stores no stallAt key at all', () => {
+    useChatStore.getState().handleFrame(
+      providerStatusFrame({ seq: 1, state: 'waiting', silentSince: '2026-09-27T00:00:10Z' }),
+    )
+
+    expect(bucket().providerStatusEvent).toEqual({
+      state: 'waiting',
+      turnId: 'turn-1',
+      silentSince: '2026-09-27T00:00:10Z',
+      sentAt: '2026-09-27T00:00:40Z',
+      receivedAt: expect.any(String),
+    })
+    expect(bucket().providerStatusEvent).not.toHaveProperty('stallAt')
+  })
+
+  it('responding clears the waiting notice', () => {
+    useChatStore.getState().handleFrame(
+      providerStatusFrame({ seq: 1, state: 'waiting', silentSince: '2026-09-27T00:00:10Z' }),
+    )
+    expect(bucket().providerStatusEvent).not.toBeNull()
+    useChatStore.getState().handleFrame(providerStatusFrame({ seq: 2, state: 'responding' }))
+
+    expect(bucket().providerStatusEvent).toBeNull()
+  })
+
+  it('recovered clears BOTH the waiting notice and a stale provider_retry line, and appends exactly one recovered note with the retry count', () => {
+    useChatStore.getState().handleFrame(providerRetryFrame({ seq: 1 }))
+    expect(bucket().providerRetryEvent).not.toBeNull()
+    useChatStore.getState().handleFrame(
+      providerStatusFrame({ seq: 2, state: 'waiting', silentSince: '2026-09-27T00:00:10Z' }),
+    )
+    // The announced retry has FIRED (a call is running — silence is measured
+    // inside it), so the waiting frame already retired the stale same-turn
+    // retry line; the waiting notice itself is up.
+    expect(bucket().providerRetryEvent).toBeNull()
+    expect(bucket().providerStatusEvent).not.toBeNull()
+
+    useChatStore.getState().handleFrame(providerStatusFrame({ seq: 3, state: 'recovered', retries: 2 }))
+
+    expect(bucket().providerStatusEvent).toBeNull()
+    expect(bucket().providerRetryEvent).toBeNull()
+    const notes = bucket().messageOrder
+      .map((id) => bucket().messagesById[id])
+      .filter((m) => m.role === 'system' && m.content.includes('came back'))
+    expect(notes).toHaveLength(1)
+    expect(notes[0].content).toBe('Connection came back — the model answered after 2 retries.')
+  })
+
+  it('recovered notes the singular after exactly one retry', () => {
+    useChatStore.getState().handleFrame(providerStatusFrame({ seq: 1, state: 'recovered', retries: 1 }))
+
+    const notes = bucket().messageOrder
+      .map((id) => bucket().messagesById[id])
+      .filter((m) => m.role === 'system' && m.content.includes('came back'))
+    expect(notes).toHaveLength(1)
+    expect(notes[0].content).toBe('Connection came back — the model answered after 1 retry.')
+  })
+
+  it('contract violation: an unknown state (or a recovered with no retry count) is skipped + logged, rendering no invented copy', () => {
+    useChatStore.getState().handleFrame(providerStatusFrame({ seq: 1, state: 'recovered' }))
+
+    const violated = { ...providerStatusFrame({ seq: 2, state: 'waiting' }), state: 'silent' } as unknown as ServerFrame
+    useChatStore.getState().handleFrame(violated)
+
+    expect(bucket().providerStatusEvent).toBeNull()
+    expect(bucket().messageOrder.map((id) => bucket().messagesById[id].content).filter((c) => c.includes('came back'))).toHaveLength(0)
+    expect(vi.mocked(logDiagnostic)).toHaveBeenCalledWith('chatProviderStatusSkipped', {
+      sessionId: SID,
+      frameState: 'silent',
     })
   })
 })

@@ -35,6 +35,7 @@ import { FeedKindLabel } from './FeedKindLabel'
 import { UnavailableChatNotice } from './UnavailableChatNotice'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ProviderRetryIndicator } from './ProviderRetryIndicator'
+import { ProviderWaitingIndicator } from './ProviderWaitingIndicator'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
@@ -2737,6 +2738,10 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const rateLimitEvent = useChatStore((s) => s.rateLimitEvent)
   const clearRateLimitEvent = useChatStore((s) => s.clearRateLimitEvent)
   const providerRetryEvent = useChatStore((s) => s.providerRetryEvent)
+  // Issues #1478/#1280 — the provider_status "waiting" notice slot (the
+  // model has gone quiet). Cleared by the frame handler on responding/
+  // recovered; like the retry line it renders only while the turn streams.
+  const providerStatusEvent = useChatStore((s) => s.providerStatusEvent)
   const isStreaming = useChatStore((s) => s.isStreaming)
   // ADR-049 D6/US-12/SD-C9: loop indicator state, same session-scoped
   // foreground field as rateLimitEvent above. (Goal pill state is read
@@ -2892,8 +2897,25 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 receivedAt={providerRetryEvent.receivedAt}
                 attempt={providerRetryEvent.attempt}
                 maxAttempts={providerRetryEvent.maxAttempts}
+                errorCode={providerRetryEvent.errorCode}
                 previousProvider={providerRetryEvent.previousProvider}
                 previousModel={providerRetryEvent.previousModel}
+              />
+            </div>
+          )}
+
+          {/* Issues #1478/#1280 — the "model has gone quiet" notice: the
+              provider_status waiting frame, same above-composer slot. The
+              frame handler clears it on responding/recovered; the streaming
+              gate removes it with the turn. No dismiss control — Stop stays
+              available the whole time (docs/troubleshooting.md). */}
+          {providerStatusEvent && isStreaming && (
+            <div className="px-[var(--space-3)] pb-[var(--space-2)]">
+              <ProviderWaitingIndicator
+                silentSince={providerStatusEvent.silentSince}
+                sentAt={providerStatusEvent.sentAt}
+                receivedAt={providerStatusEvent.receivedAt}
+                stallAt={providerStatusEvent.stallAt}
               />
             </div>
           )}
