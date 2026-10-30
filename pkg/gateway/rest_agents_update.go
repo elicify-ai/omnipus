@@ -475,20 +475,9 @@ func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 	// rather than persisting an invalid combination.
 
 	if uf.ru.req.Executor != nil {
-		// CLI-lock rule (spec §4.16 / F-10): once an agent is created with a
-		// non-empty executor.cli, the cli is IMMUTABLE. Subsequent PUTs may
-		// only mutate cli_path (allows binary upgrades without re-creating the
-		// agent), env_overrides, and cli_args. cli_path IS mutable on PUT;
-		// env_overrides and cli_args are too. cli itself is fixed at create.
-		if uf.foundAgent.Subagents != nil && uf.foundAgent.Subagents.Executor != nil &&
-			uf.foundAgent.Subagents.Executor.CLI != "" {
-			reqCLI := executorCliStr(uf.ru.req.Executor.Cli)
-			if reqCLI != "" && reqCLI != uf.foundAgent.Subagents.Executor.CLI {
-				jsonErr(uf.w, http.StatusBadRequest,
-					"executor.cli is locked after create; create a new agent to switch CLIs.")
-				return true
-			}
-		}
+		// CLI-lock rule (spec §4.16 / F-10): executor.cli and executor.kind
+		// are not part of ExecutorConfigUpdate (T8 contract), so an update can
+		// never switch the CLI; only env_overrides and cli_args are writable.
 		// env_overrides OMNIPUS_-prefix guard (spec §4.18 / F-04 STRIDE).
 		// A user-submitted env_overrides key starting with OMNIPUS_ would
 		// override gateway-managed secrets (master key, audit chain, etc.)
@@ -502,38 +491,15 @@ func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 				}
 			}
 		}
-		execCfg, errMsg := executorConfigFromRequest(
-			executorKindStr(uf.ru.req.Executor.Kind),
-			executorCliStr(uf.ru.req.Executor.Cli),
-		)
-		if errMsg != "" {
-			jsonErr(uf.w, http.StatusBadRequest, errMsg)
-			return true
-		}
-		// Merge the request into the existing executor so mutable CLI-owned
-		// fields (cli_path, env_overrides, cli_args) and any supplied kind/cli
-		// survive the update. If there is no existing executor, fall back to
-		// the validated config from the request.
+		// Merge the request into the existing executor so the stored kind and
+		// cli survive and only the writable fields (env_overrides, cli_args)
+		// change. With no existing executor the agent stays native.
 		var merged *config.ExecutorConfig
 		if uf.foundAgent.Subagents != nil && uf.foundAgent.Subagents.Executor != nil {
 			cp := *uf.foundAgent.Subagents.Executor
 			merged = &cp
 		} else {
-			merged = execCfg
-		}
-		if merged == nil {
 			merged = &config.ExecutorConfig{Kind: config.ExecutorKindNative}
-		}
-		if execCfg != nil {
-			if execCfg.Kind != "" {
-				merged.Kind = execCfg.Kind
-			}
-			if execCfg.CLI != "" {
-				merged.CLI = execCfg.CLI
-			}
-		}
-		if uf.ru.req.Executor.CliPath != nil {
-			merged.CLIPath = *uf.ru.req.Executor.CliPath
 		}
 		if uf.ru.req.Executor.EnvOverrides != nil {
 			merged.EnvOverrides = *uf.ru.req.Executor.EnvOverrides

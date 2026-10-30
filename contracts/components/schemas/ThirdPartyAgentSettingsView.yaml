@@ -1,0 +1,23 @@
+title: ThirdPartyAgentSettingsView
+description: >
+  Response of GET and PUT /api/v1/settings/third-party-agents: the saved
+  Settings -> Third-party agents section. All three CLI keys are always
+  present; a CLI with nothing saved has path "" and preset_args "". Each
+  row's `detected` is host detection read live on every request and never
+  stored; the server maps detection key "claude" to "claude-code", so the
+  screen never maps keys itself.
+type: object
+additionalProperties: false
+required: [clis]
+properties:
+  clis:
+    type: object
+    additionalProperties: false
+    required: [claude-code, codex, opencode]
+    properties:
+      claude-code:
+        $ref: './CliPresetView.yaml'
+      codex:
+        $ref: './CliPresetView.yaml'
+      opencode:
+        $ref: './CliPresetView.yaml'

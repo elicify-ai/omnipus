@@ -710,27 +710,6 @@ func (e AgentCreateRequestSubagentType) Valid() bool {
 	}
 }
 
-// Defines values for AgentCreateRequestSubagent3pExecutorKind.
-const (
-	AgentCreateRequestSubagent3pExecutorKindExternalCli AgentCreateRequestSubagent3pExecutorKind = "external-cli"
-	AgentCreateRequestSubagent3pExecutorKindNative      AgentCreateRequestSubagent3pExecutorKind = "native"
-	AgentCreateRequestSubagent3pExecutorKindRemoteA2a   AgentCreateRequestSubagent3pExecutorKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pExecutorKind enum.
-func (e AgentCreateRequestSubagent3pExecutorKind) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagent3pExecutorKindExternalCli:
-		return true
-	case AgentCreateRequestSubagent3pExecutorKindNative:
-		return true
-	case AgentCreateRequestSubagent3pExecutorKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentCreateRequestSubagent3pType.
 const (
 	AgentCreateRequestSubagent3pTypeSubagent3p AgentCreateRequestSubagent3pType = "subagent_3p"
@@ -794,6 +773,138 @@ func (e AgentDependencyListDependenciesKind) Valid() bool {
 	case AgentDependencyListDependenciesKindPrivateSecret:
 		return true
 	case AgentDependencyListDependenciesKindRoom:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailActivationStatus.
+const (
+	AgentDetailActivationStatusActive       AgentDetailActivationStatus = "active"
+	AgentDetailActivationStatusFailed       AgentDetailActivationStatus = "failed"
+	AgentDetailActivationStatusNotAttempted AgentDetailActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailActivationStatus enum.
+func (e AgentDetailActivationStatus) Valid() bool {
+	switch e {
+	case AgentDetailActivationStatusActive:
+		return true
+	case AgentDetailActivationStatusFailed:
+		return true
+	case AgentDetailActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailExecutorKind.
+const (
+	AgentDetailExecutorKindExternalCli AgentDetailExecutorKind = "external-cli"
+	AgentDetailExecutorKindNative      AgentDetailExecutorKind = "native"
+	AgentDetailExecutorKindRemoteA2a   AgentDetailExecutorKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailExecutorKind enum.
+func (e AgentDetailExecutorKind) Valid() bool {
+	switch e {
+	case AgentDetailExecutorKindExternalCli:
+		return true
+	case AgentDetailExecutorKindNative:
+		return true
+	case AgentDetailExecutorKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailPreviewOf.
+const (
+	AgentDetailPreviewOfMain       AgentDetailPreviewOf = "Main"
+	AgentDetailPreviewOfSubagent   AgentDetailPreviewOf = "Subagent"
+	AgentDetailPreviewOfSubagent3p AgentDetailPreviewOf = "subagent_3p"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailPreviewOf enum.
+func (e AgentDetailPreviewOf) Valid() bool {
+	switch e {
+	case AgentDetailPreviewOfMain:
+		return true
+	case AgentDetailPreviewOfSubagent:
+		return true
+	case AgentDetailPreviewOfSubagent3p:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailToolPermissionsEffective.
+const (
+	AgentDetailToolPermissionsEffectiveAllow AgentDetailToolPermissionsEffective = "allow"
+	AgentDetailToolPermissionsEffectiveAsk   AgentDetailToolPermissionsEffective = "ask"
+	AgentDetailToolPermissionsEffectiveDeny  AgentDetailToolPermissionsEffective = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailToolPermissionsEffective enum.
+func (e AgentDetailToolPermissionsEffective) Valid() bool {
+	switch e {
+	case AgentDetailToolPermissionsEffectiveAllow:
+		return true
+	case AgentDetailToolPermissionsEffectiveAsk:
+		return true
+	case AgentDetailToolPermissionsEffectiveDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailToolPermissionsOverride.
+const (
+	AgentDetailToolPermissionsOverrideAllow AgentDetailToolPermissionsOverride = "allow"
+	AgentDetailToolPermissionsOverrideAsk   AgentDetailToolPermissionsOverride = "ask"
+	AgentDetailToolPermissionsOverrideDeny  AgentDetailToolPermissionsOverride = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailToolPermissionsOverride enum.
+func (e AgentDetailToolPermissionsOverride) Valid() bool {
+	switch e {
+	case AgentDetailToolPermissionsOverrideAllow:
+		return true
+	case AgentDetailToolPermissionsOverrideAsk:
+		return true
+	case AgentDetailToolPermissionsOverrideDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailType.
+const (
+	AgentDetailTypeCore       AgentDetailType = "core"
+	AgentDetailTypeMain       AgentDetailType = "Main"
+	AgentDetailTypeSubagent   AgentDetailType = "Subagent"
+	AgentDetailTypeSubagent3p AgentDetailType = "subagent_3p"
+	AgentDetailTypeSystem     AgentDetailType = "system"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailType enum.
+func (e AgentDetailType) Valid() bool {
+	switch e {
+	case AgentDetailTypeCore:
+		return true
+	case AgentDetailTypeMain:
+		return true
+	case AgentDetailTypeSubagent:
+		return true
+	case AgentDetailTypeSubagent3p:
+		return true
+	case AgentDetailTypeSystem:
 		return true
 	default:
 		return false
@@ -989,6 +1100,48 @@ func (e AgentToolEntryManifestTier) Valid() bool {
 	case AgentToolEntryManifestTierFull:
 		return true
 	case AgentToolEntryManifestTierInfra:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolPermissionEffective.
+const (
+	AgentToolPermissionEffectiveAllow AgentToolPermissionEffective = "allow"
+	AgentToolPermissionEffectiveAsk   AgentToolPermissionEffective = "ask"
+	AgentToolPermissionEffectiveDeny  AgentToolPermissionEffective = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolPermissionEffective enum.
+func (e AgentToolPermissionEffective) Valid() bool {
+	switch e {
+	case AgentToolPermissionEffectiveAllow:
+		return true
+	case AgentToolPermissionEffectiveAsk:
+		return true
+	case AgentToolPermissionEffectiveDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolPermissionOverride.
+const (
+	AgentToolPermissionOverrideAllow AgentToolPermissionOverride = "allow"
+	AgentToolPermissionOverrideAsk   AgentToolPermissionOverride = "ask"
+	AgentToolPermissionOverrideDeny  AgentToolPermissionOverride = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolPermissionOverride enum.
+func (e AgentToolPermissionOverride) Valid() bool {
+	switch e {
+	case AgentToolPermissionOverrideAllow:
+		return true
+	case AgentToolPermissionOverrideAsk:
+		return true
+	case AgentToolPermissionOverrideDeny:
 		return true
 	default:
 		return false
@@ -1202,27 +1355,6 @@ func (e AgentToolsUpdateRequestConfigBuiltinPolicies) Valid() bool {
 	case AgentToolsUpdateRequestConfigBuiltinPoliciesAsk:
 		return true
 	case AgentToolsUpdateRequestConfigBuiltinPoliciesDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestExecutorKind.
-const (
-	AgentUpdateRequestExecutorKindExternalCli AgentUpdateRequestExecutorKind = "external-cli"
-	AgentUpdateRequestExecutorKindNative      AgentUpdateRequestExecutorKind = "native"
-	AgentUpdateRequestExecutorKindRemoteA2a   AgentUpdateRequestExecutorKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestExecutorKind enum.
-func (e AgentUpdateRequestExecutorKind) Valid() bool {
-	switch e {
-	case AgentUpdateRequestExecutorKindExternalCli:
-		return true
-	case AgentUpdateRequestExecutorKindNative:
-		return true
-	case AgentUpdateRequestExecutorKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -2024,6 +2156,24 @@ func (e CliDetectEntrySource) Valid() bool {
 	case CliDetectEntrySourcePath:
 		return true
 	case CliDetectEntrySourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CliPresetViewDetectedSource.
+const (
+	CliPresetViewDetectedSourcePath      CliPresetViewDetectedSource = "path"
+	CliPresetViewDetectedSourceWellKnown CliPresetViewDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the CliPresetViewDetectedSource enum.
+func (e CliPresetViewDetectedSource) Valid() bool {
+	switch e {
+	case CliPresetViewDetectedSourcePath:
+		return true
+	case CliPresetViewDetectedSourceWellKnown:
 		return true
 	default:
 		return false
@@ -12230,6 +12380,60 @@ func (e TaskUpdateRequestTriggerType) Valid() bool {
 	}
 }
 
+// Defines values for ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource.
+const (
+	ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourcePath      ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource = "path"
+	ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourceWellKnown ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource enum.
+func (e ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource) Valid() bool {
+	switch e {
+	case ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourcePath:
+		return true
+	case ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ThirdPartyAgentSettingsViewClisCodexDetectedSource.
+const (
+	ThirdPartyAgentSettingsViewClisCodexDetectedSourcePath      ThirdPartyAgentSettingsViewClisCodexDetectedSource = "path"
+	ThirdPartyAgentSettingsViewClisCodexDetectedSourceWellKnown ThirdPartyAgentSettingsViewClisCodexDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the ThirdPartyAgentSettingsViewClisCodexDetectedSource enum.
+func (e ThirdPartyAgentSettingsViewClisCodexDetectedSource) Valid() bool {
+	switch e {
+	case ThirdPartyAgentSettingsViewClisCodexDetectedSourcePath:
+		return true
+	case ThirdPartyAgentSettingsViewClisCodexDetectedSourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ThirdPartyAgentSettingsViewClisOpencodeDetectedSource.
+const (
+	ThirdPartyAgentSettingsViewClisOpencodeDetectedSourcePath      ThirdPartyAgentSettingsViewClisOpencodeDetectedSource = "path"
+	ThirdPartyAgentSettingsViewClisOpencodeDetectedSourceWellKnown ThirdPartyAgentSettingsViewClisOpencodeDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the ThirdPartyAgentSettingsViewClisOpencodeDetectedSource enum.
+func (e ThirdPartyAgentSettingsViewClisOpencodeDetectedSource) Valid() bool {
+	switch e {
+	case ThirdPartyAgentSettingsViewClisOpencodeDetectedSourcePath:
+		return true
+	case ThirdPartyAgentSettingsViewClisOpencodeDetectedSourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TodoStatus.
 const (
 	TodoStatusCompleted  TodoStatus = "completed"
@@ -13947,11 +14151,13 @@ type Agent struct {
 	DegradedReason *AgentDegradedReason `json:"degraded_reason,omitempty"`
 
 	// Description Short description of the agent's purpose.
-	Description    *string                 `json:"description,omitempty"`
+	Description *string `json:"description,omitempty"`
+
+	// EditableFields Per-field editability for this agent. For custom subagent_3p agents the executor descriptors are executor.env_overrides, executor.env_overrides_remove and executor.cli_args (editable; other agents get the reason "Only external-CLI workers have a runtime environment."), executor.cli (never: "Locked after create; create a new agent to switch CLIs."), executor.effective_cli_path (never: "Set in Settings -> Third-party agents.") and executor.kind (never: "Derived from the agent type.").
 	EditableFields *[]AgentFieldDescriptor `json:"editable_fields,omitempty"`
 	ErrorStage     *string                 `json:"error_stage,omitempty"`
 
-	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// Executor Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
 	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
@@ -13962,17 +14168,23 @@ type Agent struct {
 		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
 		Cli *ExternalCliTool `json:"cli,omitempty"`
 
-		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		// CliArgs Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
 		CliArgs *string `json:"cli_args,omitempty"`
 
-		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-		CliPath *string `json:"cli_path,omitempty"`
+		// EffectiveCliPath Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+		EffectiveCliPath *string `json:"effective_cli_path,omitempty"`
 
-		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		// EffectivePresetArgs Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+		EffectivePresetArgs *string `json:"effective_preset_args,omitempty"`
+
+		// EnvOverrides Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
 		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 
 		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 		Kind *AgentExecutorKind `json:"kind,omitempty"`
+
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		ProgramWarning *string `json:"program_warning,omitempty"`
 	} `json:"executor,omitempty"`
 
 	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
@@ -14027,21 +14239,6 @@ type Agent struct {
 
 	// Provider Explicit routing key for the agent's primary model (O3 two-field model), mirroring fallback_models[].provider. Distinct from any "provider/" prefix embedded in `model`. When set, model resolution uses this provider directly and never infers one. Empty/absent for agents that predate the migration or whose model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
-
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
@@ -14357,7 +14554,7 @@ type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
 // AgentCreateRequestSubagentType Discriminator. Must be exactly "Subagent" for this variant.
 type AgentCreateRequestSubagentType string
 
-// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (ExecutorConfigCreate: cli plus optional env_overrides and cli_args; kind and cli_path are rejected). The program for the chosen CLI is set by a person in Settings -> Third-party agents; creating an agent for a CLI with no usable Settings path succeeds and the echo carries executor.program_warning. There is no soul: a third-party agent has no SOUL.md (soul is rejected as an unknown field).
 // Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
 type AgentCreateRequestSubagent3p struct {
 	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
@@ -14366,28 +14563,16 @@ type AgentCreateRequestSubagent3p struct {
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
 
-	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
-	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
-	// When the agent has no executor block, the default is "native".
+	// Executor Executor block of a subagent_3p create request (WRITE model). `kind` is derived from the agent type and `cli_path` does not exist: the program for each CLI is set by a person in Settings -> Third-party agents. Both are rejected as unknown fields. Creating an agent for a CLI with no usable Settings path succeeds; the echo carries `program_warning`.
 	Executor struct {
 		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
-		Cli *ExternalCliTool `json:"cli,omitempty"`
+		Cli ExternalCliTool `json:"cli"`
 
-		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		// CliArgs Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the safety filter would drop are reported in the tool result's cli_args.dropped_at_run and removed at run time.
 		CliArgs *string `json:"cli_args,omitempty"`
 
-		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-		CliPath *string `json:"cli_path,omitempty"`
-
-		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		// EnvOverrides Environment variables for the spawned CLI process. Names match ^[A-Za-z_][A-Za-z0-9_]*$ and are at most 128 characters; at most 64 entries; each value at most 8,192 characters. OMNIPUS_* names are reserved and refused, naming the key. A value equal to the read mask "••••••" is refused. Values are never echoed: every read masks them.
 		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
-
-		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-		Kind *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
 	} `json:"executor"`
 
 	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
@@ -14405,33 +14590,12 @@ type AgentCreateRequestSubagent3p struct {
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
-
 	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Role *AgentRole `json:"role,omitempty"`
-
-	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
-	Soul string `json:"soul"`
 
 	// Type Discriminator. Must be exactly "subagent_3p" for this variant.
 	Type AgentCreateRequestSubagent3pType `json:"type"`
 }
-
-// AgentCreateRequestSubagent3pExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-type AgentCreateRequestSubagent3pExecutorKind string
 
 // AgentCreateRequestSubagent3pType Discriminator. Must be exactly "subagent_3p" for this variant.
 type AgentCreateRequestSubagent3pType string
@@ -14469,6 +14633,209 @@ type AgentDependencyList struct {
 // AgentDependencyListDependenciesKind defines model for AgentDependencyList.Dependencies.Kind.
 type AgentDependencyListDependenciesKind string
 
+// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields (listed in truncated_fields). Extension point: the effort fields of the effort feature are added here when that feature lands.
+type AgentDetail struct {
+	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+	ActivationStatus *AgentDetailActivationStatus `json:"activation_status,omitempty"`
+
+	// AgentMd AGENT.md content written beside the record ("" when none).
+	AgentMd *string `json:"agent_md,omitempty"`
+
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
+
+	// Connectors The agent's explicitly assigned connector (MCP server) bindings.
+	Connectors *[]struct {
+		Id string `json:"id"`
+
+		// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+		Tools *[]string `json:"tools,omitempty"`
+	} `json:"connectors,omitempty"`
+
+	// ContextWindowOverride The stored per-agent context-window override; null when none.
+	ContextWindowOverride *int                    `json:"context_window_override,omitempty"`
+	Description           *string                 `json:"description,omitempty"`
+	EditableFields        *[]AgentFieldDescriptor `json:"editable_fields,omitempty"`
+
+	// Executor Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
+	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
+	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
+	// When the agent has no executor block, the default is "native".
+	Executor *struct {
+		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+		Cli *ExternalCliTool `json:"cli,omitempty"`
+
+		// CliArgs Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
+		CliArgs *string `json:"cli_args,omitempty"`
+
+		// EffectiveCliPath Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+		EffectiveCliPath *string `json:"effective_cli_path,omitempty"`
+
+		// EffectivePresetArgs Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+		EffectivePresetArgs *string `json:"effective_preset_args,omitempty"`
+
+		// EnvOverrides Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
+		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+
+		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+		Kind *AgentDetailExecutorKind `json:"kind,omitempty"`
+
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		ProgramWarning *string `json:"program_warning,omitempty"`
+	} `json:"executor,omitempty"`
+
+	// FallbackModels The stored fallback entries, as stored.
+	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
+
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
+	Figure *AgentFigure `json:"figure,omitempty"`
+
+	// HasMainChat True when the agent has a main chat.
+	HasMainChat *bool  `json:"has_main_chat,omitempty"`
+	Id          string `json:"id"`
+
+	// MaxToolIterations The agent's own stored tool-iteration limit; null when it rides the global limit.
+	MaxToolIterations *int  `json:"max_tool_iterations,omitempty"`
+	MemoryEnabled     *bool `json:"memory_enabled,omitempty"`
+
+	// Model The stored primary model slug ("" when the agent inherits the default).
+	Model *string `json:"model,omitempty"`
+
+	// ModelChain The effective model chain: primary first, then each fallback in order, derived through the real resolver; unknown values are null.
+	ModelChain *[]struct {
+		// AcceptsImages The resolved model's image-input capability; null when not known.
+		AcceptsImages *bool `json:"accepts_images"`
+
+		// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
+		Model string `json:"model"`
+
+		// ModelOffered True when the provider offers the model; null when not known.
+		ModelOffered *bool `json:"model_offered"`
+
+		// Position "primary", or "fallback_<n>" counting from 1 in chain order.
+		Position string `json:"position"`
+
+		// Provider The resolved provider key; null when it cannot be resolved.
+		Provider *string `json:"provider"`
+
+		// ProviderConfigured True when the provider is configured on this install.
+		ProviderConfigured bool `json:"provider_configured"`
+
+		// Warning Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise.
+		Warning *string `json:"warning,omitempty"`
+	} `json:"model_chain,omitempty"`
+
+	// ModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
+	ModelParams *struct {
+		// MaxTokens Maximum tokens to generate per turn.
+		MaxTokens *int `json:"max_tokens,omitempty"`
+
+		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+		Temperature *float64 `json:"temperature,omitempty"`
+	} `json:"model_params,omitempty"`
+	Name *string `json:"name,omitempty"`
+
+	// PreviewOf Present only on a new-agent preview; names the type being previewed.
+	PreviewOf *AgentDetailPreviewOf `json:"preview_of,omitempty"`
+
+	// ProgramWarning Same text as executor.program_warning: the exact text a run would be refused with right now. Absent when a run would start.
+	ProgramWarning *string `json:"program_warning,omitempty"`
+
+	// Provider The stored primary provider key ("" when not pinned).
+	Provider *string `json:"provider,omitempty"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
+
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
+
+	// Runnable True when a run of this agent would start now (no program_warning applies).
+	Runnable *bool     `json:"runnable,omitempty"`
+	Skills   *[]string `json:"skills,omitempty"`
+
+	// Soul SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul).
+	Soul *string `json:"soul,omitempty"`
+
+	// ToolPermissions Per-tool effective policy and the agent's own stored override.
+	ToolPermissions *[]struct {
+		// Description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+		Description *string `json:"description,omitempty"`
+
+		// Effective The policy that applies to this agent's calls of the tool.
+		Effective AgentDetailToolPermissionsEffective `json:"effective"`
+
+		// Override The agent's own stored override; null when the agent rides the global ceiling.
+		Override *AgentDetailToolPermissionsOverride `json:"override"`
+
+		// Tool The tool name.
+		Tool string `json:"tool"`
+	} `json:"tool_permissions,omitempty"`
+
+	// TruncatedFields Names of fields cut by the result size bound. Absent or empty when nothing was cut.
+	TruncatedFields *[]string `json:"truncated_fields,omitempty"`
+
+	// Type Agent type, as in Agent.type.
+	Type  *AgentDetailType `json:"type,omitempty"`
+	Voice *string          `json:"voice,omitempty"`
+}
+
+// AgentDetailActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type AgentDetailActivationStatus string
+
+// AgentDetailExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+type AgentDetailExecutorKind string
+
+// AgentDetailPreviewOf Present only on a new-agent preview; names the type being previewed.
+type AgentDetailPreviewOf string
+
+// AgentDetailToolPermissionsEffective The policy that applies to this agent's calls of the tool.
+type AgentDetailToolPermissionsEffective string
+
+// AgentDetailToolPermissionsOverride The agent's own stored override; null when the agent rides the global ceiling.
+type AgentDetailToolPermissionsOverride string
+
+// AgentDetailType Agent type, as in Agent.type.
+type AgentDetailType string
+
+// AgentExecutorSettingsResult Executor-settings block of a create_agent or update_agent tool result, present when executor settings were supplied. Never carries an environment value: only names.
+type AgentExecutorSettingsResult struct {
+	CliArgs *struct {
+		// Argv The stored cli_args after tokenisation, in order.
+		Argv []string `json:"argv"`
+
+		// DroppedAtRun Tokens the safety filter will drop at run time, with its reason.
+		DroppedAtRun []struct {
+			Flag   string `json:"flag"`
+			Reason string `json:"reason"`
+		} `json:"dropped_at_run"`
+	} `json:"cli_args,omitempty"`
+
+	// Env Environment names by outcome.
+	Env *struct {
+		// AbsentRemoved Names listed in env_overrides_remove that were not stored (reported, not refused).
+		AbsentRemoved []string `json:"absent_removed"`
+
+		// Added Names that were not stored before and are now set.
+		Added []string `json:"added"`
+
+		// Removed Names removed through env_overrides_remove.
+		Removed []string `json:"removed"`
+
+		// Replaced Names whose stored value was replaced.
+		Replaced []string `json:"replaced"`
+	} `json:"env,omitempty"`
+
+	// ProgramWarning The exact text a run of this agent would be refused with right now (see ExecutorConfig.program_warning). Absent when a run would start.
+	ProgramWarning *string `json:"program_warning,omitempty"`
+
+	// Runnable create_agent only. True when a run would start now; false when the Settings program path for the agent's CLI is missing or fails its checks (program_warning then carries the text).
+	Runnable *bool `json:"runnable,omitempty"`
+}
+
 // AgentFieldDescriptor defines model for AgentFieldDescriptor.
 type AgentFieldDescriptor struct {
 	Editable bool   `json:"editable"`
@@ -14489,6 +14856,30 @@ type AgentMCPBinding struct {
 	Tools *[]string `json:"tools,omitempty"`
 }
 
+// AgentModelChainEntry One entry of an agent's EFFECTIVE model chain as reported by get_agent (AgentDetail.model_chain): the primary first, then each fallback in order. Derived through the real resolver (ResolveModelPairCfg and the agent's fallback selection), never guessed: a value that is not known is null.
+type AgentModelChainEntry struct {
+	// AcceptsImages The resolved model's image-input capability; null when not known.
+	AcceptsImages *bool `json:"accepts_images"`
+
+	// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
+	Model string `json:"model"`
+
+	// ModelOffered True when the provider offers the model; null when not known.
+	ModelOffered *bool `json:"model_offered"`
+
+	// Position "primary", or "fallback_<n>" counting from 1 in chain order.
+	Position string `json:"position"`
+
+	// Provider The resolved provider key; null when it cannot be resolved.
+	Provider *string `json:"provider"`
+
+	// ProviderConfigured True when the provider is configured on this install.
+	ProviderConfigured bool `json:"provider_configured"`
+
+	// Warning Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise.
+	Warning *string `json:"warning,omitempty"`
+}
+
 // AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
 type AgentModelParams struct {
 	// MaxTokens Maximum tokens to generate per turn.
@@ -14496,21 +14887,6 @@ type AgentModelParams struct {
 
 	// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
 	Temperature *float64 `json:"temperature,omitempty"`
-}
-
-// AgentRateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
-type AgentRateLimits struct {
-	// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-	MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-	// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-	MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-	// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-	MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-	// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-	UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 }
 
 // AgentRole Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
@@ -14608,6 +14984,27 @@ type AgentToolEntryEffectivePolicy string
 
 // AgentToolEntryManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolEntryManifestTier string
+
+// AgentToolPermission One tool's permission for an agent, as reported by get_agent (AgentDetail.tool_permissions): the effective policy after the global ceiling and the agent's own override (strictest wins), plus the agent's stored override when it has one.
+type AgentToolPermission struct {
+	// Description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+	Description *string `json:"description,omitempty"`
+
+	// Effective The policy that applies to this agent's calls of the tool.
+	Effective AgentToolPermissionEffective `json:"effective"`
+
+	// Override The agent's own stored override; null when the agent rides the global ceiling.
+	Override *AgentToolPermissionOverride `json:"override"`
+
+	// Tool The tool name.
+	Tool string `json:"tool"`
+}
+
+// AgentToolPermissionEffective The policy that applies to this agent's calls of the tool.
+type AgentToolPermissionEffective string
+
+// AgentToolPermissionOverride The agent's own stored override; null when the agent rides the global ceiling.
+type AgentToolPermissionOverride string
 
 // AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 type AgentToolsCfg struct {
@@ -14765,28 +15162,16 @@ type AgentUpdateRequest struct {
 	// Description New description. Rejected on locked agents. Empty string removes it. For Subagent / subagent_3p, an empty string after trim is rejected 400 (description is required for workers per the routing contract).
 	Description *string `json:"description,omitempty"`
 
-	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
-	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
-	// When the agent has no executor block, the default is "native".
+	// Executor Executor block of an agent update (WRITE model). Editable for custom subagent_3p agents only ("Only external-CLI workers have a runtime environment."). `kind` (derived from the agent type), `cli` (locked after create; create a new agent to switch CLIs) and `cli_path` (the program is set by a person in Settings -> Third-party agents) are rejected as unknown fields.
 	Executor *struct {
-		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
-		Cli *ExternalCliTool `json:"cli,omitempty"`
-
-		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		// CliArgs Replacement CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse.
 		CliArgs *string `json:"cli_args,omitempty"`
 
-		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-		CliPath *string `json:"cli_path,omitempty"`
-
-		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		// EnvOverrides MERGE: each supplied name is added or its value replaced; names not supplied are kept; {} is a no-op. The merged result obeys the create limits (at most 64 entries, name pattern ^[A-Za-z_][A-Za-z0-9_]*$ and at most 128 characters, value at most 8,192 characters, OMNIPUS_* refused). A value equal to the read mask "••••••" is refused.
 		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 
-		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-		Kind *AgentUpdateRequestExecutorKind `json:"kind,omitempty"`
+		// EnvOverridesRemove Names to remove from the stored environment. A name that is not stored is reported as absent_removed, not refused. A name that is both set in env_overrides and listed here is refused 400.
+		EnvOverridesRemove *[]string `json:"env_overrides_remove,omitempty"`
 	} `json:"executor,omitempty"`
 
 	// FallbackModels Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
@@ -14864,9 +15249,6 @@ type AgentUpdateRequest struct {
 	// Voice Per-agent persona voice identifier. Schema-pinned; not yet active (TTS, tracked #306). Send null to clear. Main only.
 	Voice *string `json:"voice,omitempty"`
 }
-
-// AgentUpdateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-type AgentUpdateRequestExecutorKind string
 
 // AgentUpdateRequestToolPolicyChangesSet defines model for AgentUpdateRequest.ToolPolicyChanges.Set.
 type AgentUpdateRequestToolPolicyChangesSet string
@@ -15594,7 +15976,10 @@ type CliDetect struct {
 		// Installed Whether the binary was located on $PATH or in a well-known install directory.
 		Installed bool `json:"installed"`
 
-		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 		Path *string `json:"path,omitempty"`
 
 		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -15606,7 +15991,10 @@ type CliDetect struct {
 		// Installed Whether the binary was located on $PATH or in a well-known install directory.
 		Installed bool `json:"installed"`
 
-		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 		Path *string `json:"path,omitempty"`
 
 		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -15618,7 +16006,10 @@ type CliDetect struct {
 		// Installed Whether the binary was located on $PATH or in a well-known install directory.
 		Installed bool `json:"installed"`
 
-		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 		Path *string `json:"path,omitempty"`
 
 		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -15640,7 +16031,10 @@ type CliDetectEntry struct {
 	// Installed Whether the binary was located on $PATH or in a well-known install directory.
 	Installed bool `json:"installed"`
 
-	// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+	// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+	LinkPath *string `json:"link_path,omitempty"`
+
+	// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 	Path *string `json:"path,omitempty"`
 
 	// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -15649,6 +16043,42 @@ type CliDetectEntry struct {
 
 // CliDetectEntrySource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
 type CliDetectEntrySource string
+
+// CliPreset One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+type CliPreset struct {
+	// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+	Path string `json:"path"`
+
+	// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+	PresetArgs string `json:"preset_args"`
+}
+
+// CliPresetView One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+type CliPresetView struct {
+	// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+	Detected struct {
+		// Installed Whether the binary was located on $PATH or in a well-known install directory.
+		Installed bool `json:"installed"`
+
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+		Path *string `json:"path,omitempty"`
+
+		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+		Source *CliPresetViewDetectedSource `json:"source,omitempty"`
+	} `json:"detected"`
+
+	// Path The saved program path exactly as entered; "" when nothing is saved.
+	Path string `json:"path"`
+
+	// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+	PresetArgs string `json:"preset_args"`
+}
+
+// CliPresetViewDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type CliPresetViewDetectedSource string
 
 // CliValidateRequest Request body for POST /api/v1/system/cli-validate. Stateless, create-time validation of an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same handshake used by the post-create /agents/{id}/runner/test endpoint.
 type CliValidateRequest struct {
@@ -17118,10 +17548,10 @@ type EnumValueDefGroup string
 
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
-	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
+	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
 	Code *string `json:"code,omitempty"`
 
-	// Details Optional structured details about the error.
+	// Details Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file).
 	Details *map[string]interface{} `json:"details,omitempty"`
 
 	// Error Human-readable error message.
@@ -17227,7 +17657,7 @@ type ExecutorCommandPreviewResponse struct {
 // ExecutorCommandPreviewResponsePromptDelivery How the actual task prompt (soul + instructions, composed at real dispatch time) reaches this CLI — never a --prompt flag on any of the three supported CLIs. claude-code and codex read it from stdin; opencode receives it as the last positional argument after a literal "--" end-of-options separator.
 type ExecutorCommandPreviewResponsePromptDelivery string
 
-// ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+// ExecutorConfig Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
 // "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
 // "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 // "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
@@ -17238,21 +17668,51 @@ type ExecutorConfig struct {
 	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
 	Cli *ExternalCliTool `json:"cli,omitempty"`
 
-	// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+	// CliArgs Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
 	CliArgs *string `json:"cli_args,omitempty"`
 
-	// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-	CliPath *string `json:"cli_path,omitempty"`
+	// EffectiveCliPath Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+	EffectiveCliPath *string `json:"effective_cli_path,omitempty"`
 
-	// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+	// EffectivePresetArgs Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+	EffectivePresetArgs *string `json:"effective_preset_args,omitempty"`
+
+	// EnvOverrides Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
 	EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 
 	// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 	Kind *ExecutorConfigKind `json:"kind,omitempty"`
+
+	// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+	ProgramWarning *string `json:"program_warning,omitempty"`
 }
 
 // ExecutorConfigKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type ExecutorConfigKind string
+
+// ExecutorConfigCreate Executor block of a subagent_3p create request (WRITE model). `kind` is derived from the agent type and `cli_path` does not exist: the program for each CLI is set by a person in Settings -> Third-party agents. Both are rejected as unknown fields. Creating an agent for a CLI with no usable Settings path succeeds; the echo carries `program_warning`.
+type ExecutorConfigCreate struct {
+	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+	Cli ExternalCliTool `json:"cli"`
+
+	// CliArgs Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the safety filter would drop are reported in the tool result's cli_args.dropped_at_run and removed at run time.
+	CliArgs *string `json:"cli_args,omitempty"`
+
+	// EnvOverrides Environment variables for the spawned CLI process. Names match ^[A-Za-z_][A-Za-z0-9_]*$ and are at most 128 characters; at most 64 entries; each value at most 8,192 characters. OMNIPUS_* names are reserved and refused, naming the key. A value equal to the read mask "••••••" is refused. Values are never echoed: every read masks them.
+	EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+}
+
+// ExecutorConfigUpdate Executor block of an agent update (WRITE model). Editable for custom subagent_3p agents only ("Only external-CLI workers have a runtime environment."). `kind` (derived from the agent type), `cli` (locked after create; create a new agent to switch CLIs) and `cli_path` (the program is set by a person in Settings -> Third-party agents) are rejected as unknown fields.
+type ExecutorConfigUpdate struct {
+	// CliArgs Replacement CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse.
+	CliArgs *string `json:"cli_args,omitempty"`
+
+	// EnvOverrides MERGE: each supplied name is added or its value replaced; names not supplied are kept; {} is a no-op. The merged result obeys the create limits (at most 64 entries, name pattern ^[A-Za-z_][A-Za-z0-9_]*$ and at most 128 characters, value at most 8,192 characters, OMNIPUS_* refused). A value equal to the read mask "••••••" is refused.
+	EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+
+	// EnvOverridesRemove Names to remove from the stored environment. A name that is not stored is reported as absent_removed, not refused. A name that is both set in env_overrides and listed here is refused 400.
+	EnvOverridesRemove *[]string `json:"env_overrides_remove,omitempty"`
+}
 
 // ExecutorDefaults Static reference data describing the CLI arguments Omnipus's external-CLI driver automatically applies when spawning a subagent_3p worker on this CLI (kind="external-cli"), as returned by GET /api/v1/agents/executor-defaults. This is READ-ONLY, computed reference information — it does not reflect any particular agent's configuration and there is nothing to write back. It exists so the Agent Profile UI can show operators the REAL, auto-applied flags (not merely HTML placeholder ghost-text) before they add their own executor.cli_args. The values are sourced directly from each driver's buildArgs() (pkg/agent/runner/driver_claude.go, driver_codex.go, driver_opencode.go) and must be kept byte-accurate to that code — this is reference documentation for a running system, not a design aspiration.
 type ExecutorDefaults struct {
@@ -26628,6 +27088,125 @@ type TaskUpdateRequest_Trigger_Config struct {
 // TaskUpdateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskUpdateRequestTriggerType string
 
+// ThirdPartyAgentSettings Request body of PUT /api/v1/settings/third-party-agents. Replaces the whole Settings -> Third-party agents section in one call: a CLI key absent from `clis` is saved as {path: "", preset_args: ""}. Every row is validated before anything is written (order claude-code, codex, opencode; path before preset_args); the first failing row and field is returned and nothing is written, valid rows included. No revision and no 409: the last save wins. Stored in config.json under sandbox.third_party_agents.clis.<cli>.
+type ThirdPartyAgentSettings struct {
+	// Clis One row per external CLI, keyed by the agent `cli` enum values (ExternalCliTool). Only these three keys are accepted.
+	Clis struct {
+		// ClaudeCode One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+		ClaudeCode *struct {
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			Path string `json:"path"`
+
+			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+			PresetArgs string `json:"preset_args"`
+		} `json:"claude-code,omitempty"`
+
+		// Codex One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+		Codex *struct {
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			Path string `json:"path"`
+
+			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+			PresetArgs string `json:"preset_args"`
+		} `json:"codex,omitempty"`
+
+		// Opencode One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+		Opencode *struct {
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			Path string `json:"path"`
+
+			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+			PresetArgs string `json:"preset_args"`
+		} `json:"opencode,omitempty"`
+	} `json:"clis"`
+}
+
+// ThirdPartyAgentSettingsView Response of GET and PUT /api/v1/settings/third-party-agents: the saved Settings -> Third-party agents section. All three CLI keys are always present; a CLI with nothing saved has path "" and preset_args "". Each row's `detected` is host detection read live on every request and never stored; the server maps detection key "claude" to "claude-code", so the screen never maps keys itself.
+type ThirdPartyAgentSettingsView struct {
+	Clis struct {
+		// ClaudeCode One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+		ClaudeCode struct {
+			// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+			Detected struct {
+				// Installed Whether the binary was located on $PATH or in a well-known install directory.
+				Installed bool `json:"installed"`
+
+				// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+				LinkPath *string `json:"link_path,omitempty"`
+
+				// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+				Path *string `json:"path,omitempty"`
+
+				// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+				Source *ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource `json:"source,omitempty"`
+			} `json:"detected"`
+
+			// Path The saved program path exactly as entered; "" when nothing is saved.
+			Path string `json:"path"`
+
+			// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+			PresetArgs string `json:"preset_args"`
+		} `json:"claude-code"`
+
+		// Codex One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+		Codex struct {
+			// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+			Detected struct {
+				// Installed Whether the binary was located on $PATH or in a well-known install directory.
+				Installed bool `json:"installed"`
+
+				// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+				LinkPath *string `json:"link_path,omitempty"`
+
+				// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+				Path *string `json:"path,omitempty"`
+
+				// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+				Source *ThirdPartyAgentSettingsViewClisCodexDetectedSource `json:"source,omitempty"`
+			} `json:"detected"`
+
+			// Path The saved program path exactly as entered; "" when nothing is saved.
+			Path string `json:"path"`
+
+			// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+			PresetArgs string `json:"preset_args"`
+		} `json:"codex"`
+
+		// Opencode One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+		Opencode struct {
+			// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+			Detected struct {
+				// Installed Whether the binary was located on $PATH or in a well-known install directory.
+				Installed bool `json:"installed"`
+
+				// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+				LinkPath *string `json:"link_path,omitempty"`
+
+				// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+				Path *string `json:"path,omitempty"`
+
+				// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+				Source *ThirdPartyAgentSettingsViewClisOpencodeDetectedSource `json:"source,omitempty"`
+			} `json:"detected"`
+
+			// Path The saved program path exactly as entered; "" when nothing is saved.
+			Path string `json:"path"`
+
+			// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+			PresetArgs string `json:"preset_args"`
+		} `json:"opencode"`
+	} `json:"clis"`
+}
+
+// ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource string
+
+// ThirdPartyAgentSettingsViewClisCodexDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type ThirdPartyAgentSettingsViewClisCodexDetectedSource string
+
+// ThirdPartyAgentSettingsViewClisOpencodeDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type ThirdPartyAgentSettingsViewClisOpencodeDetectedSource string
+
 // Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need an independent agent/trigger. The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy boolean `done` so a checklist can express work-in-progress (§3 tasks-system refactor — the `set_todos` agent scratchpad rides this same array).
 type Todo struct {
 	// ActiveForm Optional phrasing for the item while it is in progress.
@@ -29043,6 +29622,9 @@ type UpdateContextSettingsJSONRequestBody = ContextSettingsUpdate
 
 // UpdateMemorySettingsJSONRequestBody defines body for UpdateMemorySettings for application/json ContentType.
 type UpdateMemorySettingsJSONRequestBody = MemorySettings
+
+// UpdateThirdPartyAgentSettingsJSONRequestBody defines body for UpdateThirdPartyAgentSettings for application/json ContentType.
+type UpdateThirdPartyAgentSettingsJSONRequestBody = ThirdPartyAgentSettings
 
 // InstallSkillJSONRequestBody defines body for InstallSkill for application/json ContentType.
 type InstallSkillJSONRequestBody = SkillInstallRequest

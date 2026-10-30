@@ -1409,8 +1409,6 @@ components:
       $ref: ./components/schemas/Agent.yaml
     AgentModelParams:
       $ref: ./components/schemas/AgentModelParams.yaml
-    AgentRateLimits:
-      $ref: ./components/schemas/AgentRateLimits.yaml
     AgentStats:
       $ref: ./components/schemas/AgentStats.yaml
     AgentToolsCfg:
@@ -1461,6 +1459,18 @@ components:
       $ref: ./components/schemas/ExternalCli.yaml
     ExecutorConfig:
       $ref: ./components/schemas/ExecutorConfig.yaml
+    ExecutorConfigCreate:
+      $ref: ./components/schemas/ExecutorConfigCreate.yaml
+    ExecutorConfigUpdate:
+      $ref: ./components/schemas/ExecutorConfigUpdate.yaml
+    AgentDetail:
+      $ref: ./components/schemas/AgentDetail.yaml
+    AgentModelChainEntry:
+      $ref: ./components/schemas/AgentModelChainEntry.yaml
+    AgentToolPermission:
+      $ref: ./components/schemas/AgentToolPermission.yaml
+    AgentExecutorSettingsResult:
+      $ref: ./components/schemas/AgentExecutorSettingsResult.yaml
     ExecutorDefaults:
       $ref: ./components/schemas/ExecutorDefaults.yaml
     ExecutorCommandPreviewRequest:
@@ -1946,6 +1956,14 @@ components:
       $ref: ./components/schemas/CliDetect.yaml
     CliDetectEntry:
       $ref: ./components/schemas/CliDetectEntry.yaml
+    CliPreset:
+      $ref: ./components/schemas/CliPreset.yaml
+    CliPresetView:
+      $ref: ./components/schemas/CliPresetView.yaml
+    ThirdPartyAgentSettings:
+      $ref: ./components/schemas/ThirdPartyAgentSettings.yaml
+    ThirdPartyAgentSettingsView:
+      $ref: ./components/schemas/ThirdPartyAgentSettingsView.yaml
     CliValidateRequest:
       $ref: ./components/schemas/CliValidateRequest.yaml
     CliValidateResponse:
@@ -4945,6 +4963,73 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+  /settings/third-party-agents:
+    get:
+      operationId: getThirdPartyAgentSettings
+      summary: Get the Settings -> Third-party agents section (program path and standard parameters per CLI)
+      description: >
+        Returns the saved program path and standard parameters for each
+        external CLI (claude-code, codex, opencode); all three rows are always
+        present ("" when nothing is saved), each with a live detection result
+        that is never stored. Signed-in person only (RequirePersonSession):
+        no session 401, an agent or tool token 403; no password step.
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The saved section.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThirdPartyAgentSettingsView'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+    put:
+      operationId: updateThirdPartyAgentSettings
+      summary: Replace the Settings -> Third-party agents section
+      description: >
+        Replaces the whole section in one call (a CLI key absent from `clis`
+        is saved as {path: "", preset_args: ""}). Every row is validated
+        before anything is written, in the order claude-code, codex,
+        opencode, path before preset_args; the first failing row and field is
+        returned as 400 (code cli_path_invalid or cli_preset_invalid, field
+        clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check,
+        details.at for paths) and nothing is written, valid rows included.
+        An unknown CLI key or field gets the request-schema 400. No revision
+        and no 409: the last save wins. Signed-in person only
+        (RequirePersonSession): no session 401, an agent or tool token 403;
+        no password step.
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThirdPartyAgentSettings'
+      responses:
+        '200':
+          description: The saved section after the update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThirdPartyAgentSettingsView'
+        '400':
+          description: A row failed validation, or the body does not match the schema. Nothing was written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
   /channels:
     get:
       operationId: listChannels

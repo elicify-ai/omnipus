@@ -273,12 +273,6 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 	if refuseReservedAgentName(pap.cra.w, pap.name) {
 		return true
 	}
-	if pap.createType == config.AgentTypeWorker && wireType == string(gen.AgentTypeSubagent3p) {
-		if executorIn == nil || executorIn.CliPath == nil || strings.TrimSpace(*executorIn.CliPath) == "" {
-			jsonErr(pap.cra.w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")
-			return true
-		}
-	}
 	if r0, stop := pap.validateAndBuildConfig(); stop {
 		return r0
 	}
@@ -461,11 +455,9 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.figure = vreq.Figure
 		pap.role = vreq.Role
 		pap.color = vreq.Color
-		pap.cra.soul = vreq.Soul
 		pap.maxToolIterations = vreq.MaxToolIterations
 		return &executorRequestInput{
-			Cli:          executorCliStr(vreq.Executor.Cli),
-			CliPath:      vreq.Executor.CliPath,
+			Cli:          string(vreq.Executor.Cli),
 			EnvOverrides: vreq.Executor.EnvOverrides,
 			CliArgs:      vreq.Executor.CliArgs,
 		}, false
@@ -486,9 +478,6 @@ func (pap *restAPICreateAgentPrepareAgent) buildExecutor(wireType string, execut
 			if errMsg != "" {
 				jsonErr(pap.cra.w, http.StatusBadRequest, errMsg)
 				return true
-			}
-			if executorIn.CliPath != nil {
-				execCfg.CLIPath = *executorIn.CliPath
 			}
 			if executorIn.EnvOverrides != nil {
 				execCfg.EnvOverrides = *executorIn.EnvOverrides

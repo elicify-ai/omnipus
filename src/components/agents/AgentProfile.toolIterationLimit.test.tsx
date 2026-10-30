@@ -82,7 +82,6 @@ const baseAgent = {
   model: 'claude-sonnet-4-6',
   description: 'Cheap triage',
   soul: '',
-  rate_limits: { use_global_defaults: true },
   memory_enabled: true,
 }
 

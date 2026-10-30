@@ -37,6 +37,15 @@ properties:
     type: string
   editable_fields:
     type: array
+    description: >
+      Per-field editability for this agent. For custom subagent_3p agents
+      the executor descriptors are executor.env_overrides,
+      executor.env_overrides_remove and executor.cli_args (editable; other
+      agents get the reason "Only external-CLI workers have a runtime
+      environment."), executor.cli (never: "Locked after create; create a new
+      agent to switch CLIs."), executor.effective_cli_path (never: "Set in
+      Settings -> Third-party agents.") and executor.kind (never: "Derived
+      from the agent type.").
     items:
       $ref: './AgentFieldDescriptor.yaml'
       x-go-type: AgentFieldDescriptor
@@ -188,8 +197,6 @@ properties:
         provider: "anthropic"
   model_params:
     $ref: './AgentModelParams.yaml'
-  rate_limits:
-    $ref: './AgentRateLimits.yaml'
   stats:
     $ref: './AgentStats.yaml'
   skills:

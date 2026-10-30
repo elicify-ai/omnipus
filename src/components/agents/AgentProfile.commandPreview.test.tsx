@@ -10,8 +10,8 @@
 // retry affordance rather than disappearing.
 //
 // Follows the same rendering/mocking pattern as the file this replaces
-// (`AgentProfile.autoAppliedFlags.test.tsx` — Agent System P0 fix) and
-// `AgentProfile.cliPathValidate.test.tsx`. Real timers (not fake) — matches
+// (`AgentProfile.autoAppliedFlags.test.tsx` — Agent System P0 fix). Real
+// timers (not fake) — matches
 // `Step1Identity.prefillValidate.test.tsx`'s approach to the same 400ms
 // debounce shape, generous `waitFor` timeouts absorb it.
 
@@ -85,7 +85,6 @@ const mockExternalAgent: Agent = {
   max_tool_iterations: 20,
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,
-  rate_limits: { use_global_defaults: true },
   executor: { kind: 'external-cli', cli: 'claude-code' },
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
@@ -188,7 +187,7 @@ describe('AgentProfile — Runtime tab live command preview (executor-command-pr
   it('live-updates the preview when the operator edits Additional CLI arguments', async () => {
     vi.mocked(fetchAgent).mockResolvedValue({
       ...mockExternalAgent,
-      executor: { kind: 'external-cli', cli: 'claude-code', cli_path: '/usr/local/bin/claude' },
+      executor: { kind: 'external-cli', cli: 'claude-code', effective_cli_path: '/usr/local/bin/claude' },
     })
     renderProfile('external-worker')
     await screen.findByText('External Worker')
@@ -243,7 +242,7 @@ describe('AgentProfile — Runtime tab live command preview (executor-command-pr
   it('the "Additional CLI arguments" field still submits exactly what the operator typed', async () => {
     vi.mocked(fetchAgent).mockResolvedValue({
       ...mockExternalAgent,
-      executor: { kind: 'external-cli', cli: 'claude-code', cli_path: '/usr/local/bin/claude' },
+      executor: { kind: 'external-cli', cli: 'claude-code', effective_cli_path: '/usr/local/bin/claude' },
     })
     renderProfile('external-worker')
     await screen.findByText('External Worker')

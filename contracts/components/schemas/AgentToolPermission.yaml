@@ -1,0 +1,30 @@
+title: AgentToolPermission
+description: >
+  One tool's permission for an agent, as reported by get_agent
+  (AgentDetail.tool_permissions): the effective policy after the global
+  ceiling and the agent's own override (strictest wins), plus the agent's
+  stored override when it has one.
+type: object
+additionalProperties: false
+required: [tool, effective, override]
+properties:
+  tool:
+    type: string
+    description: The tool name.
+    example: "web_search"
+  effective:
+    type: string
+    enum: [allow, ask, deny]
+    description: The policy that applies to this agent's calls of the tool.
+    example: "ask"
+  override:
+    type: string
+    nullable: true
+    enum: [allow, ask, deny]
+    description: The agent's own stored override; null when the agent rides the global ceiling.
+    example: null
+  description:
+    type: string
+    maxLength: 40
+    description: Short description of the tool (at most 40 characters). Omitted when effective is deny.
+    example: "Search the web"

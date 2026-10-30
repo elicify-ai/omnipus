@@ -783,8 +783,9 @@ func TestCreateAgent_Subagent3p_WithCliPath_Succeeds(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
 	require.NotNil(t, created.Executor, "response must include executor")
-	require.NotNil(t, created.Executor.CliPath, "response executor must include cli_path")
-	assert.Equal(t, "/usr/local/bin/claude", *created.Executor.CliPath)
+	// T8 contract commit: executor.cli_path left the read model (spec r2
+	// §3.8), so the echo assertion is gone; this test is obsolete under the
+	// new contract and is rewritten by the T8 test author.
 
 	// Verify persistence.
 	exec := agentExecutorFromStore(t, api.homePath, created.Id)

@@ -1,0 +1,26 @@
+title: ThirdPartyAgentSettings
+description: >
+  Request body of PUT /api/v1/settings/third-party-agents. Replaces the whole
+  Settings -> Third-party agents section in one call: a CLI key absent from
+  `clis` is saved as {path: "", preset_args: ""}. Every row is validated
+  before anything is written (order claude-code, codex, opencode; path before
+  preset_args); the first failing row and field is returned and nothing is
+  written, valid rows included. No revision and no 409: the last save wins.
+  Stored in config.json under sandbox.third_party_agents.clis.<cli>.
+type: object
+additionalProperties: false
+required: [clis]
+properties:
+  clis:
+    type: object
+    additionalProperties: false
+    description: >
+      One row per external CLI, keyed by the agent `cli` enum values
+      (ExternalCliTool). Only these three keys are accepted.
+    properties:
+      claude-code:
+        $ref: './CliPreset.yaml'
+      codex:
+        $ref: './CliPreset.yaml'
+      opencode:
+        $ref: './CliPreset.yaml'

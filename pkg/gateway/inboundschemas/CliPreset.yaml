@@ -1,0 +1,32 @@
+title: CliPreset
+description: >
+  One external CLI's row in Settings -> Third-party agents, as a person saves
+  it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in
+  person; agents have no route, tool parameter or config path that writes it.
+type: object
+additionalProperties: false
+required: [path, preset_args]
+properties:
+  path:
+    type: string
+    maxLength: 4096
+    description: >
+      Program path exactly as the person typed it ("" = no program saved for
+      this CLI). Stored as entered, never the resolved target. A non-empty
+      value must pass thirdpartycli.ValidateProgramPath on save (absolute; every
+      symlink's folder and the final file and its folder not world-writable and
+      not inside an agent-writable location; the final file a regular,
+      executable file), otherwise the save is refused 400 with code
+      cli_path_invalid. Every run checks it again and execs the resolved file.
+    example: "/opt/homebrew/bin/claude"
+  preset_args:
+    type: string
+    maxLength: 4096
+    description: >
+      Standard parameters for this CLI, one line of free text, stored exactly
+      as typed ("" = none). No NUL, no line breaks (refused 400 with code
+      cli_preset_invalid). Any token is allowed: no allow list and no flag
+      filter. At spawn the parameters are appended after the agent's own
+      cli_args (which are filtered) and before the prompt hand-off, so a
+      person's value beats an agent flag of the same name.
+    example: "--max-turns 40"

@@ -1,0 +1,34 @@
+title: ExecutorConfigCreate
+description: >
+  Executor block of a subagent_3p create request (WRITE model). `kind` is
+  derived from the agent type and `cli_path` does not exist: the program for
+  each CLI is set by a person in Settings -> Third-party agents. Both are
+  rejected as unknown fields. Creating an agent for a CLI with no usable
+  Settings path succeeds; the echo carries `program_warning`.
+type: object
+additionalProperties: false
+required: [cli]
+properties:
+  cli:
+    $ref: './ExternalCli.yaml'
+    x-go-type: ExternalCliTool
+  env_overrides:
+    type: object
+    additionalProperties:
+      type: string
+    description: >
+      Environment variables for the spawned CLI process. Names match
+      ^[A-Za-z_][A-Za-z0-9_]*$ and are at most 128 characters; at most 64
+      entries; each value at most 8,192 characters. OMNIPUS_* names are
+      reserved and refused, naming the key. A value equal to the read mask
+      "••••••" is refused. Values are never echoed: every read masks them.
+    example:
+      DEBUG: "1"
+  cli_args:
+    type: string
+    description: >
+      Additional CLI arguments, one string, stored as typed. Shell
+      metacharacters warn, never refuse. Flags the safety filter would drop
+      are reported in the tool result's cli_args.dropped_at_run and removed
+      at run time.
+    example: "--max-turns 5"

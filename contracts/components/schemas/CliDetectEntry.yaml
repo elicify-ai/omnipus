@@ -18,10 +18,21 @@ properties:
     type: string
     nullable: true
     description: >
-      Absolute, symlink-resolved path to the binary. Null when installed=false.
-      This is the exact value the SPA prefills into the executor cli_path field —
-      detection, validation, and the runtime spawn all resolve this same path.
-    example: "/usr/local/bin/claude"
+      Absolute, symlink-resolved path to the binary (the final file). Null
+      when installed=false. Not the value to pre-fill into Settings ->
+      Third-party agents: a versioned symlink target would break on the next
+      package update; pre-fill from link_path when present, else this path.
+    example: "/opt/homebrew/Cellar/claude/1.2.3/bin/claude"
+  link_path:
+    type: string
+    nullable: true
+    description: >
+      The path as found on $PATH or in a well-known install folder, BEFORE
+      symlink resolution (equal to `path` when no symlink is involved). Null
+      when installed=false. The Settings -> Third-party agents screen
+      pre-fills its program path from this value when present, else from
+      `path`.
+    example: "/opt/homebrew/bin/claude"
   source:
     type: string
     nullable: true

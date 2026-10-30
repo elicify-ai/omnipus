@@ -1097,6 +1097,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/third-party-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the Settings -> Third-party agents section (program path and standard parameters per CLI)
+         * @description Returns the saved program path and standard parameters for each external CLI (claude-code, codex, opencode); all three rows are always present ("" when nothing is saved), each with a live detection result that is never stored. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+         */
+        get: operations["getThirdPartyAgentSettings"];
+        /**
+         * Replace the Settings -> Third-party agents section
+         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+         */
+        put: operations["updateThirdPartyAgentSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/channels": {
         parameters: {
             query?: never;
@@ -4165,7 +4189,7 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
+             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
              * @example csrf_missing
              */
             code?: string;
@@ -4174,7 +4198,7 @@ export interface components {
              * @example provider
              */
             field?: string;
-            /** @description Optional structured details about the error. */
+            /** @description Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file). */
             details?: {
                 [key: string]: unknown;
             };
@@ -8621,6 +8645,7 @@ export interface components {
             changed_fields?: string[];
             error_stage?: string;
             message?: string;
+            /** @description Per-field editability for this agent. For custom subagent_3p agents the executor descriptors are executor.env_overrides, executor.env_overrides_remove and executor.cli_args (editable; other agents get the reason "Only external-CLI workers have a runtime environment."), executor.cli (never: "Locked after create; create a new agent to switch CLIs."), executor.effective_cli_path (never: "Set in Settings -> Third-party agents.") and executor.kind (never: "Derived from the agent type."). */
             editable_fields?: components["schemas"]["AgentFieldDescriptor"][];
             /**
              * @description Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
@@ -8706,7 +8731,6 @@ export interface components {
              */
             fallback_models?: components["schemas"]["FallbackModel"][];
             model_params?: components["schemas"]["AgentModelParams"];
-            rate_limits?: components["schemas"]["AgentRateLimits"];
             stats?: components["schemas"]["AgentStats"];
             /**
              * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
@@ -8777,33 +8801,6 @@ export interface components {
              * @example 4096
              */
             max_tokens?: number;
-        };
-        /**
-         * AgentRateLimits
-         * @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
-         */
-        AgentRateLimits: {
-            /**
-             * @description When true, global rate limits are used and per-agent overrides are ignored.
-             * @example true
-             */
-            use_global_defaults?: boolean;
-            /**
-             * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-             * @example 100
-             */
-            max_llm_calls_per_hour?: number;
-            /**
-             * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-             * @example 60
-             */
-            max_tool_calls_per_minute?: number;
-            /**
-             * Format: double
-             * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-             * @example 5
-             */
-            max_cost_per_day?: number;
         };
         /**
          * AgentStats
@@ -9075,7 +9072,7 @@ export interface components {
         };
         /**
          * AgentCreateRequestSubagent3p
-         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (ExecutorConfigCreate: cli plus optional env_overrides and cli_args; kind and cli_path are rejected). The program for the chosen CLI is set by a person in Settings -> Third-party agents; creating an agent for a CLI with no usable Settings path succeeds and the echo carries executor.program_warning. There is no soul: a third-party agent has no SOUL.md (soul is rejected as an unknown field).
          *     Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
          */
         AgentCreateRequestSubagent3p: {
@@ -9108,36 +9105,7 @@ export interface components {
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
-            rate_limits?: {
-                /**
-                 * @description When true, global rate limits are used and per-agent overrides are ignored.
-                 * @example true
-                 */
-                use_global_defaults?: boolean;
-                /**
-                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-                 * @example 100
-                 */
-                max_llm_calls_per_hour?: number;
-                /**
-                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-                 * @example 60
-                 */
-                max_tool_calls_per_minute?: number;
-                /**
-                 * Format: double
-                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-                 * @example 5
-                 */
-                max_cost_per_day?: number;
-            };
-            /**
-             * @description Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
-             * @example You are a focused research assistant...
-             */
-            soul: string;
-            executor: components["schemas"]["ExecutorConfig"];
+            executor: components["schemas"]["ExecutorConfigCreate"];
             /**
              * @description The new worker's own tool-iteration limit (issue #904, D14), passed to the external CLI as its turn cap. Omitted = the worker rides the global limit. Refused (400) if above the current global limit.
              * @example 50
@@ -9226,7 +9194,7 @@ export interface components {
              * @example alloy
              */
             voice?: string | null;
-            executor?: components["schemas"]["ExecutorConfig"];
+            executor?: components["schemas"]["ExecutorConfigUpdate"];
             /**
              * @description New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Editable where supported for ordinary/custom agents; fixed false on hidden roles.
              * @example true
@@ -9266,7 +9234,7 @@ export interface components {
         };
         ExternalCliTool: components["schemas"]["ExternalCli"];
         /**
-         * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+         * @description Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
          *     "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
          *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
          *     "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
@@ -9283,14 +9251,42 @@ export interface components {
             kind?: "native" | "external-cli" | "remote-a2a";
             cli?: components["schemas"]["ExternalCli"];
             /**
-             * @description Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-             * @example /usr/local/bin/claude
+             * @description Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+             * @example /opt/homebrew/bin/claude
              */
-            cli_path?: string;
+            readonly effective_cli_path?: string;
             /**
-             * @description Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+             * @description Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+             * @example --max-turns 40
+             */
+            readonly effective_preset_args?: string;
+            /** @description Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start. */
+            readonly program_warning?: string;
+            /**
+             * @description Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
              * @example {
-             *       "ANTHROPIC_API_KEY": "...",
+             *       "ANTHROPIC_API_KEY": "••••••",
+             *       "DEBUG": "••••••"
+             *     }
+             */
+            env_overrides?: {
+                [key: string]: string;
+            };
+            /**
+             * @description Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
+             * @example --max-turns 5
+             */
+            cli_args?: string;
+        };
+        /**
+         * ExecutorConfigCreate
+         * @description Executor block of a subagent_3p create request (WRITE model). `kind` is derived from the agent type and `cli_path` does not exist: the program for each CLI is set by a person in Settings -> Third-party agents. Both are rejected as unknown fields. Creating an agent for a CLI with no usable Settings path succeeds; the echo carries `program_warning`.
+         */
+        ExecutorConfigCreate: {
+            cli: components["schemas"]["ExternalCli"];
+            /**
+             * @description Environment variables for the spawned CLI process. Names match ^[A-Za-z_][A-Za-z0-9_]*$ and are at most 128 characters; at most 64 entries; each value at most 8,192 characters. OMNIPUS_* names are reserved and refused, naming the key. A value equal to the read mask "••••••" is refused. Values are never echoed: every read masks them.
+             * @example {
              *       "DEBUG": "1"
              *     }
              */
@@ -9298,10 +9294,193 @@ export interface components {
                 [key: string]: string;
             };
             /**
-             * @description Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+             * @description Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the safety filter would drop are reported in the tool result's cli_args.dropped_at_run and removed at run time.
              * @example --max-turns 5
              */
             cli_args?: string;
+        };
+        /**
+         * ExecutorConfigUpdate
+         * @description Executor block of an agent update (WRITE model). Editable for custom subagent_3p agents only ("Only external-CLI workers have a runtime environment."). `kind` (derived from the agent type), `cli` (locked after create; create a new agent to switch CLIs) and `cli_path` (the program is set by a person in Settings -> Third-party agents) are rejected as unknown fields.
+         */
+        ExecutorConfigUpdate: {
+            /**
+             * @description MERGE: each supplied name is added or its value replaced; names not supplied are kept; {} is a no-op. The merged result obeys the create limits (at most 64 entries, name pattern ^[A-Za-z_][A-Za-z0-9_]*$ and at most 128 characters, value at most 8,192 characters, OMNIPUS_* refused). A value equal to the read mask "••••••" is refused.
+             * @example {
+             *       "DEBUG": "1"
+             *     }
+             */
+            env_overrides?: {
+                [key: string]: string;
+            };
+            /**
+             * @description Names to remove from the stored environment. A name that is not stored is reported as absent_removed, not refused. A name that is both set in env_overrides and listed here is refused 400.
+             * @example [
+             *       "DEBUG"
+             *     ]
+             */
+            env_overrides_remove?: string[];
+            /**
+             * @description Replacement CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse.
+             * @example --max-turns 5
+             */
+            cli_args?: string;
+        };
+        /**
+         * AgentDetail
+         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields (listed in truncated_fields). Extension point: the effort fields of the effort feature are added here when that feature lands.
+         */
+        AgentDetail: {
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            id: string;
+            /** @example Researcher */
+            name?: string;
+            description?: string;
+            /**
+             * @description Agent type, as in Agent.type.
+             * @enum {string}
+             */
+            type?: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
+            /** @description The stored primary model slug ("" when the agent inherits the default). */
+            model?: string;
+            /** @description The stored primary provider key ("" when not pinned). */
+            provider?: string;
+            /** @description The stored fallback entries, as stored. */
+            fallback_models?: components["schemas"]["FallbackModel"][];
+            model_params?: components["schemas"]["AgentModelParams"];
+            /** @description The agent's own stored tool-iteration limit; null when it rides the global limit. */
+            max_tool_iterations?: number | null;
+            /** @description The stored per-agent context-window override; null when none. */
+            context_window_override?: number | null;
+            memory_enabled?: boolean;
+            voice?: string | null;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
+            skills?: string[];
+            /** @description Per-tool effective policy and the agent's own stored override. */
+            tool_permissions?: components["schemas"]["AgentToolPermission"][];
+            /** @description The agent's explicitly assigned connector (MCP server) bindings. */
+            connectors?: components["schemas"]["AgentMCPBinding"][];
+            /** @description SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul). */
+            soul?: string;
+            /** @description AGENT.md content written beside the record ("" when none). */
+            agent_md?: string;
+            revision: components["schemas"]["ConfigurationRevision"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            editable_fields?: components["schemas"]["AgentFieldDescriptor"][];
+            executor?: components["schemas"]["ExecutorConfig"];
+            /** @description True when a run of this agent would start now (no program_warning applies). */
+            runnable?: boolean;
+            /** @description Same text as executor.program_warning: the exact text a run would be refused with right now. Absent when a run would start. */
+            program_warning?: string;
+            /** @description True when the agent has a main chat. */
+            has_main_chat?: boolean;
+            /** @description Names of fields cut by the result size bound. Absent or empty when nothing was cut. */
+            truncated_fields?: string[];
+            /**
+             * @description Present only on a new-agent preview; names the type being previewed.
+             * @enum {string}
+             */
+            preview_of?: "Main" | "Subagent" | "subagent_3p";
+            /** @description The effective model chain: primary first, then each fallback in order, derived through the real resolver; unknown values are null. */
+            model_chain?: components["schemas"]["AgentModelChainEntry"][];
+        };
+        /**
+         * AgentModelChainEntry
+         * @description One entry of an agent's EFFECTIVE model chain as reported by get_agent (AgentDetail.model_chain): the primary first, then each fallback in order. Derived through the real resolver (ResolveModelPairCfg and the agent's fallback selection), never guessed: a value that is not known is null.
+         */
+        AgentModelChainEntry: {
+            /**
+             * @description "primary", or "fallback_<n>" counting from 1 in chain order.
+             * @example fallback_1
+             */
+            position: string;
+            /**
+             * @description The model slug this entry routes to (the resolved default when the agent inherits its primary).
+             * @example deepseek/deepseek-v4.1-flash
+             */
+            model: string;
+            /**
+             * @description The resolved provider key; null when it cannot be resolved.
+             * @example openrouter
+             */
+            provider: string | null;
+            /**
+             * @description True when the provider is configured on this install.
+             * @example true
+             */
+            provider_configured: boolean;
+            /**
+             * @description True when the provider offers the model; null when not known.
+             * @example true
+             */
+            model_offered: boolean | null;
+            /**
+             * @description The resolved model's image-input capability; null when not known.
+             * @example false
+             */
+            accepts_images: boolean | null;
+            /** @description Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise. */
+            warning?: string;
+        };
+        /**
+         * AgentToolPermission
+         * @description One tool's permission for an agent, as reported by get_agent (AgentDetail.tool_permissions): the effective policy after the global ceiling and the agent's own override (strictest wins), plus the agent's stored override when it has one.
+         */
+        AgentToolPermission: {
+            /**
+             * @description The tool name.
+             * @example web_search
+             */
+            tool: string;
+            /**
+             * @description The policy that applies to this agent's calls of the tool.
+             * @example ask
+             * @enum {string}
+             */
+            effective: "allow" | "ask" | "deny";
+            /**
+             * @description The agent's own stored override; null when the agent rides the global ceiling.
+             * @example null
+             * @enum {string|null}
+             */
+            override: "allow" | "ask" | "deny" | null;
+            /**
+             * @description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+             * @example Search the web
+             */
+            description?: string;
+        };
+        /**
+         * AgentExecutorSettingsResult
+         * @description Executor-settings block of a create_agent or update_agent tool result, present when executor settings were supplied. Never carries an environment value: only names.
+         */
+        AgentExecutorSettingsResult: {
+            /** @description Environment names by outcome. */
+            env?: {
+                /** @description Names that were not stored before and are now set. */
+                added: string[];
+                /** @description Names whose stored value was replaced. */
+                replaced: string[];
+                /** @description Names removed through env_overrides_remove. */
+                removed: string[];
+                /** @description Names listed in env_overrides_remove that were not stored (reported, not refused). */
+                absent_removed: string[];
+            };
+            cli_args?: {
+                /** @description The stored cli_args after tokenisation, in order. */
+                argv: string[];
+                /** @description Tokens the safety filter will drop at run time, with its reason. */
+                dropped_at_run: {
+                    flag: string;
+                    reason: string;
+                }[];
+            };
+            /** @description create_agent only. True when a run would start now; false when the Settings program path for the agent's CLI is missing or fails its checks (program_warning then carries the text). */
+            runnable?: boolean;
+            /** @description The exact text a run of this agent would be refused with right now (see ExecutorConfig.program_warning). Absent when a run would start. */
+            program_warning?: string;
         };
         /** @description Static reference data describing the CLI arguments Omnipus's external-CLI driver automatically applies when spawning a subagent_3p worker on this CLI (kind="external-cli"), as returned by GET /api/v1/agents/executor-defaults. This is READ-ONLY, computed reference information — it does not reflect any particular agent's configuration and there is nothing to write back. It exists so the Agent Profile UI can show operators the REAL, auto-applied flags (not merely HTML placeholder ghost-text) before they add their own executor.cli_args. The values are sourced directly from each driver's buildArgs() (pkg/agent/runner/driver_claude.go, driver_codex.go, driver_opencode.go) and must be kept byte-accurate to that code — this is reference documentation for a running system, not a design aspiration. */
         ExecutorDefaults: {
@@ -14749,16 +14928,77 @@ export interface components {
              */
             installed: boolean;
             /**
-             * @description Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
-             * @example /usr/local/bin/claude
+             * @description Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+             * @example /opt/homebrew/Cellar/claude/1.2.3/bin/claude
              */
             path?: string | null;
+            /**
+             * @description The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+             * @example /opt/homebrew/bin/claude
+             */
+            link_path?: string | null;
             /**
              * @description How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
              * @example path
              * @enum {string|null}
              */
             source?: "path" | "well-known" | null;
+        };
+        /**
+         * CliPreset
+         * @description One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+         */
+        CliPreset: {
+            /**
+             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+             * @example /opt/homebrew/bin/claude
+             */
+            path: string;
+            /**
+             * @description Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+             * @example --max-turns 40
+             */
+            preset_args: string;
+        };
+        /**
+         * CliPresetView
+         * @description One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+         */
+        CliPresetView: {
+            /**
+             * @description The saved program path exactly as entered; "" when nothing is saved.
+             * @example /opt/homebrew/bin/claude
+             */
+            path: string;
+            /**
+             * @description The saved standard parameters exactly as typed; "" when nothing is saved.
+             * @example --max-turns 40
+             */
+            preset_args: string;
+            detected: components["schemas"]["CliDetectEntry"];
+        };
+        /**
+         * ThirdPartyAgentSettings
+         * @description Request body of PUT /api/v1/settings/third-party-agents. Replaces the whole Settings -> Third-party agents section in one call: a CLI key absent from `clis` is saved as {path: "", preset_args: ""}. Every row is validated before anything is written (order claude-code, codex, opencode; path before preset_args); the first failing row and field is returned and nothing is written, valid rows included. No revision and no 409: the last save wins. Stored in config.json under sandbox.third_party_agents.clis.<cli>.
+         */
+        ThirdPartyAgentSettings: {
+            /** @description One row per external CLI, keyed by the agent `cli` enum values (ExternalCliTool). Only these three keys are accepted. */
+            clis: {
+                "claude-code"?: components["schemas"]["CliPreset"];
+                codex?: components["schemas"]["CliPreset"];
+                opencode?: components["schemas"]["CliPreset"];
+            };
+        };
+        /**
+         * ThirdPartyAgentSettingsView
+         * @description Response of GET and PUT /api/v1/settings/third-party-agents: the saved Settings -> Third-party agents section. All three CLI keys are always present; a CLI with nothing saved has path "" and preset_args "". Each row's `detected` is host detection read live on every request and never stored; the server maps detection key "claude" to "claude-code", so the screen never maps keys itself.
+         */
+        ThirdPartyAgentSettingsView: {
+            clis: {
+                "claude-code": components["schemas"]["CliPresetView"];
+                codex: components["schemas"]["CliPresetView"];
+                opencode: components["schemas"]["CliPresetView"];
+            };
         };
         /**
          * CliValidateRequest
@@ -21075,6 +21315,63 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getThirdPartyAgentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved section. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThirdPartyAgentSettingsView"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+        };
+    };
+    updateThirdPartyAgentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThirdPartyAgentSettings"];
+            };
+        };
+        responses: {
+            /** @description The saved section after the update. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThirdPartyAgentSettingsView"];
+                };
+            };
+            /** @description A row failed validation, or the body does not match the schema. Nothing was written. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
         };
     };
     listChannels: {
@@ -27903,7 +28200,6 @@ export type AgentRole = components["schemas"]["AgentRole"];
 export type AgentColor = components["schemas"]["AgentColor"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
-export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
 export type AgentStats = components["schemas"]["AgentStats"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
 export type AgentToolsMcpServerBinding = components["schemas"]["AgentToolsMcpServerBinding"];
@@ -27917,6 +28213,12 @@ export type FallbackModel = components["schemas"]["FallbackModel"];
 export type FallbackModelPair = components["schemas"]["FallbackModelPair"];
 export type ExternalCliTool = components["schemas"]["ExternalCliTool"];
 export type ExecutorConfig = components["schemas"]["ExecutorConfig"];
+export type ExecutorConfigCreate = components["schemas"]["ExecutorConfigCreate"];
+export type ExecutorConfigUpdate = components["schemas"]["ExecutorConfigUpdate"];
+export type AgentDetail = components["schemas"]["AgentDetail"];
+export type AgentModelChainEntry = components["schemas"]["AgentModelChainEntry"];
+export type AgentToolPermission = components["schemas"]["AgentToolPermission"];
+export type AgentExecutorSettingsResult = components["schemas"]["AgentExecutorSettingsResult"];
 export type ExecutorDefaults = components["schemas"]["ExecutorDefaults"];
 export type ExecutorCommandPreviewRequest = components["schemas"]["ExecutorCommandPreviewRequest"];
 export type ExecutorCommandPreviewResponse = components["schemas"]["ExecutorCommandPreviewResponse"];
@@ -28100,6 +28402,10 @@ export type BearerToken = components["schemas"]["BearerToken"];
 export type ChannelConfigureRequest = components["schemas"]["ChannelConfigureRequest"];
 export type CliDetect = components["schemas"]["CliDetect"];
 export type CliDetectEntry = components["schemas"]["CliDetectEntry"];
+export type CliPreset = components["schemas"]["CliPreset"];
+export type CliPresetView = components["schemas"]["CliPresetView"];
+export type ThirdPartyAgentSettings = components["schemas"]["ThirdPartyAgentSettings"];
+export type ThirdPartyAgentSettingsView = components["schemas"]["ThirdPartyAgentSettingsView"];
 export type CliValidateRequest = components["schemas"]["CliValidateRequest"];
 export type CliValidateResponse = components["schemas"]["CliValidateResponse"];
 export type RetentionUpdateRequest = components["schemas"]["RetentionUpdateRequest"];

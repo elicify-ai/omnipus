@@ -112,9 +112,8 @@ func defaultToolsCreateREST(t *testing.T, api *restAPI, kind string) *config.Age
 	case "Subagent":
 		payload = gen.AgentCreateRequestSubagent{Type: "Subagent", Name: "Default Native Worker", Description: &description, Soul: "Complete the delegated task."}
 	case "subagent_3p":
-		request := gen.AgentCreateRequestSubagent3p{Type: "subagent_3p", Name: "Default External Worker", Description: &description, Soul: "Complete the delegated task."}
-		cli, executable := gen.ExternalCliToolCodex, defaultToolsExecutable(t)
-		request.Executor.Cli, request.Executor.CliPath = &cli, &executable
+		request := gen.AgentCreateRequestSubagent3p{Type: "subagent_3p", Name: "Default External Worker", Description: &description}
+		request.Executor.Cli = gen.ExternalCliToolCodex
 		payload = request
 	default:
 		t.Fatalf("unknown test kind %q", kind)

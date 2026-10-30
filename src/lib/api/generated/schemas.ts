@@ -1549,7 +1549,6 @@ type Agent = {
   tools_cfg?: AgentToolsCfg | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
-  rate_limits?: AgentRateLimits | undefined;
   stats?: AgentStats | undefined;
   skills?: Array<string> | undefined;
   updated_at?: string | undefined;
@@ -1633,12 +1632,6 @@ type AgentModelParams = Partial<{
   temperature: number;
   max_tokens: number;
 }>;
-type AgentRateLimits = Partial<{
-  use_global_defaults: boolean;
-  max_llm_calls_per_hour: number;
-  max_tool_calls_per_minute: number;
-  max_cost_per_day: number;
-}>;
 type AgentStats = {
   total_sessions: number;
   total_tokens: number;
@@ -1648,7 +1641,9 @@ type AgentStats = {
 type ExecutorConfig = Partial<{
   kind: "native" | "external-cli" | "remote-a2a";
   cli: ExternalCliTool;
-  cli_path: string;
+  effective_cli_path: string;
+  effective_preset_args: string;
+  program_warning: string;
   env_overrides: {};
   cli_args: string;
 }>;
@@ -1739,17 +1734,13 @@ type AgentCreateRequestSubagent3p = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  rate_limits?:
-    | Partial<{
-        use_global_defaults: boolean;
-        max_llm_calls_per_hour: number;
-        max_tool_calls_per_minute: number;
-        max_cost_per_day: number;
-      }>
-    | undefined;
-  soul: string;
-  executor: ExecutorConfig;
+  executor: ExecutorConfigCreate;
   max_tool_iterations?: number | undefined;
+};
+type ExecutorConfigCreate = {
+  cli: ExternalCliTool;
+  env_overrides?: {} | undefined;
+  cli_args?: string | undefined;
 };
 type AgentUpdateRequest = {
   revision: ConfigurationRevision;
@@ -1775,12 +1766,64 @@ type AgentUpdateRequest = {
   tools_cfg?: AgentToolsCfg | undefined;
   skills?: Array<string> | undefined;
   voice?: (string | null) | undefined;
-  executor?: ExecutorConfig | undefined;
+  executor?: ExecutorConfigUpdate | undefined;
   memory_enabled?: boolean | undefined;
 };
 type FallbackModelPair = {
   model: string;
   provider: string;
+};
+type ExecutorConfigUpdate = Partial<{
+  env_overrides: {};
+  env_overrides_remove: Array<string>;
+  cli_args: string;
+}>;
+type AgentDetail = {
+  id: string;
+  name?: string | undefined;
+  description?: string | undefined;
+  type?: ("core" | "system" | "Main" | "Subagent" | "subagent_3p") | undefined;
+  model?: string | undefined;
+  provider?: string | undefined;
+  fallback_models?: Array<FallbackModel> | undefined;
+  model_params?: AgentModelParams | undefined;
+  max_tool_iterations?: (number | null) | undefined;
+  context_window_override?: (number | null) | undefined;
+  memory_enabled?: boolean | undefined;
+  voice?: (string | null) | undefined;
+  figure?: AgentFigure | undefined;
+  role?: AgentRole | undefined;
+  color?: AgentColor | undefined;
+  skills?: Array<string> | undefined;
+  tool_permissions?: Array<AgentToolPermission> | undefined;
+  connectors?: Array<AgentMCPBinding> | undefined;
+  soul?: string | undefined;
+  agent_md?: string | undefined;
+  revision: ConfigurationRevision;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  editable_fields?: Array<AgentFieldDescriptor> | undefined;
+  executor?: ExecutorConfig | undefined;
+  runnable?: boolean | undefined;
+  program_warning?: string | undefined;
+  has_main_chat?: boolean | undefined;
+  truncated_fields?: Array<string> | undefined;
+  preview_of?: ("Main" | "Subagent" | "subagent_3p") | undefined;
+  model_chain?: Array<AgentModelChainEntry> | undefined;
+};
+type AgentToolPermission = {
+  tool: string;
+  effective: "allow" | "ask" | "deny";
+  override: "allow" | "ask" | "deny" | null;
+  description?: string | undefined;
+};
+type AgentModelChainEntry = {
+  position: string;
+  model: string;
+  provider: string | null;
+  provider_configured: boolean;
+  model_offered: boolean | null;
+  accepts_images: boolean | null;
+  warning?: string | undefined;
 };
 type ExecutorDefaults = {
   cli: ExternalCliTool;
@@ -2666,7 +2709,31 @@ type CliDetect = {
 type CliDetectEntry = {
   installed: boolean;
   path?: (string | null) | undefined;
+  link_path?: (string | null) | undefined;
   source?: ("path" | "well-known" | null) | undefined;
+};
+type CliPresetView = {
+  path: string;
+  preset_args: string;
+  detected: CliDetectEntry;
+};
+type ThirdPartyAgentSettings = {
+  clis: Partial<{
+    "claude-code": CliPreset;
+    codex: CliPreset;
+    opencode: CliPreset;
+  }>;
+};
+type CliPreset = {
+  path: string;
+  preset_args: string;
+};
+type ThirdPartyAgentSettingsView = {
+  clis: {
+    "claude-code": CliPresetView;
+    codex: CliPresetView;
+    opencode: CliPresetView;
+  };
 };
 type CliValidateRequest = {
   cli: ExternalCliTool;
@@ -4528,15 +4595,6 @@ export const AgentModelParams: z.ZodType<AgentModelParams> = z
   })
   .partial()
   .passthrough();
-export const AgentRateLimits: z.ZodType<AgentRateLimits> = z
-  .object({
-    use_global_defaults: z.boolean(),
-    max_llm_calls_per_hour: z.number().int().gte(0),
-    max_tool_calls_per_minute: z.number().int().gte(0),
-    max_cost_per_day: z.number().gte(0),
-  })
-  .partial()
-  .passthrough();
 export const AgentStats: z.ZodType<AgentStats> = z
   .object({
     total_sessions: z.number().int().gte(0),
@@ -4550,7 +4608,9 @@ export const ExecutorConfig: z.ZodType<ExecutorConfig> = z
   .object({
     kind: z.enum(["native", "external-cli", "remote-a2a"]),
     cli: ExternalCliTool,
-    cli_path: z.string(),
+    effective_cli_path: z.string(),
+    effective_preset_args: z.string(),
+    program_warning: z.string(),
     env_overrides: z.record(z.string()),
     cli_args: z.string(),
   })
@@ -4590,7 +4650,6 @@ export const Agent: z.ZodType<Agent> = z
     tools_cfg: AgentToolsCfg.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: AgentModelParams.optional(),
-    rate_limits: AgentRateLimits.optional(),
     stats: AgentStats.optional(),
     skills: z.array(z.string()).optional(),
     updated_at: z.string().datetime({ offset: true }).optional(),
@@ -4662,6 +4721,11 @@ export const AgentCreateRequestSubagent =
     soul: z.string().min(1),
     max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent>;
+export const ExecutorConfigCreate: z.ZodType<ExecutorConfigCreate> = z.object({
+  cli: ExternalCliTool,
+  env_overrides: z.record(z.string()).optional(),
+  cli_args: z.string().optional(),
+});
 export const AgentCreateRequestSubagent3p =
   z.object({
     type: z.literal("subagent_3p"),
@@ -4672,18 +4736,7 @@ export const AgentCreateRequestSubagent3p =
     figure: AgentFigure.optional(),
     role: AgentRole.optional(),
     color: AgentColor.optional(),
-    rate_limits: z
-      .object({
-        use_global_defaults: z.boolean(),
-        max_llm_calls_per_hour: z.number().int(),
-        max_tool_calls_per_minute: z.number().int(),
-        max_cost_per_day: z.number(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
-    soul: z.string().min(1),
-    executor: ExecutorConfig,
+    executor: ExecutorConfigCreate,
     max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent3p>;
 export const AgentCreateRequest =
@@ -4696,6 +4749,13 @@ export const FallbackModelPair: z.ZodType<FallbackModelPair> = z.object({
   model: z.string().min(1).max(256),
   provider: z.string().min(1).max(64),
 });
+export const ExecutorConfigUpdate: z.ZodType<ExecutorConfigUpdate> = z
+  .object({
+    env_overrides: z.record(z.string()),
+    env_overrides_remove: z.array(z.string()).max(64),
+    cli_args: z.string(),
+  })
+  .partial();
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   mcp_servers: z.array(AgentMCPBinding).optional(),
@@ -4719,7 +4779,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   tools_cfg: AgentToolsCfg.optional(),
   skills: z.array(z.string()).optional(),
   voice: z.string().nullish(),
-  executor: ExecutorConfig.optional(),
+  executor: ExecutorConfigUpdate.optional(),
   memory_enabled: z.boolean().optional(),
 });
 export const ConfigurationMutationState: z.ZodType<ConfigurationMutationState> =
@@ -5213,6 +5273,39 @@ export const ContextSettingsUpdate: z.ZodType<ContextSettingsUpdate> = z
     model_overrides: z.array(ContextModelOverride),
   })
   .partial();
+export const CliDetectEntry: z.ZodType<CliDetectEntry> = z.object({
+  installed: z.boolean(),
+  path: z.string().nullish(),
+  link_path: z.string().nullish(),
+  source: z.enum(["path", "well-known"]).nullish(),
+});
+export const CliPresetView: z.ZodType<CliPresetView> = z.object({
+  path: z.string(),
+  preset_args: z.string(),
+  detected: CliDetectEntry,
+});
+export const ThirdPartyAgentSettingsView: z.ZodType<ThirdPartyAgentSettingsView> =
+  z.object({
+    clis: z.object({
+      "claude-code": CliPresetView,
+      codex: CliPresetView,
+      opencode: CliPresetView,
+    }),
+  });
+export const CliPreset: z.ZodType<CliPreset> = z.object({
+  path: z.string().max(4096),
+  preset_args: z.string().max(4096),
+});
+export const ThirdPartyAgentSettings: z.ZodType<ThirdPartyAgentSettings> =
+  z.object({
+    clis: z
+      .object({
+        "claude-code": CliPreset,
+        codex: CliPreset,
+        opencode: CliPreset,
+      })
+      .partial(),
+  });
 export const ChannelId = z.string();
 export const ChannelIdentity: z.ZodType<ChannelIdentity> = z.object({
   kind: z.enum(["agent", "user"]),
@@ -7421,11 +7514,6 @@ export const HostFolderListing: z.ZodType<HostFolderListing> = z.object({
   parent: z.string().optional(),
   entries: z.array(HostFolderEntry),
 });
-export const CliDetectEntry: z.ZodType<CliDetectEntry> = z.object({
-  installed: z.boolean(),
-  path: z.string().nullish(),
-  source: z.enum(["path", "well-known"]).nullish(),
-});
 export const CliDetect: z.ZodType<CliDetect> = z.object({
   claude: CliDetectEntry,
   codex: CliDetectEntry,
@@ -7827,6 +7915,73 @@ export const ValidationReport: z.ZodType<ValidationReport> = z.object({
   types_checked: z.number().int().gte(0),
   types: z.array(z.string().min(1)).optional(),
 });
+export const AgentToolPermission: z.ZodType<AgentToolPermission> = z.object({
+  tool: z.string(),
+  effective: z.enum(["allow", "ask", "deny"]),
+  override: z.enum(["allow", "ask", "deny"]).nullable(),
+  description: z.string().max(40).optional(),
+});
+export const AgentModelChainEntry: z.ZodType<AgentModelChainEntry> = z.object({
+  position: z.string().regex(/^(primary|fallback_[1-9][0-9]*)$/),
+  model: z.string(),
+  provider: z.string().nullable(),
+  provider_configured: z.boolean(),
+  model_offered: z.boolean().nullable(),
+  accepts_images: z.boolean().nullable(),
+  warning: z.string().optional(),
+});
+export const AgentDetail: z.ZodType<AgentDetail> = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  type: z
+    .enum(["core", "system", "Main", "Subagent", "subagent_3p"])
+    .optional(),
+  model: z.string().optional(),
+  provider: z.string().optional(),
+  fallback_models: z.array(FallbackModel).optional(),
+  model_params: AgentModelParams.optional(),
+  max_tool_iterations: z.number().int().gte(1).nullish(),
+  context_window_override: z.number().int().gte(1).nullish(),
+  memory_enabled: z.boolean().optional(),
+  voice: z.string().nullish(),
+  figure: AgentFigure.optional(),
+  role: AgentRole.optional(),
+  color: AgentColor.optional(),
+  skills: z.array(z.string()).optional(),
+  tool_permissions: z.array(AgentToolPermission).optional(),
+  connectors: z.array(AgentMCPBinding).optional(),
+  soul: z.string().optional(),
+  agent_md: z.string().optional(),
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  activation_status: ConfigurationActivationStatus.optional(),
+  editable_fields: z.array(AgentFieldDescriptor).optional(),
+  executor: ExecutorConfig.optional(),
+  runnable: z.boolean().optional(),
+  program_warning: z.string().optional(),
+  has_main_chat: z.boolean().optional(),
+  truncated_fields: z.array(z.string()).optional(),
+  preview_of: z.enum(["Main", "Subagent", "subagent_3p"]).optional(),
+  model_chain: z.array(AgentModelChainEntry).optional(),
+});
+export const AgentExecutorSettingsResult = z
+  .object({
+    env: z.object({
+      added: z.array(z.string()),
+      replaced: z.array(z.string()),
+      removed: z.array(z.string()),
+      absent_removed: z.array(z.string()),
+    }),
+    cli_args: z.object({
+      argv: z.array(z.string()),
+      dropped_at_run: z.array(
+        z.object({ flag: z.string(), reason: z.string() })
+      ),
+    }),
+    runnable: z.boolean(),
+    program_warning: z.string(),
+  })
+  .partial();
 export const AgentSession = z
   .object({
     id: z.string(),
@@ -14905,6 +15060,60 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/settings/third-party-agents",
+    alias: "getThirdPartyAgentSettings",
+    description: `Returns the saved program path and standard parameters for each external CLI (claude-code, codex, opencode); all three rows are always present (&quot;&quot; when nothing is saved), each with a live detection result that is never stored. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+`,
+    requestFormat: "json",
+    response: ThirdPartyAgentSettingsView,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/settings/third-party-agents",
+    alias: "updateThirdPartyAgentSettings",
+    description: `Replaces the whole section in one call (a CLI key absent from &#x60;clis&#x60; is saved as {path: &quot;&quot;, preset_args: &quot;&quot;}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.&lt;cli&gt;.path or clis.&lt;cli&gt;.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ThirdPartyAgentSettings,
+      },
+    ],
+    response: ThirdPartyAgentSettingsView,
+    errors: [
+      {
+        status: 400,
+        description: `A row failed validation, or the body does not match the schema. Nothing was written.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
         schema: ErrorResponse,
       },
     ],

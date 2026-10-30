@@ -1,0 +1,130 @@
+title: AgentDetail
+description: >
+  Result of the get_agent tool: the agent's stored definition plus its
+  effective model chain. Stored fields stay as stored; model_chain is the
+  resolved view (primary first, then each fallback). Only id and revision
+  are always present: the get_agent `fields` tool parameter filters the
+  result, and the size bound may cut long fields (listed in
+  truncated_fields). Extension point: the effort fields of the effort
+  feature are added here when that feature lands.
+type: object
+additionalProperties: false
+required:
+  - id
+  - revision
+properties:
+  id:
+    type: string
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  name:
+    type: string
+    example: "Researcher"
+  description:
+    type: string
+  type:
+    type: string
+    enum:
+      - core
+      - system
+      - Main
+      - Subagent
+      - subagent_3p
+    description: Agent type, as in Agent.type.
+  model:
+    type: string
+    description: The stored primary model slug ("" when the agent inherits the default).
+  provider:
+    type: string
+    description: The stored primary provider key ("" when not pinned).
+  fallback_models:
+    type: array
+    items:
+      $ref: './FallbackModel.yaml'
+    description: The stored fallback entries, as stored.
+  model_params:
+    $ref: './AgentModelParams.yaml'
+  max_tool_iterations:
+    type: integer
+    minimum: 1
+    nullable: true
+    description: The agent's own stored tool-iteration limit; null when it rides the global limit.
+  context_window_override:
+    type: integer
+    minimum: 1
+    nullable: true
+    description: The stored per-agent context-window override; null when none.
+  memory_enabled:
+    type: boolean
+  voice:
+    type: string
+    nullable: true
+  figure:
+    $ref: './AgentFigure.yaml'
+    x-go-type: AgentFigure
+  role:
+    $ref: './AgentRole.yaml'
+    x-go-type: AgentRole
+  color:
+    $ref: './AgentColor.yaml'
+    x-go-type: AgentColor
+  skills:
+    type: array
+    items:
+      type: string
+  tool_permissions:
+    type: array
+    items:
+      $ref: './AgentToolPermission.yaml'
+    description: Per-tool effective policy and the agent's own stored override.
+  connectors:
+    type: array
+    items:
+      $ref: './AgentMCPBinding.yaml'
+    description: The agent's explicitly assigned connector (MCP server) bindings.
+  soul:
+    type: string
+    description: SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul).
+  agent_md:
+    type: string
+    description: AGENT.md content written beside the record ("" when none).
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+  activation_status:
+    $ref: './ConfigurationActivationStatus.yaml'
+  editable_fields:
+    type: array
+    items:
+      $ref: './AgentFieldDescriptor.yaml'
+      x-go-type: AgentFieldDescriptor
+  executor:
+    $ref: './ExecutorConfig.yaml'
+  runnable:
+    type: boolean
+    description: True when a run of this agent would start now (no program_warning applies).
+  program_warning:
+    type: string
+    description: >
+      Same text as executor.program_warning: the exact text a run would be
+      refused with right now. Absent when a run would start.
+  has_main_chat:
+    type: boolean
+    description: True when the agent has a main chat.
+  truncated_fields:
+    type: array
+    items:
+      type: string
+    description: Names of fields cut by the result size bound. Absent or empty when nothing was cut.
+  preview_of:
+    type: string
+    enum:
+      - Main
+      - Subagent
+      - subagent_3p
+    description: Present only on a new-agent preview; names the type being previewed.
+  model_chain:
+    type: array
+    items:
+      $ref: './AgentModelChainEntry.yaml'
+    description: >
+      The effective model chain: primary first, then each fallback in order,
+      derived through the real resolver; unknown values are null.

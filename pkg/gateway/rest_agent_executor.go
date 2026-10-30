@@ -39,40 +39,8 @@ var validExecutorCLIs = map[string]bool{
 // (contracts/components/schemas/ExecutorConfig.yaml).
 type executorRequestInput struct {
 	Cli          string
-	CliPath      *string
 	EnvOverrides *map[string]string
 	CliArgs      *string
-}
-
-// executorCliStr dereferences an optional generated CLI enum pointer to its
-// string value. Returns "" when the pointer is nil. Verified against the
-// generated output (not assumed): Agent.Executor.Cli, AgentUpdateRequest.
-// Executor.Cli, and AgentCreateRequestSubagent3p.Executor.Cli all resolve to
-// the SAME shared gen.ExternalCliTool type (contracts/components/schemas/
-// ExternalCli.yaml, $ref'd — see ExecutorConfig.yaml#/properties/cli) — the
-// discriminated union's oneOf variant inlines the surrounding Executor
-// *struct* as anonymous, but the $ref'd Cli *field* inside it still points
-// at the named shared type, not an anonymous one. Every current call site
-// already passes *ExternalCliTool; the generic exists so this helper (and
-// the locally-declared mirror struct in setAgentExecutorResponse below)
-// keeps working unchanged if a future variant's Cli field ever is inlined
-// as a genuinely distinct anonymous type.
-func executorCliStr[T ~string](cli *T) string {
-	if cli == nil {
-		return ""
-	}
-	return string(*cli)
-}
-
-// executorKindStr dereferences an optional generated ExecutorKind pointer to its
-// string value. Returns "" when the pointer is nil. Used by the create/update
-// handlers where Executor.Kind is *ExecutorKind (the schema marks kind as
-// optional + derived, so the pointer may be nil on the wire).
-func executorKindStr[T ~string](kind *T) string {
-	if kind == nil {
-		return ""
-	}
-	return string(*kind)
 }
 
 // executorKindPtr returns a pointer to the given gen.AgentExecutorKind. Used
@@ -144,19 +112,17 @@ func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig) {
 	// assignment fails to COMPILE — a build-time signal, not a silent
 	// runtime field mismatch.
 	exec := struct { // not-wire-format: generated gen.Agent.Executor inline shape, only populates the generated field
-		Cli          *gen.ExternalCliTool   `json:"cli,omitempty"`
-		CliArgs      *string                `json:"cli_args,omitempty"`
-		CliPath      *string                `json:"cli_path,omitempty"`
-		EnvOverrides *map[string]string     `json:"env_overrides,omitempty"`
-		Kind         *gen.AgentExecutorKind `json:"kind,omitempty"`
+		Cli                 *gen.ExternalCliTool   `json:"cli,omitempty"`
+		CliArgs             *string                `json:"cli_args,omitempty"`
+		EffectiveCliPath    *string                `json:"effective_cli_path,omitempty"`
+		EffectivePresetArgs *string                `json:"effective_preset_args,omitempty"`
+		EnvOverrides        *map[string]string     `json:"env_overrides,omitempty"`
+		Kind                *gen.AgentExecutorKind `json:"kind,omitempty"`
+		ProgramWarning      *string                `json:"program_warning,omitempty"`
 	}{}
 	if ec.CLI != "" {
 		cli := gen.ExternalCliTool(ec.CLI)
 		exec.Cli = &cli
-	}
-	if ec.CLIPath != "" {
-		cp := ec.CLIPath
-		exec.CliPath = &cp
 	}
 	if len(ec.EnvOverrides) > 0 {
 		eo := ec.EnvOverrides

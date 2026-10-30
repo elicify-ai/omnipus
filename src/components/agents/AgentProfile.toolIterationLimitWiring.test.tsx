@@ -71,7 +71,6 @@ const baseAgent: Agent = {
   max_tool_iterations: 200,
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,
-  rate_limits: { use_global_defaults: true },
   memory_enabled: true,
   figure: 'Omnipus',
   role: 'general',
@@ -198,7 +197,7 @@ describe('AgentProfile — Max tool calls per turn (#904)', () => {
       id: 'ext',
       name: 'External Worker',
       type: 'subagent_3p',
-      executor: { kind: 'external-cli', cli: 'claude-code', cli_path: '/usr/bin/claude' },
+      executor: { kind: 'external-cli', cli: 'claude-code', effective_cli_path: '/usr/bin/claude' },
     }
     vi.mocked(updateAgent).mockResolvedValue(worker)
     // I12: an external-cli save runs the runner test first.
@@ -216,7 +215,7 @@ describe('AgentProfile — Max tool calls per turn (#904)', () => {
       id: 'ext',
       name: 'External Worker',
       type: 'subagent_3p',
-      executor: { kind: 'external-cli', cli: 'claude-code', cli_path: '/usr/bin/claude' },
+      executor: { kind: 'external-cli', cli: 'claude-code', effective_cli_path: '/usr/bin/claude' },
     }
     renderProfile(worker)
     await screen.findByText(worker.name)
@@ -238,7 +237,7 @@ describe('AgentProfile — Max tool calls per turn (#904)', () => {
       id: 'ext',
       name: 'External Worker',
       type: 'subagent_3p',
-      executor: { kind: 'external-cli', cli: 'claude-code', cli_path: '/usr/bin/claude' },
+      executor: { kind: 'external-cli', cli: 'claude-code', effective_cli_path: '/usr/bin/claude' },
     }
     renderProfile(worker)
     await screen.findByText(worker.name)

@@ -1,0 +1,18 @@
+title: CliPresetView
+description: >
+  One external CLI's row in the Settings -> Third-party agents read model:
+  the saved values plus a live detection result.
+type: object
+additionalProperties: false
+required: [path, preset_args, detected]
+properties:
+  path:
+    type: string
+    description: The saved program path exactly as entered; "" when nothing is saved.
+    example: "/opt/homebrew/bin/claude"
+  preset_args:
+    type: string
+    description: The saved standard parameters exactly as typed; "" when nothing is saved.
+    example: "--max-turns 40"
+  detected:
+    $ref: './CliDetectEntry.yaml'

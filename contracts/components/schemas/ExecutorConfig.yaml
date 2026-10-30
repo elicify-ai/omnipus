@@ -1,7 +1,12 @@
 type: object
 description: >
-  Executor configuration for a sub-agent. Controls which runtime is used to
-  execute the sub-agent's tasks.
+  Executor configuration for a sub-agent (READ model: returned by REST GET,
+  the agent list, create and update echoes, and get_agent). Controls which
+  runtime is used to execute the sub-agent's tasks. Write models are
+  ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is
+  no per-agent program path: the program for each CLI is set by a person in
+  Settings -> Third-party agents (effective_cli_path, effective_preset_args
+  and program_warning report it here, read-only).
 
   "native" (default) runs the task inside the Omnipus agent loop — the existing
   behaviour, always available.
@@ -57,30 +62,53 @@ properties:
   cli:
     $ref: './ExternalCli.yaml'
     x-go-type: ExternalCliTool
-  cli_path:
+  effective_cli_path:
     type: string
+    readOnly: true
     description: >
-      Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable
-      on PUT (allows upgrading the CLI binary without re-creating the agent).
-      When empty, the OS $PATH is used (fragile when multiple CLI versions are
-      installed — recommend an absolute path).
-    example: "/usr/local/bin/claude"
+      Read-only. The program path saved in Settings -> Third-party agents for
+      this agent's CLI, exactly as the person entered it. Absent when no path
+      is saved for that CLI. A run uses only this Settings path (checked again
+      at spawn, the resolved file is exec'd); there is no per-agent program
+      path, no fallback to an old stored path and no $PATH lookup.
+    example: "/opt/homebrew/bin/claude"
+  effective_preset_args:
+    type: string
+    readOnly: true
+    description: >
+      Read-only. The standard parameters saved in Settings -> Third-party
+      agents for this agent's CLI, exactly as typed. Absent when none are
+      saved. Appended after this agent's cli_args at spawn, unfiltered.
+    example: "--max-turns 40"
+  program_warning:
+    type: string
+    readOnly: true
+    description: >
+      Read-only. The exact text a run of this agent would be refused with
+      right now: "This agent cannot run: no program path is set for <Name>. A
+      person can set it in Settings -> Third-party agents -> <Name>." or "This
+      agent cannot run: the program set for <Name> in Settings -> Third-party
+      agents does not pass its checks (<check> at <at>). A person can fix it
+      there." Absent when a run would start.
   env_overrides:
     type: object
     additionalProperties:
       type: string
     description: >
-      Additional environment variables merged into the spawned CLI process's
-      environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE,
-      and the master-key env var are NOT overridable — user-supplied keys take
-      precedence only for non-Omnipus vars).
+      Environment variables merged into the spawned CLI process's environment
+      alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On
+      every read (REST GET, list, create and update echoes, get_agent) each
+      value is replaced by the fixed mask "••••••"; only the names are
+      readable. Written through ExecutorConfigCreate (whole map) and
+      ExecutorConfigUpdate (merge plus env_overrides_remove).
     example:
-      ANTHROPIC_API_KEY: "..."
-      DEBUG: "1"
+      ANTHROPIC_API_KEY: "••••••"
+      DEBUG: "••••••"
   cli_args:
     type: string
     description: >
-      Free-form additional CLI arguments appended to the spawn invocation. The
-      spawn layer uses execve (no shell interpolation), so values are passed
-      safely; warn (but do not reject) on shell-injection chars in the value.
+      Free-form additional CLI arguments as stored, appended to the spawn
+      invocation after the driver's built-in flags. The spawn layer uses
+      execve (no shell interpolation); flags the safety filter would drop are
+      removed at run time.
     example: "--max-turns 5"
