@@ -98,6 +98,7 @@ import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { LibrarySearchBar } from './search/LibrarySearchBar'
 import { useLibraryCrossTabRefresh } from './useLibraryCrossTabRefresh'
+import { LIBRARY_AUTO_REFRESH_INTERVAL_MS, useLibraryAutoRefresh } from './useLibraryAutoRefresh'
 import { ListPreviewLayout, ListPreviewRegion } from '@/components/panel-shell/ListPreviewLayout'
 import {
   confirmDiscardLibraryEdits,
@@ -419,6 +420,21 @@ export function LibraryExplorer({
     if (addressed) setBrowsedDir(selectedDir ?? addressFolder ?? '')
   }
 
+  // ── Background self-refresh (founder decision 2026-10-30, "Q8b A") ───────
+  // The open Library's FOLDER VIEW re-checks itself every
+  // LIBRARY_AUTO_REFRESH_INTERVAL_MS while the panel is open AND the tab is
+  // visible AND the window is focused (the gate); the interval driving it
+  // lives in the effect right below the queries. Agent writes, shell
+  // commands and outside edits never emit a WS library_changed frame and
+  // never blur this tab, so the D-107 focus-refresh above alone left the
+  // open panel stale. R2 (as narrowed by team-lead, 2026-10-30): only the
+  // LISTING that is shown is re-fetched — the browsed folder's entries while
+  // a workspace is open, the workspaces list at the virtual root. An open
+  // file is deliberately NOT re-fetched (live-updating an open document is a
+  // separate future epic), and rootEntriesQuery does not tick either: it
+  // backs the mount picker/transfer dialog, not the screen.
+  const autoRefresh = useLibraryAutoRefresh()
+
   // Always fetched (cheap, small list) — backs the virtual-root listing AND
   // resolves the current workspace's display name for the breadcrumb + the
   // destination picker inside LibraryTransferDialog.
@@ -434,6 +450,29 @@ export function LibraryExplorer({
     enabled: workspaceId !== null,
     staleTime: 10_000,
   })
+
+  // The re-check timer itself. One interval for the ONE listing on screen —
+  // the browsed folder's entries with a workspace open, the workspaces list
+  // at the virtual root — driven through that query's own cache entry so the
+  // fetch, dedupe and error-keeping stay TanStack's. R4: quiet by
+  // construction — a background re-fetch keeps `data` mounted (the listing's
+  // error states below are keyed on the ABSENCE of data, the D-98 rule
+  // LibraryPreviewPane applies to the file body), a tick landing while the
+  // previous re-fetch is still in flight is SKIPPED rather than stacked, and
+  // a failed tick raises no toast — the view simply stays as it was. The
+  // interval is torn down whenever the gate goes false (panel closed, tab
+  // hidden, window unfocused) and rebuilt when it returns.
+  useEffect(() => {
+    if (!autoRefresh) return
+    const listingKey = workspaceId !== null
+      ? libraryQueryKeys.entries(workspaceId, browsedDir, includeHidden)
+      : libraryQueryKeys.workspaces()
+    const timer = setInterval(() => {
+      if (queryClient.getQueryState(listingKey)?.fetchStatus === 'fetching') return
+      void queryClient.refetchQueries({ queryKey: listingKey, exact: true })
+    }, LIBRARY_AUTO_REFRESH_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [autoRefresh, workspaceId, browsedDir, includeHidden, queryClient])
 
   const sortedWorkspaces = useMemo(
     () => [...(workspacesQuery.data ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
@@ -1235,7 +1274,15 @@ export function LibraryExplorer({
           // true only once a workspace is open.
           <LibrarySearchBar workspaceId={null} folderPath="" onOpenNote={() => {}}>
             {workspacesQuery.isLoading && <ListSkeleton />}
-            {workspacesQuery.isError && (
+            {/* R4 (quiet background re-checks): the error state is for a
+                folder that could not be loaded AT ALL — keyed on the ABSENCE
+                of data, exactly the D-98 rule LibraryPreviewPane applies to
+                the file body. With `isError` alone, a failed background tick
+                (TanStack keeps `data` but flips `isError`) replaced the rows
+                on screen with the failure screen; a stale-but-present
+                listing keeps rendering and the next successful tick updates
+                it. */}
+            {workspacesQuery.data === undefined && workspacesQuery.isError && (
               <QueryErrorState
                 layout="fill"
                 message="Could not load workspaces."
@@ -1243,11 +1290,10 @@ export function LibraryExplorer({
                 testId="library-workspaces-error"
               />
             )}
-            {!workspacesQuery.isLoading && !workspacesQuery.isError && sortedWorkspaces.length === 0 && (
+            {workspacesQuery.data !== undefined && sortedWorkspaces.length === 0 && (
               <EmptyState icon={<Buildings size={28} />} message="No workspaces yet." />
             )}
-            {!workspacesQuery.isLoading &&
-              !workspacesQuery.isError &&
+            {workspacesQuery.data !== undefined &&
               sortedWorkspaces.map((node) => (
                 <Button
                   key={node.id}
@@ -1297,7 +1343,10 @@ export function LibraryExplorer({
             }}
           >
             {entriesQuery.isLoading && <ListSkeleton />}
-            {entriesQuery.isError && (
+            {/* R4 — see the workspaces block above: keyed on the ABSENCE of
+                data (D-98's rule) so a failed background tick keeps the rows
+                on screen instead of replacing them with the failure state. */}
+            {entriesQuery.data === undefined && entriesQuery.isError && (
               <QueryErrorState
                 layout="fill"
                 message="Could not load this folder."
@@ -1305,14 +1354,13 @@ export function LibraryExplorer({
                 testId="library-entries-error"
               />
             )}
-            {!entriesQuery.isLoading && !entriesQuery.isError && sortedEntries.length === 0 && (
+            {entriesQuery.data !== undefined && sortedEntries.length === 0 && (
               <EmptyState
                 icon={<FolderOpen size={28} />}
                 message={browsedDir ? 'This folder is empty.' : 'No files in this workspace yet.'}
               />
             )}
-            {!entriesQuery.isLoading &&
-              !entriesQuery.isError &&
+            {entriesQuery.data !== undefined &&
               sortedEntries.map((entry) => (
                 <LibraryEntryRow
                   key={entry.path}
