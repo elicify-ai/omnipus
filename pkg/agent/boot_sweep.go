@@ -1507,7 +1507,7 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 		if clone.PlanID == "" {
 			clone.PlanID = rec.PlanID
 		}
-		if err := pe.createTask(&clone); err != nil {
+		if err := pe.taskStore.Create(&clone); err != nil {
 			// A collision that isn't "exists" is a real error — surface it so
 			// ReplayAtBoot marks the intent not-done and retries next boot.
 			return err
@@ -1527,7 +1527,7 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 			return fmt.Errorf("intent %q: tail edge with an empty endpoint (%q -> %q)",
 				rec.IntentID, e.FromTaskID, e.ToTaskID)
 		}
-		if _, _, err := pe.addTaskDependency(e.ToTaskID, e.FromTaskID); err != nil {
+		if _, _, err := pe.taskStore.AddDependency(e.ToTaskID, e.FromTaskID); err != nil {
 			return fmt.Errorf("intent %q: wire tail edge %s->%s: %w",
 				rec.IntentID, e.FromTaskID, e.ToTaskID, err)
 		}
@@ -1538,7 +1538,7 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 	// a re-apply is the correct no-op (the member is already `next`), so this
 	// is logged rather than returned — mirroring the live apply exactly.
 	if rec.Revision.Verb == plan.RevisionTargetedRetry && rec.Revision.RetriedMemberID != "" {
-		if _, err := pe.restartResetTask(rec.Revision.RetriedMemberID); err != nil {
+		if _, err := pe.taskStore.RestartReset(rec.Revision.RetriedMemberID); err != nil {
 			logger.DebugCF("plan_engine", "intent replay: targeted-retry reset (may be an idempotent no-op)",
 				map[string]any{"plan_id": rec.PlanID, "task_id": rec.Revision.RetriedMemberID, "error": err.Error()})
 		}
@@ -1578,7 +1578,7 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 		ph := rec.Patch.PlanPhase
 		patch.PlanPhase = &ph
 	}
-	if _, err := pe.updatePlan(rec.PlanID, patch); err != nil {
+	if _, err := pe.planStore.Update(rec.PlanID, patch); err != nil {
 		// A missing plan (deleted between commit and replay) is not a
 		// replay-blocking error — the correction's target vanished, so the
 		// intent is effectively done. Anything else surfaces.

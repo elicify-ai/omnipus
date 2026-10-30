@@ -275,8 +275,7 @@ func backgroundStopsOf(rs *services) shutdownBackgroundStops {
 // None of these Stop/Close calls takes a context, so each runs on its own
 // goroutine and the wait for it is bounded by ctx. Each call is still
 // launched, in order, even when the budget is already spent: its first act
-// closes admission (the cron engines' scheduling; the plan engine's write
-// gate, which also fences a Tick pass already running). (Once the budget is spent the calls are not awaited, so
+// closes admission. (Once the budget is spent the calls are not awaited, so
 // their goroutines may then start in any order.) A call still running at the deadline is not abandoned
 // half-way; its goroutine finishes the callee's own bounded teardown (cron
 // and plan drains are 30 s, LiveLimits aborts its fetch before joining) and
@@ -306,12 +305,8 @@ func stopBackgroundWriters(ctx context.Context, s shutdownBackgroundStops) {
 	// ADR-049 D4: the plan engine dispatches member tasks (which spawn
 	// turns), so it stops alongside CronService — before draining active
 	// turns — for the exact same "no new active-request admission after this
-	// point" reason the comment above documents for cron. Its Stop first
-	// closes the engine's write gate (no plan/task write, member dispatch or
-	// plan turn after that, even from a Tick pass already running), waits
-	// for the writes already admitted, joins its loops and then drains
-	// judges and wakes for up to 30 s. If this wait gives up at the budget,
-	// a still-running pass can therefore no longer write (6a re-check I2).
+	// point" reason the comment above documents for cron. Its Stop joins its
+	// loops and then drains judges and wakes for up to 30 s.
 	if s.plan != nil && !stopTurnSchedulers(ctx, s.plan) {
 		slog.Warn("shutdown: plan engine stop did not finish within the shutdown budget; continuing")
 	}

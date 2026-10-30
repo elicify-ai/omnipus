@@ -44,7 +44,7 @@ func (pe *PlanEngine) tryStartApprovedPlan(ctx context.Context, planID string) {
 	}
 
 	running := plan.StateRunning
-	updated, err := pe.updatePlan(planID, plan.Patch{State: &running})
+	updated, err := pe.planStore.Update(planID, plan.Patch{State: &running})
 	if err != nil {
 		logger.WarnCF("plan_engine", "approved->running transition failed",
 			map[string]any{"plan_id": planID, "error": err.Error()})
@@ -67,7 +67,7 @@ func (pe *PlanEngine) tryStartApprovedPlan(ctx context.Context, planID string) {
 	// stalled on its very first abandoned round.
 	pe.clearJudgeUnavailableStreak(planID)
 	clearSig := ""
-	if _, cerr := pe.updatePlan(planID, plan.Patch{LastUnmetTerminalSignature: &clearSig}); cerr != nil {
+	if _, cerr := pe.planStore.Update(planID, plan.Patch{LastUnmetTerminalSignature: &clearSig}); cerr != nil {
 		logger.WarnCF("plan_engine", "could not clear durable unmet signature on start",
 			map[string]any{"plan_id": planID, "error": cerr.Error()})
 	}
@@ -105,9 +105,6 @@ func (pe *PlanEngine) tryStartApprovedPlan(ctx context.Context, planID string) {
 func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 	pe.planDecisionMu.Lock()
 	defer pe.planDecisionMu.Unlock()
-	if pe.writeGate.isClosed() {
-		return // Stop has begun: no new pass (writes are refused anyway)
-	}
 
 	p, err := pe.planStore.Get(planID)
 	if err != nil {
@@ -289,7 +286,7 @@ func (pe *PlanEngine) promoteReadyMembers(tasks []task.Task) (advancedAny bool) 
 		if t.Status != task.StatusDone {
 			continue
 		}
-		advanced, err := pe.advanceBlockedDependents(t.ID)
+		advanced, err := pe.taskStore.AdvanceBlockedDependents(t.ID)
 		if err != nil {
 			logger.WarnCF("plan_engine", "advance blocked dependents failed",
 				map[string]any{"task_id": t.ID, "error": err.Error()})
@@ -359,7 +356,7 @@ func (pe *PlanEngine) promoteInboxMembers(p *plan.Plan, tasks []task.Task) (prom
 		if t.Status != task.StatusInbox {
 			continue
 		}
-		if _, err := pe.updateTask(t.ID, task.Patch{Status: &next}); err != nil {
+		if _, err := pe.taskStore.Update(t.ID, task.Patch{Status: &next}); err != nil {
 			logger.WarnCF("plan_engine", "promote inbox member to next failed",
 				map[string]any{"plan_id": p.ID, "task_id": t.ID, "error": err.Error()})
 			continue
@@ -420,7 +417,7 @@ func (pe *PlanEngine) promoteReadyStandaloneTasks() {
 			// plan); skip to avoid double-promoting or racing it.
 			continue
 		}
-		if _, err := pe.advanceUnblocked(t.ID); err != nil {
+		if _, err := pe.taskStore.AdvanceUnblocked(t.ID); err != nil {
 			logger.WarnCF("plan_engine", "promoteReadyStandaloneTasks: advance failed",
 				map[string]any{"task_id": t.ID, "error": err.Error()})
 		}
@@ -515,16 +512,16 @@ func (pe *PlanEngine) dispatchReadyMembers(ctx context.Context, planID string, t
 		if t.Status != task.StatusNext {
 			continue
 		}
-		if initiator != nil && !canInitiate {
+		var err error
+		switch {
+		case initiator == nil:
+			err = pe.dispatcher.executeTaskPlanVerified(dispatchCtx, t.ID)
+		case !canInitiate:
 			logger.ErrorCF("plan_engine", "dispatcher cannot carry the plan's initiating agent; refusing to dispatch",
 				map[string]any{"plan_id": planID, "task_id": t.ID})
 			continue
-		}
-		err := pe.dispatchPlanMember(dispatchCtx, t.ID, initiator, initiated)
-		if errors.Is(err, errPlanEngineStopped) {
-			logger.WarnCF("plan_engine", "member task not dispatched: plan engine stopping",
-				map[string]any{"plan_id": planID, "task_id": t.ID})
-			return dispatchedAny
+		default:
+			err = initiated.executeTaskPlanInitiated(dispatchCtx, t.ID, initiator)
 		}
 		if err != nil {
 			logger.WarnCF("plan_engine", "member task dispatch failed (will retry)",
@@ -782,7 +779,7 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 	// A person playing the plan takes over its authority: clear any agent
 	// initiator in the same write, so members dispatch as a person's start.
 	var personStart *task.Initiator
-	if _, updateErr := pe.updatePlan(planID, plan.Patch{State: &approved, InitiatedBy: &personStart}); updateErr != nil {
+	if _, updateErr := pe.planStore.Update(planID, plan.Patch{State: &approved, InitiatedBy: &personStart}); updateErr != nil {
 		return nil, fmt.Errorf("plan_engine: PlayPlan: restart transition: %w", updateErr)
 	}
 
@@ -799,7 +796,7 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 		t := &tasks[i]
 		if task.IsTerminal(t.Status) && t.Status != task.StatusDone {
 			// Failed/cancelled member — reset for re-dispatch.
-			if _, rerr := pe.restartResetTask(t.ID); rerr != nil {
+			if _, rerr := pe.taskStore.RestartReset(t.ID); rerr != nil {
 				logger.WarnCF("plan_engine", "PlayPlan: could not reset member",
 					map[string]any{"plan_id": planID, "task_id": t.ID, "error": rerr.Error()})
 				stillFailed = append(stillFailed, t.ID)
@@ -816,7 +813,7 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 	// (UAT defect B).
 	pe.clearJudgeUnavailableStreak(planID)
 	clearSig := ""
-	if _, err := pe.updatePlan(planID, plan.Patch{LastUnmetTerminalSignature: &clearSig}); err != nil {
+	if _, err := pe.planStore.Update(planID, plan.Patch{LastUnmetTerminalSignature: &clearSig}); err != nil {
 		logger.WarnCF("plan_engine", "PlayPlan: could not clear unmet signature",
 			map[string]any{"plan_id": planID, "error": err.Error()})
 	}
@@ -891,7 +888,7 @@ func (pe *PlanEngine) recordMemberResumePoint(planID, taskID string) {
 	// task so the worker turn / Judge start from it. Best-effort: a store
 	// failure is logged, not fatal — the resume still proceeds (as a fresh
 	// attempt if the hash couldn't be recorded).
-	if _, err := pe.updateTask(taskID, task.Patch{ResumeFromCommit: &hash}); err != nil {
+	if _, err := pe.taskStore.Update(taskID, task.Patch{ResumeFromCommit: &hash}); err != nil {
 		logger.WarnCF("plan_engine", "member resume: could not persist resume_from_commit",
 			map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash, "error": err.Error()})
 	}

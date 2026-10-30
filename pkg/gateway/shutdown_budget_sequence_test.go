@@ -130,9 +130,7 @@ func requireBudgetKept(t *testing.T, elapsed time.Duration, entered, left map[st
 }
 
 // Stuck later waits: every background stop hangs. The sequence still ends in
-// the budget, and each stop is still started (its first act closes admission;
-// for the plan engine that fence is proven in pkg/agent's
-// TestPlanEngineStop_InFlightTickCannotWriteOrDispatchAfterStop).
+// the budget, and each stop is still started (its first act closes admission).
 func TestGracefulShutdown_StuckBackgroundStopsStayInsideTheBudget(t *testing.T) {
 	r := newSequenceRecorder()
 	stuck := make(chan struct{})

@@ -363,7 +363,7 @@ func (pe *PlanEngine) countCorrectionAndClearWake(planID string, p *plan.Plan, r
 		cleared := ""
 		postPatch.HandoverText = &cleared
 	}
-	if _, err := pe.updatePlan(planID, postPatch); err != nil {
+	if _, err := pe.planStore.Update(planID, postPatch); err != nil {
 		// The correction itself is durably committed by the caller; this write
 		// only carries supervision bookkeeping. Surface it — a stuck wake
 		// receipt would let the next tick's deadline fire against a plan that
@@ -892,7 +892,7 @@ func (pe *PlanEngine) buildCorrectionApplyFunc(planID string, req CorrectionRequ
 			if m.PlanID == "" {
 				m.PlanID = planID
 			}
-			if err := pe.createTask(m); err != nil {
+			if err := pe.taskStore.Create(m); err != nil {
 				return fmt.Errorf("create tail member %q: %w", m.ID, err)
 			}
 			if err := pe.pairTailMemberGoal(m.ID); err != nil {
@@ -902,14 +902,14 @@ func (pe *PlanEngine) buildCorrectionApplyFunc(planID string, req CorrectionRequ
 		// Wire tail edges (AddDependency is idempotent: returns added=false,
 		// nil when the edge already exists — safe for replay).
 		for _, e := range rec.Edges {
-			if _, _, err := pe.addTaskDependency(e.ToTaskID, e.FromTaskID); err != nil {
+			if _, _, err := pe.taskStore.AddDependency(e.ToTaskID, e.FromTaskID); err != nil {
 				return fmt.Errorf("wire edge %s->%s: %w", e.FromTaskID, e.ToTaskID, err)
 			}
 		}
 		// Targeted-retry: reset the specific failed member (idempotent:
 		// RestartReset errors on non-failed, which is the correct no-op).
 		if req.Verb == CorrectionTargetedRetry && req.RetriedMemberID != "" {
-			if _, err := pe.restartResetTask(req.RetriedMemberID); err != nil {
+			if _, err := pe.taskStore.RestartReset(req.RetriedMemberID); err != nil {
 				// Already reset (idempotent replay) — not fatal.
 				logger.DebugCF("plan_engine", "targeted-retry reset (may be idempotent no-op)",
 					map[string]any{"task_id": req.RetriedMemberID, "error": err.Error()})
@@ -924,7 +924,7 @@ func (pe *PlanEngine) buildCorrectionApplyFunc(planID string, req CorrectionRequ
 		// Patch the plan record (clear unmet signature, set phase).
 		dispatching := plan.PhaseDispatching
 		clearSig := ""
-		if _, err := pe.updatePlan(planID, plan.Patch{
+		if _, err := pe.planStore.Update(planID, plan.Patch{
 			PlanPhase:                  &dispatching,
 			LastUnmetTerminalSignature: &clearSig,
 		}); err != nil {
@@ -957,7 +957,7 @@ func (pe *PlanEngine) autoResetLiveRoundFailedMembers(planID string, tasks []tas
 		if t.Status != task.StatusFailed {
 			continue // only reset failed members; done/next/blocked/in_progress untouched
 		}
-		if _, err := pe.restartResetTask(t.ID); err != nil {
+		if _, err := pe.taskStore.RestartReset(t.ID); err != nil {
 			logger.WarnCF("plan_engine", "auto-reset: could not reset failed member",
 				map[string]any{"plan_id": planID, "task_id": t.ID, "error": err.Error()})
 		}

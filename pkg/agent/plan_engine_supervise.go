@@ -370,7 +370,7 @@ func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
 			// (FR-050) — a later re-stall must re-wake rather than inherit a
 			// spent deadline. correction_rounds and session_id survive.
 			patch := clearSupervisionWakePatch(plan.Patch{HandoverText: &cleared, PlanPhase: &dispatching})
-			if _, err := pe.updatePlan(p.ID, patch); err != nil {
+			if _, err := pe.planStore.Update(p.ID, patch); err != nil {
 				logger.WarnCF("plan_engine", "could not clear stale stall note/phase",
 					map[string]any{"plan_id": p.ID, "error": err.Error()})
 			}
@@ -396,7 +396,7 @@ func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
 	// it — otherwise a plan whose stall text churns every tick would re-arm attempt
 	// 1 forever and never reach the FR-022 ceiling.
 	newPark := !plan.IsSupervisionEligiblePhase(p.EffectivePlanPhase())
-	if _, err := pe.updatePlan(p.ID, plan.Patch{HandoverText: &note, PlanPhase: &stalled}); err != nil {
+	if _, err := pe.planStore.Update(p.ID, plan.Patch{HandoverText: &note, PlanPhase: &stalled}); err != nil {
 		logger.WarnCF("plan_engine", "could not persist stall note",
 			map[string]any{"plan_id": p.ID, "error": err.Error()})
 		return
@@ -471,7 +471,7 @@ func (pe *PlanEngine) surfaceJudgeUnavailableStall(p *plan.Plan, streak int, jud
 	// arriving here from `judging` opens a new park; one already parked keeps
 	// climbing its existing attempt ladder rather than re-arming attempt 1.
 	newPark := !plan.IsSupervisionEligiblePhase(p.EffectivePlanPhase())
-	if _, err := pe.updatePlan(p.ID, plan.Patch{HandoverText: &note, PlanPhase: &stalled}); err != nil {
+	if _, err := pe.planStore.Update(p.ID, plan.Patch{HandoverText: &note, PlanPhase: &stalled}); err != nil {
 		// Loud, and NOT swallowed into a silent retry: if the park cannot be
 		// persisted the plan stays at `judging` with no goroutine watching
 		// it, which is the wedged state this whole function exists to end.
@@ -654,7 +654,7 @@ func (pe *PlanEngine) beginPlanJudgeRound(p *plan.Plan, tasks []task.Task) {
 	}
 
 	judging := plan.PhaseJudging
-	if _, err := pe.updatePlan(p.ID, plan.Patch{PlanPhase: &judging}); err != nil {
+	if _, err := pe.planStore.Update(p.ID, plan.Patch{PlanPhase: &judging}); err != nil {
 		release()
 		logger.WarnCF("plan_engine", "could not set plan_phase=judging",
 			map[string]any{"plan_id": p.ID, "error": err.Error()})
@@ -838,7 +838,7 @@ func (pe *PlanEngine) noteJudgeUnavailable(planID, cause string, wait time.Durat
 	if wait > 0 {
 		reason += fmt.Sprintf("; retrying in %s", wait.Round(time.Second))
 	}
-	if _, uerr := pe.updatePlan(planID, plan.Patch{PausedReason: &reason}); uerr != nil {
+	if _, uerr := pe.planStore.Update(planID, plan.Patch{PausedReason: &reason}); uerr != nil {
 		logger.WarnCF("plan_engine", "judge round: could not persist judge-unavailability pause",
 			map[string]any{"plan_id": planID, "error": uerr.Error()})
 	}
@@ -876,7 +876,7 @@ func (pe *PlanEngine) clearJudgeUnavailablePauseLocked(planID string) {
 		return
 	}
 	cleared := ""
-	if _, uerr := pe.updatePlan(planID, plan.Patch{PausedReason: &cleared}); uerr != nil {
+	if _, uerr := pe.planStore.Update(planID, plan.Patch{PausedReason: &cleared}); uerr != nil {
 		logger.WarnCF("plan_engine", "judge round: could not clear judge-unavailability pause",
 			map[string]any{"plan_id": planID, "error": uerr.Error()})
 	}
@@ -897,7 +897,7 @@ func (pe *PlanEngine) revertAbandonedJudgeRoundLocked(p *plan.Plan, judgeReason 
 func (pe *PlanEngine) revertAbandonedJudgeRoundWithWorkLocked(p *plan.Plan, judgeReason, work string) {
 	dispatching := plan.PhaseDispatching
 	note := buildJudgeUnavailableRetryHandover(judgeReason, work)
-	if _, uerr := pe.updatePlan(p.ID, plan.Patch{PlanPhase: &dispatching, HandoverText: &note}); uerr != nil {
+	if _, uerr := pe.planStore.Update(p.ID, plan.Patch{PlanPhase: &dispatching, HandoverText: &note}); uerr != nil {
 		logger.WarnCF("plan_engine", "judge round: could not revert plan_phase after unavailability",
 			map[string]any{"plan_id": p.ID, "error": uerr.Error()})
 	}
@@ -1040,7 +1040,7 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeFor(planID string, snapshot *plan.Pl
 	// two different fields of the same record; a projection failure must
 	// not silently drop or corrupt the round's actual outcome).
 	if projectedDoD, pstats := projectVerdictOntoCriteria(current.DoD, verdict); pstats.Applied > 0 {
-		if _, perr := pe.updatePlan(current.ID, plan.Patch{DoD: &projectedDoD}); perr != nil {
+		if _, perr := pe.planStore.Update(current.ID, plan.Patch{DoD: &projectedDoD}); perr != nil {
 			logger.WarnCF("plan_engine",
 				"judge round: could not persist the verdict projection onto plan DoD (GOAL-FR-036)",
 				map[string]any{"plan_id": current.ID, "error": perr.Error()})
@@ -1072,7 +1072,7 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeFor(planID string, snapshot *plan.Pl
 	// reset its ladder.
 	newPark := !plan.IsSupervisionEligiblePhase(current.EffectivePlanPhase())
 	sig := terminalSig
-	if _, uerr := pe.updatePlan(current.ID, plan.Patch{
+	if _, uerr := pe.planStore.Update(current.ID, plan.Patch{
 		JudgeRounds:                &newRounds,
 		PlanPhase:                  &awaiting,
 		HandoverText:               &steering,
@@ -1133,7 +1133,7 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeFor(planID string, snapshot *plan.Pl
 func (pe *PlanEngine) synthesizeAndComplete(p *plan.Plan, newRounds int) {
 	synthesizing := plan.PhaseSynthesizing
 	done := plan.StateDone
-	if _, err := pe.updatePlan(p.ID, plan.Patch{
+	if _, err := pe.planStore.Update(p.ID, plan.Patch{
 		JudgeRounds: &newRounds,
 		PlanPhase:   &synthesizing,
 		State:       &done,
@@ -1388,7 +1388,7 @@ func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string, n
 	if sessionID != "" {
 		patch.SupervisionSessionID = &sessionID
 	}
-	updated, err := pe.updatePlan(p.ID, patch)
+	updated, err := pe.planStore.Update(p.ID, patch)
 	if err != nil {
 		logger.ErrorCF("plan_engine", "could not persist supervision wake receipt; wake not dispatched",
 			map[string]any{"plan_id": p.ID, "error": err.Error()})
@@ -1422,7 +1422,7 @@ func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string, n
 				"error":       dispatchErr.Error(),
 			})
 		wakeErr := dispatchErr.Error()
-		if errored, uerr := pe.updatePlan(p.ID, plan.Patch{SupervisionWakeError: &wakeErr}); uerr != nil {
+		if errored, uerr := pe.planStore.Update(p.ID, plan.Patch{SupervisionWakeError: &wakeErr}); uerr != nil {
 			logger.ErrorCF("plan_engine", "could not record the supervision wake error",
 				map[string]any{"plan_id": p.ID, "error": uerr.Error()})
 		} else {

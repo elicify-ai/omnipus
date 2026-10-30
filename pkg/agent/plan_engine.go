@@ -306,11 +306,6 @@ type PlanEngine struct {
 	clock        PlanEngineClock
 	tickInterval time.Duration
 
-	// writeGate fences every durable plan/task write and dispatch against
-	// Stop (see plan_engine_write_gate.go). Closed by Stop on a started
-	// engine, reopened by Start.
-	writeGate planEngineWriteGate
-
 	// mu guards ticking, activeCounters, and verifierRegistry's lazy
 	// initialization — all small, fast-to-touch bookkeeping. It is NEVER
 	// held across a store call or the judge LLM call itself.
@@ -696,7 +691,6 @@ func (pe *PlanEngine) Start(ctx context.Context) error {
 	}
 	pe.started = true
 	pe.stopCh = make(chan struct{})
-	pe.writeGate.reopen()
 	var sub EventSubscription
 	if pe.agentLoop != nil {
 		sub = pe.agentLoop.SubscribeEvents(64)
@@ -762,19 +756,11 @@ func (pe *PlanEngine) Stop() {
 	if wasStarted {
 		pe.started = false
 		close(pe.stopCh)
-		// Refuse every later write and dispatch at once, inside the same
-		// critical section that ends started: a Tick or processPlan pass
-		// already running cannot be interrupted, and the gateway's shutdown
-		// may stop waiting for this Stop once its budget is spent.
-		pe.writeGate.close()
 	}
 	subID := pe.subID
 	pe.mu.Unlock()
 
 	if wasStarted {
-		// Await the writes admitted before the close: each is one store
-		// call or one dispatch admission, never a whole pass.
-		pe.writeGate.awaitDrained()
 		if pe.agentLoop != nil && subID != 0 {
 			pe.agentLoop.UnsubscribeEvents(subID)
 		}
@@ -871,10 +857,6 @@ func (pe *PlanEngine) Tick(ctx context.Context) {
 		return
 	}
 	defer pe.releaseTick()
-	if pe.writeGate.isClosed() {
-		logger.DebugCF("plan_engine", "tick skipped: plan engine stopped", nil)
-		return
-	}
 
 	plans, err := pe.planStore.List(plan.Filter{})
 	if err != nil {
@@ -962,7 +944,7 @@ type strandedMemberObservation struct {
 func (pe *PlanEngine) failPlanLocked(planID string, reason plan.FailedReason, handover string) {
 	failed := plan.StateFailed
 	idle := plan.PhaseIdle
-	updated, err := pe.updatePlan(planID, plan.Patch{
+	updated, err := pe.planStore.Update(planID, plan.Patch{
 		State:        &failed,
 		FailedReason: &reason,
 		HandoverText: &handover,
@@ -1110,7 +1092,7 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 	failed := plan.StateFailed
 	reason := plan.FailedReasonStoppedByUser
 	handover := fmt.Sprintf("Plan %q was stopped by %s.", p.Title, userID)
-	updated, err := pe.updatePlan(planID, plan.Patch{
+	updated, err := pe.planStore.Update(planID, plan.Patch{
 		State:        &failed,
 		FailedReason: &reason,
 		HandoverText: &handover,
@@ -1385,7 +1367,7 @@ func (pe *PlanEngine) cancelMemberLocked(taskID, userID string) (*task.Task, err
 	cancelReason := task.CancelReasonStoppedByUser
 	result := fmt.Sprintf("%s Cancelled by %s via Stop.", memberCancelReasonMarker, userID)
 	now := time.Now().UTC().Format(time.RFC3339)
-	updated, err := pe.updateTask(taskID, task.Patch{
+	updated, err := pe.taskStore.Update(taskID, task.Patch{
 		Status:       &failed,
 		CancelReason: &cancelReason,
 		Result:       &result,
@@ -1673,7 +1655,7 @@ func effectiveLastActivity(p *plan.Plan) time.Time {
 // is logged at Warn and swallowed.
 func (pe *PlanEngine) touchActivity(planID string) {
 	now := pe.clock.Now().UTC().Format(time.RFC3339)
-	if _, err := pe.updatePlan(planID, plan.Patch{LastActivityAt: &now}); err != nil {
+	if _, err := pe.planStore.Update(planID, plan.Patch{LastActivityAt: &now}); err != nil {
 		logger.WarnCF("plan_engine", "could not bump plan LastActivityAt",
 			map[string]any{"plan_id": planID, "error": err.Error()})
 	}
@@ -1948,13 +1930,6 @@ func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourc
 		return fmt.Errorf("plan_engine: agent %q does not resolve; plan %q wake not dispatched", agentID, planID)
 	}
 
-	// Admission runs inside the write gate: once Stop has begun, no new plan
-	// turn is launched (the turn itself is drained by Stop through wakeWG).
-	if !pe.writeGate.enter() {
-		settled()
-		return fmt.Errorf("plan %q wake not dispatched: %w", planID, errPlanEngineStopped)
-	}
-	defer pe.writeGate.leave()
 	al := pe.agentLoop
 	sessionKey := fmt.Sprintf("agent:%s:session:%s", agentID, sessionID)
 	pe.wakeWG.Add(1)
@@ -2166,7 +2141,7 @@ func (pe *PlanEngine) setPausedForOwner(agentID, newReason string, pausing bool)
 				continue // not paused (or paused for an unrelated reason)
 			}
 		}
-		if _, uerr := pe.updatePlan(p.ID, plan.Patch{PausedReason: &newReason}); uerr != nil {
+		if _, uerr := pe.planStore.Update(p.ID, plan.Patch{PausedReason: &newReason}); uerr != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", p.ID, uerr))
 		}
 	}
@@ -2304,7 +2279,7 @@ func (pe *PlanEngine) ensureOwnerSessionLocked(p *plan.Plan) string {
 			map[string]any{"plan_id": p.ID, "owner_agent_id": p.OwnerAgentID, "error": err.Error()})
 		return ""
 	}
-	if _, err := pe.updatePlan(p.ID, plan.Patch{OwnerSessionID: &sessionID}); err != nil {
+	if _, err := pe.planStore.Update(p.ID, plan.Patch{OwnerSessionID: &sessionID}); err != nil {
 		logger.ErrorCF("plan_engine", "could not persist owner_session_id",
 			map[string]any{"plan_id": p.ID, "error": err.Error()})
 		return ""
