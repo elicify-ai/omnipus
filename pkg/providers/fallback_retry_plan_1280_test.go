@@ -234,6 +234,36 @@ func TestIssue1280_EarlierCandidateHandsOverAndTheLastRunsThePlan(t *testing.T) 
 	require.Equal(t, 3, res.Retries)
 }
 
+// TestIssue1280_SkipRecordCarriesTheRealFailureClass: the A-4 skip (a
+// Retry-After over the ceiling) records the REAL failure class of the last
+// failed call. With the plan governing network and overload failures on the
+// last candidate, a skip is no longer rate-limit-only — a 503 with a huge
+// Retry-After reaches it, and labelling that "rate limit" misreports the
+// outage to anything that reads Attempts[].Reason. The real class of a 503
+// in the FailoverReason taxonomy is FailoverTimeout (transientStatusCodes);
+// what the record must never say again is the hardcoded rate limit.
+func TestIssue1280_SkipRecordCarriesTheRealFailureClass(t *testing.T) {
+	rec := &issue1280Recorder{}
+	fc, ctx := issue1280Chain(rec)
+	calls := 0
+	_, err := fc.Execute(ctx, []FallbackCandidate{{Provider: "p", Model: "m"}},
+		func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+			calls++
+			return nil, peFromBoundary(t, 503,
+				http.Header{"Retry-After": []string{"9999"}},
+				`{"error":{"message":"overloaded"}}`)
+		})
+	fex := exhaustedFrom(t, err)
+	require.Equal(t, 1, calls, "A-4: a Retry-After over the ceiling skips the retries at once")
+	require.Len(t, fex.Attempts, 1)
+	skip := fex.Attempts[0]
+	require.True(t, skip.Skipped, "the candidate is skipped without a cooldown mark")
+	require.NotEqual(t, FailoverRateLimit, skip.Reason,
+		"the skipped record must not hardcode a rate-limit label for a 503")
+	require.Equal(t, FailoverTimeout, skip.Reason,
+		"the skipped record must carry the last failed call's real class (503 → FailoverTimeout)")
+}
+
 // TestIssue1280_PlanRetriesThenDeadlineIsNotTaggedPlanRun: when the plan
 // retries a connection failure and the LATER call then fails with a
 // deadline — a class the plan explicitly does not govern — the concluding

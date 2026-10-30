@@ -483,8 +483,13 @@ func (fc *FallbackChain) Execute(
 		var lastErr error
 		skipWithoutMark := false
 		// Recorded with the A-4/D14 skip so the observability record can say
-		// whether the #1280 plan governed the failure that was skipped.
+		// whether the #1280 plan governed the failure that was skipped, and
+		// what its real failure class was — since the plan took over, a skip
+		// is no longer rate-limit-only (an over-ceiling Retry-After on a 503
+		// or an exhausted wait budget reach it too), so the record must not
+		// hardcode a rate-limit label.
 		skipRetryPlan := false
+		var skipFailErr *FailoverError
 		var calls int
 
 		for attemptNo := 1; ; attemptNo++ {
@@ -581,6 +586,7 @@ func (fc *FallbackChain) Execute(
 			if plan.skip {
 				skipWithoutMark = true
 				skipRetryPlan = plan.planCandidate
+				skipFailErr = failErr
 				break
 			}
 			if plan.retry {
@@ -637,12 +643,15 @@ func (fc *FallbackChain) Execute(
 
 		if skipWithoutMark {
 			// A-4/D14 skip: recorded for observability, never marked. RetryPlan
-			// says whether the plan governed the skipped failure.
+			// says whether the plan governed the skipped failure; Reason is the
+			// real class of the last failed call — non-nil whenever the skip
+			// was decided (inPlaceRetry dereferences it), never a hardcoded
+			// rate-limit label.
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Provider:  candidate.Provider,
 				Model:     candidate.Model,
 				Error:     lastErr,
-				Reason:    FailoverRateLimit,
+				Reason:    skipFailErr.Reason,
 				Skipped:   true,
 				Duration:  fc.since(candStart),
 				Calls:     calls,
