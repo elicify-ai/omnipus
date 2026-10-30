@@ -36,7 +36,10 @@ var errHistoryHealSlotBusy = errors.New("another chat history rebuild holds the 
 // chatHistoryHealState is the per-owner attempt state, guarded by owner.mu.
 // It lives for the store's (process's) lifetime; a restart starts afresh.
 type chatHistoryHealState struct {
+	// attempts counts every real attempt (the warning's attempt field);
+	// counted counts only the failures that move toward the latch.
 	attempts int
+	counted  int
 	last     time.Time
 	latched  bool
 }
@@ -59,7 +62,15 @@ func (us *UnifiedStore) historyHealContext(parent context.Context) (context.Cont
 // historyHealTransient reports whether a failure class may be retried after
 // the backoff, rather than latching for the process lifetime.
 func historyHealTransient(class string) bool {
-	return class == "busy" || class == "source_changed" || class == "deadline"
+	return historyHealUncounted(class) || class == "deadline"
+}
+
+// historyHealUncounted reports the transient classes that are not failures
+// of the heal itself (6a review W1/W2): another chat holds the rebuild slot,
+// or the chat was written to during the build. They keep the 60 s spacing
+// but never count toward the chatHistoryHealMaxAttempts latch.
+func historyHealUncounted(class string) bool {
+	return class == "busy" || class == "source_changed"
 }
 
 // healChatHistoryOwned runs with owner.mu held, after reconcileHistoryOwned
@@ -78,8 +89,11 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 	// fail logs one warning for this attempt with its sanitized cause and
 	// returns ret, or the original trigger when ret is nil.
 	fail := func(class string, cause, ret error) (chatHistoryReconcileResult, error) {
+		if !historyHealUncounted(class) {
+			state.counted++
+		}
 		retry := "after_restart"
-		if historyHealTransient(class) && state.attempts < chatHistoryHealMaxAttempts {
+		if historyHealUncounted(class) || historyHealTransient(class) && state.counted < chatHistoryHealMaxAttempts {
 			retry = "after_backoff"
 		} else {
 			state.latched = true
