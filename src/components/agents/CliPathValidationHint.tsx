@@ -42,12 +42,15 @@ export function CliPathValidationHint({ validation, detectHint, testId }: CliPat
 
   if (validation.kind === 'forbidden') {
     // T11 slice A: the server refused the check (403). Not retryable by
-    // editing, so it says how to fix it instead of "retry"; the autosave is
-    // not blocked by this state (FR-019).
+    // editing; the autosave is not blocked by this state (FR-019). Only the
+    // person-gate refusal gets the sign-in explanation; any other 403 shows
+    // the server's own message.
     return (
       <p data-testid={testId} data-cli-status="forbidden" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
         <WarningCircle size={11} weight="fill" />
-        CLI check unavailable: it runs only for a signed-in person. Sign in to your account; development-bypass mode and the command-line token cannot use it ({validation.message}).
+        {validation.personRequired
+          ? 'CLI check unavailable: it runs only for a signed-in person. Sign in to your account; development-bypass mode and the command-line token cannot use it.'
+          : `CLI check refused by the server: ${validation.message}`}
       </p>
     )
   }

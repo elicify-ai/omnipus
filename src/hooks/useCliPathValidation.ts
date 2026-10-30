@@ -22,16 +22,35 @@ import type { SupportedCli } from '@/lib/cliDetect'
 
 const DEBOUNCE_MS = 400
 
+/** ErrorResponse code of the Check CLI person-gate 403
+ *  (pkg/gateway/middleware.PersonSessionRequiredCode). */
+const PERSON_SESSION_REQUIRED_CODE = 'person_session_required'
+
+/** The server's own 403 message (ErrorResponse.error), falling back to the
+ *  client's generic text when the body carries none. */
+function forbiddenMessage(body: string | undefined, fallback: string): string {
+  if (body) {
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown }
+      if (typeof parsed.error === 'string' && parsed.error.trim() !== '') return parsed.error
+    } catch {
+      // Not JSON: use the fallback below.
+    }
+  }
+  return fallback
+}
+
 export type CliValidationState =
   | { kind: 'idle' }
   | { kind: 'pending' }
   | { kind: 'result'; result: CliValidateResponse }
   | { kind: 'error' }
-  // T11 slice A: the server refused the check itself (HTTP 403) — Check CLI
-  // runs only for a signed-in person, not in development-bypass mode or with
-  // the command-line token. Editing the path cannot fix this, so it is not
-  // the transient 'error' state. Non-blocking like 'error' (FR-019).
-  | { kind: 'forbidden'; message: string }
+  // T11 slice A: the server refused the check itself (HTTP 403). Editing the
+  // path cannot fix this, so it is not the transient 'error' state.
+  // personRequired is true only for the person-gate refusal (ErrorResponse
+  // code "person_session_required"); any other 403 keeps its own message.
+  // Non-blocking like 'error' (FR-019).
+  | { kind: 'forbidden'; personRequired: boolean; message: string }
 
 export interface UseCliPathValidation {
   status: CliValidationState
@@ -89,7 +108,11 @@ export function useCliPathValidation(): UseCliPathValidation {
             // "retry on the next edit".
             if (controller.signal.aborted) return
             if (isApiError(err) && err.status === 403) {
-              setStatus({ kind: 'forbidden', message: err.userMessage })
+              setStatus({
+                kind: 'forbidden',
+                personRequired: err.code === PERSON_SESSION_REQUIRED_CODE,
+                message: forbiddenMessage(err.body, err.userMessage),
+              })
               return
             }
             setStatus({ kind: 'error' })
