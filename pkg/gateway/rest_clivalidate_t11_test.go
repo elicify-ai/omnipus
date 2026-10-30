@@ -163,6 +163,34 @@ func t11AssertNotSpawned(t *testing.T, marker string, spawns int) {
 	require.ErrorIs(t, err, fs.ErrNotExist, "marker %s must be absent (the program must not have started)", marker)
 }
 
+// t11ReasonMeansProgramRan is true when the checked file executed and reported
+// a version. "ok" and "unauthenticated" differ only by whether this machine has
+// the CLI's own credentials (an API key or the CLI's auth file). That is not
+// the file check. Spec FR-5: the route launches the returned file.
+func t11ReasonMeansProgramRan(reason gen.CliValidateResponseReason) bool {
+	return reason == gen.CliValidateResponseReasonOk ||
+		reason == gen.CliValidateResponseReasonUnauthenticated
+}
+
+// t11AssertProgramRan is the launch proof for an allowed candidate. The reason
+// may be ok or unauthenticated; the version, the resolved path and the marker
+// say which file ran.
+func t11AssertProgramRan(t *testing.T, w *httptest.ResponseRecorder, marker, final string, spawns int, launched []string) {
+	t.Helper()
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	resp := t11DecodeValidate(t, w)
+	require.Truef(t, t11ReasonMeansProgramRan(resp.Reason),
+		"spec FR-5: a program outside the forbidden roots is launched; ok and unauthenticated both mean it ran (the difference is this machine's CLI login); body=%s", w.Body.String())
+	require.NotNil(t, resp.Version)
+	require.Equal(t, t11Version, *resp.Version, "the fake's own version, not another program's")
+	require.NotNil(t, resp.ResolvedPath)
+	require.Equal(t, final, *resp.ResolvedPath, "callers launch the checked resolved file")
+	require.Equal(t, 1, spawns)
+	require.Equal(t, []string{final}, launched, "the handshake is given the checked final file")
+	_, err := os.Stat(marker)
+	require.NoError(t, err, "the launched program must have written the marker")
+}
+
 func t11AssertPathRefused(t *testing.T, w *httptest.ResponseRecorder, marker string, spawns int, needles ...string) {
 	t.Helper()
 	require.Equal(t, http.StatusOK, w.Code,
@@ -357,42 +385,63 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			refuse(t, outer, "link")
 		})
 
-		t.Run("file writable by others", func(t *testing.T) {
+		// Founder Q2b, spec §3.2 / §5 / FR-5: mode is not a reason to refuse.
+		// One route positive control: a group-writable program outside the
+		// forbidden roots is launched. The other-writable and link-folder cases
+		// are the same removed rule, covered here as the same allow.
+		allow := func(t *testing.T, path string) {
+			t.Helper()
+			final, err := filepath.EvalSymlinks(path)
+			require.NoError(t, err)
+			t11ClearMarker(t, marker)
+			*spawns = 0
+			*launched = nil
+			w := t11PostValidate(t, mux, cfg, token, path, ip, nil)
+			t11AssertProgramRan(t, w, marker, final, *spawns, *launched)
+		}
+		t.Run("group-writable file outside forbidden roots is launched", func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.Chmod(dir, 0o700))
+			dst := filepath.Join(dir, "fakecli")
+			t11CopyExe(t, prog, dst, 0o775)
+			fi, err := os.Stat(dst)
+			require.NoError(t, err)
+			require.NotZero(t, fi.Mode().Perm()&0o020, "fixture: the program is group-writable")
+			allow(t, dst)
+		})
+		t.Run("other-writable file outside forbidden roots is launched", func(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.Chmod(dir, 0o700))
 			dst := filepath.Join(dir, "fakecli")
 			t11CopyExe(t, prog, dst, 0o707)
-			refuse(t, dst, "writable")
+			fi, err := os.Stat(dst)
+			require.NoError(t, err)
+			require.NotZero(t, fi.Mode().Perm()&0o002, "fixture: the program is writable by others")
+			allow(t, dst)
 		})
-
-		t.Run("parent directory writable by others", func(t *testing.T) {
+		t.Run("other-writable parent outside forbidden roots is launched", func(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.Chmod(dir, 0o707))
+			fi, err := os.Stat(dir)
+			require.NoError(t, err)
+			require.NotZero(t, fi.Mode().Perm()&0o002, "fixture: the parent is writable by others")
 			dst := filepath.Join(dir, "fakecli")
 			t11CopyExe(t, prog, dst, 0o755)
-			refuse(t, dst, "writable")
+			allow(t, dst)
 		})
-
-		t.Run("parent directory group writable", func(t *testing.T) {
-			// Spec §3.2 / §5: a directory others in the group can replace is refused.
-			// 0775 is group-writable and not other-writable.
-			dir := t.TempDir()
-			require.NoError(t, os.Chmod(dir, 0o775))
-			dst := filepath.Join(dir, "fakecli")
-			t11CopyExe(t, prog, dst, 0o755)
-			refuse(t, dst, "writable")
-		})
-
-		t.Run("link folder group writable", func(t *testing.T) {
+		t.Run("group-writable link folder outside forbidden roots is launched", func(t *testing.T) {
 			finalDir := t.TempDir()
 			require.NoError(t, os.Chmod(finalDir, 0o700))
-			final := filepath.Join(finalDir, "fakecli")
-			t11CopyExe(t, prog, final, 0o755)
+			finalFile := filepath.Join(finalDir, "fakecli")
+			t11CopyExe(t, prog, finalFile, 0o755)
 			linkDir := t.TempDir()
 			require.NoError(t, os.Chmod(linkDir, 0o775))
+			fi, err := os.Stat(linkDir)
+			require.NoError(t, err)
+			require.NotZero(t, fi.Mode().Perm()&0o020, "fixture: the link folder is group-writable")
 			link := filepath.Join(linkDir, "link")
-			require.NoError(t, os.Symlink(final, link))
-			refuse(t, link, "writable")
+			require.NoError(t, os.Symlink(finalFile, link))
+			allow(t, link)
 		})
 
 		t.Run("not executable", func(t *testing.T) {
@@ -449,9 +498,9 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 
 	if runtime.GOOS != "windows" {
 		t.Run("allowed symlink launches the final file", func(t *testing.T) {
-			// Spec gap, stated: a symlink's own mode is 0777 on Unix. The spec
-			// still says an accepted link launches the resolved file, so a link
-			// whose target and parent directories are not other-writable is allowed.
+			// A symlink's own mode is 0777 on Unix. Spec §3.2 founder Q2b does
+			// not look at mode: a link outside the forbidden roots launches the
+			// resolved file.
 			dir := t.TempDir()
 			require.NoError(t, os.Chmod(dir, 0o700))
 			dst := filepath.Join(dir, "fakecli")
@@ -534,7 +583,7 @@ func TestCliValidate_IncompleteMountRefuses(t *testing.T) {
 	dst := filepath.Join(dir, "fakecli")
 	t11CopyExe(t, prog, dst, 0o755)
 	token, cfg := t11Person(t, home)
-	spawns, _ := t11CountSpawns(t)
+	spawns, launched := t11CountSpawns(t)
 
 	refuse := func(t *testing.T, ip string) {
 		t.Helper()
@@ -550,13 +599,11 @@ func TestCliValidate_IncompleteMountRefuses(t *testing.T) {
 		require.NoError(t, err)
 		t11ClearMarker(t, marker)
 		*spawns = 0
+		*launched = nil
 		w := t11PostValidate(t, mux, cfg, token, dst, "198.51.100.90:1", nil)
-		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-		resp := t11DecodeValidate(t, w)
-		require.Equal(t, gen.CliValidateResponseReason("ok"), resp.Reason, "body=%s", w.Body.String())
-		require.Equal(t, 1, *spawns, "a complete mount record must not block an outside program")
-		_, err = os.Stat(marker)
-		require.NoError(t, err, "the outside program must have written the marker")
+		final, err := filepath.EvalSymlinks(dst)
+		require.NoError(t, err)
+		t11AssertProgramRan(t, w, marker, final, *spawns, *launched)
 	})
 
 	t.Run("unreadable mount record", func(t *testing.T) {

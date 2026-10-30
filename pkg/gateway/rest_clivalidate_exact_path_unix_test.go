@@ -47,7 +47,12 @@ func TestCliValidate_LaunchesExactCheckedPath(t *testing.T) {
 	require.NotEqual(t, base, checked, "resolving must not select the sibling without the space")
 	require.Equal(t, []string{checked}, *launched, "the handshake receives the checked file, not the sibling")
 	require.Equal(t, 1, *spawns)
-	require.Equal(t, "ok", string(resp.Reason), "body detail %v", resp.Detail)
+	// "ok" and "unauthenticated" differ only by this machine's CLI login.
+	// Both mean the checked file ran and reported a version (spec FR-5).
+	require.Truef(t, t11ReasonMeansProgramRan(resp.Reason),
+		"the checked file ran; body detail %v reason %s", resp.Detail, resp.Reason)
+	require.NotNil(t, resp.Version)
+	require.Equal(t, t11Version, *resp.Version, "the version is the fake's, so this file is the one that ran")
 	_, err = os.Stat(spacedMarker)
 	require.NoError(t, err, "the space-suffixed file must be the one that ran")
 	_, err = os.Stat(plainMarker)
