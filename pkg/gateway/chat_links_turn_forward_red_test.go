@@ -171,10 +171,13 @@ func chatLinksBind(t *testing.T, handler *WSHandler, sessionID string) *wsConn {
 func chatLinksTap(al *agent.AgentLoop, handler *WSHandler) chan agent.ToolExecEndPayload {
 	ends := make(chan agent.ToolExecEndPayload, 4)
 	al.SetEventSyncTap(func(evt agent.Event) {
+		// Forward first. The test waits on this channel, and chatLinksFrames
+		// only looks for 200ms, so a signal sent before the tap can report
+		// zero opens while the frame is still in flight (R3-T2).
+		handler.hubSyncTap(evt)
 		if p, ok := evt.Payload.(agent.ToolExecEndPayload); ok && p.Tool == tools.ShowToUserToolName {
 			ends <- p
 		}
-		handler.hubSyncTap(evt)
 	})
 	return ends
 }
