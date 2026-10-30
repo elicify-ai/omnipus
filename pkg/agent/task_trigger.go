@@ -222,6 +222,11 @@ func (s *TaskTriggerScheduler) startSweep() {
 }
 
 // Stop shuts down the recovery-sweep ticker and the underlying cron engine.
+// The engine stops first, so no due trigger starts a run once Stop has been
+// called, even while a recovery sweep is still in flight (6a delta silent
+// review I1: the gateway's shutdown stops waiting at its budget). A sweep
+// only re-arms jobs, which a stopped engine keeps without running; Stop
+// still waits for the sweep before returning.
 func (s *TaskTriggerScheduler) Stop() {
 	s.mu.Lock()
 	stop := s.sweepStop
@@ -230,9 +235,8 @@ func (s *TaskTriggerScheduler) Stop() {
 	if stop != nil {
 		close(stop)
 	}
-	s.sweepWG.Wait()
-
 	s.cs.Stop()
+	s.sweepWG.Wait()
 }
 
 // SetClock overrides the time source for both this scheduler's own "now"
