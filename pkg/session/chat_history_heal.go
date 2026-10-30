@@ -3,10 +3,14 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Demand self-heal of a derived chat-history index that is too far behind for
@@ -25,6 +29,9 @@ const (
 // one full rebuild runs at a time. A heal that cannot take it is a transient
 // "busy" attempt. Tests may hold it by sending into the channel.
 var chatHistoryHealSlot = make(chan struct{}, 1)
+
+// errHistoryHealSlotBusy is the cause logged for a "busy" attempt.
+var errHistoryHealSlotBusy = errors.New("another chat history rebuild holds the process-wide rebuild slot")
 
 // chatHistoryHealState is the per-owner attempt state, guarded by owner.mu.
 // It lives for the store's (process's) lifetime; a restart starts afresh.
@@ -68,7 +75,9 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 	state.last = now
 	attempt := state.attempts
 	started := time.Now()
-	fail := func(class string, cause error) (chatHistoryReconcileResult, error) {
+	// fail logs one warning for this attempt with its sanitized cause and
+	// returns ret, or the original trigger when ret is nil.
+	fail := func(class string, cause, ret error) (chatHistoryReconcileResult, error) {
 		retry := "after_restart"
 		if historyHealTransient(class) && state.attempts < chatHistoryHealMaxAttempts {
 			retry = "after_backoff"
@@ -76,9 +85,9 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 			state.latched = true
 		}
 		slog.Warn("session: chat history index rebuild failed", "session_id", sid, "trigger", "catchup_limit", "class", class,
-			"duration_ms", time.Since(started).Milliseconds(), "attempt", attempt, "retry", retry)
-		if cause != nil {
-			return chatHistoryReconcileResult{}, cause
+			"duration_ms", time.Since(started).Milliseconds(), "attempt", attempt, "retry", retry, "cause", historyHealCause(cause))
+		if ret != nil {
+			return chatHistoryReconcileResult{}, ret
 		}
 		return chatHistoryReconcileResult{}, trigger
 	}
@@ -87,23 +96,23 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 	case chatHistoryHealSlot <- struct{}{}:
 		defer func() { <-chatHistoryHealSlot }()
 	default:
-		return fail("busy", nil)
+		return fail("busy", errHistoryHealSlotBusy, nil)
 	}
 	dir, err := filepath.Abs(filepath.Join(us.baseDir, sid))
 	if err != nil {
-		return fail("storage_error", nil)
+		return fail("storage_error", err, nil)
 	}
 	size, err := historyHealSourceSize(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		// A listed source file vanished during the walk: a proven move such
 		// as a day rollover, not a stable storage failure.
-		return fail("source_changed", nil)
+		return fail("source_changed", err, nil)
 	}
 	if err != nil {
-		return fail("storage_error", nil)
+		return fail("storage_error", err, nil)
 	}
 	if size > chatHistoryHealMaxSourceBytes {
-		return fail("too_large", nil)
+		return fail("too_large", fmt.Errorf("session source is %d bytes, above the %d byte cap", size, chatHistoryHealMaxSourceBytes), nil)
 	}
 	hctx, cancel := us.historyHealContext(context.WithoutCancel(ctx))
 	defer cancel()
@@ -130,9 +139,9 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 			result, readyErr := us.reconcileHistoryOwned(hctx, sid)
 			if readyErr != nil {
 				if errors.Is(hctx.Err(), context.DeadlineExceeded) {
-					return fail("deadline", nil)
+					return fail("deadline", readyErr, nil)
 				}
-				return fail("readiness", readyErr)
+				return fail("readiness", readyErr, readyErr)
 			}
 			*state = chatHistoryHealState{}
 			slog.Warn("session: chat history index rebuilt", "session_id", sid, "trigger", "catchup_limit", "action", summary.Action,
@@ -142,7 +151,7 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 		}
 	}
 	if errors.Is(hctx.Err(), context.DeadlineExceeded) {
-		return fail("deadline", nil)
+		return fail("deadline", err, nil)
 	}
 	class := "storage_error"
 	var buildErr *ChatHistoryIndexBuildError
@@ -152,9 +161,9 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 	if class == "index_inconsistent" {
 		// The existing published index failed its complete proof: real
 		// derived damage, refused as such rather than as plain lag.
-		return fail(class, historyUnavailable("index_inconsistent", err))
+		return fail(class, err, historyUnavailable("index_inconsistent", err))
 	}
-	return fail(class, nil)
+	return fail(class, err, nil)
 }
 
 // historyHealSourceSize is a stat-only total of the session folder, excluding
@@ -180,4 +189,62 @@ func historyHealSourceSize(dir string) (int64, error) {
 		return nil
 	})
 	return total, err
+}
+
+// chatHistoryHealCauseMax bounds the logged cause text.
+const chatHistoryHealCauseMax = 512
+
+var (
+	// historyHealPathToken matches any token holding a path separator (with an
+	// optional drive letter): absolute and relative paths, session folders.
+	historyHealPathToken = regexp.MustCompile(`(?:[A-Za-z]:)?[^\s:;,'"()]*[/\\][^\s:;,'"()]*`)
+	// historyHealFileToken matches a bare history or canonical file name.
+	historyHealFileToken = regexp.MustCompile(`[^\s:;,'"()]+\.(?:jsonl|json|chi|tmp)\b`)
+)
+
+// historyHealCause is the operator-facing cause of a heal failure: the
+// underlying error text with every path and file name replaced, newlines
+// folded and the length bounded. The session id is logged separately. Errors
+// here carry mechanism text (errno, decode position, check name), never
+// record content. The classifying wrappers expose only their class, so their
+// private cause is unwrapped first.
+func historyHealCause(err error) string {
+	text := historyHealCauseText(err)
+	text = historyHealPathToken.ReplaceAllString(text, "<path>")
+	text = historyHealFileToken.ReplaceAllString(text, "<file>")
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) > chatHistoryHealCauseMax {
+		cut := chatHistoryHealCauseMax
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		text = text[:cut] + "..."
+	}
+	return text
+}
+
+func historyHealCauseText(err error) string {
+	switch e := err.(type) {
+	case nil:
+		return "unknown"
+	case *ChatHistoryIndexBuildError:
+		if e.cause != nil {
+			return historyHealCauseText(e.cause)
+		}
+		return e.Class
+	case *ChatHistoryUnavailableError:
+		if e.cause != nil {
+			return e.Reason + ": " + historyHealCauseText(e.cause)
+		}
+		return e.Reason
+	case interface{ Unwrap() []error }:
+		var parts []string
+		for _, inner := range e.Unwrap() {
+			if inner != nil {
+				parts = append(parts, historyHealCauseText(inner))
+			}
+		}
+		return strings.Join(parts, "; ")
+	}
+	return err.Error()
 }
