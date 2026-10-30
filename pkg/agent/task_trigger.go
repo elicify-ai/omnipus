@@ -256,6 +256,7 @@ func (s *TaskTriggerScheduler) StartAfterPhysicalBoot() error {
 		return err
 	}
 	s.markBootOwedFires()
+	s.markMissedFires()
 	s.cs.SetRunner(s)
 	if err := s.cs.StartAfterPhysicalBoot(); err != nil {
 		return err
@@ -350,6 +351,119 @@ func (s *TaskTriggerScheduler) confirmBootOwedFires() {
 		s.taskToJob[id] = trackedTrigger{jobID: tracked.jobID, generation: gen}
 		s.bootOwedFire[id] = true
 		s.mu.Unlock()
+	}
+}
+
+// markMissedFires is the boot sweep behind the Calendar's visible "missed"
+// note (founder decision 2026-10-29, Q1 A: "A missed Calendar run stays
+// skipped, never replayed. Add a visible 'missed' note in the Calendar";
+// train 6b option B). For every scheduled fire that came due while the
+// process was DOWN — a state the engine can only show before its
+// physical-boot restore runs — it writes one TaskRun close record with
+// status "missed" (store.RecordMissedOccurrence) and never replays the run:
+// the engine's own recompute gives a past-due pending instant no next run.
+//
+// Detection (per job, on the store exactly as the death left it — this runs
+// before cs.StartAfterPhysicalBoot clears the dead Running flags):
+//
+//   - recurring (rrule) task, pending instant still armed in the past
+//     (State.NextRunAtMS non-nil and <= now): that occurrence came due
+//     unattended and is recorded, with the instant as the calendar join key
+//     so the occurrences overlay (occurrence_runs) can show it. A dead
+//     process's Running flag is deliberately NOT an exclusion here: the
+//     boot re-anchor stands for recurring triggers (StartAfterPhysicalBoot's
+//     doc — the interrupted occurrence neither runs nor is owed), so
+//     "pending instant in the past" means the fire will never happen either
+//     way. An occurrence whose run DID happen is excluded by the store's
+//     per-instant suppression, not here.
+//   - once task, at-time in the past with no run since (LastRunAtMS nil or
+//     before the at-time): recorded with a nil occurrence key (the TaskRun
+//     contract keeps a once run's occurrence_ms null; it shows in the
+//     task's run history — the occurrences endpoint renders recurring
+//     tasks only). A persisted Running flag EXCLUDES a once job: that fire
+//     started and is owed its rerun at this boot (markBootOwedFires) —
+//     labelling it missed would mislabel a run that is about to happen.
+//
+// A fire the dead process had started on a recurring trigger whose pending
+// instant was already cleared (the RunDueJobs→executeJobByID window) is
+// detectable by neither shape and stays a silent vanish — the same accepted
+// at-least-once window the engine's #1484 restore has. No machinery is
+// added for it.
+//
+// One record per missed instant is the store's suppression rule
+// (RecordMissedOccurrence), and the sweep is capped at the documented 20
+// most recent records per job per boot. That cap is structural, not
+// loop-enforced: a job carries at most one pending instant — the next
+// occurrence the engine had armed when the process died — so this sweep
+// writes at most one record per job per boot and no enforcement could ever
+// bind; if a future detection shape can yield several instants per job, it
+// must enforce the 20-most-recent cap here.
+func (s *TaskTriggerScheduler) markMissedFires() {
+	jobs := s.cs.ListJobs(true)
+	nowMs := s.now().UnixMilli()
+	for i := range jobs {
+		job := &jobs[i]
+		if !job.Enabled {
+			continue
+		}
+		id := job.Payload.Message
+		if id == "" || job.Name != fmt.Sprintf("task:%s", id) {
+			continue // not a derived task-trigger job
+		}
+		t, err := s.store.Get(id)
+		if err != nil {
+			continue // deleted or unreadable: nothing to record against
+		}
+		if t.EffectiveSurface() == task.SurfaceHeartbeat ||
+			t.Trigger == nil || t.Trigger.Type == task.TriggerManual {
+			continue
+		}
+
+		var occurrenceMs *int64
+		var instant int64
+		isRrule := t.Trigger.Type == task.TriggerRecurring &&
+			t.Trigger.Config.Rrule != nil && *t.Trigger.Config.Rrule != ""
+		switch {
+		case isRrule:
+			if job.State.NextRunAtMS == nil || *job.State.NextRunAtMS > nowMs {
+				continue // nothing pending, or the pending occurrence is still future
+			}
+			instant = *job.State.NextRunAtMS
+			v := instant
+			occurrenceMs = &v
+		case t.Trigger.Type == task.TriggerOnce:
+			if job.State.Running {
+				continue // interrupted: owed its rerun at this boot, not missed
+			}
+			if job.Schedule.Kind != "at" || job.Schedule.AtMS == nil || *job.Schedule.AtMS > nowMs {
+				continue
+			}
+			if last := job.State.LastRunAtMS; last != nil && *last >= *job.Schedule.AtMS {
+				continue // the once fire ran; its outcome saved
+			}
+			instant = *job.Schedule.AtMS
+			occurrenceMs = nil // TaskRun contract: a once run's occurrence_ms is null
+		default:
+			continue
+		}
+
+		// One record per missed instant is the store's suppression rule
+		// (RecordMissedOccurrence). The documented cap of the 20 most recent
+		// records per job per boot is structural, not loop-enforced: a job
+		// carries at most one pending instant, so this sweep writes at most
+		// one record per job per boot and any enforcement here would be dead
+		// code. If a future detection shape can yield several instants per
+		// job, enforce the cap here, keeping the 20 most recent.
+		run, recorded, err := s.store.RecordMissedOccurrence(id, occurrenceMs)
+		if err != nil {
+			slog.Warn("task_trigger: failed to record missed fire, continuing",
+				"task_id", id, "occurrence_ms", instant, "error", err)
+			continue
+		}
+		if recorded {
+			slog.Warn("task_trigger: scheduled fire was missed while Omnipus was down; recorded, not replayed",
+				"task_id", id, "occurrence_ms", instant, "run_id", run.RunID)
+		}
 	}
 }
 

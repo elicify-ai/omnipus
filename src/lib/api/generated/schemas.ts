@@ -2616,7 +2616,7 @@ type TaskOccurrenceSet = {
   occurrence_runs?:
     | Array<{
         occurrence_ms: number;
-        status: "in_progress" | "done" | "failed" | "skipped";
+        status: "in_progress" | "done" | "failed" | "skipped" | "missed";
         run_id: string;
         session_id: string;
         has_result: boolean;
@@ -5946,7 +5946,7 @@ export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
     .array(
       z.object({
         occurrence_ms: z.number().int(),
-        status: z.enum(["in_progress", "done", "failed", "skipped"]),
+        status: z.enum(["in_progress", "done", "failed", "skipped", "missed"]),
         run_id: z.string(),
         session_id: z.string(),
         has_result: z.boolean(),
@@ -6008,7 +6008,7 @@ export const TaskRun = z.object({
   run_id: z.string(),
   task_id: z.string(),
   occurrence_ms: z.number().int().nullable(),
-  status: z.enum(["in_progress", "done", "failed", "skipped"]),
+  status: z.enum(["in_progress", "done", "failed", "skipped", "missed"]),
   result: z.string().max(50000).optional(),
   session_id: z.string(),
   kind: z.enum(["scheduled", "manual"]),
