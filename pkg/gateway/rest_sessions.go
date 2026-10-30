@@ -27,7 +27,98 @@ import (
 
 // --- Sessions ---
 
+// sessionSubRoute is one allowed sub-path under /api/v1/sessions/{id}/.
+// methods is the exhaustive Allow list for that sub-resource. exact requires
+// the whole sub-path to equal name; otherwise name and name + "/" + rest are
+// the same resource. unimplemented means the address is recognised, so a
+// method outside methods is 405, but no handler serves it yet, so an accepted
+// method is 404.
+type sessionSubRoute struct {
+	name          string
+	exact         bool
+	methods       []string
+	unimplemented bool
+}
+
+// sessionSubRoutes is the explicit list of sub-paths HandleSessions accepts
+// under /api/v1/sessions/{id}/. Anything else is 404. A listed sub-path used
+// with a method not in methods is 405 with an Allow header. The bare session
+// (/api/v1/sessions/{id}, no sub-path) is not in this list.
+//
+// "messages" (exact) is GET /sessions/{id}/messages. "messages" (nested) is
+// messages/{position}: issue #1471 names that address, and a non-GET on it is
+// 405, but no per-message handler exists on this base, so GET is 404 until
+// that route lands. "tool-results" covers the resource and tool-results/{ref};
+// HandleToolResults owns the ref rules.
+var sessionSubRoutes = []sessionSubRoute{
+	{name: "messages", exact: true, methods: []string{http.MethodGet}},
+	{name: "messages", exact: false, methods: []string{http.MethodGet}, unimplemented: true},
+	{name: "tool-results", exact: false, methods: []string{http.MethodGet}},
+}
+
+// matchSessionSubRoute returns the allow-list entry for subPath.
+// An exact entry wins over a nested entry of the same name.
+func matchSessionSubRoute(subPath string) (sessionSubRoute, bool) {
+	var nested sessionSubRoute
+	var haveNested bool
+	for _, route := range sessionSubRoutes {
+		if route.exact {
+			if subPath == route.name {
+				return route, true
+			}
+			continue
+		}
+		if (subPath == route.name || strings.HasPrefix(subPath, route.name+"/")) && !haveNested {
+			nested = route
+			haveNested = true
+		}
+	}
+	if haveNested {
+		return nested, true
+	}
+	return sessionSubRoute{}, false
+}
+
+// dispatchSessionSubPath serves /api/v1/sessions/{id}/{subPath}.
+// An unknown sub-path is 404. A known sub-path with the wrong method is 405
+// and sets Allow to the methods that sub-resource accepts. This function
+// never renames or deletes the session.
+func (a *restAPI) dispatchSessionSubPath(w http.ResponseWriter, r *http.Request, sessionID, subPath string) {
+	route, ok := matchSessionSubRoute(subPath)
+	if !ok {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	allowed := false
+	for _, method := range route.methods {
+		if method == r.Method {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		w.Header().Set("Allow", strings.Join(route.methods, ", "))
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if route.unimplemented {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	switch route.name {
+	case "messages":
+		a.getSessionMessages(w, r, sessionID)
+	case "tool-results":
+		// HandleToolResults reads the ref from r.URL.Path itself.
+		a.HandleToolResults(w, r)
+	default:
+		// A listed route with no handler must not fall through onto the session.
+		jsonErr(w, http.StatusNotFound, "not found")
+	}
+}
+
 // HandleSessions routes /api/v1/sessions requests: GET (list/detail/messages/tool-results), POST (create), PUT (rename), DELETE (delete).
+// PUT and DELETE apply only to the bare session. Any sub-path is either a listed sub-resource or 404.
 func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	// Extract optional session ID and sub-path from the URL.
 	// Supports: /api/v1/sessions, /api/v1/sessions/{id}, /api/v1/sessions/{id}/messages,
@@ -52,10 +143,11 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Dispatch tool-results sub-resource before the generic method switch so the
-	// full path (including ref) is available to HandleToolResults via r.URL.Path.
-	if strings.HasPrefix(subPath, "tool-results/") || subPath == "tool-results" {
-		a.HandleToolResults(w, r)
+	// A sub-path is never the session itself. Refuse it here so the method
+	// switch below cannot rename or delete the chat, and cannot return the
+	// session detail for an address it does not recognise.
+	if sessionID != "" && subPath != "" {
+		a.dispatchSessionSubPath(w, r, sessionID, subPath)
 		return
 	}
 
@@ -63,8 +155,6 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		if sessionID == "" {
 			a.listSessions(w, r)
-		} else if subPath == "messages" {
-			a.getSessionMessages(w, r, sessionID)
 		} else {
 			a.getSession(w, r, sessionID)
 		}
