@@ -96,6 +96,8 @@ A page captures a short immutable read cut. Content reads then open and close on
 
 The messages response is a **`SessionHistoryResponse` envelope**, not a bare array. Read `entries` together with `page_info`, `has_earlier`, `has_later`, and their optional `next_before` / `next_after` positions. The old `X-Has-Earlier-Messages` header is not paging authority. Matching server and browser assets must be deployed together; reload old browser tabs after deployment.
 
+Rename and delete use only `PUT /api/v1/sessions/{id}` and `DELETE /api/v1/sessions/{id}`, with no sub-path. Unknown sub-paths return `404`. Known sub-paths (`messages` and `tool-results`, including their descendants) reject non-GET methods with `405` and `Allow: GET`; refused requests never rename or delete the chat. The implemented reads are `GET /api/v1/sessions/{id}/messages` for history and `GET /api/v1/sessions/{id}/tool-results/{ref}` for a stored tool result. Nested `messages/...` paths, including `messages/{position}`, are reserved but have no read handler on this version: GET returns `404`, and other methods return `405` with `Allow: GET`.
+
 | Read | Request example | Meaning |
 |---|---|---|
 | Latest | `GET /api/v1/sessions/{session_id}/messages` | Default target 40 drawn-row units, ascending results from the recent end, stopping at the latest exact clear marker if reached. |
