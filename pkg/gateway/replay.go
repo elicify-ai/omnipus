@@ -1163,19 +1163,25 @@ func loadTerminalAskRecord(store *session.UnifiedStore, sessionID string) *askus
 // transcript ToolCall, or ok=false when the call has no persisted media
 // descriptors. The agent loop persists media as
 // tc.Result["media"] = []map[string]any{{"ref","filename","content_type","type"}}
-// so replay can re-emit attachments without re-resolving the MediaStore.
+// (plus "caption" and "page_number" when present) so replay can re-emit
+// attachments without re-resolving the MediaStore.
+//
+// A document-preview group (tc.Result["presentation"] == "page_thumbnails",
+// office-preview spec §5.2) replays as its own group: the frame carries the
+// tool call id, the presentation and the preview record, its parts keep
+// their page numbers, it is never path-deduplicated against other frames
+// (two identical previews stay two groups), and an unavailable preview
+// replays with no parts so the person still sees the unavailable card.
 func buildMediaFrame(
 	sessionID string,
 	tc session.ToolCall,
 	mediaStore media.MediaStore,
 	seenPaths map[string]struct{},
 ) (generated.MediaFrame, bool) {
-	raw, ok := tc.Result["media"]
-	if !ok {
-		return generated.MediaFrame{}, false
-	}
-	list, ok := raw.([]any)
-	if !ok {
+	group, isGroup := replayPreviewGroup(tc)
+	raw, hasMedia := tc.Result["media"]
+	list, _ := raw.([]any)
+	if !hasMedia && !isGroup {
 		return generated.MediaFrame{}, false
 	}
 	parts := make([]generated.MediaPart, 0, len(list))
@@ -1201,7 +1207,8 @@ func buildMediaFrame(
 		// browser.screenshot's inline-data extraction, another from
 		// send_file). Replaying both produces a duplicate image in the
 		// SPA. Skip refs whose path was already emitted in this replay.
-		if mediaStore != nil && seenPaths != nil {
+		// Preview groups are exempt: their dedup key is the tool call.
+		if !isGroup && mediaStore != nil && seenPaths != nil {
 			if path, err := mediaStore.ResolveWithOpts(refStr, media.ResolveOpts{}); err == nil && path != "" {
 				if _, dup := seenPaths[path]; dup {
 					continue
@@ -1209,21 +1216,41 @@ func buildMediaFrame(
 				seenPaths[path] = struct{}{}
 			}
 		}
-		parts = append(parts, generated.MediaPart{
+		part := generated.MediaPart{
 			Type:        mediaType,
 			Url:         mediaRefURL(refStr),
 			Filename:    filename,
 			ContentType: contentType,
-		})
+		}
+		if caption, _ := m["caption"].(string); caption != "" {
+			part.Caption = &caption
+		}
+		if page, ok := replayPositiveInt(m["page_number"]); ok {
+			part.PageNumber = &page
+		}
+		parts = append(parts, part)
+	}
+	frame := generated.MediaFrame{
+		Type:      string(generated.WsFrameTypeMedia),
+		SessionId: sessionID,
+		Parts:     parts,
+	}
+	if isGroup {
+		id := string(tc.ID)
+		presentation := previewPresentationPageThumbnails
+		frame.ToolCallId = &id
+		frame.Presentation = &presentation
+		frame.Preview = group
+		// Empty parts are legal only for an unavailable preview (§5.2).
+		if len(parts) == 0 && (group == nil || group.Outcome != previewOutcomeUnavailable) {
+			return generated.MediaFrame{}, false
+		}
+		return frame, true
 	}
 	if len(parts) == 0 {
 		return generated.MediaFrame{}, false
 	}
-	return generated.MediaFrame{
-		Type:      string(generated.WsFrameTypeMedia),
-		SessionId: sessionID,
-		Parts:     parts,
-	}, true
+	return frame, true
 }
 
 // buildSpawnIDsWithChildren scans all entries and returns the set of spawn
