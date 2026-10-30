@@ -171,7 +171,7 @@ Attach to an authorized existing session. `since_seq` plus `boot_id` requests in
 | `history_limit` | Optional integer 20–100, default 40; logical drawn-row target for snapshots only. |
 | `history_min_rows` | Optional integer 1–effective limit, default 20; advisory estimated two-screen floor. Whole source groups and this floor take precedence over the 4 MiB soft historical-page target. |
 
-With known geometry, the browser estimates roughly four screens for opening and two for the floor. Otherwise it omits the size fields and uses server defaults; it does not send a second attach merely to correct sizing. REST contiguous top-ups correct actual height underfill. Invalid size fields reject before bind/wipe, never become an unlimited replay.
+With known geometry, the browser estimates roughly three screens for opening and two for the floor. Otherwise it omits the size fields and uses server defaults; it does not send a second attach merely to correct sizing. REST contiguous top-ups correct actual height underfill. Invalid size fields reject before bind/wipe, never become an unlimited replay.
 
 ### `cancel`
 
