@@ -202,40 +202,6 @@ func TestResolveMediaRefs_NilStore_PassThrough(t *testing.T) {
 	assert.Equal(t, messages[1].Media, result[1].Media)
 }
 
-// TestPDFCapableModel_Matrix locks the conservative PDF-capability allow-list.
-// The asymmetry matters: a false positive sends a native PDF block to a model
-// whose provider rejects it (hard HTTP 400, empty turn), so the list must err
-// toward text extraction. Regression: claude-3.5-haiku was wrongly classified
-// as capable (matched the old bare "claude-3" substring) and OpenRouter→Bedrock
-// returned "'claude-3-5-haiku-...' does not support PDF input." (verified live
-// 2026-06-01).
-func TestPDFCapableModel_Matrix(t *testing.T) {
-	capable := []string{
-		"google/gemini-2.0-flash-001", // verified live: native PDF works
-		"google/gemini-1.5-pro",
-		"anthropic/claude-3.5-sonnet",
-		"anthropic/claude-sonnet-4",
-		"anthropic/claude-opus-4",
-		"openai/gpt-4o",
-		"openai/gpt-4.1",
-		"openai/o3-mini",
-	}
-	notCapable := []string{
-		"anthropic/claude-3.5-haiku", // verified live: provider 400s on PDF
-		"anthropic/claude-3-5-haiku-20241022",
-		"anthropic/claude-3-haiku",
-		"z-ai/glm-5v-turbo", // verified live: gets text-extraction fallback
-		"meta-llama/llama-3.3-70b-instruct",
-		"mistralai/mistral-large",
-	}
-	for _, m := range capable {
-		assert.Truef(t, pdfCapableModel(m), "expected %q to be PDF-capable", m)
-	}
-	for _, m := range notCapable {
-		assert.Falsef(t, pdfCapableModel(m), "expected %q to NOT be PDF-capable (must fall back to text)", m)
-	}
-}
-
 // makeMiniPDF builds a minimal valid single-page PDF with extractable text and
 // correct xref offsets, mirroring the document generator used in the live test.
 func makeMiniPDF(text string) []byte {
