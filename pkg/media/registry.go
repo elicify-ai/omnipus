@@ -179,7 +179,11 @@ func (s *FileMediaStore) LoadRegistry() error {
 		loaded++
 	}
 
-	logger.InfoCF("media", "registry: loaded persisted refs",
+	// Warn, not info (#1439 step 1): this line is the only place that counts
+	// refs the registry DROPPED because their files are gone — the exact
+	// counter a "media ref not found" investigation needs, and invisible at
+	// the default log level while it was info.
+	logger.WarnCF("media", "registry: loaded",
 		map[string]any{"loaded": loaded, "dropped_missing": dropped, "path": path})
 	return nil
 }
