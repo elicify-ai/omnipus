@@ -47,7 +47,10 @@ func trustedOwner(uid uint32) bool {
 //   - dir must not be writable by its group or other users, unless it is a
 //     sticky folder (such as /tmp) and next itself is owned by root or the
 //     gateway user — the sticky bit stops others renaming or deleting an
-//     entry they do not own.
+//     entry they do not own;
+//   - the one group-writable exception is macOS /Applications in its shipped
+//     root:admin shape (isTrustedAdminFolder, founder decision 2026-10-30);
+//     it must still not be writable by other users.
 func checkStep(dir, next string, nextInfo os.FileInfo) error {
 	di, err := os.Lstat(dir)
 	if err != nil {
@@ -62,6 +65,9 @@ func checkStep(dir, next string, nextInfo os.FileInfo) error {
 	}
 	perm := di.Mode().Perm()
 	if perm&0o022 == 0 {
+		return nil
+	}
+	if perm&0o002 == 0 && isTrustedAdminFolder(dir, di) {
 		return nil
 	}
 	if di.Mode()&os.ModeSticky != 0 {
