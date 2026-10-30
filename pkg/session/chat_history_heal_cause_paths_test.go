@@ -56,6 +56,10 @@ func TestHistoryHealCause_RemovesWholePathsWithSpaces(t *testing.T) {
 		{"wrapped_path_error_keeps_the_wrapper_text", fmt.Errorf("persist checkpoint: %w", unixOpen), "persist checkpoint: open <path>: permission denied"},
 		{"build_wrapper_unwraps_to_the_path_error", historyBuildFailure("storage_error", winRemove), "remove <path>: Access is denied."},
 		{"joined_path_errors", errors.Join(unixOpen, winRemove), "open <path>: permission denied; remove <path>: Access is denied."},
+		// A wrapper that embeds the path error mid-text cannot be split into
+		// its own words and the inner text, so only the typed error is kept.
+		{"embedding_wrapper_keeps_only_the_path_error", fmt.Errorf("retire failed (%w), will retry", unixOpen), "open <path>: permission denied"},
+		{"embedding_wrapper_around_a_spaced_rename", fmt.Errorf("[%w] skipped", &os.LinkError{Op: "rename", Old: healCauseWindowsDir + `\a b.tmp`, New: healCauseWindowsDir + `\c d.tmp`, Err: fs.ErrExist}), "rename <path> <path>: file already exists"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := historyHealCause(tc.err)

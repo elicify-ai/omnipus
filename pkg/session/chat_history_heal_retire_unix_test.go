@@ -58,8 +58,8 @@ func healFixRetireFault(t *testing.T, persistent bool) {
 	proofs := 0
 	chatHistoryReadHook = func(ctx context.Context, e chatHistoryReadEvent) error {
 		if oldRead != nil {
-			if err := oldRead(ctx, e); err != nil {
-				return err
+			if hookErr := oldRead(ctx, e); hookErr != nil {
+				return hookErr
 			}
 		}
 		if published != "" && e.SessionID == f.sid && e.Scope == "recovery" && e.Purpose == "anchor" && e.Phase == "record_opened" && e.Cut.generation == published {

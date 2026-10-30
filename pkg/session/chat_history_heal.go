@@ -330,7 +330,12 @@ func historyHealCauseText(err error, roots []string) string {
 	if err == nil {
 		return "unknown"
 	}
-	switch e := err.(type) {
+	// The switch matches the OUTERMOST layer only, on purpose: each layer is
+	// rendered by itself and wrappers recurse below, so a wrapper keeps its
+	// own words and every member of a joined error is kept. errors.As would
+	// jump to the first matching inner error and drop both; it is used below
+	// only for wrappers whose text cannot be split.
+	switch e := err.(type) { //nolint:errorlint // layer-by-layer rendering; wrapped errors recurse through the branches below
 	case *ChatHistoryIndexBuildError:
 		if e.cause != nil {
 			return historyHealCauseText(e.cause, roots)
@@ -373,6 +378,17 @@ func historyHealCauseText(err error, roots []string) string {
 		if prefix, isPrefix := strings.CutSuffix(err.Error(), inner.Error()); isPrefix {
 			return historyHealFreeText(prefix, roots) + historyHealCauseText(inner, roots)
 		}
+	}
+	// A wrapper that embeds a path error mid-text cannot be split into its
+	// own words and the inner text: keep only the typed error, whose path is
+	// removed whole.
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return historyHealCauseText(linkErr, roots)
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return historyHealCauseText(pathErr, roots)
 	}
 	return historyHealFreeText(err.Error(), roots)
 }
