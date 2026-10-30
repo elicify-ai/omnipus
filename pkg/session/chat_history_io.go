@@ -125,31 +125,7 @@ func historyReadBytes(ctx context.Context, path string, off, length int64, e cha
 	b = b[:n]
 	e.Phase = "record_read"
 	e.Bytes = int64(n)
-	if m := historyMetrics(ctx); m != nil {
-		if e.Stream == "archive" {
-			switch {
-			case e.Scope == "recovery":
-				m.RecoveryArchiveRecords++
-				m.RecoveryArchiveBytes += int64(n)
-			case e.Purpose == "dependency":
-				m.DependencyArchiveRecords++
-				m.DependencyArchiveBytes += int64(n)
-			default:
-				m.SelectedArchiveRecords++
-				m.SelectedArchiveBytes += int64(n)
-			}
-		}
-		if e.Stream == "disposition" {
-			m.DispositionRecordsRead++
-			m.DispositionBytesRead += int64(n)
-		}
-		if e.Scope == "recovery" && e.Purpose == "anchor" {
-			m.RecoveryAnchorRecords++
-		}
-		if e.Scope == "recovery" && e.Purpose == "overflow" {
-			m.RecoveryOverflowRecords++
-		}
-	}
+	historyCountRead(ctx, e, int64(n))
 	err = errors.Join(readErr, historyReadEvent(ctx, e))
 	if err != nil {
 		return b, err
@@ -158,6 +134,35 @@ func historyReadBytes(ctx context.Context, path string, off, length int64, e cha
 		return b, io.ErrUnexpectedEOF
 	}
 	return b, nil
+}
+
+// historyCountRead records one content read in the request metrics.
+func historyCountRead(ctx context.Context, e chatHistoryReadEvent, n int64) {
+	if m := historyMetrics(ctx); m != nil {
+		if e.Stream == "archive" {
+			switch {
+			case e.Scope == "recovery":
+				m.RecoveryArchiveRecords++
+				m.RecoveryArchiveBytes += n
+			case e.Purpose == "dependency":
+				m.DependencyArchiveRecords++
+				m.DependencyArchiveBytes += n
+			default:
+				m.SelectedArchiveRecords++
+				m.SelectedArchiveBytes += n
+			}
+		}
+		if e.Stream == "disposition" {
+			m.DispositionRecordsRead++
+			m.DispositionBytesRead += n
+		}
+		if e.Scope == "recovery" && e.Purpose == "anchor" {
+			m.RecoveryAnchorRecords++
+		}
+		if e.Scope == "recovery" && e.Purpose == "overflow" {
+			m.RecoveryOverflowRecords++
+		}
+	}
 }
 
 func historyReadArchive(ctx context.Context, dir string, r historyRecord, cut ChatHistoryReadCut, scope, purpose string) (ArchiveRecord, error) {

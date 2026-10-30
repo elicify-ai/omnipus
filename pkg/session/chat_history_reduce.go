@@ -253,11 +253,58 @@ func historyReduceSpan(t *chatHistoryIndexTree, r *historyRecord, e TranscriptEn
 
 // Apply the existing full-reader effect/cancel rules to just one addressed
 // owner and its indexed corrections. No omitted chronological prefix is read.
+// historyArchiveReader reads one canonical record for a page projection.
+type historyArchiveReader func(r historyRecord, purpose string) (ArchiveRecord, error)
+
+// historyProjectEntry reduces one occurrence for a page. A bounded display
+// page streams every record it reads (A2.8, founder decision 2026-10-30):
+// large strings become bounded stand-ins and only what the user sees is
+// built. A value shown whole that is larger than its stand-in (for example
+// a very large system message) reruns the projection with whole reads; a
+// record the stream cannot read becomes the D4 placeholder, never guessed
+// text. The full-content reader always reads whole.
 func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoint, cut ChatHistoryReadCut, r historyRecord, cache map[uint64]ChatHistoryEntry, purpose string) (ChatHistoryEntry, error) {
 	if v, ok := cache[r.Rank]; ok {
 		return v, nil
 	}
-	rec, err := historyReadArchive(t.ctx, dir, r, cut, "page", purpose)
+	whole := func(m historyRecord, p string) (ArchiveRecord, error) {
+		return historyReadArchive(t.ctx, dir, m, cut, "page", p)
+	}
+	if t.fullProjection {
+		return historyProjectEntryWith(t, dir, cp, cut, r, cache, purpose, whole, nil)
+	}
+	ins := newHistoryStandIns()
+	streamed := func(m historyRecord, p string) (ArchiveRecord, error) {
+		return historyStreamArchive(t.ctx, dir, m, cut, "page", p, ins)
+	}
+	out, err := historyProjectEntryWith(t, dir, cp, cut, r, cache, purpose, streamed, ins)
+	switch {
+	case errors.Is(err, errHistoryStandInUnresolved):
+		return historyProjectEntryWith(t, dir, cp, cut, r, cache, purpose, whole, nil)
+	case errors.Is(err, errHistoryStreamUnreadable):
+		return historyUnreadableEntry(t, cp, r, cache)
+	}
+	return out, err
+}
+
+// historyUnreadableEntry is the fail-closed page entry of a record the
+// streamed display read could not read: one D4 placeholder row.
+func historyUnreadableEntry(t *chatHistoryIndexTree, cp historyCheckpoint, r historyRecord, cache map[uint64]ChatHistoryEntry) (ChatHistoryEntry, error) {
+	position, err := historyPositionForAddress(cp.SessionID, r.Address)
+	if err != nil || position != r.Position {
+		return ChatHistoryEntry{}, errors.New("history occurrence position disagrees with canonical address")
+	}
+	if t.positions == nil {
+		t.positions = make(map[HistoryPosition]uint64)
+	}
+	t.positions[position] = r.Rank
+	out := ChatHistoryEntry{Position: r.Position, Entry: TranscriptEntry{ID: r.Address.EntryID, Role: r.Role, displayUnavailable: true}, RowCount: 1}
+	cache[r.Rank] = out
+	return out, nil
+}
+
+func historyProjectEntryWith(t *chatHistoryIndexTree, dir string, cp historyCheckpoint, cut ChatHistoryReadCut, r historyRecord, cache map[uint64]ChatHistoryEntry, purpose string, read historyArchiveReader, ins *historyStandIns) (ChatHistoryEntry, error) {
+	rec, err := read(r, purpose)
 	if err != nil {
 		return ChatHistoryEntry{}, err
 	}
@@ -280,7 +327,7 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 		if !ok {
 			continue
 		}
-		effect, e := historyReadArchive(t.ctx, dir, meta, cut, "page", "dependency")
+		effect, e := read(meta, "dependency")
 		if e != nil {
 			return ChatHistoryEntry{}, e
 		}
@@ -314,7 +361,7 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 			return ChatHistoryEntry{}, e
 		}
 		if present {
-			cancel, e := historyReadArchive(t.ctx, dir, meta, cut, "page", "dependency")
+			cancel, e := read(meta, "dependency")
 			if e != nil {
 				return ChatHistoryEntry{}, e
 			}
@@ -361,7 +408,7 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 		t.positions = make(map[HistoryPosition]uint64)
 	}
 	t.positions[position] = r.Rank
-	parents, err := historyNestedDelegateParents(t, dir, cut, entry)
+	parents, err := historyNestedDelegateParents(t, entry, read)
 	if err != nil {
 		return ChatHistoryEntry{}, err
 	}
@@ -369,7 +416,7 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 	// on the bounded page copy; facts the projection consumes are derived from
 	// the full value first. The full-content reader keeps the value whole.
 	if !t.fullProjection {
-		if entry, err = historyShortenForDisplay(entry); err != nil {
+		if entry, err = historyShortenStreamed(entry, ins); err != nil {
 			return ChatHistoryEntry{}, err
 		}
 	}

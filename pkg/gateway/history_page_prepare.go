@@ -211,6 +211,11 @@ func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHis
 		return out, err
 	}
 	reason := "invalid_preview_marker"
+	if !malformed && e.Entry.DisplayUnavailable() {
+		// A2.8: the streamed display read could not read this record; it
+		// fails closed to the D4 placeholder instead of guessing text.
+		malformed, reason = true, "display_stream_unreadable"
+	}
 	if !malformed && historySavedMarkerPresent(e.Entry) {
 		// A2.2: a schema-valid marker in a saved result is still not a
 		// reader preview, so it is never sent as one on either carrier.

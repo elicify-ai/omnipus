@@ -618,6 +618,11 @@ type TranscriptEntry struct {
 	// paging spec, Amendment 2026-10-27 D2, A2.1). Never persisted, never set
 	// on a canonical, model or full-content read.
 	displayContentOriginalSize int
+	// displayUnavailable marks a bounded history-page stand-in for a record
+	// the streamed display read could not read (A2.8): only ID and Role are
+	// set and the projector shows the D4 per-item placeholder. Never
+	// persisted, never set on a canonical, model or full-content read.
+	displayUnavailable bool
 }
 
 // SystemSubtypeGoalOutcome is the TranscriptEntry.SystemSubtype value of a goal

@@ -6,7 +6,7 @@ import "errors"
 // named by this group's nested calls. The existing latest-call index supplies
 // bounded addresses; a page edge is never evidence that a parent is absent.
 // Return IDs, not parent content or invented span/lifecycle state.
-func historyNestedDelegateParents(t *chatHistoryIndexTree, dir string, cut ChatHistoryReadCut, entry TranscriptEntry) ([]ToolCallID, error) {
+func historyNestedDelegateParents(t *chatHistoryIndexTree, entry TranscriptEntry, read historyArchiveReader) ([]ToolCallID, error) {
 	var parents []ToolCallID
 	seen := map[ToolCallID]bool{}
 	for _, call := range entry.ToolCalls {
@@ -30,7 +30,7 @@ func historyNestedDelegateParents(t *chatHistoryIndexTree, dir string, cut ChatH
 		if !ok || !meta.Eligible {
 			return nil, errors.New("missing nested parent occurrence")
 		}
-		parent, err := historyReadArchive(t.ctx, dir, meta, cut, "page", "dependency")
+		parent, err := read(meta, "dependency")
 		if err != nil {
 			return nil, err
 		}

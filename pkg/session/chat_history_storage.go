@@ -282,13 +282,19 @@ func historyDecodeArchive(b []byte) (ArchiveRecord, error) {
 	if err := json.Unmarshal(b[:len(b)-1], &r); err != nil {
 		return r, historyBuildFailure("corrupt_archive", err)
 	}
+	return r, historyValidateArchive(r)
+}
+
+// historyValidateArchive is the read-side shape check shared by the full and
+// the streamed display read.
+func historyValidateArchive(r ArchiveRecord) error {
 	if r.ViewMembership != ViewMembershipChat && r.ViewMembership != ViewMembershipModel && r.ViewMembership != ViewMembershipBoth {
-		return r, historyBuildFailure("unconverted", errors.New("unsupported archive membership"))
+		return historyBuildFailure("unconverted", errors.New("unsupported archive membership"))
 	}
 	if err := r.validateToolCallEffect(); err != nil {
-		return r, historyBuildFailure("invalid_reference", err)
+		return historyBuildFailure("invalid_reference", err)
 	}
-	return r, nil
+	return nil
 }
 func historyRetained(cp historyCheckpoint) []string {
 	out := make([]string, 0, len(cp.ArchiveEnds))
