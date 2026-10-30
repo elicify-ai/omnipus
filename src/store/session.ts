@@ -435,10 +435,11 @@ function keepAttachedOwner(
  *
  * A fallback must never overwrite a known, more specific descriptor with the
  * generic 'chat' (#1449 round 6). Two writers fall back when the caller
- * carries no session type of its own — the WS-connect reattach
- * (src/components/chat/OmnipusRuntimeProvider.tsx::reattachActiveSession,
- * through setActiveSession) and the workspace entry's own resolution
- * (src/store/session/workspaceEntryFlow.ts::applyEntry). A downgraded MAIN
+ * carries no session type of its own — setActiveSession (e.g. the deep-link
+ * route's offline fallback) and the workspace entry's own resolution
+ * (src/store/session/workspaceEntryFlow.ts::applyEntry). The WS-connect
+ * reattach (src/components/chat/OmnipusRuntimeProvider.tsx::reattachActiveSession)
+ * no longer writes a descriptor at all. A downgraded MAIN
  * reads "Extra chat" in the header line, and because the header's honest
  * "agent names unavailable" warning is gated on the session being a main, it
  * can never render — the 30s readiness wait of the committed narrow-header
@@ -537,7 +538,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       const wsId = useWorkspacesStore.getState().activeWorkspaceId
       if (wsId) {
         // The caller here re-asserts a session the store may already know
-        // (the WS-connect reattach, the deep-link route's offline fallback)
+        // (e.g. the deep-link route's offline fallback)
         // and carries no session type of its own — so the store's own
         // descriptor for THAT session is the better answer than the generic
         // 'chat' (knownSessionDescriptor). A fallback must never downgrade a
