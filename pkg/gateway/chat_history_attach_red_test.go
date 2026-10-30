@@ -198,7 +198,7 @@ func pagingUnindexedSessionInWorkspace(t *testing.T, target *session.UnifiedStor
 	return meta.ID
 }
 
-const pagingUnavailable = "This conversation's history could not be loaded. Try again later."
+const pagingUnavailable = "This conversation's history could not be loaded."
 
 func TestUnavailableHistory_CanonicalAppendAndLiveOnlyControls(t *testing.T) {
 	f := newAttachFixture(t, "history-unavailable", "live-answer")

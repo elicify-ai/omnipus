@@ -14,7 +14,7 @@ type SessionHistoryPageInfo = SessionHistoryResponse['page_info']
 
 export const SID = 'history-paging-session'
 export const STAMP = '2026-10-21T10:00:00Z'
-export const UNAVAILABLE = 'This conversation\'s history could not be loaded. Try again later.'
+export const UNAVAILABLE = 'This conversation\'s history could not be loaded.'
 
 // Synthetic server-issued selectors: hash only fixture labels, NOT the product's
 // D2 encoding. They deliberately have no useful lexical/acceptance-order relation.

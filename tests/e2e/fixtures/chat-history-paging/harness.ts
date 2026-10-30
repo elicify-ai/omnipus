@@ -19,7 +19,7 @@ import { assertNativeBashPolicy } from './agent-tool-policy';
 type HistoryProvider = Awaited<ReturnType<typeof startTerminalOutcomeProvider>> | HistoryControlProvider;
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
-export const UNAVAILABLE = 'This conversation\'s history could not be loaded. Try again later.';
+export const UNAVAILABLE = 'This conversation\'s history could not be loaded.';
 export const BUDGET = 4_194_304; // D4a: 4 MiB, not an observed product value.
 export const POSITION = /^hp1_[A-Za-z0-9_-]{43}$/;
 export const historyScroller = (page: Page) => page.getByTestId('virtualized-message-list');
