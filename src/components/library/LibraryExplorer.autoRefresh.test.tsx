@@ -17,6 +17,22 @@
 //       re-fetch;
 //   R6  an outside change to the shown folder appears without user action.
 //
+// Gate-1 review round (2026-10-30) additions:
+//   CR-1/SF-3  one request per tick — no production retry loop survives the
+//              window losing focus (the test runs the production retry
+//              predicate);
+//   SF-2       the timer never re-drives a folder whose FIRST load failed;
+//   SF-4       a tick whose response fails schema validation raises no toast
+//              (asserted against the production query client's cache
+//              subscriber — the thing that raises that toast);
+//   SF-1       an explicit open whose listing refresh fails keeps the rows
+//              and shows a retryable notice — the quiet exception is the
+//              TIMER's only;
+//   I1/I2/I3   coverage strengthening: an open file is never re-fetched by
+//              the timer, a failed tick's recovery is proven with changed
+//              server data, and pending/failed ticks are quiet at the
+//              virtual root too.
+//
 // Counting note: useLibraryCrossTabRefresh (pre-existing, untouched) ALSO
 // invalidates the listings when the tab regains focus/visibility. In this
 // file every resume-from-hidden/unfocused test settles that immediate
@@ -28,6 +44,11 @@ import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import type { LibraryEntry, LibraryWorkspaceNode } from '@/lib/api'
+// The REAL production schema-error class and the REAL production client
+// pieces — gate-1 SF-4/CR-1 must run against the app's own error/subscriber
+// machinery, never a replica that can drift from it.
+import { ApiSchemaError } from '@/lib/api/http'
+import { queryClient as productionQueryClient, shouldRetryQuery, shouldRetryMutation } from '@/lib/queryClient'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -36,6 +57,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchLibraryWorkspaces: vi.fn(),
     fetchLibraryEntries: vi.fn(),
     fetchLibraryContent: vi.fn(),
+    fetchLibraryContentVersioned: vi.fn(),
     deleteLibraryEntry: vi.fn(),
     renameLibraryEntry: vi.fn(),
     moveLibraryEntry: vi.fn(),
@@ -59,6 +81,8 @@ import {
   fetchKnowledgeBaseInfo,
   fetchKnowledgeGraph,
   fetchKnowledgeOutline,
+  fetchLibraryContent,
+  fetchLibraryContentVersioned,
   fetchLibraryEntries,
   fetchLibraryWorkspaces,
   searchFiles,
@@ -69,9 +93,26 @@ import { LibraryExplorer } from './LibraryExplorer'
 
 const mockedFetchWorkspaces = vi.mocked(fetchLibraryWorkspaces)
 const mockedFetchEntries = vi.mocked(fetchLibraryEntries)
+const mockedFetchContent = vi.mocked(fetchLibraryContent)
+const mockedFetchContentVersioned = vi.mocked(fetchLibraryContentVersioned)
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+}
+
+// The production singleton's retry policy (src/lib/queryClient.ts) — used by
+// the CR-1/SF-3 test, which must prove a tick's failure cannot schedule the
+// client's own retries behind a closed gate. The real predicate, not a copy.
+function makeRetryingClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: shouldRetryQuery,
+        retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000),
+      },
+      mutations: { retry: shouldRetryMutation, retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000) },
+    },
+  })
 }
 
 function makeEntry(over: Partial<LibraryEntry> = {}): LibraryEntry {
@@ -109,9 +150,9 @@ function serveFolderNow(_wsId: string, dir?: string, includeHidden?: boolean) {
 let hasFocusSpy: ReturnType<typeof vi.spyOn>
 let visibilitySpy: ReturnType<typeof vi.spyOn>
 
-async function renderAndSettle(initialWorkspaceId?: string) {
+async function renderAndSettle(initialWorkspaceId?: string, client: QueryClient = makeClient()) {
   const view = render(
-    <QueryClientProvider client={makeClient()}>
+    <QueryClientProvider client={client}>
       <LibraryExplorer
         initialWorkspaceId={initialWorkspaceId}
         onClose={vi.fn()}
@@ -371,23 +412,35 @@ describe('LibraryExplorer — an outside change to the shown folder appears with
   })
 })
 
-describe('LibraryExplorer — a failed re-check is quiet and keeps the view (R4)', () => {
-  it('a failed tick keeps the rows on screen, shows no error banner and raises no toast', async () => {
+describe('LibraryExplorer — a failed re-check is quiet and keeps the view (R4, gate-1 I2/SF-1)', () => {
+  it('a failed tick runs, stays quiet, keeps the rows — and the next tick provably recovers', async () => {
     await renderAndSettle('ws-1')
     expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
 
+    const before = entriesCalls('')
     mockedFetchEntries.mockRejectedValueOnce(new Error('offline'))
     await tick(LIBRARY_AUTO_REFRESH_INTERVAL_MS)
 
-    // The stale-but-present listing keeps rendering (D-98's data-presence
-    // rule); the error state is for a folder that never loaded at all.
+    // The failing tick actually ISSUED its request — then stayed quiet: the
+    // stale-but-present listing keeps rendering (D-98's data-presence rule),
+    // no error screen replaces it, no toast, and NO open-refresh notice
+    // (gate-1 SF-1: the quiet exception is the timer's, never an explicit
+    // open's).
+    expect(entriesCalls('')).toBe(before + 1)
     expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
     expect(screen.queryByTestId('library-entries-error')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('library-open-refresh-error')).not.toBeInTheDocument()
     expect(useUiStore.getState().toasts).toHaveLength(0)
 
-    // The next tick recovers the view from the same rows.
+    // Recovery is proven with CHANGED server data, not by re-asserting the
+    // same row: the next tick's request brings the outside change on screen.
+    folderNow = [
+      makeEntry(),
+      makeEntry({ name: 'agent-output.txt', path: 'agent-output.txt', mime: 'text/plain' }),
+    ]
     await tick(LIBRARY_AUTO_REFRESH_INTERVAL_MS)
-    expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
+    expect(entriesCalls('')).toBe(before + 2)
+    expect(screen.getByTestId('library-row-agent-output.txt')).toBeInTheDocument()
   })
 
   it('ticks never stack onto an in-flight re-fetch', async () => {
@@ -413,5 +466,216 @@ describe('LibraryExplorer — a failed re-check is quiet and keeps the view (R4)
     // The next tick after the re-fetch settles proceeds normally.
     await tick(LIBRARY_AUTO_REFRESH_INTERVAL_MS)
     expect(entriesCalls('')).toBe(inFlight + 1)
+  })
+})
+
+describe('LibraryExplorer — one request per tick, nothing behind a closed gate (gate-1 CR-1/SF-3)', () => {
+  it('a tick makes ONE attempt: no retry loop survives the window losing focus', async () => {
+    // The production retry policy is on (1s/2s/4s, 3 retries) — exactly the
+    // configuration whose retries used to keep firing after blur.
+    await renderAndSettle('ws-1', makeRetryingClient())
+    const mounted = entriesCalls('')
+
+    // The tick's request is held in flight while the window loses focus
+    // (the tab stays visible — TanStack's own focus manager only checks
+    // visibility, which is why this needs its own gate).
+    let rejectTick!: (err: Error) => void
+    mockedFetchEntries.mockImplementationOnce(
+      () => new Promise<LibraryEntry[]>((_, reject) => { rejectTick = reject }),
+    )
+    await tick(LIBRARY_AUTO_REFRESH_INTERVAL_MS)
+    const afterTick = entriesCalls('')
+    expect(afterTick).toBe(mounted + 1)
+
+    blurWindow()
+    await act(async () => {
+      rejectTick(new Error('flaky network'))
+    })
+    // Advance past the full production retry schedule (1s + 2s + 4s) with
+    // margin: not ONE further request may fire while the window is
+    // unfocused. The next eligible attempt is the next tick, after focus.
+    await tick(9_000)
+    expect(entriesCalls('')).toBe(afterTick)
+
+    focusWindow()
+    // Settle the pre-existing focus-return invalidation (see the counting
+    // note at the top of this file), then measure the timer's own tick.
+    await tick(0)
+    const afterReturn = entriesCalls('')
+    await tick(LIBRARY_AUTO_REFRESH_INTERVAL_MS)
+    expect(entriesCalls('')).toBe(afterReturn + 1)
+  })
+})
+
+describe('LibraryExplorer — a folder whose first load failed is left alone (gate-1 SF-2)', () => {
+  it('the timer never re-drives a failed first load — the error and its Retry stay put', async () => {
+    mockedFetchEntries.mockRejectedValue(new Error('still down'))
+    await renderAndSettle('ws-1')
+    expect(screen.getByTestId('library-entries-error')).toBeInTheDocument()
+    const afterFirstLoad = entriesCalls('')
+
+    // Three ticks land against a query with NO cached listing. None of them
+    // may re-drive it: the stable error state keeps its explanation and its
+    // Retry instead of flashing into a loading skeleton on every tick.
+    await tick(3 * LIBRARY_AUTO_REFRESH_INTERVAL_MS)
+
+    expect(entriesCalls('')).toBe(afterFirstLoad)
+    expect(screen.getByTestId('library-entries-error')).toBeInTheDocument()
+    expect(screen.queryByTestId('library-loading-skeleton')).not.toBeInTheDocument()
+  })
+})
+
+describe('LibraryExplorer — a schema-failed tick raises no toast (gate-1 SF-4)', () => {
+  it('a tick whose response fails schema validation stays quiet', async () => {
+    // The schema-error toast is raised by the PRODUCTION client's cache
+    // subscriber (src/lib/queryClient.ts), by nothing in this component —
+    // so this test renders against the real singleton client. A schema
+    // error is never retried (shouldRetryQuery excludes it), so the tick's
+    // failure path is single-attempt and deterministic.
+    productionQueryClient.clear()
+    useUiStore.setState({ toasts: [] })
+    try {
+      await renderAndSettle('ws-1', productionQueryClient)
+      expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
+
+      mockedFetchEntries.mockRejectedValueOnce(
+        new ApiSchemaError('/library/ws-1/entries', [{ path: ['entries'], message: 'expected array, got object' }], null),
+      )
+      await tick(LIBRARY_AUTO_REFRESH_INTERVAL_MS)
+
+      // Quiet: rows stay, no error screen, no open-refresh notice (this was
+      // a TIMER tick), and — the point — no toast from the global subscriber.
+      expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
+      expect(screen.queryByTestId('library-entries-error')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('library-open-refresh-error')).not.toBeInTheDocument()
+      expect(useUiStore.getState().toasts).toHaveLength(0)
+    } finally {
+      productionQueryClient.clear()
+    }
+  })
+})
+
+describe('LibraryExplorer — an explicit open refresh failure is visible (gate-1 SF-1)', () => {
+  it('an open whose listing refresh fails keeps the rows and shows a retryable notice', async () => {
+    const client = makeClient()
+    const tree = (refreshKey?: number) => (
+      <QueryClientProvider client={client}>
+        <LibraryExplorer initialWorkspaceId="ws-1" refreshKey={refreshKey} onClose={vi.fn()} onPopOut={vi.fn()} />
+      </QueryClientProvider>
+    )
+    const view = render(tree())
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
+    expect(screen.queryByTestId('library-open-refresh-error')).not.toBeInTheDocument()
+
+    // The caller re-opens the explorer on a supplied address (refreshKey);
+    // the refresh it starts FAILS while a cached listing is on screen.
+    mockedFetchEntries.mockRejectedValueOnce(new Error('offline'))
+    view.rerender(tree(1))
+    await waitFor(() => expect(screen.getByTestId('library-open-refresh-error')).toBeInTheDocument())
+
+    // The stale rows are NOT replaced by the folder's full error state —
+    // but the failure is not silent either: a banner explains, Retry acts.
+    expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
+    expect(screen.queryByTestId('library-entries-error')).not.toBeInTheDocument()
+
+    // Retry re-runs the refresh; success clears the notice, rows stay.
+    fireEvent.click(screen.getByTestId('library-open-refresh-retry'))
+    await waitFor(() => expect(screen.queryByTestId('library-open-refresh-error')).not.toBeInTheDocument())
+    expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
+  })
+})
+
+describe('LibraryExplorer — the timer never touches an open file (gate-1 I1)', () => {
+  it('the shown folder updates while an open document stays byte-for-byte as opened', async () => {
+    const openedBody = {
+      path: 'notes.txt',
+      content: 'original body',
+      size: 13,
+      is_text: true,
+      too_large: false,
+    }
+    mockedFetchContentVersioned.mockResolvedValue({ data: openedBody, version: null })
+    mockedFetchContent.mockResolvedValue(openedBody)
+    folderNow = [makeEntry({ name: 'notes.txt', path: 'notes.txt', mime: 'text/plain' })]
+    await renderAndSettle('ws-1')
+
+    fireEvent.click(screen.getByTestId('library-row-notes.txt'))
+    await waitFor(() => expect(screen.getByTestId('library-preview-view-body')).toBeInTheDocument())
+    expect(screen.getByTestId('library-preview-view-body')).toHaveTextContent('original body')
+    const versionedBefore = mockedFetchContentVersioned.mock.calls.length
+    const plainBefore = mockedFetchContent.mock.calls.length
+    expect(versionedBefore).toBeGreaterThanOrEqual(1)
+
+    // The outside world moves on: a new file appears AND the open file's
+    // bytes change on the server. Only the LISTING may follow — re-serving
+    // the new bytes must never happen behind the timer's back, whether by a
+    // fresh request or by any write into the content cache.
+    folderNow = [
+      makeEntry({ name: 'notes.txt', path: 'notes.txt', mime: 'text/plain' }),
+      makeEntry({ name: 'new.md', path: 'new.md' }),
+    ]
+    mockedFetchContentVersioned.mockResolvedValue({ data: { ...openedBody, content: 'REPLACED body' }, version: null })
+    await tick(2 * LIBRARY_AUTO_REFRESH_INTERVAL_MS)
+
+    expect(screen.getByTestId('library-row-new.md')).toBeInTheDocument()
+    expect(mockedFetchContentVersioned.mock.calls.length).toBe(versionedBefore)
+    expect(mockedFetchContent.mock.calls.length).toBe(plainBefore)
+    expect(screen.getByTestId('library-preview-view-body')).toHaveTextContent('original body')
+  })
+})
+
+describe('LibraryExplorer — pending and failed ticks are quiet at every listing surface (gate-1 I3)', () => {
+  it.each([
+    { surface: 'a workspace folder', wsId: 'ws-1' as string | undefined },
+    { surface: 'the virtual root', wsId: undefined },
+  ])('a tick held pending — then failed — keeps the rows, without skeleton or toast ($surface)', async ({ wsId }) => {
+    await renderAndSettle(wsId)
+    if (wsId === undefined) {
+      expect(screen.getByTestId('library-workspace-node-ws-1')).toBeInTheDocument()
+    } else {
+      expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
+    }
+
+    // Hold the tick's re-fetch pending across a further tick.
+    let rejectFetch!: (err: Error) => void
+    if (wsId === undefined) {
+      mockedFetchWorkspaces.mockImplementationOnce(
+        () => new Promise<LibraryWorkspaceNode[]>((_, reject) => { rejectFetch = reject }),
+      )
+    } else {
+      mockedFetchEntries.mockImplementationOnce(
+        () => new Promise<LibraryEntry[]>((_, reject) => { rejectFetch = reject }),
+      )
+    }
+    await tick(LIBRARY_AUTO_REFRESH_INTERVAL_MS)
+
+    // While the re-fetch is pending the view is untouched: no skeleton
+    // flash, no toast, rows exactly as they were.
+    if (wsId === undefined) {
+      expect(screen.getByTestId('library-workspace-node-ws-1')).toBeInTheDocument()
+    } else {
+      expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
+    }
+    expect(screen.queryByTestId('library-loading-skeleton')).not.toBeInTheDocument()
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+
+    // The held re-fetch FAILS: the rows still stay, and neither listing's
+    // error screen replaces them.
+    await act(async () => {
+      rejectFetch(new Error('late failure'))
+    })
+    await tick(0)
+    if (wsId === undefined) {
+      expect(screen.getByTestId('library-workspace-node-ws-1')).toBeInTheDocument()
+      expect(screen.queryByTestId('library-workspaces-error')).not.toBeInTheDocument()
+    } else {
+      expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
+      expect(screen.queryByTestId('library-entries-error')).not.toBeInTheDocument()
+    }
+    expect(useUiStore.getState().toasts).toHaveLength(0)
   })
 })
