@@ -50,6 +50,8 @@ import { MIA } from '../../tests/omnipus-l1-ui-red/fixtures'
 import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { readPersistedSessionByWorkspace, useSessionStore } from './session'
+import { getMessages } from './chat/messages'
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
 
@@ -144,11 +146,18 @@ class WebSocketDoubleWithoutConnecting {
 
 let connections: WsConnection[] = []
 
+type WsFrameSink = ConstructorParameters<typeof WsConnection>[0]['onFrames']
+
+/** OmnipusRuntimeProvider.tsx::WsLifecycle's frame sink: every parsed frame goes to the real chat store. */
+const intoChatStore: WsFrameSink = (frames) => {
+  for (const frame of frames) useChatStore.getState().handleFrame(frame)
+}
+
 /** A real WsConnection that has connect()ed: its socket is CONNECTING and nothing is published yet. */
-function connectingConnection(): { conn: WsConnection; socket: LateSocket } {
+function connectingConnection(onFrames: WsFrameSink = vi.fn()): { conn: WsConnection; socket: LateSocket } {
   vi.stubGlobal('WebSocket', LateSocket)
   const conn: WsConnection = new WsConnection({
-    onFrames: vi.fn(),
+    onFrames,
     // OmnipusRuntimeProvider.tsx::WsLifecycle: publish the flag, then re-bind the active session.
     onConnected: () => {
       useConnectionStore.getState().setConnected(true)
@@ -169,8 +178,8 @@ function connectingConnection(): { conn: WsConnection; socket: LateSocket } {
  * OmnipusRuntimeProvider.tsx::WsLifecycle on a fresh page: connect(), then publish the
  * connection - before its socket has opened.
  */
-function publishConnectingSocket(): LateSocket {
-  const { conn, socket } = connectingConnection()
+function publishConnectingSocket(onFrames?: WsFrameSink): LateSocket {
+  const { conn, socket } = connectingConnection(onFrames)
   useConnectionStore.getState().setConnection(conn)
   expect(conn.isConnected, 'precondition: the socket is not OPEN yet').toBe(false)
   return socket
@@ -498,6 +507,82 @@ describe('workspace entry while the chat socket is still opening, with another c
     const attaches = attachFrames(socket)
     expect(attaches.filter((frame) => frame.session_id === MAIN), 'exactly one attach for B').toHaveLength(1)
     expect(attaches.at(-1), 'the newest navigation intent is the last attach on the socket').toMatchObject({ type: 'attach_session', session_id: MAIN })
+    expect(attaches.map((frame) => frame.session_id), 'the reconnect re-bound A on the new socket before B attached (BDD-02.3: had B failed, A would still be live)').toEqual([PRIOR, MAIN])
+  })
+
+  // CHECK R2-F1/R2-F2 (/workspace/logs/1449/ci1502/check-narrow-r2/CHECK-REPORT.md). Oracles:
+  //   - agent-first-navigation-spec BDD-02.3: "A committed; B validation/load/attach fails" ->
+  //     "A tuple stays coherent, B intent retryable/no send; no false switch/fallback".
+  //   - same spec, "Foreground commitment and bounded read" 2: a reconnect is not an open.
+  //   - AddParticipant.tsx::MainChatAddParticipant reads attachedSessionType === 'main', so A's
+  //     attached type is part of A's coherent tuple, not a diagnostic detail.
+  // A still-open chat keeps receiving its own frames after the socket reopens: the reconnect
+  // re-binds A's transport even though the entry for B is what the user asked for.
+  it.each([
+    ['B\'s list load fails and settles BEFORE the socket opens', 'fail-then-open'],
+    ['the socket opens while B loads, then B\'s list load fails', 'open-then-fail'],
+  ] as const)('%s: A stays the coherent, live chat and B keeps its own remembered pointer', async (_label, order) => {
+    const BEFORE = 'Jim said this before the connection dropped'
+    const AFTER = 'Jim says this after the socket reopened'
+    useWorkspacesStore.setState({ activeWorkspaceId: PRIOR_WS })
+    useSessionStore.getState().setWorkspaceSessionDescriptor(PRIOR_WS, PRIOR_DESCRIPTOR)
+    useSessionStore.setState({ activeSessionId: PRIOR, activeAgentId: 'jim', attachedSessionType: 'main', attachedTaskTitle: PRIOR_DESCRIPTOR.title })
+    useChatStore.getState().appendMessage({ id: 'a-before', role: 'user', content: BEFORE, timestamp: '2026-10-29T12:00:00Z' })
+    let failSessions!: (reason: Error) => void
+    vi.mocked(fetchSessions).mockImplementationOnce(() => new Promise<Session[]>((_resolve, reject) => { failSessions = reject }))
+    const socket = publishConnectingSocket(intoChatStore)
+
+    useWorkspacesStore.setState({ activeWorkspaceId: WS })
+    const entry = enterWorkspace()
+    await settle()
+    if (order === 'fail-then-open') {
+      failSessions(new ApiError(503, 'sessions unavailable'))
+      await entry
+      expect(useSessionStore.getState().workspaceEntry?.status, 'precondition: B failed before the socket opened').toBe('failed-attempt')
+      expect(useSessionStore.getState().resolvingSessionForWorkspace[WS], 'precondition: B is no longer loading').toBeUndefined()
+      socket.open()
+    } else {
+      expect(useSessionStore.getState().resolvingSessionForWorkspace[WS], 'precondition: B is still loading').toBe(true)
+      socket.open()
+      failSessions(new ApiError(503, 'sessions unavailable'))
+      await entry
+    }
+
+    // A's transport: the reopened socket carries exactly one attach, for A.
+    expect(attachFrames(socket).map((frame) => frame.session_id), 'A re-bound on the new socket; B never attached').toEqual([PRIOR])
+    // Frames the gateway now addresses to A reach A's transcript through the real parser and store.
+    const deliver = (frame: object) => socket.onmessage?.({ data: JSON.stringify(frame) })
+    deliver({ type: 'session_state', session_id: PRIOR, user_id: 'u-1', pending_approvals: [], emitted_at: '2026-10-29T12:01:00Z', boot_id: 'boot-1' })
+    deliver({ type: 'catch_up_complete', session_id: PRIOR, seq: 1, boot_id: 'boot-1', mode: 'incremental' })
+    deliver({ type: 'user_message', session_id: PRIOR, id: 'a-after', content: AFTER, timestamp: '2026-10-29T12:01:01Z', seq: 2 })
+    await new Promise<void>((resolve) => {
+      if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(() => resolve())
+      else setTimeout(resolve, 0)
+    })
+    await settle()
+    const chat = useChatStore.getState()
+    expect(getMessages(chat.sessionsById[PRIOR]).map((message) => message.content), 'A kept its transcript and received the new frame').toEqual([BEFORE, AFTER])
+    expect(chat.messages.map((message) => message.content), 'A is still the transcript on screen').toEqual([BEFORE, AFTER])
+
+    const state = useSessionStore.getState()
+    expect({
+      sessionId: state.activeSessionId,
+      agentId: state.activeAgentId,
+      type: state.attachedSessionType,
+      title: state.attachedTaskTitle,
+    }, 'A\'s tuple is coherent: same chat, owner, MAIN type and title').toEqual({ sessionId: PRIOR, agentId: 'jim', type: 'main', title: PRIOR_DESCRIPTOR.title })
+    expect(state.sessionByWorkspace[WS], 'B still remembers its own chat, so Retry tries B again').toEqual(DESTINATION_DESCRIPTOR)
+    expect(readPersistedSessionByWorkspace()[WS], 'and so does the copy a reload reads').toEqual(DESTINATION_DESCRIPTOR)
+    expect(state.sessionByWorkspace[PRIOR_WS], 'A\'s own workspace pointer is untouched').toEqual(PRIOR_DESCRIPTOR)
+    expect(state.workspaceEntry, 'B is a retryable failed attempt over committed A').toEqual({
+      status: 'failed-attempt',
+      committed: { sessionId: PRIOR, agentId: 'jim' },
+      attempted: { sessionId: MAIN, sendEnabled: false },
+      acknowledged: false,
+      retry: true,
+      fellBack: false,
+    })
+    expect(workspaceEntryBlocksSend(state, WS), 'no send while B is a failed attempt').toBe(true)
   })
 })
 

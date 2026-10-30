@@ -8,7 +8,6 @@ import { useChatStore } from "@/store/chat";
 import { getPendingFirstSend } from "@/store/chat/first-send";
 import { useConnectionStore } from "@/store/connection";
 import { useUiStore } from "@/store/ui";
-import { useWorkspacesStore } from "@/store/workspacesStore";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
 import { useSessionStore, attachSessionCursorFields, attachAlreadyInFlight, noteAttachSent } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
@@ -156,20 +155,18 @@ export function reattachActiveSession(
   // BEFORE replay starts. After a handover (e.g. Mia → Jim) a full reload must
   // keep the header on Jim (active_agent_id), not revert to the creating agent.
   //
-  // Not while a workspace entry for the current workspace is still resolving:
-  // that entry is the newest navigation intent and commits its own
-  // workspace/session/owner tuple. A reconnect is not an open (agent-first
-  // navigation spec, "Foreground commitment and bounded read" 2), and
-  // setActiveSession would write this older session's descriptor under the
-  // entry's workspace, which makes the entry abandon its restore (#1449).
-  // The attach below still re-binds the transport, so if the entry ends
-  // without attaching, the chat still shown keeps receiving its frames.
-  const sessionState = useSessionStore.getState();
-  const workspaceId = useWorkspacesStore.getState().activeWorkspaceId;
-  const entryPending = !!workspaceId && sessionState.resolvingSessionForWorkspace[workspaceId] === true;
-  const seedAgentId = entryPending ? null : resolveLastActiveAgentId(activeSessionId);
-  if (seedAgentId) {
-    useSessionStore.getState().setActiveSession(activeSessionId, seedAgentId);
+  // This re-binds the SAME, already active session; it is not an open
+  // (agent-first navigation spec, "Foreground commitment and bounded read" 2).
+  // So it only fills an owner the store does not know yet. It must not go
+  // through setActiveSession: that clears the attached type and title (a main
+  // chat would lose its participant control) and records the session under the
+  // CURRENT workspace - which, while the user is entering another workspace or
+  // after that entry failed, is not this session's workspace, and would replace
+  // that workspace's remembered chat (#1449). A live owner is already the value
+  // resolveLastActiveAgentId returns, so there is nothing to re-seed then.
+  if (useSessionStore.getState().activeAgentId == null) {
+    const seedAgentId = resolveLastActiveAgentId(activeSessionId);
+    if (seedAgentId) useSessionStore.setState({ activeAgentId: seedAgentId });
   }
   // #823 catch-up redesign (BE-DESIGN.md §6.1): send this bucket's own
   // numbered cursor (if any) so the gateway can answer with an incremental

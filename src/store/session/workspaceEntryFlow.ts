@@ -107,7 +107,7 @@ function socketIsOpening(): boolean {
  * settles from the connection store update inside it, and the continuation is a
  * microtask), so its connect-time reattachActiveSession has already run. With no
  * active session it re-binds nothing; with an older chat still active it only re-binds
- * that chat's transport and does not re-commit it while this entry is resolving
+ * that chat's transport and never re-commits it
  * (OmnipusRuntimeProvider.tsx::reattachActiveSession), so this workspace's remembered
  * pointer is unchanged and the attach that follows sets the chat's type and agent itself.
  *
