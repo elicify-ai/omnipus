@@ -4,8 +4,10 @@
  * or the file is gone (listing omits it and the file read is HTTP 404).
  *
  * Oracle: BS-1.3 says a re-click shows that file. A failed refresh must not
- * present the cached bytes as the current file: a visible alert with a Retry
- * control stays after the read has given up, and the earlier text may remain.
+ * present the cached bytes as the current file: the notice stays after the
+ * read has given up, and the earlier text may remain. Founder Q10 (2026-10-30):
+ * that notice offers no Retry; it stays until a later open reads the file
+ * successfully. Re-basing the open editor is out of scope.
  * BS-1.5 says a missing file uses the Library's existing not-there landing,
  * not the cached text. BS-1.4 is why a dirty click is not the way into this
  * refresh: that click asks first. The draft case opens through the same store
@@ -159,7 +161,7 @@ async function shownCachedBody() {
 }
 
 describe('a re-opened file whose fresh read fails (R5-SF-1)', () => {
-  it('keeps the earlier text and a persistent Retry alert when the content refresh returns HTTP 500', async () => {
+  it('keeps the earlier text and a persistent notice when the content refresh returns HTTP 500', async () => {
     renderOnPlan(2)
     await shownCachedBody()
 
@@ -170,13 +172,14 @@ describe('a re-opened file whose fresh read fails (R5-SF-1)', () => {
     const preview = screen.getByTestId('library-preview-pane')
     expect(preview).toHaveTextContent(BODY_A)
     const refreshNotice = screen.getByText('Could not refresh this file — showing the earlier version.')
-    expect(refreshNotice.closest('[role="alert"]')).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible()
+    const refreshAlert = refreshNotice.closest('[role="alert"]')
+    expect(refreshAlert).not.toBeNull()
+    // Founder Q10: the notice has no Retry. The control used to be a sibling of the alert.
+    expect(refreshAlert!.parentElement?.querySelector('button')).toBeNull()
     await act(async () => {
       await Promise.resolve()
     })
     expect(screen.getByText('Could not refresh this file — showing the earlier version.')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible()
     expect(preview).toHaveTextContent(BODY_A)
   })
 
@@ -196,7 +199,6 @@ describe('a re-opened file whose fresh read fails (R5-SF-1)', () => {
     expect(screen.getByTestId('library-editor-textarea')).toHaveValue(`${BODY_A}\n${DRAFT}`)
     const refreshNotice = screen.getByText('Could not refresh this file — showing the earlier version.')
     expect(refreshNotice.closest('[role="alert"]')).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible()
   })
 
   it('says an already open file is missing when the fresh listing omits it and the read is HTTP 404', async () => {
@@ -211,7 +213,6 @@ describe('a re-opened file whose fresh read fails (R5-SF-1)', () => {
       const missingNotice = screen.getByText('This file is no longer in the Library — showing the earlier version.')
       expect(missingNotice.closest('[role="alert"]')).not.toBeNull()
     })
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible()
     expect(screen.getByTestId('library-preview-pane')).toHaveTextContent(BODY_A)
     expect(screen.getByTestId('library-row-notes/other.md')).toBeEnabled()
   })
