@@ -27,10 +27,3 @@ func rootWritability() (bool, error) {
 		return true, fmt.Errorf("could not check whether the filesystem root is writable: %w", err)
 	}
 }
-
-// rootIsWritable is the default rootWritableProbe (the test seam keeps its
-// plain bool signature).
-func rootIsWritable() bool {
-	w, _ := rootWritability()
-	return w
-}

@@ -11,7 +11,7 @@
 //  2. It contains none of * ? [ ] { } % $ ` ~ \ and no ".." segment.
 //  3. It is not expansion-derived (applied by the caller).
 //  4. Its first component below the filesystem root does not exist.
-//  5. The gateway's effective user cannot write the root (rootWritableProbe;
+//  5. The gateway's effective user cannot write the root (rootWritabilityFn;
 //     always "writable" on Windows, so the rule is off there).
 //  6. It stands alone: skipping whitespace including newlines, the nearest
 //     character before the opening quote is one of ( , = [ { : or the start
@@ -48,18 +48,31 @@ import (
 	"strings"
 )
 
-// rootWritableProbe reports whether the gateway's effective user can write
-// the filesystem root (spec §3.1 condition 5). A package variable so tests
-// can force either branch; production uses the platform probe
-// (shell_standalone_literal_unix.go / _windows.go).
-var rootWritableProbe = rootIsWritable
-
-// rootWritabilityFn is the platform root check with its cause (T11 SF-5):
-// literalTopCannotExist asks it why the root counts as writable, so a failed
-// check (rather than a genuinely writable root) is named in the refusal. A
-// package variable so tests can make the check fail; production uses the
-// platform rootWritability (shell_standalone_literal_unix.go / _windows.go).
+// rootWritabilityFn is spec §3.1 condition 5: ONE probe of whether the
+// gateway's effective user can write the filesystem root, returning the
+// decision and, when the probe itself failed, its error (T11 SF-5: the error
+// of that one call is kept and named in the refusal; no second probe stands
+// in for it). Production uses the platform rootWritability
+// (shell_standalone_literal_unix.go / _windows.go); a test can inject a
+// one-shot error by replacing it.
 var rootWritabilityFn = rootWritability
+
+// rootWritableProbe, when set (tests only), replaces the decision of a probe
+// that succeeded, so a test can force either branch on any host. It never
+// hides a probe error. nil in production.
+var rootWritableProbe func() bool
+
+// rootDecision runs the single root probe and applies the test override.
+func rootDecision() (writable bool, err error) {
+	writable, err = rootWritabilityFn()
+	if err != nil {
+		return true, err
+	}
+	if rootWritableProbe != nil {
+		writable = rootWritableProbe()
+	}
+	return writable, nil
+}
 
 // standAloneLiteralForbiddenChars is spec §3.1 condition 2's character set.
 const standAloneLiteralForbiddenChars = "*?[]{}%$`~\\"
@@ -210,14 +223,13 @@ func shellWordEndsAfter(cmd string, i int) bool {
 // false, which keeps today's refusal. An unexpected Lstat error is also
 // returned so the refusal can say the check could not complete, instead of
 // presenting the uncertainty as a real outside write (T11 fix round 1, SF-5).
-// When the root probe answers "writable", the platform check is asked for
-// its cause, so a failed probe (rather than a genuinely writable root) is
-// named in the refusal too.
+// A failed root probe returns its own error, so the refusal names it.
 func literalTopCannotExist(p string) (bool, error) {
-	if rootWritableProbe() {
-		if _, err := rootWritabilityFn(); err != nil {
-			return false, err
-		}
+	writable, err := rootDecision()
+	if err != nil {
+		return false, err
+	}
+	if writable {
 		return false, nil
 	}
 	if !strings.HasPrefix(p, "/") {
@@ -228,7 +240,7 @@ func literalTopCannotExist(p string) (bool, error) {
 		return false, nil
 	}
 	top := filepath.Join("/", first)
-	_, err := os.Lstat(top)
+	_, err = os.Lstat(top)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return true, nil

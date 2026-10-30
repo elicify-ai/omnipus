@@ -6,6 +6,3 @@ package tools
 // as writable, so the stand-alone quoted-literal rule is off and every
 // outside reference keeps today's refusal.
 func rootWritability() (bool, error) { return true, nil }
-
-// rootIsWritable is the default rootWritableProbe.
-func rootIsWritable() bool { return true }

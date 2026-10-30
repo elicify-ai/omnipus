@@ -14,9 +14,16 @@
 //   - a here-document body whose command is one of those shells or `eval`.
 //
 // A here-document body fed to any other program (python3 <<'PY' ...) is data
-// and is skipped: the shell never brace-expands here-document bodies. Text
-// that cannot be parsed (unbalanced quotes, a `$(...)` the tokenizer refuses,
-// nesting deeper than maxBraceScanDepth) counts as "may expand".
+// and is skipped: the shell never brace-expands here-document bodies.
+//
+// When the scan cannot be sure where a nested shell's script is, it answers
+// "may expand" and the exemption is withheld (T11 round 4, founder: keep it
+// simple): text that cannot be parsed (unbalanced quotes, a `$(...)` the
+// tokenizer refuses, nesting deeper than maxBraceScanDepth), a long or
+// argument-taking option before -c (`bash --norc -c`, `bash -o x -c`), and a
+// shell reading its script from standard input (a pipe, a here-string, or a
+// here-document behind a wrapper such as env, command or nice). Unquoted
+// separators split words even without whitespace (`true;bash -c ...`).
 //
 // Residual, stated: a non-shell program that hands its own data to a shell
 // (Python's os.system, perl system) is not followed; the guard reads command
@@ -73,9 +80,15 @@ func mayBraceExpand(cmd string, depth int) bool {
 		if (cmd[i] == '{' || cmd[i] == '}') && !mask[i] {
 			return true
 		}
+		// An unquoted command separator splits words even without
+		// whitespace (`true;bash -c ...`), so it becomes a space here.
+		if !mask[i] && strings.IndexByte(";&|()\n", cmd[i]) >= 0 {
+			outside.WriteByte(' ')
+			continue
+		}
 		outside.WriteByte(cmd[i])
 	}
-	words, ok := tokenizeShellWords(strings.ReplaceAll(outside.String(), "\n", " "))
+	words, ok := tokenizeShellWords(outside.String())
 	if !ok {
 		return true
 	}
@@ -86,21 +99,70 @@ func mayBraceExpand(cmd string, depth int) bool {
 			}
 			continue
 		}
-		if !braceExpandingShells[filepath.Base(w)] {
-			continue
-		}
-		j, hasC := i+1, false
-		for j < len(words) && strings.HasPrefix(words[j], "-") && !strings.HasPrefix(words[j], "--") {
-			if strings.Contains(words[j], "c") {
-				hasC = true
-			}
-			j++
-		}
-		if hasC && j < len(words) && mayBraceExpand(words[j], depth+1) {
+		if braceExpandingShells[filepath.Base(w)] && nestedShellMayBraceExpand(words[i+1:], depth) {
 			return true
 		}
 	}
 	return false
+}
+
+// nestedShellMayBraceExpand judges the words after a shell name. It follows
+// the rule "cannot be sure, withhold" (T11 round 4): only a run of plain
+// short options (letters, none taking an argument) before the script is
+// understood. A long option (--norc), a +option, an option that takes an
+// argument (-o, -O), or a shell that reads its script from standard input
+// (no -c and no script-file argument: a pipe, a here-string, a
+// here-document behind a wrapper) all count as "may brace-expand". A shell
+// given a script FILE is not followed: the file's contents are not command
+// text.
+func nestedShellMayBraceExpand(args []string, depth int) bool {
+	j, hasC := 0, false
+	for j < len(args) && (strings.HasPrefix(args[j], "-") || strings.HasPrefix(args[j], "+")) {
+		opt := args[j]
+		if !isPlainShortOptionCluster(opt) {
+			return true
+		}
+		if strings.ContainsRune(opt, 'c') {
+			hasC = true
+		}
+		j++
+	}
+	for j < len(args) && isRedirectionWord(args[j]) {
+		if strings.HasPrefix(strings.TrimLeft(args[j], "0123456789"), "<<<") {
+			return true // a here-string feeds the shell its script on standard input
+		}
+		j++
+	}
+	if j >= len(args) {
+		return true // reads its script from standard input: cannot see it
+	}
+	if !hasC {
+		return false // runs a script file; its contents are not command text
+	}
+	return mayBraceExpand(args[j], depth+1)
+}
+
+// isPlainShortOptionCluster accepts "-x" style clusters of letters that take
+// no argument. "-o"/"-O" (which consume the next word), "--…", "+…" and
+// anything else are not understood.
+func isPlainShortOptionCluster(opt string) bool {
+	if len(opt) < 2 || opt[0] != '-' || opt[1] == '-' {
+		return false
+	}
+	for _, r := range opt[1:] {
+		isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		if !isLetter || r == 'o' || r == 'O' {
+			return false
+		}
+	}
+	return true
+}
+
+// isRedirectionWord reports a redirection token such as "<<EOF", "<file",
+// ">out", "2>err" or "<<<word" (it is not a script argument).
+func isRedirectionWord(w string) bool {
+	trimmed := strings.TrimLeft(w, "0123456789")
+	return strings.HasPrefix(trimmed, "<") || strings.HasPrefix(trimmed, ">")
 }
 
 // hereDocBody is one here-document body: cmd[start:end], and whether the
@@ -208,8 +270,9 @@ func readHereDocDelimiter(cmd string, j int) (string, int, bool) {
 }
 
 // hereDocConsumerIsShell reports whether the simple command that owns the
-// here-document operator at op is a brace-expanding shell or eval. When it
-// cannot tell, it answers true (the body is then scanned as shell text).
+// here-document operator at op runs a brace-expanding shell or eval anywhere
+// in its words. When it cannot tell, it answers true (the body is then
+// scanned as shell text).
 func hereDocConsumerIsShell(cmd string, mask []bool, op int) bool {
 	start := 0
 	for k := op - 1; k >= 0; k-- {
@@ -219,13 +282,17 @@ func hereDocConsumerIsShell(cmd string, mask []bool, op int) bool {
 		}
 	}
 	words, ok := tokenizeShellWords(cmd[start:op])
-	if !ok {
+	if !ok || len(words) == 0 {
 		return true
 	}
-	head, _ := resolveShellHead(words)
-	if head == "" {
-		return true
+	// Any shell or eval word in the simple command counts, not only its head:
+	// a wrapper such as env, command, nice, exec, nohup, time or sudo puts
+	// the shell later in the word list (T11 round 4).
+	for _, w := range words {
+		base := filepath.Base(w)
+		if braceExpandingShells[base] || base == "eval" {
+			return true
+		}
 	}
-	base := filepath.Base(head)
-	return braceExpandingShells[base] || base == "eval"
+	return false
 }
