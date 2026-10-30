@@ -30,28 +30,48 @@ function Harness() {
   )
 }
 
-describe('CliPathValidationHint person-session 403', () => {
+describe('CliPathValidationHint 403', () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    vi.mocked(fetchCliValidate).mockRejectedValue(
-      new ApiError(403, 'this action requires a signed-in person'),
-    )
   })
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('tells the person to sign in and does not call the refusal a retry', async () => {
+  async function settle() {
     render(<Harness />)
     fireEvent.click(screen.getByRole('button', { name: 'check' }))
-    // Debounce is 400ms (useCliPathValidation). act flushes the timer and the
-    // rejected request so the assertion sees the settled hint, not "Checking…".
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400)
     })
+  }
 
-    const hint = screen.getByText(/signed-in person/i)
+  it('explains how to sign in only for the person-gate code', async () => {
+    vi.mocked(fetchCliValidate).mockRejectedValue(
+      new ApiError(403, 'unused', {
+        code: 'person_session_required',
+        body: JSON.stringify({ error: 'a signed-in person is required', code: 'person_session_required' }),
+      }),
+    )
+    await settle()
+    const hint = screen.getByText(/sign in to your account/i)
     expect(hint).toHaveAttribute('data-cli-status', 'forbidden')
+    expect(hint.textContent ?? '').not.toMatch(/refused by the server/i)
+    expect(hint.textContent ?? '').not.toMatch(/you can still save/i)
+    expect(hint.textContent ?? '').not.toMatch(/will retry/i)
+  })
+
+  it('shows the server message for any other 403', async () => {
+    vi.mocked(fetchCliValidate).mockRejectedValue(
+      new ApiError(403, 'unused', {
+        code: 'something_else',
+        body: JSON.stringify({ error: 'the check is turned off' }),
+      }),
+    )
+    await settle()
+    const hint = screen.getByText(/CLI check refused by the server: the check is turned off/i)
+    expect(hint).toHaveAttribute('data-cli-status', 'forbidden')
+    expect(hint.textContent ?? '').not.toMatch(/sign in to your account/i)
     expect(hint.textContent ?? '').not.toMatch(/you can still save/i)
     expect(hint.textContent ?? '').not.toMatch(/will retry/i)
   })

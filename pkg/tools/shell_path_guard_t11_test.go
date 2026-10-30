@@ -196,6 +196,45 @@ func TestGuard_BraceConcatenationStillRefused(t *testing.T) {
 	}
 }
 
+// TestGuard_UnquotedBraceWithholdsExemption is the simplified S5 rule.
+// The stand-alone exemption holds only when no text the shell reads has an
+// unquoted brace. Braces inside quotes, escaped braces, and a here-document
+// fed to a non-shell stay allowed. Nested shells, eval, and a here-document
+// fed to a shell still refuse. Unparsable text withholds the exemption.
+func TestGuard_UnquotedBraceWithholdsExemption(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	absent := t11AbsentTop(t)
+	allowed := fmt.Sprintf(`python3 -c "print('%s/v1'); s='{a}'"`, absent)
+	got := tool.guardCommand(context.Background(), allowed, cwd)
+	require.Empty(t, got, "braces inside quotes do not withhold the exemption\nrefusal: %s", got)
+
+	escaped := fmt.Sprintf(`python3 -c "print('%s/v1')" \{`, absent)
+	got = tool.guardCommand(context.Background(), escaped, cwd)
+	require.Empty(t, got, "an escaped brace does not withhold the exemption\nrefusal: %s", got)
+
+	pyHere := "python3 <<'PY'\nprint('" + absent + "/v1')\nprint('{a}')\nPY\n"
+	got = tool.guardCommand(context.Background(), pyHere, cwd)
+	require.Empty(t, got, "a here-document fed to python is not shell text\nrefusal: %s", got)
+
+	refused := []string{
+		fmt.Sprintf(`echo {a,b}; python3 -c "print('%s/v1')"`, absent),
+		`zsh -c "touch {'/tm',}p/t11-proof"`,
+		`find . -exec sh -c "touch {'/tm',}p/t11-proof" \;`,
+		`xargs sh -c "touch {'/tm',}p/t11-proof"`,
+		`env bash -c "touch {'/tm',}p/t11-proof"`,
+		`eval "touch {'/tm',}p/t11-proof"`,
+		"sh <<'EOF'\ntouch {'/tm',}p/t11-proof\nEOF\n",
+		fmt.Sprintf(`python3 -c "print('%s/v1')`, absent),
+	}
+	for _, cmd := range refused {
+		t.Run(cmd, func(t *testing.T) {
+			t11RequireRefused(t, tool, cwd, cmd, "path outside working dir", "an unquoted brace withholds the exemption, or the text cannot be parsed")
+		})
+	}
+}
+
 // TestGuard_RuleOffWhenRootWritable is FR-3. On a non-root Unix host the
 // spec's "root is writable" input is not this process, so the assertion is
 // the complementary one the same sentence requires: the rule stays on.

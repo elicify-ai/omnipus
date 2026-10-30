@@ -517,3 +517,78 @@ func TestCliValidate_IncompleteDiscoveryRefuses(t *testing.T) {
 	w := t11PostValidate(t, mux, cfg, token, dst, "198.51.100.82:1", nil)
 	t11AssertPathRefused(t, w, marker, *spawns, "workspace", "discover", "mount", "incomplete")
 }
+
+// TestCliValidate_IncompleteMountRefuses is S6 at the registered route.
+// A valid mount record still lets a program outside it run. An unreadable
+// record, malformed JSON, or a dropped entry is path-not-allowed and starts
+// nothing. Spec §3.2: the refusal reason is path-not-allowed on HTTP 200.
+// HTTP 403 is only the person gate.
+func TestCliValidate_IncompleteMountRefuses(t *testing.T) {
+	_, mux, home := t11ValidateMux(t)
+	const id = "t11mroute"
+	require.NoError(t, workspace.SaveRecord(home, workspace.Workspace{ID: id, Name: "T11"}))
+	marker := filepath.Join(t.TempDir(), "marker")
+	prog := t11BuildMarkerProgram(t, marker)
+	dir := t.TempDir()
+	require.NoError(t, os.Chmod(dir, 0o700))
+	dst := filepath.Join(dir, "fakecli")
+	t11CopyExe(t, prog, dst, 0o755)
+	token, cfg := t11Person(t, home)
+	spawns, _ := t11CountSpawns(t)
+
+	refuse := func(t *testing.T, ip string) {
+		t.Helper()
+		t11ClearMarker(t, marker)
+		*spawns = 0
+		w := t11PostValidate(t, mux, cfg, token, dst, ip, nil)
+		t11AssertPathRefused(t, w, marker, *spawns, "mount")
+	}
+
+	t.Run("valid mount still runs a program outside it", func(t *testing.T) {
+		host := t.TempDir()
+		_, _, err := workspace.CreateMount(home, id, "extra", host)
+		require.NoError(t, err)
+		t11ClearMarker(t, marker)
+		*spawns = 0
+		w := t11PostValidate(t, mux, cfg, token, dst, "198.51.100.90:1", nil)
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+		resp := t11DecodeValidate(t, w)
+		require.Equal(t, gen.CliValidateResponseReason("ok"), resp.Reason, "body=%s", w.Body.String())
+		require.Equal(t, 1, *spawns, "a complete mount record must not block an outside program")
+		_, err = os.Stat(marker)
+		require.NoError(t, err, "the outside program must have written the marker")
+	})
+
+	t.Run("unreadable mount record", func(t *testing.T) {
+		path, err := workspace.MountStorePath(home, id)
+		require.NoError(t, err)
+		require.NoError(t, os.Remove(path))
+		require.NoError(t, os.Mkdir(path, 0o700))
+		refuse(t, "198.51.100.91:1")
+	})
+
+	t.Run("malformed mount record", func(t *testing.T) {
+		path, err := workspace.MountStorePath(home, id)
+		require.NoError(t, err)
+		require.NoError(t, os.RemoveAll(path))
+		require.NoError(t, os.WriteFile(path, []byte(`{"mounts":[`), 0o600))
+		refuse(t, "198.51.100.92:1")
+	})
+
+	t.Run("dropped mount entry", func(t *testing.T) {
+		host := t.TempDir()
+		body, err := json.Marshal(map[string]any{
+			"workspace_id": id,
+			"mounts": []map[string]string{
+				{"name": "ok", "host_path": host},
+				{"name": "ok", "host_path": "/etc"},
+			},
+		})
+		require.NoError(t, err)
+		path, err := workspace.MountStorePath(home, id)
+		require.NoError(t, err)
+		require.NoError(t, os.RemoveAll(path))
+		require.NoError(t, os.WriteFile(path, body, 0o600))
+		refuse(t, "198.51.100.93:1")
+	})
+}

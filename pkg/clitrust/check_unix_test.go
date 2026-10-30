@@ -266,19 +266,47 @@ func TestAgentWritableRoots_RuntimeHomeSpelling(t *testing.T) {
 	})
 
 	t.Run("default home is not trimmed", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.Chmod(dir, 0o700))
+		// S3: the runtime does not trim Defaults.Home. Every forbidden root is
+		// then made absolute against the gateway's working directory. The relative
+		// spelling itself is not a root; both absolute spellings are.
+		cwd := t.TempDir()
+		t.Chdir(cwd)
+		rel := "t11-default-home"
+		dir := filepath.Join(cwd, rel)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
 		prog := t11WriteExe(t, dir, "fakecli", 0o755)
 		cfg := &config.Config{}
-		padded := "  " + dir + "  "
+		padded := "  " + rel + "  "
 		cfg.Agents.Defaults.Home = padded
 		got := t11MustRoots(t, roots, t.TempDir(), cfg)
-		require.Truef(t, t11PathListed(got, padded),
-			"the runtime keeps Defaults.Home as written; got %v", got)
-		require.Truef(t, t11PathListed(got, dir),
-			"spec §3.2: the trimmed spelling is also forbidden; got %v", got)
+		absPadded, err := filepath.Abs(padded)
+		require.NoError(t, err)
+		absTrim, err := filepath.Abs(rel)
+		require.NoError(t, err)
+		require.Truef(t, filepath.IsAbs(absPadded) && filepath.IsAbs(absTrim), "both spellings are absolute")
+		require.Truef(t, t11PathListed(got, absPadded), "the untrimmed default home, made absolute; got %v", got)
+		require.Truef(t, t11PathListed(got, absTrim), "spec §3.2: the trimmed spelling is also forbidden; got %v", got)
+		require.Falsef(t, t11PathListed(got, padded), "a relative spelling is not itself a root; got %v", got)
 		resolved, err := check(prog, got)
-		require.Error(t, err, "spec §3.2: a program at the trimmed spelling of the default home is refused")
+		require.Error(t, err, "spec §3.2: a program at the trimmed absolute home is refused")
+		require.Empty(t, resolved)
+		require.Contains(t, strings.ToLower(err.Error()), "home")
+	})
+
+	t.Run("relative agent home is forbidden at its absolute path", func(t *testing.T) {
+		cwd := t.TempDir()
+		t.Chdir(cwd)
+		rel := "t11-agent-rel"
+		dir := filepath.Join(cwd, rel)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		prog := t11WriteExe(t, dir, "fakecli", 0o755)
+		cfg := &config.Config{}
+		cfg.Agents.List = []config.AgentConfig{{ID: "t11rel", Home: rel}}
+		got := t11MustRoots(t, roots, t.TempDir(), cfg)
+		require.Truef(t, t11PathListed(got, dir), "spec §3.2 S3: the relative home is stored absolute; got %v", got)
+		require.Falsef(t, t11PathListed(got, rel), "the relative spelling is not a root; got %v", got)
+		resolved, err := check(prog, got)
+		require.Error(t, err, "spec §3.2: a program inside a relative agent home is refused")
 		require.Empty(t, resolved)
 		require.Contains(t, strings.ToLower(err.Error()), "home")
 	})
