@@ -2,12 +2,17 @@ package session
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -99,7 +104,7 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 			state.latched = true
 		}
 		slog.Warn("session: chat history index rebuild failed", "session_id", sid, "trigger", "catchup_limit", "class", class,
-			"duration_ms", time.Since(started).Milliseconds(), "attempt", attempt, "retry", retry, "cause", historyHealCause(cause))
+			"duration_ms", time.Since(started).Milliseconds(), "attempt", attempt, "retry", retry, "cause", us.historyHealCause(cause))
 		if ret != nil {
 			return chatHistoryReconcileResult{}, ret
 		}
@@ -174,7 +179,7 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 			}
 			if cleanupErr != nil {
 				slog.Warn("session: chat history index old generations not retired", "session_id", sid, "trigger", "catchup_limit",
-					"cause", historyHealCause(cleanupErr))
+					"cause", us.historyHealCause(cleanupErr))
 			}
 			// A cleanup failure the proof could not clear either is the
 			// store's real state (storage_error, retried on every read), not
@@ -229,21 +234,27 @@ const chatHistoryHealCauseMax = 512
 var (
 	// historyHealPathToken matches any token holding a path separator (with an
 	// optional drive letter): absolute and relative paths, session folders.
+	// It is the backstop for free text only; typed path errors and the
+	// store's known roots are removed whole first (6a delta review I1).
 	historyHealPathToken = regexp.MustCompile(`(?:[A-Za-z]:)?[^\s:;,'"()]*[/\\][^\s:;,'"()]*`)
 	// historyHealFileToken matches a bare history or canonical file name.
 	historyHealFileToken = regexp.MustCompile(`[^\s:;,'"()]+\.(?:jsonl|json|chi|tmp)\b`)
 )
 
 // historyHealCause is the operator-facing cause of a heal failure: the
-// underlying error text with every path and file name replaced, newlines
-// folded and the length bounded. The session id is logged separately. Errors
-// here carry mechanism text (errno, decode position, check name), never
-// record content. The classifying wrappers expose only their class, so their
-// private cause is unwrapped first.
-func historyHealCause(err error) string {
-	text := historyHealCauseText(err)
-	text = historyHealPathToken.ReplaceAllString(text, "<path>")
-	text = historyHealFileToken.ReplaceAllString(text, "<file>")
+// underlying error with every path and file name removed, newlines folded and
+// the length bounded. The session id is logged separately.
+//
+// Paths are removed whole, never token by token, because a folder name may
+// hold spaces (6a delta review I1): the path of an fs.PathError or
+// os.LinkError is dropped from the typed error; in free text, each known root
+// (roots: the store's data folders) is removed together with everything up to
+// the next ": " separator. A decoder or parse error (JSON, time, number) is
+// logged as its class only: its text quotes the persisted value it failed on.
+// The classifying wrappers expose only their class, so their private cause is
+// unwrapped first.
+func historyHealCause(err error, roots ...string) string {
+	text := historyHealCauseText(err, historyHealRoots(roots))
 	text = strings.Join(strings.Fields(text), " ")
 	if len(text) > chatHistoryHealCauseMax {
 		cut := chatHistoryHealCauseMax
@@ -255,30 +266,150 @@ func historyHealCause(err error) string {
 	return text
 }
 
-func historyHealCauseText(err error) string {
-	switch e := err.(type) {
-	case nil:
+// historyHealCause is the store's sanitizer: it also removes every spelling
+// of the store's own data folders from free error text.
+func (us *UnifiedStore) historyHealCause(err error) string {
+	roots := []string{us.baseDir, us.homePath}
+	for _, root := range []string{us.baseDir, us.homePath} {
+		if root == "" {
+			continue
+		}
+		if abs, absErr := filepath.Abs(root); absErr == nil {
+			roots = append(roots, abs)
+			if resolved, evalErr := filepath.EvalSymlinks(abs); evalErr == nil {
+				roots = append(roots, resolved)
+			}
+		}
+	}
+	return historyHealCause(err, roots...)
+}
+
+// historyHealRoots drops empty and root-only spellings and orders the rest
+// longest first, so a longer root is never cut short by its own prefix.
+func historyHealRoots(roots []string) []string {
+	out := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if len(strings.Trim(root, `/\.`)) == 0 {
+			continue
+		}
+		out = append(out, root)
+	}
+	sort.Slice(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
+	return out
+}
+
+// historyHealDecodeClass reports the class of the first decoder or parse error
+// in err's chain; their text carries persisted values, never logged.
+func historyHealDecodeClass(err error) (string, bool) {
+	var (
+		syntaxErr  *json.SyntaxError
+		typeErr    *json.UnmarshalTypeError
+		invalidErr *json.InvalidUnmarshalError
+		timeErr    *time.ParseError
+		numErr     *strconv.NumError
+		base64Err  base64.CorruptInputError
+	)
+	switch {
+	case errors.As(err, &timeErr):
+		return fmt.Sprintf("%T", timeErr), true
+	case errors.As(err, &numErr):
+		return fmt.Sprintf("%T", numErr), true
+	case errors.As(err, &syntaxErr):
+		return fmt.Sprintf("%T", syntaxErr), true
+	case errors.As(err, &typeErr):
+		return fmt.Sprintf("%T", typeErr), true
+	case errors.As(err, &invalidErr):
+		return fmt.Sprintf("%T", invalidErr), true
+	case errors.As(err, &base64Err):
+		return fmt.Sprintf("%T", base64Err), true
+	}
+	return "", false
+}
+
+func historyHealCauseText(err error, roots []string) string {
+	if err == nil {
 		return "unknown"
+	}
+	// The switch matches the OUTERMOST layer only, on purpose: each layer is
+	// rendered by itself and wrappers recurse below, so a wrapper keeps its
+	// own words and every member of a joined error is kept. errors.As would
+	// jump to the first matching inner error and drop both; it is used below
+	// only for wrappers whose text cannot be split.
+	switch e := err.(type) { //nolint:errorlint // layer-by-layer rendering; wrapped errors recurse through the branches below
 	case *ChatHistoryIndexBuildError:
 		if e.cause != nil {
-			return historyHealCauseText(e.cause)
+			return historyHealCauseText(e.cause, roots)
 		}
 		return e.Class
 	case *ChatHistoryUnavailableError:
 		if e.cause != nil {
-			return e.Reason + ": " + historyHealCauseText(e.cause)
+			return e.Reason + ": " + historyHealCauseText(e.cause, roots)
 		}
 		return e.Reason
 	case *historyRetirementError:
-		return historyHealCauseText(e.err)
+		return historyHealCauseText(e.err, roots)
+	case *fs.PathError:
+		return historyHealFreeText(e.Op, roots) + " <path>: " + historyHealCauseText(e.Err, roots)
+	case *os.LinkError:
+		return historyHealFreeText(e.Op, roots) + " <path> <path>: " + historyHealCauseText(e.Err, roots)
+	case *os.SyscallError:
+		return historyHealFreeText(e.Syscall, roots) + ": " + historyHealCauseText(e.Err, roots)
 	case interface{ Unwrap() []error }:
 		var parts []string
 		for _, inner := range e.Unwrap() {
 			if inner != nil {
-				parts = append(parts, historyHealCauseText(inner))
+				parts = append(parts, historyHealCauseText(inner, roots))
 			}
 		}
 		return strings.Join(parts, "; ")
 	}
-	return err.Error()
+	if class, ok := historyHealDecodeClass(err); ok {
+		inner := errors.Unwrap(err)
+		if _, own := historyHealDecodeClass(inner); inner != nil && own {
+			// A wrapper over the decoder error: keep the wrapper's own words
+			// only when they are a plain prefix of the inner text.
+			if prefix, isPrefix := strings.CutSuffix(err.Error(), inner.Error()); isPrefix {
+				return historyHealFreeText(prefix, roots) + historyHealCauseText(inner, roots)
+			}
+		}
+		return "decode error (" + class + ")"
+	}
+	if inner := errors.Unwrap(err); inner != nil {
+		if prefix, isPrefix := strings.CutSuffix(err.Error(), inner.Error()); isPrefix {
+			return historyHealFreeText(prefix, roots) + historyHealCauseText(inner, roots)
+		}
+	}
+	// A wrapper that embeds a path error mid-text cannot be split into its
+	// own words and the inner text: keep only the typed error, whose path is
+	// removed whole.
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return historyHealCauseText(linkErr, roots)
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return historyHealCauseText(pathErr, roots)
+	}
+	return historyHealFreeText(err.Error(), roots)
+}
+
+// historyHealFreeText removes paths from text that carries no typed path:
+// each known root through the next ": " separator (or the end), then any
+// remaining separator-holding token and bare file name.
+func historyHealFreeText(text string, roots []string) string {
+	for _, root := range roots {
+		for {
+			at := strings.Index(text, root)
+			if at < 0 {
+				break
+			}
+			end := len(text)
+			if sep := strings.Index(text[at+len(root):], ": "); sep >= 0 {
+				end = at + len(root) + sep
+			}
+			text = text[:at] + "<path>" + text[end:]
+		}
+	}
+	text = historyHealPathToken.ReplaceAllString(text, "<path>")
+	return historyHealFileToken.ReplaceAllString(text, "<file>")
 }
