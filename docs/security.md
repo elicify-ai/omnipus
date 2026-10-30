@@ -671,12 +671,13 @@ Before starting anything, Omnipus checks the program file. The path must be abso
 
 - the file, or any link on the way, is inside the Omnipus data folder, an agent's working folder, a workspace or a workspace mount (places agents can write);
 - the list of those places cannot be read completely — for example a workspace's mount record is unreadable — because then the check cannot tell what is safe;
+- on macOS, the file or a folder on the way to it has an access-control-list entry that allows writing, deleting or changing permissions (any such "allow" entry refuses the path, whoever it names; "deny" entries are fine);
 - on Linux and macOS, another user could replace the program: the file or any folder on the way to it belongs to a user other than root or the account running Omnipus, the file is writable by its group or by other users, or a folder on the way is writable by its group or by other users. Two exceptions: a shared folder with the sticky bit, such as `/tmp`, is allowed when the entry inside it belongs to root or to the account running Omnipus; and on macOS, `/Applications` itself is allowed in its standard form (owned by root, group admin, writable by administrators but not by other users), so programs installed there pass. Folders inside an app are checked normally;
 - the file is not a regular program the account running Omnipus can execute.
 
 On Windows the path must be a full drive or network (UNC) path to an `.exe`, `.cmd` or `.bat` file, without short `8.3` names (such as `PROGRA~1`) or alternate data streams. **Windows permissions and junctions are not checked yet:** a Windows program in a folder other users can write is not refused. Use the check on Windows only for programs installed in protected locations.
 
-When the check passes, Omnipus runs the file it checked. An empty path is reported as **missing-binary**. Passing the check does not sandbox the program: external command-line workers run outside the Omnipus sandbox (see [sandbox limitations](operations/sandbox-limitations.md#external-command-line-workers-run-outside-the-omnipus-sandbox)).
+When the check passes on Linux or macOS, Omnipus runs exactly the file it checked, by the same path, with no further lookup. **On Windows this is not guaranteed yet:** a later executable-extension lookup can select a different file, so checked-file launch identity is deferred together with the other Windows checks. An empty path is reported as **missing-binary**. Passing the check does not sandbox the program: external command-line workers run outside the Omnipus sandbox (see [sandbox limitations](operations/sandbox-limitations.md#external-command-line-workers-run-outside-the-omnipus-sandbox)).
 
 ## Limits and things to watch
 

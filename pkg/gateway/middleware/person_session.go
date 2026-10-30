@@ -5,9 +5,11 @@
 package middleware
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/elicify-ai/omnipus/pkg/gateway/pathredact"
@@ -41,7 +43,7 @@ func RequirePersonSession(next http.HandlerFunc) http.HandlerFunc {
 				"path", pathredact.RequestPath(r.URL.Path),
 				"remote_addr", r.RemoteAddr,
 				"reason", reason)
-			writeJSONErr(w, http.StatusForbidden, "this action requires a signed-in person")
+			writePersonSessionRefusal(w)
 			return
 		}
 		next(w, r)
@@ -75,4 +77,22 @@ func personSessionRefusal(r *http.Request) string {
 		}
 	}
 	return "not_a_configured_person"
+}
+
+// PersonSessionRequiredCode is the ErrorResponse code of the person-gate 403,
+// so a client can tell this refusal apart from other 403s (CSRF, origin) and
+// label only this one "needs a signed-in person" (T11 SF-4).
+const PersonSessionRequiredCode = "person_session_required"
+
+// writePersonSessionRefusal writes the 403 ErrorResponse with its code.
+func writePersonSessionRefusal(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	code := PersonSessionRequiredCode
+	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{
+		Error: "this action requires a signed-in person",
+		Code:  &code,
+	}); err != nil {
+		slog.Debug("writePersonSessionRefusal: encode failed", "error", err)
+	}
 }

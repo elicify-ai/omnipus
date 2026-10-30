@@ -50,7 +50,9 @@ func trustedOwner(uid uint32) bool {
 //     entry they do not own;
 //   - the one group-writable exception is macOS /Applications in its shipped
 //     root:admin shape (isTrustedAdminFolder, founder decision 2026-10-30);
-//     it must still not be writable by other users.
+//     it must still not be writable by other users;
+//   - on macOS, dir must carry no access-control-list entry that allows
+//     writing (checkNoWriteACL); the same applies to the final file.
 func checkStep(dir, next string, nextInfo os.FileInfo) error {
 	di, err := os.Lstat(dir)
 	if err != nil {
@@ -62,6 +64,9 @@ func checkStep(dir, next string, nextInfo os.FileInfo) error {
 	}
 	if !trustedOwner(owner) {
 		return fmt.Errorf("the folder %q belongs to another user (uid %d), who could replace %q; only folders owned by root or the user running Omnipus are allowed", dir, owner, next)
+	}
+	if err := checkNoWriteACL(dir); err != nil {
+		return err
 	}
 	perm := di.Mode().Perm()
 	if perm&0o022 == 0 {
@@ -101,6 +106,9 @@ func checkFinalFile(final string) error {
 	}
 	if !trustedOwner(owner) {
 		return fmt.Errorf("%q belongs to another user (uid %d); only programs owned by root or the user running Omnipus are allowed", final, owner)
+	}
+	if err := checkNoWriteACL(final); err != nil {
+		return err
 	}
 	if err := unix.Faccessat(unix.AT_FDCWD, final, unix.X_OK, unix.AT_EACCESS); err != nil {
 		if errors.Is(err, unix.EACCES) {

@@ -177,6 +177,40 @@ func TestConnectionWithPath(ctx context.Context, cli, cliPath string) Connection
 		}
 	}
 
+	return testConnectionBinary(ctx, cli, spec, binPath)
+}
+
+// TestConnectionCheckedFile is the connection test for a program file that a
+// caller has already checked (T11: clitrust.CheckProgramPath). It runs exactly
+// checkedFile — the same bytes, with no whitespace trimming and no PATH or
+// executable-extension lookup — so the file that starts is the file that was
+// checked (code review R2-C1: trimming a checked "name " could select a
+// different sibling "name"). checkedFile must be absolute.
+func TestConnectionCheckedFile(ctx context.Context, cli, checkedFile string) ConnectionTestResult {
+	spec, ok := supportedCLIs[cli]
+	if !ok {
+		return ConnectionTestResult{
+			OK:     false,
+			Reason: ReasonUnknownCLI,
+			Message: fmt.Sprintf(
+				"[%s] unknown external CLI %q (supported: %s)",
+				ReasonUnknownCLI, cli, strings.Join(SupportedCLIs(), ", "),
+			),
+		}
+	}
+	if !filepath.IsAbs(checkedFile) {
+		return ConnectionTestResult{
+			OK:      false,
+			Reason:  ReasonMissingBinary,
+			Message: fmt.Sprintf("[%s] %q checked program path %q is not absolute", ReasonMissingBinary, cli, checkedFile),
+		}
+	}
+	return testConnectionBinary(ctx, cli, spec, checkedFile)
+}
+
+// testConnectionBinary is the handshake and credential step shared by both
+// connection tests, on an already-selected binary path.
+func testConnectionBinary(ctx context.Context, cli string, spec cliSpec, binPath string) ConnectionTestResult {
 	// 2. Handshake — run `<binary> --version`, no real work, no tokens.
 	version, hErr := probeVersion(ctx, binPath, spec.versionArgs)
 	if hErr != nil {

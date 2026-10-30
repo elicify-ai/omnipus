@@ -59,12 +59,12 @@ import (
 // no silent wait, no unbounded fan-out of caller-supplied spawns.
 var cliValidateInflight = newInflightLimiter(2)
 
-// cliTestConnection performs the actual spawn-based connection test. It is a
-// package var (not a direct runner.TestConnectionWithPath call) so tests can
-// inject a deterministic / blocking stand-in to exercise the per-caller
-// in-flight cap without spawning a real binary. In production this is always
-// runner.TestConnectionWithPath.
-var cliTestConnection = runner.TestConnectionWithPath
+// cliTestConnection performs the actual spawn-based connection test on the
+// checked program file. It is a package var so tests can inject a
+// deterministic / blocking stand-in. In production it is
+// runner.TestConnectionCheckedFile, which runs exactly the checked path bytes
+// (no trimming, no PATH lookup) — T11 code review R2-C1.
+var cliTestConnection = runner.TestConnectionCheckedFile
 
 // inflightLimiter is a per-key bounded counter used to cap concurrent in-flight
 // operations for one caller.

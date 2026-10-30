@@ -31,11 +31,23 @@ func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
 		return nil, fmt.Errorf("the Omnipus data folder is not known, so the folders agents can write cannot be listed")
 	}
 	var roots []string
+	var absErr error
+	// add keeps only absolute roots: a relative agent home is made absolute
+	// against the gateway's working directory, as the runtime's filesystem
+	// policy does, because a relative root can never match an absolute
+	// candidate (T11 round 3, S3).
 	add := func(p string) {
 		if strings.TrimSpace(p) == "" {
 			return
 		}
-		roots = append(roots, filepath.Clean(p))
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			if absErr == nil {
+				absErr = fmt.Errorf("the agent-writable folder %q could not be made absolute: %w", p, err)
+			}
+			return
+		}
+		roots = append(roots, abs)
 	}
 	// addHome adds a runtime-resolved agent home and, when it differs, its
 	// whitespace-trimmed spelling: the runtime trims a per-agent home but uses
@@ -54,6 +66,9 @@ func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
 			addHome(agenthome.Resolve(&cfg.Agents.List[i], &cfg.Agents.Defaults))
 		}
 	}
+	if absErr != nil {
+		return nil, absErr
+	}
 	ids, err := workspace.ListWorkspaceIDs(home)
 	if err != nil {
 		return nil, fmt.Errorf("the workspaces could not be listed, so their folders and mounts cannot be excluded: %w", err)
@@ -71,6 +86,9 @@ func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
 		for _, m := range mounts {
 			add(m.HostPath)
 		}
+	}
+	if absErr != nil {
+		return nil, absErr
 	}
 	return roots, nil
 }

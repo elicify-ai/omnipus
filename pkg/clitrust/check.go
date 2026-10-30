@@ -79,7 +79,12 @@ func expandRoots(forbidden []string) ([]string, error) {
 		if strings.TrimSpace(r) == "" {
 			continue
 		}
-		clean := filepath.Clean(r)
+		// A relative root is made absolute against the working directory (the
+		// runtime's base); a relative root never matches an absolute path.
+		clean, err := filepath.Abs(r)
+		if err != nil {
+			return nil, fmt.Errorf("the agent-writable folder %q could not be made absolute, so the program location cannot be checked: %w", r, err)
+		}
 		out = append(out, clean)
 		resolved, err := filepath.EvalSymlinks(clean)
 		switch {
