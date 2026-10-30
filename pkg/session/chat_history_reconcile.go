@@ -338,7 +338,19 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 	if err != nil {
 		return result, historyUnavailable("index_inconsistent", err)
 	}
-	defer t.file.Close()
+	// The published generation's handle. The expiry path closes it as soon as
+	// compaction has read it, before that file is retired: Windows refuses
+	// to remove a file this process still holds open.
+	published := t.file
+	defer func() {
+		if published != nil {
+			// As before this change, a close error here is not returned:
+			// published writes through this handle (tail trim, publish)
+			// were synced first, and an unpublished tail is discarded by
+			// the next reconcile, so the close cannot lose published data.
+			_ = published.Close()
+		}
+	}()
 	if _, _, err = historyValidateIndexTail(t, cp, false); err != nil {
 		return result, historyUnavailable("index_inconsistent", err)
 	}
@@ -376,6 +388,11 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 			return result, historyUnavailable("index_inconsistent", err)
 		}
 		defer t.file.Close()
+		closeErr := published.Close()
+		published = nil
+		if closeErr != nil {
+			return result, historyUnavailable("storage_error", closeErr)
+		}
 	}
 	reuseOnly := false
 	if hasSaved && len(expired) == 0 {

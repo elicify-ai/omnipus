@@ -187,3 +187,39 @@ func TestHistoryHealCause_RemovesKnownRootsFromFreeText(t *testing.T) {
 	got := store.historyHealCause(fmt.Errorf("scan %s: interrupted", filepath.Join(store.BaseDir(), "s1", "day one")))
 	require.Equal(t, "scan <path>: interrupted", got, "the store passes its own data folder as a known root")
 }
+
+// 6a re-check I1: fmt's %q doubles every backslash, so a Windows path inside
+// a Go-quoted error ("C:\\Users\\Jane Doe\\...") matched neither a known root
+// nor the token backstop, and its private folder words leaked. The shapes are
+// the exact formats of pkg/fileutil and pkg/session errors that can reach a
+// heal cause (fileutil/atomic_rename_windows.go::renameReplacingDurable,
+// fileutil/atomic_rename_unix.go, fileutil/atomic_sync_dir.go,
+// session/daypartition.go). Oracle: a quoted segment holding a path is
+// removed whole, quotes included; a quoted non-path value is kept.
+func TestHistoryHealCause_RemovesGoQuotedPaths(t *testing.T) {
+	winTmp := healCauseWindowsDir + `\.chat-history\checkpoint.json.tmp 1`
+	winDst := healCauseWindowsDir + `\.chat-history\checkpoint.json`
+	unixTmp, unixDst := healCauseUnixDir+"/a b.tmp", healCauseUnixDir+"/checkpoint.json"
+	denied := errors.New("Access is denied.")
+	for _, tc := range []struct {
+		name  string
+		roots []string
+		err   error
+		want  string
+	}{
+		{"windows_write_through_rename", nil, fmt.Errorf("fileutil: write-through rename %q to %q: %w", winTmp, winDst, denied), "fileutil: write-through rename <path> to <path>: Access is denied."},
+		{"windows_rename_with_known_root", []string{healCauseWindowsDir}, fmt.Errorf("fileutil: write-through rename %q to %q: %w", winTmp, winDst, denied), "fileutil: write-through rename <path> to <path>: Access is denied."},
+		{"windows_rename_inside_build_wrapper", nil, historyBuildFailure("storage_error", fmt.Errorf("fileutil: write-through rename %q to %q: %w", winTmp, winDst, denied)), "fileutil: write-through rename <path> to <path>: Access is denied."},
+		{"unix_rename_temp_file", nil, fmt.Errorf("fileutil: rename temp file %q to %q: %w", unixTmp, unixDst, &os.LinkError{Op: "rename", Old: unixTmp, New: unixDst, Err: fs.ErrPermission}), "fileutil: rename temp file <path> to <path>: rename <path> <path>: permission denied"},
+		{"windows_create_temp_in_dir", nil, fmt.Errorf("fileutil: create temp file in %q: %w", healCauseWindowsDir, &fs.PathError{Op: "open", Path: healCauseWindowsDir + `\x 1.tmp`, Err: denied}), "fileutil: create temp file in <path>: open <path>: Access is denied."},
+		{"session_read_partition", nil, fmt.Errorf("session: read partition %q: %w", healCauseUnixDir+"/2026-01-01 day.jsonl", fs.ErrPermission), "session: read partition <path>: permission denied"},
+		{"quoted_relative_windows_folder", nil, fmt.Errorf("session: create dir %q: %w", `Jane Doe Private Matter\sessions\s1`, fs.ErrExist), "session: create dir <path>: file already exists"},
+		{"quoted_non_path_value_is_kept", nil, fmt.Errorf("entry %q is not valid", "msg-7"), `entry "msg-7" is not valid`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := historyHealCause(tc.err, tc.roots...)
+			require.Equal(t, tc.want, got)
+			requireNoPrivateCauseWords(t, got)
+		})
+	}
+}

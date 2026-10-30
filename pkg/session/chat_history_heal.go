@@ -394,22 +394,46 @@ func historyHealCauseText(err error, roots []string) string {
 }
 
 // historyHealFreeText removes paths from text that carries no typed path:
+// first every Go-quoted segment that holds a path (quotes included), then
 // each known root through the next ": " separator (or the end), then any
 // remaining separator-holding token and bare file name.
 func historyHealFreeText(text string, roots []string) string {
+	text = historyHealQuotedSegment.ReplaceAllStringFunc(text, historyHealQuotedPath)
 	for _, root := range roots {
-		for {
-			at := strings.Index(text, root)
+		// Scan forward: text before "from" is already rewritten.
+		for from := 0; ; {
+			at := strings.Index(text[from:], root)
 			if at < 0 {
 				break
 			}
+			at += from
 			end := len(text)
 			if sep := strings.Index(text[at+len(root):], ": "); sep >= 0 {
 				end = at + len(root) + sep
 			}
 			text = text[:at] + "<path>" + text[end:]
+			from = at + len("<path>")
 		}
 	}
 	text = historyHealPathToken.ReplaceAllString(text, "<path>")
 	return historyHealFileToken.ReplaceAllString(text, "<file>")
+}
+
+// historyHealQuotedSegment matches a Go-quoted string as %q writes it:
+// double-quoted with backslash escapes, or back-quoted (%#q).
+var historyHealQuotedSegment = regexp.MustCompile("\"(?:[^\"\\\\]|\\\\.)*\"|`[^`]*`")
+
+// historyHealQuotedPath replaces one quoted segment with <path> when its
+// value holds a path separator. %q doubles every backslash of a Windows
+// path and keeps spaces inside the quotes, so neither the known roots nor
+// the token backstop can match it piecewise; the whole segment goes.
+func historyHealQuotedPath(segment string) string {
+	value, err := strconv.Unquote(segment)
+	if err != nil {
+		value = segment[1 : len(segment)-1]
+	}
+	if strings.ContainsAny(value, `/\`) {
+		return "<path>"
+	}
+	return segment
 }
