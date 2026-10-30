@@ -42,7 +42,6 @@ type Manifest struct {
 	Revision           string        `json:"revision"`
 	Python             string        `json:"python"`
 	Node               string        `json:"node"`
-	Converter          string        `json:"converter"`
 	PythonRequirements []Requirement `json:"python_requirements"`
 	Assets             []Asset       `json:"assets"`
 	Platforms          []string      `json:"platforms"`
@@ -128,6 +127,25 @@ func InstallProbe(layout Layout, manifest Manifest) error {
 	}
 	data = append(data, '\n')
 	return fileutil.WriteFileAtomic(layout.Manifest, data, 0o644)
+}
+
+// Ready is the registry-free readiness check behind the bash document layer
+// (office-preview spec AD-3): the provisioned manifest must be readable,
+// well-formed and belong to this layout's revision. Agents never run a
+// converter, so no converter registry takes part in readiness.
+func Ready(layout Layout) error {
+	data, err := os.ReadFile(layout.Manifest)
+	if err != nil {
+		return fmt.Errorf("read document manifest: %w", err)
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fmt.Errorf("parse document manifest: %w", err)
+	}
+	if manifest.Revision == "" || manifest.Revision != filepath.Base(layout.Prefix) {
+		return errors.New("document manifest revision does not match its prefix")
+	}
+	return nil
 }
 
 var DocumentSkillIDs = []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
