@@ -56,6 +56,14 @@ const STATUS_BADGE_CLASSES: Record<StatusBadgeKey, string> = {
   done: 'text-[color:var(--status-done-foreground)] bg-[var(--status-done-background)]',
   failed: 'text-[color:var(--status-failed-foreground)] bg-[var(--status-failed-background)]',
   skipped: 'text-[color:var(--status-cancelled-foreground)] bg-[var(--status-cancelled-background)]',
+  // `missed` (founder decision 2026-10-29, Calendar 6b; backend 9bd80b391):
+  // a scheduled fire that came due while Omnipus was down, recorded at the
+  // next boot, never replayed. Muted by decision — the grey inbox token
+  // family, the same neutral the calendar's missed chip uses. No dedicated
+  // `--status-missed-*` family exists; the amber `cancelled` family stays
+  // `skipped`'s (a skipped run is the overlap guard's decision, a missed
+  // run is downtime), and the label text carries the distinction.
+  missed: 'text-[color:var(--status-inbox-foreground)] bg-[var(--status-inbox-background)]',
 }
 
 export function StatusBadge({ status, className, ...rest }: StatusBadgeProps) {

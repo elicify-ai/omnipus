@@ -10,7 +10,7 @@ In a narrow panel or on a phone, the toolbar controls wrap onto extra rows so th
 
 The Board and List hide scheduled tasks; use Calendar to manage scheduled and repeating work. The split keeps a repeating series separate from the task's last-run status: a run can be **Done** while future occurrences remain scheduled. Old web addresses still resolve: `/tasks` redirects to the Tasks panel and `/automations` redirects to the Calendar.
 
-The calendar also records outcomes. In Week and Day, individual recurring-occurrence chips use the recorded run's status icon when a run exists, or the scheduled or no-record state when it does not. One-time scheduled-task chips use a clock icon, with colour taken from the task's status. Clicking a recorded occurrence lets you inspect its status and, when available, its result and a link to the chat it ran in.
+The calendar also records outcomes. In Week and Day, individual recurring-occurrence chips use the recorded run's status icon when a run exists (done, failed, skipped, or missed), or the scheduled or no-record state when it does not — no record means the run's history is unavailable (retention expired or the schedule changed), which is different from a run missed while Omnipus was down. One-time scheduled-task chips use a clock icon, with colour taken from the task's status. Clicking a recorded occurrence lets you inspect its status and, when available, its result and a link to the chat it ran in.
 
 ```mermaid
 flowchart LR
@@ -55,7 +55,7 @@ Week and Day use labelled chips with the meanings below. Month represents the ev
 
 | Chip in Week or Day | What it means |
 |---|---|
-| Recurring occurrence chip | One scheduled occurrence of a repeating task, at its fire time; the icon reflects its recorded run or its scheduled or no-record state |
+| Recurring occurrence chip | One scheduled occurrence of a repeating task, at its fire time; the icon reflects its recorded run — done, failed, skipped, or a muted missed chip ("Omnipus was not running at this time; the run was skipped and will not be replayed.") — or its scheduled or no-record state |
 | One-time chip | A one-time task's scheduled fire, shown with a clock icon and the task's status colour |
 | More not shown | The server capped how many runs it expanded for that task; the days beyond the marker are not empty. This marker does not open run details |
 | Due chip | A workspace task's deadline, including a task that also has a schedule, shown on its due date |
