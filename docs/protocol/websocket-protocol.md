@@ -245,7 +245,7 @@ These frames are sent by the backend to the frontend over the WebSocket connecti
 | Frame/field | Contract |
 |---|---|
 | `session_snapshot` | Carries the selected page's `page_info`, `has_earlier`/`has_later` and matching optional cursors. No duplicate entries array or ordinal/frame-range manifest. A rejected history read sends no successful snapshot or history wipe. |
-| Source frame `history_origin` | `{position, entry_id?}` names the actual persisted occurrence. Narration, tool start/result, source-derived special/media/span/question frames carry it when replayed from a page. A tool-only source does not borrow the previous assistant bubble. |
+| Source frame `history_origin` | `{position, entry_id?, turn_id?}` names the actual persisted occurrence. Narration, tool start/result, source-derived special/media/span/question frames carry it when replayed from a page. A tool-only source does not borrow the previous assistant bubble. |
 | Session-only frames | Replay warning/done, current controls and session-only terminal-card rehydration have no invented chronological owner. A replayed pending tool has no fabricated terminal result. |
 | Session-scoped `session_state.history_state` | `available`, or `unavailable` with sanitized `reason` and `message`. Missing history metadata is not successful empty history. Reasons are `index_missing`, `index_inconsistent`, `catchup_limit`, `storage_error`, `projection_error`. |
 | `catch_up_complete.mode` | `snapshot`, `incremental`, or `live_only`. Only completed control/projection delivery advances the live cursor. `live_only` is explicitly not reconstructed history, a history-derived restart/unanswered sweep or an attention-seen acknowledgement. |
