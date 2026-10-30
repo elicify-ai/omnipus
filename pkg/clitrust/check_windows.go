@@ -47,12 +47,6 @@ func isShortNameComponent(c string) bool {
 	return false
 }
 
-// checkStep has no Windows implementation yet: Windows permission (ACL) and
-// junction checks are deferred (founder decision 2026-10-30, "Windows later";
-// tracked as a follow-up issue). Windows candidates get the shape checks
-// above only, and the documentation does not claim more.
-func checkStep(string, string, os.FileInfo) error { return nil }
-
 // checkFinalFile requires a regular file; the admitted extension (checked in
 // checkPathShape) is what makes it executable on Windows.
 func checkFinalFile(final string) error {

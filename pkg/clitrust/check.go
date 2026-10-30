@@ -21,14 +21,16 @@ const agentWritableKinds = "a folder agents can write (the Omnipus home, a works
 // that file and never resolve path a second time.
 //
 // The path must be absolute. The link chain is resolved one link at a time.
-// The candidate is refused when the final file, any link, or any link's
-// folder lies inside one of the forbidden roots (normally
-// AgentWritableRoots), when another user could replace the final file or any
-// folder or link on the way to it (Unix: checkStep and checkFinalFile in
-// check_unix.go), or when the final file is not a regular file the gateway
-// user can execute. Windows applies its path-shape rules only (drive or UNC
-// path, .exe/.cmd/.bat, no 8.3 short names, no alternate data streams); its
-// permission checks are not implemented yet (check_windows.go).
+// The only location rule is "could an agent have planted it": the candidate
+// is refused when the final file, any link, or any link's folder lies inside
+// one of the forbidden roots (normally AgentWritableRoots — the Omnipus home,
+// agent homes, workspaces and mounts). It is also refused when the final file
+// is not a regular file the gateway user can execute. Who owns the program or
+// can write it is the user's responsibility, not Omnipus's (founder decision
+// 2026-10-30, "Omnipus runs the command and worries not about where the CLI
+// accesses anything"), so no owner, permission-bit or ACL check is made.
+// Windows adds its path-shape rules (drive or UNC path, .exe/.cmd/.bat, no
+// 8.3 short names, no alternate data streams) in check_windows.go.
 //
 // Every refusal is an error naming the failed check and the path concerned;
 // no file content is ever read into it.
@@ -143,9 +145,6 @@ func resolveLinkChain(path string) (string, []string, error) {
 		fi, err := os.Lstat(next)
 		if err != nil {
 			return "", nil, fmt.Errorf("%q cannot be read: %w", path, err)
-		}
-		if stepErr := checkStep(cur, next, fi); stepErr != nil {
-			return "", nil, stepErr
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
 			cur = next
