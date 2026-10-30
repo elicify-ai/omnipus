@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -688,9 +689,10 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, tu
 			if probeErr != nil {
 				logger.WarnCF("tools", "bash guard: quoted-literal check could not complete; the reference stays refused",
 					map[string]any{"error": probeErr.Error()})
-				return outsideWorkDirRefusal(p, cwdPath, use, false) +
-					" The guard could not finish checking that this quoted value names no real folder (" + probeErr.Error() +
-					"), so it stays refused. Retry, or write the script with write_file and run the saved file."
+				return "Command blocked by safety guard: the safety check could not complete (" + probeErr.Error() +
+					"), so this command was refused and stays blocked. It could not confirm that the quoted value " +
+					strconv.Quote(p) + " names no real folder. Retry the command, or write the script with write_file " +
+					"and run the saved file. " + outsideWorkDirRefusal(p, cwdPath, use, false)
 			}
 		}
 
