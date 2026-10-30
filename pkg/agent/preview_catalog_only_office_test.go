@@ -9,20 +9,14 @@ package agent
 // Office-document preview — the three-way model rule is catalog-only
 // (office-preview spec AD-11, FR-018; TDD row T-43, BDD B-09).
 //
-// Oracles from the spec (AD-11), never from the code:
-//   - "Catalog only: pkg/agent/media_present.go::modelSupportsPDF /
-//     ::modelSupportsImage. pkg/agent/loop_media.go::pdfCapableModel is
-//     deleted; its Haiku-via-Bedrock exclusion becomes the catalog entry
-//     for that provider + model, in the authoritative catalog source."
-//   - §9 prohibitions: "keep ... the PDF model list" is forbidden.
+// Oracles: spec AD-11, FR-018 and §4.1; team-lead option A (2026-10-30)
+// corrects the stale Haiku-via-Bedrock exclusion premise. Model capabilities
+// and upstream limits belong to the authoritative catalog, not these tests.
+// The rule is independent of model names: only the fixture's modalities
+// decide; the hard-coded PDF list must be deleted (§9, AD-11).
 //
-// RED reasons on the pre-change code:
-//  1. loop_media.go still defines and calls pdfCapableModel (the deleted
-//     hard-coded list) — the source scan below fails.
-//  2. The embedded catalog still lists the "pdf" modality for the
-//     Haiku-via-Bedrock entries the exclusion must move into (verified
-//     before writing: amazon-bedrock anthropic.claude-haiku-4-5-20251001-v1:0
-//     carries ['text','image','pdf']).
+// Original RED: loop_media.go still defined and called pdfCapableModel.
+// The fixture-based rule below replaces the stale embedded-snapshot test.
 
 import (
 	"os"
@@ -46,35 +40,34 @@ func TestOfficePreview_HardcodedPDFModelListDeleted(t *testing.T) {
 	}
 }
 
-// TestOfficePreview_CatalogHaikuViaBedrockWithoutPDF (AD-11): the
-// Haiku-via-Bedrock exclusion lives in the authoritative catalog source —
-// every amazon-bedrock Haiku entry exists and lists NO pdf modality.
-func TestOfficePreview_CatalogHaikuViaBedrockWithoutPDF(t *testing.T) {
-	cat, err := catalog.NewCatalog(catalog.EmbeddedSnapshot)
-	if err != nil {
-		t.Fatalf("loading embedded catalog snapshot failed: %v", err)
+// TestOfficePreview_PDFModality_CatalogAloneDecides pins the rule on fixtures,
+// not model facts: the same provider/model key changes capability when only
+// its catalog modalities change. Model facts and Bedrock limits stay upstream.
+func TestOfficePreview_PDFModality_CatalogAloneDecides(t *testing.T) {
+	const provider, model = "fixture-provider", "fixture-model"
+	cases := []struct {
+		name       string
+		modalities []string
+		wantPDF    bool
+		wantImage  bool
+	}{
+		{"native_pdf", []string{"text", "image", "pdf"}, true, true},
+		{"page_images_without_pdf", []string{"text", "image"}, false, true},
+		{"text_only_without_pdf", []string{"text"}, false, false},
 	}
-	doc := cat.Document()
-
-	entries := 0
-	for _, provider := range doc.Providers {
-		if provider.ID != "amazon-bedrock" {
-			continue
-		}
-		for _, model := range provider.Models {
-			if !strings.Contains(strings.ToLower(model.ID), "haiku") {
-				continue
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cat, err := catalog.NewCatalog(catalogDocJSON(t, provider, model, tc.modalities...))
+			if err != nil {
+				t.Fatalf("loading test catalog fixture failed: %v", err)
 			}
-			entries++
-			for _, modality := range model.InputModalities {
-				if modality == catalog.ModalityPDF {
-					t.Fatalf("BLOCKED: catalog entry amazon-bedrock/%s lists the pdf modality — AD-11 moves the Haiku-via-Bedrock exclusion INTO this entry (T-43, B-09): the exclusion is missing", model.ID)
-				}
+			if got := modelSupportsPDF(cat, provider, model); got != tc.wantPDF {
+				t.Errorf("modelSupportsPDF(%s/%s) = %v, want %v for catalog modalities %v (AD-11)", provider, model, got, tc.wantPDF, tc.modalities)
 			}
-		}
-	}
-	if entries == 0 {
-		t.Fatalf("no amazon-bedrock Haiku entry found in the embedded catalog — the AD-11 exclusion must exist as a real catalog entry, not as silence")
+			if got := modelSupportsImage(cat, provider, model); got != tc.wantImage {
+				t.Errorf("modelSupportsImage(%s/%s) = %v, want %v for catalog modalities %v (§4.1)", provider, model, got, tc.wantImage, tc.modalities)
+			}
+		})
 	}
 }
 

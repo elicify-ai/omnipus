@@ -45,7 +45,7 @@ import (
 
 // previewToolCall builds a persisted preview_document tool-call record in
 // the RED-proposed shape.
-func previewToolCall(id session.ToolCallID, sourceName, version string, pageCount, first, last int, outcome string, parts []map[string]any) session.ToolCall {
+func previewToolCall(id session.ToolCallID, sourceName, version string, pageCount, first, last int, outcome, unavailableReason string, parts []map[string]any) session.ToolCall {
 	media := make([]any, 0, len(parts))
 	for _, p := range parts {
 		media = append(media, map[string]any{
@@ -57,17 +57,21 @@ func previewToolCall(id session.ToolCallID, sourceName, version string, pageCoun
 			"caption":      p["caption"],
 		})
 	}
+	preview := map[string]any{
+		"source_name":    sourceName,
+		"source_version": version,
+		"page_count":     pageCount,
+		"first_page":     first,
+		"last_page":      last,
+		"outcome":        outcome,
+	}
+	if unavailableReason != "" {
+		preview["unavailable_reason"] = unavailableReason
+	}
 	result := map[string]any{
 		"media":        media,
 		"presentation": "page_thumbnails",
-		"preview": map[string]any{
-			"source_name":  sourceName,
-			"source_version": version,
-			"page_count":   pageCount,
-			"first_page":   first,
-			"last_page":    last,
-			"outcome":      outcome,
-		},
+		"preview":      preview,
 	}
 	return session.ToolCall{ID: id, Tool: "preview_document", Status: "success", Result: result}
 }
@@ -88,7 +92,7 @@ func thumbPart(ref string, page int) map[string]any {
 // call id, page_thumbnails presentation, the preview record, and parts in
 // page order carrying page_number and caption.
 func TestOfficePreview_ReplayProjection_GroupAndPreviewRecord(t *testing.T) {
-	tc := previewToolCall("call-prev-1", "report.docx", "a1b2c3d4e5f6", 12, 1, 4, "complete",
+	tc := previewToolCall("call-prev-1", "report.docx", "a1b2c3d4e5f6", 12, 1, 4, "complete", "",
 		[]map[string]any{thumbPart("media://page1", 1), thumbPart("media://page2", 2), thumbPart("media://page3", 3), thumbPart("media://page4", 4)})
 
 	frame, ok := buildMediaFrame("session-1", tc, nil, nil)
@@ -134,19 +138,30 @@ func TestOfficePreview_ReplayProjection_GroupAndPreviewRecord(t *testing.T) {
 // persistent "page previews unavailable" card rebuilds from replay without
 // rendering.
 func TestOfficePreview_ReplayProjection_UnavailableFrame(t *testing.T) {
-	tc := previewToolCall("call-prev-2", "report.docx", "a1b2c3d4e5f6", 12, 1, 4, "unavailable", nil)
-	frame, ok := buildMediaFrame("session-1", tc, nil, nil)
-	if !ok {
-		t.Fatalf("BLOCKED: replay dropped the unavailable preview frame — the person must still see the unavailable card after reload (T-62, B-12, B-34)")
-	}
-	if len(frame.Parts) != 0 {
-		t.Fatalf("unavailable preview frame must carry no parts, got %d", len(frame.Parts))
-	}
-	if frame.Preview == nil || frame.Preview.Outcome != "unavailable" {
-		t.Fatalf("preview record outcome = %v, want unavailable (spec §5.2)", frame.Preview)
-	}
-	if frame.Preview.UnavailableReason == nil || *frame.Preview.UnavailableReason == "" {
-		t.Fatalf("unavailable preview must carry unavailable_reason (spec §5.2 enum: renderer_missing/renderer_damaged/renderer_failed/storage_failed)")
+	// §5.2: the record owns the reason; replay preserves it, not a default.
+	for _, reason := range []string{"renderer_missing", "renderer_damaged", "renderer_failed", "storage_failed"} {
+		t.Run(reason, func(t *testing.T) {
+			tc := previewToolCall("call-prev-2", "report.docx", "a1b2c3d4e5f6", 12, 1, 4, "unavailable", reason, nil)
+			frame, ok := buildMediaFrame("session-1", tc, nil, nil)
+			if !ok {
+				t.Fatalf("BLOCKED: replay dropped the unavailable preview frame — the person must still see the unavailable card after reload (T-62, B-12, B-34)")
+			}
+			if len(frame.Parts) != 0 {
+				t.Fatalf("unavailable preview frame must carry no parts, got %d", len(frame.Parts))
+			}
+			if frame.ToolCallId == nil || *frame.ToolCallId != "call-prev-2" {
+				t.Fatalf("unavailable frame tool_call_id = %v, want call-prev-2 (§5.2)", frame.ToolCallId)
+			}
+			if frame.Presentation == nil || *frame.Presentation != "page_thumbnails" {
+				t.Fatalf("unavailable frame presentation = %v, want page_thumbnails (§5.2)", frame.Presentation)
+			}
+			if frame.Preview == nil || frame.Preview.Outcome != "unavailable" {
+				t.Fatalf("preview record outcome = %v, want unavailable (spec §5.2)", frame.Preview)
+			}
+			if frame.Preview.UnavailableReason == nil || string(*frame.Preview.UnavailableReason) != reason {
+				t.Fatalf("unavailable_reason = %v, want persisted reason %q (§5.2)", frame.Preview.UnavailableReason, reason)
+			}
+		})
 	}
 }
 
@@ -182,12 +197,12 @@ func TestOfficePreview_ReplayProjection_TwoIdenticalPreviewsStaySeparate(t *test
 	}
 
 	seen := map[string]struct{}{}
-	tc1 := previewToolCall("call-prev-a", "report.docx", "a1b2c3d4e5f6", 2, 1, 2, "complete",
+	tc1 := previewToolCall("call-prev-a", "report.docx", "a1b2c3d4e5f6", 2, 1, 2, "complete", "",
 		[]map[string]any{thumbPart(refPage1, 1), thumbPart(refPage2, 2)})
 	shot := session.ToolCall{ID: "call-shot", Tool: "browser_screenshot", Status: "success", Result: map[string]any{
 		"media": []any{map[string]any{"ref": refShot, "filename": "shot.png", "content_type": "image/png", "type": "image"}},
 	}}
-	tc2 := previewToolCall("call-prev-b", "report.docx", "a1b2c3d4e5f6", 2, 1, 2, "complete",
+	tc2 := previewToolCall("call-prev-b", "report.docx", "a1b2c3d4e5f6", 2, 1, 2, "complete", "",
 		[]map[string]any{thumbPart(refPage1, 1), thumbPart(refPage2, 2)})
 
 	frames := 0
