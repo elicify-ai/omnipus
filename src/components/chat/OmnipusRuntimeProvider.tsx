@@ -8,6 +8,7 @@ import { useChatStore } from "@/store/chat";
 import { getPendingFirstSend } from "@/store/chat/first-send";
 import { useConnectionStore } from "@/store/connection";
 import { useUiStore } from "@/store/ui";
+import { useWorkspacesStore } from "@/store/workspacesStore";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
 import { useSessionStore, attachSessionCursorFields, attachAlreadyInFlight, noteAttachSent } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
@@ -154,7 +155,19 @@ export function reattachActiveSession(
   // Re-seed the header/composer agent from the authoritative last-active agent
   // BEFORE replay starts. After a handover (e.g. Mia → Jim) a full reload must
   // keep the header on Jim (active_agent_id), not revert to the creating agent.
-  const seedAgentId = resolveLastActiveAgentId(activeSessionId);
+  //
+  // Not while a workspace entry for the current workspace is still resolving:
+  // that entry is the newest navigation intent and commits its own
+  // workspace/session/owner tuple. A reconnect is not an open (agent-first
+  // navigation spec, "Foreground commitment and bounded read" 2), and
+  // setActiveSession would write this older session's descriptor under the
+  // entry's workspace, which makes the entry abandon its restore (#1449).
+  // The attach below still re-binds the transport, so if the entry ends
+  // without attaching, the chat still shown keeps receiving its frames.
+  const sessionState = useSessionStore.getState();
+  const workspaceId = useWorkspacesStore.getState().activeWorkspaceId;
+  const entryPending = !!workspaceId && sessionState.resolvingSessionForWorkspace[workspaceId] === true;
+  const seedAgentId = entryPending ? null : resolveLastActiveAgentId(activeSessionId);
   if (seedAgentId) {
     useSessionStore.getState().setActiveSession(activeSessionId, seedAgentId);
   }

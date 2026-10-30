@@ -26,9 +26,9 @@
  *   - Wave-1 Bug 2 (src/store/session.workspace.test.ts) and src/lib/nav/workspaceEntry.ts
  *     (a transport failure is a `failed-attempt` that keeps the committed chat): a failed
  *     load, and an attach whose send fails on a socket that is not opening, still fail at once.
- *   - The bound on the wait is a design choice with no external specification (a safety
- *     valve against a hang): the cases below pin only that it is neither tiny (a handshake
- *     of several seconds must still succeed) nor unbounded.
+ *   - The bound on the wait is a design choice with no external product specification (a
+ *     safety valve against a hang); its value, 15 seconds, is what the two user pages above
+ *     promise, so the cases below pin that exact boundary in simulated time.
  *   - "Not waiting" is measured in SIMULATED time (fake timers, AT_ONCE_MS): a wrongly waiting
  *     entry would otherwise end at the bound in the very same state and the case would pass.
  *   - A connection that holds no socket is not "connecting" (first principles: no handshake is
@@ -49,7 +49,7 @@ import { supersedeNavigationIntent } from '@/store/session/workspaceEntryFlow'
 import { MIA } from '../../tests/omnipus-l1-ui-red/fixtures'
 import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
-import { useSessionStore } from './session'
+import { readPersistedSessionByWorkspace, useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
 
@@ -330,6 +330,50 @@ describe('workspace entry while the chat socket is still opening', () => {
     expect(logDiagnostic).toHaveBeenCalledWith('sessionWorkspaceEntrySocketWaitTimedOut', { workspaceId: WS })
   })
 
+  // CHECK F-2: docs/using-omnipus-ui.md and docs/workspaces.md promise the wait ends after 15
+  // seconds. Pinned in simulated time from the moment the entry starts waiting.
+  it('the wait ends at exactly 15 seconds: still waiting 1 ms before, failed with Retry at 15,000 ms', async () => {
+    vi.useFakeTimers()
+    const socket = publishConnectingSocket()
+    const entry = enterWorkspace()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useSessionStore.getState().resolvingSessionForWorkspace[WS], 'precondition: waiting from simulated 0 ms').toBe(true)
+
+    await vi.advanceTimersByTimeAsync(14_999)
+    expect(useSessionStore.getState().workspaceEntry, 'at 14,999 ms the entry is still waiting').toBeNull()
+    expect(useSessionStore.getState().resolvingSessionForWorkspace[WS]).toBe(true)
+    expect(logDiagnostic).not.toHaveBeenCalledWith('sessionWorkspaceEntrySocketWaitTimedOut', expect.anything())
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(logDiagnostic).toHaveBeenCalledWith('sessionWorkspaceEntrySocketWaitTimedOut', { workspaceId: WS })
+    expect(useSessionStore.getState().workspaceEntry, 'at 15,000 ms the wait has ended').toEqual(FAILED_ATTEMPT)
+    await entry
+    expect(useSessionStore.getState().resolvingSessionForWorkspace[WS]).toBeUndefined()
+    expect(socket.send).not.toHaveBeenCalled()
+  })
+
+  it('a socket that opens 1 ms before the 15-second bound still restores the chat', async () => {
+    vi.useFakeTimers()
+    const socket = publishConnectingSocket()
+    const entry = enterWorkspace()
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(14_999)
+    expect(useSessionStore.getState().resolvingSessionForWorkspace[WS], 'precondition: still waiting at 14,999 ms').toBe(true)
+
+    socket.open()
+    await vi.advanceTimersByTimeAsync(0)
+    await entry
+
+    const restored = useSessionStore.getState()
+    expect(restored.workspaceEntry).toEqual({ status: 'exact', acknowledged: false })
+    expect(restored.activeSessionId).toBe(MAIN)
+    expect(restored.attachedSessionType).toBe('main')
+    expect(attachFrames(socket)).toEqual([expect.objectContaining({ type: 'attach_session', session_id: MAIN })])
+    expect(logDiagnostic).not.toHaveBeenCalledWith('sessionWorkspaceEntrySocketWaitTimedOut', expect.anything())
+    await vi.advanceTimersByTimeAsync(1)
+    expect(logDiagnostic, 'the released wait left no timer behind').not.toHaveBeenCalledWith('sessionWorkspaceEntrySocketWaitTimedOut', expect.anything())
+  })
+
   it('a socket that closes without ever opening ends the wait at once: the entry fails with Retry instead of waiting out the bound', async () => {
     vi.useFakeTimers()
     const socket = publishConnectingSocket()
@@ -399,6 +443,61 @@ describe('workspace entry while the chat socket is still opening', () => {
       expect.objectContaining({ message: RESTORE_FAILED_TOAST, variant: 'warning', action: expect.objectContaining({ label: 'Retry' }) }),
     ])
     expect(socket.send).not.toHaveBeenCalled()
+  })
+})
+
+describe('workspace entry while the chat socket is still opening, with another chat still active', () => {
+  // CHECK F-1 (/workspace/logs/1449/ci1502/check-narrow/CHECK-REPORT.md). Oracles:
+  //   - docs/internal/specs/agent-first-navigation-spec.md, "Foreground commitment and bounded
+  //     read" 2: "Commit only the winning intent's coherent workspace/session/immutable owner ...
+  //     Prefetch, hidden/background reconnect and overtaken A are not opens."
+  //   - same spec, FR-004 / BDD-02.1: entering a workspace whose remembered chat is valid and
+  //     visible restores exactly that conversation and its immutable owner.
+  // Opening the workspace's name (Sidebar) changes only the active workspace; the previous chat A
+  // stays active until the entry attaches the destination.
+  const PRIOR_WS = 'prior-workspace'
+  const PRIOR = 'prior-main'
+  const PRIOR_DESCRIPTOR = { id: PRIOR, type: 'main' as const, title: 'Jim main chat', agentId: 'jim' }
+  const DESTINATION_DESCRIPTOR = { id: MAIN, type: 'main' as const, title: 'Mia main chat', agentId: 'mia' }
+
+  it('restores the opened workspace\'s remembered chat when the socket opens: the reconnect does not re-commit the previous chat over it', async () => {
+    // Chat A is committed in its own workspace; workspace B (WS) remembers its own main chat.
+    useWorkspacesStore.setState({ activeWorkspaceId: PRIOR_WS })
+    useSessionStore.getState().setWorkspaceSessionDescriptor(PRIOR_WS, PRIOR_DESCRIPTOR)
+    useSessionStore.setState({ activeSessionId: PRIOR, activeAgentId: 'jim', attachedSessionType: 'main' })
+    queryClient.setQueryData(['sessions'], [mainSession()])
+    const socket = publishConnectingSocket()
+
+    // The user opens workspace B by its name.
+    useWorkspacesStore.setState({ activeWorkspaceId: WS })
+    const entry = enterWorkspace()
+    await settle()
+
+    const waiting = useSessionStore.getState()
+    expect(waiting.resolvingSessionForWorkspace[WS], 'precondition: B\'s loads are done and the entry waits for the socket').toBe(true)
+    expect(waiting.workspaceEntry).toBeNull()
+    expect(waiting.activeSessionId, 'precondition: chat A is still the active chat').toBe(PRIOR)
+    expect(waiting.sessionByWorkspace[WS]).toEqual(DESTINATION_DESCRIPTOR)
+
+    socket.open()
+    await entry
+
+    const restored = useSessionStore.getState()
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBe(WS)
+    expect({
+      sessionId: restored.activeSessionId,
+      agentId: restored.activeAgentId,
+      type: restored.attachedSessionType,
+    }, 'the active tuple is B\'s remembered main chat and its immutable owner').toEqual({ sessionId: MAIN, agentId: 'mia', type: 'main' })
+    expect(restored.workspaceEntry).toEqual({ status: 'exact', acknowledged: false })
+    expect(restored.resolvingSessionForWorkspace[WS]).toBeUndefined()
+    expect(restored.sessionByWorkspace[WS], 'B\'s remembered pointer still names B\'s chat, not A').toEqual(DESTINATION_DESCRIPTOR)
+    expect(readPersistedSessionByWorkspace()[WS], 'and so does the copy a reload reads').toEqual(DESTINATION_DESCRIPTOR)
+    expect(restored.sessionByWorkspace[PRIOR_WS], 'A\'s own workspace pointer is untouched').toEqual(PRIOR_DESCRIPTOR)
+    expect(useUiStore.getState().toasts).toEqual([])
+    const attaches = attachFrames(socket)
+    expect(attaches.filter((frame) => frame.session_id === MAIN), 'exactly one attach for B').toHaveLength(1)
+    expect(attaches.at(-1), 'the newest navigation intent is the last attach on the socket').toMatchObject({ type: 'attach_session', session_id: MAIN })
   })
 })
 
