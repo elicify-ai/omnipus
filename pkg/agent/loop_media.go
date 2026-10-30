@@ -88,16 +88,16 @@ func resolveMediaRefsWithOffload(
 			// never dropped silently.
 			if !strings.HasPrefix(ref, "media://") {
 				if strings.HasPrefix(ref, "data:image/") {
-					normalized := normalizeImageDataURLToBudget(
+					normalized, cause := normalizeImageDataURLToBudget(
 						ref, maxSize, resizeBudgetForModel(cat, provider, model, maxSize))
 					if normalized != "" {
 						resolved = append(resolved, normalized)
 					} else {
-						contentInjections = append(contentInjections,
-							"[attachment unavailable: image (too large to fit the model's size limits, even after resizing)]")
+						contentInjections = append(contentInjections, imageUnavailableMarker(cause))
 						logger.WarnCF("agent", "history image exceeded the model budget and could not be resized — replaced with an honest marker", map[string]any{
 							"provider": provider,
 							"model":    model,
+							"cause":    string(cause),
 						})
 					}
 					continue
@@ -792,57 +792,127 @@ func imageFitsBudget(localPath string, info os.FileInfo, budget catalog.ResizeLi
 	return true
 }
 
+// imageFitCause names why a data-URL image could not be presented within
+// the model's budget. The callers render it into the honest marker text, so
+// a decode failure never masquerades as "too large even after resizing".
+type imageFitCause string
+
+const (
+	// imageFitTooLarge: the image decodes but cannot be made to fit (the
+	// resize ladder exhausted, or it sits above the bounded downscale band).
+	imageFitTooLarge imageFitCause = "too-large"
+	// imageFitUndecodable: the payload failed the full decode (corrupt or
+	// truncated) while being over budget — it can neither be sent as-is nor
+	// shrunk, so it is replaced with a marker naming the unreadable data.
+	imageFitUndecodable imageFitCause = "undecodable"
+)
+
+// imageUnavailableMarker renders the honest content marker for a data-URL
+// image that could not be presented within the model's budget.
+func imageUnavailableMarker(cause imageFitCause) string {
+	if cause == imageFitUndecodable {
+		return "[attachment unavailable: image (data unreadable: corrupt or truncated, and over the model's size limits)]"
+	}
+	return "[attachment unavailable: image (too large to fit the model's size limits, even after resizing)]"
+}
+
+// logDataURLNormalizeFailure warns once per data-URL normalization failure
+// with the real cause. The data-URL path has no source file, so unlike
+// logImageNormalizationFailure there is no path field — the size and
+// dimension facts identify the payload.
+func logDataURLNormalizeFailure(cause string, err error, fields map[string]any) {
+	details := map[string]any{"reason": cause}
+	if err != nil {
+		details["error"] = err.Error()
+	}
+	for key, value := range fields {
+		details[key] = value
+	}
+	logger.WarnCF("agent", "History data-URL image could not be fitted to the model budget — replacing with an honest marker", details)
+}
+
 // normalizeImageDataURLToBudget applies the model's resize budget to an
 // already-resolved data:image/… URL (issue #1435 requirement B: an image
 // that is ALREADY oversized in history must be shrunk at send time too, the
 // same as freshly registered attachments). Returns the input unchanged when
-// it fits or cannot be decoded (undecodable payloads keep today's pass-
-// through behavior — the provider's own rejection then classifies honestly);
-// returns "" only when the image is decodable, over budget, and cannot be
-// made to fit — the caller must replace it with a visible marker, never a
-// silent drop.
-func normalizeImageDataURLToBudget(dataURL string, maxSize int, budget catalog.ResizeLimits) string {
+// it fits, and ("", cause) with a WarnCF log when the image is over budget
+// and cannot be presented — the caller must replace it with the visible
+// marker imageUnavailableMarker(cause) names, never a silent drop. An
+// over-budget payload whose full decode fails (corrupt/truncated data) is
+// also replaced: passing it through would send the provider an image it
+// rejects as media_too_large on every later loop iteration.
+func normalizeImageDataURLToBudget(dataURL string, maxSize int, budget catalog.ResizeLimits) (string, imageFitCause) {
 	comma := strings.IndexByte(dataURL, ',')
 	if comma < 0 {
-		return dataURL
+		return dataURL, ""
 	}
 	raw, err := base64.StdEncoding.DecodeString(dataURL[comma+1:])
 	if err != nil {
-		return dataURL
+		return dataURL, ""
 	}
 	maxBytes := budget.MaxBytes
 	if maxBytes <= 0 || maxBytes > int64(maxSize) {
 		maxBytes = int64(maxSize)
 	}
+	sizeFields := func() map[string]any {
+		return map[string]any{"bytes": len(raw), "budget_bytes": maxBytes}
+	}
 	config, _, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil {
-		return dataURL
+		// The header itself is unreadable, so the dimensions are unknown —
+		// but the byte fact stands: an over-budget payload cannot be sent.
+		if int64(len(raw)) > maxBytes {
+			logDataURLNormalizeFailure("decode-config-failed", err, sizeFields())
+			return "", imageFitUndecodable
+		}
+		return dataURL, ""
 	}
 	if config.Width <= 0 || config.Height <= 0 {
-		return dataURL
+		if int64(len(raw)) > maxBytes {
+			logDataURLNormalizeFailure("invalid-dimensions", nil, map[string]any{
+				"bytes": len(raw), "budget_bytes": maxBytes,
+				"width": config.Width, "height": config.Height,
+			})
+			return "", imageFitUndecodable
+		}
+		return dataURL, ""
 	}
 	overBytes := int64(len(raw)) > maxBytes
 	overEdge := budget.LongEdgePx > 0 && maxInt(config.Width, config.Height) > budget.LongEdgePx
 	overPatches := budget.MaxPatches > 0 && resize.PatchCount(config.Width, config.Height) > budget.MaxPatches
 	if !overBytes && !overEdge && !overPatches {
-		return dataURL
+		return dataURL, ""
+	}
+	dims := map[string]any{
+		"width": config.Width, "height": config.Height,
+		"bytes": len(raw), "budget_bytes": maxBytes,
 	}
 	// Bounded-resource downscaling: the decode-bomb ceiling still applies —
 	// only images inside the downscale band are decoded for shrinking.
 	if uint64(config.Width)*uint64(config.Height) > maxDownscaleInputPixels {
-		return ""
+		logDataURLNormalizeFailure("pixel-budget-exceeded", nil, dims)
+		return "", imageFitTooLarge
 	}
 	limits := budget
 	limits.MaxBytes = maxBytes
 	decoded, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
-		return dataURL
+		// Over budget AND undecodable: sending it would hand the provider a
+		// payload it rejects as media_too_large on every later iteration
+		// (the strip-retry deliberately does not fire for that code).
+		logDataURLNormalizeFailure("decode-failed", err, dims)
+		return "", imageFitUndecodable
 	}
 	result, err := resize.ResizeToFit(decoded, limits)
 	if err != nil {
-		return ""
+		if errors.Is(err, resize.ErrLadderFloor) {
+			logDataURLNormalizeFailure("resize-ladder-floor", err, dims)
+		} else {
+			logDataURLNormalizeFailure("resize-failed", err, dims)
+		}
+		return "", imageFitTooLarge
 	}
-	return "data:" + result.Mime + ";base64," + base64.StdEncoding.EncodeToString(result.Data)
+	return "data:" + result.Mime + ";base64," + base64.StdEncoding.EncodeToString(result.Data), ""
 }
 
 // fitOrdinaryImageMediaToBudget re-fits ordinary inline image media of a
@@ -878,13 +948,13 @@ func fitOrdinaryImageMediaToBudget(messages []providers.Message, budget catalog.
 				fitted = append(fitted, ref)
 				continue
 			}
-			normalized := normalizeImageDataURLToBudget(ref, int(budget.MaxBytes), budget)
+			normalized, cause := normalizeImageDataURLToBudget(ref, int(budget.MaxBytes), budget)
 			if normalized == "" {
-				// Undecodable or above the bounded downscale band: keep the
-				// failure visible, never send an unfittable image in silence.
+				// Unfittable (too large, or corrupt and over budget): keep the
+				// failure visible with the honest cause, never send an
+				// unfittable image in silence.
 				msgChanged = true
-				markers = append(markers,
-					"\n\n[attachment unavailable: image (too large to fit the model's size limits, even after resizing)]")
+				markers = append(markers, "\n\n"+imageUnavailableMarker(cause))
 				continue
 			}
 			if normalized != ref {
