@@ -241,14 +241,16 @@ export function LibraryPreviewPane({
         // R5-SF-1: a refresh that failed while a body is on screen keeps the
         // body (and any unsaved draft) but is never silent — a persistent
         // notice says the text is the earlier version, or that the file is
-        // gone, with Retry. Always the same two slots, so the notice
-        // appearing or clearing never remounts the editor below it.
+        // gone. Always the same two slots, so the notice appearing or
+        // clearing never remounts the editor below it. No Retry (founder
+        // Q10, R6-SF-1): a successful re-read would clear the notice while
+        // the mounted editor still showed the old text; re-basing an open
+        // editor is a separate future epic.
         return (
           <>
             {contentQuery.isError && (
               <ContentRefreshNotice
                 missing={isApiError(contentQuery.error) && contentQuery.error.status === 404}
-                onRetry={() => void contentQuery.refetch()}
               />
             )}
             <LibraryTextBody
@@ -361,12 +363,13 @@ function UntrustedContentBoundary() {
  * R5-SF-1: shown above a text body whose latest read failed while an earlier
  * body is still on screen (TanStack keeps `data` on a failed refetch). A 404
  * means the file is gone, so the text must not pass for the current file;
- * any other failure means the text may be out of date. Persistent until a
- * read succeeds (the banner has no dismiss), with Retry.
+ * any other failure means the text may be out of date. Stays until the file
+ * is read successfully again (the banner has no dismiss and no Retry — see
+ * the call site).
  */
-function ContentRefreshNotice({ missing, onRetry }: { missing: boolean; onRetry: () => void }) {
+function ContentRefreshNotice({ missing }: { missing: boolean }) {
   return (
-    <div className="flex shrink-0 items-start gap-[var(--space-2)] px-[var(--space-2-5)] pt-[var(--space-2)]">
+    <div className="flex shrink-0 px-[var(--space-2-5)] pt-[var(--space-2)]">
       <LibraryErrorBanner
         className="flex-1"
         testId={missing ? 'library-content-missing' : 'library-content-refresh-failed'}
@@ -374,9 +377,6 @@ function ContentRefreshNotice({ missing, onRetry }: { missing: boolean; onRetry:
           ? 'This file is no longer in the Library — showing the earlier version.'
           : 'Could not refresh this file — showing the earlier version.'}
       />
-      <Button type="button" variant="outline" size="sm" onClick={onRetry} data-testid="library-content-refresh-retry">
-        Retry
-      </Button>
     </div>
   )
 }
