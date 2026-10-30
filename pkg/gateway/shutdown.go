@@ -7,6 +7,7 @@ package gateway
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -60,8 +61,29 @@ func omnipusGracefulShutdown(
 	// inbound source; together they guarantee no new bus message — hence no new
 	// active-request admission — after this point. Device/health/preview registries
 	// have no turn side effects and stop later (step 4).
+	//
+	// #1490: the task-trigger and /loop schedulers are two more copies of the
+	// cron engine, and both start work when a job comes due (a triggered task
+	// run, a scheduled /loop turn). They stop here too, for the same reason.
+	// Each Stop is idempotent, so a later cleanup pass that stops them again
+	// is harmless. Each cron-engine Stop closes admission at once, then may
+	// wait up to its 30 s lane drain (pkg/cron defaultStopDrainTimeout). One
+	// after another, three engines could take 90 s against the 70 s budget,
+	// so the three run side by side and the wait ends at the budget (6a
+	// review W3).
+	var cronStop, taskTriggerStop, loopStop func()
 	if runningServices.CronService != nil {
-		runningServices.CronService.Stop()
+		cronStop = runningServices.CronService.Stop
+	}
+	if runningServices.TaskTrigger != nil {
+		taskTriggerStop = runningServices.TaskTrigger.Stop
+	}
+	if runningServices.LoopScheduler != nil {
+		loopStop = runningServices.LoopScheduler.Stop
+	}
+	if !stopTurnSchedulers(ctx, cronStop, taskTriggerStop, loopStop) {
+		slog.Warn("shutdown: scheduler stop did not finish within the shutdown budget; continuing",
+			"timeout", omnipusShutdownTimeout)
 	}
 	// ADR-049 D4: the plan engine dispatches member tasks (which spawn
 	// turns), so it stops alongside CronService — before draining active
@@ -69,19 +91,6 @@ func omnipusGracefulShutdown(
 	// point" reason the comment above documents for cron.
 	if runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
-	}
-	// #1490: the task-trigger and /loop schedulers are two more copies of the
-	// cron engine, and both start work when a job comes due (a triggered task
-	// run, a scheduled /loop turn). Stop them here too, before the turn drain,
-	// for the same #265 reason as CronService above. Same order as
-	// stopAndCleanupServices (CronService, PlanEngine, TaskTrigger,
-	// LoopScheduler); each Stop is idempotent, so a later cleanup pass that
-	// stops them again is harmless.
-	if runningServices.TaskTrigger != nil {
-		runningServices.TaskTrigger.Stop()
-	}
-	if runningServices.LoopScheduler != nil {
-		runningServices.LoopScheduler.Stop()
 	}
 	// ADR-066 rung 4 writes $OMNIPUS_HOME/cache/model_limits.json at the tail
 	// of a background fetch that nothing else waits for. Close it here, with
@@ -109,11 +118,16 @@ func omnipusGracefulShutdown(
 	}
 
 	// US-7 / FR-008: Wait for active turns to complete before force-closing.
-	// Cap the wait to omnipusShutdownTimeout - 5 s so it always fits in the budget.
-	// This is a shutdown drain bound, not a work time limit: the gateway is
-	// going away. (The retired agents.defaults.timeout_seconds used to shorten
-	// it; turns have no time limit any more, issue #1306.)
-	activeTurnTimeout := int((omnipusShutdownTimeout - 5*time.Second).Seconds()) // 65 s
+	// The wait is what is left of the budget minus a 5 s margin, at most 65 s,
+	// so it always fits after the stops above. This is a shutdown drain bound,
+	// not a work time limit: the gateway is going away. (The retired
+	// agents.defaults.timeout_seconds used to shorten it; turns have no time
+	// limit any more, issue #1306.)
+	remaining := omnipusShutdownTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining = time.Until(deadline)
+	}
+	activeTurnTimeout := int(shutdownActiveTurnWait(remaining).Seconds())
 
 	slog.Info("shutdown: step 2 — waiting for active turns to complete",
 		"active_turn_wait_seconds", activeTurnTimeout)
@@ -227,4 +241,44 @@ func omnipusGracefulShutdown(
 	}
 
 	slog.Info("shutdown: complete")
+}
+
+// shutdownActiveTurnMargin is kept free after the active-turn wait for the
+// agent-loop close.
+const shutdownActiveTurnMargin = 5 * time.Second
+
+// shutdownActiveTurnWait is the active-turn wait for the budget left:
+// remaining minus the margin, never above 65 s, never below zero.
+func shutdownActiveTurnWait(remaining time.Duration) time.Duration {
+	wait := min(remaining, omnipusShutdownTimeout) - shutdownActiveTurnMargin
+	return max(wait, 0)
+}
+
+// stopTurnSchedulers runs the given Stop functions side by side (nil entries
+// are skipped) and waits until all return or ctx ends. It reports whether all
+// finished. A Stop still running at the deadline keeps tearing down in the
+// background; its admission is already closed.
+func stopTurnSchedulers(ctx context.Context, stops ...func()) bool {
+	var wg sync.WaitGroup
+	for _, stop := range stops {
+		if stop == nil {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stop()
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
