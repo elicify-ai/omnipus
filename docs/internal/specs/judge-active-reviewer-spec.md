@@ -705,6 +705,11 @@ does not build one. Instead:
   per call, bounded, so the Judge can read the facts. This is evidence, and it is the general form
   of "prefer evidence the system already holds over asking a model to opine" — the model still
   reads it, but it reads facts rather than a name and a colour.
+  *(Amendment 2026-10-30, issue #1484, commit `e3917fd23`; ADR-084 amendment under R8-e: the feed
+  is no longer `{tool, parameters, status, error}` only. `judge_evidence_tiers.go::formatTierOneToolCall`
+  also renders the tool's output as the working agent saw it — `Result["text"]` only, no other
+  `Result` shape — as a `[tool_output]` line, redacted and then cut at 2,048 runes with the
+  explicit truncation marker.)*
 - **FR-107** keeps tier 1's *deciding* power exactly where it already is: a **declared**
   `KindBehavior` criterion, which is an authoring act like a declared check. Tier 1 never decides a
   criterion nobody declared it for.
@@ -733,7 +738,12 @@ projected away" from "this tool returned nothing".
 **Resolution — FR-106.** Tier-1 facts are built from the durable quadruple
 `{Tool, Parameters, Status, Error}`; a `Result` value is used only when
 `ContentState` is empty; and an `emptied` or `capped` `ContentState` is **inconclusive**, never a
-contradiction. The coordinating instruction to "reuse FR-030's in-memory capture rather than
+contradiction. *(Amendment 2026-10-30, issue #1484, commit `e3917fd23`; ADR-084 amendment under
+R8-e: `Result` is no longer used only when `ContentState` is empty. `Result["text"]` is rendered
+whatever `ContentState` is; when it is `emptied` or `capped`, the explicit projection marker stays
+and states that the output that follows is the projected text the agent saw, not the full result.
+The FR-108 veto still reads `Status` only, so a projected result is still never a contradiction.)*
+The coordinating instruction to "reuse FR-030's in-memory capture rather than
 re-reading the transcript" is right in spirit and **only half available here**, which is C28.
 
 ### C28 — MAJOR (new). FR-030's capture cannot supply tier 1, because it holds the wrong session's calls
@@ -799,7 +809,7 @@ goal never has any). Its wording must not assume a repository, a diff or a test 
 | `pkg/agent/goal_triggers.go::dispatchGoalAsyncFollowUp` / `idleSteerDeliverer` | call | The shared re-inject primitive: `asyncNotifier.Notify(AsyncNotifyEvent{… SourceKind: "goal_idle_settle", SenderCanonicalID: goalLoopFollowUpSenderID})`. Stamping that sentinel is what lets the re-injected turn pass `checkGoalLoopAfterTurn`'s origin gate (ADR-088 D6b). The deferred claim path's steer MUST route here, not through `result.followUps` (C23). |
 | `pkg/agent/goal_triggers.go::goalAdjudicationInFlight` / `verifier_registry.go::Register` / `ErrVerifierSessionHeld` | call | The two-layer in-flight guard: a check-then-act marker plus a CAS whose doc comment states the invariant outright ("a concurrent adjudication is already in flight for this unit and must not be silently clobbered … G-1 'exactly once'"). **Open item 3 resolves onto these** (FR-101) rather than onto anything new. |
 | `pkg/agent/behavior_scan.go::runBehaviorScan` / `task.CriterionBehavior` | extend | D14 **tier 1's only shipped evaluator**, and it is `{Tool, MinCount, MaxCount, Scope}` — a successful-call **count** for a named tool. It reads neither `Parameters` nor `Result`, so it cannot answer any of D14's own three examples (C26). |
-| `pkg/agent/verifier_adjudication.go::renderTranscriptEntriesForWindow` | modify | Renders every call as `fmt.Sprintf("[tool_call] %s -> %s", tc.Tool, tc.Status)` — name and status only. ADR §2 E3's defect, still live in the one place D14 tier 1 needs it not to be (C26, FR-105). |
+| `pkg/agent/verifier_adjudication.go::renderTranscriptEntriesForWindow` | modify | Renders every call as `fmt.Sprintf("[tool_call] %s -> %s", tc.Tool, tc.Status)` — name and status only. ADR §2 E3's defect, still live in the one place D14 tier 1 needs it not to be (C26, FR-105). *(Amendment 2026-10-30: done. Each call is now rendered by `judge_evidence_tiers.go::formatTierOneToolCall` — tool, status, parameters, the FR-106 projection marker, error, and `Result["text"]` as a `[tool_output]` line (#1484) — with the 32 KiB oldest-first tier-1 cap applied here; narration and every rendered field go through the unconditional `judgeEvidenceRedactor` (#721).)* |
 | `pkg/session/daypartition.go::ToolCall` | consume | `{ID, Tool, Status, DurationMS, Parameters, Result, ParentToolCallID, Error, ContentState}`; `Status ∈ success\|error\|pending\|denied`. `recordEmptiedOnTranscript` rewrites **`Result` and `ContentState` only** — the other four are durable (C27). |
 | `pkg/tools/set_goal.go::SetGoalTool` | pattern + modify | The precedent `goal_claim` follows exactly: a validated write-path over **this session's own** record, refusing on a delegated sub-turn or a goalless session by its own scope preconditions rather than by policy; seeded `allow` on the ceiling and for every human-facing agent, explicit `deny` for Judge/PlanSupervisor via `denyAllThenOverride` and for Worker via `tightenGlobalCeiling`. Its `judgment` enum is `boolean \| quantitative \| artifact` and **requires no check** — FR-110 forbids changing that. |
 | `pkg/coreagent/core.go::allStaticToolNames` / `pkg/config/defaults.go` ceiling | modify | `goal_claim` is added to both. The mechanical invariant `len(AllStaticToolNames()) == len(config.DefaultConfig().Sandbox.ToolPolicies)` (`TestCatalog_MatchesGlobalCeilingEntryForEntry`) fails on a one-sided edit. |
@@ -1173,7 +1183,7 @@ zero Judge calls; a goal whose agent claims receives its answer first and its ve
 | E-35 | The gateway restarts while a background adjudication is in flight | The adjudication is lost — it is in-memory only, per the Deployment section's no-stateful-change rule. The goal is left quiet with an unconsumed round, which is the state FR-097's re-post handles. **No resume, no persisted queue** |
 | E-36 | A criterion's text names `report.pdf` but declares no check | **No check is built.** It is a prose criterion and the Judge opens the file. Under revision 6 an inferred `test -f && test -s` would have run (C24, FR-109) |
 | E-37 | A criterion declares a check and the goal has no workspace (unbound `/goal`) | The check is inconclusive, vetoes nothing, and the criterion is judged. The shipped check runner is workspace-rooted; an unbound goal has no workspace (FR-040) |
-| E-38 | Tier-1 evidence for a criterion exists but the tool call's `Result` was projected away by ADR-066 D5 | `ContentState == "emptied"` makes it **inconclusive**, never a contradiction: `Tool`, `Parameters`, `Status` and `Error` are still durable and are still rendered (C27, FR-106) |
+| E-38 | Tier-1 evidence for a criterion exists but the tool call's `Result` was projected away by ADR-066 D5 | `ContentState == "emptied"` makes it **inconclusive**, never a contradiction: `Tool`, `Parameters`, `Status` and `Error` are still durable and are still rendered (C27, FR-106). *(Amendment 2026-10-30, #1484: the call also carries the projection marker, and any projected `Result["text"]` still present is rendered after it as the text the agent saw, not the full output; a `capped` result is handled the same way)* |
 | E-39 | The working agent ran the project's test suite itself during its work | That `bash` call is **tier-1 evidence like any other** — rendered with its command and status. Nothing re-runs it, and no exit-code rung is engaged on its account (FR-105, D14 rule 3) |
 | E-40 | A tool call the criterion depends on has `Status: "denied"` | Tier 1 reports it as denied. It is **not** a contradiction of a `met` (the agent may have achieved the criterion another way) and it is **not** evidence for one — inconclusive (FR-108) |
 
@@ -1348,7 +1358,7 @@ zero Judge calls; a goal whose agent claims receives its answer first and its ve
 | Check construction | **declared only.** `planArtifactCheck`, `artifactPathRe`, `artifactContainsRe`, `artifactCheckCandidate` and `isSafeWorkspaceArtifactPath` are absent from the tree; a CI grep gate asserts it (FR-109) |
 | Task-type classifiers | **zero.** No function anywhere decides whether a goal or criterion is "coding" |
 | Tier-1 durable fields | `{Tool, Parameters, Status, Error}` — never rewritten by `recordEmptiedOnTranscript`, which touches `Result` and `ContentState` only |
-| Tier-1 rendered per call | `{tool, parameters, status, error}`, parameters bounded at 512 runes per call and the whole tier-1 block at 32 KiB, oldest-first truncation with an explicit elision marker (FR-105) |
+| Tier-1 rendered per call | `{tool, parameters, status, error}`, parameters bounded at 512 runes per call and the whole tier-1 block at 32 KiB, oldest-first truncation with an explicit elision marker (FR-105). *(Amendment 2026-10-30, #1484: plus a `[tool_output]` line rendering `Result["text"]`, redacted then cut at 2,048 runes per call (`tierOneOutputRuneLimit`) with the same marker; the error string is also bounded at 512 runes; the output line counts toward the 32 KiB block)* |
 | Per-adjudication bytes-read cap | default 2 MiB, operator-configurable, hard ceiling 8 MiB |
 | Per-adjudication token/cost ceiling | default 120 K prompt+completion tokens, operator-configurable; a WARN at 75 % (FR-081) |
 | Default judge turn timeout | raised from 120 s to 420 s; operator-configurable; hard ceiling 900 s |
