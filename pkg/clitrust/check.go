@@ -113,12 +113,17 @@ func insideAny(p string, roots []string) (string, bool) {
 	return "", false
 }
 
+// pathWithin reports whether p equals or lies below root. Both are folded by
+// foldPathCase first: on macOS and Windows the usual volumes are
+// case-insensitive, so /Users/x/OmniHome and /users/x/omnihome name the same
+// folder and a different-case spelling must not escape the check (T11 round
+// 4, R3-C1). Folding on a rare case-sensitive volume only refuses more,
+// which is the safe side. A comparison that fails counts as inside.
 func pathWithin(root, p string) bool {
-	rel, err := filepath.Rel(root, p)
+	rel, err := filepath.Rel(foldPathCase(root), foldPathCase(p))
 	if err != nil {
-		return false
+		return true
 	}
-	// filepath.Rel compares path elements case-insensitively on Windows.
 	if rel == "." {
 		return true
 	}

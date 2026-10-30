@@ -669,9 +669,9 @@ Only a signed-in person can use it: the request must come from one of the config
 
 Before starting anything, Omnipus checks the program file. The path must be absolute. Omnipus follows every link on the way to the real file and refuses the path — reason **path-not-allowed**, with a message naming the failed check, nothing started — when:
 
-- the file, or any link on the way, is inside the Omnipus data folder, an agent's working folder, a workspace or a workspace mount (places agents can write);
+- the file, or any link on the way, is inside the Omnipus data folder, an agent's working folder, a workspace or a workspace mount (places agents can write) (on macOS and Windows the comparison ignores letter case, because those volumes usually do);
 - the list of those places cannot be read completely — for example a workspace's mount record is unreadable — because then the check cannot tell what is safe;
-- the file is not a regular program the account running Omnipus can execute.
+- the file is not a regular file, or — on Linux and macOS — the account running Omnipus cannot execute it. On Windows only the regular-file and extension rules are checked before launch; if Windows then refuses to start the program, the result is **handshake-failed**, not **path-not-allowed**.
 
 The check only asks whether an agent could have planted the program. It does not check who owns the program or who else can change it: like any program you run yourself, keeping the CLI and its folders protected is your responsibility.
 
