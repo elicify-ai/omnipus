@@ -85,7 +85,7 @@ export function WebFetchBlock({
   const resolved = resolveToolResult(result, error)
   const content = resolved.kind === 'text' ? resolved.text : ''
   const { preview, truncated } = content ? truncateContent(content) : { preview: '', truncated: false }
-  // Only render the "open in new tab" action link for a real http(s)/mailto/tel
+  // Only render the "open in new tab" action link for a real http(s)/mailto
   // URL — never for javascript:/data:/etc. Reuses the same allow-list IframePreview
   // already applies to preview URLs (@/lib/url-safe), so both surfaces agree.
   const linkable = isSafeHref(url)

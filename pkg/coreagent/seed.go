@@ -112,6 +112,11 @@ var allStaticToolNames = []string{
 	// their denyAllThenOverride stamps (they can never be session owners; an
 	// advertised always-erroring tool violates their minimal seeds).
 	"AskUserQuestion",
+	// show_to_user (chat-links spec US-6, FR-019): opens the Library in the
+	// user's watching web chat. Main allow / Worker deny through the founder's
+	// 2026-10-22 default tool table (NewCustomAgentToolsCfg plus
+	// workerTierDeniedTools); Omnipus keeps its fixed list (D-F2).
+	"show_to_user",
 	// set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004): the validated
 	// write-path over the goal record (definition/criteria/DoD), seeded
 	// ALLOW for every human-facing agent alongside AskUserQuestion — it can
@@ -955,6 +960,7 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"edit_file":     allow,
 				"append_file":   allow,
 				"send_file":     allow,
+				"show_to_user":  allow,
 				"request_mount": ask,
 				"serve_web":     allow,
 				// Drafting and received attachments do not send mail.
@@ -986,7 +992,7 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 var workerTierDeniedTools = []string{
 	"answer_request", "read_conversation", "set_goal", "run_retrospective",
 	"create_plan", "execute_plan", "stop_plan", "plan_correct", "create_task",
-	"request_secret",
+	"request_secret", "show_to_user",
 }
 
 // RestrictForWorkerTier turns Main creation defaults into Worker defaults

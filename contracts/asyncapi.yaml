@@ -171,6 +171,10 @@ channels:
         $ref: '#/components/messages/RoomMemberStateFrame'
       RoomMetaFrame:
         $ref: '#/components/messages/RoomMetaFrame'
+      OpenInLibraryFrame:
+        $ref: '#/components/messages/OpenInLibraryFrame'
+      ChatPresenceFrame:
+        $ref: '#/components/messages/ChatPresenceFrame'
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
@@ -292,6 +296,18 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/PingFrame'
+  sendChatPresence:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Whether this tab is watching the chat of session_id (chat-links spec, "Watching"): sent with watching true
+      when the tab starts watching and periodically while it stays watching, and with watching false when it stops. Bound
+      to this connection, accepted only for a session the connection may attach to; in memory only, never journaled,
+      replayed or persisted.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ChatPresenceFrame'
   sendAttachSession:
     action: send
     channel:
@@ -610,6 +626,18 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/MediaFrame'
+  receiveOpenInLibrary:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Live-only request, after a successful show_to_user call, to open the workspace Library at a file (chat-links
+      spec, "Replay guarantee"). Delivered unsequenced to the connections bound to the session at that moment; never
+      journaled, persisted or replayed, so a reload or reconnect never receives it. Each tab decides once on arrival whether
+      to open the Library or show an "Open in Library" notice.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/OpenInLibraryFrame'
   receiveLibraryChanged:
     action: receive
     channel:
@@ -1100,6 +1128,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/PingFrame'
+    ChatPresenceFrame:
+      name: ChatPresenceFrame
+      title: chat_presence
+      summary: Whether this tab is watching a chat (client → server, chat-links spec).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ChatPresenceFrame'
     AttachSessionFrame:
       name: AttachSessionFrame
       title: attach_session
@@ -1291,6 +1326,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/MediaFrame'
+    OpenInLibraryFrame:
+      name: OpenInLibraryFrame
+      title: open_in_library
+      summary: Live-only request to open the Library at a file (server → client, chat-links spec).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/OpenInLibraryFrame'
     ToolApprovalRequiredFrame:
       name: ToolApprovalRequiredFrame
       title: tool_approval_required
@@ -2657,6 +2699,8 @@ components:
       - room_entry
       - room_member_state
       - room_meta
+      - open_in_library
+      - chat_presence
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -2886,6 +2930,37 @@ components:
         type:
           type: string
           const: pong
+    ChatPresenceFrame:
+      title: ChatPresenceFrame
+      description: >
+        Client → server (chat-links spec, "Watching"). Reports whether this tab is
+        watching the chat of session_id: the tab is visible and that chat's screen
+        is mounted. Sent with watching true when the tab starts watching and again
+        periodically while it stays watching, and with watching false when the tab
+        is hidden, the chat changes or the chat screen unmounts. The server keeps
+        the claim in memory only, bound to this connection, and accepts it only
+        for a session this connection may attach to; an unrefreshed claim expires
+        and a closed connection drops its claims. Not journaled, not replayed, not
+        persisted. Keep in sync by hand with
+        contracts/components/schemas/ChatPresenceFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - watching
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: chat_presence
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Chat session this tab is (or stopped) watching.
+        watching:
+          type: boolean
+          description: True while this tab is watching that chat; false when it stops.
     AttachSessionFrame:
       title: AttachSessionFrame
       description: >
@@ -5474,6 +5549,32 @@ components:
             Which REST operation emitted the frame (e.g. "delete", "rename",
             "mkdir", "upload", "write"). For debugging surfaces; clients must
             not branch their invalidation on it.
+    LibraryRef:
+      title: LibraryRef
+      description: >
+        Address of a file in a workspace Library (chat-links spec, Contract
+        section). Navigation data only: it never grants access; opening the file
+        still goes through the viewer's own Library access. Mirrors
+        contracts/components/schemas/LibraryRef.yaml — keep both copies in sync
+        by hand. Declared before MediaPart because the generated Zod consts are
+        emitted in declaration order.
+      type: object
+      required:
+      - workspace_id
+      - path
+      additionalProperties: false
+      properties:
+        workspace_id:
+          type: string
+          minLength: 1
+          description: Workspace whose Library holds the file.
+        path:
+          type: string
+          minLength: 1
+          description: >
+            Library path of the file, relative to the workspace Library root. For a
+            file in a mounted folder the mount name comes first. Never empty: the
+            Library root is not a valid target.
     MediaPart:
       title: MediaPart
       description: One media attachment.
@@ -5503,6 +5604,15 @@ components:
           minLength: 1
         caption:
           type: string
+        library_ref:
+          $ref: '#/components/schemas/LibraryRef'
+          description: >
+            Library address of the sent file (chat-links spec, R5 and FR-021).
+            Present for a file in a workspace Library or one of its mounted
+            folders, for every media type; the web chat shows "Open in Library"
+            on non-image file cards only. Omitted for a file outside every Library
+            and when the session's workspace is unknown. Keep in sync by hand with
+            contracts/components/schemas/MediaPart.yaml.
     MediaFrame:
       title: MediaFrame
       description: >
@@ -5539,6 +5649,61 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/MediaFrame.yaml.
+    OpenInLibraryFrame:
+      title: OpenInLibraryFrame
+      description: >
+        Server → client, live only (chat-links spec, "Replay guarantee" and
+        "Tool-to-hub seam"). Sent after a successful show_to_user call to every
+        connection bound to the chat session at that moment, asking the tab to open
+        the workspace Library at a file. Delivered unsequenced: never numbered,
+        journaled, persisted or replayed, so it has no seq property and a reload or
+        reconnect never receives it. Each tab decides once, on arrival, whether to
+        open the Library or to show an "Open in Library" notice instead. Keep in
+        sync by hand with contracts/components/schemas/OpenInLibraryFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - call_id
+      - request_id
+      - workspace_id
+      - path
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: open_in_library
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Chat session the show_to_user call ran in.
+        call_id:
+          type: string
+          minLength: 1
+          description: >
+            Tool call id of the show_to_user call. Correlates the frame with its
+            tool card only; it is not unique and is never a de-duplication key.
+        request_id:
+          type: string
+          minLength: 32
+          maxLength: 32
+          pattern: '^[0-9a-f]{32}$'
+          description: >
+            Server-minted identity of this open request: 16 random bytes as 32
+            lowercase hex characters. The client de-duplicates on session_id plus
+            request_id.
+        workspace_id:
+          type: string
+          minLength: 1
+          description: Workspace whose Library should open.
+        path:
+          type: string
+          minLength: 1
+          description: >
+            Library path of the file, relative to the workspace Library root. For a
+            file in a mounted folder the mount name comes first. Never empty: the
+            Library root is not a valid target.
     CommandSegmentInfo:
       title: CommandSegmentInfo
       description: >

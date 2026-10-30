@@ -507,6 +507,7 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | C→S | `attach_session` | Attach to an authorized session. Use `since_seq` and `boot_id` for servable incremental catch-up; otherwise receive a bounded recent snapshot or an unavailable-history live/control result. |
 | C→S | `device_pairing_response` | Admin approval/rejection of a pending device pairing request |
 | C→S | `whatsapp_pairing_subscribe` | Start/stop receiving WhatsApp pairing frames on this connection (#283) |
+| C→S | `chat_presence` | This tab is (`watching: true`) or stopped being (`watching: false`) on screen showing the chat `session_id`. Re-sent every 15 seconds while watching; a report expires after 45 seconds and is dropped when the connection closes. Not journaled, not replayed, not persisted. Accepted for any existing chat the connection may attach to. |
 | S→C | `session_started` | New session ID minted by the server (response to a `message` without `session_id`) |
 | S→C | `session_mode_updated` | Acknowledge a per-chat mode change with the resolved Auto-approve setting |
 | S→C | `token` | LLM response token chunk |
@@ -521,6 +522,7 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | S→C | `replay_message` | One replayed transcript entry during an `attach_session` |
 | S→C | `rate_limit` | Rate-limit denial applied to an agent action (SEC-26) |
 | S→C | `media` | One or more media attachments from a tool (parts array, never null) |
+| S→C | `open_in_library` | A request from `show_to_user` to open the Library at `workspace_id`/`path`. Live only: no `seq`, not in the journal, never replayed on reconnect or reload; sent only to connections attached to that session when the call succeeds. The client de-duplicates on `session_id` + `request_id` (32 lowercase hex characters) and decides once, on arrival, whether to open the Library or show a notice. |
 | S→C | `tool_approval_required` | Tool call paused for ask-policy approval (FR-011, FR-082); `args` always an object, never null |
 | S→C | `tool_approval_resolved` | A pending tool approval was resolved (approved, denied, or expired) — sent to every connected tab so all of them drop the request together |
 | S→C | `session_state` | One-shot approval-state snapshot on every WS reconnect (FR-052, FR-073, FR-081) |

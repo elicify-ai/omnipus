@@ -1,5 +1,7 @@
 import { UsersThree } from '@phosphor-icons/react'
 import { ChatScreen } from '@/components/chat/ChatScreen'
+import { LibraryOpenNotice } from '@/components/chat/LibraryOpenNotice'
+import { useChatPresence } from '@/hooks/useChatPresence'
 import { useSessionStore } from '@/store/session'
 import { useOpenOmnipus } from '@/hooks/useOpenOmnipus'
 import { Button } from '@/components/ui/button'
@@ -43,7 +45,29 @@ export function WorkspaceChatTab({ workspaceId }: WorkspaceChatTabProps) {
 
   if (emptyTeam) return <EmptyTeamEntry />
 
-  return <ChatScreen />
+  return <WorkspaceChatView workspaceId={workspaceId} />
+}
+
+/**
+ * The mounted chat view (chat-links spec "Watching"): reports presence for the
+ * active session and hosts its "Open in Library" notice. Bare chat links
+ * resolve against this workspace only while the active session is the one
+ * this workspace recorded — during a workspace switch the previous
+ * workspace's session is briefly still active, and its links must not
+ * resolve against the new workspace.
+ */
+function WorkspaceChatView({ workspaceId }: WorkspaceChatTabProps) {
+  const sessionId = useSessionStore((s) => s.activeSessionId)
+  const recordedHere = useSessionStore(
+    (s) => s.activeSessionId !== null && s.sessionByWorkspace[workspaceId]?.id === s.activeSessionId,
+  )
+  useChatPresence(sessionId, recordedHere ? workspaceId : null)
+  return (
+    <>
+      <ChatScreen />
+      {sessionId && <LibraryOpenNotice sessionId={sessionId} />}
+    </>
+  )
 }
 
 function EmptyTeamEntry() {

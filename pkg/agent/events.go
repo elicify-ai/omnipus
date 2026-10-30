@@ -8,6 +8,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // EventKind identifies a structured agent-loop event.
@@ -459,6 +460,11 @@ type ToolExecEndPayload struct {
 	// AgentID is the agent executing this tool call.
 	// FR-I-008: live tool_call_result frames must carry agent_id to match replay frame parity.
 	AgentID string
+	// OpenInLibrary is show_to_user's open request (chat-links "Tool-to-hub
+	// seam"), copied from the tool result only on success. The gateway turns
+	// it into the live-only open_in_library frame; it is never persisted, so
+	// no replay can rebuild it. Nil for every other tool and every error.
+	OpenInLibrary *tools.LibraryOpenTarget
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.

@@ -661,6 +661,32 @@ Three named exceptions:
 - **External CLI workers.** The external command-line workers (Claude Code, Codex, opencode runs inside an isolated workspace) also receive the provider login values their CLI needs — for example `ANTHROPIC_API_KEY` or `CODEX_HOME` — because their job is to authenticate to your model provider. This is the documented runner credential path; the general gateway secrets stay excluded there too.
 - **God Mode.** While God Mode is on (Settings → Gateway → Danger zone), the programs your agent's `bash` commands start — foreground or background — and the runs of the `environment_setup` tool receive your **full gateway environment** instead of the allowlist. That includes your saved provider API keys and mailbox passwords. This is an accepted risk: God Mode means full trust, and its documentation says that God Mode programs see your keys. One limit survives even here: the three gateway boot values — the master-key and key-file variables and the web token — are still withheld from these programs. When God Mode is off, and for every other starter (browser, hooks, git, MCP servers, transcoders, the launcher), the allowlist is all a child ever gets.
 
+## Chat links and opening the Library for you
+
+Agents can point you at files in two ways. Both open a viewer only: they never give an agent, or you, access to a file you could not already open.
+
+| Feature | What it does | Limits |
+|---|---|---|
+| Chat links | A file an agent mentions in web chat can be a link (`omnipus://file/<workspace>/<path>`) that opens the Library at that file. | Produced only in web chat. Telegram, email and other channels get the file name, never a link, so no workspace name leaves Omnipus. A file outside every workspace Library is shown as its full path with no link. Clicking a link opens the Library with your own Library permissions. |
+| `show_to_user` | An agent asks the Library beside your chat to open a file. | Main agents (Mia, Jim and main agents you create) have it by default; worker agents and Omnipus do not. It works only in your own web chat, never from a helper the agent started, and only for a file in that chat's own workspace or its mounted folders that the agent is allowed to read and that can actually be opened. |
+
+When `show_to_user` is called:
+
+- **It opens by itself only while you are looking at that chat.** "Looking" means the browser tab is visible and that chat is on screen. Otherwise the chat shows an **Open in Library** notice and nothing opens until you click it.
+- **Unsaved Library edits are never discarded.** If the Library has unsaved changes, you get the notice instead; clicking it asks before leaving your edits.
+- **It happens live only.** The request is not saved in the chat history, so reloading the page or reconnecting never opens anything.
+- **It is rate-limited.** At most 5 calls per minute in one chat. A call refused for another reason does not use up any of the five.
+- **Refusals do not reveal what exists.** A file that does not exist, a file the agent may not read, a protected file such as Omnipus's master key, and the workspace root all get the same refusal text. One exception remains: a link (symlink) inside the workspace that points at a protected file can get a different refusal while that file is missing than once it exists. Neither answer reveals the file's contents.
+- **Audit entries.** Each `show_to_user` call writes a `tool_call` audit entry with the agent, the outcome and a reason code. Success uses `ok`. Refusals use `outside`, `other workspace`, `denied-or-missing`, `no workspace`, `delegated session`, `wrong channel` or `rate limit`, and two internal failures use `policy_unavailable` (the turn's file permissions could not be worked out) and `request_id_unavailable` (no random request id could be created). A successful entry also records the workspace and the Library path; a refusal entry never records the reference the agent sent. If writing the audit entry fails, the gateway logs that failure.
+- **It shows the Library's existing preview of that file.** It adds no new way of displaying files.
+
+**What the agent learns about you.** On each web-chat turn the agent sees one line, `User watching: yes` or `User watching: no`, about that chat only. It does not learn which device or how many tabs you have. Each open tab tells Omnipus about the chat it shows. A tab's report lasts 45 seconds unless the tab refreshes it, and ends when the tab closes. Two current limits of this signal:
+
+- The server accepts a report for any chat the connection is allowed to open, not only the chat it is attached to.
+- Switching to another chat without the tab sending a "stopped watching" report leaves the old chat marked as watched until the report expires.
+
+So `User watching: yes` can occasionally be stale. This affects only what the agent is told. Whether the Library opens is decided again by the tab itself when the request arrives.
+
 ## Limits and things to watch
 
 - Security controls reduce risk but do not make every agent action safe. Read approval details before allowing a request.

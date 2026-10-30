@@ -21,7 +21,6 @@ import {
   Copy,
   Check,
   Plus,
-  File,
   Lightning,
 } from '@phosphor-icons/react'
 import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
@@ -98,6 +97,7 @@ import { ComposerMediaLibraryButton, LibraryAttachmentChips } from './ComposerMe
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
+import { AssistantMediaItem } from './AssistantMediaItem'
 import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
 import { ComposerMenu } from './composer/ComposerMenu'
 import { recipientAddressBlocked } from '@/store/chat/recipientSend'
@@ -724,30 +724,9 @@ function InlineMedia() {
 
   return (
     <div className="flex flex-col gap-[var(--space-2)] mt-[var(--space-2)]">
-      {storeMsg.media.map((m, i) =>
-        m.type === 'image' ? (
-          <div key={`${m.url}-${i}`} className="max-w-2xl">
-            <ChatImage
-              src={m.url}
-              alt={m.caption || m.filename}
-              filename={m.filename}
-            />
-            {m.caption && (
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
-            )}
-          </div>
-        ) : (
-          <a tabIndex={0}
-            key={`${m.url}-${i}`}
-            href={m.url}
-            download={m.filename}
-            className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-          >
-            <File size={14} />
-            {m.filename}
-          </a>
-        ),
-      )}
+      {storeMsg.media.map((m, i) => (
+        <AssistantMediaItem key={`${m.url}-${i}`} kind={m.type === 'image' ? 'image' : 'file'} url={m.url} filename={m.filename} caption={m.caption} libraryRef={m.libraryRef} />
+      ))}
     </div>
   )
 }
@@ -1232,30 +1211,9 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
             <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
-              {mediaItems.map((m, i) =>
-                m.type === 'image' ? (
-                  <div key={`${m.url}-${i}`} className="max-w-2xl">
-                    <ChatImage
-                      src={m.url}
-                      alt={m.caption || m.filename}
-                      filename={m.filename}
-                    />
-                    {m.caption && (
-                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
-                    )}
-                  </div>
-                ) : (
-                  <a tabIndex={0}
-                    key={`${m.url}-${i}`}
-                    href={m.url}
-                    download={m.filename}
-                    className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-                  >
-                    <File size={14} />
-                    {m.filename}
-                  </a>
-                ),
-              )}
+              {mediaItems.map((m, i) => (
+                <AssistantMediaItem key={`${m.url}-${i}`} kind={m.type === 'image' ? 'image' : 'file'} url={m.url} filename={m.filename} caption={m.caption} libraryRef={m.libraryRef} />
+              ))}
             </div>
           )}
 
@@ -1286,7 +1244,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
               (incorrectly) rendering the paragraph as one unbroken block. */}
           {messageParts.map((part, idx) => {
             if (part.type === 'text') {
-              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
+              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} chatLinks />
             }
             const callId = part.call.id
             const tc = toolCalls[callId] ?? part.call

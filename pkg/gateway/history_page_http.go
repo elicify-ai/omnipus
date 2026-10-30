@@ -77,7 +77,7 @@ func historyHTTPFailure(ctx context.Context, w http.ResponseWriter, id string, e
 	}
 }
 func (a *restAPI) historyProjectionDeps(store *session.UnifiedStore, id string) historyPageProjectionDeps {
-	deps := historyPageProjectionDeps{ToolStore: newToolResultStore(a.homePath), TerminalAsk: loadTerminalAskRecord(store, id), MediaStore: a.agentLoop.GetMediaStore()}
+	deps := historyPageProjectionDeps{ToolStore: newToolResultStore(a.homePath), TerminalAsk: loadTerminalAskRecord(store, id), MediaStore: a.agentLoop.GetMediaStore(), Home: a.homePath}
 	if deps.MediaStore == nil {
 		deps.MediaStore = a.mediaStore
 	}

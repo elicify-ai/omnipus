@@ -5,6 +5,8 @@ import { useChatStore } from '@/store/chat'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { cn } from '@/lib/utils'
+import { parseChatLink, type ChatLinkTarget } from '@/lib/chatLinks'
+import { ChatLibraryLink } from '../ChatLibraryLink'
 
 interface WriteFileArgs {
   path?: string
@@ -36,6 +38,8 @@ function basename(p: string): string {
 // is an object carrying a prose `reason`; every other failure arrives as the
 // error text itself. Both are rendered the same way — the point is that the
 // row stops being silent, not that the user learns which shape it was.
+// A reloaded call carries the persisted `{ text: "…" }` envelope instead of
+// the string, so its text is read too (FileOpReplayBlock).
 function failureReason(result: unknown): string | undefined {
   if (typeof result === 'string') {
     const trimmed = result.trim()
@@ -44,6 +48,8 @@ function failureReason(result: unknown): string | undefined {
   if (result !== null && typeof result === 'object') {
     const reason = (result as Record<string, unknown>)['reason']
     if (typeof reason === 'string' && reason.trim() !== '') return reason.trim()
+    const text = (result as Record<string, unknown>)['text']
+    if (typeof text === 'string' && text.trim() !== '') return text.trim()
   }
   return undefined
 }
@@ -74,6 +80,7 @@ function FileOpBlock({
   isError,
   isCancelled,
   isRefusal,
+  libraryTarget,
 }: {
   label: string
   path: string
@@ -83,6 +90,8 @@ function FileOpBlock({
   isError?: boolean
   isCancelled?: boolean
   isRefusal?: boolean
+  /** Where the written file lives in the Library — set only for a finished, successful write (follow-up 2). */
+  libraryTarget?: ChatLinkTarget | null
 }) {
   // A precondition refusal gets its own label, matching GenericToolCall (the
   // REPLAY renderer for this same tool). Without this the identical event read
@@ -126,7 +135,9 @@ function FileOpBlock({
       {statusConfig.indicator}
       <span className="text-[var(--color-muted)] shrink-0">{label}</span>
       <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
-        {basename(path)}
+        {libraryTarget
+          ? <ChatLibraryLink target={libraryTarget}>{basename(path)}</ChatLibraryLink>
+          : basename(path)}
       </span>
       {detail && !isRunning && (
         <span className="text-[var(--color-muted)] shrink-0">{detail}</span>
@@ -200,6 +211,10 @@ function FileOpRow({
   // the hook for `reason` (storeCall?.error), which has no equivalent on
   // that boolean, so there is no simplification to gain by reading both.
   const isError = !isCancelled && storeCall?.status === 'error'
+  // Follow-up 2: a successful write's file name becomes the same Library link
+  // a chat reply would render (same opener, same leave gate, chat-only rules).
+  const succeeded = !isRunning && !isError && !isCancelled && !isRefusal
+  const libraryTarget = succeeded ? writtenFileLibraryTarget(storeCall?.result ?? result) : null
 
   // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
   // hides this row when shouldRenderToolCall says so, unless verbose chat is
@@ -223,6 +238,88 @@ function FileOpRow({
       isError={isError}
       isCancelled={isCancelled}
       isRefusal={isRefusal}
+      libraryTarget={libraryTarget}
+    />
+  )
+}
+
+const LINK_LINE_RE = /^link: (omnipus:\/\/file\/\S+)$/m
+
+/**
+ * The Library location of a written file, or null. The ONLY source is the
+ * tool result's `link:` line: the server adds it on web chat for a Library
+ * file only (FR-011), so a write without one is not a Library file (US-4
+ * AS-4, R4). The written path itself is never guessed into a Library address
+ * — the turn's working directory is not a Library root (BS-4.4).
+ */
+function writtenFileLibraryTarget(result: unknown): ChatLinkTarget | null {
+  const text = resultText(result)
+  if (text === null) return null
+  const line = LINK_LINE_RE.exec(text)
+  return line ? parseChatLink(line[1], null) : null
+}
+
+/**
+ * The tool result's text: a string live, and on reload the persisted
+ * `{ text: "…" }` envelope the gateway replays (pkg/gateway/replay.go
+ * buildResultFrame returns the stored Result map unchanged).
+ */
+function resultText(result: unknown): string | null {
+  if (typeof result === 'string') return result
+  if (result !== null && typeof result === 'object') {
+    const text = (result as Record<string, unknown>)['text']
+    if (typeof text === 'string') return text
+  }
+  return null
+}
+
+/** The file-operation tools that render as a FileOpBlock row, live and on replay. */
+export function isFileOpToolName(tool: string): boolean {
+  return tool === 'write_file' || tool === 'file.write' || tool === 'edit_file' || tool === 'append_file'
+}
+
+/**
+ * The completed/replayed form of FileOpRow (code-reviewer C2): a finished
+ * reply, and a reloaded one whose live tool-call store is empty, render
+ * through renderHistoricalToolCall rather than AssistantUI, so this builds
+ * the same FileOpBlock from the persisted call — same status, refusal and
+ * failure-reason rules, same visibility gate, and the same server-only
+ * `link:` line as the Library address.
+ */
+export function FileOpReplayBlock({
+  toolName,
+  params,
+  result,
+  status,
+  error,
+  verboseChatEnabled,
+}: {
+  toolName: string
+  params: Record<string, unknown> | undefined
+  result: unknown
+  status: 'running' | 'success' | 'error' | 'cancelled'
+  error?: string
+  verboseChatEnabled: boolean
+}) {
+  const isRunning = status === 'running'
+  const isCancelled = status === 'cancelled'
+  const isError = !isCancelled && status === 'error'
+  const isRefusal = isFileExistsRefusal(result)
+  if (!shouldRenderToolCall(toolName, params, verboseChatEnabled, isError)) return null
+  const path = typeof params?.path === 'string' ? params.path : '(unknown)'
+  const content = typeof params?.content === 'string' ? params.content : undefined
+  const succeeded = !isRunning && !isError && !isCancelled && !isRefusal
+  return (
+    <FileOpBlock
+      label={toolName}
+      path={path}
+      detail={toolName === 'edit_file' ? undefined : byteCount(content)}
+      reason={failureReason(error) ?? failureReason(result)}
+      isRunning={isRunning}
+      isError={isError}
+      isCancelled={isCancelled}
+      isRefusal={isRefusal}
+      libraryTarget={succeeded ? writtenFileLibraryTarget(result) : null}
     />
   )
 }
