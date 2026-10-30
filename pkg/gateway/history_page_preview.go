@@ -90,12 +90,16 @@ func historyStoredMarkerInvalid(e session.TranscriptEntry) (bool, error) {
 	return false, nil
 }
 
-// historyFullEntryCarriesMarker reports a full-entry projection in which a
-// saved tool result carries the reserved `_history_preview` key. The full
-// read never shortens, so any such key is saved data, not a reader marker,
-// and the 200 response must never carry it (A2.2).
-func historyFullEntryCarriesMarker(e session.TranscriptEntry) bool {
+// historySavedMarkerPresent reports a saved (not reader-made) tool result
+// that carries the reserved `_history_preview` key. A reader preview replaces
+// its result with nil, so any such key is saved data. An ordinary result must
+// not carry it (A2.2): on every carrier, valid marker shape or not, the item
+// becomes the D4 placeholder and the key is never sent.
+func historySavedMarkerPresent(e session.TranscriptEntry) bool {
 	for _, tc := range e.ToolCalls {
+		if _, preview := tc.HistoryDisplayPreview(); preview {
+			continue
+		}
 		if _, marker := tc.Result["_history_preview"]; marker {
 			return true
 		}

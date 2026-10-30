@@ -138,8 +138,8 @@ func (a *restAPI) serveSessionHistoryEntry(w http.ResponseWriter, r *http.Reques
 	// ordinary (unshortened) result must not carry the reserved key. A saved
 	// result that does — valid marker shape or not — fails the server-side
 	// marker check and becomes the D4 per-item placeholder (#1452 SEC-3).
-	if historyFullEntryCarriesMarker(entry.Entry) {
-		logsafeWarn("history: saved item replaced by its placeholder", "event", "history_item_placeholder", "reason", "preview_marker_in_full_entry")
+	if historySavedMarkerPresent(entry.Entry) {
+		logsafeWarn("history: saved item replaced by its placeholder", "event", "history_item_placeholder", "reason", "saved_preview_marker")
 		entry.Entry = historyPlaceholderSource(entry.Entry)
 		entry.NestedDelegateParents = nil
 	}

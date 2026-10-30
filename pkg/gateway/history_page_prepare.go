@@ -210,8 +210,14 @@ func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHis
 	if err != nil {
 		return out, err
 	}
+	reason := "invalid_preview_marker"
+	if !malformed && historySavedMarkerPresent(e.Entry) {
+		// A2.2: a schema-valid marker in a saved result is still not a
+		// reader preview, so it is never sent as one on either carrier.
+		malformed, reason = true, "saved_preview_marker"
+	}
 	if malformed {
-		logsafeWarn("history: saved item replaced by its placeholder", "event", "history_item_placeholder", "reason", "invalid_preview_marker")
+		logsafeWarn("history: saved item replaced by its placeholder", "event", "history_item_placeholder", "reason", reason)
 		e.Entry = historyPlaceholderSource(e.Entry)
 		e.NestedDelegateParents = nil
 	}
