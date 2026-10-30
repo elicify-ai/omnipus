@@ -27363,7 +27363,7 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
-            /** @description The caller is not a signed-in person: the request authenticated with the CLI token, the gateway is in development-bypass mode, or no user is attached. Refused before the body is read; nothing is started. */
+            /** @description The caller is not a signed-in person: the request authenticated with the CLI token or the legacy environment token, the gateway is in development-bypass mode, or no configured user account is attached. Refused before the body is read; nothing is started. The ErrorResponse `code` is "person_session_required", which tells this refusal apart from other 403s such as a CSRF failure. */
             403: {
                 headers: {
                     [name: string]: unknown;

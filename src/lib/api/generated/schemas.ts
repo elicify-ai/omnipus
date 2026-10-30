@@ -15243,7 +15243,7 @@ Polled by the SPA StatusBar every 15 seconds.
       },
       {
         status: 403,
-        description: `The caller is not a signed-in person: the request authenticated with the CLI token, the gateway is in development-bypass mode, or no user is attached. Refused before the body is read; nothing is started.
+        description: `The caller is not a signed-in person: the request authenticated with the CLI token or the legacy environment token, the gateway is in development-bypass mode, or no configured user account is attached. Refused before the body is read; nothing is started. The ErrorResponse &#x60;code&#x60; is &quot;person_session_required&quot;, which tells this refusal apart from other 403s such as a CSRF failure.
 `,
         schema: ErrorResponse,
       },
