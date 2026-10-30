@@ -129,3 +129,40 @@ func TestChatHistoryRetention_ActualRetainedContinuation_NativeWindows(t *testin
 func TestChatHistoryReadCut_SlowReadDoesNotHoldAppendLocks_NativeWindows(t *testing.T) {
 	historyWindowsHeldRecord(t, true)
 }
+
+// 6a cut Windows failure, rule part: a generation file that ANOTHER holder
+// (a virus scanner, an indexer) keeps open is sharing-busy. Its retirement
+// stays pending instead of failing the read as storage_error, and the next
+// ordinary reconcile retires it once the holder lets go.
+func TestChatHistoryRetention_SharingBusyGenerationStaysPendingAndRetries(t *testing.T) {
+	s, sid := newEffectsSession(t)
+	oldTime := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	buildChatHistoryDayFixture(t, s, sid, []chatHistoryFixtureDay{
+		historyDayRows("2026-01-01", "expired", 1, &oldTime),
+		historyDayRows("2026-01-02", "current", 1, nil),
+	})
+	dir := filepath.Join(s.BaseDir(), sid)
+	before, err := historyLoadCheckpoint(context.Background(), dir, sid)
+	require.NoError(t, err)
+	oldFile := filepath.Join(historyIndexPath(dir), "generations", before.File)
+	holder, err := os.Open(oldFile) // an outside holder, not a pinned reader
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = holder.Close() })
+
+	n, err := s.RetentionSweep(90)
+	require.NoError(t, err, "a sharing-busy old generation must not fail retention")
+	require.Equal(t, 1, n)
+	after, err := historyLoadCheckpoint(context.Background(), dir, sid)
+	require.NoError(t, err)
+	require.NotEqual(t, before.File, after.File, "the compacted generation is published")
+	_, err = os.Stat(oldFile)
+	require.NoError(t, err, "the busy old generation stays pending, not removed")
+	_, err = s.reconcileChatHistoryIndex(context.Background(), sid)
+	require.NoError(t, err, "a read while the holder still has the file is not storage_error")
+
+	require.NoError(t, holder.Close())
+	_, err = s.reconcileChatHistoryIndex(context.Background(), sid)
+	require.NoError(t, err)
+	_, err = os.Stat(oldFile)
+	require.True(t, errors.Is(err, os.ErrNotExist), "the next ordinary reconcile retires the released generation: %v", err)
+}

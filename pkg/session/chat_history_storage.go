@@ -348,11 +348,18 @@ func (o *chatHistoryOwner) retain(path string) func() error {
 
 // removeRetiredLocked keeps failed cleanup pending. The caller holds refsMu;
 // neither this path nor a reader release waits for owner.mu/session shards.
+// A Windows sharing violation (another process, such as a virus scanner,
+// holds the file) is not a failure: the file stays pending and the next
+// reconcile or reader release retries it (package rule: genuine Windows
+// sharing-busy is not proof of anything).
 func (o *chatHistoryOwner) removeRetiredLocked(path string) error {
 	if !o.retired[path] || o.refs[path] > 0 {
 		return nil
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if isArchiveSharingBusy(err) {
+			return nil
+		}
 		return err
 	}
 	delete(o.retired, path)
