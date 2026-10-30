@@ -156,6 +156,12 @@ export interface ComposerConversation { // not-wire-format: React props for the 
   reconnectPhase: ReturnType<typeof useConnectionStore.getState>['reconnectPhase']
   /** The textarea accepts input. */
   inputEnabled: boolean
+  /**
+   * The Send button may send. Defaults to `inputEnabled` (the normal chat
+   * blocks typing and sending together). The group keeps the box typeable
+   * while sending is blocked (FR-013): the text waits for the block to lift.
+   */
+  sendEnabled?: boolean
   /** Attach, drag-drop and the library picker are blocked. */
   attachDisabled: boolean
   /** The conversation is read-only because its agent was removed (normal chat only). */
@@ -339,6 +345,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
     profile, isStreaming, isReplaying, reconnectPhase, inputEnabled, attachDisabled, agentRemoved,
     cancelState, goalRunning, slashMenu,
   } = conversation
+  const sendEnabled = conversation.sendEnabled ?? inputEnabled
 
   // Tracks whether we already warned for the current large-input threshold crossing,
   // so we only fire one toast per paste/input event that exceeds 1MB.
@@ -1122,7 +1129,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
             // composer is empty (no text and no attachments) via the runtime's
             // canSend, so no manual empty-check is needed here either.
             <ComposerPrimitive.Send
-              disabled={!inputEnabled || isReplaying}
+              disabled={!sendEnabled || isReplaying}
               data-testid="chat-send"
               tabIndex={6}
               onClick={(e) => {
@@ -1140,7 +1147,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
               }}
               className={cn(
                 'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg flex items-center justify-center transition-colors',
-                inputEnabled && !isReplaying
+                sendEnabled && !isReplaying
                   ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
                     // Muted accent while reconnecting — functional but visually signals
                     // the message will queue rather than send immediately.

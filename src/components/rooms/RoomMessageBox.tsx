@@ -116,7 +116,9 @@ export function RoomMessageBox({
     return false
   }, [blockedReason, composerRuntime])
 
-  const inputEnabled = blockedReason === undefined
+  // FR-013 blocks sending, not typing: the text stays in the box and can be
+  // sent once the reason clears (ruling Q2).
+  const sendEnabled = blockedReason === undefined
   const conversation: ComposerConversation = {
     profile: ROOM_COMPOSER_PROFILE,
     isStreaming: false,
@@ -124,8 +126,9 @@ export function RoomMessageBox({
     isConnected,
     // The group never queues while disconnected: sending is blocked instead.
     reconnectPhase: null,
-    inputEnabled,
-    attachDisabled: !inputEnabled,
+    inputEnabled: true,
+    sendEnabled,
+    attachDisabled: !sendEnabled,
     agentRemoved: false,
     placeholder: GROUP_PLACEHOLDER,
     inputLabel: 'Message the group',
