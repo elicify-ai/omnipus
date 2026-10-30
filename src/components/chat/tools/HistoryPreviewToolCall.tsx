@@ -10,7 +10,7 @@ import type { HistoryResultPreview } from '@/lib/api/generated/asyncapi-types'
 import type { ToolCall } from '@/lib/api'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { humanByteSize } from '@/lib/historyPreview'
-import { useHistoryEntryRead } from '@/lib/historyEntryReads'
+import { isHistoryEntryPlaceholder, useHistoryEntryRead } from '@/lib/historyEntryReads'
 import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 import { HistoryEntryReadOutcome } from '../historyEntryOutcome'
 import { safeJson } from './toolResultDisplay'
@@ -39,6 +39,7 @@ export function HistoryPreviewToolCall({ tc, marker, sessionId, historyPosition 
   const [expanded, setExpanded] = useState(false)
   const read = useHistoryEntryRead(sessionId, historyPosition ?? '', expanded && !!historyPosition)
   const fullCall = read.data?.role === 'assistant' ? read.data.tool_calls?.find(call => call.id === tc.id) : undefined
+  const placeholder = read.isSuccess && isHistoryEntryPlaceholder(read.data)
   const status = getToolBadgeStatusConfig(tc.status, { size: 12 })
   return (
     <div data-testid="tool-call-badge" data-tool={tc.tool} className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
@@ -58,7 +59,7 @@ export function HistoryPreviewToolCall({ tc, marker, sessionId, historyPosition 
             <>
               <pre tabIndex={0} role="region" aria-label="Tool output preview" className={outputClass}>{marker.preview}</pre>
               {historyPosition
-                ? <HistoryEntryReadOutcome read={read} incomplete={read.isSuccess && !fullCall} />
+                ? <HistoryEntryReadOutcome read={read} placeholder={placeholder} incomplete={read.isSuccess && !fullCall} />
                 : <p className="font-body text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Only the saved preview is available here.</p>}
             </>
           )}

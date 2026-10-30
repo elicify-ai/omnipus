@@ -23,14 +23,19 @@ export function classifyReadFailure(error: unknown): ReadFailure {
   return 'recoverable'
 }
 
-export function HistoryEntryReadOutcome({ read, incomplete = false }: {
+export function HistoryEntryReadOutcome({ read, incomplete = false, placeholder = false }: {
   read: Pick<UseQueryResult<unknown, Error>, 'isError' | 'error' | 'fetchStatus' | 'refetch' | 'isSuccess'>
   /** The read succeeded but did not carry the expected content: recoverable. */
   incomplete?: boolean
+  /** The read succeeded with the server's D4 placeholder: permanent, like 410 and 404. */
+  placeholder?: boolean
 }) {
   const retry = () => { void read.refetch() }
   if (read.fetchStatus === 'fetching') {
     return <p role="status" className="font-body text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Loading the full content…</p>
+  }
+  if (read.isSuccess && placeholder) {
+    return <ErrorState message="The full content of this saved item cannot be displayed — showing the saved preview." className="items-start py-[var(--space-1)]" />
   }
   if (read.isSuccess && incomplete) {
     return <ErrorState message="The full content could not be shown." onRetry={retry} className="items-start py-[var(--space-1)]" />
