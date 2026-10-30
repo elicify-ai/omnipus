@@ -141,10 +141,13 @@ type FallbackAttempt struct {
 	Skipped  bool // true if skipped due to cooldown
 	// Calls is how many provider calls this candidate received (issue #1280).
 	Calls int
-	// RetryPlan is true when the issue #1280 retry plan ran on this
-	// candidate (it was the last one the chain could try and its failure
-	// was a connection, overload or mid-answer failure). The agent loop
-	// must not retry such an exhaustion again.
+	// RetryPlan is true when the issue #1280 retry plan governed THIS
+	// recorded failure (the candidate was the last one the chain could
+	// try and its failure was a connection, overload or mid-answer
+	// failure). The agent loop must not retry such an exhaustion again.
+	// A later failure the plan does not govern — a deadline, a silence
+	// stall — leaves the flag false, so the loop's own timeout recovery
+	// (which owns those classes) still runs.
 	RetryPlan bool
 }
 
@@ -479,7 +482,9 @@ func (fc *FallbackChain) Execute(
 		candStart := fc.now()
 		var lastErr error
 		skipWithoutMark := false
-		planApplied := false // issue #1280: the retry plan ran on this candidate
+		// Recorded with the A-4/D14 skip so the observability record can say
+		// whether the #1280 plan governed the failure that was skipped.
+		skipRetryPlan := false
 		var calls int
 
 		for attemptNo := 1; ; attemptNo++ {
@@ -573,9 +578,9 @@ func (fc *FallbackChain) Execute(
 			// §7.4 C-8 (earlier candidates) / issue #1280 plan (last candidate):
 			// decide whether THIS candidate is called again in place.
 			plan := fc.inPlaceRetry(ctx, candidates, i, attemptNo, err, failErr, c10Streamed)
-			planApplied = planApplied || plan.planCandidate
 			if plan.skip {
 				skipWithoutMark = true
+				skipRetryPlan = plan.planCandidate
 				break
 			}
 			if plan.retry {
@@ -602,7 +607,7 @@ func (fc *FallbackChain) Execute(
 						Reason:    failErr.Reason,
 						Duration:  fc.since(candStart),
 						Calls:     attemptNo,
-						RetryPlan: planApplied,
+						RetryPlan: plan.planCandidate,
 					})
 					return nil, context.Canceled
 				}
@@ -610,7 +615,13 @@ func (fc *FallbackChain) Execute(
 			}
 
 			// Cap reached (or a non-rate-limit retriable reason): mark the
-			// candidate failed ONCE and move to the next candidate.
+			// candidate failed ONCE and move to the next candidate. RetryPlan
+			// is plan.planCandidate — whether the plan governed THIS final
+			// failure — never a sticky execution-wide flag: a plan-retried
+			// candidate whose LATER call fails with a class the plan does not
+			// govern (a deadline, a silence stall) must leave the flag false,
+			// or the agent loop would skip the timeout recovery that owns
+			// those classes.
 			fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Provider:  candidate.Provider,
@@ -619,13 +630,14 @@ func (fc *FallbackChain) Execute(
 				Reason:    failErr.Reason,
 				Duration:  fc.since(candStart),
 				Calls:     attemptNo,
-				RetryPlan: planApplied,
+				RetryPlan: plan.planCandidate,
 			})
 			break
 		}
 
 		if skipWithoutMark {
-			// A-4/D14 skip: recorded for observability, never marked.
+			// A-4/D14 skip: recorded for observability, never marked. RetryPlan
+			// says whether the plan governed the skipped failure.
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Provider:  candidate.Provider,
 				Model:     candidate.Model,
@@ -634,7 +646,7 @@ func (fc *FallbackChain) Execute(
 				Skipped:   true,
 				Duration:  fc.since(candStart),
 				Calls:     calls,
-				RetryPlan: planApplied,
+				RetryPlan: skipRetryPlan,
 			})
 		}
 

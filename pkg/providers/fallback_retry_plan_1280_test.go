@@ -234,6 +234,34 @@ func TestIssue1280_EarlierCandidateHandsOverAndTheLastRunsThePlan(t *testing.T) 
 	require.Equal(t, 3, res.Retries)
 }
 
+// TestIssue1280_PlanRetriesThenDeadlineIsNotTaggedPlanRun: when the plan
+// retries a connection failure and the LATER call then fails with a
+// deadline — a class the plan explicitly does not govern — the concluding
+// attempt record must not carry the plan flag. The flag is what tells the
+// agent loop "the plan already owned this exhaustion", and on it the loop
+// skips its own timeout recovery (context compaction retry), which the
+// retry-plan contract says owns deadlines.
+func TestIssue1280_PlanRetriesThenDeadlineIsNotTaggedPlanRun(t *testing.T) {
+	rec := &issue1280Recorder{}
+	fc, ctx := issue1280Chain(rec)
+	calls := 0
+	_, err := fc.Execute(ctx, []FallbackCandidate{{Provider: "p", Model: "m"}},
+		func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+			calls++
+			if calls <= 3 {
+				return nil, errors.New("dial tcp: lookup openrouter.ai: no such host")
+			}
+			return nil, context.DeadlineExceeded
+		})
+	fex := exhaustedFrom(t, err)
+	require.Equal(t, 4, calls, "3 plan retries, then the call that times out")
+	require.Equal(t, issue1280PlanWaits[:3], rec.waits, "the plan ran on the connection failures")
+	require.Len(t, fex.Attempts, 1)
+	require.Equal(t, FailoverTimeout, fex.Attempts[0].Reason, "the concluding failure is the deadline")
+	require.False(t, fex.Attempts[0].RetryPlan,
+		"the final failure is a deadline — outside the plan — so the loop's timeout recovery must not be suppressed")
+}
+
 func TestIssue1280_NoRetryOnceBytesStreamedThisAttempt(t *testing.T) {
 	rec := &issue1280Recorder{}
 	fc, ctx := issue1280Chain(rec)

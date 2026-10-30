@@ -70,8 +70,11 @@ func (rt *agentLoopRunTurn) publishRetryNotice() {
 	}
 }
 
-// exhaustedRanRetryPlan reports whether a fallback-chain exhaustion already
-// includes the issue #1280 retry plan on one of its candidates.
+// exhaustedRanRetryPlan reports whether a fallback-chain exhaustion's
+// recorded failures were governed by the issue #1280 retry plan — i.e. the
+// plan owns the conclusion and the agent loop must not retry it. A final
+// failure the plan does not govern (a deadline, a silence stall) leaves
+// every record's flag false, so the loop's own timeout recovery runs.
 func exhaustedRanRetryPlan(exhausted *providers.FallbackExhaustedError) bool {
 	if exhausted == nil {
 		return false
