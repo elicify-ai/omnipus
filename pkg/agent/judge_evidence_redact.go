@@ -10,12 +10,16 @@
 package agent
 
 import (
+	"regexp"
+
 	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // judgeEvidenceRedactor returns the unconditional scrubber for text that
-// reaches the Judge's prompt. Three layers, in order:
+// reaches the Judge's prompt. Plain e-mail addresses are deliberately NOT
+// scrubbed (founder decision Q14 B, 2026-10-30): a goal such as "email the
+// order to supplier@x.com" must be verifiable from the tool's parameters and
+// output. Four layers, in order:
 //
 //  1. The operator's REGISTERED credential values (config.
 //     RegisterSensitiveValues at boot: credential-store values, provider
@@ -28,10 +32,15 @@ import (
 //     in front of the Judge.
 //  2. The SEC-16 secret SHAPES (audit.NewRedactor's default set: sk-…,
 //     key-…, Bearer …, ghp_/gho_…, xoxb-/xoxp-…, AKIA/ASIA…, JWTs, ya29.…,
-//     e-mail addresses). This catches a credential that was never registered
-//     because the agent only just read it out of a file — layer 1 cannot see
-//     it by construction.
-//  3. The audit logger's credential set (audit.RedactCredentials): the same
+//     but NOT e-mail addresses: audit.NewSecretShapeRedactor). This catches a
+//     credential that was never registered because the agent only just read
+//     it out of a file — layer 1 cannot see it by construction.
+//  3. A URL userinfo that carries a password is replaced WHOLE, user part
+//     included (judgeUserinfoLoginPattern): there the user is a login, and
+//     with e-mail redaction gone an e-mail login such as
+//     https://name@corp.example:pw@host would otherwise stay visible — and
+//     its raw "@" defeats layer 4's userinfo pattern, leaking the password.
+//  4. The audit logger's credential set (audit.RedactCredentials): the same
 //     shapes anchored at a separator, a case-insensitive "bearer", and the
 //     password in a URL's userinfo (scheme://user:PASSWORD@host), which
 //     layer 2 does not cover.
@@ -52,23 +61,28 @@ func (al *AgentLoop) judgeEvidenceRedactor() func(string) string {
 			}
 		}
 		s = judgeEvidencePatternRedactor.Redact(s)
+		s = judgeUserinfoLoginPattern.ReplaceAllString(s, "${1}[REDACTED]@")
 		return audit.RedactCredentials(s)
 	}
 }
 
 // judgeEvidencePatternRedactor is layer 2 of judgeEvidenceRedactor, built
-// once. The pattern set is hardcoded in pkg/audit, so a construction error is
-// a programming bug; it is logged loudly and the redactor falls back to
-// disabled for this layer only — layers 1 and 3 still run.
+// once. Its pattern set is hardcoded in pkg/audit, so a construction failure
+// is a programming bug and panics at init.
 //
 //nolint:gochecknoglobals // immutable, process-wide; mirrors envcontext.defaultRedactor.
-var judgeEvidencePatternRedactor = func() *audit.Redactor {
-	r, err := audit.NewRedactor(nil)
-	if err != nil {
-		logger.ErrorCF("agent", "judge: could not build the evidence secret-pattern redactor; "+
-			"Judge evidence keeps registered-value and audit credential redaction only",
-			map[string]any{"error": err.Error()})
-		return audit.DisabledRedactor()
-	}
-	return r
-}()
+var judgeEvidencePatternRedactor = audit.NewSecretShapeRedactor()
+
+// judgeUserinfoLoginPattern is layer 3 of judgeEvidenceRedactor: the whole
+// userinfo of a URL that carries a password (scheme://USER:PASSWORD@host).
+// The user part may contain a raw "@" (an e-mail login); the greedy user
+// match backtracks to the LAST ":password@" before the first "/" or
+// whitespace, so "https://host:8080/" (no "@" before the "/") and
+// "https://user@host:8080/" (port, then "/") are left alone. Quotes,
+// backslashes, angle brackets, "?" and "#" end the match too: tool
+// parameters are rendered as space-free JSON, and without that stop a URL
+// with no path would run on into the next field and swallow a following
+// "to":"supplier@x.com". Group 1 keeps "scheme://".
+//
+//nolint:gochecknoglobals // immutable, process-wide compiled pattern.
+var judgeUserinfoLoginPattern = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://)[^\s/"'\\<>?#]*:[^\s@/"'\\<>?#]+@`)

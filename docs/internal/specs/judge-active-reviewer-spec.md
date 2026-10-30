@@ -2790,11 +2790,18 @@ Five properties this change makes materially worse and which nothing above bound
     *Amendment 2026-10-30 (issue #721, commit `42c76a39e`).* Redaction is one unconditional
     scrubber, `judge_evidence_redact.go::judgeEvidenceRedactor`, shared with the machine-check
     evidence store. It applies three layers in order: registered credential values
-    (`SensitiveDataReplacer`, at any length), the secret-pattern set (`audit.NewRedactor`'s
-    defaults, including email addresses) and the audit credential set (`audit.RedactCredentials`,
-    including URL userinfo passwords). It does not depend on `tools.filter_sensitive_data` or
-    `filter_min_length`, it runs before every truncation, and it covers the narration as well as
-    parameters, errors and tool output. Scrubbed spans are replaced by markers, not deleted.
+    (`SensitiveDataReplacer`, at any length), the secret-pattern set and the audit credential set
+    (`audit.RedactCredentials`, including URL userinfo passwords). It does not depend on
+    `tools.filter_sensitive_data` or `filter_min_length`, it runs before every truncation, and it
+    covers the narration as well as parameters, errors and tool output. Scrubbed spans are
+    replaced by markers, not deleted.
+    *Amendment 2026-10-30 (founder decision Q14 B).* Plain email addresses in the narration,
+    parameters, errors and tool output are NOT redacted, so a criterion such as "the order was
+    emailed to supplier@x.com" is verifiable from the evidence. The secret-pattern layer is
+    therefore the SEC-16 shape set without the email-address pattern
+    (`audit.NewSecretShapeRedactor`). A URL userinfo that carries a password
+    (`scheme://user:password@host`) is replaced whole, user part included, so an email used as a
+    login stays hidden together with its password.
   - **This is the tier that makes a non-coding goal work.** "The supplier was emailed" is answerable
     because `{tool: send_email, parameters: {to: …}, status: success}` is in front of the Judge.
     "A calendar hold exists", "the page was published", "the file was written" likewise. No shell, no
