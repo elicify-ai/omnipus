@@ -4,31 +4,33 @@ package tools
 
 import (
 	"errors"
+	"fmt"
 
 	"golang.org/x/sys/unix"
-
-	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// rootIsWritable is spec §3.1 condition 5 on Unix: the effective-access check
+// rootWritability is spec §3.1 condition 5 on Unix: the effective-access check
 // (faccessat with AT_EACCESS, so the effective uid/gid decide, not the real
 // ids) for write access to "/". EACCES (not allowed) and EROFS (a read-only
 // root, such as the macOS sealed system volume) mean the root is not writable,
 // so the stand-alone literal rule may apply. Any other error answers
-// "writable", which turns the rule off and keeps today's refusal.
-//
-// The unexpected-error case is logged with its cause (T11 fix round 1, SF-5)
-// so a disabled rule is diagnosable rather than looking like a broken fix.
-func rootIsWritable() bool {
+// "writable" — the rule is off and today's refusal stays — and returns the
+// cause so the refusal can name it (T11 SF-5).
+func rootWritability() (bool, error) {
 	err := unix.Faccessat(unix.AT_FDCWD, "/", unix.W_OK, unix.AT_EACCESS)
 	switch {
 	case err == nil:
-		return true
+		return true, nil
 	case errors.Is(err, unix.EACCES), errors.Is(err, unix.EROFS):
-		return false
+		return false, nil
 	default:
-		logger.WarnCF("tools", "bash guard: could not check whether the filesystem root is writable; the quoted-literal rule is off for this command",
-			map[string]any{"error": err.Error()})
-		return true
+		return true, fmt.Errorf("could not check whether the filesystem root is writable: %w", err)
 	}
+}
+
+// rootIsWritable is the default rootWritableProbe (the test seam keeps its
+// plain bool signature).
+func rootIsWritable() bool {
+	w, _ := rootWritability()
+	return w
 }

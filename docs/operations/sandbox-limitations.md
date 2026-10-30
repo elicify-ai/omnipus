@@ -26,7 +26,7 @@ Windows has no kernel sandbox: `selectBackendPlatform` (`pkg/sandbox/sandbox_oth
 
 ### Shell path guard: quoted-literal exception depends on root writability
 
-The bash tool's command-text path guard (`pkg/tools/shell_path_guard.go`) can accept a stand-alone quoted absolute literal, such as `'/api/v1/users'`, when it meets the quote and surrounding-text conditions (including not being part of a shell brace expansion such as `{'/tm',}p`), contains none of the template or glob characters, its top-level folder does not exist, and the gateway's effective user cannot write the filesystem root (`pkg/tools/shell_standalone_literal.go`).
+The bash tool's command-text path guard (`pkg/tools/shell_path_guard.go`) can accept a stand-alone quoted absolute literal, such as `'/api/v1/users'`, when it meets the quote and surrounding-text conditions (the command, and any shell script nested in it, must contain no unquoted `{` or `}`, so no shell brace expansion such as `{'/tm',}p` can join it into a real path), contains none of the template or glob characters, its top-level folder does not exist, and the gateway's effective user cannot write the filesystem root (`pkg/tools/shell_standalone_literal.go`).
 
 On Windows the root always counts as writable, so this exception is disabled. On Unix the decision uses effective write access, not the account name: root on a writable filesystem disables it, while a read-only root can permit it. If the root check itself fails, the exception is off for that command and the cause is logged.
 
@@ -34,7 +34,7 @@ With the workspace-path guard enabled, `../` text is still refused rather than r
 
 ### External command-line workers run outside the Omnipus sandbox
 
-External workers (Claude Code, Codex, OpenCode) and the CLI version check (`POST /api/v1/system/cli-validate`) start their program directly, not through the sandboxed execution path, on every platform. They run with a scrubbed environment in their working folder, but a working folder is not an Omnipus filesystem boundary. The CLI check verifies who may start a program and which file may be started (see [security](../security.md#checking-an-external-command-line-program)); it does not confine the program once it runs.
+External workers (Claude Code, Codex, OpenCode) and the CLI version check (`POST /api/v1/system/cli-validate`) start their program directly, not through the sandboxed execution path, on every platform. They run with a scrubbed environment in their working folder, but a working folder is not an Omnipus filesystem boundary. Here, "outside the Omnipus sandbox" means that these programs receive no per-run workspace filesystem policy. It does not remove restrictions already inherited from the gateway: on Linux, the gateway's installed system-call filter still applies to them. The CLI check verifies who may start a program and which file may be started (see [security](../security.md#checking-an-external-command-line-program)); it does not confine the program once it runs.
 
 ## Landlock rights are gated by kernel version
 
