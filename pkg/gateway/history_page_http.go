@@ -134,6 +134,15 @@ func (a *restAPI) serveSessionHistoryEntry(w http.ResponseWriter, r *http.Reques
 		historyHTTPFailure(r.Context(), w, id, err)
 		return
 	}
+	// A2.2: the full projection is never a HistoryResultPreview, and an
+	// ordinary (unshortened) result must not carry the reserved key. A saved
+	// result that does — valid marker shape or not — fails the server-side
+	// marker check and becomes the D4 per-item placeholder (#1452 SEC-3).
+	if historyFullEntryCarriesMarker(entry.Entry) {
+		logsafeWarn("history: saved item replaced by its placeholder", "event", "history_item_placeholder", "reason", "preview_marker_in_full_entry")
+		entry.Entry = historyPlaceholderSource(entry.Entry)
+		entry.NestedDelegateParents = nil
+	}
 	_, encoded, err := historyWireMessage(id, entry)
 	if err != nil {
 		historyHTTPFailure(r.Context(), w, id, historyProjectionError(err))
