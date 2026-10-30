@@ -85,3 +85,39 @@ describe('default renderer has no chat links (BS-1.18)', () => {
   })
 })
 
+describe('rejected bare targets stay the existing unsafe-link span (UI States, OBS-5)', () => {
+  // Spec UI States: an unparseable link is the same node MarkdownLink already
+  // renders for an unsafe href — a struck-through span titled
+  // "Link removed: unsafe URL scheme", not a raw text node. Tests assert that
+  // treatment. OBS-5 says the same. The grammar's "plain text" sentence
+  // (Bare-link rule: README, docs/, and any final segment that is not a file)
+  // names that non-anchor outcome, not a second rendering.
+  // `views` and `readme` fail the file rule (no `.` then 1–16 alphanumerics),
+  // so with a known workspace they are rejected forms.
+  let release: (() => void) | undefined
+  afterEach(() => {
+    release?.()
+    release = undefined
+    useUiStore.getState().closePanel()
+  })
+
+  it('renders views and readme as the struck span, and a real file as a Library anchor', () => {
+    release = registerChatView('sess-rejected', 'W')
+    const acceptedView = render(<MarkdownLink href="notes/plan.md">the plan</MarkdownLink>)
+    const accepted = screen.getByTestId('markdown-link')
+    expect(accepted.tagName).toBe('A')
+    expect(accepted).toHaveAttribute('href', '/#/library?workspace=W&path=notes%2Fplan.md')
+    acceptedView.unmount()
+
+    for (const href of ['views', 'readme']) {
+      const { unmount } = render(<MarkdownLink href={href}>{href}</MarkdownLink>)
+      const el = screen.getByTestId('markdown-link')
+      expect(el.tagName, href).toBe('SPAN')
+      expect(el, href).toHaveAttribute('title', 'Link removed: unsafe URL scheme')
+      expect(el, href).not.toHaveAttribute('href')
+      expect(el, href).toHaveTextContent(href)
+      unmount()
+    }
+  })
+})
+
