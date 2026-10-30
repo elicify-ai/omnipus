@@ -26,8 +26,8 @@ import type {
   Message as WireMessage,
 } from '@/lib/api/generated/openapi-types'
 import type { SubagentEndFrame, SubagentMessageFrame, SubagentStartFrame, SubagentStateFrame } from '@/lib/api/generated/asyncapi-types'
-import { ApiSchemaError, _recordApiSchemaError, request } from './http'
-import { historyProtocolError, validateHistoryPage } from './history-validation'
+import { _recordApiSchemaError, request } from './http'
+import { historyProtocolError, historySchemaError, validateHistoryPage, withoutHistoryBody } from './history-validation'
 import { carriesHistoryPreviewKey, isMalformedHistoryPreview } from '../historyPreview'
 import type { HistoryPosition, SessionHistoryReadOptions, SessionDetailReadOptions, SessionHistoryPage, SessionHistoryEntry, SessionDetail, AvailableSessionDetail, UnavailableSessionDetail } from './history-types'
 export type { HistoryPosition, SessionHistoryPageInfo, SessionHistoryMetadata, SessionHistoryEntry, SessionHistoryPage, SessionHistoryQuery, SessionHistoryReadOptions, SessionDetailReadOptions, SessionDetail, AvailableSessionDetail, UnavailableSessionDetail } from './history-types'
@@ -1208,8 +1208,8 @@ export async function fetchSessionMessages(sessionId: string, options?: SessionH
   // A generated-schema transform keeps staged item validation inside the
   // transport's validated path, rather than emitting an unchecked-read warning.
   const schema = z.unknown().transform(raw => validateHistoryPage(raw, sessionId, endpoint))
-  const page = await request<ReturnType<typeof validateHistoryPage>>(path, options?.signal ? { signal: options.signal } : undefined, schema as ZodType<ReturnType<typeof validateHistoryPage>>)
-  if (!page) historyProtocolError(endpoint, ['entries'], page)
+  const page = await withoutHistoryBody(endpoint, request<ReturnType<typeof validateHistoryPage>>(path, options?.signal ? { signal: options.signal } : undefined, schema as ZodType<ReturnType<typeof validateHistoryPage>>))
+  if (!page) historyProtocolError(endpoint, ['entries'])
   return { ...page, entries: parseWireMessageList(page.entries, endpoint) }
 }
 
@@ -1223,13 +1223,23 @@ export async function fetchSessionMessages(sessionId: string, options?: SessionH
 export async function fetchSessionHistoryEntry(sessionId: string, position: HistoryPosition, signal?: AbortSignal): Promise<SessionHistoryEntry> {
   const path = `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(position)}`
   const endpoint = `GET /api/v1/sessions/${encodeURIComponent(sessionId)}/messages/{history_position}`
-  const schema = historyMessageSchema().refine(
+  const full = historyMessageSchema().refine(
     (message) => message.history_position === position && message.content_original_size_bytes === undefined &&
       !(message.tool_calls ?? []).some(call => carriesHistoryPreviewKey(call.result)),
     { message: 'Response is not the full projection of the requested occurrence.' },
   )
-  const message = await request(path, signal ? { signal } : undefined, schema as unknown as ZodType<WireMessage>)
-  if (!message) historyProtocolError(endpoint, ['message'], message)
+  // Validated inside the transport's schema step, so a rejection is counted
+  // there once and its error never holds the saved entry (SEC-3).
+  const schema = z.unknown().transform((raw) => {
+    const parsed = full.safeParse(raw)
+    if (!parsed.success) {
+      _recordApiSchemaError(endpoint, parsed.error.issues.length)
+      throw historySchemaError(endpoint, parsed.error.issues)
+    }
+    return parsed.data
+  })
+  const message = await withoutHistoryBody(endpoint, request(path, signal ? { signal } : undefined, schema as unknown as ZodType<WireMessage>))
+  if (!message) historyProtocolError(endpoint, ['message'])
   return { ...rawToMessage(message as RawMessage), historyPosition: position }
 }
 
@@ -1241,32 +1251,32 @@ export async function fetchSessionDetail(sessionId: string, options?: SessionDet
   const path = `/sessions/${encodeURIComponent(sessionId)}`
   const endpoint = `GET /api/v1${path}`
   const schema = z.unknown().transform(raw => normalizeSessionDetail(raw, sessionId, endpoint))
-  const detail = await request<SessionDetail>(path, options?.signal ? { signal: options.signal } : undefined, schema as ZodType<SessionDetail>)
-  if (!detail) historyProtocolError(endpoint, ['session'], detail)
+  const detail = await withoutHistoryBody(endpoint, request<SessionDetail>(path, options?.signal ? { signal: options.signal } : undefined, schema as ZodType<SessionDetail>))
+  if (!detail) historyProtocolError(endpoint, ['session'])
   return detail
 }
 
 function normalizeSessionDetail(raw: unknown, sessionId: string, endpoint: string): SessionDetail {
-  if (!raw || typeof raw !== 'object') historyProtocolError(endpoint, ['session'], raw)
+  if (!raw || typeof raw !== 'object') historyProtocolError(endpoint, ['session'])
   // Generated detail validation sees the real identity/state/metadata, but item
   // validation is staged so one malformed public row has a visible placeholder.
   const source = raw as Record<string, unknown>
   const parsed = WireSessionDetailSchema.safeParse({ ...source, ...('messages' in source ? { messages: [] } : {}) })
   if (!parsed.success) {
     _recordApiSchemaError(endpoint, parsed.error.issues.length)
-    throw new ApiSchemaError(endpoint, parsed.error.issues, raw)
+    throw historySchemaError(endpoint, parsed.error.issues)
   }
   const detail = parsed.data
-  if (detail.session.id !== sessionId) historyProtocolError(endpoint, ['session', 'id'], raw)
+  if (detail.session.id !== sessionId) historyProtocolError(endpoint, ['session', 'id'])
   const base = { session: rawToSession(detail.session), ...(detail.agent_removed !== undefined ? { agent_removed: detail.agent_removed } : {}) }
   if (detail.history_state.status === 'unavailable') {
     for (const key of ['messages', 'page_info', 'has_earlier', 'has_later', 'next_before', 'next_after']) {
-      if (Object.hasOwn(source, key)) historyProtocolError(endpoint, [key], raw)
+      if (Object.hasOwn(source, key)) historyProtocolError(endpoint, [key])
     }
-    if (!detail.history_state.reason || !detail.history_state.message) historyProtocolError(endpoint, ['history_state'], raw)
+    if (!detail.history_state.reason || !detail.history_state.message) historyProtocolError(endpoint, ['history_state'])
     return { ...base, history_state: detail.history_state } as UnavailableSessionDetail
   }
-  if (detail.history_state.reason !== undefined || detail.history_state.message !== undefined) historyProtocolError(endpoint, ['history_state'], raw)
+  if (detail.history_state.reason !== undefined || detail.history_state.message !== undefined) historyProtocolError(endpoint, ['history_state'])
   const { entries, session_id, ...metadata } = validateHistoryPage({
     session_id: sessionId, entries: source.messages,
     ...Object.fromEntries(['page_info', 'has_earlier', 'has_later', 'next_before', 'next_after'].filter(key => Object.hasOwn(source, key)).map(key => [key, source[key]])),
