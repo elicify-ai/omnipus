@@ -469,9 +469,12 @@ export function LibraryExplorer({
         queryFn: () => fetchLibraryContent(workspaceId, opened),
       })
     }
+    // invalidateQueries resolves even when a refetch fails (TanStack only
+    // rejects with throwOnError), so this settles on completion, not success.
+    // Failures surface on the queries themselves: the listing's own error
+    // state, and the opened file's ContentRefreshNotice in LibraryPreviewPane
+    // (R5-SF-1). The rejection branch only covers an unexpected throw.
     queryClient.invalidateQueries({ queryKey: ['library', workspaceId] }).then(settle, (err: unknown) => {
-      // The refetch's own query error state reports the failure; the landing
-      // must still be allowed to decide, so settle either way.
       console.warn('[library] refresh on open failed', err)
       settle()
     })
