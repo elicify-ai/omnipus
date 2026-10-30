@@ -107,10 +107,13 @@ func mayBraceExpand(cmd string, depth int) bool {
 }
 
 // nestedShellMayBraceExpand judges the words after a shell name. It follows
-// the rule "cannot be sure, withhold" (T11 round 4): only a run of plain
-// short options (letters, none taking an argument) before the script is
-// understood. A long option (--norc), a +option, an option that takes an
-// argument (-o, -O), or a shell that reads its script from standard input
+// the rule "cannot be sure, withhold" (T11 round 4): only plain short options
+// (letters, none taking an argument) and the known argument-less long
+// options (knownNoArgLongShellOptions, e.g. --norc, --login) before the
+// script are understood, so the script can be located with certainty. Any
+// other long option (--rcfile FILE, an unknown one), a +option, an option
+// that takes an argument (-o, -O), or a shell that reads its script from
+// standard input
 // (no -c and no script-file argument: a pipe, a here-string, a
 // here-document behind a wrapper) all count as "may brace-expand". A shell
 // given a script FILE is not followed: the file's contents are not command
@@ -119,6 +122,10 @@ func nestedShellMayBraceExpand(args []string, depth int) bool {
 	j, hasC := 0, false
 	for j < len(args) && (strings.HasPrefix(args[j], "-") || strings.HasPrefix(args[j], "+")) {
 		opt := args[j]
+		if knownNoArgLongShellOptions[opt] {
+			j++
+			continue
+		}
 		if !isPlainShortOptionCluster(opt) {
 			return true
 		}
@@ -140,6 +147,16 @@ func nestedShellMayBraceExpand(args []string, depth int) bool {
 		return false // runs a script file; its contents are not command text
 	}
 	return mayBraceExpand(args[j], depth+1)
+}
+
+// knownNoArgLongShellOptions are the bash/sh long options that take no
+// argument, so the script position after them is certain. Options that take
+// an argument (--rcfile, --init-file) and any option not listed here make
+// the scan withhold the exemption.
+var knownNoArgLongShellOptions = map[string]bool{
+	"--norc": true, "--noprofile": true, "--login": true, "--posix": true,
+	"--noediting": true, "--restricted": true, "--verbose": true,
+	"--debugger": true,
 }
 
 // isPlainShortOptionCluster accepts "-x" style clusters of letters that take
