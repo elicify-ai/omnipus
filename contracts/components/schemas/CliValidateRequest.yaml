@@ -3,8 +3,11 @@ description: >
   Request body for POST /api/v1/system/cli-validate. Stateless, create-time
   validation of an external-executor CLI: confirms the binary at cli_path
   actually runs and reports a version, before the operator saves the
-  subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same
-  handshake used by the post-create /agents/{id}/runner/test endpoint.
+  subagent_3p agent. The shared program-file check runs first; the version
+  handshake then runs on the checked pathname (runner.TestConnectionCheckedFile,
+  the same handshake the post-create /agents/{id}/runner/test endpoint uses,
+  without a second lookup — subject to the documented Windows
+  executable-extension limitation).
 type: object
 required:
   - cli
@@ -20,6 +23,8 @@ properties:
     description: >
       Filesystem path to the CLI binary to validate — either the detected
       prefill or an operator-entered override. An empty value is classified
-      "missing-binary" without a spawn attempt; the target MUST be a regular,
-      executable file before it is spawned.
+      "missing-binary" without a spawn attempt. A non-empty value must pass
+      the program-file check (absolute, outside every agent-writable folder,
+      a regular file; executable for the gateway user on Linux/macOS), else
+      "path-not-allowed" and nothing is spawned.
     example: "/usr/local/bin/claude"

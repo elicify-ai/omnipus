@@ -37,20 +37,22 @@ properties:
       - path-not-allowed
     description: >
       Classification of the validation result. "ok": binary runs and reports
-      a version, believed authenticated. "missing-binary": cli_path is empty, or
-      the checked program could not be found when the version check ran —
+      a version, believed authenticated. "missing-binary": cli_path is empty —
       blocks Create/Save. A non-empty cli_path that is missing, not a regular
       file, or not executable is refused by the program-file check as
       "path-not-allowed" instead and is never started.
-      "handshake-failed": the target ran but did not return a valid
-      version-shaped response within the timeout — blocks Create/Save.
+      "handshake-failed": the checked program could not be started, or ran but
+      did not return a valid version-shaped response within the timeout —
+      blocks Create/Save.
       "unauthenticated": the binary runs and reports a version but has no
       usable credentials — non-blocking warning, Create/Save allowed.
       "unknown-cli": the `cli` value is not one of the supported executors;
       no subprocess is spawned. "path-not-allowed": the shared program-file
-      check refused cli_path (not absolute, missing, not a regular executable,
-      inside or linked through the Omnipus home, a workspace or a mount, or
-      writable by others); nothing is spawned. Maps
+      check refused cli_path (not absolute, missing, not a regular file, not
+      executable for the gateway user on Linux/macOS, or inside or linked
+      through the Omnipus home, an agent home, a workspace or a mount);
+      nothing is spawned. Ownership and writability of the program are the
+      operator's responsibility and are not checked. Maps
       runner.ReasonOK (empty string) to "ok".
     example: "ok"
   resolved_path:

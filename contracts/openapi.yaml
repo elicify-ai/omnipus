@@ -12988,18 +12988,21 @@ paths:
       description: >
         Stateless, create-time validation for an external-executor CLI:
         confirms the binary at cli_path actually runs and reports a version,
-        before the operator saves the subagent_3p agent. Reuses
-        runner.TestConnectionWithPath verbatim (the same handshake as
-        POST /agents/{id}/runner/test) — the only requirement is that the
-        binary runs and returns a valid version-shaped response; no per-CLI
-        identity/name match is performed. A signed-in person only (T11,
+        before the operator saves the subagent_3p agent. The version
+        handshake (the same as POST /agents/{id}/runner/test) runs on the
+        checked pathname with no second lookup — the only requirement is that
+        the binary runs and returns a valid version-shaped response; no
+        per-CLI identity/name match is performed. On Windows the launch can
+        still apply an executable-extension lookup (documented limitation). A signed-in person only (T11,
         RequirePersonSession): CLI-token, development-bypass and user-less
         requests get 403 before the body is read. Before anything starts,
         the shared program-file check (clitrust.CheckProgramPath against the
         agent-writable roots) must accept cli_path: an absolute path whose
-        final file and every link lie outside the Omnipus home, workspaces
-        and mounts, are not writable by others, and whose final file is a
-        regular executable. A refusal is classified "path-not-allowed" and
+        final file, every link and every link's folder lie outside the
+        Omnipus home, agent homes, workspaces and mounts, and whose final
+        file is a regular file (executable for the gateway user on
+        Linux/macOS). Ownership and writability of the program are the
+        operator's responsibility and are not checked. A refusal is classified "path-not-allowed" and
         nothing is spawned; an accepted candidate launches exactly the
         checked resolved file. An empty cli_path is "missing-binary". Applies
         a dedicated rate limiter and a small per-caller in-flight
