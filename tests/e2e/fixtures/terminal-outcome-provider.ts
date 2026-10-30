@@ -7,6 +7,8 @@ export const TERMINAL_NARRATION = 'I will load the acceptance probe tool.';
 export interface TerminalOutcomeProvider {
   url: string;
   finishToolRound: () => void;
+  /** Replace the narration before the chat request. Read when that request arrives, so a workspace id minted after startup can be named in the link. */
+  setNarration: (text: string) => void;
   calls: () => number;
   failures: () => string[];
   close: () => Promise<void>;
@@ -19,7 +21,7 @@ export interface TerminalOutcomeProvider {
  * not actually read a file. Assertions in the caller prove it executed.
  */
 export async function startTerminalOutcomeProvider(opts?: { narration?: string }): Promise<TerminalOutcomeProvider> {
-  const narration = opts?.narration && opts.narration.length > 0 ? opts.narration : TERMINAL_NARRATION;
+  let narration = opts?.narration && opts.narration.length > 0 ? opts.narration : TERMINAL_NARRATION;
   let calls = 0;
   const failures: string[] = [];
   let release!: () => void;
@@ -94,6 +96,7 @@ export async function startTerminalOutcomeProvider(opts?: { narration?: string }
   return {
     url,
     finishToolRound: release,
+    setNarration: (text: string) => { narration = text; },
     calls: () => calls,
     failures: () => [...failures],
     close: async () => {
