@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
@@ -98,4 +99,36 @@ func TestIssue1435_HistoryDataURLDecodeFailureMarkerReachesTheModel(t *testing.T
 	require.True(t, strings.Contains(out[0].Content,
 		"[attachment unavailable: image (data unreadable: corrupt or truncated, and over the model's size limits)]"),
 		"the model-facing content must carry the decode-failure marker, got %q", out[0].Content)
+}
+
+// TestIssue1435_DataURLNormalizeIsCachedAcrossCalls: an oversized history
+// image sits in canonical history with its original bytes, so EVERY provider
+// round of a tool loop re-pays the full base64 decode, image.Decode and
+// resize ladder for it. The second identical normalize must be served from
+// the process-wide normalize cache — the same LRU the file-ref path already
+// uses (keyed by sha256 of the raw payload plus the budget) — not re-decoded.
+func TestIssue1435_DataURLNormalizeIsCachedAcrossCalls(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, photoLikeImage(600, 400)))
+	require.Greater(t, buf.Len(), issue1435DataURLBudget, "fixture must be over budget")
+	overBudget := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+	// The real callers always pass a budget with a long edge (the default
+	// 7680 when no catalog row applies); ResizeToFit requires both fields.
+	budget := catalog.ResizeLimits{LongEdgePx: 7680}
+
+	before := library.GlobalNormalizeCacheStats()
+	first, cause := normalizeImageDataURLToBudget(overBudget, issue1435DataURLBudget, budget)
+	require.NotEmpty(t, first, "fixture: the image must normalize below the budget")
+	require.Empty(t, cause)
+	mid := library.GlobalNormalizeCacheStats()
+
+	second, cause2 := normalizeImageDataURLToBudget(overBudget, issue1435DataURLBudget, budget)
+	require.Equal(t, first, second, "same input and budget must produce the same output")
+	require.Empty(t, cause2)
+	after := library.GlobalNormalizeCacheStats()
+
+	require.Equal(t, int64(1), mid.Misses-before.Misses,
+		"the first normalize is a cache miss")
+	require.Greater(t, after.Hits-before.Hits, int64(0),
+		"the second identical normalize must be a cache hit, not another full decode-and-resize")
 }

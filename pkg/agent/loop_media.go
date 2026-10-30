@@ -895,6 +895,26 @@ func normalizeImageDataURLToBudget(dataURL string, maxSize int, budget catalog.R
 	}
 	limits := budget
 	limits.MaxBytes = maxBytes
+
+	// FR-004 reuse (train-6b review): an oversized history image is
+	// re-normalized on EVERY provider round of a tool loop — full base64
+	// decode, image.Decode (up to the downscale band) and the ladder each
+	// time. The file-ref path already caches its normalized artifact in the
+	// process-wide LRU keyed by sha256 of the raw bytes plus the budget; the
+	// data-URL path reuses the same cache with the same key shape (modelSlot
+	// empty, like the wrapper path). Stale-OK: raw bytes cannot change
+	// mid-process, and the budget is part of the key.
+	cacheKey := library.NormalizeCacheKey{
+		Sha256:           library.HashRawBytes(raw),
+		ModelSlot:        "",
+		BudgetMaxBytes:   limits.MaxBytes,
+		BudgetMaxEdge:    limits.LongEdgePx,
+		BudgetMaxPatches: limits.MaxPatches,
+	}
+	if cached, ok := library.GlobalNormalizeCache().Get(cacheKey); ok {
+		return string(cached), ""
+	}
+
 	decoded, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		// Over budget AND undecodable: sending it would hand the provider a
@@ -912,7 +932,9 @@ func normalizeImageDataURLToBudget(dataURL string, maxSize int, budget catalog.R
 		}
 		return "", imageFitTooLarge
 	}
-	return "data:" + result.Mime + ";base64," + base64.StdEncoding.EncodeToString(result.Data), ""
+	normalizedURL := "data:" + result.Mime + ";base64," + base64.StdEncoding.EncodeToString(result.Data)
+	library.GlobalNormalizeCache().Put(cacheKey, []byte(normalizedURL))
+	return normalizedURL, ""
 }
 
 // fitOrdinaryImageMediaToBudget re-fits ordinary inline image media of a
