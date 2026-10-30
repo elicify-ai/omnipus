@@ -48,13 +48,18 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     ? JSON.stringify([fullscreen ? 0 : panelIntentRevision, suppliedContext.workspaceId, suppliedContext.path])
     : ''
   const lastSuppliedKeyRef = useRef(suppliedKey)
+  // The open the current context came from, applied in the SAME update as the
+  // context, so the explorer receives the new address and its refresh key in
+  // one render (its refresh-on-open reads the address it was opened on).
+  const [appliedRevision, setAppliedRevision] = useState(panelIntentRevision)
 
   useEffect(() => {
     if (!suppliedContext) return
     if (lastSuppliedKeyRef.current === suppliedKey) return
     lastSuppliedKeyRef.current = suppliedKey
     setCurrentContext(suppliedContext)
-  }, [suppliedContext, suppliedKey])
+    setAppliedRevision(panelIntentRevision)
+  }, [suppliedContext, suppliedKey, panelIntentRevision])
 
   const getExpandContext = useCallback(() => currentContext, [currentContext])
   useEffect(() => {
@@ -86,6 +91,9 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
           initialWorkspaceId={suppliedContext.workspaceId}
           address={asLibraryAddress(currentContext)}
           onAddressChange={updateAddress}
+          // Every openPanel refreshes the Library data before "not found" is
+          // decided (UAT R2: a file an agent just wrote).
+          refreshKey={appliedRevision}
           onWorkspaceChange={(workspaceId) => {
             setCurrentContext((current) => ({
               ...current,

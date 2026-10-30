@@ -63,6 +63,7 @@ import { cn } from '@/lib/utils'
 import {
   fetchLibraryWorkspaces,
   fetchLibraryEntries,
+  fetchLibraryContent,
   fetchKnowledgeBaseInfo,
   deleteLibraryEntry,
   renameLibraryEntry,
@@ -92,6 +93,7 @@ import { mountNameFromPath } from './libraryMountName'
 import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
 import { LibraryNewNoteDialog } from './LibraryNewNoteDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
+import { classifyLibraryEntry } from './preview/libraryPreviewKind'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { LibrarySearchBar } from './search/LibrarySearchBar'
@@ -193,6 +195,16 @@ export interface LibraryExplorerProps {
    */
   onSelectionChange?: (selection: { path: string | null; folder: string }) => void
   /**
+   * Changes every time the caller opens the explorer on a new supplied
+   * address (the docked panel passes `panelIntentRevision`: a chat link, an
+   * "Open in Library" action, an agent's show request). The explorer then
+   * refreshes this workspace's Library data and only says a file "was not
+   * found" from a listing fetched after that open, so a file an agent has
+   * just written is never reported missing from a stale listing (UAT R2).
+   * Omit for callers whose address changes are the explorer's own.
+   */
+  refreshKey?: number
+  /**
    * How the file list and the open preview divide the space.
    *
    * 'stacked' (default, the docked <aside>): preview BELOW the list. The aside
@@ -254,6 +266,7 @@ export function LibraryExplorer({
   onWorkspaceChange,
   onSelectionChange,
   layout = 'stacked',
+  refreshKey,
 }: LibraryExplorerProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -428,6 +441,43 @@ export function LibraryExplorer({
   )
   const sortedEntries = useMemo(() => sortEntries(entriesQuery.data ?? []), [entriesQuery.data])
 
+  // UAT R2 — see `refreshKey`. Refresh this workspace's listing and file
+  // contents on every supplied open, and record which open has been
+  // refreshed so the not-found landing below waits for it.
+  const [refreshedKey, setRefreshedKey] = useState<number | undefined>(undefined)
+  const openedPathRef = useRef(selectedPath)
+  openedPathRef.current = selectedPath
+  useEffect(() => {
+    if (refreshKey === undefined) return undefined
+    let current = true
+    const settle = () => {
+      if (current) setRefreshedKey(refreshKey)
+    }
+    if (workspaceId === null) {
+      settle()
+      return () => { current = false }
+    }
+    // Start reading the opened file itself alongside the listing, so it does
+    // not wait for the listing round trip first. Only for kinds whose name
+    // alone says the preview needs the text (LibraryPreviewPane's
+    // needsContent), and through the pane's own query key and fetcher.
+    const opened = openedPathRef.current
+    const openedKind = opened === null ? null : classifyLibraryEntry({ name: baseNameOf(opened), is_text_editable: false })
+    if (opened !== null && (openedKind === 'markdown' || openedKind === 'mermaid' || openedKind === 'html')) {
+      void queryClient.prefetchQuery({
+        queryKey: libraryQueryKeys.content(workspaceId, opened),
+        queryFn: () => fetchLibraryContent(workspaceId, opened),
+      })
+    }
+    queryClient.invalidateQueries({ queryKey: ['library', workspaceId] }).then(settle, (err: unknown) => {
+      // The refetch's own query error state reports the failure; the landing
+      // must still be allowed to decide, so settle either way.
+      console.warn('[library] refresh on open failed', err)
+      settle()
+    })
+    return () => { current = false }
+  }, [refreshKey, workspaceId, queryClient])
+
   // The selected FILE is resolved from the folder listing rather than stored
   // as a second copy of it, so an address arriving from outside (a fresh
   // load, the back button, a link) needs no different code path from a click.
@@ -457,12 +507,19 @@ export function LibraryExplorer({
   // is loading, or when the folder itself failed to load, we do not know that
   // the file is missing and must not say so. A failed folder listing keeps
   // its own retryable error state instead.
+  //
+  // UAT R2: when the caller re-opened the explorer on a supplied address
+  // (`refreshKey`), the listing on screen may predate a file an agent just
+  // wrote. The claim then also waits for the refresh that open started, and
+  // is never made from a listing that is still being refetched.
   const deepLinkUnresolved =
     selectedPath !== null &&
     selectedEntry === null &&
     workspaceId !== null &&
     selectedDir === browsedDir &&
-    entriesQuery.isSuccess
+    entriesQuery.isSuccess &&
+    !entriesQuery.isFetching &&
+    (refreshKey === undefined || refreshedKey === refreshKey)
   // UAT D-36 (2026-09-13): a `path` that names a FOLDER in the listing is not
   // "not found" — it is right there, one row down. Saying so was a plain
   // falsehood (the OP lane read it as an encoding bug). Such an address now
@@ -1281,6 +1338,10 @@ export function LibraryExplorer({
           testId="library-preview-pane-wrapper"
         >
           <LibraryPreviewPane
+            // One pane — and so one editor — per file (UAT R12): a pane reused
+            // across files would carry the previous file's discarded draft into
+            // the next one and report it as "changed elsewhere".
+            key={`${workspaceId}\u0000${selectedEntry.path}`}
             workspaceId={workspaceId}
             entry={selectedEntry}
             onClose={async () => {
