@@ -28,9 +28,26 @@ export interface ChatImageProps {
   alt?: string
   filename?: string
   className?: string
+  /**
+   * Office-preview page thumbnails (office-preview spec §5.3/§5.4): open the
+   * paged group viewer instead of the single-image lightbox.
+   */
+  onEnlarge?: () => void
+  /** Accessible name of the enlarge control; defaults to "View: <alt>". */
+  label?: string
+  /**
+   * Thumbnail mode: no hover toolbar (Retry and Enlarge stay on the error
+   * placeholder) and no per-image error toast — a thumbnail group reports
+   * its failures once per group instead (§5.3). `onError` still fires.
+   */
+  thumbnail?: boolean
+  /** Called once per failed load of the current `src`. */
+  onError?: () => void
+  /** Extra `data-*` attributes for the image control (focus-return hooks). */
+  dataAttributes?: Record<`data-${string}`, string>
 }
 
-export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
+export function ChatImage({ src, alt, filename, className, onEnlarge, label, thumbnail = false, onError, dataAttributes }: ChatImageProps) {
   const openMediaLightbox = useUiStore((s) => s.openMediaLightbox)
   const addToast = useUiStore((s) => s.addToast)
 
@@ -52,15 +69,20 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
   const imgError = errorFor.error
   const handleImgError = useCallback(() => {
     console.warn(`[ChatImage] Image failed to load: ${src}`)
-    addToast({ message: `Image failed to load: ${filename || alt || src}`, variant: 'error' })
+    // Thumbnails report once per group (onError), never one toast per image.
+    if (!thumbnail) addToast({ message: `Image failed to load: ${filename || alt || src}`, variant: 'error' })
+    onError?.()
     setErrorFor({ src, error: true })
-  }, [src, alt, filename, addToast])
+  }, [src, alt, filename, addToast, thumbnail, onError])
   const retry = useCallback(() => setErrorFor({ src, error: false }), [src])
 
   // Stable fallback filename for downloads / sharing.
   const name = filename || alt || 'image.png'
 
-  const enlarge = () => openMediaLightbox({ kind: 'image', src, alt, filename })
+  const enlarge = useCallback(
+    () => (onEnlarge ? onEnlarge() : openMediaLightbox({ kind: 'image', src, alt, filename })),
+    [onEnlarge, openMediaLightbox, src, alt, filename],
+  )
 
   // Hover-overlay actions (memoized on the inputs they close over).
   const overlayActions = useMemo<MediaAction[]>(() => {
@@ -92,11 +114,11 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
     acts.push({
       icon: <ArrowsOutSimple size={14} />,
       label: 'Enlarge',
-      onClick: () => openMediaLightbox({ kind: 'image', src, alt, filename }),
+      onClick: enlarge,
     })
 
     return acts
-  }, [src, alt, filename, name, openMediaLightbox])
+  }, [src, name, enlarge])
 
   // Error-state actions: Copy / Share / Download issue their OWN independent
   // fetch() (media-actions.ts) and Enlarge mounts a fresh <img> inside the
@@ -105,8 +127,11 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
   // dropped request) they can still succeed. Retry just re-mounts the <img> to
   // give the src another attempt directly inline.
   const errorActions = useMemo<MediaAction[]>(
-    () => [{ icon: <ArrowsClockwise size={14} />, label: 'Retry', onClick: retry }, ...overlayActions],
-    [retry, overlayActions],
+    () => [
+      { icon: <ArrowsClockwise size={14} />, label: 'Retry', onClick: retry },
+      ...(thumbnail ? [{ icon: <ArrowsOutSimple size={14} />, label: 'Enlarge', onClick: enlarge }] : overlayActions),
+    ],
+    [retry, overlayActions, thumbnail, enlarge],
   )
 
   // Reject unsafe schemes (javascript:, blob:, file:, …) at the render boundary —
@@ -161,6 +186,7 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
         loading="lazy"
         onClick={enlarge}
         onError={handleImgError}
+        {...dataAttributes}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
@@ -171,18 +197,20 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
             enlarge()
           }
         }}
-        aria-label={alt ? `View: ${alt}` : 'View image'}
+        aria-label={label ?? (alt ? `View: ${alt}` : 'View image')}
         className="max-w-full rounded-md cursor-zoom-in border border-[var(--color-border)] hover:border-[var(--color-accent)]/50 transition-colors block"
       />
 
       {/* Hover-revealed overlay toolbar. On touch devices (no hover, e.g. iPad)
           the [@media(hover:none)] variant forces it visible so the controls are
           reachable — otherwise group-hover never fires and they'd be invisible. */}
-      <MediaActionToolbar
-        variant="overlay"
-        actions={overlayActions}
-        className="absolute top-2 right-2 opacity-0 group-hover/chatimg:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity"
-      />
+      {!thumbnail && (
+        <MediaActionToolbar
+          variant="overlay"
+          actions={overlayActions}
+          className="absolute top-2 right-2 opacity-0 group-hover/chatimg:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity"
+        />
+      )}
     </div>
   )
 }

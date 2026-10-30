@@ -21,7 +21,6 @@ import {
   Copy,
   Check,
   Plus,
-  File,
   Lightning,
 } from '@phosphor-icons/react'
 import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
@@ -98,6 +97,8 @@ import { ComposerMediaLibraryButton, LibraryAttachmentChips } from './ComposerMe
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
+import { AssistantMediaList } from './AssistantMediaList'
+import { PreviewAnnouncer } from './PreviewAnnouncer'
 import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
 import { ComposerMenu } from './composer/ComposerMenu'
 import { recipientAddressBlocked } from '@/store/chat/recipientSend'
@@ -722,32 +723,10 @@ function InlineMedia() {
 
   if (!storeMsg?.media?.length) return null
 
+  // Inline media plus office-preview thumbnail groups (AssistantMediaList).
   return (
-    <div className="flex flex-col gap-[var(--space-2)] mt-[var(--space-2)]">
-      {storeMsg.media.map((m, i) =>
-        m.type === 'image' ? (
-          <div key={`${m.url}-${i}`} className="max-w-2xl">
-            <ChatImage
-              src={m.url}
-              alt={m.caption || m.filename}
-              filename={m.filename}
-            />
-            {m.caption && (
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
-            )}
-          </div>
-        ) : (
-          <a tabIndex={0}
-            key={`${m.url}-${i}`}
-            href={m.url}
-            download={m.filename}
-            className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-          >
-            <File size={14} />
-            {m.filename}
-          </a>
-        ),
-      )}
+    <div className="mt-[var(--space-2)]">
+      <AssistantMediaList media={storeMsg.media} />
     </div>
   )
 }
@@ -1231,31 +1210,8 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
-            <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
-              {mediaItems.map((m, i) =>
-                m.type === 'image' ? (
-                  <div key={`${m.url}-${i}`} className="max-w-2xl">
-                    <ChatImage
-                      src={m.url}
-                      alt={m.caption || m.filename}
-                      filename={m.filename}
-                    />
-                    {m.caption && (
-                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
-                    )}
-                  </div>
-                ) : (
-                  <a tabIndex={0}
-                    key={`${m.url}-${i}`}
-                    href={m.url}
-                    download={m.filename}
-                    className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-                  >
-                    <File size={14} />
-                    {m.filename}
-                  </a>
-                ),
-              )}
+            <div className="mb-[var(--space-2)]">
+              <AssistantMediaList media={mediaItems} />
             </div>
           )}
 
@@ -2846,6 +2802,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               <span>New response from {activeAgentName}</span>
             )}
           </div>
+          {/* Office-preview spec §5.4: one polite announcement per thumbnail group. */}
+          <PreviewAnnouncer />
 
           <HistoryOpenState read={historyRead} />
           {/* Virtualized message list — only visible rows (+ 5-message overscan) are mounted as DOM nodes. */}
