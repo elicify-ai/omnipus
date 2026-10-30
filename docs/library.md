@@ -28,6 +28,14 @@ Files arrive three ways:
 2. From a workspace, select its **Library** panel toggle in the workspace bar (or the panels menu on a narrow bar). The panel opens already inside that workspace's files. The sidebar **Library** entry is different: it lists every workspace. There is no Library button in the chat header.
 3. Select **Expand Library panel** in the panel heading for a full-screen Library. In a normal browser tab, this opens a new tab or switches to a tab Omnipus recognises as already showing it. In an installed app or standalone Chrome window, it uses the same window instead; **Back to chat** returns there with Library re-docked. A newly opened tab carries the current workspace and the selected file, if any, in its address. With no file selected, the browsed subfolder is not carried over. The docked panel closes after the handoff. Use **Back to chat** to leave the full-screen view; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how the panel is restored and the same-tab fallback.
 
+## How the Library stays current
+
+An open Library keeps its folder view up to date on its own. While the panel is open and you are actively looking at it — the tab visible and the window focused — the folder you are viewing is re-read every 10 seconds. A file an agent just wrote, a change made through a shell command, or an edit saved by another app appears in the list within about ten seconds, without you switching panels or reloading.
+
+The re-checking pauses while the panel is closed, the tab is in the background, or the window is not focused, and resumes when you come back. If a re-check cannot reach the server, the list simply stays as it is — no error pops up — and the next successful re-check brings it current again.
+
+One deliberate limit: a file you have **open** in the preview pane is not live-updated. What you see stays as it was when you opened it, and your unsaved edits are never replaced. Switch away from the tab and back (or close and reopen the file) to pick up the latest version.
+
 ## How to add files
 
 1. Open the Library and navigate into the workspace and folder you want the files in.
