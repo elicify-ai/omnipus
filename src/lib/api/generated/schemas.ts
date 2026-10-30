@@ -1783,6 +1783,7 @@ type AgentDetail = {
   name?: string | undefined;
   description?: string | undefined;
   type?: ("core" | "system" | "Main" | "Subagent" | "subagent_3p") | undefined;
+  locked?: boolean | undefined;
   model?: string | undefined;
   provider?: string | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
@@ -1796,6 +1797,7 @@ type AgentDetail = {
   color?: AgentColor | undefined;
   skills?: Array<string> | undefined;
   tool_permissions?: Array<AgentToolPermission> | undefined;
+  stored_overrides?: {} | undefined;
   connectors?: Array<AgentMCPBinding> | undefined;
   soul?: string | undefined;
   agent_md?: string | undefined;
@@ -1807,7 +1809,7 @@ type AgentDetail = {
   program_warning?: string | undefined;
   has_main_chat?: boolean | undefined;
   truncated_fields?: Array<string> | undefined;
-  preview_of?: ("Main" | "Subagent" | "subagent_3p") | undefined;
+  absent_fields?: Array<string> | undefined;
   model_chain?: Array<AgentModelChainEntry> | undefined;
 };
 type AgentToolPermission = {
@@ -1824,6 +1826,13 @@ type AgentModelChainEntry = {
   model_offered: boolean | null;
   accepts_images: boolean | null;
   warning?: string | undefined;
+};
+type AgentPreview = {
+  preview_of: "Main" | "Subagent" | "subagent_3p";
+  tool_permissions?: Array<AgentToolPermission> | undefined;
+  connectors?: Array<AgentMCPBinding> | undefined;
+  absent_fields?: Array<string> | undefined;
+  truncated_fields?: Array<string> | undefined;
 };
 type ExecutorDefaults = {
   cli: ExternalCliTool;
@@ -7937,6 +7946,7 @@ export const AgentDetail: z.ZodType<AgentDetail> = z.object({
   type: z
     .enum(["core", "system", "Main", "Subagent", "subagent_3p"])
     .optional(),
+  locked: z.boolean().optional(),
   model: z.string().optional(),
   provider: z.string().optional(),
   fallback_models: z.array(FallbackModel).optional(),
@@ -7950,6 +7960,7 @@ export const AgentDetail: z.ZodType<AgentDetail> = z.object({
   color: AgentColor.optional(),
   skills: z.array(z.string()).optional(),
   tool_permissions: z.array(AgentToolPermission).optional(),
+  stored_overrides: z.record(z.enum(["allow", "ask", "deny"])).optional(),
   connectors: z.array(AgentMCPBinding).optional(),
   soul: z.string().optional(),
   agent_md: z.string().optional(),
@@ -7961,8 +7972,15 @@ export const AgentDetail: z.ZodType<AgentDetail> = z.object({
   program_warning: z.string().optional(),
   has_main_chat: z.boolean().optional(),
   truncated_fields: z.array(z.string()).optional(),
-  preview_of: z.enum(["Main", "Subagent", "subagent_3p"]).optional(),
+  absent_fields: z.array(z.string()).optional(),
   model_chain: z.array(AgentModelChainEntry).optional(),
+});
+export const AgentPreview: z.ZodType<AgentPreview> = z.object({
+  preview_of: z.enum(["Main", "Subagent", "subagent_3p"]),
+  tool_permissions: z.array(AgentToolPermission).optional(),
+  connectors: z.array(AgentMCPBinding).optional(),
+  absent_fields: z.array(z.string()).optional(),
+  truncated_fields: z.array(z.string()).optional(),
 });
 export const AgentExecutorSettingsResult = z
   .object({

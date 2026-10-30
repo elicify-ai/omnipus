@@ -821,21 +821,21 @@ func (e AgentDetailExecutorKind) Valid() bool {
 	}
 }
 
-// Defines values for AgentDetailPreviewOf.
+// Defines values for AgentDetailStoredOverrides.
 const (
-	AgentDetailPreviewOfMain       AgentDetailPreviewOf = "Main"
-	AgentDetailPreviewOfSubagent   AgentDetailPreviewOf = "Subagent"
-	AgentDetailPreviewOfSubagent3p AgentDetailPreviewOf = "subagent_3p"
+	AgentDetailStoredOverridesAllow AgentDetailStoredOverrides = "allow"
+	AgentDetailStoredOverridesAsk   AgentDetailStoredOverrides = "ask"
+	AgentDetailStoredOverridesDeny  AgentDetailStoredOverrides = "deny"
 )
 
-// Valid indicates whether the value is a known member of the AgentDetailPreviewOf enum.
-func (e AgentDetailPreviewOf) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentDetailStoredOverrides enum.
+func (e AgentDetailStoredOverrides) Valid() bool {
 	switch e {
-	case AgentDetailPreviewOfMain:
+	case AgentDetailStoredOverridesAllow:
 		return true
-	case AgentDetailPreviewOfSubagent:
+	case AgentDetailStoredOverridesAsk:
 		return true
-	case AgentDetailPreviewOfSubagent3p:
+	case AgentDetailStoredOverridesDeny:
 		return true
 	default:
 		return false
@@ -932,6 +932,69 @@ func (e AgentFigure) Valid() bool {
 	case AgentFigureRobot:
 		return true
 	case AgentFigureWoman:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentPreviewPreviewOf.
+const (
+	AgentPreviewPreviewOfMain       AgentPreviewPreviewOf = "Main"
+	AgentPreviewPreviewOfSubagent   AgentPreviewPreviewOf = "Subagent"
+	AgentPreviewPreviewOfSubagent3p AgentPreviewPreviewOf = "subagent_3p"
+)
+
+// Valid indicates whether the value is a known member of the AgentPreviewPreviewOf enum.
+func (e AgentPreviewPreviewOf) Valid() bool {
+	switch e {
+	case AgentPreviewPreviewOfMain:
+		return true
+	case AgentPreviewPreviewOfSubagent:
+		return true
+	case AgentPreviewPreviewOfSubagent3p:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentPreviewToolPermissionsEffective.
+const (
+	AgentPreviewToolPermissionsEffectiveAllow AgentPreviewToolPermissionsEffective = "allow"
+	AgentPreviewToolPermissionsEffectiveAsk   AgentPreviewToolPermissionsEffective = "ask"
+	AgentPreviewToolPermissionsEffectiveDeny  AgentPreviewToolPermissionsEffective = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentPreviewToolPermissionsEffective enum.
+func (e AgentPreviewToolPermissionsEffective) Valid() bool {
+	switch e {
+	case AgentPreviewToolPermissionsEffectiveAllow:
+		return true
+	case AgentPreviewToolPermissionsEffectiveAsk:
+		return true
+	case AgentPreviewToolPermissionsEffectiveDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentPreviewToolPermissionsOverride.
+const (
+	AgentPreviewToolPermissionsOverrideAllow AgentPreviewToolPermissionsOverride = "allow"
+	AgentPreviewToolPermissionsOverrideAsk   AgentPreviewToolPermissionsOverride = "ask"
+	AgentPreviewToolPermissionsOverrideDeny  AgentPreviewToolPermissionsOverride = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentPreviewToolPermissionsOverride enum.
+func (e AgentPreviewToolPermissionsOverride) Valid() bool {
+	switch e {
+	case AgentPreviewToolPermissionsOverrideAllow:
+		return true
+	case AgentPreviewToolPermissionsOverrideAsk:
+		return true
+	case AgentPreviewToolPermissionsOverrideDeny:
 		return true
 	default:
 		return false
@@ -14633,8 +14696,11 @@ type AgentDependencyList struct {
 // AgentDependencyListDependenciesKind defines model for AgentDependencyList.Dependencies.Kind.
 type AgentDependencyListDependenciesKind string
 
-// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields (listed in truncated_fields). Extension point: the effort fields of the effort feature are added here when that feature lands.
+// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Extension point: the effort fields of the effort feature are added here when that feature lands.
 type AgentDetail struct {
+	// AbsentFields Result metadata, never selectable: requested properties the full object does not carry. Absent or empty when none.
+	AbsentFields *[]string `json:"absent_fields,omitempty"`
+
 	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 	ActivationStatus *AgentDetailActivationStatus `json:"activation_status,omitempty"`
 
@@ -14697,6 +14763,9 @@ type AgentDetail struct {
 	HasMainChat *bool  `json:"has_main_chat,omitempty"`
 	Id          string `json:"id"`
 
+	// Locked As Agent.locked — identity is fixed on built-ins.
+	Locked *bool `json:"locked,omitempty"`
+
 	// MaxToolIterations The agent's own stored tool-iteration limit; null when it rides the global limit.
 	MaxToolIterations *int  `json:"max_tool_iterations,omitempty"`
 	MemoryEnabled     *bool `json:"memory_enabled,omitempty"`
@@ -14738,9 +14807,6 @@ type AgentDetail struct {
 	} `json:"model_params,omitempty"`
 	Name *string `json:"name,omitempty"`
 
-	// PreviewOf Present only on a new-agent preview; names the type being previewed.
-	PreviewOf *AgentDetailPreviewOf `json:"preview_of,omitempty"`
-
 	// ProgramWarning Same text as executor.program_warning: the exact text a run would be refused with right now. Absent when a run would start.
 	ProgramWarning *string `json:"program_warning,omitempty"`
 
@@ -14760,6 +14826,9 @@ type AgentDetail struct {
 	// Soul SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul).
 	Soul *string `json:"soul,omitempty"`
 
+	// StoredOverrides The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included.
+	StoredOverrides *map[string]AgentDetailStoredOverrides `json:"stored_overrides,omitempty"`
+
 	// ToolPermissions Per-tool effective policy and the agent's own stored override.
 	ToolPermissions *[]struct {
 		// Description Short description of the tool (at most 40 characters). Omitted when effective is deny.
@@ -14768,14 +14837,14 @@ type AgentDetail struct {
 		// Effective The policy that applies to this agent's calls of the tool.
 		Effective AgentDetailToolPermissionsEffective `json:"effective"`
 
-		// Override The agent's own stored override; null when the agent rides the global ceiling.
+		// Override The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
 		Override *AgentDetailToolPermissionsOverride `json:"override"`
 
 		// Tool The tool name.
 		Tool string `json:"tool"`
 	} `json:"tool_permissions,omitempty"`
 
-	// TruncatedFields Names of fields cut by the result size bound. Absent or empty when nothing was cut.
+	// TruncatedFields Result metadata, never selectable: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]". Absent or empty when nothing was cut.
 	TruncatedFields *[]string `json:"truncated_fields,omitempty"`
 
 	// Type Agent type, as in Agent.type.
@@ -14789,13 +14858,13 @@ type AgentDetailActivationStatus string
 // AgentDetailExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentDetailExecutorKind string
 
-// AgentDetailPreviewOf Present only on a new-agent preview; names the type being previewed.
-type AgentDetailPreviewOf string
+// AgentDetailStoredOverrides defines model for AgentDetail.StoredOverrides.
+type AgentDetailStoredOverrides string
 
 // AgentDetailToolPermissionsEffective The policy that applies to this agent's calls of the tool.
 type AgentDetailToolPermissionsEffective string
 
-// AgentDetailToolPermissionsOverride The agent's own stored override; null when the agent rides the global ceiling.
+// AgentDetailToolPermissionsOverride The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
 type AgentDetailToolPermissionsOverride string
 
 // AgentDetailType Agent type, as in Agent.type.
@@ -14888,6 +14957,50 @@ type AgentModelParams struct {
 	// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
 	Temperature *float64 `json:"temperature,omitempty"`
 }
+
+// AgentPreview Result of the get_agent tool with new_agent_type: a preview of what a new agent of that type would get. The agent does not exist, so there is no id and no revision. absent_fields and truncated_fields are result metadata.
+type AgentPreview struct {
+	// AbsentFields Result metadata: requested properties the preview does not carry.
+	AbsentFields *[]string `json:"absent_fields,omitempty"`
+
+	// Connectors Connector (MCP server) bindings a new agent of this type would get.
+	Connectors *[]struct {
+		Id string `json:"id"`
+
+		// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+		Tools *[]string `json:"tools,omitempty"`
+	} `json:"connectors,omitempty"`
+
+	// PreviewOf The agent type being previewed.
+	PreviewOf AgentPreviewPreviewOf `json:"preview_of"`
+
+	// ToolPermissions Per-tool effective policy a new agent of this type would get.
+	ToolPermissions *[]struct {
+		// Description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+		Description *string `json:"description,omitempty"`
+
+		// Effective The policy that applies to this agent's calls of the tool.
+		Effective AgentPreviewToolPermissionsEffective `json:"effective"`
+
+		// Override The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+		Override *AgentPreviewToolPermissionsOverride `json:"override"`
+
+		// Tool The tool name.
+		Tool string `json:"tool"`
+	} `json:"tool_permissions,omitempty"`
+
+	// TruncatedFields Result metadata: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]".
+	TruncatedFields *[]string `json:"truncated_fields,omitempty"`
+}
+
+// AgentPreviewPreviewOf The agent type being previewed.
+type AgentPreviewPreviewOf string
+
+// AgentPreviewToolPermissionsEffective The policy that applies to this agent's calls of the tool.
+type AgentPreviewToolPermissionsEffective string
+
+// AgentPreviewToolPermissionsOverride The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+type AgentPreviewToolPermissionsOverride string
 
 // AgentRole Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 type AgentRole string
@@ -14993,7 +15106,7 @@ type AgentToolPermission struct {
 	// Effective The policy that applies to this agent's calls of the tool.
 	Effective AgentToolPermissionEffective `json:"effective"`
 
-	// Override The agent's own stored override; null when the agent rides the global ceiling.
+	// Override The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
 	Override *AgentToolPermissionOverride `json:"override"`
 
 	// Tool The tool name.
@@ -15003,7 +15116,7 @@ type AgentToolPermission struct {
 // AgentToolPermissionEffective The policy that applies to this agent's calls of the tool.
 type AgentToolPermissionEffective string
 
-// AgentToolPermissionOverride The agent's own stored override; null when the agent rides the global ceiling.
+// AgentToolPermissionOverride The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
 type AgentToolPermissionOverride string
 
 // AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
