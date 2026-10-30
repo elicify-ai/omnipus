@@ -182,6 +182,7 @@ func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id
 		historyHTTPFailure(r.Context(), w, id, err)
 		return
 	}
+	request.keep = historyKeepBody
 	prepared, err := request.Read(attempt.context(r.Context()), store)
 	attempt.err = err
 	if err != nil {
@@ -211,6 +212,7 @@ func (a *restAPI) writePagedSessionDetail(w http.ResponseWriter, r *http.Request
 	request, err := newHistoryPageRequest(meta.ID, opts, a.historyProjectionDeps(store, meta.ID))
 	var prepared preparedHistoryPage
 	if err == nil {
+		request.keep = historyKeepMessages
 		prepared, err = request.Read(attempt.context(r.Context()), store)
 	}
 	attempt.err = err

@@ -142,6 +142,7 @@ func (wh *wsHandlerHandleAttachSession) sendPreparedHistorySnapshot() {
 	request, err := newHistoryPageRequest(wh.attachID, wh.historyOptions, deps)
 	var prepared preparedHistoryPage
 	if err == nil {
+		request.keep = historyKeepFrames
 		prepared, err = request.Read(attempt.context(wh.ctx), wh.store)
 	}
 	attempt.err = err
@@ -183,7 +184,10 @@ func (wh *wsHandlerHandleAttachSession) sendPreparedHistorySnapshot() {
 	if !wh.sendHistoryState(state) {
 		return
 	}
-	for _, raw := range prepared.ReplayFrames {
+	for i, raw := range prepared.ReplayFrames {
+		// Once handed to the connection a frame is the queue's; the prepared
+		// page releases its copy so a slow client holds only unsent frames.
+		prepared.ReplayFrames[i] = nil
 		var peek wsTypeOnly
 		if err = json.Unmarshal(raw, &peek); err != nil {
 			wh.historyDeliveryFailed(err)
