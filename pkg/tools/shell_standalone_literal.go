@@ -54,6 +54,13 @@ import (
 // (shell_standalone_literal_unix.go / _windows.go).
 var rootWritableProbe = rootIsWritable
 
+// rootWritabilityFn is the platform root check with its cause (T11 SF-5):
+// literalTopCannotExist asks it why the root counts as writable, so a failed
+// check (rather than a genuinely writable root) is named in the refusal. A
+// package variable so tests can make the check fail; production uses the
+// platform rootWritability (shell_standalone_literal_unix.go / _windows.go).
+var rootWritabilityFn = rootWritability
+
 // standAloneLiteralForbiddenChars is spec §3.1 condition 2's character set.
 const standAloneLiteralForbiddenChars = "*?[]{}%$`~\\"
 
@@ -208,7 +215,7 @@ func shellWordEndsAfter(cmd string, i int) bool {
 // named in the refusal too.
 func literalTopCannotExist(p string) (bool, error) {
 	if rootWritableProbe() {
-		if _, err := rootWritability(); err != nil {
+		if _, err := rootWritabilityFn(); err != nil {
 			return false, err
 		}
 		return false, nil
