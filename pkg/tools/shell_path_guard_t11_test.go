@@ -406,3 +406,89 @@ func TestGuard_FragmentsConcatenationTraversalRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestGuard_NestedShellFormsStillWithholdExemption is spec §3.1: an unquoted
+// brace in any text the shell will parse withholds the stand-alone exemption.
+// A long option before -c, a nested shell glued to ; && || or |, and a
+// here-document fed to a shell behind env, command or nice are still shell
+// text. Fixtures are print-only (echo); nothing is written. /tm must be absent
+// so the quoted fragment would be exempt if the brace scan missed it.
+func TestGuard_NestedShellFormsStillWithholdExemption(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	require.False(t, t11FirstExists("/tm"), "fixture: /tm exists, so the quoted fragment is not an absent literal")
+	absent := t11AbsentTop(t)
+	glue := `echo {'/tm',}p/x`
+
+	allowed := []string{
+		fmt.Sprintf(`python3 -c "print('%s/v1'); s='{a}'"`, absent),
+		fmt.Sprintf(`python3 -c "print('%s/v1')" \{`, absent),
+		"python3 <<'PY'\nprint('" + absent + "/v1')\nprint('{a}')\nPY\n",
+		fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent),
+		fmt.Sprintf(`bash --norc -c "python3 -c \"print('%s/v1/users')\""`, absent),
+	}
+	for _, cmd := range allowed {
+		t.Run("allowed "+cmd, func(t *testing.T) {
+			got := tool.guardCommand(context.Background(), cmd, cwd)
+			require.Empty(t, got, "spec §3.1: quoted, escaped, or non-shell braces stay allowed\nrefusal: %s", got)
+		})
+	}
+
+	refused := []string{
+		`bash -c "` + glue + `"`,
+		`bash --norc -c "` + glue + `"`,
+		`sh --login -c "` + glue + `"`,
+		`true; bash -c "` + glue + `"`,
+		`true;bash -c "` + glue + `"`,
+		`true&&bash -c "` + glue + `"`,
+		`true||bash -c "` + glue + `"`,
+		`true|bash -c "` + glue + `"`,
+		"bash <<'EOF'\n" + glue + "\nEOF\n",
+		"env bash <<'EOF'\n" + glue + "\nEOF\n",
+		"command bash <<'EOF'\n" + glue + "\nEOF\n",
+		"nice sh <<'EOF'\n" + glue + "\nEOF\n",
+	}
+	for _, cmd := range refused {
+		t.Run(cmd, func(t *testing.T) {
+			t11RequireRefused(t, tool, cwd, cmd, "path outside working dir", "an unquoted brace in shell text withholds the exemption")
+		})
+	}
+}
+
+// TestGuard_ProbeErrorOneShot is SF-5. One unexpected probe error must be kept.
+// The first call fails and every later call succeeds. The check must call the
+// probe once and refuse with that cause, saying the safety check could not
+// complete. A second call would see success and hide the failure.
+func TestGuard_ProbeErrorOneShot(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	absent := t11AbsentTop(t)
+	cmd := fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent)
+	const cause = "t11-sf5-oneshot"
+	var calls int
+	oldProbe := rootWritableProbe
+	oldFn := rootWritabilityFn
+	t.Cleanup(func() {
+		rootWritableProbe = oldProbe
+		rootWritabilityFn = oldFn
+	})
+	rootWritabilityFn = func() (bool, error) {
+		calls++
+		if calls == 1 {
+			return true, errors.New(cause)
+		}
+		return false, nil
+	}
+	// The bool probe and the error-bearing probe are the same check. Pointing
+	// the bool probe at it makes a discarded first error visible: production
+	// currently asks both.
+	rootWritableProbe = func() bool {
+		writable, _ := rootWritabilityFn()
+		return writable
+	}
+	got := tool.guardCommand(context.Background(), cmd, cwd)
+	require.Equal(t, 1, calls, "SF-5: the probe runs once; a later success must not replace the first error\ngot: %s", got)
+	require.Contains(t, got, cause, "SF-5: the refusal names the first probe's cause\ngot: %s", got)
+	require.Contains(t, strings.ToLower(got), "could not complete",
+		"SF-5: the refusal says the safety check could not complete\ngot: %s", got)
+}
