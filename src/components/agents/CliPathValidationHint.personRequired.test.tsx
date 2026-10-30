@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
+import { Button } from '@/components/ui/button'
 import { CliPathValidationHint } from './CliPathValidationHint'
 import { useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { ApiError } from '@/lib/api'
@@ -21,9 +22,9 @@ function Harness() {
   const { status, validate } = useCliPathValidation()
   return (
     <>
-      <button type="button" onClick={() => validate('claude-code', '/usr/local/bin/claude')}>
+      <Button type="button" onClick={() => validate('claude-code', '/usr/local/bin/claude')}>
         check
-      </button>
+      </Button>
       <CliPathValidationHint validation={status} detectHint={{ kind: 'unknown' }} />
     </>
   )
@@ -50,6 +51,7 @@ describe('CliPathValidationHint person-session 403', () => {
     })
 
     const hint = screen.getByText(/signed-in person/i)
+    expect(hint).toHaveAttribute('data-cli-status', 'forbidden')
     expect(hint.textContent ?? '').not.toMatch(/you can still save/i)
     expect(hint.textContent ?? '').not.toMatch(/will retry/i)
   })

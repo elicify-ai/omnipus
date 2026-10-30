@@ -18,7 +18,7 @@ import (
 
 func loadT11CLITrust(t *testing.T) (
 	check func(path string, forbidden []string) (string, error),
-	roots func(home string, cfg *config.Config) []string,
+	roots func(home string, cfg *config.Config) ([]string, error),
 ) {
 	t.Helper()
 	return clitrust.CheckProgramPath, clitrust.AgentWritableRoots
