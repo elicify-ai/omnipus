@@ -1266,7 +1266,7 @@ The 4 MiB soft budget, the two-screen floor and whole-group atomicity otherwise 
 
 **Where.** The shortening runs at the end of `pkg/session/chat_history_reduce.go::historyProjectEntry`, after tool-call effects, cancellation and disposition are applied (`applyToolCallEffects`, `deriveCancelTruncation`) and before the entry is stored in the selection cache (`cache[r.Rank] = out`). It applies to selected entries and to dependency (span-fact) entries.
 
-**It cannot move earlier.** A projection effect *merges* a `text` key into the existing result map (`pkg/session/transcript_effects.go::applyProjectionText`). Shortening a settle post-image before later effects apply would therefore corrupt the reduced value. An earlier, incremental shortening is permitted only if T62 and T63b prove byte-identical output to "reduce fully, then shorten".
+**It cannot move earlier.** A projection effect *merges* a `text` key into the existing result map (`pkg/session/transcript_effects.go::applyProjectionText`). Shortening a settle post-image before later effects apply would therefore corrupt the reduced value. An earlier, incremental shortening is permitted only if T62 and T63b prove byte-identical output to "reduce fully, then shorten". [Superseded 2026-10-30 (founder): the display reader no longer materialises large values before reducing; see A2.8. The byte-identical proof obligation stands.]
 
 **Session layer stays wire-free.** The session layer records the shortening in **private typed fields** on `session.ToolCall` and `session.TranscriptEntry`, never as a hand-built wire map. Only the D4b gateway projector maps those fields to the generated types in A2.2 (Hard Constraint #8).
 
@@ -1332,7 +1332,7 @@ Session constants sit next to `DefaultChatHistorySoftByteBudget` in `pkg/session
 
 **Claimed (by construction).** Every copy held for the **page** is built from shortened entries: the selection cache, the page entries, the generated messages, the encodings, the WS frames, the final response and the schema trees.
 
-**Not claimed (corrected 2026-10-27, grill I1).** That only one canonical record is decoded at a time. While one group is reduced, its owner record, every decoded effect record in its reference list (each settle carries a full post-image) and the reduced value coexist before shortening. That transient peak scales with the group's corrections. The page ceiling does not bound it.
+**Not claimed (corrected 2026-10-27, grill I1).** That only one canonical record is decoded at a time. While one group is reduced, its owner record, every decoded effect record in its reference list (each settle carries a full post-image) and the reduced value coexist before shortening. That transient peak scales with the group's corrections. The page ceiling does not bound it. [Superseded 2026-10-30 (founder, A2.8): the display reader holds only bounded stand-ins for large values, so this transient peak no longer scales with result or text size.]
 
 **Measured, not assumed.** T63, T63b and T63c record attributable peak heap for:
 - the D-B4b corpus;
@@ -1349,6 +1349,21 @@ Shortening happens before metering, so D-B1, D-B1b and D-B1c can no longer reach
 - D-B1c: atomic-group and floor overrides.
 
 The expected numbers are derived from the stated rules, never read off the product. This re-derivation follows the founder-approved amendment; it is not a weakening. B38 (D-B2) and D-B5 are unaffected.
+
+#### A2.8 Amendment 2026-10-30 (founder) — only what the user sees enters memory for chat display
+
+**Authority.** Founder decision 2026-10-30 04:13Z, Discord #team-b: "only what the user really sees should go into memory, for chat display", relayed by team-lead with the follow-up rulings (A) build the streamed display reader and amend A2.1/A2.6, and (B) the same rule applies to chat text over 64 KiB and to large tool error strings. Model context, canonical archive bytes, positions, the A2.2 marker, the D4 placeholder and whole owning groups are unchanged.
+
+| Item | Rule |
+|---|---|
+| Display read | The bounded display reader (`ReadChatHistoryPage`, its dependencies and span facts) streams each canonical record from disk with a running SHA-256 for the existing digest check. It never reads a whole record into memory. The private `model_message` member is skipped without being kept. |
+| Large values | A JSON string whose canonical encoding (`encoding/json` rules) exceeds 51,200 bytes is replaced by a bounded stand-in: the first 65,540 decoded bytes, the first 4,100 encoded bytes, the exact decoded and encoded sizes, and whether it contains the quoted key `"session_id"`. Every other value is decoded as before. |
+| Reduction | Effects, cancellation and dispositions run on the stand-ins unchanged (settle replaces, projection sets `text`, retract restores). The A2.1 shortening then derives the preview, true sizes and facts from the stand-ins. Output must be byte-identical to "reduce fully, then shorten" (T62, T63b and an equality test against the full-entry projection). |
+| Values the user sees whole | Where a stand-in remains after shortening (content of a non-message entry type, tool arguments, media descriptors, a child-session id, or any other field), that one record is decoded in full, exactly as before this amendment. Persisted tool errors are already bounded at 2,000 characters by the producer, below the stand-in threshold. |
+| Fail closed | A record the streaming scanner cannot read becomes the D4 placeholder with a content-free diagnostic, never partial or wrong text. A property test compares the scanner with `encoding/json` on seeded random documents. |
+| Concurrency | At most 2 history page preparations run at once per process. Further requests wait (cancellable with their request), never refused. |
+| Full-content read | `getSessionHistoryEntry` still returns the whole projection, read in full. |
+| Model context | Unchanged and separate (`ReadModelSlots`); a test proves it still returns the full saved result bytes. |
 
 #### Acceptance scenarios (D2)
 
