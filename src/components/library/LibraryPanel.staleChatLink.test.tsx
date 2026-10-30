@@ -12,6 +12,7 @@
  *
  * Fetch is the only stand-in. LibraryPanel and LibraryExplorer are real.
  */
+import { act } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -64,6 +65,10 @@ function entry(name: string, path: string, over: Partial<LibraryEntry> = {}): Li
 const planEntry = entry('plan.md', 'notes/plan.md')
 const retroEntry = entry('retro.md', 'notes/retro.md')
 let notesListing: LibraryEntry[] = [planEntry]
+// Set only after the first listing has rendered. The refresh that the next
+// chat-link click starts waits here, so the test can see the in-flight screen.
+let holdNotes: Promise<LibraryEntry[]> | null = null
+let notesHoldEntered = 0
 
 function contentFor(path: string): string {
   if (path === 'notes/retro.md') return RETRO
@@ -74,6 +79,8 @@ function contentFor(path: string): string {
 beforeEach(() => {
   vi.clearAllMocks()
   notesListing = [planEntry]
+  holdNotes = null
+  notesHoldEntered = 0
   useUiStore.getState().closePanel()
   vi.mocked(fetchLibraryWorkspaces).mockResolvedValue([
     { id: 'W', name: 'Workspace', entry_count: 1 } satisfies LibraryWorkspaceNode,
@@ -85,7 +92,13 @@ beforeEach(() => {
     marker: 'none',
   })
   vi.mocked(fetchLibraryEntries).mockImplementation(async (_ws: string, folder?: string) => {
-    if (folder === 'notes') return notesListing
+    if (folder === 'notes') {
+      if (holdNotes) {
+        notesHoldEntered += 1
+        return holdNotes
+      }
+      return notesListing
+    }
     if (!folder) return [entry('notes', 'notes', { is_dir: true, is_text_editable: false, size: 0 })]
     return []
   })
@@ -123,9 +136,20 @@ describe('a chat link opens a file created after the folder was listed (UAT R2)'
     expect(screen.queryByTestId('library-deeplink-unresolved')).toBeNull()
 
     // The file now exists for the next read. The listing already on screen
-    // does not include it, which is the stale-cache case.
+    // does not include it, which is the stale-cache case. Hold that read so
+    // a refresh that has not finished cannot claim the file is missing
+    // (BS-1.5 is only for a file the finished read did not return).
     notesListing = [planEntry, retroEntry]
+    let releaseNotes: (rows: LibraryEntry[]) => void = () => {}
+    holdNotes = new Promise((resolve) => {
+      releaseNotes = resolve
+    })
     fireEvent.click(screen.getByTestId('markdown-link'))
+    await waitFor(() => expect(notesHoldEntered).toBeGreaterThan(0))
+    expect(screen.queryByTestId('library-deeplink-unresolved')).toBeNull()
+    await act(async () => {
+      releaseNotes(notesListing)
+    })
 
     await waitFor(() => {
       expect(screen.queryByTestId('library-deeplink-unresolved')).toBeNull()
