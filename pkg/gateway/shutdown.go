@@ -7,6 +7,7 @@ package gateway
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -40,8 +41,25 @@ func omnipusGracefulShutdown(
 	// to shorten the active-turn wait); kept so callers stay unchanged.
 	_ *config.Config,
 ) {
-	ctx, cancel := context.WithTimeout(context.Background(), omnipusShutdownTimeout)
+	runGracefulShutdown(runningServices, agentLoop, provider, defaultShutdownBudget, backgroundStopsOf(runningServices))
+}
+
+// runGracefulShutdown is the shutdown sequence under budget b. Every wait in
+// steps 1 and 2 is bounded by what is left of b (6a delta review I2), so the
+// sequence reaches the agent-loop close with b.margin still available.
+func runGracefulShutdown(
+	runningServices *services,
+	agentLoop shutdownLoop,
+	provider providers.LLMProvider,
+	b shutdownBudget,
+	stops shutdownBackgroundStops,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), b.total)
 	defer cancel()
+	// The background stops below may use the budget up to the margin kept
+	// for the agent-loop close, never past it.
+	stopsCtx, stopsCancel := context.WithTimeout(ctx, b.total-b.margin)
+	defer stopsCancel()
 
 	slog.Info("shutdown: step 1 — stopping new requests")
 	// Stop channel manager first so no new inbound messages are accepted.
@@ -53,81 +71,36 @@ func omnipusGracefulShutdown(
 		runningServices.ChannelManager.StopAll(stopCtx)
 	}
 
-	// #265: stop the turn-triggering background services (cron) BEFORE
-	// draining active turns. If they fire during the drain, the resulting turn's
-	// cost.json / session-context writes can outlive RunContext and race
-	// t.TempDir cleanup on macOS APFS. The channel manager (above) is the other
-	// inbound source; together they guarantee no new bus message — hence no new
-	// active-request admission — after this point. Device/health/preview registries
-	// have no turn side effects and stop later (step 4).
-	if runningServices.CronService != nil {
-		runningServices.CronService.Stop()
-	}
-	// ADR-049 D4: the plan engine dispatches member tasks (which spawn
-	// turns), so it stops alongside CronService — before draining active
-	// turns — for the exact same "no new active-request admission after this
-	// point" reason the comment above documents for cron.
-	if runningServices.PlanEngine != nil {
-		runningServices.PlanEngine.Stop()
-	}
-	// #1490: the task-trigger and /loop schedulers are two more copies of the
-	// cron engine, and both start work when a job comes due (a triggered task
-	// run, a scheduled /loop turn). Stop them here too, before the turn drain,
-	// for the same #265 reason as CronService above. Same order as
-	// stopAndCleanupServices (CronService, PlanEngine, TaskTrigger,
-	// LoopScheduler); each Stop is idempotent, so a later cleanup pass that
-	// stops them again is harmless.
-	if runningServices.TaskTrigger != nil {
-		runningServices.TaskTrigger.Stop()
-	}
-	if runningServices.LoopScheduler != nil {
-		runningServices.LoopScheduler.Stop()
-	}
-	// ADR-066 rung 4 writes $OMNIPUS_HOME/cache/model_limits.json at the tail
-	// of a background fetch that nothing else waits for. Close it here, with
-	// the other background writers, so the write cannot land after RunContext
-	// returns (2026-09-12: 130 post-shutdown writes in one CI run, one of
-	// them mid-TempDir-RemoveAll). Close aborts the fetch and returns once its
-	// goroutine has exited.
-	if runningServices.LiveLimits != nil {
-		runningServices.LiveLimits.Close()
-	}
-	// The provider-catalog refresh loop is the other post-boot background
-	// writer (providers_catalog.json, 2.4 MB, pulled from a GitHub release).
-	// Cancel it and wait for the goroutine to exit — bounded, because a wedged
-	// transport must not hold shutdown hostage.
-	if runningServices.catalogRefreshCancel != nil {
-		runningServices.catalogRefreshCancel()
-	}
-	if runningServices.catalogRefreshDone != nil {
-		select {
-		case <-runningServices.catalogRefreshDone:
-		case <-time.After(catalogRefreshStopTimeout):
-			slog.Warn("shutdown: catalog refresh loop did not exit in time; continuing",
-				"timeout", catalogRefreshStopTimeout)
-		}
-	}
+	// #265: stop the turn-triggering background services (cron, task
+	// triggers, /loop, the plan engine) and the background cache writers
+	// BEFORE draining active turns — see stopBackgroundWriters.
+	stopBackgroundWriters(stopsCtx, stops)
 
 	// US-7 / FR-008: Wait for active turns to complete before force-closing.
-	// Cap the wait to omnipusShutdownTimeout - 5 s so it always fits in the budget.
-	// This is a shutdown drain bound, not a work time limit: the gateway is
-	// going away. (The retired agents.defaults.timeout_seconds used to shorten
-	// it; turns have no time limit any more, issue #1306.)
-	activeTurnTimeout := int((omnipusShutdownTimeout - 5*time.Second).Seconds()) // 65 s
+	// The wait is what is left of the budget minus the margin, at most
+	// b.total - b.margin (65 s in production), so it always fits after the
+	// stops above. This is a shutdown drain bound, not a work time limit: the
+	// gateway is going away. (The retired agents.defaults.timeout_seconds used
+	// to shorten it; turns have no time limit any more, issue #1306.)
+	remaining := b.total
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining = time.Until(deadline)
+	}
+	activeTurnWait := b.activeTurnWait(remaining)
 
 	slog.Info("shutdown: step 2 — waiting for active turns to complete",
-		"active_turn_wait_seconds", activeTurnTimeout)
+		"active_turn_wait_seconds", int(activeTurnWait.Seconds()))
 
 	// Stop() prevents new turns from starting.
 	agentLoop.Stop()
 
-	activeTurnCtx, activeTurnCancel := context.WithTimeout(ctx, time.Duration(activeTurnTimeout)*time.Second)
+	activeTurnCtx, activeTurnCancel := context.WithTimeout(ctx, activeTurnWait)
 	defer activeTurnCancel()
 	if agentLoop.WaitForActiveRequestsContext(activeTurnCtx) {
 		slog.Info("shutdown: all active turns completed before shutdown")
 	} else {
 		slog.Warn("shutdown: timeout waiting for active turns — force-canceling",
-			"timeout_seconds", activeTurnTimeout)
+			"timeout_seconds", int(activeTurnWait.Seconds()))
 	}
 
 	// Now close the agent loop resources.
@@ -227,4 +200,171 @@ func omnipusGracefulShutdown(
 	}
 
 	slog.Info("shutdown: complete")
+}
+
+// shutdownActiveTurnMargin is kept free after the active-turn wait for the
+// agent-loop close.
+const shutdownActiveTurnMargin = 5 * time.Second
+
+// shutdownBudget is the time the graceful shutdown may take (total) and the
+// part of it kept for the agent-loop close (margin).
+type shutdownBudget struct {
+	total, margin time.Duration
+}
+
+var defaultShutdownBudget = shutdownBudget{total: omnipusShutdownTimeout, margin: shutdownActiveTurnMargin}
+
+// activeTurnWait is the active-turn wait for the budget left: remaining minus
+// the margin, never above total minus the margin, never below zero.
+func (b shutdownBudget) activeTurnWait(remaining time.Duration) time.Duration {
+	return max(min(remaining, b.total)-b.margin, 0)
+}
+
+// shutdownActiveTurnWait is the production budget's active-turn wait:
+// remaining minus 5 s, never above 65 s, never below zero.
+func shutdownActiveTurnWait(remaining time.Duration) time.Duration {
+	return defaultShutdownBudget.activeTurnWait(remaining)
+}
+
+// shutdownLoop is the part of the agent loop the shutdown sequence drives.
+type shutdownLoop interface {
+	Stop()
+	WaitForActiveRequestsContext(ctx context.Context) bool
+	Close()
+}
+
+// shutdownBackgroundStops are the stops of the background services that
+// start turns or write files, run before the active-turn drain. Nil entries
+// are skipped.
+type shutdownBackgroundStops struct {
+	schedulers    []func() // cron, task triggers, /loop
+	plan          func()
+	liveLimits    func()
+	catalogCancel func()
+	catalogDone   <-chan struct{}
+}
+
+// backgroundStopsOf collects the running services' background stops.
+func backgroundStopsOf(rs *services) shutdownBackgroundStops {
+	var s shutdownBackgroundStops
+	if rs.CronService != nil {
+		s.schedulers = append(s.schedulers, rs.CronService.Stop)
+	}
+	if rs.TaskTrigger != nil {
+		s.schedulers = append(s.schedulers, rs.TaskTrigger.Stop)
+	}
+	if rs.LoopScheduler != nil {
+		s.schedulers = append(s.schedulers, rs.LoopScheduler.Stop)
+	}
+	if rs.PlanEngine != nil {
+		s.plan = rs.PlanEngine.Stop
+	}
+	if rs.LiveLimits != nil {
+		s.liveLimits = rs.LiveLimits.Close
+	}
+	s.catalogCancel = rs.catalogRefreshCancel
+	s.catalogDone = rs.catalogRefreshDone
+	return s
+}
+
+// stopBackgroundWriters stops, in order, the turn schedulers, the plan
+// engine, the live model-limits fetcher and the catalog refresh loop. Every
+// wait ends at ctx (the shutdown budget minus the agent-loop margin) or, for
+// the catalog, at catalogRefreshStopTimeout, whichever comes first.
+//
+// None of these Stop/Close calls takes a context, so each runs on its own
+// goroutine and the wait for it is bounded by ctx. Each call is still
+// launched, in order, even when the budget is already spent: its first act
+// closes admission. (Once the budget is spent the calls are not awaited, so
+// their goroutines may then start in any order.) A call still running at the deadline is not abandoned
+// half-way; its goroutine finishes the callee's own bounded teardown (cron
+// and plan drains are 30 s, LiveLimits aborts its fetch before joining) and
+// then exits. The waiter only closes channels, so no goroutine of ours stays
+// blocked after its callee returns.
+func stopBackgroundWriters(ctx context.Context, s shutdownBackgroundStops) {
+	// #265: stop the turn-triggering background services (cron) BEFORE
+	// draining active turns. If they fire during the drain, the resulting turn's
+	// cost.json / session-context writes can outlive RunContext and race
+	// t.TempDir cleanup on macOS APFS. The channel manager (stopped first) is
+	// the other inbound source; together they guarantee no new bus message —
+	// hence no new active-request admission — after this point.
+	// Device/health/preview registries have no turn side effects and stop
+	// later (step 4).
+	//
+	// #1490: the task-trigger and /loop schedulers are two more copies of the
+	// cron engine, and both start work when a job comes due (a triggered task
+	// run, a scheduled /loop turn). They stop here too, for the same reason.
+	// Each Stop is idempotent, so a later cleanup pass that stops them again
+	// is harmless. Each cron-engine Stop closes admission at once, then may
+	// wait up to its 30 s lane drain (pkg/cron defaultStopDrainTimeout). One
+	// after another, three engines could take 90 s against the 70 s budget,
+	// so the three run side by side (6a review W3).
+	if !stopTurnSchedulers(ctx, s.schedulers...) {
+		slog.Warn("shutdown: scheduler stop did not finish within the shutdown budget; continuing")
+	}
+	// ADR-049 D4: the plan engine dispatches member tasks (which spawn
+	// turns), so it stops alongside CronService — before draining active
+	// turns — for the exact same "no new active-request admission after this
+	// point" reason the comment above documents for cron. Its Stop joins its
+	// loops and then drains judges and wakes for up to 30 s.
+	if s.plan != nil && !stopTurnSchedulers(ctx, s.plan) {
+		slog.Warn("shutdown: plan engine stop did not finish within the shutdown budget; continuing")
+	}
+	// ADR-066 rung 4 writes $OMNIPUS_HOME/cache/model_limits.json at the tail
+	// of a background fetch that nothing else waits for. Close it here, with
+	// the other background writers, so the write cannot land after RunContext
+	// returns (2026-09-12: 130 post-shutdown writes in one CI run, one of
+	// them mid-TempDir-RemoveAll). Close aborts the fetch and returns once its
+	// goroutine has exited.
+	if s.liveLimits != nil && !stopTurnSchedulers(ctx, s.liveLimits) {
+		slog.Warn("shutdown: live model-limits close did not finish within the shutdown budget; continuing")
+	}
+	// The provider-catalog refresh loop is the other post-boot background
+	// writer (providers_catalog.json, 2.4 MB, pulled from a GitHub release).
+	// Cancel it and wait for the goroutine to exit — bounded, because a wedged
+	// transport must not hold shutdown hostage.
+	if s.catalogCancel != nil {
+		s.catalogCancel()
+	}
+	if s.catalogDone != nil {
+		timer := time.NewTimer(catalogRefreshStopTimeout)
+		defer timer.Stop()
+		select {
+		case <-s.catalogDone:
+		case <-timer.C:
+			slog.Warn("shutdown: catalog refresh loop did not exit in time; continuing",
+				"timeout", catalogRefreshStopTimeout)
+		case <-ctx.Done():
+			slog.Warn("shutdown: catalog refresh loop did not exit within the shutdown budget; continuing")
+		}
+	}
+}
+
+// stopTurnSchedulers runs the given Stop functions side by side (nil entries
+// are skipped) and waits until all return or ctx ends. It reports whether all
+// finished. A Stop still running at the deadline keeps tearing down in the
+// background; its goroutine exits when the Stop returns.
+func stopTurnSchedulers(ctx context.Context, stops ...func()) bool {
+	var wg sync.WaitGroup
+	for _, stop := range stops {
+		if stop == nil {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stop()
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }

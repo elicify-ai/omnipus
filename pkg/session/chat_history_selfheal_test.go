@@ -193,10 +193,11 @@ func TestChatHistorySelfHeal_HardFailureLatchesUntilRestart(t *testing.T) {
 	selfHealRequirePrivateLogs(t, logs, f)
 }
 
-// Design §§1,4,5.7: transient failures retry at least 60 seconds apart, at
-// most three times. The third failure can only retry after restart: there is
-// no remaining in-process attempt, even after backoff. No wall-clock sleeps.
-func TestChatHistorySelfHeal_BusyBackoffIsAtLeast60SecondsAndAtMost3Attempts(t *testing.T) {
+// Design §§1,4,5.7, amended by the 6a gate fix round (code W1/W2): busy and
+// source_changed retry at least 60 seconds apart and never latch; the
+// counted deadline class keeps the 3-attempt latch
+// (TestChatHistoryHeal_DeadlineAttemptsStillLatchAfterThree). No sleeps.
+func TestChatHistorySelfHeal_BusyAndSourceChangedBackOff60SecondsWithoutLatching(t *testing.T) {
 	for _, class := range []string{"busy", "source_changed"} {
 		t.Run(class, func(t *testing.T) { selfHealAssertTransientBackoff(t, class) })
 	}

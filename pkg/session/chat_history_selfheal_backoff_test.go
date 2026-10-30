@@ -12,9 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Design §1: count actual failed attempts, not demand calls or elapsed real
-// time. A check just after attempt two still backs off from that LAST attempt,
-// not from the first attempt or the last refused check.
+// Design §1 as amended by the 6a gate fix round (code W1/W2): busy and
+// source_changed are not failures of the heal itself, so they never count
+// toward the 3-attempt latch, but every attempt still waits at least 60 s
+// after the LAST attempt (not the first, not the last refused check). Count
+// actual attempts, not demand calls or elapsed real time.
 func selfHealAssertTransientBackoff(t *testing.T, class string) {
 	t.Helper()
 	logs := selfHealCaptureLogs(t)
@@ -39,26 +41,22 @@ func selfHealAssertTransientBackoff(t *testing.T, class string) {
 		{120*time.Second - time.Millisecond, 2},
 		{120 * time.Second, 3}, // exactly 60 seconds since attempt two
 		{120*time.Second + time.Millisecond, 3},
-		{180 * time.Second, 3}, // no fourth attempt after another full interval
-		{24 * time.Hour, 3},    // the latch does not expire with a longer backoff
+		{180*time.Second - time.Millisecond, 3},
+		{180 * time.Second, 4}, // a fourth attempt: these classes never latch
+		{240*time.Second - time.Millisecond, 4},
+		{240 * time.Second, 5},
 	}
 	for _, step := range schedule {
 		now = base.Add(step.elapsed)
 		err := f.store.CheckChatHistoryReadiness(context.Background(), f.sid)
 		selfHealRequireUnavailable(t, err, "catchup_limit")
-		require.Nil(t, errors.Unwrap(err), "transient failure/backoff/latch must preserve the original public error at elapsed=%s", step.elapsed)
+		require.Nil(t, errors.Unwrap(err), "transient failure/backoff must preserve the original public error at elapsed=%s", step.elapsed)
 		records := selfHealEvents(t, logs, f.sid, selfHealBadLog)
 		require.Len(t, records, step.attempts, "class=%s elapsed=%s: one warning per actual attempt, none for a refused check", class, step.elapsed)
 		for i, record := range records {
 			selfHealRequireLogBase(t, record, f.sid, int64(i+1))
 			require.Equal(t, class, record["class"], "class=%s elapsed=%s", class, step.elapsed)
-			retry := "after_backoff"
-			if i == 2 {
-				// Design §§1,4: with three attempts spent, another in-process
-				// retry is impossible. The warning must not promise one.
-				retry = "after_restart"
-			}
-			require.Equal(t, retry, record["retry"], "attempt=%d elapsed=%s", i+1, step.elapsed)
+			require.Equal(t, "after_backoff", record["retry"], "attempt=%d elapsed=%s: an uncounted class always retries", i+1, step.elapsed)
 		}
 		wantBuilds := int64(step.attempts)
 		if class == "busy" {
@@ -69,23 +67,36 @@ func selfHealAssertTransientBackoff(t *testing.T, class string) {
 		require.Equal(t, wantBuilds, writes.Load(), "only actual source_changed attempts append a canonical record")
 		require.Empty(t, selfHealEvents(t, logs, f.sid, selfHealOKLog))
 		require.Equal(t, before, historyTree(t, historyIndexDir(f.store, f.sid)), "a failed/backing-off attempt must not publish a new baseline")
+		owner := f.store.historyOwner(f.sid)
+		owner.mu.Lock()
+		latched := owner.heal.latched
+		owner.mu.Unlock()
+		require.False(t, latched, "class=%s elapsed=%s: an uncounted class must not latch", class, step.elapsed)
 	}
-	// Remove the external failure. Continued refusal now proves a real attempt
-	// cap/latch, not merely a slot that remained busy or a source still changing.
+	// Remove the external failure. The spacing still holds just before the
+	// next eligible instant; at it, the heal completes without a restart.
 	releaseFault()
-	err := f.store.CheckChatHistoryReadiness(context.Background(), f.sid)
-	selfHealRequireUnavailable(t, err, "catchup_limit")
-	require.Nil(t, errors.Unwrap(err))
-	require.Len(t, selfHealEvents(t, logs, f.sid, selfHealBadLog), 3, "freeing the slot/removing source churn cannot unlock attempt four")
-	wantBuilds := int64(3)
+	now = base.Add(300*time.Second - time.Millisecond)
+	selfHealRequireUnavailable(t, f.store.CheckChatHistoryReadiness(context.Background(), f.sid), "catchup_limit")
+	require.Len(t, selfHealEvents(t, logs, f.sid, selfHealBadLog), 5, "the 60 s spacing still applies after the fault clears")
+	now = base.Add(300 * time.Second)
+	require.NoError(t, f.store.CheckChatHistoryReadiness(context.Background(), f.sid), "class=%s: after five uncounted attempts the heal still recovers", class)
+	require.Len(t, selfHealEvents(t, logs, f.sid, selfHealBadLog), 5)
+	ok := selfHealEvents(t, logs, f.sid, selfHealOKLog)
+	require.Len(t, ok, 1)
+	selfHealRequireLogBase(t, ok[0], f.sid, 6)
+	wantWrites := int64(5)
 	if class == "busy" {
-		wantBuilds = 0
+		wantWrites = 0
 	}
-	require.Equal(t, wantBuilds, builds.Load())
-	require.Equal(t, wantBuilds, writes.Load())
-	require.Zero(t, len(chatHistoryHealSlot), "neither failed builds nor latch checks may leak a heal slot")
-	require.Empty(t, selfHealEvents(t, logs, f.sid, selfHealOKLog))
-	require.Equal(t, before, historyTree(t, historyIndexDir(f.store, f.sid)))
+	require.Equal(t, wantWrites, writes.Load())
+	require.Zero(t, len(chatHistoryHealSlot), "neither failed builds nor the heal may leak a heal slot")
+	owner := f.store.historyOwner(f.sid)
+	owner.mu.Lock()
+	state := owner.heal
+	owner.mu.Unlock()
+	require.Equal(t, chatHistoryHealState{}, state, "success clears the attempt state")
+	selfHealRequireIndexed(t, f)
 	selfHealRequirePrivateLogs(t, logs, f)
 }
 

@@ -176,6 +176,7 @@ func TestChatHistoryHeal_PostPublicationDeadlineIsTransientAndKeepsPublishedInde
 					selfHealRequireLogBase(t, warning, f.sid, int64(i+1))
 					require.Equal(t, "deadline", warning["class"], "post-publication expiry is NOT permanent readiness failure")
 					require.Equal(t, "after_backoff", warning["retry"], "design §§1,4: deadline attempts 1 and 2 remain retryable")
+					require.Contains(t, warning["cause"], "deadline exceeded", "6a H1: the readiness-deadline branch keeps the proof error as its cause")
 				}
 				select {
 				case chatHistoryHealSlot <- struct{}{}:

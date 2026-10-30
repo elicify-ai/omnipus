@@ -14,8 +14,7 @@ import (
 )
 
 // Issue #1470: after a calendar-day change a chat's history stops loading
-// ("This conversation's history could not be loaded. Try again
-// later."). The saved conversation is intact; the derived index stops updating.
+// ("This conversation's history could not be loaded."). The saved conversation is intact; the derived index stops updating.
 //
 // The sequence: a session that is still EMPTY when a gateway boot stamps it
 // with a day, and that receives its first message on a LATER UTC day. The
