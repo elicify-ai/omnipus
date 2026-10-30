@@ -145,10 +145,26 @@ func (r *historyPageRequest) weigh(ctx context.Context, p session.ChatHistoryPag
 	}
 	return weight, nil
 }
+
+// historyPreparationLimit bounds concurrent history page preparations per
+// process, so the near-admission working set is held at most this many times.
+const historyPreparationLimit = 2
+
+var historyPreparationSlots = make(chan struct{}, historyPreparationLimit)
+
 func (r *historyPageRequest) Read(ctx context.Context, store *session.UnifiedStore) (preparedHistoryPage, error) {
 	if store == nil {
 		return preparedHistoryPage{}, historyProjectionError(errors.New("history store unavailable"))
 	}
+	// At most historyPreparationLimit page preparations run at once in this
+	// process; others wait for a slot until their request ends, and are
+	// never refused (A2.8, founder decision 2026-10-30).
+	select {
+	case historyPreparationSlots <- struct{}{}:
+	case <-ctx.Done():
+		return preparedHistoryPage{}, ctx.Err()
+	}
+	defer func() { <-historyPreparationSlots }()
 	defer func() { r.memo = nil; r.media = nil; r.lifecycle = nil }()
 	r.reset("")
 	r.sessionTokensTotal = store.ReadSessionTokensTotal(r.sessionID)
