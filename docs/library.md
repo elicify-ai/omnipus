@@ -61,7 +61,9 @@ An open Library keeps its folder view up to date on its own. While the panel is 
 
 The re-checking pauses while the panel is closed, the tab is in the background, or the window is not focused, and resumes when you come back. If a re-check cannot reach the server, the list simply stays as it is — no error pops up — and the next successful re-check brings it current again.
 
-One deliberate limit: a file you have **open** in the preview pane is not live-updated. What you see stays as it was when you opened it, and your unsaved edits are never replaced. Switch away from the tab and back (or close and reopen the file) to pick up the latest version.
+If a refresh of the folder you are viewing fails while its list is already shown — for example while a file you opened is being looked up — the Library says so: a banner above the list explains that the folder could not be refreshed, with a Retry button. The list itself stays on screen.
+
+One deliberate limit: a file you have **open** in the preview pane is not live-updated. What you see stays as it was when you opened it, and your unsaved edits are never replaced. Switching to another tab and back does not refresh it either — to pick up the latest version of an open file, close and reopen it (if you have unsaved edits, the Library asks what to do with them first).
 
 ## How to add files
 

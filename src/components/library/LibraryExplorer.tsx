@@ -99,6 +99,7 @@ import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { LibrarySearchBar } from './search/LibrarySearchBar'
 import { useLibraryCrossTabRefresh } from './useLibraryCrossTabRefresh'
 import { LIBRARY_AUTO_REFRESH_INTERVAL_MS, useLibraryAutoRefresh } from './useLibraryAutoRefresh'
+import { handleAuthError } from '@/lib/queryClient'
 import { ListPreviewLayout, ListPreviewRegion } from '@/components/panel-shell/ListPreviewLayout'
 import {
   confirmDiscardLibraryEdits,
@@ -453,23 +454,60 @@ export function LibraryExplorer({
 
   // The re-check timer itself. One interval for the ONE listing on screen —
   // the browsed folder's entries with a workspace open, the workspaces list
-  // at the virtual root — driven through that query's own cache entry so the
-  // fetch, dedupe and error-keeping stay TanStack's. R4: quiet by
-  // construction — a background re-fetch keeps `data` mounted (the listing's
-  // error states below are keyed on the ABSENCE of data, the D-98 rule
-  // LibraryPreviewPane applies to the file body), a tick landing while the
-  // previous re-fetch is still in flight is SKIPPED rather than stacked, and
-  // a failed tick raises no toast — the view simply stays as it was. The
-  // interval is torn down whenever the gate goes false (panel closed, tab
-  // hidden, window unfocused) and rebuilt when it returns.
+  // at the virtual root. R4: quiet by construction, with three guards:
+  //
+  // - NO STACKING: a tick is skipped while any re-fetch of this listing is
+  //   already running — our own previous tick, the refresh-on-open, the
+  //   D-107 focus refresh, or a user Retry.
+  // - CACHED LISTINGS ONLY (gate-1 SF-2): the tick re-checks a listing that
+  //   is ON SCREEN. A folder whose first load FAILED has no cached listing
+  //   to refresh — re-driving it from here would flip its stable error+Retry
+  //   state into a loading skeleton on every tick. First-load recovery stays
+  //   with the visible Retry button and the D-107 focus refresh.
+  // - ONE ATTEMPT, WRITTEN STRAIGHT INTO THE CACHE (gate-1 CR-1/SF-3 +
+  //   SF-4): deliberately NOT refetchQueries/fetchQuery. Those run inside
+  //   this query's production retry policy — up to three further requests at
+  //   1s/2s/4s that keep firing after the gate has closed the interval (the
+  //   window blurred, the panel closed) — and they dispatch a failure into
+  //   the query cache, where the global schema-error subscriber toasts. A
+  //   timer tick owns neither of those surfaces: it makes ONE plain request
+  //   and hands the result to setQueryData. The next eligible tick — 10 s
+  //   later, while the gate still holds — is its retry; a 401 is still
+  //   forwarded to the global confirm-before-logout handler, and a schema
+  //   failure never poisons the cache (the throw happens before setQueryData,
+  //   so the old listing stays).
+  //
+  // The interval is torn down whenever the gate goes false (panel closed,
+  // tab hidden, window unfocused) and rebuilt when it returns.
   useEffect(() => {
     if (!autoRefresh) return
     const listingKey = workspaceId !== null
       ? libraryQueryKeys.entries(workspaceId, browsedDir, includeHidden)
       : libraryQueryKeys.workspaces()
+    let tickInFlight = false
     const timer = setInterval(() => {
-      if (queryClient.getQueryState(listingKey)?.fetchStatus === 'fetching') return
-      void queryClient.refetchQueries({ queryKey: listingKey, exact: true })
+      const state = queryClient.getQueryState(listingKey)
+      if (tickInFlight || !state || state.fetchStatus !== 'idle') return
+      if (state.data === undefined) return
+      tickInFlight = true
+      const fetchListing: () => Promise<LibraryEntry[] | LibraryWorkspaceNode[]> =
+        workspaceId !== null
+          ? () => fetchLibraryEntries(workspaceId, browsedDir, includeHidden)
+          : fetchLibraryWorkspaces
+      fetchListing()
+        .then((data) => {
+          tickInFlight = false
+          queryClient.setQueryData(listingKey, data)
+        })
+        .catch((err: unknown) => {
+          tickInFlight = false
+          void handleAuthError(err)
+          console.warn('[library] background re-check failed; keeping the on-screen listing', {
+            workspace: workspaceId,
+            folder: browsedDir,
+            error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+          })
+        })
     }, LIBRARY_AUTO_REFRESH_INTERVAL_MS)
     return () => clearInterval(timer)
   }, [autoRefresh, workspaceId, browsedDir, includeHidden, queryClient])
@@ -1274,14 +1312,17 @@ export function LibraryExplorer({
           // true only once a workspace is open.
           <LibrarySearchBar workspaceId={null} folderPath="" onOpenNote={() => {}}>
             {workspacesQuery.isLoading && <ListSkeleton />}
-            {/* R4 (quiet background re-checks): the error state is for a
-                folder that could not be loaded AT ALL — keyed on the ABSENCE
-                of data, exactly the D-98 rule LibraryPreviewPane applies to
-                the file body. With `isError` alone, a failed background tick
-                (TanStack keeps `data` but flips `isError`) replaced the rows
-                on screen with the failure screen; a stale-but-present
-                listing keeps rendering and the next successful tick updates
-                it. */}
+            {/* R4/gate-1: this error state is for a listing that could not be
+                loaded AT ALL — keyed on the ABSENCE of data (the D-98 rule
+                LibraryPreviewPane applies to the file body). Timer ticks never
+                produce this state (they write into the cache directly and
+                keep their failures quiet), but an explicit re-fetch that runs
+                with cached data can — and with cached rows present, replacing
+                them wholesale would throw away the view. The rows stay; the
+                folder branch below surfaces an EXPLICIT refresh's failure as
+                its own notice. The workspaces list has no explicit-open flow
+                (refreshKey settles immediately at the virtual root), so it
+                keeps no notice of its own. */}
             {workspacesQuery.data === undefined && workspacesQuery.isError && (
               <QueryErrorState
                 layout="fill"
@@ -1343,9 +1384,36 @@ export function LibraryExplorer({
             }}
           >
             {entriesQuery.isLoading && <ListSkeleton />}
-            {/* R4 — see the workspaces block above: keyed on the ABSENCE of
-                data (D-98's rule) so a failed background tick keeps the rows
-                on screen instead of replacing them with the failure state. */}
+            {/* gate-1 SF-1 — an EXPLICIT refresh failure is never silent.
+                The quiet-failure exception belongs to TIMER ticks (above);
+                when the refresh an open/deep-link started FAILS while a
+                cached listing is on screen, the user asked for something the
+                stale rows cannot show (the file they opened is often not in
+                them, and `deepLinkUnresolved` will not claim "not found" from
+                a failed listing). The rows stay put; this notice explains and
+                offers Retry. It is DERIVED, not stored: it appears the moment
+                the listing's last explicit re-fetch failed with data present,
+                and clears itself when any re-fetch succeeds (a Retry, a later
+                tick, the focus refresh). A failed
+                timer tick never produces it — ticks don't dispatch errors
+                into the query cache. */}
+            {entriesQuery.isError && entriesQuery.data !== undefined && (
+              <div data-testid="library-open-refresh-error" className="flex flex-col gap-[var(--space-1)]">
+                <LibraryErrorBanner message="Could not refresh this folder — the list below may be out of date." />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => void entriesQuery.refetch()}
+                  data-testid="library-open-refresh-retry"
+                  className="h-auto w-full justify-start px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
+                >
+                  Retry refresh
+                </Button>
+              </div>
+            )}
+            {/* R4/gate-1 — see the workspaces block above: keyed on the
+                ABSENCE of data, so a listing that never loaded shows its
+                retryable failure state. */}
             {entriesQuery.data === undefined && entriesQuery.isError && (
               <QueryErrorState
                 layout="fill"
