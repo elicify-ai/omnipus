@@ -13,6 +13,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import type { Session } from '@/lib/api'
 import { ApiError } from '@/lib/api-error'
 import { resolveWorkspaceEntry, workspaceEntryBlocksSend, type EmptyTeamEntry, type EntryResult, type EntryTeam, type FailedAttempt, type PointerVerdict, type WelcomeEntry } from '@/lib/nav/workspaceEntry'
+import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { clearPendingAutoApproveOnSessionChange, knownSessionDescriptor, readPersistedSessionByWorkspace, useSessionStore } from '@/store/session'
@@ -29,7 +30,16 @@ let navigationIntent = 0
 const inFlight = new Map<string, { linkedSessionId: string | undefined; job: Promise<void> }>()
 const resolvingIntent = new Map<string, number>()
 const visibilityWaiters = new Set<() => void>()
+const socketWaiters = new Set<() => void>()
 let resumeQueuedSends: (() => void) | null = null
+
+/**
+ * Longest an entry waits for a socket that is still opening before it attaches
+ * anyway and, if that still cannot send, reports the ordinary failed attempt with
+ * Retry (see waitForSocketOpen). A handshake takes a round trip or two; this is a
+ * safety bound against a hang, not an expected delay.
+ */
+const SOCKET_OPEN_WAIT_MS = 15_000
 
 /** The chat store registers without introducing a session/chat import cycle. */
 export function registerWorkspaceEntryQueueResume(resume: () => void): void {
@@ -47,6 +57,9 @@ export function supersedeNavigationIntent(): number {
   navigationIntent += 1
   // Release superseded hidden entries so their listeners/in-flight jobs end.
   for (const finish of visibilityWaiters) finish()
+  // Likewise an entry waiting for its socket: a lingering job would also make a
+  // return to the same workspace re-use it (runWorkspaceEntry's in-flight map).
+  for (const finish of socketWaiters) finish()
   return navigationIntent
 }
 
@@ -69,6 +82,54 @@ function waitForEntryVisibility(token: number): Promise<void> {
 
 export function navigationIntentCurrent(token: number): boolean {
   return token === navigationIntent
+}
+
+/**
+ * True while the chat socket exists and its handshake has not finished. Strictly
+ * `true`: no connection at all (attachToSession records the chat offline), a socket
+ * that is down or waiting out a reconnect backoff, and a connection object that does
+ * not report readiness all keep the immediate attach and its ordinary failure path.
+ */
+function socketIsOpening(): boolean {
+  return useConnectionStore.getState().connection?.isConnecting === true
+}
+
+/**
+ * A freshly loaded page publishes its WsConnection BEFORE the socket has opened
+ * (OmnipusRuntimeProvider.tsx::WsLifecycle), and the entry's REST loads can finish
+ * first. WsConnection.send() returns false on a socket that is not OPEN, so an
+ * attach made now reports "connected but cannot send": the entry would latch
+ * "Could not restore your last conversation" and nothing would retry it when the
+ * socket opens a moment later (#1449). An entry that is about to attach therefore
+ * waits for its socket, the way sessions.$sessionId.tsx gates its attach on `wsOpen`.
+ *
+ * The caller resumes after WsLifecycle.onConnected has run to the end (this promise
+ * settles from the connection store update inside it, and the continuation is a
+ * microtask), so its connect-time reattachActiveSession - which only re-binds an
+ * already active session - has found nothing to re-bind and the attach that follows
+ * sets the chat's type and agent itself.
+ *
+ * Bounded by SOCKET_OPEN_WAIT_MS; a newer navigation intent releases the wait early.
+ * Either way the caller attaches next and any failure is reported as before.
+ */
+function waitForSocketOpen(token: number, workspaceId: string): Promise<void> {
+  if (!socketIsOpening() || !navigationIntentCurrent(token)) return Promise.resolve()
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer)
+      unsubscribe()
+      socketWaiters.delete(finish)
+      resolve()
+    }
+    const unsubscribe = useConnectionStore.subscribe(() => {
+      if (!socketIsOpening()) finish()
+    })
+    const timer = setTimeout(() => {
+      logDiagnostic('sessionWorkspaceEntrySocketWaitTimedOut', { workspaceId })
+      finish()
+    }, SOCKET_OPEN_WAIT_MS)
+    socketWaiters.add(finish)
+  })
 }
 
 function rememberedId(workspaceId: string): string | null | undefined {
@@ -335,12 +396,6 @@ async function execute(workspaceId: string, linkedSessionId?: string): Promise<v
     }
     if (!navigationIntentCurrent(token)) return
     const loaded = await loadInputs(workspaceId, remembered, typeof linked === 'string')
-    // The tab may have become hidden while the network requests were in flight.
-    while (typeof document !== 'undefined' && document.hidden && navigationIntentCurrent(token)) {
-      await waitForEntryVisibility(token)
-    }
-    if (!navigationIntentCurrent(token)) return
-    if (useSessionStore.getState().sessionByWorkspace[workspaceId] !== descriptorAtStart) return
     // A missing explicit link is an error, not permission to open the team's
     // main chat. Ordinary remembered-pointer entry keeps its existing fallback.
     const linkedUnavailable = linked && ['deleted', 'hidden', 'forbidden'].includes(loaded.pointerVerdict)
@@ -355,6 +410,16 @@ async function execute(workspaceId: string, linkedSessionId?: string): Promise<v
         team: loaded.team,
         committed,
       })
+    // Only an entry that attaches a chat (applyEntry) needs the socket; a failure,
+    // unavailable or empty-team entry must still report at once.
+    if (result.status === 'exact' || result.status === 'welcome') await waitForSocketOpen(token, workspaceId)
+    // The tab may have become hidden while the network requests were in flight or
+    // the socket was opening.
+    while (typeof document !== 'undefined' && document.hidden && navigationIntentCurrent(token)) {
+      await waitForEntryVisibility(token)
+    }
+    if (!navigationIntentCurrent(token)) return
+    if (useSessionStore.getState().sessionByWorkspace[workspaceId] !== descriptorAtStart) return
     applyEntry(workspaceId, result, loaded.sessions, token, linked ?? undefined)
   } catch (error) {
     // Not a network failure (loadInputs absorbs those): something threw. Never
