@@ -37,11 +37,21 @@ func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
 		}
 		roots = append(roots, filepath.Clean(p))
 	}
+	// addHome adds a runtime-resolved agent home and, when it differs, its
+	// whitespace-trimmed spelling: the runtime trims a per-agent home but uses
+	// the default home as written, and other components read the trimmed
+	// form, so both spellings are refused (extra roots only ever refuse more).
+	addHome := func(p string) {
+		add(p)
+		if t := strings.TrimSpace(p); t != p {
+			add(agenthome.ExpandHome(t))
+		}
+	}
 	add(home)
 	if cfg != nil {
-		add(agenthome.Resolve(nil, &cfg.Agents.Defaults))
+		addHome(agenthome.Resolve(nil, &cfg.Agents.Defaults))
 		for i := range cfg.Agents.List {
-			add(agenthome.Resolve(&cfg.Agents.List[i], &cfg.Agents.Defaults))
+			addHome(agenthome.Resolve(&cfg.Agents.List[i], &cfg.Agents.Defaults))
 		}
 	}
 	ids, err := workspace.ListWorkspaceIDs(home)
