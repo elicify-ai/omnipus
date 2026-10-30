@@ -895,23 +895,47 @@ type MarshalErrorResult struct {
 	MarshalError string `json:"_marshal_error"`
 }
 
-// MediaFrame — Server → client media attachments. parts MUST be a non-empty array (never null) — nil-safety contract to prevent parts.map() crash. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
+// MediaFrame — Server → client media attachments. parts MUST be an array (never null) — nil-safety contract to prevent parts.map() crash — and non-empty except for an unavailable page_thumbnails frame (see parts). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced. Office preview (office-preview spec §5.2): preview_document thumbnails arrive one frame per tool call with tool_call_id, presentation "page_thumbnails" and a preview record; live, replay and history producers emit the same projection.
 type MediaFrame struct {
 	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
-	Parts         []MediaPart         `json:"parts"`
+	// Never null. Non-empty except when presentation is "page_thumbnails" and preview.outcome is "unavailable"; the server guarantees this cross-field rule. At most 32 parts.
+	Parts []MediaPart `json:"parts"`
+	// "inline" (default when absent) = today's inline media. "page_thumbnails" = one document-preview thumbnail group in page order.
+	Presentation *string       `json:"presentation,omitempty"`
+	Preview      *MediaPreview `json:"preview,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/MediaFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
+	// Id of the tool call that produced these media; grouping key (with the message) for page_thumbnails frames. A preview Retry result arrives as a new frame with the same tool_call_id. Absent on ungrouped inline media.
+	ToolCallId *string `json:"tool_call_id,omitempty"`
+	Type       string  `json:"type"`
 }
 
 // MediaPart — One media attachment.
 type MediaPart struct {
+	// Display text only, never parsed (page thumbnails: "report.docx · page 3 of 12"). Keep in sync by hand with contracts/components/schemas/MediaPart.yaml.
 	Caption     *string `json:"caption,omitempty"`
 	ContentType string  `json:"content_type"`
 	Filename    string  `json:"filename"`
-	Type        string  `json:"type"`
-	Url         string  `json:"url"`
+	// 1-based source page shown by this part. Present on parts of a page_thumbnails MediaFrame; absent otherwise.
+	PageNumber *int   `json:"page_number,omitempty"`
+	Type       string `json:"type"`
+	Url        string `json:"url"`
+}
+
+// MediaPreview — Document-preview record on a page_thumbnails MediaFrame (office-preview spec §5.2): the previewed source and the thumbnail outcome for the person, independent of what the model received. complete = every page in first_page..last_page stored; partial = some stored; unavailable = none (parts may be empty, unavailable_reason present). Keep in sync by hand with contracts/components/schemas/MediaPreview.yaml.
+type MediaPreview struct {
+	FirstPage int `json:"first_page"`
+	// Server guarantees first_page <= last_page <= page_count and last_page - first_page < 20.
+	LastPage  int    `json:"last_page"`
+	Outcome   string `json:"outcome"`
+	PageCount int    `json:"page_count"`
+	// Display name of the previewed file (base name).
+	SourceName string `json:"source_name"`
+	// First 12 lowercase hex characters of the source SHA-256 at preview time.
+	SourceVersion string `json:"source_version"`
+	// Present iff outcome is "unavailable".
+	UnavailableReason *string `json:"unavailable_reason,omitempty"`
 }
 
 // MessageFrame — Client → server user chat message. Omit session_id to start a new session; include to continue an existing one. content must always be present as a key, but MAY be an empty string when media is also present and non-empty — an attachment-only send legitimately has no caption (UAT Issue 5). The anyOf below enforces the actual invariant: content has at least 1 character, OR media has at least 1 entry — a message with neither is still rejected.

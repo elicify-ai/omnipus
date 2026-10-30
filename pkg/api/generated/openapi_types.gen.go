@@ -8228,6 +8228,21 @@ func (e PlatformAuthStartRequestMethod) Valid() bool {
 	}
 }
 
+// Defines values for PreviewRetryResponseStatus.
+const (
+	PreviewRetryResponseStatusStarted PreviewRetryResponseStatus = "started"
+)
+
+// Valid indicates whether the value is a known member of the PreviewRetryResponseStatus enum.
+func (e PreviewRetryResponseStatus) Valid() bool {
+	switch e {
+	case PreviewRetryResponseStatusStarted:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProbeProviderRequestAuth.
 const (
 	ProbeProviderRequestAuthApiKey ProbeProviderRequestAuth = "api_key"
@@ -22442,6 +22457,15 @@ type PlatformAuthStartResponse struct {
 	// State The single-use, 10-minute anti-forgery value the platform will echo back to /auth/callback. Keep it in memory for as long as the sign-in is in progress: for the 60 seconds after a successful callback it is also what POST /auth/platform/claim accepts to hand the resulting session to the application, so during that window it IS a credential. Do not store it, log it or show it.
 	State string `json:"state"`
 }
+
+// PreviewRetryResponse 202 body of POST /sessions/{session_id}/previews/{tool_call_id}/retry (office-preview spec §5.2). The retry was admitted and started; its result arrives asynchronously as a new MediaFrame (presentation "page_thumbnails") carrying the same tool_call_id, never in this response.
+type PreviewRetryResponse struct {
+	// Status Always "started" for an admitted retry.
+	Status PreviewRetryResponseStatus `json:"status"`
+}
+
+// PreviewRetryResponseStatus Always "started" for an admitted retry.
+type PreviewRetryResponseStatus string
 
 // ProbeProviderRequest Body for POST /onboarding/probe-provider. Validates credentials against a provider and returns the probed model. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. ONE shape, owned by ADR-067 (id, api_base, protocol) and ADR-068 (auth, api_key, model) — see ADR-067 FR-023 / ADR-068 FR-036. Runtime rules the schema cannot express: id must be in the served catalog OR be accompanied by both api_base and protocol (a custom row) — otherwise 400 naming the field id with the message 'unknown provider "<id>"' and never a list of accepted ids; the reserved literals "catalog" and "default-model" are never valid ids; api_key is required iff auth is api_key (400 naming api_key) and must be absent with auth sign_in; a tier "unsupported" provider → 400 with its unsupported_reason; any api_base passes the SSRF gate (422 when blocked).
 type ProbeProviderRequest struct {

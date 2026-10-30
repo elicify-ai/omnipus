@@ -34,4 +34,14 @@ properties:
     description: MIME type of the file (e.g., "image/png").
   caption:
     type: string
-    description: Optional human-readable caption for display below the media.
+    description: >
+      Optional human-readable caption for display below the media. Display
+      text only — clients never parse it (for page thumbnails it reads like
+      "report.docx · page 3 of 12"; the page number travels in page_number).
+  page_number:
+    type: integer
+    minimum: 1
+    description: >
+      1-based page number of the source document this part shows. Present on
+      parts of a MediaFrame whose presentation is "page_thumbnails"; absent
+      otherwise.

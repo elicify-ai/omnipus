@@ -5503,13 +5503,78 @@ components:
           minLength: 1
         caption:
           type: string
+          description: >
+            Display text only, never parsed (page thumbnails: "report.docx · page 3
+            of 12"). Keep in sync by hand with contracts/components/schemas/MediaPart.yaml.
+        page_number:
+          type: integer
+          minimum: 1
+          description: >
+            1-based source page shown by this part. Present on parts of a
+            page_thumbnails MediaFrame; absent otherwise.
+    MediaPreview:
+      title: MediaPreview
+      description: >
+        Document-preview record on a page_thumbnails MediaFrame (office-preview
+        spec §5.2): the previewed source and the thumbnail outcome for the person,
+        independent of what the model received. complete = every page in
+        first_page..last_page stored; partial = some stored; unavailable = none
+        (parts may be empty, unavailable_reason present). Keep in sync by hand
+        with contracts/components/schemas/MediaPreview.yaml.
+      type: object
+      required:
+        - source_name
+        - source_version
+        - page_count
+        - first_page
+        - last_page
+        - outcome
+      additionalProperties: false
+      properties:
+        source_name:
+          type: string
+          minLength: 1
+          description: Display name of the previewed file (base name).
+        source_version:
+          type: string
+          pattern: '^[0-9a-f]{12}$'
+          description: First 12 lowercase hex characters of the source SHA-256 at preview time.
+        page_count:
+          type: integer
+          minimum: 1
+        first_page:
+          type: integer
+          minimum: 1
+        last_page:
+          type: integer
+          minimum: 1
+          description: Server guarantees first_page <= last_page <= page_count and last_page - first_page < 20.
+        outcome:
+          type: string
+          enum:
+            - complete
+            - partial
+            - unavailable
+        unavailable_reason:
+          type: string
+          enum:
+            - renderer_missing
+            - renderer_damaged
+            - renderer_failed
+            - storage_failed
+          description: Present iff outcome is "unavailable".
     MediaFrame:
       title: MediaFrame
       description: >
-        Server → client media attachments. parts MUST be a non-empty array (never
-        null) — nil-safety contract to prevent parts.map() crash. Session-scoped
+        Server → client media attachments. parts MUST be an array (never null) —
+        nil-safety contract to prevent parts.map() crash — and non-empty except
+        for an unavailable page_thumbnails frame (see parts). Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057
-        W5 audit (FR-089) — genuinely child-turn-produced.
+        W5 audit (FR-089) — genuinely child-turn-produced. Office preview
+        (office-preview spec §5.2): preview_document thumbnails arrive one frame
+        per tool call with tool_call_id, presentation "page_thumbnails" and a
+        preview record; live, replay and history producers emit the same
+        projection.
       type: object
       required:
       - type
@@ -5527,10 +5592,32 @@ components:
           minLength: 1
         parts:
           type: array
-          minItems: 1
+          minItems: 0
           maxItems: 32
           items:
             $ref: '#/components/schemas/MediaPart'
+          description: >
+            Never null. Non-empty except when presentation is "page_thumbnails"
+            and preview.outcome is "unavailable"; the server guarantees this
+            cross-field rule. At most 32 parts.
+        tool_call_id:
+          type: string
+          minLength: 1
+          description: >
+            Id of the tool call that produced these media; grouping key (with the
+            message) for page_thumbnails frames. A preview Retry result arrives as
+            a new frame with the same tool_call_id. Absent on ungrouped inline media.
+        presentation:
+          type: string
+          enum:
+            - inline
+            - page_thumbnails
+          default: inline
+          description: >
+            "inline" (default when absent) = today's inline media. "page_thumbnails"
+            = one document-preview thumbnail group in page order.
+        preview:
+          $ref: '#/components/schemas/MediaPreview'
         seq:
           type: integer
           format: int64

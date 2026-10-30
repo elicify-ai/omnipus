@@ -244,6 +244,8 @@ components:
       $ref: ./components/schemas/SessionDetail.yaml
     SessionHistoryResponse:
       $ref: ./components/schemas/SessionHistoryResponse.yaml
+    PreviewRetryResponse:
+      $ref: ./components/schemas/PreviewRetryResponse.yaml
     # Shared page/context/origin/readiness schemas live in component files and
     # are generated as named Go/WS types by their inline AsyncAPI mirrors.
     # Cross-file x-go-type refs reuse those types without duplicate declarations.
@@ -3386,6 +3388,82 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+  /sessions/{session_id}/previews/{tool_call_id}/retry:
+    post:
+      operationId: retrySessionPreview
+      summary: Retry the page thumbnails of a document preview
+      description: >
+        Re-renders the page thumbnails of one earlier preview_document call
+        (office-preview spec §5.2, §5.3; FQ2 r2 A) when its thumbnail outcome
+        was unavailable or partial. Same limits and admission as the tool;
+        authorization is the requesting person's access to the session AND the
+        preview's source file. The source must be unchanged: its current
+        SHA-256 (first 12 hex) must equal the recorded MediaPreview.source_version.
+        Returns 202 once the retry is admitted and started; the result arrives
+        asynchronously as a new MediaFrame (presentation "page_thumbnails") with
+        the same tool_call_id, never in this response. No request body.
+      tags:
+      - sessions
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Session that contains the preview_document call.
+      - name: tool_call_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Id of the preview_document tool call (MediaFrame.tool_call_id).
+      responses:
+        '202':
+          description: Retry admitted and started; the result arrives as a MediaFrame.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewRetryResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: >
+            The requester has no access to the session or to the preview's source
+            file (ErrorResponse; the source path is never echoed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Unknown preview (no preview_document call with this id in the session).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            The source file changed since the preview: ErrorResponse.code is exactly
+            "preview_source_changed" (current digest differs from source_version).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          description: >
+            The PDF renderer is not installed, damaged or disabled: ErrorResponse.code
+            is exactly "preview_renderer_unavailable".
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /agents:
     get:
       operationId: listAgents

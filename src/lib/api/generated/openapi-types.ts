@@ -416,6 +416,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions/{session_id}/previews/{tool_call_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry the page thumbnails of a document preview
+         * @description Re-renders the page thumbnails of one earlier preview_document call (office-preview spec §5.2, §5.3; FQ2 r2 A) when its thumbnail outcome was unavailable or partial. Same limits and admission as the tool; authorization is the requesting person's access to the session AND the preview's source file. The source must be unchanged: its current SHA-256 (first 12 hex) must equal the recorded MediaPreview.source_version. Returns 202 once the retry is admitted and started; the result arrives asynchronously as a new MediaFrame (presentation "page_thumbnails") with the same tool_call_id, never in this response. No request body.
+         */
+        post: operations["retrySessionPreview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agents": {
         parameters: {
             query?: never;
@@ -4825,6 +4845,17 @@ export interface components {
             /** @description Present iff has_later, equal to the last selected history_position. */
             next_after?: string;
             page_info: components["schemas"]["SessionHistoryPageInfo"];
+        };
+        /**
+         * PreviewRetryResponse
+         * @description 202 body of POST /sessions/{session_id}/previews/{tool_call_id}/retry (office-preview spec §5.2). The retry was admitted and started; its result arrives asynchronously as a new MediaFrame (presentation "page_thumbnails") carrying the same tool_call_id, never in this response.
+         */
+        PreviewRetryResponse: {
+            /**
+             * @description Always "started" for an admitted retry.
+             * @enum {string}
+             */
+            status: "started";
         };
         /**
          * SessionPage
@@ -19518,6 +19549,69 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    retrySessionPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session that contains the preview_document call. */
+                session_id: string;
+                /** @description Id of the preview_document tool call (MediaFrame.tool_call_id). */
+                tool_call_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Retry admitted and started; the result arrives as a MediaFrame. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewRetryResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description The requester has no access to the session or to the preview's source file (ErrorResponse; the source path is never echoed). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unknown preview (no preview_document call with this id in the session). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The source file changed since the preview: ErrorResponse.code is exactly "preview_source_changed" (current digest differs from source_version). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description The PDF renderer is not installed, damaged or disabled: ErrorResponse.code is exactly "preview_renderer_unavailable". */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     listAgents: {
         parameters: {
             query?: never;
@@ -27797,6 +27891,7 @@ export type AgentActivityRun = components["schemas"]["AgentActivityRun"];
 export type SessionStats = components["schemas"]["SessionStats"];
 export type SessionDetail = components["schemas"]["SessionDetail"];
 export type SessionHistoryResponse = components["schemas"]["SessionHistoryResponse"];
+export type PreviewRetryResponse = components["schemas"]["PreviewRetryResponse"];
 export type SessionPage = components["schemas"]["SessionPage"];
 export type SessionCreateRequest = components["schemas"]["SessionCreateRequest"];
 export type SessionRenameRequest = components["schemas"]["SessionRenameRequest"];

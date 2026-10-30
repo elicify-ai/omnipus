@@ -782,6 +782,19 @@ export const MediaPart = z
     filename: z.string().min(1),
     content_type: z.string().min(1),
     caption: z.string().optional(),
+    page_number: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const MediaPreview = z
+  .object({
+    source_name: z.string().min(1),
+    source_version: z.string().regex(/^[0-9a-f]{12}$/),
+    page_count: z.number().int().min(1),
+    first_page: z.number().int().min(1),
+    last_page: z.number().int().min(1),
+    outcome: z.enum(["complete", "partial", "unavailable"]),
+    unavailable_reason: z.enum(["renderer_missing", "renderer_damaged", "renderer_failed", "storage_failed"]).optional(),
   })
   .strict();
 
@@ -790,7 +803,10 @@ export const MediaFrame = z
     history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("media"),
     session_id: z.string().min(1),
-    parts: z.array(MediaPart).min(1).max(32),
+    parts: z.array(MediaPart).min(0).max(32),
+    tool_call_id: z.string().min(1).optional(),
+    presentation: z.enum(["inline", "page_thumbnails"]).optional(),
+    preview: MediaPreview.optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
