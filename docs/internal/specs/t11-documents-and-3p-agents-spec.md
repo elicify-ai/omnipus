@@ -194,7 +194,7 @@ Provider/model for agent-driven rows: `openrouter` + `deepseek/deepseek-v4.1-fla
 
 | Item | Where it goes |
 |---|---|
-| #1489 PowerPoint→PDF (`convert_document`) | On hold; being redesigned as `preview_document` with installer-managed LibreOffice + pdfium |
+| #1489 PowerPoint→PDF (`convert_document`) | **Superseded 2026-10-30:** re-scoped and designed in *Built-in office-document preview (`preview_document`)*, `docs/internal/specs/office-preview-spec.md` on `landing/office-preview` (`e73402f05`); the `convert_document` design is retired and will not be built. ADR-090 carries the dated 2026-10-30 amendment (`ca5075e35`). |
 | `test_agent_runner` chat tool | Later; the existing Runtime-tab test buttons remain |
 | Three-part sign-in status and smoke-outcome reshaping | Later |
 | Diagnostic snapshot redesign (workspace authority, result identity, late-result ordering) | Later |
