@@ -457,7 +457,12 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 		stg.runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
 			triggerStorePath, tStore, agent.GetTaskExecutor(stg.agentLoop),
 		)
-		if startErr := stg.runningServices.TaskTrigger.Start(); startErr != nil {
+		// Physical boot, not a same-process start: a one-time trigger whose
+		// run the dead prior process had started is owed that run here, once
+		// (founder decision 2026-10-29, Q1 A; the task-trigger half of
+		// #1484). Gateway reload restarts this scheduler with plain Start —
+		// reload must never replay.
+		if startErr := stg.runningServices.TaskTrigger.StartAfterPhysicalBoot(); startErr != nil {
 			return nil, true, fmt.Errorf("error starting task trigger scheduler: %w", startErr)
 		}
 		stg.agentLoop.SetTaskTriggerScheduler(stg.runningServices.TaskTrigger)

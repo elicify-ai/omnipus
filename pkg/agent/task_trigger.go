@@ -26,8 +26,9 @@
 // Boot wiring (done by the gateway, NOT this file):
 //
 //	s := agent.NewTaskTriggerScheduler(storePath, taskStore, executor)
-//	s.Start()      // SetRunner(s) + cs.Start() + starts the recovery sweep ticker
-//	s.Reconcile()  // register jobs for all existing triggered tasks
+//	s.StartAfterPhysicalBoot() // process boot: dead-process restore + owed once-fire replay
+//	s.Start()                  // same-process start (reload): restore, no replay
+//	s.Reconcile()              // register jobs for all existing triggered tasks
 //
 // On task create/update: s.OnTaskUpserted(t)
 // On task delete:        s.OnTaskDeleted(taskID)
@@ -42,6 +43,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sync"
 	"time"
 
@@ -159,6 +161,35 @@ type TaskTriggerScheduler struct {
 	// has been silently dead. Guarded by mu; an ID is dropped once a scan no
 	// longer reports it (the file became readable again, or was deleted).
 	unreadableSweeps map[string]int
+
+	// bootOwedPending and bootOwedFire implement the boot-only start fix for
+	// crashed one-time triggers (founder decision 2026-10-29, Q1 A; the
+	// task-trigger half of #1484). A one-time fire the dead prior process had
+	// started but never finished is owed its run at the next boot. The
+	// engine's own physical-boot restore (#1484) re-arms the interrupted
+	// job, but every job here is DERIVED from the task store: the boot
+	// Reconcile immediately after Start re-derives each job and would
+	// replace the past-due armed fire with a not-due re-registration
+	// (computeNextRun gives a past at-job no next run), silently dropping
+	// the owed run again. markBootOwedFires records the interrupted jobs'
+	// task IDs while the dead process's Running flags are still on the
+	// store; confirmBootOwedFires — after the engine has cleared those flags
+	// and re-armed the owed jobs — blesses each tracked job that still
+	// matches its task's current trigger content with the bootOwedFire
+	// marker, which makes OnTaskUpserted's idempotency guard treat that
+	// exact job as armed so the reconcile cannot take the fire away.
+	//
+	// "Once, and only at boot": the marker exists only on the
+	// StartAfterPhysicalBoot path (a plain Start — gateway reload, same
+	// process — never sets it and replays nothing), it is consumed by the
+	// one owed fire (any later registration or removal clears it), and a
+	// trigger edited while the process was down never confirms — the edit
+	// wins. A fire that merely came due while down is not touched: it never
+	// had Running set, stays skipped, never replayed (docs/calendar.md).
+	// Both are guarded by mu; bootOwedPending lives only across the
+	// mark→engine-restore→confirm sequence of one physical boot.
+	bootOwedPending []string
+	bootOwedFire    map[string]bool
 }
 
 // NewTaskTriggerScheduler creates a scheduler that uses a dedicated CronService
@@ -166,10 +197,11 @@ type TaskTriggerScheduler struct {
 // dispatch function unless overridden (test seam: replace dispatch before Start).
 func NewTaskTriggerScheduler(storePath string, store *task.Store, executor *TaskExecutor) *TaskTriggerScheduler {
 	s := &TaskTriggerScheduler{
-		cs:        cron.NewCronService(storePath),
-		store:     store,
-		taskToJob: make(map[string]trackedTrigger),
-		clock:     systemClock{},
+		cs:           cron.NewCronService(storePath),
+		store:        store,
+		taskToJob:    make(map[string]trackedTrigger),
+		bootOwedFire: make(map[string]bool),
+		clock:        systemClock{},
 	}
 	if executor != nil {
 		s.dispatch = executor.SpawnTriggeredRun
@@ -181,6 +213,12 @@ func NewTaskTriggerScheduler(storePath string, store *task.Store, executor *Task
 // Start restores persisted task-to-job bindings and removes duplicate internal
 // jobs before the cron runner can fire, then starts the engine and recovery
 // sweep (Scheduler rule 6). Must be called once at boot, before Reconcile.
+//
+// Start is the same-process start: gateway reload calls it on a fresh
+// instance after the previous instance drained. Persisted Running flags then
+// belong to live lanes of the SAME process, so nothing is restored or
+// replayed — a crashed one-time fire is replayed only by
+// StartAfterPhysicalBoot.
 func (s *TaskTriggerScheduler) Start() error {
 	if err := s.restoreStoredJobs(); err != nil {
 		return err
@@ -191,6 +229,128 @@ func (s *TaskTriggerScheduler) Start() error {
 	}
 	s.startSweep()
 	return nil
+}
+
+// StartAfterPhysicalBoot is Start's physical-boot twin, mirroring
+// cron.CronService.StartAfterPhysicalBoot: this process follows a dead prior
+// one, so the persisted Running flags on the trigger store belong to a dead
+// process and are restored — and a one-time fire that dead process had
+// started but never finished is owed its run: the engine re-arms it due at
+// once, it runs exactly once, and only this boot path ever replays it
+// (founder decision 2026-10-29, Q1 A, "boot-only start fix for crashed
+// one-time triggers"; the task-trigger half of #1484 — dbee8a193 fixed the
+// user-schedules instance).
+//
+// More than the engine call is needed: the jobs here are derived from the
+// task store, and the boot Reconcile that follows this start re-derives each
+// job from its task. Without the bootOwedFire marker that reconcile would
+// replace the past-due armed fire with a not-due re-registration (a past
+// at-job gets no next run) and drop the owed run again. A one-time fire that
+// merely came due while Omnipus was down is NOT replayed — it never had
+// Running set and stays skipped, as docs/calendar.md states.
+//
+// Must be called at most once per instance (the engine rejects a second
+// physical-boot window) and before Reconcile, like Start.
+func (s *TaskTriggerScheduler) StartAfterPhysicalBoot() error {
+	if err := s.restoreStoredJobs(); err != nil {
+		return err
+	}
+	s.markBootOwedFires()
+	s.cs.SetRunner(s)
+	if err := s.cs.StartAfterPhysicalBoot(); err != nil {
+		return err
+	}
+	s.confirmBootOwedFires()
+	s.startSweep()
+	return nil
+}
+
+// markBootOwedFires records the task IDs whose trigger job is a one-time
+// ("at") fire the dead prior process had started without its outcome saved —
+// cron.InterruptedOneTimeFire on the store exactly as the death left it,
+// with Running still set. Must run BEFORE the engine's physical-boot restore
+// clears those flags (restoreStoredJobs has already loaded the store, and
+// the engine is not started yet, so the job slice is quiescent). Only jobs
+// in this scheduler's "task:<id>" payload shape are owed here; everything
+// else on this store is not a derived trigger job.
+func (s *TaskTriggerScheduler) markBootOwedFires() {
+	jobs := s.cs.ListJobs(true)
+	owed := make([]string, 0, len(jobs))
+	for i := range jobs {
+		job := &jobs[i]
+		if !cron.InterruptedOneTimeFire(job) {
+			continue
+		}
+		if id := job.Payload.Message; id != "" && job.Name == fmt.Sprintf("task:%s", id) {
+			owed = append(owed, id)
+		}
+	}
+	s.mu.Lock()
+	s.bootOwedPending = owed
+	s.mu.Unlock()
+	if len(owed) > 0 {
+		slog.Warn("task_trigger: one-time trigger was running when the previous process stopped; running it again at this boot",
+			"task_ids", owed)
+	}
+}
+
+// confirmBootOwedFires turns the pre-start bootOwedPending list into
+// bootOwedFire markers. It runs after the engine's physical-boot restore has
+// cleared the dead Running flags and re-armed the owed jobs, and blesses a
+// tracked job only when it still matches its task's CURRENT trigger content
+// — the same match restoreStoredJobs applies. A confirmed marker makes
+// OnTaskUpserted's idempotency guard treat the engine-armed owed job as
+// armed, so the boot reconcile cannot replace it with a not-due
+// re-derivation.
+//
+// No match means the trigger changed (or was removed, exhausted, or made
+// invalid) while the process was down: the edit wins, the task is left
+// unmarked and Reconcile re-derives its job from the new content. A
+// recurring (rrule) task never confirms — its persisted job carries the
+// interrupted occurrence, not the next one, so the content match fails and
+// the documented boot re-anchor to the next future occurrence stands.
+func (s *TaskTriggerScheduler) confirmBootOwedFires() {
+	s.mu.Lock()
+	pending := s.bootOwedPending
+	s.bootOwedPending = nil
+	s.mu.Unlock()
+
+	nowMs := s.now().UnixMilli()
+	for _, id := range pending {
+		s.mu.Lock()
+		tracked, ok := s.taskToJob[id]
+		s.mu.Unlock()
+		if !ok {
+			continue // task deleted or its job pruned while down: nothing to run
+		}
+		t, err := s.store.Get(id)
+		if err != nil {
+			continue // unreadable: Reconcile logs it and recovery retries later
+		}
+		if t.EffectiveSurface() == task.SurfaceHeartbeat ||
+			t.Trigger == nil || t.Trigger.Type == task.TriggerManual {
+			continue // no time trigger any more
+		}
+		if task.IsTerminal(t.Status) && !t.Trigger.IsRepeating() {
+			continue // a terminal non-repeating trigger is over; nothing is owed
+		}
+		sched, err := triggerToCronSchedule(t.Trigger, nowMs)
+		if err != nil {
+			continue // invalid or exhausted now: Reconcile retires it
+		}
+		spec := s.jobSpecFor(t, sched)
+		job, ok := s.cs.GetJob(tracked.jobID)
+		if !ok || !job.Enabled || job.State.Running ||
+			job.AgentID != spec.AgentID || job.Payload.Command != spec.Command ||
+			!reflect.DeepEqual(job.Schedule, sched) {
+			continue // trigger content changed while down: the edit wins
+		}
+		gen := triggerGeneration(t.Trigger)
+		s.mu.Lock()
+		s.taskToJob[id] = trackedTrigger{jobID: tracked.jobID, generation: gen}
+		s.bootOwedFire[id] = true
+		s.mu.Unlock()
+	}
 }
 
 // startSweep launches the recovery-sweep goroutine if it is not already
@@ -486,13 +646,23 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 
 	s.mu.Lock()
 	current, tracked := s.taskToJob[t.ID]
-	alreadyArmedUnchanged := tracked && current.generation == generation && s.isArmedLocked(t.ID, nowMs)
+	// A bootOwedFire marker means this exact job is the owed fire of a
+	// crashed one-time trigger, re-armed by the physical-boot restore and
+	// confirmed against this task's current trigger content. It counts as
+	// armed for this guard even though its next run is in the past — that
+	// past-due arm is precisely what must survive this reconcile until the
+	// engine fires it (boot-only start fix, founder decision 2026-10-29).
+	owed := s.bootOwedFire[t.ID]
+	alreadyArmedUnchanged := tracked && current.generation == generation &&
+		(s.isArmedLocked(t.ID, nowMs) || owed)
 	if alreadyArmedUnchanged {
 		// Idempotency guard (see doc comment above): a live job already exists
 		// for this EXACT trigger content, armed and healthy — installed
-		// by this fire's own exit-path re-arm (rearmRrule). Replacing it here
+		// by this fire's own exit-path re-arm (rearmRrule), or the owed fire
+		// of a crashed one-time trigger re-armed at the physical boot.
+		// Replacing it here
 		// would risk clobbering an RRULE occurrence with one computed from a later "now"
-		// (occurrence skip). No-op.
+		// (occurrence skip) — or dropping the owed run. No-op.
 		s.mu.Unlock()
 		slog.Debug("task_trigger: upsert is a no-op, trigger unchanged and job already armed",
 			"task_id", t.ID)
@@ -530,6 +700,9 @@ func (s *TaskTriggerScheduler) replaceJobLocked(
 		s.cs.RemoveJob(existing.jobID)
 		delete(s.taskToJob, taskID)
 	}
+	// Any fresh registration supersedes a pending owed fire: the marker
+	// protects one exact past-due job, and that job is gone here.
+	delete(s.bootOwedFire, taskID)
 	job, err := s.cs.AddJobFull(spec)
 	if err != nil {
 		return nil, err
@@ -545,6 +718,9 @@ func (s *TaskTriggerScheduler) OnTaskDeleted(taskID string) {
 	if ok {
 		delete(s.taskToJob, taskID)
 	}
+	// The owed-fire marker protects one exact job; with the task (and its
+	// job) gone there is nothing left to protect.
+	delete(s.bootOwedFire, taskID)
 	s.mu.Unlock()
 
 	if ok {
@@ -574,6 +750,14 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 		s.cs.RemoveJob(job.ID)
 		return "", nil
 	}
+
+	// A bootOwedFire marker protects the owed fire of a crashed one-time
+	// trigger only until the engine dispatches it — exactly once, and only
+	// across the boot reconcile. The debt is paid here, whatever this run's
+	// outcome; the at-job deletes itself after it.
+	s.mu.Lock()
+	delete(s.bootOwedFire, taskID)
+	s.mu.Unlock()
 
 	t, err := s.store.Get(taskID)
 	if err != nil {

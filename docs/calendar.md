@@ -66,7 +66,7 @@ An agent heartbeat is separate from scheduled task work and does not appear on t
 
 - **A scheduled run has no time limit.** It runs until the agent finishes or someone stops it. Older versions stopped a run after five minutes (`schedules.run_timeout_seconds`, or a per-schedule timeout); those settings are now ignored. Runs recorded with the status **timeout** by an older version keep that status in the history.
 - Restarting or reloading the gateway does not add extra triggers for a scheduled task. If earlier starts left duplicate internal triggers, startup keeps one per task and logs each removed duplicate before the scheduler can fire. This cleanup does not change your task definitions or recorded task runs.
-- A missed run is skipped, never replayed. If the server was down at the fire time, that occurrence is gone, and After N occurrences counts planned runs, not completed ones.
+- A missed run is skipped, never replayed. If the server was down at the fire time, that occurrence is gone, and After N occurrences counts planned runs, not completed ones. The exception is a one-time run the server actually started and then crashed in the middle of: the next gateway start runs that one again, once.
 - A failed run does not stop the series. The next occurrence fires anyway; the failure is shown on its Week/Day chip.
 - The fastest repeat is once a minute.
 - Monthly on day 29, 30, or 31 lands on the last day of shorter months, so nothing is skipped in February.

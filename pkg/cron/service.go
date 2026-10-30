@@ -1041,6 +1041,19 @@ func interruptedOneTimeFire(job *CronJob) bool {
 	return true
 }
 
+// InterruptedOneTimeFire is the exported form of the physical-boot predicate
+// initRunStateUnsafe applies (#1484): a one-time ("at") job whose run had
+// started in a process that is now gone, without its outcome saved. It is
+// only meaningful while that dead process's Running flags are still on the
+// store — before StartAfterPhysicalBoot clears them.
+//
+// Derived-job schedulers call it on their persisted jobs BEFORE the engine's
+// physical-boot restore, so a crashed fire of a derived one-time trigger can
+// be marked as owed and protected from the boot re-derivation that would
+// otherwise replace the armed job with a not-due one (a past at-job gets no
+// next run) and silently drop the run a second time.
+func InterruptedOneTimeFire(job *CronJob) bool { return interruptedOneTimeFire(job) }
+
 func (cs *CronService) getNextWakeMS() *int64 {
 	var nextWake *int64
 	for _, job := range cs.store.Jobs {
