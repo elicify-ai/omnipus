@@ -123,12 +123,18 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 		// keyed by filepath.Join(us.baseDir, ...), while the builder works on
 		// an absolute, symlink-resolved directory.
 		generations := filepath.Join(historyIndexPath(filepath.Join(us.baseDir, sid)), "generations")
+		// cleanupErr is a failure to remove old generation files after the
+		// new checkpoint was published. The rebuild is complete by then:
+		// the old files stay pending and every later reconcile (the proof
+		// below included) retries their removal.
+		var cleanupErr error
 		err = build.publish(hctx, func(_, keep string) error {
 			// Retire with the RUNTIME owner so page readers' retained
 			// generations survive until their last release.
 			h := us.lockSession(sid)
 			defer h.Unlock()
-			return owner.retire(generations, keep)
+			cleanupErr = owner.retire(generations, keep)
+			return nil
 		})
 		err = errors.Join(err, build.Close())
 		if err == nil {
@@ -137,7 +143,9 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 			// on the detached heal context: a client leaving mid-heal is not
 			// a readiness failure.
 			result, readyErr := us.reconcileHistoryOwned(hctx, sid)
-			if readyErr != nil {
+			var retirement *historyRetirementError
+			cleanupOnly := readyErr != nil && errors.As(readyErr, &retirement)
+			if readyErr != nil && !cleanupOnly {
 				if errors.Is(hctx.Err(), context.DeadlineExceeded) {
 					return fail("deadline", readyErr, nil)
 				}
@@ -147,7 +155,17 @@ func (us *UnifiedStore) healChatHistoryOwned(ctx context.Context, sid string, ow
 			slog.Warn("session: chat history index rebuilt", "session_id", sid, "trigger", "catchup_limit", "action", summary.Action,
 				"records", summary.ArchiveRecordCount, "source_groups", summary.SourceGroupCount, "partitions", summary.PartitionCount,
 				"bytes", size, "duration_ms", time.Since(started).Milliseconds(), "attempt", attempt)
-			return result, nil
+			if cleanupErr == nil && cleanupOnly {
+				cleanupErr = readyErr
+			}
+			if cleanupErr != nil {
+				slog.Warn("session: chat history index old generations not retired", "session_id", sid, "trigger", "catchup_limit",
+					"cause", historyHealCause(cleanupErr))
+			}
+			// A cleanup failure the proof could not clear either is the
+			// store's real state (storage_error, retried on every read), not
+			// a failed heal: it neither spends an attempt nor latches.
+			return result, readyErr
 		}
 	}
 	if errors.Is(hctx.Err(), context.DeadlineExceeded) {
@@ -237,6 +255,8 @@ func historyHealCauseText(err error) string {
 			return e.Reason + ": " + historyHealCauseText(e.cause)
 		}
 		return e.Reason
+	case *historyRetirementError:
+		return historyHealCauseText(e.err)
 	case interface{ Unwrap() []error }:
 		var parts []string
 		for _, inner := range e.Unwrap() {

@@ -359,7 +359,22 @@ func (o *chatHistoryOwner) removeRetiredLocked(path string) error {
 	return nil
 }
 
+// historyRetirementError marks a failure to remove old index generation
+// files: cleanup after a published checkpoint, not a failed publication.
+// Error and Unwrap expose the OS error unchanged.
+type historyRetirementError struct{ err error }
+
+func (e *historyRetirementError) Error() string { return e.err.Error() }
+func (e *historyRetirementError) Unwrap() error { return e.err }
+
 func (o *chatHistoryOwner) retire(dir, keep string) error {
+	if err := o.retireFiles(dir, keep); err != nil {
+		return &historyRetirementError{err: err}
+	}
+	return nil
+}
+
+func (o *chatHistoryOwner) retireFiles(dir, keep string) error {
 	o.refsMu.Lock()
 	defer o.refsMu.Unlock()
 	entries, err := os.ReadDir(dir)
