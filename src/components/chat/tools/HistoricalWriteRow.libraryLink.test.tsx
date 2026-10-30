@@ -48,7 +48,7 @@ const SID = 'sess-hist'
 const HREF = '/#/library?workspace=W&path=notes%2Fplan.md'
 const LINKED = 'Wrote it.\nlink: omnipus://file/W/notes/plan.md'
 
-function message(tool: string, result: string): ChatMessage {
+function message(tool: string, result: unknown): ChatMessage {
   const call = {
     id: `call-${tool}`,
     tool,
@@ -66,7 +66,7 @@ function message(tool: string, result: string): ChatMessage {
   }
 }
 
-function renderFinished(tool: string, result: string, live: boolean) {
+function renderFinished(tool: string, result: unknown, live: boolean) {
   const msg = message(tool, result)
   const call = msg.tool_calls?.[0] as ToolCall
   useChatStore.setState({
@@ -75,7 +75,7 @@ function renderFinished(tool: string, result: string, live: boolean) {
     toolCallOrder: live && call ? [call.id] : [],
     textAtToolCallStart: {},
   })
-  render(
+  return render(
     <VirtualAssistantMessageRow
       message={msg}
       liteMode={false}
@@ -83,6 +83,17 @@ function renderFinished(tool: string, result: string, live: boolean) {
       pairedReplyToIds={new Set()}
     />,
   )
+}
+
+function expectPlanLink() {
+  const link = screen.getByRole('link', { name: 'plan.md' })
+  expect(link).toHaveAttribute('href', HREF)
+  fireEvent.click(link)
+  expect(useUiStore.getState().activePanel).toEqual({
+    id: 'library',
+    context: { workspaceId: 'W', path: 'notes/plan.md' },
+  })
+  return link
 }
 
 describe('finished write rows keep the server Library link (FR-011)', () => {
@@ -94,26 +105,30 @@ describe('finished write rows keep the server Library link (FR-011)', () => {
   })
 
   it.each(['write_file', 'edit_file', 'append_file'])(
-    'keeps %s clickable after the reply finishes and after reload',
+    'keeps %s clickable from a string result, then from the persisted reload object',
     (tool) => {
-      renderFinished(tool, LINKED, true)
-      const live = screen.getByRole('link', { name: 'plan.md' })
-      expect(live).toHaveAttribute('href', HREF)
-      fireEvent.click(live)
-      expect(useUiStore.getState().activePanel).toEqual({
-        id: 'library',
-        context: { workspaceId: 'W', path: 'notes/plan.md' },
-      })
-
+      const live = renderFinished(tool, LINKED, true)
+      expectPlanLink()
+      live.unmount()
       useUiStore.getState().closePanel()
-      renderFinished(tool, LINKED, false)
-      const reloaded = screen.getAllByRole('link', { name: 'plan.md' }).at(-1)
-      expect(reloaded).toHaveAttribute('href', HREF)
+      useChatStore.setState({ toolCalls: {}, toolCallOrder: [] })
+
+      // Reload replays the stored result map. truncateResult returns that map
+      // unchanged when it fits inline (pkg/gateway/replay.go). The settled
+      // shape is { text }, not the live string.
+      renderFinished(tool, { text: LINKED }, false)
+      expectPlanLink()
     },
   )
 
   it('does not invent a link when the finished result has no link line (R4)', () => {
     renderFinished('write_file', 'wrote scratch/plan.md', false)
+    expect(screen.queryByRole('link', { name: 'plan.md' })).toBeNull()
+    expect(document.querySelector('a[href*="/#/library"]')).toBeNull()
+  })
+
+  it('does not invent a link when the persisted object has no link line (R4)', () => {
+    renderFinished('write_file', { text: 'wrote scratch/plan.md' }, false)
     expect(screen.queryByRole('link', { name: 'plan.md' })).toBeNull()
     expect(document.querySelector('a[href*="/#/library"]')).toBeNull()
   })
