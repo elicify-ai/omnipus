@@ -49,17 +49,28 @@ func (e TranscriptEntry) DisplayContentOriginalSizeBytes() int {
 	return e.displayContentOriginalSize
 }
 
-// historyUTF8Prefix returns the longest prefix of s that is at most limit
-// bytes long and does not end inside a UTF-8 character.
+// historyUTF8Cut returns the length of the longest prefix of b that is at
+// most limit bytes long and does not end inside a UTF-8 character.
+func historyUTF8Cut[T string | []byte](b T, limit int) int {
+	if len(b) <= limit {
+		return len(b)
+	}
+	cut := limit
+	for back := 0; cut > 0 && back < utf8.UTFMax && !utf8.RuneStart(b[cut]); back++ {
+		cut--
+	}
+	return cut
+}
+
+// historyUTF8Prefix returns a copy of the longest prefix of s that is at most
+// limit bytes long and does not end inside a UTF-8 character. A shortened
+// prefix is copied so the bounded display value never keeps the complete
+// source allocation reachable (#1452 security gate SEC-1).
 func historyUTF8Prefix(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	cut := limit
-	for back := 0; cut > 0 && back < utf8.UTFMax && !utf8.RuneStart(s[cut]); back++ {
-		cut--
-	}
-	return s[:cut]
+	return strings.Clone(s[:historyUTF8Cut(s, limit)])
 }
 
 // historyOrdinaryMessage is the existing semantic default: an empty/omitted
@@ -116,7 +127,9 @@ func historyResultDisplay(result map[string]any) (HistoryResultDisplay, bool, er
 	if len(encoded) <= ChatHistoryInlineResultMaxBytes {
 		return HistoryResultDisplay{}, false, nil
 	}
-	d := HistoryResultDisplay{Preview: historyUTF8Prefix(string(encoded), ChatHistoryResultPreviewBytes), OriginalSizeBytes: len(encoded)}
+	// Convert only the bounded prefix: string(encoded) would copy the whole
+	// encoding and the preview would keep that copy alive (SEC-1).
+	d := HistoryResultDisplay{Preview: string(encoded[:historyUTF8Cut(encoded, ChatHistoryResultPreviewBytes)]), OriginalSizeBytes: len(encoded)}
 	d.Media, d.HasMedia = result["media"]
 	if sid, ok := result["session_id"].(string); ok {
 		d.ChildSessionID = sid

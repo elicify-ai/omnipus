@@ -90,6 +90,19 @@ func historyStoredMarkerInvalid(e session.TranscriptEntry) (bool, error) {
 	return false, nil
 }
 
+// historyFullEntryCarriesMarker reports a full-entry projection in which a
+// saved tool result carries the reserved `_history_preview` key. The full
+// read never shortens, so any such key is saved data, not a reader marker,
+// and the 200 response must never carry it (A2.2).
+func historyFullEntryCarriesMarker(e session.TranscriptEntry) bool {
+	for _, tc := range e.ToolCalls {
+		if _, marker := tc.Result["_history_preview"]; marker {
+			return true
+		}
+	}
+	return false
+}
+
 // historyPlaceholderSource is the replay source for an item that degraded to
 // the D4 placeholder: identity and the placeholder text only, no saved body.
 func historyPlaceholderSource(e session.TranscriptEntry) session.TranscriptEntry {

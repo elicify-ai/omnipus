@@ -377,17 +377,20 @@ var unparseableFailureWarns atomic.Uint64
 // reconnect, into a log this project already has a documented flooding hazard
 // with. The signal is identical every time, so the first one is the whole
 // message; the rest is volume.
-func warnUnparseableStructuredFailure(err error, payload string) {
+//
+// Content-free on purpose (#1452 security gate SEC-2): this runs while history
+// pages are prepared, so the payload is saved tool-error text. Only a fixed
+// event/reason and counts are logged — never a payload prefix, and never the
+// JSON error text, whose SyntaxError quotes the offending payload character.
+func warnUnparseableStructuredFailure(payloadLen int) {
 	n := unparseableFailureWarns.Add(1)
 	if n != 1 && n%10 != 0 {
 		return
 	}
 	slog.Warn("gateway: structured tool-failure payload failed to parse; rendering as prose",
-		"error", err,
-		"len", len(payload),
-		// truncateRunesForFrame, not payload[:60] — a byte slice can cut a
-		// multi-byte rune in half and put invalid UTF-8 into a log field.
-		"prefix", truncateRunesForFrame(payload, 60),
+		"event", "structured_tool_failure_parse_failed",
+		"reason", "invalid_json",
+		"len", payloadLen,
 		"occurrences", n)
 }
 
@@ -409,14 +412,14 @@ func parseStructuredToolFailure(result string) (obj map[string]any, reason strin
 		return nil, "", false
 	}
 	var parsed map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+	if json.Unmarshal([]byte(trimmed), &parsed) != nil {
 		// A string that OPENS like one of our payloads but does not parse is
 		// almost certainly one that got truncated downstream — the producers
 		// bound their fields precisely so this cannot happen, so if it does,
 		// something moved. Silence here would render a JSON fragment to the
 		// user with no trace of why, which is how this class stays invisible.
 		if strings.HasPrefix(trimmed, `{"error":"`) {
-			warnUnparseableStructuredFailure(err, trimmed)
+			warnUnparseableStructuredFailure(len(trimmed))
 		}
 		return nil, "", false
 	}
