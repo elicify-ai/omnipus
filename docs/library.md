@@ -55,6 +55,14 @@ The tool call behind this is hidden in the conversation when it succeeds; a refu
 
 When an agent sends you a file from its workspace, the file card has **Open in Library** next to the download link. It opens the docked Library on that file, asking first if there are unsaved edits. A workspace image gets the same button below it; its own image toolbar is unchanged. A file or image that is not in any Library has no extra button. Files sent over other channels, such as Telegram or email, arrive on their own with no Omnipus link.
 
+## How the Library stays current
+
+An open Library keeps its folder view up to date on its own. While the panel is open and you are actively looking at it — the tab visible and the window focused — the folder you are viewing is re-read every 10 seconds. A file an agent just wrote, a change made through a shell command, or an edit saved by another app appears in the list within about ten seconds, without you switching panels or reloading.
+
+The re-checking pauses while the panel is closed, the tab is in the background, or the window is not focused, and resumes when you come back. If a re-check cannot reach the server, the list simply stays as it is — no error pops up — and the next successful re-check brings it current again.
+
+One deliberate limit: a file you have **open** in the preview pane is not live-updated. What you see stays as it was when you opened it, and your unsaved edits are never replaced. Switch away from the tab and back (or close and reopen the file) to pick up the latest version.
+
 ## How to add files
 
 1. Open the Library and navigate into the workspace and folder you want the files in.
