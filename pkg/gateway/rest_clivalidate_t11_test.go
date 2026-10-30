@@ -257,6 +257,16 @@ func t11ClearMarker(t *testing.T, marker string) {
 	}
 }
 
+// t11AssertPersonSessionCode requires the registered route's 403 body to carry
+// the contract code. The literal is the wire value, not the producer's constant.
+func t11AssertPersonSessionCode(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	var body gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), "body=%s", w.Body.String())
+	require.NotNil(t, body.Code, "spec §3.2 / C-A1: the 403 names its code; body=%s", w.Body.String())
+	require.Equal(t, "person_session_required", *body.Code, "body=%s", w.Body.String())
+}
+
 // TestCliValidate_NonPersonRefusedZeroSpawn is FR-4. A CLI token and a
 // development-bypass request are 403 before the body is read, and the
 // candidate program does not start. A signed-in person is not 403.
@@ -273,6 +283,7 @@ func TestCliValidate_NonPersonRefusedZeroSpawn(t *testing.T) {
 		var reads t11ReadCounter
 		w := t11PostValidate(t, mux, cfg, token, prog, "198.51.100.60:1", &reads)
 		require.Equal(t, http.StatusForbidden, w.Code, "spec FR-4 / C-A1; body=%s", w.Body.String())
+		t11AssertPersonSessionCode(t, w)
 		require.Zero(t, reads.n, "spec §3.2: 403 before reading the body")
 		t11AssertNotSpawned(t, marker, *spawns)
 	})
@@ -287,6 +298,7 @@ func TestCliValidate_NonPersonRefusedZeroSpawn(t *testing.T) {
 		var reads t11ReadCounter
 		w := t11PostValidate(t, mux, cfg, "", prog, "198.51.100.61:1", &reads)
 		require.Equal(t, http.StatusForbidden, w.Code, "spec FR-4 / C-A1; body=%s", w.Body.String())
+		t11AssertPersonSessionCode(t, w)
 		require.NotEqual(t, http.StatusServiceUnavailable, w.Code, "this is the person gate (403), not RequireNotBypass (503)")
 		require.Zero(t, reads.n, "spec §3.2: 403 before reading the body")
 		t11AssertNotSpawned(t, marker, *spawns)
