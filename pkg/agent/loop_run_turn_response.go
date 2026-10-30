@@ -60,7 +60,7 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 	cr.compactionAttemptedOnTimeout = false
 
 	// tryPDFTextFallback is the provider-agnostic safety net for native-PDF
-	// rejections. pdfCapableModel cannot perfectly track OpenRouter's
+	// rejections. The model catalog cannot perfectly track OpenRouter's
 	// per-route capabilities (e.g. Claude Haiku routed via Amazon Bedrock
 	// 400s on PDF input), and each provider phrases the rejection
 	// differently, so instead of matching error strings it triggers on the
