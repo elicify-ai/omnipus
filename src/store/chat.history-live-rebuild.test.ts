@@ -8,6 +8,7 @@ import { useChatStore } from './chat'
 import { useSessionStore } from './session'
 import { useConnectionStore } from './connection'
 import { queryClient } from '@/lib/queryClient'
+import { codeToDisplay } from '@/lib/llm-error'
 import { resetRealStores } from '../../tests/l1-room-ui/harness'
 import { entry, expectValidPage, page, pos, SID } from '../../tests/chat-history-paging/fixtures'
 
@@ -61,7 +62,10 @@ describe('T24 B26: a parked reader keeps its rows when the current turn ends', (
 
   it('a live cancel-ack error frame for the current turn keeps every reader row', async () => {
     await readOlderInterval()
-    useChatStore.getState().handleFrame({ type: 'error', session_id: SID, message: 'This turn was stopped before it finished.' })
+    // The cancel-ack text comes from the error catalogue (llm_error_no_hardcopy_test.go).
+    const stopCopy = codeToDisplay.turn_canceled
+    expect(stopCopy, 'the catalogue carries the stopped-turn message').toMatch(/\S/)
+    useChatStore.getState().handleFrame({ type: 'error', session_id: SID, message: stopCopy })
     expect(readerRows(), 'B26: the current turn ending cannot erase the rows the reader is anchored in').toStrictEqual(readerIds)
   })
 })
