@@ -142,6 +142,15 @@ type FileMediaStore struct {
 	// snapshots were taken. Lock order: registryMu, then mu. Never acquired
 	// while holding saveMu.
 	registryMu sync.Mutex
+
+	// successor is the store this store handed its state over to at a reload
+	// (#1439), set by HandoverTo. A retired store still receives
+	// registrations from a turn in flight across the swap and forwards each
+	// one down the chain (forwardToSuccessors) so the live store resolves
+	// and persists it. succMu guards the pointer and is a LEAF lock: never
+	// held while acquiring any other lock.
+	succMu    sync.Mutex
+	successor *FileMediaStore
 }
 
 // saveDebounce is the coalescing window for SaveRegistry. Calls landing
@@ -178,6 +187,12 @@ func NewFileMediaStoreWithCleanup(cfg MediaCleanerConfig) *FileMediaStore {
 }
 
 // Store registers a local file under the given scope. The file must exist.
+//
+// On a store retired by a reload handover (HandoverTo) Store still works —
+// a turn in flight across the swap creates media through the snapshot it
+// holds — and additionally forwards every new ref to the store it handed
+// over to, so the live store resolves it (serveMedia, the next turn) and
+// persists it.
 func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (string, error) {
 	if _, err := os.Stat(localPath); err != nil {
 		return "", fmt.Errorf("media store: %s: %w", localPath, err)
@@ -186,6 +201,16 @@ func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (
 	ref := "media://" + uuid.New().String()
 	meta.CleanupPolicy = normalizeCleanupPolicy(meta.CleanupPolicy)
 
+	s.storeRef(ref, localPath, meta, scope)
+	s.scheduleSave()
+	s.forwardToSuccessors(ref, localPath, meta, scope)
+	return ref, nil
+}
+
+// storeRef records one ref's mappings under s.mu. Store and the handover
+// forwarder share this primitive so a forwarded ref keeps the exact ref ID
+// its caller already received.
+func (s *FileMediaStore) storeRef(ref, localPath string, meta MediaMeta, scope string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -207,9 +232,27 @@ func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (
 	}
 	pathState.refCount++
 	s.pathStates[localPath] = pathState
+}
 
-	s.scheduleSave()
-	return ref, nil
+// forwardToSuccessors walks s's handover-successor chain, registering ref in
+// every store and arming a save on each. Hops are not nested — each storeRef
+// takes and releases its own mu, succMu is a leaf lock — so the chain cannot
+// deadlock. Retired successors' saves are no-ops (saveStopped is set at
+// handover), so only the live store at the chain's end actually persists;
+// intermediate stores merely keep the ref resolvable for any consumer still
+// holding them.
+func (s *FileMediaStore) forwardToSuccessors(ref, localPath string, meta MediaMeta, scope string) {
+	s.succMu.Lock()
+	succ := s.successor
+	s.succMu.Unlock()
+	for succ != nil {
+		succ.storeRef(ref, localPath, meta, scope)
+		succ.scheduleSave()
+		succ.succMu.Lock()
+		next := succ.successor
+		succ.succMu.Unlock()
+		succ = next
+	}
 }
 
 // RefByPath returns the most-recently-registered ref pointing at localPath,
@@ -588,6 +631,14 @@ func (s *FileMediaStore) Stop() {
 //     never write registry.json again: a stale final flush cannot overwrite
 //     a newer snapshot the new store writes after the swap. s.Stop() after a
 //     handover only closes its cleanup goroutine.
+//   - A save is armed on dst immediately: until then the handed-over refs
+//     exist only in memory while registry.json still holds the pre-handover
+//     snapshot, so a restart in that gap would lose exactly the refs the
+//     handover exists to rescue.
+//   - Registrations on s after the handover — media a turn in flight across
+//     the swap creates through its snapshot — are forwarded to dst (same ref
+//     ID, forwardToSuccessors), so the live store resolves them and, being
+//     the only store with saves armed, persists them.
 //
 // Only the five ref-state maps are copied; dst keeps its own cleaner config,
 // cleanup goroutine, workspace-library provider and save machinery. A ref
@@ -599,6 +650,12 @@ func (s *FileMediaStore) HandoverTo(dst *FileMediaStore) {
 	if dst == nil || dst == s {
 		return
 	}
+
+	// Wire the forwarding edge before anything else. succMu is a leaf lock,
+	// so this ordering cannot interact with the lock order taken below.
+	s.succMu.Lock()
+	s.successor = dst
+	s.succMu.Unlock()
 
 	// Lock order: s.registryMu, then dst.registryMu — this is the package's
 	// only two-store operation, and every caller passes old then new. Holding
@@ -636,6 +693,10 @@ func (s *FileMediaStore) HandoverTo(dst *FileMediaStore) {
 	dst.pathStates = copyPathStates(s.pathStates)
 	dst.mu.Unlock()
 	s.mu.Unlock()
+
+	// Persist the handed-over state on dst: saves on s are retired from this
+	// point, so dst's save machinery is the only path to registry.json.
+	dst.scheduleSave()
 }
 
 func copyRefEntries(src map[string]mediaEntry) map[string]mediaEntry {

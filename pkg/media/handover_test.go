@@ -210,3 +210,93 @@ func TestHandoverTo_NoOpTargets(t *testing.T) {
 	// test's home instead of letting the timer fire into a later test's.
 	store.Stop()
 }
+
+// TestHandoverTo_RefStoredAfterHandoverResolvesViaLiveStore covers the other
+// half of a turn in flight across the reload swap (#1439 follow-up, review
+// 6b item 4): the turn does not only RESOLVE refs through its old-store
+// snapshot, it also CREATES media through it (browser.screenshot, send_file,
+// image generation) after the swap has already flipped the live pointer.
+// The ref must land in BOTH stores: the old one keeps the in-flight turn
+// working, the live one is what serveMedia and the next turn resolve
+// through — and the only store whose save machinery is still armed, so the
+// live one must persist it.
+func TestHandoverTo_RefStoredAfterHandoverResolvesViaLiveStore(t *testing.T) {
+	mediaDir := isolatedRegistryHome(t)
+
+	oldStore := NewFileMediaStore()
+	liveStore := NewFileMediaStore()
+	oldStore.HandoverTo(liveStore)
+
+	// Media created by the in-flight turn AFTER the swap, through the old
+	// store it still holds.
+	path := writePayload(t, mediaDir, "late-shot.png")
+	ref, err := oldStore.Store(path, MediaMeta{
+		Filename: "late-shot.png",
+		Source:   "tool:browser",
+	}, SessionInlineScopePrefix+"session-2")
+	if err != nil {
+		t.Fatalf("old store: %v", err)
+	}
+
+	// The in-flight turn keeps resolving through its snapshot.
+	if got, err := oldStore.Resolve(ref); err != nil || got != path {
+		t.Fatalf("in-flight turn lost its own new ref: resolve=%q err=%v", got, err)
+	}
+	// serveMedia / next-turn path: the live store must know the same ref.
+	if got, err := liveStore.Resolve(ref); err != nil {
+		t.Fatalf("ref created after the handover never reached the live store: %v", err)
+	} else if got != path {
+		t.Fatalf("live store resolves the forwarded ref to the wrong path: %q", got)
+	}
+
+	// Persistence: the live store is the only store with saves armed, so its
+	// final flush is what must carry the ref across a restart.
+	liveStore.Stop()
+	oldStore.Stop()
+	refs, err := readPersistedRefs(registryPath())
+	if err != nil {
+		t.Fatalf("read persisted registry: %v", err)
+	}
+	if rec, ok := refs[ref]; !ok {
+		t.Fatalf("ref created after the handover is not persisted by the live store")
+	} else if rec.Path != path {
+		t.Fatalf("persisted ref points at %q, want %q", rec.Path, path)
+	}
+}
+
+// TestHandoverTo_HandedOverRefsArePersisted pins the persistence half of the
+// handover itself: the outgoing store's save machinery is retired at
+// handover, so unless the handover arms a save on the live store, the refs
+// it just moved exist only in memory — registry.json still holds the
+// pre-handover snapshot (missing exactly the last saveDebounce window the
+// handover exists to rescue), and a restart before the live store's next
+// mutation loses them.
+func TestHandoverTo_HandedOverRefsArePersisted(t *testing.T) {
+	mediaDir := isolatedRegistryHome(t)
+
+	oldStore := NewFileMediaStore()
+	parkDebounceSave(oldStore)
+	path := writePayload(t, mediaDir, "handed-over.png")
+	ref, err := oldStore.Store(path, MediaMeta{
+		Filename: "handed-over.png",
+		Source:   "tool:browser",
+	}, SessionInlineScopePrefix+"session-3")
+	if err != nil {
+		t.Fatalf("old store: %v", err)
+	}
+
+	liveStore := NewFileMediaStore()
+	oldStore.HandoverTo(liveStore)
+	liveStore.Stop() // synchronous final flush of the live store
+
+	oldStore.Stop()
+	refs, err := readPersistedRefs(registryPath())
+	if err != nil {
+		t.Fatalf("read persisted registry: %v", err)
+	}
+	if rec, ok := refs[ref]; !ok {
+		t.Fatalf("handed-over ref lost on restart: live store never persisted it")
+	} else if rec.Path != path {
+		t.Fatalf("persisted ref points at %q, want %q", rec.Path, path)
+	}
+}
