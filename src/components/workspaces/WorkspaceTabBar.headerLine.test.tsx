@@ -1,12 +1,19 @@
 // Oracle (specifications, not the implementation):
-//   - R44 (founder 2026-10-07): the strip steps down only when the full row no
-//     longer FITS the measured free space; sidebar closed + a panel open at
-//     1440 px keeps the full labelled row.
-//   - #1449 D13 / US-11 AS6 / S-103 (founder 2026-10-28): "the workspace strip
-//     ALWAYS keeps the header line; the chat slot shrinks and truncates
-//     first" — so the chat's TITLE is free room for the strip, while the
-//     slot's other items (the "Add participant" icon, its padding and gap)
-//     are not: D13 puts that control permanently at the right end of the line.
+//   - R44 (founder 2026-10-07; ADR-20261007, "R44 measured-space modes"): the
+//     strip steps down only when the full row no longer FITS the measured free
+//     space; sidebar closed + a panel open at 1440 px keeps the full labelled
+//     row.
+//   - #1449 D13 (founder 2026-10-28; ADR-20261028 §A9 "Minimal chrome", on the
+//     branch spec/1449-group-chat): the chat controls sit permanently at the
+//     right end of the SAME header line, and "WorkspaceTabBar measures the
+//     remaining slot (R44), so the added shrink-0 controls are absorbed by its
+//     existing mode fallback" (§A9.1). The founder's rule for who yields
+//     (2026-10-28, also the header of tests/e2e/chat-header-narrow.spec.ts):
+//     "the workspace strip ALWAYS keeps the header line; the chat slot shrinks
+//     and truncates first" — so the chat's TITLE is free room for the strip,
+//     while the slot's other items (the "Add participant" icon, its padding and
+//     gap) are not: D13 puts that control permanently at the right end of the
+//     line.
 //
 // The widths below are independent synthetic fixtures taken from the failing
 // CI geometry (run 40893972010, shard ui-3: F1 at 14 px and CR-1 at 20 px),
@@ -90,6 +97,8 @@ interface LineOptions {
   titleYields?: boolean
   /** False: the slot holds no title at the first render. */
   withTitle?: boolean
+  /** The width (px) of a second declared title inside the SAME slot item; absent = one title. */
+  secondTitle?: number
   lineStyle?: CSSProperties
   launcherStyle?: CSSProperties
   controlsStyle?: CSSProperties
@@ -104,7 +113,8 @@ function applyInlineStyle(element: HTMLElement, style: CSSProperties | undefined
 
 function renderLine(g: Geometry, root: number, options: LineOptions = {}) {
   setGeometry(g, root)
-  const { slotMinWidth, titleYields = true, withTitle = true, lineStyle, launcherStyle, controlsStyle } = options
+  const { slotMinWidth, titleYields = true, withTitle = true, secondTitle, lineStyle, launcherStyle, controlsStyle } = options
+  if (secondTitle !== undefined) widths.title2 = secondTitle
   const view = render(
     <header data-testid="line" data-header-line="">
       <div data-testid="launcher" />
@@ -112,6 +122,7 @@ function renderLine(g: Geometry, root: number, options: LineOptions = {}) {
       <div data-testid="controls" />
       <div data-testid="slot" style={{ minWidth: slotMinWidth }}>
         {withTitle ? <span data-testid="title" {...(titleYields ? { 'data-header-yield': '' } : {})} /> : null}
+        {secondTitle === undefined ? null : <span data-testid="title2" data-header-yield="" />}
       </div>
     </header>,
   )
@@ -154,6 +165,17 @@ describe('the chat title is free room for the workspace strip (F1, R44 + D13)', 
     [652.99, 'icons'], [653, 'full'], [653.01, 'full'],
   ])('CR-1 fixture at a %s px header selects %s (icons needs room 276, full needs 542)', (line, mode) => {
     renderLine({ ...CR1, line: line as number }, (line as number) - 55 - 90)
+    expect(strip()).toHaveAttribute('data-mode', mode as string)
+  })
+
+  it.each([
+    // The CR-1 slot with its 34 px title split into 20 + 14 inside the same item: every declared
+    // title is room the strip may take back, so room = line - 55 - 90 + (20 + 14) = line - 111,
+    // the same boundary as the single 34 px title above (icons needs room 276). Counting only
+    // the first title would leave line - 125 and put the boundary at 401 px.
+    [386.99, 'narrow'], [387, 'icons'],
+  ])('two declared titles in one slot item both give their width back: a %s px header selects %s', (line, mode) => {
+    renderLine({ ...CR1, line: line as number, title: 20 }, (line as number) - 55 - 90, { secondTitle: 14 })
     expect(strip()).toHaveAttribute('data-mode', mode as string)
   })
 
