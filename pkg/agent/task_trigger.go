@@ -184,6 +184,12 @@ type TaskTriggerScheduler struct {
 	// Running set, stays skipped, never replayed (docs/calendar.md).
 	// Guarded by mu.
 	bootOwedFire map[string]bool
+
+	// bootPrepared and bootReplay carry the result of PrepareAfterPhysicalBoot
+	// — the engine's replay decision per interrupted job — to
+	// StartAfterPhysicalBoot. Guarded by mu.
+	bootPrepared bool
+	bootReplay   map[string]cron.BootReplay
 }
 
 // NewTaskTriggerScheduler creates a scheduler that uses a dedicated CronService
@@ -253,17 +259,21 @@ func (s *TaskTriggerScheduler) Start() error {
 // replayed — it never had Running set and stays skipped, as docs/calendar.md
 // states.
 //
+// The classification is PrepareAfterPhysicalBoot; StartAfterPhysicalBoot
+// runs it first when the caller has not.
+//
 // Must be called at most once per instance (the engine rejects a second
 // physical-boot window) and before Reconcile, like Start.
 func (s *TaskTriggerScheduler) StartAfterPhysicalBoot() error {
-	if err := s.restoreStoredJobs(); err != nil {
+	if err := s.PrepareAfterPhysicalBoot(); err != nil {
 		return err
 	}
-	owedJobs := s.markBootOwedFires()
-	s.markMissedFires()
+	s.mu.Lock()
+	decisions := s.bootReplay
+	s.mu.Unlock()
 	s.cs.SetRunner(s)
-	if err := s.cs.StartAfterPhysicalBootReplaying(func(job *cron.CronJob) bool {
-		return owedJobs[job.ID]
+	if err := s.cs.StartAfterPhysicalBootReplaying(func(job *cron.CronJob) cron.BootReplay {
+		return decisions[job.ID] // an absent job is declined
 	}); err != nil {
 		return err
 	}
@@ -271,8 +281,42 @@ func (s *TaskTriggerScheduler) StartAfterPhysicalBoot() error {
 	return nil
 }
 
+// PrepareAfterPhysicalBoot is the classification half of
+// StartAfterPhysicalBoot: it restores the task-to-job bindings, settles which
+// interrupted one-time fires are owed (markBootOwedFires, which may release
+// the dead process's claim on a task) and records the missed fires — without
+// starting the engine. Idempotent: a second call is a no-op.
+//
+// It must run while NO task producer of this process has started — not the
+// queued-task drain, not the cron engines, not the plan engine, not the REST
+// listener. That is what makes an in_progress task here provably the dead
+// process's claim: a live claim cannot exist yet (6b re-review N1, where the
+// drain started first and a claim it took was failed underneath its run).
+// The gateway calls it right after its own interrupted-task reconcile and
+// before startSchedulers; StartAfterPhysicalBoot later only starts the
+// engine with the decisions made here.
+func (s *TaskTriggerScheduler) PrepareAfterPhysicalBoot() error {
+	s.mu.Lock()
+	prepared := s.bootPrepared
+	s.mu.Unlock()
+	if prepared {
+		return nil
+	}
+	if err := s.restoreStoredJobs(); err != nil {
+		return err
+	}
+	decisions := s.markBootOwedFires()
+	s.markMissedFires()
+	s.mu.Lock()
+	s.bootReplay = decisions
+	s.bootPrepared = true
+	s.mu.Unlock()
+	return nil
+}
+
 // markBootOwedFires settles which interrupted jobs are owed their run at this
-// boot and returns their job IDs. It reads the store exactly as the death
+// boot and returns the engine's replay decision for each owed job (every
+// other interrupted job is declined). It reads the store exactly as the death
 // left it — cron.InterruptedOneTimeFire needs the dead process's Running
 // flags, so it must run BEFORE the engine's physical-boot restore clears
 // them (restoreStoredJobs has already loaded the store and the engine is not
@@ -294,12 +338,20 @@ func (s *TaskTriggerScheduler) StartAfterPhysicalBoot() error {
 // A dead in_progress claim on an owed task is released here, as one boot
 // recovery operation with the owed fire (6b review I2): the overlap guard in
 // RunScheduled would otherwise treat it as a live run, record a skip and let
-// the engine delete the one-time job. Nothing in this process can hold a
-// live claim on the task yet, so the claim is the dead process's. The owed
-// task is then marked with bootOwedFire so the boot Reconcile keeps its job.
-func (s *TaskTriggerScheduler) markBootOwedFires() map[string]bool {
+// the engine delete the one-time job. PrepareAfterPhysicalBoot runs before
+// any task producer of this process starts, so the claim is the dead
+// process's (re-review N1). The owed task is then marked with bootOwedFire
+// so the boot Reconcile keeps its job.
+//
+// When that release fails (the task store refuses the write), the fire
+// cannot run on this boot — its task would stay claimed — but the debt is not
+// dropped (re-review N3): the job is kept exactly as the dead process left it
+// (cron.BootReplayKeep, Running still set), protected from the boot
+// Reconcile by the same marker, and the failure is logged at ERROR. The next
+// physical boot finds the same interrupted fire and tries again.
+func (s *TaskTriggerScheduler) markBootOwedFires() map[string]cron.BootReplay {
 	nowMs := s.now().UnixMilli()
-	owedJobs := make(map[string]bool)
+	decisions := make(map[string]cron.BootReplay)
 	var owedTasks []string
 	for _, job := range s.cs.ListJobs(true) {
 		if !cron.InterruptedOneTimeFire(&job) {
@@ -341,25 +393,28 @@ func (s *TaskTriggerScheduler) markBootOwedFires() map[string]bool {
 			!reflect.DeepEqual(job.Schedule, sched) {
 			continue // trigger content changed while down: the edit wins
 		}
+		decision := cron.BootReplayRun
 		if deadClaim {
 			if err := recoverInterruptedTask(s.store, id); err != nil {
-				slog.Error("task_trigger: interrupted one-time fire not rerun: cannot release the dead process's claim",
+				slog.Error("task_trigger: interrupted one-time fire kept for the next boot: cannot release the dead process's claim",
 					"task_id", id, "job_id", job.ID, "error", err)
-				continue
+				decision = cron.BootReplayKeep
 			}
 		}
 		s.mu.Lock()
 		s.taskToJob[id] = trackedTrigger{jobID: job.ID, generation: triggerGeneration(t.Trigger)}
 		s.bootOwedFire[id] = true
 		s.mu.Unlock()
-		owedJobs[job.ID] = true
-		owedTasks = append(owedTasks, id)
+		decisions[job.ID] = decision
+		if decision == cron.BootReplayRun {
+			owedTasks = append(owedTasks, id)
+		}
 	}
 	if len(owedTasks) > 0 {
 		slog.Warn("task_trigger: one-time trigger was running when the previous process stopped; running it again at this boot",
 			"task_ids", owedTasks)
 	}
-	return owedJobs
+	return decisions
 }
 
 // isBootOwedFireLocked reports whether t's tracked job is the owed fire of a

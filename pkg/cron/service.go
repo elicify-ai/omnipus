@@ -366,12 +366,28 @@ func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err 
 	return cs.initRunStateReplayingUnsafe(physicalBoot, nil)
 }
 
+// BootReplay is what a physical-boot restore does with one interrupted
+// one-time job (see StartAfterPhysicalBootReplaying).
+type BootReplay int
+
+const (
+	// BootReplayDecline clears the dead Running flag and leaves the job
+	// unarmed: a past at-job gets no next run, so it never fires.
+	BootReplayDecline BootReplay = iota
+	// BootReplayRun re-arms the job for its owed run (#1484).
+	BootReplayRun
+	// BootReplayKeep leaves the job exactly as the dead process left it —
+	// Running still set, unarmed — so it is still an interrupted fire at the
+	// next physical boot. For a caller that owes the run but cannot settle it
+	// yet; within this process the persisted Running flag keeps the job from
+	// firing.
+	BootReplayKeep
+)
+
 // initRunStateReplayingUnsafe is initRunStateUnsafe with a physical-boot
-// replay filter: an interrupted one-time job is re-armed for its owed run only
-// when replay is nil or reports true for it. A job the filter declines still
-// has its dead Running flag cleared and gets the normal recompute (a past
-// at-job gets no next run), so it never fires from this restore.
-func (cs *CronService) initRunStateReplayingUnsafe(physicalBoot bool, replay func(*CronJob) bool) (started bool, err error) {
+// replay decision per interrupted one-time job. A nil replay runs every
+// interrupted job (the #1484 default).
+func (cs *CronService) initRunStateReplayingUnsafe(physicalBoot bool, replay func(*CronJob) BootReplay) (started bool, err error) {
 	if physicalBoot && cs.runWindowUsed {
 		return false, fmt.Errorf("cron: physical-boot restore requires an unused service instance")
 	}
@@ -387,10 +403,20 @@ func (cs *CronService) initRunStateReplayingUnsafe(physicalBoot bool, replay fun
 		// The prior process has no live lane. Preserve all schedule/history data;
 		// normal Start/reload deliberately retain the same-process overlap flag.
 		for i := range cs.store.Jobs {
-			if interruptedOneTimeFire(&cs.store.Jobs[i]) && (replay == nil || replay(&cs.store.Jobs[i])) {
-				interrupted = append(interrupted, i)
+			job := &cs.store.Jobs[i]
+			if interruptedOneTimeFire(job) {
+				decision := BootReplayRun
+				if replay != nil {
+					decision = replay(job)
+				}
+				switch decision {
+				case BootReplayRun:
+					interrupted = append(interrupted, i)
+				case BootReplayKeep:
+					continue // keep Running: the evidence survives to the next boot
+				}
 			}
-			cs.store.Jobs[i].State.Running = false
+			job.State.Running = false
 		}
 	}
 
@@ -434,19 +460,21 @@ func (cs *CronService) StartAfterPhysicalBoot() error {
 }
 
 // StartAfterPhysicalBootReplaying is StartAfterPhysicalBoot for a store whose
-// jobs are derived from another source of truth: only the interrupted
-// one-time jobs replay accepts are re-armed for their owed run. The filter is
-// applied before the run loop starts, so a declined job can never fire from
+// jobs are derived from another source of truth: replay decides, per
+// interrupted one-time job, whether it is re-armed for its owed run, declined
+// or kept as interrupted evidence for a later boot. The decisions are applied
+// before the run loop starts, so a declined or kept job can never fire from
 // this restore — not even in the window before the caller reconciles its
 // derived jobs (6b review I3: the task-trigger scheduler stores each
 // recurring occurrence as an at-job, and an interrupted occurrence must not
-// be replayed). replay runs under the service lock: it must not call back
+// be replayed; re-review N3: an owed run whose task cannot be settled yet is
+// kept, not lost). replay runs under the service lock: it must not call back
 // into this CronService.
-func (cs *CronService) StartAfterPhysicalBootReplaying(replay func(job *CronJob) bool) error {
+func (cs *CronService) StartAfterPhysicalBootReplaying(replay func(job *CronJob) BootReplay) error {
 	return cs.startRunWindow(true, replay)
 }
 
-func (cs *CronService) startRunWindow(physicalBoot bool, replay func(*CronJob) bool) error {
+func (cs *CronService) startRunWindow(physicalBoot bool, replay func(*CronJob) BootReplay) error {
 	cs.mu.Lock()
 	started, err := cs.initRunStateReplayingUnsafe(physicalBoot, replay)
 	stop := cs.stopChan

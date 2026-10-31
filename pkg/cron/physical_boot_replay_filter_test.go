@@ -68,7 +68,7 @@ func TestPhysicalBootReplayFilter_DeclinedJobNeverFires(t *testing.T) {
 	rec := &recordingRunner{}
 	restarted.SetRunner(rec)
 	restarted.mu.Lock()
-	_, err := restarted.initRunStateReplayingUnsafe(true, func(job *CronJob) bool { return job.ID == keepID })
+	_, err := restarted.initRunStateReplayingUnsafe(true, runOnly(keepID))
 	restarted.mu.Unlock()
 	if err != nil {
 		t.Fatalf("initRunStateReplayingUnsafe: %v", err)
@@ -98,7 +98,7 @@ func TestPhysicalBootReplayFilter_PublicStartDeclinesBeforeLoop(t *testing.T) {
 	restarted.SetClock(clk)
 	rec := &recordingRunner{}
 	restarted.SetRunner(rec)
-	if err := restarted.StartAfterPhysicalBootReplaying(func(job *CronJob) bool { return job.ID == keepID }); err != nil {
+	if err := restarted.StartAfterPhysicalBootReplaying(runOnly(keepID)); err != nil {
 		t.Fatalf("StartAfterPhysicalBootReplaying: %v", err)
 	}
 	restarted.RunDueJobs(clk.Now())
@@ -111,5 +111,54 @@ func TestPhysicalBootReplayFilter_PublicStartDeclinesBeforeLoop(t *testing.T) {
 	}
 	if err := restarted.StartAfterPhysicalBootReplaying(nil); err == nil {
 		t.Fatalf("a second physical-boot window on one instance must be refused")
+	}
+}
+
+// runOnly replays the job with the given ID and declines every other one.
+func runOnly(id string) func(*CronJob) BootReplay {
+	return func(job *CronJob) BootReplay {
+		if job.ID == id {
+			return BootReplayRun
+		}
+		return BootReplayDecline
+	}
+}
+
+// 6b re-review N3: a kept job stays interrupted evidence — Running persisted,
+// never fired in this process — so the next physical boot can still owe it.
+func TestPhysicalBootReplayFilter_KeptJobStaysInterruptedForNextBoot(t *testing.T) {
+	clk := newFakeClock(time.Date(2026, 10, 22, 6, 59, 0, 0, time.UTC))
+	restartPath, keepID, dropID := crashTwoAtJobs(t, clk)
+
+	restarted := NewCronService(restartPath)
+	restarted.SetClock(clk)
+	rec := &recordingRunner{}
+	restarted.SetRunner(rec)
+	restarted.mu.Lock()
+	_, err := restarted.initRunStateReplayingUnsafe(true, func(job *CronJob) BootReplay {
+		if job.ID == keepID {
+			return BootReplayKeep
+		}
+		return BootReplayDecline
+	})
+	restarted.mu.Unlock()
+	if err != nil {
+		t.Fatalf("initRunStateReplayingUnsafe: %v", err)
+	}
+	restarted.RunDueJobs(clk.Now())
+	restarted.WaitForLane()
+	restarted.Stop()
+	if got := rec.calls(); len(got) != 0 {
+		t.Fatalf("neither a kept nor a declined job fires; runner calls = %v", got)
+	}
+
+	next := NewCronService(restartPath)
+	kept, ok := next.GetJob(keepID)
+	if !ok || !InterruptedOneTimeFire(&kept) {
+		t.Fatalf("a kept job must still be an interrupted fire on disk for the next boot; job=%+v ok=%v", kept, ok)
+	}
+	dropped, ok := next.GetJob(dropID)
+	if !ok || InterruptedOneTimeFire(&dropped) {
+		t.Fatalf("a declined job loses its interrupted evidence; job=%+v ok=%v", dropped, ok)
 	}
 }

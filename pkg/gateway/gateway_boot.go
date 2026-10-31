@@ -295,6 +295,10 @@ type setupAndStartServicesState struct {
 	bootSweepCfg    config.PlanningConfig
 	providerCatalog *catalog.Catalog
 	api             *restAPI
+	// taskTrigger is created and prepared (boot classification) before
+	// startSchedulers starts any task producer; startSchedulers then starts
+	// it. nil when the agent loop has no task store.
+	taskTrigger *agent.TaskTriggerScheduler
 }
 
 func setupAndStartServices(
@@ -336,12 +340,28 @@ func setupAndStartServices(
 		return nil, err
 	}
 
-	// Recover tasks left "in_progress" by the dead previous process BEFORE any
-	// scheduler, drain or trigger can claim a task in this one: run later, it
-	// would fail runs this process had already started — such as the owed
-	// rerun of a crashed one-time trigger (6b review I2). Also before the HTTP
-	// listener accepts connections, so no handler can race it.
+	// Boot recovery of interrupted task work, all of it BEFORE any task
+	// producer of this process (drain, cron engines, trigger engine, plan
+	// engine, REST listener) starts, so every in_progress claim it sees is the
+	// dead process's and none of this process's runs can be failed by it
+	// (6b review I2, re-review N1):
+	//   1. hold the goal transitions it makes: the goal outcome recorder and
+	//      its session stores are wired later (wireInteractiveServices,
+	//      setupPlans); buildRESTAPI replays them once they are (re-review N2);
+	//   2. reconcile tasks the dead process left in_progress;
+	//   3. classify the trigger scheduler's interrupted fires. startSchedulers
+	//      starts its engine later, with the decisions made here.
+	tools.HoldTaskGoalEndedUntilReplay()
 	agent.ReconcileInterruptedTasks(agent.GetTaskStore(stg.agentLoop))
+	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
+		stg.taskTrigger = agent.NewTaskTriggerScheduler(
+			filepath.Join(stg.homePath, "tasks_triggers", "jobs.json"),
+			tStore, agent.GetTaskExecutor(stg.agentLoop),
+		)
+		if err := stg.taskTrigger.PrepareAfterPhysicalBoot(); err != nil {
+			return nil, fmt.Errorf("error preparing task trigger scheduler: %w", err)
+		}
+	}
 
 	if runningServices, stop, err := stg.startSchedulers(); stop {
 		return runningServices, err
@@ -459,11 +479,10 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 	// scheduler). Boot-reconciles existing tasks' triggers, then the create/
 	// update/delete REST + tool paths (re)register/remove jobs via
 	// AgentLoop.NotifyTaskUpserted / NotifyTaskDeleted.
-	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
-		triggerStorePath := filepath.Join(stg.homePath, "tasks_triggers", "jobs.json")
-		stg.runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
-			triggerStorePath, tStore, agent.GetTaskExecutor(stg.agentLoop),
-		)
+	if stg.taskTrigger != nil {
+		// Created and prepared by setupAndStartServices before any task
+		// producer started (re-review N1).
+		stg.runningServices.TaskTrigger = stg.taskTrigger
 		// Physical boot, not a same-process start: a one-time trigger whose
 		// run the dead prior process had started is owed that run here, once
 		// (founder decision 2026-10-29, Q1 A; the task-trigger half of
@@ -1382,6 +1401,14 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 
 	startKnowledgeLifecycle(stg.homePath, stg.wsHandler, 0,
 		knowledgeDriftNotifier(stg.runningServices.notifStore, stg.agentLoop, stg.agentLoop.GetConfig))
+
+	// Hand the goal transitions held since the boot reconcile to the goal
+	// outcome recorder, now that it and its session stores are wired, so each
+	// interrupted task's goal keeps its lasting goal_outcome line (re-review
+	// N2).
+	if err := tools.ReplayHeldTaskGoalEnded(); err != nil {
+		slog.Error("gateway: boot goal outcome lines not written", "error", err)
+	}
 
 	// Drop blocked_by edges pointing at task files that no longer exist, so the
 	// dependency graph self-heals on boot (a waiting task gated only on an orphan

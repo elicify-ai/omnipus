@@ -55,7 +55,8 @@ type crashRunRecorder struct {
 }
 
 // newCrashRunRecorder returns a recorder that claims through store at clk's
-// time, as the production dispatch does.
+// time, as the production dispatch does. A nil store models a death inside
+// the fire before the task was claimed.
 func newCrashRunRecorder(store *task.Store, clk *triggerFakeClock) *crashRunRecorder {
 	return &crashRunRecorder{
 		store:   store,
@@ -66,8 +67,10 @@ func newCrashRunRecorder(store *task.Store, clk *triggerFakeClock) *crashRunReco
 }
 
 func (r *crashRunRecorder) dispatch(_ context.Context, taskID string, _ *int64) error {
-	if _, err := r.store.ClaimForRun(taskID, r.clk.Now()); err != nil {
-		return err
+	if r.store != nil { // nil store: the process dies before the claim
+		if _, err := r.store.ClaimForRun(taskID, r.clk.Now()); err != nil {
+			return err
+		}
 	}
 	r.mu.Lock()
 	first := !r.closed
