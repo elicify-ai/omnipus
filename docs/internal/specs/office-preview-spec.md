@@ -101,6 +101,7 @@ Anything else — wrong version, unknown type, oversize, duplicate/out-of-range 
 - **Manifest.** Component version, build ID and protocol version (renderer), SHA-256 of `omnipus-pdfium` and its `libpdfium.*` (D1 A) / `soffice` (and `soffice.bin` on Windows), of the filtered registry (macOS) and of the file list.
 - **Checks.** Renderer: program and library re-hashed before every launch. LibreOffice: executable and registry re-hashed at gateway start and whenever size/modification time changed. Mismatch → "damaged", nothing launched, no fallback program. The verified real path is resolved once per call and passed to the spawn unchanged.
 - **Writer exclusion (R2-MAJ-012).** A component is usable only while its root is not inside, and does not contain, any write root of **any** agent: workspaces, mounts, operator allowances and grants from configuration. **2026-11-01 (§3.2):** also every write authority a running confined process holds (Allow-once included), and enforced for the whole run through the write-authority gate — an overlapping authority published mid-run stops the preview. Checked at gateway start, on every configuration reload and mount/grant approval, and per call against the calling turn. If any overlap exists the component is disabled for everyone: "unsafe location", plus a `doctor` line naming the overlapping grant. Not re-hashed per call: the bundle's libraries and configuration; their protection is this exclusion plus the kernel sandbox where active. **Honest boundary:** on Windows (Q5) and in unconfined mode (FQ2 r1) agents with `bash` are not kernel-prevented from writing an install folder; operator-registered components rest on the operator's registration. Documented.
+- **`doctor` findings (2026-11-01).** `doctor` reports damaged and agent-writable components, an uncheckable component state and an unenforced Linux memory limit; a component that is not installed is not a `doctor` finding (an install choice, §10; the tool result and component status report it).
 
 **AD-5 Input and page rules.** Exactly `.docx .xlsx .pptx .pdf`, content matching the extension, ≤ 50 MiB, not encrypted. (1) `pages` syntax (digits, 1 ≤ N ≤ M ≤ 9999, M − N < 20) and file checks before any work — refusal starts nothing. (2) After `info`: default range clamps; partial overlap clamps ("pages 9–12 of 12 (requested 9–20)"); wholly beyond → "the document has N pages". Macro-enabled, legacy, OpenDocument and template formats are out of scope.
 
@@ -300,7 +301,7 @@ PNG pages are stored like browser screenshots (`pkg/tools/normalization.go::stor
 |---|---|
 | `MediaFrame.yaml` | optional `tool_call_id` (string); optional `presentation` enum `inline` (default) / `page_thumbnails`; optional `preview` object {`source_name`, `source_version` (12 hex), `page_count`, `first_page`, `last_page`, `outcome` enum `complete` / `partial` / `unavailable`, `unavailable_reason` enum `renderer_missing` / `renderer_damaged` / `renderer_failed` / `storage_failed`}; `parts` `minItems` 1 → 0, allowed empty only with `presentation: page_thumbnails` and `outcome: unavailable` (description states it; server guarantees it; T-62 asserts) |
 | `MediaPart.yaml` | optional `page_number` (integer ≥ 1); `caption` stays display text, never parsed |
-| `openapi.yaml` new route | `POST /sessions/{session_id}/previews/{tool_call_id}/retry` → 202 `{status: started}`; 403 no access to the session or source; 404 unknown preview; 409 `preview_source_changed` (current file digest ≠ recorded version); 503 `preview_renderer_unavailable`. The result arrives as a new `MediaFrame` with the same `tool_call_id`. Same limits and admission as the tool; authorization = the requesting person's access to the session and the source. |
+| `openapi.yaml` new route | `POST /sessions/{session_id}/previews/{tool_call_id}/retry` → 202 `{status: started}`; 403 `preview_source_not_in_library` (source not a file of the session workspace's Library); 404 unknown session, no access to it, or unknown preview; 409 `preview_source_changed` (current file digest ≠ recorded version); 503 `preview_renderer_unavailable`. The result arrives as a new `MediaFrame` with the same `tool_call_id`. Same limits and admission as the tool; authorization = the requesting person's access to the session and the source read through the session workspace's Library (2026-11-01). |
 
 Producers that must emit the same projection: live `pkg/gateway/webchat_channel.go::SendMedia`, replay `pkg/gateway/replay.go::buildMediaFrame` (today drops `caption`), and any REST session-history endpoint returning tool media (backend-lead lists all three). Persisted tool-call record gains the display media with `caption`, `page_number`, `tool_call_id`, `presentation`, `preview`. SPA store: media grouped by (message, `tool_call_id`) instead of flattened; dedup key (`tool_call_id`, URL); screenshots (no `tool_call_id`) unchanged.
 
@@ -533,7 +534,7 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | T-63 | Display-only: archive, window and next request contain no thumbnail bytes or refs | Integration | B-06 |
 | T-64 | Viewer focus: initial, Tab containment, 3 page changes without remount, first/last, return fallback; existing image/diagram regression | Component/E2E | B-14 |
 | T-65 | Viewer failure, zero stored, one group announcement, no per-image toast for thumbnails only | Component/E2E | B-41 |
-| T-66 | Retry route: unchanged → new frame same group; changed → 409; no access → 403; limits apply | Integration | B-42 |
+| T-66 | Retry route: unchanged Library file → new frame same group; changed → 409; source outside the Library (agent home, operator allowance, protected file) → 403 `preview_source_not_in_library`; no session access → 404; limits and §3.2 gate apply; the rendered bytes are the ones the version was computed on | Integration | B-42 |
 | T-67 | Windows guard proven: exclude one family → job fails while read-boundary tests still pass | CI | B-50 |
 | T-68 | Windows clean machine registration, tamper, unregister | Integration (Windows) | B-49 |
 | T-69 | Writer exclusion: other agent's mount/grant covering the root disables for all; approval-time check | Integration | B-48, B-18 |
@@ -609,7 +610,7 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | FR-045 | MUST enforce the named Windows test inventory. |
 | FR-046 | MUST test the four inspectors against their contracts with mutations; apply §6 dispositions. |
 | FR-047 | MUST remove the document runtime's `soffice` contract. |
-| FR-048 | MUST state the macOS best-effort memory boundary in UI text, `doctor` and docs, with no hard-cap claim. |
+| FR-048 | MUST state the macOS best-effort memory boundary in UI text and docs, with no hard-cap claim. |
 
 | ID | Success criterion |
 |---|---|
