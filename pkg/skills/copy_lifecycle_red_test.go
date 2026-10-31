@@ -548,7 +548,7 @@ func TestCopyInterference_CaptureThenStage(t *testing.T) {
 		var armed, postBoundarySourceReads int32
 		prevOpen := CaptureOpenProbe
 		CaptureOpenProbe = func(op, path string) {
-			if atomic.LoadInt32(&armed) == 1 && strings.Contains(path, srcDir) {
+			if op != "metadata" && (path == srcDir || strings.HasPrefix(path, srcDir+string(filepath.Separator))) && atomic.LoadInt32(&armed) == 1 {
 				atomic.AddInt32(&postBoundarySourceReads, 1)
 			}
 		}
