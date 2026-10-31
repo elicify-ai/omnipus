@@ -255,10 +255,11 @@ server.handle_request()
   echo $!
 }
 
-# wait until the stub prints a port, or the pid dies.
+# wait until the stub prints a port, or the pid dies. Up to 10 s: a cold python3 start on a
+# loaded Mac took longer than the former 1 s budget, so a random case reported "stub did not start".
 wait_port() {
   local portfile="$1" pid="$2" i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  for i in $(seq 1 100); do
     if [ -s "$portfile" ]; then
       cat "$portfile"
       return 0

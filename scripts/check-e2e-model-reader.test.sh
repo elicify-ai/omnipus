@@ -43,7 +43,8 @@ t1="$tmp/intact"; make_tree "$t1"
 expect_rc case1-intact 0 "$t1"
 
 t2="$tmp/env-mutant"; make_tree "$t2"
-sed -i "s/^  printf 'E2E_FALLBACK_KEYREF=%s\\\\n' \"\$F_KEYREF\"$/  : # mutant: line dropped/" "$t2/scripts/e2e-model.sh"
+sed -i.bak "s/^  printf 'E2E_FALLBACK_KEYREF=%s\\\\n' \"\$F_KEYREF\"$/  : # mutant: line dropped/" "$t2/scripts/e2e-model.sh"
+rm -f "$t2/scripts/e2e-model.sh.bak" # -i.bak: the one in-place form GNU and BSD (macOS) sed both accept
 if cmp -s "$t1/scripts/e2e-model.sh" "$t2/scripts/e2e-model.sh"; then
   echo "case2-env-mutant: FAIL — the mutation did not apply (the reader changed shape)" >&2
   fail=1
@@ -52,7 +53,8 @@ else
 fi
 
 t3="$tmp/strict-mutant"; make_tree "$t3"
-sed -i 's/--strict) STRICT=1; shift ;;/--strict) shift ;;/' "$t3/scripts/e2e-model.sh"
+sed -i.bak 's/--strict) STRICT=1; shift ;;/--strict) shift ;;/' "$t3/scripts/e2e-model.sh"
+rm -f "$t3/scripts/e2e-model.sh.bak"
 if cmp -s "$t1/scripts/e2e-model.sh" "$t3/scripts/e2e-model.sh"; then
   echo "case3-strict-mutant: FAIL — the mutation did not apply (the reader changed shape)" >&2
   fail=1
