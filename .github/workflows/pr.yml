@@ -1737,6 +1737,16 @@ jobs:
           shards=$(python3 scripts/go-test-shards.py test matrix)
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
 
+      - name: Test the sharded-runner partitioner and completeness check
+        # scripts/gateway-test-shards.py is what both sharded runners
+        # (run-gateway-sharded.sh, run-agent-sharded.sh) use to decide which
+        # tests each shard binary runs (`list`) and to prove after the run
+        # that every listed test produced a result (`verify`). A bug there
+        # silently narrows EVERY Go shard at once, so the tool carries its
+        # own unit tests (stdlib-only, ~0.1s) and they run where the shard
+        # matrix is computed.
+        run: python3 scripts/gateway-test-shards_test.py
+
   chat-history-core:
     name: Chat history core (${{ matrix.os }})
     # Product receipts for pkg/session's chat-history semantics, including the
@@ -1969,15 +1979,97 @@ jobs:
           # ~18s async-notify publish retry (3 attempts x 5s + 1s + 2s waits,
           # docs/tools.md) that the B3 and gate-fix delivery tests exercise on
           # a full or closed bus: retry in 47bda1463, tests in 57a7d0280 and
-          # 4fc5692fd. Every other non-gateway shard keeps 10m. The primary
-          # run and the isolated re-run below both use $go_timeout.
+          # 4fc5692fd. Every other non-gateway shard keeps 10m.
+          #
+          # UPDATE (#1487 part 2): pkg/agent kept growing — 889.116s on run
+          # 40958296852 (job 123755261549), within runner variance of this
+          # 20m ceiling. The shard now compiles once and runs pkg/agent in 4
+          # parallel shard binaries with a 10m PER-SHARD budget (see the
+          # branch below); the primary hang signal therefore fires at 10m.
+          # $go_timeout=20m now applies ONLY to the flake-filter isolated
+          # re-run below, where a serial pkg/agent re-run needs the full
+          # ~11-12 min measured budget — keeping it avoids recreating the
+          # documented "re-run died before it could classify" bug (the
+          # gateway 10m03s evidence above).
           packages=$(python3 scripts/go-test-shards.py test "$SHARD") || exit 1
           mapfile -t pkgs <<< "$packages"
           parallel=()
           go_timeout=10m
           if [ "$SHARD" = "agent" ]; then parallel=(-p 1); go_timeout=20m; fi
-          out=$(go test -tags goolm,stdjson -count=1 -timeout "$go_timeout" "${parallel[@]}" "${pkgs[@]}" 2>&1)
-          code=$?
+          if [ "$SHARD" = "agent" ]; then
+            # Compile-once sharded execution for pkg/agent (#1487, part 2) —
+            # the same mechanism the gateway shard uses (#1487, part 1):
+            # one `go test -c`, N parallel copies with disjoint -run regexes
+            # (scripts/run-agent-sharded.sh, partitioner
+            # scripts/gateway-test-shards.py is package-agnostic).
+            #
+            # Evidence (before this change): pkg/agent measured 889.116s on
+            # run 40958296852 (job 123755261549) with -p 1 — 165s
+            # (run 35432082880) -> 485.165s (job 121703770561) -> 889s, i.e.
+            # the shard was ~5 min from the 20m ceiling and inside runner
+            # variance of it. Measured on pod-team-a: the two B3 async-notify
+            # contract tests alone were 313s of that (projection 240.7s,
+            # producer 72.4s); the projection cost is cut at the source
+            # (bounded caller contexts in the projection subtests, whose
+            # oracles do not include the attempt count — the full-timer
+            # budget stays owned by TestAsyncNotifierB3RetryContract), and
+            # the remaining serial package is divided across 4 shard
+            # binaries.
+            #
+            # --timeout 10m is PER SHARD (the script passes it to each
+            # binary): a hang now surfaces at 10m instead of 20m. Measured
+            # basis (pod-team-a, 4 shard binaries on the pod's SHARED CPUs,
+            # i.e. worse than a GH runner's core-per-shard): shard walls
+            # 449s/380s/358s/338s, max 7.5 min, total wall 486s for all of
+            # pkg/agent — so 10m holds ~1.6-2x headroom on runner hardware
+            # and no limit was raised anywhere.
+            #
+            # go_timeout (20m) below is now ONLY the flake-filter isolated
+            # re-run budget: a serial pkg/agent re-run measured ~11-12 min
+            # after the projection cut (889s CI minus ~215s projection
+            # saving), so a tighter re-run budget would recreate the
+            # documented misclassification bug where the re-run dies before
+            # it can classify (see the gateway 10m03s evidence above).
+            #
+            # The runner script also hardens the path (2026-10-30 run-test
+            # review): each shard runs from pkg/agent itself (`go test` runs
+            # tests with the package dir as cwd — tests read
+            # testdata/todo_rule_q2.txt relative to it), a failed partition
+            # step is FATAL (the old process substitution could yield a
+            # green zero-shard run), and after the run the partitioner's
+            # `verify` completeness check fails the job unless every
+            # runnable listed test produced a --- PASS/FAIL/SKIP result
+            # line. On failure the runner also prints go test's
+            # `FAIL <pkg import path>` summary line — a test binary run ends
+            # in a bare `FAIL` with no package path, which the flake filter
+            # below cannot extract a package from — so the DATA RACE /
+            # --- FAIL carve-outs and the flake filter keep working on this
+            # step's output exactly as they did for the plain go test call.
+            # The race step below reuses the same script with --race
+            # at 2 shards.
+            shard_out=$(bash scripts/run-agent-sharded.sh --shards 4 --timeout 10m --tags goolm,stdjson 2>&1)
+            shard_code=$?
+            rest_out=""
+            rest_code=0
+            other_pkgs=()
+            for p in "${pkgs[@]}"; do
+              if [[ $p != */pkg/agent ]]; then other_pkgs+=("$p"); fi
+            done
+            if [ ${#other_pkgs[@]} -gt 0 ]; then
+              rest_out=$(go test -tags goolm,stdjson -count=1 -timeout 10m -p 1 "${other_pkgs[@]}" 2>&1)
+              rest_code=$?
+            fi
+            out="${shard_out}"
+            if [ ${#other_pkgs[@]} -gt 0 ]; then
+              out="${out}"$'\n''=== agent shard: remaining small packages ==='
+              out="${out}"$'\n'"${rest_out}"
+            fi
+            code=$shard_code
+            if [ $code -eq 0 ]; then code=$rest_code; fi
+          else
+            out=$(go test -tags goolm,stdjson -count=1 -timeout "$go_timeout" "${parallel[@]}" "${pkgs[@]}" 2>&1)
+            code=$?
+          fi
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
           # race can be reported without flipping the overall `go test` exit code
@@ -2125,7 +2217,19 @@ jobs:
           # the WHY comment above for the measurement (2702.664s on run
           # 35432082880) and the headroom rationale. Matches this step's
           # flake-filter re-run below.
-          out=$(go test -tags goolm,stdjson -count=1 -timeout 75m -p 1 ./pkg/gateway/ 2>&1)
+          # Compile-once sharded execution (ADR-067/ADR-076 follow-up, #1487).
+          # One `go test -c` produces a single test binary; N copies run in
+          # parallel, each with a deterministic subset of tests via -run regex.
+          # Partitioning lives in scripts/gateway-test-shards.py (hash % N).
+          # Output is concatenated in shard order for stable flake filter.
+          #
+          # The 75m budget is per-shard here (the script passes it to each
+          # binary). The job still has a 45-minute wall budget in the step
+          # definition; a hang is still bounded.
+          out=$(bash scripts/run-gateway-sharded.sh \
+            --shards 4 \
+            --timeout 75m \
+            --tags goolm,stdjson 2>&1)
           code=$?
           echo "$out"
           # Same DATA RACE carve-out as the previous step. A race that vanishes
@@ -2526,13 +2630,63 @@ jobs:
           # before invoking go test; never run an empty/untargeted shard.
           packages=$(python3 scripts/go-test-shards.py race "$SHARD") || exit 1
           mapfile -t race_pkgs <<< "$packages"
-          parallel=()
-          if [ "$SHARD" = "agent" ]; then parallel=(-p 1); fi
-          # 2700s (45m) per binary: comfortably covers every package here
-          # without the gateway (the slowest remaining was pkg/tools/browser
-          # at 676s on the same run). A finite hang signal is preserved.
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${parallel[@]}" "${race_pkgs[@]}" 2>&1)
-          code=$?
+          if [ "$SHARD" = "agent" ]; then
+            # Compile-once sharded -race execution for pkg/agent — the same
+            # mechanism the gateway race step uses
+            # (scripts/run-gateway-sharded.sh --race), now via
+            # scripts/run-agent-sharded.sh --race (CGO_ENABLED=1 + -race).
+            #
+            # Why 2 shards, not the unit path's 4: race-instrumented binaries
+            # are memory-heavy, so two concurrent copies, not four.
+            #
+            # Evidence (run 40958296852, job 123755261446): this job was the
+            # workflow's longest at 28.4 min, and pkg/agent's own execution
+            # was 1434.234s of it (~24 min); the four pkg/agent/* neighbour
+            # packages total ~13s. Two shards halve the pkg/agent execution
+            # wall; checkout/setup/compile are unchanged.
+            #
+            # --timeout 2700s is PER SHARD and UNCHANGED from the plain call
+            # it replaces: `go test -timeout` bounds each package's test
+            # binary, so pkg/agent's race binary had 2700s before and each
+            # shard binary has 2700s now — nothing raised, nothing lowered.
+            # What only CI can confirm: the true 2-shard wall time and the
+            # runner's memory headroom with two concurrent race binaries.
+            #
+            # The step's carve-outs below (DATA RACE / --- FAIL, and the
+            # -p 1 flake-filter re-run at the same 2700s budget) operate on
+            # the merged $out/$code unchanged, exactly as for the plain call
+            # they replace: on failure the runner prints go test's
+            # `FAIL <pkg import path>` summary line (a test binary run ends
+            # in a bare `FAIL`, which the flake filter cannot extract a
+            # package from). The agent steps carry no guard-failure
+            # carve-out: pkg/agent's TestMain emits no GUARD FAILURE token.
+            race_shard_out=$(bash scripts/run-agent-sharded.sh --race --shards 2 --timeout 2700s --tags goolm,stdjson 2>&1)
+            race_shard_code=$?
+            rest_out=""
+            rest_code=0
+            other_pkgs=()
+            for p in "${race_pkgs[@]}"; do
+              if [[ $p != */pkg/agent ]]; then other_pkgs+=("$p"); fi
+            done
+            if [ ${#other_pkgs[@]} -gt 0 ]; then
+              rest_out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s -p 1 "${other_pkgs[@]}" 2>&1)
+              rest_code=$?
+            fi
+            out="${race_shard_out}"
+            if [ ${#other_pkgs[@]} -gt 0 ]; then
+              out="${out}"$'\n''=== agent race shard: remaining small packages ==='
+              out="${out}"$'\n'"${rest_out}"
+            fi
+            code=$race_shard_code
+            if [ $code -eq 0 ]; then code=$rest_code; fi
+          else
+            parallel=()
+            # 2700s (45m) per binary: comfortably covers every package here
+            # without the gateway (the slowest remaining was pkg/tools/browser
+            # at 676s on the same run). A finite hang signal is preserved.
+            out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${parallel[@]}" "${race_pkgs[@]}" 2>&1)
+            code=$?
+          fi
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
           # race can be reported without flipping the overall `go test` exit code
@@ -2662,8 +2816,50 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 3600s -p 1 ./pkg/gateway/... 2>&1)
+          out=$(bash scripts/run-gateway-sharded.sh \
+          --shards 2 \
+          --timeout 3600s \
+          --tags goolm,stdjson \
+          --race 2>&1)
           code=$?
+          # Restore -race coverage for the gateway SUBPACKAGES. The sharded
+          # runner builds ./pkg/gateway/ only, so when this step moved to the
+          # runner (837e0582f) the subpackages the canonical race list assigns
+          # to this shard — pkg/gateway/ctxkey, pkg/gateway/pathredact,
+          # pkg/gateway/inboundschemas (no test files) and
+          # pkg/gateway/middleware (5 test files, 9.958s on run 35432082880)
+          # — silently lost -race coverage. Before 837e0582f this step ran
+          # `-timeout 3600s -p 1 ./pkg/gateway/...`; the restored run keeps
+          # the same per-binary race semantics with two stated deltas: the
+          # budget is the shared race step's 2700s per binary (~270x the
+          # largest measured subpackage, a finite hang signal preserved —
+          # the 3600s figure was sized for the pkg/gateway root's 2703s
+          # timeouts, not these), and -p 1 is dropped (it mattered only
+          # while the multi-hour root package shared the invocation; four
+          # small binaries under go test's default parallelism are how the
+          # shared race step runs its own list). The root package is
+          # filtered out of the SAME canonical list, and the output merges
+          # before the carve-outs so the DATA RACE / --- FAIL rules and the
+          # flake filter below cover the subpackages too (real
+          # `FAIL <pkg>` lines from this plain go test call feed the filter
+          # unchanged; the runner's own synthetic line covers the root).
+          gw_race_pkgs=$(python3 scripts/go-test-shards.py race gateway) || exit 1
+          sub_pkgs=()
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            if [ "$p" != "github.com/elicify-ai/omnipus/pkg/gateway" ]; then sub_pkgs+=("$p"); fi
+          done <<< "$gw_race_pkgs"
+          sub_out=""
+          sub_code=0
+          if [ ${#sub_pkgs[@]} -gt 0 ]; then
+            sub_out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${sub_pkgs[@]}" 2>&1)
+            sub_code=$?
+          fi
+          if [ ${#sub_pkgs[@]} -gt 0 ]; then
+            out="${out}"$'\n''=== gateway race shard: subpackages ==='
+            out="${out}"$'\n'"${sub_out}"
+          fi
+          if [ $code -eq 0 ]; then code=$sub_code; fi
           echo "$out"
           # Same DATA RACE carve-out as the shared step — a race is never
           # routed through a flake filter (mirrors run_gorace in

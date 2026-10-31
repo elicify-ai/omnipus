@@ -18206,7 +18206,7 @@ export interface components {
              * @enum {string}
              */
             reason?: "index_missing" | "index_inconsistent" | "catchup_limit" | "storage_error" | "projection_error";
-            /** @description Required only when unavailable. Fixed sanitized copy, never an underlying cause, path, raw position or query. For index_missing/index_inconsistent/catchup_limit: "Session history is unavailable. Retry after the operator restores its index." Other required storage/projection failures retain the fixed redacted session-storage error behavior in D11. Not a turn-ending ErrorFrame. */
+            /** @description Required only when unavailable. Fixed sanitized copy, never an underlying cause, path, raw position or query. For index_missing/index_inconsistent/catchup_limit: "This conversation's history could not be loaded." Other required storage/projection failures retain the fixed redacted session-storage error behavior in D11. Not a turn-ending ErrorFrame. */
             message?: string;
         };
         /**
@@ -19479,7 +19479,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly "Session history is unavailable. Retry after the operator restores its index." A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress. */
+            /** @description Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly "This conversation's history could not be loaded." A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress. */
             500: {
                 headers: {
                     [name: string]: unknown;

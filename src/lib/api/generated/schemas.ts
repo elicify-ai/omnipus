@@ -14756,7 +14756,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       },
       {
         status: 500,
-        description: `Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly &quot;Session history is unavailable. Retry after the operator restores its index.&quot; A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress.
+        description: `Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly &quot;This conversation&#x27;s history could not be loaded.&quot; A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress.
 `,
         schema: ErrorResponse,
       },

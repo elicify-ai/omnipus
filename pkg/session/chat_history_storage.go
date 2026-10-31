@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,6 +79,30 @@ type chatHistoryOwner struct {
 	refsMu  sync.Mutex
 	refs    map[string]int
 	retired map[string]bool
+	// loggedReason/loggedCause are the reason and the cause of the failure
+	// already logged for this owner, so one failure episode logs once.
+	loggedReason, loggedCause string
+	// heal is the demand self-heal attempt state (chat_history_heal.go).
+	heal chatHistoryHealState
+}
+
+// logFailure logs the owner's derived-index failure once per failure episode:
+// the session id, the public reason and the cause. It never logs record
+// content and never changes what the owner holds.
+func (o *chatHistoryOwner) logFailure(sessionID string) {
+	failure := o.failure
+	if failure == nil {
+		// The owner is healthy again: the next failure episode logs again.
+		o.loggedReason, o.loggedCause = "", ""
+		return
+	}
+	reason := historyFailureReason(failure)
+	cause := historyFailureCause(failure)
+	if reason == o.loggedReason && cause == o.loggedCause {
+		return
+	}
+	o.loggedReason, o.loggedCause = reason, cause
+	slog.Warn("chat history: derived index unavailable", "session_id", sessionID, "reason", reason, "cause", cause)
 }
 
 func (us *UnifiedStore) historyOwner(id string) *chatHistoryOwner {
@@ -323,18 +348,40 @@ func (o *chatHistoryOwner) retain(path string) func() error {
 
 // removeRetiredLocked keeps failed cleanup pending. The caller holds refsMu;
 // neither this path nor a reader release waits for owner.mu/session shards.
+// A Windows sharing violation (another process, such as a virus scanner,
+// holds the file) is not a failure: the file stays pending and the next
+// reconcile or reader release retries it (package rule: genuine Windows
+// sharing-busy is not proof of anything).
 func (o *chatHistoryOwner) removeRetiredLocked(path string) error {
 	if !o.retired[path] || o.refs[path] > 0 {
 		return nil
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if isArchiveSharingBusy(err) {
+			return nil
+		}
 		return err
 	}
 	delete(o.retired, path)
 	return nil
 }
 
+// historyRetirementError marks a failure to remove old index generation
+// files: cleanup after a published checkpoint, not a failed publication.
+// Error and Unwrap expose the OS error unchanged.
+type historyRetirementError struct{ err error }
+
+func (e *historyRetirementError) Error() string { return e.err.Error() }
+func (e *historyRetirementError) Unwrap() error { return e.err }
+
 func (o *chatHistoryOwner) retire(dir, keep string) error {
+	if err := o.retireFiles(dir, keep); err != nil {
+		return &historyRetirementError{err: err}
+	}
+	return nil
+}
+
+func (o *chatHistoryOwner) retireFiles(dir, keep string) error {
 	o.refsMu.Lock()
 	defer o.refsMu.Unlock()
 	entries, err := os.ReadDir(dir)
@@ -360,7 +407,9 @@ func (o *chatHistoryOwner) retire(dir, keep string) error {
 
 // validateIndexTail never trims framed damage or any canonical bytes. Only the
 // incomplete unpublished final transaction can be redone from the known root.
-func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint) (historyCheckpoint, bool, error) {
+// With discard false it only checks for damage and never truncates: the
+// discard itself runs only after the canonical 64-fact bound was enforced.
+func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint, discard bool) (historyCheckpoint, bool, error) {
 	info, err := t.file.Stat()
 	if err != nil {
 		return historyCheckpoint{}, false, err
@@ -371,6 +420,9 @@ func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint) (hi
 	for off < info.Size() {
 		frame, next, readErr := t.readFrame(off, info.Size())
 		if errors.Is(readErr, io.ErrUnexpectedEOF) {
+			if !discard {
+				return historyCheckpoint{}, false, nil
+			}
 			return historyCheckpoint{}, false, historyDiscardUnpublishedTail(t, cp)
 		}
 		if readErr != nil {
@@ -392,6 +444,9 @@ func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint) (hi
 		// Every complete frame beyond the published boundary was checked and
 		// none committed. Canonical mutation counting has already enforced64;
 		// tree-node count is not a substitute for that unique-fact bound.
+		if !discard {
+			return historyCheckpoint{}, false, nil
+		}
 		return historyCheckpoint{}, false, historyDiscardUnpublishedTail(t, cp)
 	}
 	return saved, found, nil

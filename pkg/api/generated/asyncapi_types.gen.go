@@ -1362,7 +1362,7 @@ type SessionHistoryPageInfo struct {
 
 // SessionHistoryState — Server history readiness, not proof that this client loaded a page (chat history paging D7a/D10). status=available omits reason and message. status=unavailable requires both reason and a fixed sanitized message. Producers and consumers must reject any other combination. No preparing state or successful empty-history fallback. Current authorized live controls and canonical sends remain independent.
 type SessionHistoryState struct {
-	// Required only when unavailable. Fixed sanitized copy, never an underlying cause, path, raw position or query. For index_missing/index_inconsistent/catchup_limit: "Session history is unavailable. Retry after the operator restores its index." Other required storage/projection failures retain the fixed redacted session-storage error behavior in D11. Not a turn-ending ErrorFrame.
+	// Required only when unavailable. Fixed sanitized copy, never an underlying cause, path, raw position or query. For index_missing/index_inconsistent/catchup_limit: "This conversation's history could not be loaded." Other required storage/projection failures retain the fixed redacted session-storage error behavior in D11. Not a turn-ending ErrorFrame.
 	Message *string `json:"message,omitempty"`
 	// Present only for unavailable history, after the bounded recovery attempt.
 	Reason *string `json:"reason,omitempty"`
