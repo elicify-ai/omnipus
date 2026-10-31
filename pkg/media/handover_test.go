@@ -107,8 +107,8 @@ func TestHandoverTo_OldStoreStopNeverOverwritesNewerRegistry(t *testing.T) {
 	}
 
 	liveStore := NewFileMediaStore()
-	if err := liveStore.LoadRegistry(); err != nil {
-		t.Fatalf("live store LoadRegistry: %v", err)
+	if loadErr := liveStore.LoadRegistry(); loadErr != nil {
+		t.Fatalf("live store LoadRegistry: %v", loadErr)
 	}
 	oldStore.HandoverTo(liveStore)
 
@@ -239,12 +239,12 @@ func TestHandoverTo_RefStoredAfterHandoverResolvesViaLiveStore(t *testing.T) {
 	}
 
 	// The in-flight turn keeps resolving through its snapshot.
-	if got, err := oldStore.Resolve(ref); err != nil || got != path {
-		t.Fatalf("in-flight turn lost its own new ref: resolve=%q err=%v", got, err)
+	if got, resolveErr := oldStore.Resolve(ref); resolveErr != nil || got != path {
+		t.Fatalf("in-flight turn lost its own new ref: resolve=%q err=%v", got, resolveErr)
 	}
 	// serveMedia / next-turn path: the live store must know the same ref.
-	if got, err := liveStore.Resolve(ref); err != nil {
-		t.Fatalf("ref created after the handover never reached the live store: %v", err)
+	if got, resolveErr := liveStore.Resolve(ref); resolveErr != nil {
+		t.Fatalf("ref created after the handover never reached the live store: %v", resolveErr)
 	} else if got != path {
 		t.Fatalf("live store resolves the forwarded ref to the wrong path: %q", got)
 	}

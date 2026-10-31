@@ -67,11 +67,19 @@ func registryPath() string {
 // (A fixed "registry.json.tmp" shared by concurrent saves is what produced
 // "invalid character 'e' after top-level value" on load.)
 //
+// A store retired by HandoverTo never writes: its successor owns the file.
+//
 // Lock order is registryMu, then s.mu. Must not be called while holding
 // s.mu: the snapshot takes s.mu.RLock.
 func (s *FileMediaStore) SaveRegistry() {
 	s.registryMu.Lock()
 	defer s.registryMu.Unlock()
+
+	if s.retired {
+		// HandoverTo moved this store's state to its successor, which now owns
+		// registry.json; this store's snapshot is stale by definition.
+		return
+	}
 
 	path := registryPath()
 	if path == "" {

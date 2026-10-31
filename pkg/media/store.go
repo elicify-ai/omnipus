@@ -142,6 +142,12 @@ type FileMediaStore struct {
 	// snapshots were taken. Lock order: registryMu, then mu. Never acquired
 	// while holding saveMu.
 	registryMu sync.Mutex
+	// retired is set by HandoverTo under registryMu once dst owns the live
+	// state and registry.json. SaveRegistry checks it under the same lock, so
+	// a save admitted before the handover (a debounce callback that passed
+	// saveStopped and then queued on registryMu) cannot write this store's
+	// stale snapshot after the handover.
+	retired bool
 
 	// successor is the store this store handed its state over to at a reload
 	// (#1439), set by HandoverTo. A retired store still receives
@@ -213,6 +219,16 @@ func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (
 func (s *FileMediaStore) storeRef(ref, localPath string, meta MediaMeta, scope string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Registering a ref this store already holds is a no-op. Ref IDs are
+	// unique per Store call, so a repeat is the same registration arriving
+	// twice: HandoverTo copied it into this store between the caller's
+	// storeRef and its forwardToSuccessors. Counting it again would leave the
+	// path's refCount above the number of refs, and releasing the last ref
+	// would then never delete a store-managed file.
+	if _, exists := s.refs[ref]; exists {
+		return
+	}
 
 	s.refs[ref] = mediaEntry{path: localPath, meta: meta, storedAt: s.nowFunc()}
 	if s.scopeToRefs[scope] == nil {
@@ -626,11 +642,13 @@ func (s *FileMediaStore) Stop() {
 //     flight across the swap keeps resolving through the OLD store — that
 //     half of #1439's evidence ("the agent's own turn still resolves") must
 //     keep working. s itself is retired by the caller right after the swap.
-//   - s's debounced-save machinery is disabled under s.registryMu, so any
-//     save already running on s finishes before the state moves and s can
-//     never write registry.json again: a stale final flush cannot overwrite
-//     a newer snapshot the new store writes after the swap. s.Stop() after a
-//     handover only closes its cleanup goroutine.
+//   - s is retired under s.registryMu: any save already running on s
+//     finishes before the state moves, its debounced-save machinery is
+//     disabled, and SaveRegistry refuses to write for a retired store — also
+//     for a debounce callback admitted before the handover and still queued
+//     on registryMu. s can never write registry.json again: a stale snapshot
+//     cannot overwrite a newer one the new store writes after the swap.
+//     s.Stop() after a handover only closes its cleanup goroutine.
 //   - A save is armed on dst immediately: until then the handed-over refs
 //     exist only in memory while registry.json still holds the pre-handover
 //     snapshot, so a restart in that gap would lose exactly the refs the
@@ -667,6 +685,13 @@ func (s *FileMediaStore) HandoverTo(dst *FileMediaStore) {
 	defer s.registryMu.Unlock()
 	dst.registryMu.Lock()
 	defer dst.registryMu.Unlock()
+
+	// Retire s's registry writes. saveStopped below only stops saves that have
+	// not passed their admission check yet; a debounce callback admitted
+	// earlier may already be queued on s.registryMu. It sees retired once it
+	// gets the lock and returns without writing (SaveRegistry), so nothing has
+	// to wait for it here while holding the lock it needs.
+	s.retired = true
 
 	// Retire s's debounced saves: from here on its snapshots are stale — dst
 	// owns both the live state and registry.json, and s.Stop() (called by the
