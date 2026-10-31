@@ -114,7 +114,7 @@ func (c *t02PauseStop) Stop(ctx context.Context) error {
 }
 
 type t02PendingReporter interface {
-	PendingApplication(string) (uint64, bool)
+	PendingApplication(id string) (uint64, bool)
 }
 
 // Observe an actual marker while the old rebuild is held at its barrier.
