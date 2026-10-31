@@ -1842,7 +1842,6 @@ type ExecutorDefaults = {
 type ExecutorCommandPreviewRequest = {
   cli: ExternalCliTool;
   model?: string | undefined;
-  cli_path?: string | undefined;
   cli_args?: string | undefined;
   max_tool_iterations?: number | undefined;
 };
@@ -1850,7 +1849,6 @@ type ExecutorSmokeTestRequest = {
   cli: ExternalCliTool;
   agent_id?: string | undefined;
   model?: string | undefined;
-  cli_path?: string | undefined;
   cli_args?: string | undefined;
 };
 type ChannelEntry = {
@@ -4892,7 +4890,6 @@ export const ExecutorCommandPreviewRequest: z.ZodType<ExecutorCommandPreviewRequ
   z.object({
     cli: ExternalCliTool,
     model: z.string().max(256).optional(),
-    cli_path: z.string().max(4096).optional(),
     cli_args: z.string().max(4096).optional(),
     max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   });
@@ -4909,7 +4906,6 @@ export const ExecutorSmokeTestRequest: z.ZodType<ExecutorSmokeTestRequest> =
     cli: ExternalCliTool,
     agent_id: z.string().max(128).optional(),
     model: z.string().max(256).optional(),
-    cli_path: z.string().max(4096).optional(),
     cli_args: z.string().max(4096).optional(),
   });
 export const ExecutorSmokeTestResponse = z.object({
@@ -9286,7 +9282,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/agents/executor-preview",
     alias: "postAgentsExecutorPreview",
-    description: `Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_path/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Works from the create wizard (no agent id exists yet) and from an existing agent&#x27;s edit form alike — mirrors POST /system/cli-validate&#x27;s stateless, body-driven shape. No subprocess is spawned.
+    description: `Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Works from the create wizard (no agent id exists yet) and from an existing agent&#x27;s edit form alike — mirrors POST /system/cli-validate&#x27;s stateless, body-driven shape. No subprocess is spawned.
 `,
     requestFormat: "json",
     parameters: [

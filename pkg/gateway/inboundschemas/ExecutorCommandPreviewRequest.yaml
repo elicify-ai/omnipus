@@ -7,7 +7,10 @@ description: >
   BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not
   a hand-maintained approximation. Body-driven and agent-agnostic (mirrors
   POST /system/cli-validate) so it works both from the create wizard, where
-  no agent id exists yet, and from an existing agent's edit form.
+  no agent id exists yet, and from an existing agent's edit form. There is
+  no cli_path member (T11 C-B1): the program for the CLI is the path a
+  person saved in Settings -> Third-party agents, and a request that
+  carries cli_path is refused with 400 in every inbound-validation mode.
 required:
   - cli
 additionalProperties: false
@@ -24,13 +27,6 @@ properties:
       the resulting command for claude-code and codex; for opencode the flag
       is also absent when the value is not "provider/model"-shaped — see the
       response's model_dropped_reason for that case).
-  cli_path:
-    type: string
-    maxLength: 4096
-    description: >
-      Optional executor.cli_path override to preview. Empty means "resolved
-      via the OS $PATH at spawn time" and the response's binary field reflects
-      that (the bare command name, not an absolute path).
   cli_args:
     type: string
     maxLength: 4096
