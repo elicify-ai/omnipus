@@ -18,11 +18,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type t10LoopProvider struct{ calls atomic.Int32 }
+type t10LoopProvider struct {
+	calls   atomic.Int32
+	failure error
+}
 
 func (p *t10LoopProvider) GetDefaultModel() string { return "test-model" }
 func (p *t10LoopProvider) Chat(_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
 	p.calls.Add(1)
+	if p.failure != nil {
+		return nil, p.failure
+	}
 	return &providers.LLMResponse{Content: "t10 real turn result\nLOOP_NEXT: 2m — continue"}, nil
 }
 
