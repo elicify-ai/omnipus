@@ -23,10 +23,10 @@ Status legend: **RED** = fails today on the missing feature (correct RED); **PIN
 | S-12 | picker S-12 row | model-effort-picker.test.tsx | RED | null render |
 | S-13 | effort.spec.ts S-13 | tests/e2e/effort.spec.ts | PARTIAL | collection proof only at RED; runtime = GREEN acceptance (CI) |
 | S-14 | TestT_S1_Mapping_S09/S14 rows + picker + TS notes | mapping + picker + mapEffort.test.ts | RED | sentinel |
-| S-15 | TestT_GW frame metadata (D5) | pkg/gateway/effort_red_gateway_test.go | RED | frame lacks `provider`/`reasoning_effort` |
+| S-15/S-75 | TestT_GW_ChatFrameEffortMetadataBoundaries + TestT_GW_TurnCompletionFrameCarriesEffortMetadata (D5 rows, T-W1 length boundaries incl. validate_inbound-independent refusals) | pkg/gateway/effort_red_gateway_test.go | RED | frames carry no effort metadata; no metadata length validation exists |
 | S-16 | — | — | GAP | deleted tombstone in spec |
 | S-20 | TestT_R0_S20_ExtraBodyOverrideRecorded | pkg/agent/effort_red_request_rejection_test.go | RED | no override record on entry; body pin passes |
-| S-21 | TestT_GW history transports + e2e S-21 | gateway + effort.spec.ts | RED/PARTIAL | REST/frame lack effort fields |
+| S-21 | TestT_GW_HistoryTransportsCarryEffortRecord + e2e S-21 | gateway + effort.spec.ts | RED/PARTIAL | replay/REST carry no effort record; carried-values equality rows are the landed-writer GREEN obligation |
 | S-22 | capabilities D3 rows + mapping blocked rows | capabilities.test.ts, D2 | PARTIAL | chip half via D3; `/effort` refusal needs the command GREEN |
 | S-23 | TestT_P5_S23_EffortClearsTemperature | pkg/providers/anthropic/effort_red_carrier_test.go | RED | temperature stays on the wire |
 | S-24 | TestT_P2_S24_RejectedEffortRetriedOnce | rejection file | RED | no retry (adapters send no effort) |
@@ -47,7 +47,7 @@ Status legend: **RED** = fails today on the missing feature (correct RED); **PIN
 | S-45/S-46 | served/vendored catalog checks | — | GAP | catalog pipeline (US-8) test item not in the RED scope assigned; documented for the implementer's T-C3 |
 | S-47 | — | — | GAP | deleted tombstone |
 | S-48/S-49/S-72 | TestT_S1_Mapping rows + TS twins | mapping + mapEffort.test.ts | RED | sentinel |
-| S-50/S-55/S-56/S-58/S-59/S-60/S-61/S-62 | TestT_GW agents REST + onboarding | pkg/gateway/effort_red_gateway_test.go | RED | handlers drop effort keys |
+| S-50/S-55/S-56/S-58/S-59/S-60/S-61/S-62 | TestT_GW_AgentPrimaryEffortSavedAndReadBack, AgentEffortSaveValidationRows, AgentNameOnlyEditKeepsStoredEffort, AgentModelChangeWithoutEffortMappedOrBlocked, DefaultModelEffortStored, ProviderDeleteNewDefaultCarriesEffort, OnboardingEffortStoredOnVariants, OnboardingInvalidPlacementsRefused (refusal rows PIN) | pkg/gateway/effort_red_gateway_test.go | RED | strict decode refuses `reasoning_effort` (400 unknown field); effort rows not mapped/blocked on model change |
 | S-51 | TestT_S2_S51_DefaultModelEffortUsed | rejection file | RED | llmOpts key unstorable → nothing sent |
 | S-52 | TestT_S2_S52_UnsetFallbackSendsNothing | rejection file | PIN | fallback inherits nothing (mutation: share rt.llmOpts → fails) |
 | S-53 | TestT_S2_S53_FallbackUsesOwnSetting | rejection file | RED | fallback effort unstorable |
@@ -56,8 +56,8 @@ Status legend: **RED** = fails today on the missing feature (correct RED); **PIN
 | S-65 | — | — | GAP | deny-policy dispatch lives in pkg/agent, not the tool registry (agent-loop author's item) |
 | S-69 | TestT_D1_S69_ThinkingLevelKeyDeleted + TestT_D1_S69_ThinkingLevelOptionDeleted + config codec | pkg/config + anthropic carrier | RED | legacy key still exists and still drives thinking |
 | S-71/S-78/S-97 | recap request tests (S-71 rows, S-78 hand-written config, S-97 deadline rows) | pkg/agent/effort_red_recap_request_test.go | RED + pins (S-71 row 3, no-reason-data, S-97 retry-fits row) | bodies carry no recap effort; deadline not honoured |
-| S-79/S-80 | TestT_GW memory settings recap keys + TestT_W2_RecapEffortKeysRoundTrip | gateway + pkg/config | RED | keys dropped; adapter-table effect rows = GREEN obligation (documented) |
-| S-81 | TestT_GW memory settings ranges | gateway file | RED | twelve keys unknown |
+| S-79/S-80 | TestT_GW_RecapEffortAndProviderStored, TestT_GW_RecapLimitsStoredAndBounded (bounded table) + TestT_W2_RecapEffortKeysRoundTrip | gateway + pkg/config | RED | GET carries no recap keys; limit writes unbounded/unknown; adapter-table effect rows = GREEN obligation (documented) |
+| S-81 | TestT_GW_RecapLimitsStoredAndBounded (min/max/min-1/max+1 rows, validate_inbound off+on) | pkg/gateway/effort_red_gateway_test.go | RED | keys unknown; no range validation |
 | S-82/S-93 | effort-red-recap-limits.test.tsx (T-L4/T-L7) | src/components/settings/ | RED | inputs/autosave absent |
 | S-84 | BootstrapRecapPass idle window | — | GAP | getter seam doesn't exist at RED (config getter = GREEN); effect asserted indirectly via S-79/S-97 rows |
 | S-85/S-06 | TestT_C4_S85_OutputLimitedReasoningOnly / S-06 | containment | PIN | truncated-reasoning rule unchanged |
@@ -66,8 +66,8 @@ Status legend: **RED** = fails today on the missing feature (correct RED); **PIN
 | S-89 | TestT_C5_S89_CodexRecapCarriesEffortAndNoOutputLimit | pkg/providers/effort_red_codex_recap_test.go | RED | reasoning.effort absent, no output limit |
 | S-90 | TestT_P5_S34_S90_EffortDrivesTheAnthropicWire (off row) | anthropic carrier | RED | no thinking disabled encoding |
 | S-92 | TestT_TL92_CredentialMaskingStillWorks | tools file | PIN | masking unchanged (mutation: prefix match → fails) |
-| S-94 | TestT_TL94_* + gateway refuseNullEffort + mapping composite rows | tools + gateway + D2 | RED + PIN (allow_from scalar→list control) | |
-| S-95 | TestT_GW transports (T-R2) + e2e scroll-up | gateway + effort.spec.ts | RED/PARTIAL | wire fields absent; read-time-sum mutation pinned via snapshot rows |
+| S-94 | TestT_TL94_* (tools) + TestT_GW_AgentNullEffortRefused (REST null/empty) + mapping composite rows | tools + gateway + D2 | RED + PIN (allow_from scalar→list control) | strict decode refuses the key instead of the pinned null/empty sentences |
+| S-95 | TestT_GW_HistoryTransportsCarryEffortRecord (real attach handler + ReplayMessageFrame.yaml/REST Message contract validation, no per-call member pin) + e2e scroll-up | gateway + effort.spec.ts | RED + PIN | closed wire schemas refuse `effort`/`turn_reasoning_tokens` (R3-MAJ-002); read-time-sum mutation pinned via snapshot rows |
 | S-96 | — | — | GAP | deleted tombstone |
 | S-97 | recap deadline rows | recap file | RED + PIN (retry-fits row) | |
 
