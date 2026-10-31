@@ -747,6 +747,8 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	}
 
 	if !c.IsAllowedSender(sender) {
+
+		c.RecordRejected(sender.CanonicalID)
 		return
 	}
 

@@ -367,6 +367,8 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 	sender.DisplayName = displayName
 
 	if !c.IsAllowedSender(sender) {
+
+		c.RecordRejected(sender.CanonicalID)
 		logger.DebugCF("discord", "Message rejected by allowlist", map[string]any{
 			"user_id": m.Author.ID,
 		})

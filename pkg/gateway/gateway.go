@@ -286,6 +286,10 @@ type services struct {
 	// directly). Written only during executeReload under the reloading
 	// single-flight guard. No additional lock is required for read access.
 	bundle credentials.SecretBundle
+	// bundleCaptureVersion is the channel manager's credential-write version
+	// stamped immediately before bundle was resolved (channels spec FR-050
+	// (ii)); written and read with bundle. 0 = unstamped (boot).
+	bundleCaptureVersion uint64
 
 	// reloadDegraded is set to true when a config reload fails and the service
 	// is running on the last successfully loaded config. Cleared on next

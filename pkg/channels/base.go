@@ -101,6 +101,8 @@ type BaseChannel struct {
 	owner               Channel // the concrete channel that embeds this BaseChannel
 	reasoningChannelID  string
 	cancelInterceptor   CancelRequester // injected by Manager; may be nil
+	// rejected remembers senders the allow list ignored (FR-060, base_rejected.go).
+	rejected rejectedSenderMemory
 }
 
 func NewBaseChannel(
@@ -277,10 +279,16 @@ func (c *BaseChannel) HandleMessage(
 	}
 	if sender.CanonicalID != "" || sender.PlatformID != "" {
 		if !c.IsAllowedSender(sender) {
+			rejected := sender.CanonicalID
+			if rejected == "" {
+				rejected = senderID
+			}
+			c.recordRejected(rejected)
 			return nil
 		}
 	} else {
 		if !c.IsAllowed(senderID) {
+			c.recordRejected(senderID)
 			return nil
 		}
 	}

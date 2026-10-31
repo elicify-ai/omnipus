@@ -194,6 +194,9 @@ type Manager struct {
 	// startErrors keeps each channel's last Start failure (cleared when it
 	// starts), so an approved connect can name the cause (gate r2 T2-SF-10).
 	startErrors map[string]error
+	// applied is the pending-application marker state (FR-050 leg 5;
+	// manager_applied.go). It has its own lock.
+	applied applicationMarkers
 	// reloadHandoffHook is a test seam (gate r3 CR-T2-R3-01): it runs while a
 	// reload waits for the old dispatchers with m.mu released. Nil in production.
 	reloadHandoffHook func()
@@ -2138,6 +2141,10 @@ type managerReload struct {
 	removedInstances map[string]Channel
 	cc               map[string]config.ChannelInstanceConfig
 	startCleanupErr  error
+	// captureVersion is the credential-write version stamped before secrets
+	// were resolved (FR-050 (ii)); it bounds which markers a completed
+	// rebuild may acknowledge.
+	captureVersion uint64
 }
 
 // Reload applies configuration changes to the channel manager. It compares
@@ -2145,7 +2152,15 @@ type managerReload struct {
 // stopped, added channels are initialized and started, and existing (unchanged)
 // channel workers are restarted on a fresh context to ensure continued routing.
 func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets credentials.SecretBundle) error {
-	mr := &managerReload{m: m, ctx: ctx, cfg: cfg, secrets: secrets}
+	return m.ReloadCaptured(ctx, cfg, secrets, NoCredentialCapture)
+}
+
+// ReloadCaptured is Reload for a bundle whose credential capture was stamped
+// with CredentialWriteVersion before it was resolved: a rebuilt adapter that
+// starts acknowledges only the pending-application markers that capture
+// includes (FR-050 (iii)).
+func (m *Manager) ReloadCaptured(ctx context.Context, cfg *config.Config, secrets credentials.SecretBundle, captureVersion uint64) error {
+	mr := &managerReload{m: m, ctx: ctx, cfg: cfg, secrets: secrets, captureVersion: captureVersion}
 
 	mr.m.mu.Lock()
 	defer mr.m.mu.Unlock()

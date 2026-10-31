@@ -418,6 +418,8 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 	}
 
 	if !c.IsAllowedSender(sender) {
+
+		c.RecordRejected(sender.CanonicalID)
 		logger.DebugCF("weixin", "Message rejected by allowlist", map[string]any{
 			"from_user_id": fromUserID,
 		})

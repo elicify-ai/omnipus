@@ -234,6 +234,8 @@ func (c *DingTalkChannel) onChatBotMessageReceived(
 	}
 
 	if !c.IsAllowedSender(sender) {
+
+		c.RecordRejected(sender.CanonicalID)
 		return nil, nil
 	}
 

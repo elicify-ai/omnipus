@@ -89,6 +89,7 @@ func (s *services) reloadDegradedStatus() (bool, string) {
 // mutate, so they can be atomically restored on reload failure.
 type servicesSnapshot struct {
 	bundle         credentials.SecretBundle
+	bundleCapture  uint64
 	ChannelManager *channels.Manager
 	CronService    *cron.CronService
 	TaskTrigger    *agent.TaskTriggerScheduler
@@ -99,6 +100,7 @@ type servicesSnapshot struct {
 func snapshotServices(svc *services) servicesSnapshot {
 	return servicesSnapshot{
 		bundle:         svc.bundle,
+		bundleCapture:  svc.bundleCaptureVersion,
 		ChannelManager: svc.ChannelManager,
 		CronService:    svc.CronService,
 		TaskTrigger:    svc.TaskTrigger,
@@ -109,6 +111,7 @@ func snapshotServices(svc *services) servicesSnapshot {
 
 func restoreServices(svc *services, snap servicesSnapshot) {
 	svc.bundle = snap.bundle
+	svc.bundleCaptureVersion = snap.bundleCapture
 	svc.ChannelManager = snap.ChannelManager
 	svc.CronService = snap.CronService
 	svc.TaskTrigger = snap.TaskTrigger
@@ -466,6 +469,18 @@ func executeReload(
 // markDegraded restores the bundle snapshot). Called for the config a reload
 // was handed and again, under restAPI.configMu, for handleConfigReload's
 // swap-time re-read.
+// reloadCredentialCaptureHook is a test seam (channels spec S-88 case g,
+// R8-MIN-001; test-only hook point, no sleeps): prepareReloadConfig calls it
+// with "stamped" after recording the credential-write version and before
+// resolving the channel bundle, and with "captured" after resolving it;
+// reloadChannels calls it with "rebuild" after the final capture, with the
+// config-write lock released, right before the channel rebuild. A test
+// blocks inside it to interleave a Configure credential write with the
+// capture (the swap-time capture holds configMu, which Configure also takes,
+// so the stale-bundle window of S-88 case g is "rebuild"). Nil in
+// production; never assign it outside tests.
+var reloadCredentialCaptureHook func(stage string)
+
 func prepareReloadConfig(newCfg *config.Config, runningServices *services) error {
 	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: a
 	// config reload (file-watcher poll via configReloadChan, or manual
@@ -536,7 +551,20 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 		// sentinel lets /health's degraded reason name the store without
 		// leaking the underlying error.
 		enabledRefs := buildEnabledRefMap(newCfg)
+		// FR-050 (ii): stamp the credential-write version BEFORE resolving,
+		// so a write marked after this point is never acknowledged by a
+		// rebuild that consumes this bundle (even if the resolver saw it).
+		captureVersion := channels.NoCredentialCapture
+		if mgr := runningServices.ChannelManager; mgr != nil {
+			captureVersion = mgr.CredentialWriteVersion()
+		}
+		if reloadCredentialCaptureHook != nil {
+			reloadCredentialCaptureHook("stamped") // test seam (S-88 case g)
+		}
 		newBundle, bundleErrs := credentials.ResolveBundle(newCfg, cs)
+		if reloadCredentialCaptureHook != nil {
+			reloadCredentialCaptureHook("captured") // test seam (S-88 case g)
+		}
 		bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
 		if healthErr := storeHealthFailure("reload", cs.HealthCheck()); healthErr != nil {
 			return fmt.Errorf("reload rejected: %w", fatalStoreWideAuthFailure(healthErr,
@@ -569,6 +597,7 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 			return fmt.Errorf("reload rejected: %w", fatalStoreWideAuthFailure(e, nil))
 		}
 		runningServices.bundle = newBundle
+		runningServices.bundleCaptureVersion = captureVersion
 
 		// Re-register the complete plaintext set so the scrubber stays current
 		// after reload: config refs, enabled MCP env values, and OAuth grants
@@ -991,7 +1020,11 @@ func (rs *restartServicesState) reloadChannels() (error, bool) {
 	// PairingObserver set when they first emit events.
 	wireChannelManager(rs.runningServices.ChannelManager, rs.al)
 
-	if rs.err = rs.runningServices.ChannelManager.Reload(context.Background(), rs.cfg, rs.runningServices.bundle); rs.err != nil {
+	if reloadCredentialCaptureHook != nil {
+		reloadCredentialCaptureHook("rebuild") // test seam (S-88 case g)
+	}
+	if rs.err = rs.runningServices.ChannelManager.ReloadCaptured(context.Background(), rs.cfg,
+		rs.runningServices.bundle, rs.runningServices.bundleCaptureVersion); rs.err != nil {
 		return fmt.Errorf("error reload channels: %w", rs.err), true
 	}
 	// Post-Reload re-wire: Reload() may have recreated channel instances (new

@@ -794,6 +794,8 @@ func (c *MatrixChannel) handleMessageEvent(ctx context.Context, evt *event.Event
 	}
 
 	if !c.IsAllowedSender(sender) {
+
+		c.RecordRejected(sender.CanonicalID)
 		logger.DebugCF("matrix", "Message rejected by allowlist", map[string]any{
 			"sender_id": senderID,
 		})

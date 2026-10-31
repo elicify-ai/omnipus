@@ -307,6 +307,7 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	if mgr := a.agentLoop.GetChannelManager(); mgr != nil {
 		failed := mgr.FailedChannels()
 		applyDegradedOverlay(channels, failed)
+		applyRejectedSendersOverlay(channels, mgr.GetChannel)
 		// Warn for any failed channel whose (normalised) base type has no matching
 		// entry in the channels list — these are dead channels that would otherwise
 		// be silently invisible to operators. Entry ids may now be per-instance
@@ -1356,7 +1357,16 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 
 	// Phase C — execute. Validation passed: perform the credential-store writes
 	// and the config-file merge (unchanged from the pre-restructure behavior).
+	//
+	// FR-056: every failure below is classified by what this request durably
+	// changed — storedCount tracks the credentials already in the store. A
+	// stored credential sets the pending-application marker (FR-050 leg 5)
+	// right after its store when the saved configuration already selects its
+	// reference, otherwise only once the write has made the configuration
+	// select it.
+	beforeCfg := a.agentLoop.GetConfig()
 	var clearedRefs []string // credentials to delete AFTER the config write commits
+	storedCount, markAfterWrite := 0, 0
 	for _, act := range actions {
 		delete(updates, act.field) // never persist the inline plaintext
 		refField := act.field + "_ref"
@@ -1368,10 +1378,19 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 			clearedRefs = append(clearedRefs, act.refName)
 			continue
 		}
-		if _, err := a.storeCredential(act.refName, act.secret); err != nil {
-			slog.Error("rest: store channel credential", "channel", channelID, "field", act.field, "error", err)
-			jsonServerFailure(w, http.StatusInternalServerError, "could not store the "+act.field+" credential", err)
+		if err := configureStoreCredential(a, act.refName, act.secret); err != nil {
+			code := gen.ChannelConfigureErrorCodeCouldNotSave
+			if storedCount > 0 {
+				code = gen.ChannelConfigureErrorCodeCredentialSavedNotSaved
+			}
+			writeConfigureFailure(w, channelID, code, "could not store the "+act.field+" credential", err)
 			return
+		}
+		storedCount++
+		if selected, _ := existing[refField].(string); selected == act.refName {
+			a.markCredentialsPending(channelID, 1)
+		} else {
+			markAfterWrite++
 		}
 		updates[refField] = act.refName
 	}
@@ -1404,10 +1423,16 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		updatedCh = ch
 		return nil
 	}); err != nil {
-		slog.Error("rest: configure channel", "channel", channelID, "error", err)
-		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
+		code := configureWriteFailureCode(err, storedCount)
+		if code == gen.ChannelConfigureErrorCodeSavedNotRefreshed {
+			// The file now selects this request's references (FR-050 (i));
+			// no RequestRestart, no reload (T-6b).
+			a.markCredentialsPending(channelID, markAfterWrite)
+		}
+		writeConfigureFailure(w, channelID, code, "", err)
 		return
 	}
+	a.markCredentialsPending(channelID, markAfterWrite)
 
 	// Config (with cleared refs) is durable now — delete the now-unreferenced
 	// credentials. A failure here only leaves an orphaned encrypted blob (the ref
@@ -1469,7 +1494,10 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		}
 	}
 
-	jsonOK(w, redactChannelConfig(channelID, updatedCh))
+	// FR-050/FR-052: restart from desired-vs-applied state and report the
+	// true outcome (T-6).
+	applied := a.applyConfiguredChannel(channelID, beforeCfg, storedCount > 0)
+	jsonOK(w, configureResponse(redactChannelConfig(channelID, updatedCh), applied))
 }
 
 // testChannel handles POST /api/v1/channels/{id}/test.
