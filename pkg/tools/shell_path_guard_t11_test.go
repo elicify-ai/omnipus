@@ -594,13 +594,15 @@ func TestGuard_LongOptionScriptPositionKeptCertain(t *testing.T) {
 // written or launched; /tm must be absent so the glue literal's condition 4
 // holds.
 //
-// Grammar decisions (cited, not guessed):
+// Grammar context (not a test of the scanner's all-digit fd rule):
 //   - `bash2>x` is NOT a shell invocation: under POSIX 2.3 Token Recognition
 //     and 2.7 Redirection an IO_NUMBER is recognized only when the token
 //     immediately before the operator is all digits; `bash2` is an ordinary
 //     command word, so the simple command is "run bash2 with stdout
 //     redirected" and no interpreter reads the pipe. It must stay allowed —
-//     including after the fix.
+//     including after the fix. This guard-level control pins that allowance,
+//     not the all-digit refinement: an ends-in-a-digit classifier can produce
+//     the same guard verdict. That refinement is unpinned here (CHECK W1).
 //   - `bash&>out.txt`: bash lexes `&>` as its combined stdout+stderr
 //     redirection operator; POSIX sh has no `&>` and reads `&` as the async
 //     separator (an asynchronous bash still reading the pipe, then an empty
