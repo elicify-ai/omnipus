@@ -98,16 +98,16 @@ it.each([404, 410] as const)('T66: permanent HTTP%i keeps preview without Retry 
 it('T66: HTTP401 invokes existing sign-in handling without silent retries', async () => {
   const previousURL = window.location.href
   const previousState = window.history.state
-  let history: ReturnType<typeof createHashHistory> | undefined
+  const history: { current?: ReturnType<typeof createHashHistory> } = {}
   restoreOwnedHashHistory = () => {
-    try { history?.destroy() }
+    try { history.current?.destroy() }
     finally { window.history.replaceState(previousState, '', previousURL) }
   }
   // Production forceLogout redirects through window.location.hash. Only this
   // fixture opts into the same real history; it never redirects on auth's behalf.
   window.history.replaceState({}, '', `/#${MAIN_PATH}`)
-  history = createHashHistory()
-  app = await openPreviewApp(undefined, { history })
+  history.current = createHashHistory()
+  app = await openPreviewApp(undefined, { history: history.current })
   app.network.respond('GET', fullPath(), () => json({ error: 'unauthorized' }, 401))
   app.network.respond('GET', '/api/v1/auth/validate', () => json({ error: 'unauthorized' }, 401))
   await userEvent.setup().click(previewToggle())

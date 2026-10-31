@@ -48,7 +48,7 @@ export async function rest(sources: Message[], kind: 'latest' | 'older' | 'refre
     mode: kind === 'refresh' ? 'window_refresh' : kind, limit: kind === 'refresh' ? 100 : 20,
     min_rows: 1, stop_reason: earlier ? 'row_target' : 'end',
   } })
-  const reads = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response(selected))
+  const reads = vi.fn<typeof fetch>(async () => response(selected))
   vi.stubGlobal('fetch', reads)
   const store = useChatStore.getState()
   if (kind === 'older') await store.loadOlderHistory(SID, { limit: 20, min_rows: 1 })

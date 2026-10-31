@@ -34,16 +34,7 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled')
   return status === 'cancelled' ? { type: 'incomplete', reason: 'cancelled' } : { type: 'complete' }
 }
 
-export function renderHistoricalToolCall({
-  tc,
-  callId,
-  inlineEvents,
-  activeSessionId,
-  verboseChatEnabled,
-  goalRecordEmpty,
-  liteMode,
-  historyPosition,
-}: {
+interface HistoricalToolCallArgs {
   tc: ToolCall
   callId: string
   inlineEvents: readonly DelegationEvent[] | undefined
@@ -53,7 +44,10 @@ export function renderHistoricalToolCall({
   liteMode: boolean
   /** The saved occurrence owning this call (#1452 D2: addresses its full result). */
   historyPosition?: string
-}): ReactNode {
+}
+
+export function renderHistoricalToolCall(args: HistoricalToolCallArgs): ReactNode {
+  const { tc, callId, inlineEvents, activeSessionId, verboseChatEnabled, historyPosition } = args
   // #1452 D2 A2.4: a result the history page shortened reaches no
   // tool-specific renderer (they would try to parse the marker as their own
   // result shape); every tool falls back to the one preview display.
@@ -64,6 +58,19 @@ export function renderHistoricalToolCall({
       <HistoryPreviewToolCall key={callId} tc={tc} marker={tc.result} sessionId={activeSessionId ?? ''} historyPosition={historyPosition} />
     ) : null)
   }
+  return renderSavedToolCall(args)
+}
+
+/** The tool-specific replay renderers, for a result that was not shortened. */
+function renderSavedToolCall({
+  tc,
+  callId,
+  inlineEvents,
+  activeSessionId,
+  verboseChatEnabled,
+  goalRecordEmpty,
+  liteMode,
+}: HistoricalToolCallArgs): ReactNode {
   // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
   // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
   // here too, so replayed sessions render the preview link (or the malformed

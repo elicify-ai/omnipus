@@ -92,6 +92,18 @@ function readOptions(sessionId: string, position: string, generation: number, en
 }
 
 /** One occurrence's full public projection, read only while `enabled`. Same position, same read. */
+/**
+ * A full read answered with the D4 per-item placeholder (spec D4; A2.2, #1452
+ * SEC-3): the server kept the occurrence's identity and position but cannot
+ * serve its saved body. Only ordinary user/assistant occurrences are ever
+ * shortened, so a system-role answer is that placeholder. It is a permanent
+ * state of this occurrence, not a failed read: the same read returns it again.
+ */
+export function isHistoryEntryPlaceholder(entry: SessionHistoryEntry | undefined): boolean {
+  // The Message type carries no tool calls on a system-role entry.
+  return entry?.role === 'system'
+}
+
 export function useHistoryEntryRead(sessionId: string, position: string, enabled: boolean): UseQueryResult<SessionHistoryEntry, Error> {
   const generation = useHistoryEntryReadStore(state => state.generations[entryKey(sessionId, position)] ?? 0)
   const refused = useHistoryEntryReadStore(state => state.refused[entryKey(sessionId, position)] === true)

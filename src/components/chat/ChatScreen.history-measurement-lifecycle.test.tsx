@@ -102,7 +102,7 @@ describe('I2 actual viewport measurement lifecycle — D5/D-G1c', () => {
     await resize()
     // Only one row is now mounted. The99 old-width samples must NOT dilute120.
     expectAverage(120, 'D5 width generation resets old unmounted samples, not only observed rows')
-    expect(historyAttachSizing(MAIN_ID), 'ceil(3200/120)=27; ceil(1600/120)=14').toStrictEqual({ history_limit: 27, history_min_rows: 14 })
+    expect(historyAttachSizing(MAIN_ID), 'ceil(2400/120)=20; ceil(1600/120)=14').toStrictEqual({ history_limit: 20, history_min_rows: 14 })
   })
 
   it('Verbose presentation change drops prior unmounted samples, even at the same width', async () => {
@@ -115,14 +115,14 @@ describe('I2 actual viewport measurement lifecycle — D5/D-G1c', () => {
     await act(async () => useChatPreferencesStore.getState().setVerboseChatEnabled(!previous))
     await resize()
     expectAverage(160, 'D5 presentation generation resets all99 unmounted old samples')
-    expect(historyAttachSizing(MAIN_ID), '3200/160=20;1600/160=10').toStrictEqual({ history_limit: 20, history_min_rows: 10 })
+    expect(historyAttachSizing(MAIN_ID), '2400/160=15 clamped20;1600/160=10').toStrictEqual({ history_limit: 20, history_min_rows: 10 })
   })
 
   it('session change forgets old attach geometry and starts80 when no new stable row is measured', async () => {
     await loadRows(sources())
     render(<MeasurementProbe />)
     expectAverage(40, 'positive control: outgoing session has measured geometry')
-    expect(historyAttachSizing(MAIN_ID), 'known outgoing H800/A40 geometry').toStrictEqual({ history_limit: 80, history_min_rows: 40 })
+    expect(historyAttachSizing(MAIN_ID), 'known outgoing H800/A40 geometry').toStrictEqual({ history_limit: 60, history_min_rows: 40 })
     const next = 'I2-next-session'
     await loadRows(sources(1001), { sid: next })
     layout.state.rowHeight = 0
@@ -130,7 +130,7 @@ describe('I2 actual viewport measurement lifecycle — D5/D-G1c', () => {
     await resize()
     expectAverage(80, 'D5 new session with no positive measurements uses the seed, not outgoing40')
     expect(historyAttachSizing(MAIN_ID), 'leaving the session clears its ephemeral attach geometry').toStrictEqual({})
-    expect(historyAttachSizing(next), 'new H800/A80 uses opening40/floor20').toStrictEqual({ history_limit: 40, history_min_rows: 20 })
+    expect(historyAttachSizing(next), 'new H800/A80 uses opening30/floor20').toStrictEqual({ history_limit: 30, history_min_rows: 20 })
   })
 
   it('excludes zero/negative/nonfinite, unstable, hidden, aria-hidden, live anchors and loader/hint/Retry nodes', async () => {
@@ -141,7 +141,7 @@ describe('I2 actual viewport measurement lifecycle — D5/D-G1c', () => {
     ])
     render(<MeasurementProbe unstable={[5]} hiddenRows={[6]} ariaHiddenRows={[7]} liveAnchors={[8]} controls />)
     expectAverage(40, 'only the one stable positive visible recorded row contributes')
-    expect(historyAttachSizing(MAIN_ID), 'excluded objects do not bias actual request geometry').toStrictEqual({ history_limit: 80, history_min_rows: 40 })
+    expect(historyAttachSizing(MAIN_ID), 'excluded objects do not bias actual request geometry').toStrictEqual({ history_limit: 60, history_min_rows: 40 })
   })
 
   it('measures actual tool children once, not wrapper plus children', async () => {
@@ -155,7 +155,7 @@ describe('I2 actual viewport measurement lifecycle — D5/D-G1c', () => {
     layout.state.toolHeights.set('child80', 80)
     render(<MeasurementProbe />)
     expectAverage(60, 'D5(40+80)/2, never(120+40+80)/3')
-    expect(historyAttachSizing(MAIN_ID), 'ceil(3200/60)=54;ceil(1600/60)=27').toStrictEqual({ history_limit: 54, history_min_rows: 27 })
+    expect(historyAttachSizing(MAIN_ID), '2400/60=40;ceil(1600/60)=27').toStrictEqual({ history_limit: 40, history_min_rows: 27 })
   })
 
   it.each(['hidden', 'zero-height'] as const)('%s suppresses real automatic HTTP reads; a visible positive viewport resumes them', async mode => {
@@ -174,14 +174,14 @@ describe('I2 actual viewport measurement lifecycle — D5/D-G1c', () => {
       layout.visibility(false)
       fireEvent.scroll(region)
     })
-    await waitFor(() => expect(network.requests.filter(read => read.path === path()), 'positive instrument: visible viewport actually asks for missing4H coverage').toHaveLength(2))
+    await waitFor(() => expect(network.requests.filter(read => read.path === path()), 'positive instrument: visible viewport actually asks for missing3H coverage').toHaveLength(2))
     const reads = network.requests.filter(read => read.path === path())
-    expect(Object.fromEntries(new URLSearchParams(reads[1].query)), '40 initial40px rows cover1600; opening needs1600 more, so40/40').toStrictEqual({ before: pos(61), limit: '40', min_rows: '40' })
-    const response = page(sources(21, 40), { sessionId: MAIN_ID, later: true, info: { mode: 'older', limit: 40, min_rows: 40 } })
-    expectValidPage(response, sources(21, 40).map(row => row.history_position!), 40)
+    expect(Object.fromEntries(new URLSearchParams(reads[1].query)), '40 initial40px rows cover1600; opening needs800 more, so20/20').toStrictEqual({ before: pos(61), limit: '20', min_rows: '20' })
+    const response = page(sources(41, 20), { sessionId: MAIN_ID, later: true, info: { mode: 'older', limit: 20, min_rows: 20 } })
+    expectValidPage(response, Array.from({ length: 20 }, (_, index) => pos(41 + index)), 20)
     await act(async () => held.resolve(json(response)))
-    await waitFor(() => expect(useChatStore.getState().history.readerPositions, 'real adapter commits the resumed contiguous page').toStrictEqual(Array.from({ length: 80 }, (_, index) => pos(21 + index))))
-    expect(network.requests.filter(read => read.path === path()), 'two-screen top-up completes4H with no concurrent duplicate').toHaveLength(2)
+    await waitFor(() => expect(useChatStore.getState().history.readerPositions, 'real adapter commits the resumed contiguous page').toStrictEqual(Array.from({ length: 60 }, (_, index) => pos(41 + index))))
+    expect(network.requests.filter(read => read.path === path()), 'one-screen remainder completes3H with no concurrent duplicate').toHaveLength(2)
   })
 })
 
@@ -197,12 +197,12 @@ describe('I2 real virtualizer estimated-prefix invalidation — D5/D-G1d', () =>
     expect(mounted.length, 'positive instrument: real virtual rows are mounted').toBeGreaterThan(0)
     expect(mounted.length, 'positive instrument: some source rows really are unmounted estimates').toBeLessThan(100)
     expect(content.style.height, '100 ordinary rows initially measured/estimated80 =>8000').toBe('8000px')
-    expect(historyAttachSizing(MAIN_ID), 'positive control: initial stable measurements really are80').toStrictEqual({ history_limit: 40, history_min_rows: 20 })
+    expect(historyAttachSizing(MAIN_ID), 'positive control: initial stable measurements really are80').toStrictEqual({ history_limit: 30, history_min_rows: 20 })
 
     layout.state.rowHeight = 40
     await resize()
     await resize()
-    await waitFor(() => expect(historyAttachSizing(MAIN_ID), 'same generation now observes40, after—not instead of—the initial80 measurement').toStrictEqual({ history_limit: 80, history_min_rows: 40 }))
+    await waitFor(() => expect(historyAttachSizing(MAIN_ID), 'same generation now observes40, after—not instead of—the initial80 measurement').toStrictEqual({ history_limit: 60, history_min_rows: 40 }))
     expect(content.style.height, 'D5 ALL unmeasured prefixes use current40, not stale80;100*40=4000').toBe('4000px')
 
     // The control prefix is an independently measured physical DOM input.
