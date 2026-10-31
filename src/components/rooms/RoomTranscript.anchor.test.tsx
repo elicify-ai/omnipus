@@ -88,10 +88,12 @@ function scrollLogToTop(): void {
   // anchor. Merely changing a JS variable no longer drives the shared list.
   fireEvent.wheel(log, { deltaY: -1 })
   log.scrollTop = 0
-  fireEvent.scroll(log)
   expect(log.scrollTop, 'instrument: the reader reached the loaded top').toBe(0)
+  expect(viewportTopOf('entry-3')).toBe(CONTROL_HEIGHT)
+  fireEvent.scroll(log)
   expect(useRoomStore.getState().rooms[ROOM_ID]?.viewMode, 'instrument: the real store received reader intent')
     .toBe('historical')
+  expect(viewportTopOf('entry-3')).toBe(CONTROL_HEIGHT)
 }
 
 function moveReaderDuringGet(): void {
