@@ -291,3 +291,15 @@ func RetentionSweep(historyRoot string, windowDays int, disabled bool, now time.
 	_ = redNotImplemented
 	return redNotImplemented // RED scaffold
 }
+
+// ContentRevision is §7.3's proposed revision function: regular files hashed
+// by relative path + executable bit + bytes; non-regular entries hashed as
+// type + link target (never dereferenced); directories ignored;
+// .versions/, .omnipus-builtin and .skill-origin.json skipped; ErrNotFound
+// only when the folder is absent. It replaces revisionForDir's
+// ErrNotFound-on-missing-SKILL.md behaviour (§5.11) and, unlike the pinned
+// hasher, it is sensitive to the executable bit (R8-MIN-002).
+func ContentRevision(dir string) (string, error) {
+	_ = redNotImplemented
+	return "", redNotImplemented // RED scaffold
+}
