@@ -509,12 +509,13 @@ func extractEnvVar(output, prefix string) string {
 	return ""
 }
 
-// TestBashDocumentRuntimeCorruptRegistryRunsCommandsWithNotice is the
-// coordinator-corrected readiness design: a corrupt OPTIONAL Office
-// installation must not indiscriminately block unrelated bash commands. The
+// TestBashDocumentRuntimeCorruptManifestRunsCommandsWithNotice is the
+// coordinator-corrected readiness design: a corrupt OPTIONAL document-runtime
+// manifest must not indiscriminately block unrelated bash commands. AD-3
+// removes converter registries from readiness; the manifest owns it. The
 // command runs on the host environment while the result truthfully reports
 // the broken managed runtime — the fallback is loud, never silent.
-func TestBashDocumentRuntimeCorruptRegistryRunsCommandsWithNotice(t *testing.T) {
+func TestBashDocumentRuntimeCorruptManifestRunsCommandsWithNotice(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses POSIX shell")
 	}
@@ -524,11 +525,7 @@ func TestBashDocumentRuntimeCorruptRegistryRunsCommandsWithNotice(t *testing.T) 
 		t.Fatal(err)
 	}
 	layout := provisionLayout(t, home, "mia")
-	registry := documentruntime.ConverterServiceRegistryDir(layout)
-	if mkdirErr := os.MkdirAll(registry, 0o755); mkdirErr != nil {
-		t.Fatal(mkdirErr)
-	}
-	if writeErr := os.WriteFile(filepath.Join(registry, "services.rdb"), []byte(`<components>`), 0o644); writeErr != nil {
+	if writeErr := os.WriteFile(layout.Manifest, []byte(`{"revision":`), 0o644); writeErr != nil {
 		t.Fatal(writeErr)
 	}
 	tool, err := NewExecToolWithDeps(workspace, true, nil, ExecToolDeps{GodMode: false})
@@ -560,10 +557,10 @@ func TestBashDocumentRuntimeCorruptRegistryRunsCommandsWithNotice(t *testing.T) 
 	}
 }
 
-// TestBashDocumentRuntimeCorruptRegistryNoticeAcrossSpawnModes extends the
+// TestBashDocumentRuntimeCorruptManifestNoticeAcrossSpawnModes extends the
 // corrected readiness design to every spawn mode: foreground/background and
 // god-mode/sandboxed all run the command and all carry the honest notice.
-func TestBashDocumentRuntimeCorruptRegistryNoticeAcrossSpawnModes(t *testing.T) {
+func TestBashDocumentRuntimeCorruptManifestNoticeAcrossSpawnModes(t *testing.T) {
 	for _, tc := range []struct {
 		name                string
 		godMode, background bool
@@ -580,11 +577,7 @@ func TestBashDocumentRuntimeCorruptRegistryNoticeAcrossSpawnModes(t *testing.T) 
 				t.Fatal(err)
 			}
 			layout := provisionLayout(t, home, "mia")
-			registry := documentruntime.ConverterServiceRegistryDir(layout)
-			if mkdirErr := os.MkdirAll(registry, 0o755); mkdirErr != nil {
-				t.Fatal(mkdirErr)
-			}
-			if writeErr := os.WriteFile(filepath.Join(registry, "services.rdb"), []byte(`<components>`), 0o644); writeErr != nil {
+			if writeErr := os.WriteFile(layout.Manifest, []byte(`{"revision":`), 0o644); writeErr != nil {
 				t.Fatal(writeErr)
 			}
 			tool, err := NewExecToolWithDeps(workspace, true, nil, ExecToolDeps{GodMode: tc.godMode})
