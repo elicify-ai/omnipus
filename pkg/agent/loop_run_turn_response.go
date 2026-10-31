@@ -51,6 +51,9 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 		if err := cr.rr.rq.checkpointRequest(true); err != nil {
 			return nil, err
 		}
+		// #1534: a new provider call starts with no pre-Stop text of its
+		// own; a streamed attempt records what it shows (stop_turn_end.go).
+		cr.rr.rq.ri.rf.rt.ts.setStopShown("", false)
 		return cr.rr.rq.ri.rf.rt.callProviderOnce(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
 	}
 
