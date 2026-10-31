@@ -241,3 +241,78 @@ func TestWsStreamer_CutoffAtStop_ConcurrentUpdate_SavesOnlyPreCutBody(t *testing
 			"nothing delivered after the server claimed the Stop may be saved (#1534)")
 	}
 }
+
+// TestWsStreamer_StopCutoff_ZeroPreStopTokens_SavesNothing pins the
+// empty-buffer arm of the Stop cutoff (CHECK F5 — the case whose
+// regression protection was missing: mutation (e), removing
+// persistTranscript's `&& !wsf.stopCut` guard, survived the round-1 pack).
+// The user Stops BEFORE any token arrived; the final content that the turn
+// loop hands Finalize afterwards is post-Stop text and must not be saved —
+// the combined saved body stays empty.
+//
+// This is regression coverage: 009aa51fb already has the empty-buffer guard.
+// Independent CHECK must remove `&& !wsf.stopCut` from persistTranscript and
+// confirm this test dies on saved "AFTER" instead of "". Mutation proof is
+// deferred to CHECK, not claimed by the RED author.
+//
+// BDD:
+//
+//	Given a streaming assistant answer with no tokens shown yet,
+//	When the server claims the Stop and the turn's final content "AFTER" is
+//	  handed to Finalize afterwards,
+//	Then no saved assistant entry contains that post-Stop text — the
+//	  combined saved body is empty.
+func TestWsStreamer_StopCutoff_ZeroPreStopTokens_SavesNothing(t *testing.T) {
+	streamer, store, sid := newStopParityStreamer(t, "chat-1534-zero", "turn-1534-zero", "msg-1534-zero")
+	ctx := context.Background()
+
+	// No Update ever ran: prove the saved buffer is empty at the claim.
+	streamer.statsMu.Lock()
+	bufferedAtClaim := streamer.accumulated.Len()
+	streamer.statsMu.Unlock()
+	require.Equal(t, 0, bufferedAtClaim, "this case must exercise the empty-buffer fallback, not a prefix cut")
+	hasCut := claimStopCutoffForTest(t, streamer)
+
+	// A delivery strictly after the claim: still published (frames
+	// unchanged), never saved.
+	require.NoError(t, streamer.Update(ctx, "AFTER"))
+	hub := streamer.wsHandler().hubs.lookup(sid)
+	require.NotNil(t, hub, "the first token must create the session's hub")
+	hub.mu.Lock()
+	items := hub.proj.snapshot()
+	hub.mu.Unlock()
+	require.Len(t, items, 1)
+	assert.Equal(t, "AFTER", items[0].text,
+		"frames are unchanged by the fix: the post-Stop token is still published live")
+
+	// The turn loop's final content arrives after the claim — post-Stop text.
+	require.NoError(t, streamer.Finalize(ctx, "AFTER"))
+
+	assistant := stopParityAssistantEntries(t, store, sid)
+	combined := ""
+	for i, entry := range assistant {
+		assert.NotContains(t, entry.Content, "AFTER",
+			"nothing delivered after the server claimed the Stop may be saved (assistant entry %d: %q)", i, entry.Content)
+		combined += entry.Content
+	}
+	assert.Empty(t, combined,
+		"with zero pre-Stop tokens the saved stopped answer must be empty, not the post-Stop final content (got %q)", combined)
+	assert.True(t, hasCut, "the cutoff seam must exist for the empty-buffer arm above to hold")
+}
+
+// TestWsStreamer_NoStop_ZeroTokens_FallbackStillSavesFinalContent is the
+// paired positive control for the row above (CHECK F5 step 5): with no Stop
+// and no streamed updates, persistTranscript's empty-buffer finalContent
+// fallback must still save exactly that final content — the ordinary
+// disconnected/empty-buffer path this round must not break.
+func TestWsStreamer_NoStop_ZeroTokens_FallbackStillSavesFinalContent(t *testing.T) {
+	streamer, store, sid := newStopParityStreamer(t, "chat-1534-zero-ctl", "turn-1534-zero-ctl", "msg-1534-zero-ctl")
+	ctx := context.Background()
+
+	require.NoError(t, streamer.Finalize(ctx, "AFTER"))
+
+	assistant := stopParityAssistantEntries(t, store, sid)
+	require.Len(t, assistant, 1, "the fallback must persist the final content as the assistant entry")
+	assert.Equal(t, "AFTER", assistant[0].Content,
+		"control: with no Stop, the empty-buffer fallback saves exactly the final content")
+}

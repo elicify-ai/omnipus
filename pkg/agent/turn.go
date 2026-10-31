@@ -464,6 +464,10 @@ type turnState struct {
 	// Last streamer used during this turn. Finalized once at turn end
 	// to send the "done" frame, preventing premature done signals mid-turn.
 	lastStreamer bus.Streamer
+	// stopShown is the text the last provider attempt streamed before a
+	// user Stop claim that the answer does not hold yet (#1534, see
+	// stop_turn_end.go). Guarded by mu.
+	stopShown string
 
 	// Transcript recording fields (nil transcriptStore disables recording)
 	transcriptSessionID string
