@@ -121,6 +121,10 @@ afterEach(() => {
 describe('F-a — cached opening waits for this attach snapshot', () => {
   it('does not spend the opening jump on cached rows carrying the previous ready flag', async () => {
     const socket = await mountCachedRoom()
+    // S-42 / CHECK F1: observe the cover after two real reveal frames.
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    })
 
     expect(screen.getByText('entry-5'), 'cached rows are actually mounted').toBeInTheDocument()
     expect(useRoomStore.getState().rooms[ROOM_ID]?.snapshotReceived, 'S-42 this attach is not ready').toBe(false)
@@ -153,6 +157,10 @@ describe('F-a — cached opening waits for this attach snapshot', () => {
       return json({ entries: [message(1), message(2)], has_older: false } satisfies RoomHistoryResponse)
     })
     const socket = await mountCachedRoom(ROOM_ID, true)
+    // S-42 / CHECK F1: observe the cover after two real reveal frames.
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    })
     expect(useRoomStore.getState().rooms[ROOM_ID]?.hasOlder, 'older rows exist before the current snapshot').toBe(true)
     expect(useRoomStore.getState().rooms[ROOM_ID]?.snapshotReceived).toBe(false)
     expect(historyRequests(), 'cached rows cannot spend the opening fill').toEqual([])
