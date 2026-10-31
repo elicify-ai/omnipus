@@ -14,9 +14,9 @@ import (
 )
 
 // checkDocumentPreview reports the document preview components and limits
-// (office preview spec AD-4, AD-7, §3.1 D1.4): a missing, damaged or
-// agent-writable LibreOffice or PDF renderer, and a Linux memory limit the
-// kernel does not enforce. Read-only: it resolves and fingerprints the
+// (office preview spec AD-4, AD-7, §3.1 D1.4): a damaged or agent-writable
+// LibreOffice or PDF renderer, and a Linux memory limit the kernel does not
+// enforce. A component that is not installed is silent. Read-only: it resolves and fingerprints the
 // components and never runs them.
 func checkDocumentPreview(cfg *config.Config) []warning {
 	home := internal.GetOmnipusHome()
@@ -61,7 +61,10 @@ func componentProblem(r *component.Resolver, roots []component.WriteRoot, kind c
 	comp, problem := r.Resolve(kind)
 	if problem != nil {
 		if problem.Status == component.StatusMissing {
-			return fmt.Sprintf("%s not installed: %s. To add it, %s.", name, effect, reinstall)
+			// Not installed is a supported install choice, not a doctor
+			// finding (AD-4, architect ruling 2026-11-01): previews report
+			// it when they are used.
+			return ""
 		}
 		return fmt.Sprintf("%s damaged (%s): %s. Reinstall it or %s.", name, problem.Reason, effect, reinstall)
 	}

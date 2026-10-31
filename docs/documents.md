@@ -49,6 +49,10 @@ After you select **Retry**:
 | "Retrying — rendering the pages again…" | The retry started. The page images replace the card when they are ready; if the retry fails again, the card comes back with Retry |
 | "The file changed — ask the agent to preview again." | The file was changed after the preview, so the old preview cannot be retried. Ask the agent to preview the current file |
 | "Retry failed: …" | The retry could not start, with the reason. For example "Retry failed: the PDF renderer is not available." You can try again unless you no longer have access to the chat or the file |
+| "This file is outside the workspace Library, so its previews can't be retried here. Ask the agent to preview it again." | Retry works only for files in the chat's workspace Library (its work folder and mounted folders). The card then hides its Retry button |
+| "This preview is no longer available." | The chat or this preview could not be found, for example because the chat was deleted. The card then hides its Retry button |
+
+Retry works for files in the workspace Library: it renders the file you could open in the Library, checks that it is still the previewed version, and shows the page images to you only. The agent's model receives nothing from a retry.
 
 ### Screen readers
 
@@ -133,15 +137,7 @@ reads any other file.
   applies when Omnipus cannot read a source of write access: an unreadable
   settings file refuses registration, and an unreadable or partly invalid
   mount record keeps previews off.
-- `omnipus doctor` reports each problem with these components as a warning:
-  `PDF renderer not installed`, `LibreOffice not installed`, `… damaged
-  (<reason>)`, or `… is in a folder an agent can write (<access>)`, each with
-  what it means for previews and how to fix it. On Linux it also warns
-  `Document preview memory limit not enforced: <reason>` when the kernel does
-  not apply the memory limit (see "Limits and isolation"). Like every doctor
-  warning, these make `omnipus doctor` finish with exit code 1, so an
-  installation without LibreOffice reports a warning until LibreOffice is
-  registered. Doctor never starts either program.
+- `omnipus doctor` warns when a component is `… damaged (<reason>)` or `… is in a folder an agent can write (<access>)`, each with what it means for previews and how to fix it. On Linux it also warns `Document preview memory limit not enforced: <reason>` when the kernel does not apply the memory limit (see "Limits and isolation"). A component that is simply not installed is not a warning: previews report it when they are used. Like every doctor warning, these make `omnipus doctor` finish with exit code 1. Doctor never starts either program.
 - What the check does not cover yet: an **Allow once** approval for a single
   command that is still running in another chat, access granted while a
   preview is already running (it is seen by the next preview), and links

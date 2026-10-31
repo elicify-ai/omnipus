@@ -44,8 +44,17 @@ function retryErrorState(err: unknown): RetryState {
     if (err.status === 503 && err.code === 'preview_renderer_unavailable') {
       return { kind: 'error', message: 'Retry failed: the PDF renderer is not available.', canRetry: true }
     }
-    // 403 no access, 404 unknown preview: retrying again cannot succeed.
-    const permanent = err.status === 403 || err.status === 404
+    // Retrying again cannot succeed for these (architect ruling 2026-11-01):
+    // the source is not a workspace Library file, or the preview is gone.
+    if (err.status === 403 && err.code === 'preview_source_not_in_library') {
+      return {
+        kind: 'error',
+        message: "This file is outside the workspace Library, so its previews can't be retried here. Ask the agent to preview it again.",
+        canRetry: false,
+      }
+    }
+    if (err.status === 404) return { kind: 'error', message: 'This preview is no longer available.', canRetry: false }
+    const permanent = err.status === 403
     return { kind: 'error', message: `Retry failed: ${err.userMessage}`, canRetry: !permanent }
   }
   return { kind: 'error', message: `Retry failed: ${err instanceof Error ? err.message : String(err)}`, canRetry: true }
