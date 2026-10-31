@@ -1,13 +1,10 @@
 # Documents in chat
 
 <!-- Draft sections: "Page previews in the chat" is drafted by the frontend
-lead; the remaining sections of this page are drafted by the backend lead.
-Drafted so far: "PDFs you attach to a message" and "The Office documents
-skill". Still to draft with the renderer work (office-preview wave 2): how
-agents preview documents and what preview_document returns per model kind,
-installation components, limits (including the macOS best-effort memory
-limit), unconfined and Windows exposure, and "The Library gains no Office
-preview". docs-verifier audits the page against the code before landing. -->
+lead; the remaining sections of this page are drafted by the backend lead
+("How agents preview documents" added with office-preview wave 2).
+Still to draft with packaging: the installer components. docs-verifier
+audits the page against the code before landing. -->
 
 ## Page previews in the chat
 
@@ -57,6 +54,79 @@ After you select **Retry**:
 
 Page images are buttons named by their caption. When a new group arrives, a screen reader announces it once, for example "Preview of report.docx: 4 pages", or "Page previews unavailable". Groups that were already there when you opened the chat are not announced again. In the viewer, each page change is announced as "Page n of N".
 
+## How agents preview documents
+
+An agent looks at a Word document (`.docx`), spreadsheet (`.xlsx`), slide deck
+(`.pptx`) or PDF with the `preview_document` tool. It names the file in its
+workspace and, optionally, the pages: `"3"` for one page or `"11-20"` for a
+range of at most 20 pages. Without pages it gets the first 10.
+
+What the agent's model receives depends on what the model reads, decided from
+the model catalog:
+
+| The model | It receives |
+|---|---|
+| Reads PDFs, and the PDF fits the media size limit | The whole PDF (for an Office file: the PDF converted from it). No page images |
+| Sees images, but does not read PDFs or the PDF is too large | Images of the requested pages, with a note when the PDF was too large |
+| Reads text only, or the pages could not be made into images | The text of the requested pages (at most 4 MiB), with the reason |
+
+The model gets this content for the current turn only. In later turns the
+conversation keeps the tool's result text, which says to call
+`preview_document` again. The result text names the file and the first 12
+characters of its fingerprint (so an edited file shows a new value), says
+"pages a–b of N", names the next batch when there are more pages, and reports
+whether the page images for you were stored.
+
+Refusals, each starting with `preview_document:`:
+
+| Message | Meaning |
+|---|---|
+| `unsupported file type; supported: .docx, .xlsx, .pptx, .pdf` | Other formats, including macro-enabled (`.docm`), template and older Office formats, are not previewed |
+| `file content does not match its .<ext> extension` | The file is not what its name says |
+| `file exceeds the 50 MiB preview limit` | Larger files are not previewed |
+| `password-protected documents cannot be previewed` | Encrypted documents are refused |
+| `the document has N pages` | The requested pages are all past the end. A range that runs past the end is shortened instead, for example "pages 25–30 of 30 (requested 25–40)" |
+| `timed out after 120 s` or `stopped` | One preview may take at most 120 seconds, including waiting for its turn; Stop ends it at once |
+
+The agent reads the file with exactly the access `read_file` has: a file the
+agent may not read is refused with the same answer `read_file` gives.
+
+### What previews need
+
+- **PDF files** need nothing extra to reach the model. Page images need the PDF
+  renderer component. Without it the agent gets the PDF or its text, and the
+  result says `page images unavailable: PDF renderer not installed`.
+- **Office files** need LibreOffice 26.8. Register an installed copy with
+  `omnipus office register <folder>` (on macOS the folder is `LibreOffice.app`);
+  `omnipus office unregister` removes it. Without it, Office previews are
+  refused with a message that says so; PDF previews still work.
+- Register an unpacked PDF renderer release with
+  `omnipus pdf-renderer register <folder>`. Registration refuses a folder an
+  agent can write, and Omnipus checks the fingerprints of both components
+  before every use: a changed file disables the component until it is
+  reinstalled or registered again.
+
+### Limits and isolation
+
+LibreOffice and the PDF renderer run as separate programs, never inside
+Omnipus. At most two renderer runs and one LibreOffice conversion run at a
+time; other previews wait. Each run is limited to 60 seconds and, for memory,
+512 MiB (renderer) or 1 GiB (LibreOffice). On macOS the memory limit is best
+effort: Omnipus checks memory use every 100 ms and stops a program above its
+limit, so use may briefly exceed it.
+
+LibreOffice runs with macros off, links never updated and formulas recalculated
+when the file opens. On macOS and Linux, when the kernel sandbox is active, the
+programs can write at most their own temporary folder; on macOS they have no
+network; on Linux they cannot open or accept TCP connections where the kernel supports that rule (UDP is not
+blocked). When
+that sandbox cannot be set up, they still run with the limits above and the
+result says `converted without sandbox: <reason>`. On Windows there is no file
+isolation: only the time and memory limits apply.
+
+Previews are for agents and the chat. This adds no Office preview to the
+Library panel.
+
 ## PDFs you attach to a message
 
 What the agent's model receives depends on whether the model reads PDFs. Omnipus
@@ -66,7 +136,7 @@ input gets the PDF itself; every other model gets the extracted text.
 | The model | It receives |
 |---|---|
 | Reads PDFs (the catalog says so) | The PDF document itself, so it can see layout, tables and images on the pages |
-| Reads PDFs, but the file is larger than the media size limit (`agents.defaults.max_media_size`, 20 MB unless set) | The extracted text of the PDF instead |
+| Reads PDFs, but the file is larger than the media size limit (`agents.defaults.max_media_size`, 20 MB unless set, or the provider's own PDF limit when the model catalog records a smaller one) | The extracted text of the PDF instead |
 | Does not read PDFs | The extracted text of the PDF. Where the chat has a workspace, the file is also saved there so the agent can open it with its tools |
 
 How the PDF travels depends on the provider, and you do not need to set anything:
