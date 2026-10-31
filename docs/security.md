@@ -69,6 +69,14 @@ The chat switch is the one place that can turn Auto-approve **on** when the glob
 
 **Exception: external command-line workers.** A worker that runs on Claude Code, Codex or OpenCode does not use Omnipus's tool approval dialog at all. Omnipus automatically approves the permission requests the external tool reports, so turning Auto-approve off is not a way to make an external worker ask you before each action. Omnipus Allow/Ask/Deny rules govern Omnipus tools only and do not reach inside the external tool. Treat delegating to an external command-line worker as its own trust decision.
 
+### Third-party agent programs and parameters
+
+The program each external tool runs, and the standard parameters added to every run, are set only by a signed-in person under **Settings → Third-party agents** (see [settings](settings.md#third-party-agents)). Agents have no tool, setting or other route that changes them.
+
+The standard parameters may hold **any** parameter the tool accepts; Omnipus does not filter them and shows no warning. **Omnipus does not sandbox external command-line tools**: they start in their working folder with a reduced environment and their web traffic routed through Omnipus's egress proxy, but no Omnipus file confinement applies to them, and a working folder is not a boundary. Claude Code already runs with its own permission prompts turned off. A Codex parameter such as `--dangerously-bypass-approvals-and-sandbox` also turns off Codex's own sandbox, and Codex can then read and write anything the user account running Omnipus can. Add such a parameter only if you accept that.
+
+Every run that uses standard parameters writes one audit entry saying "person preset used; flag filter bypassed for preset parameters". The parameter text in that entry passes through the secret filter.
+
 ### Auto-approve and the kernel sandbox
 
 **Auto-approve does not need a kernel sandbox to work.** A kernel sandbox is protection enforced by the operating system itself: Landlock on Linux, Seatbelt on macOS, with the Process Sandbox set to **Enforce**. Auto-approve also works on Windows, which has no Omnipus kernel sandbox, and when the sandbox is unavailable or set to Permissive or Off. Without an enforcing kernel sandbox, shell commands face the stricter approval checks below.

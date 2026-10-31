@@ -12,6 +12,7 @@ import { ChatSection } from '@/components/settings/ChatSection'
 import { MemorySection } from '@/components/settings/MemorySection'
 import { ContextSection } from '@/components/settings/ContextSection'
 import { SystemAgentsSection } from '@/components/settings/SystemAgentsSection'
+import { ThirdPartyAgentsSection } from '@/components/settings/ThirdPartyAgentsSection'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { fetchAboutInfo, isDevicePairingEnabled } from '@/lib/api'
 // O4: the passive RestartBanner at the top of Settings is replaced by the
@@ -22,6 +23,7 @@ export type SettingsTab =
   | 'providers'
   | 'models'
   | 'system-agents'
+  | 'third-party-agents'
   | 'integrations'
   | 'security'
   | 'gateway'
@@ -91,6 +93,7 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride, focu
             <TabsTrigger data-testid="settings-tab-providers" value="providers">Providers</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-models" value="models">Models</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-system-agents" value="system-agents">System agents</TabsTrigger>
+            <TabsTrigger data-testid="settings-tab-third-party-agents" value="third-party-agents">Third-party agents</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-integrations" value="integrations">Integrations</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-security" value="security">Security</TabsTrigger>
             <TabsTrigger value="gateway">Gateway</TabsTrigger>
@@ -115,6 +118,13 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride, focu
               through the shared agent editor; linked from Omnipus's chat header. */}
           <TabsContent value="system-agents">
             <SystemAgentsSection />
+          </TabsContent>
+
+          {/* T11 slice B (FR-6/FR-7): the program path and standard
+              parameters a person sets per external CLI; the agent editor's
+              Runtime tab links here. */}
+          <TabsContent value="third-party-agents">
+            <ThirdPartyAgentsSection />
           </TabsContent>
 
           <TabsContent value="integrations">

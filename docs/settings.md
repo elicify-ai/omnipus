@@ -4,7 +4,7 @@ Settings connects model providers, sets agent limits, records your context, and 
 
 ## What it is
 
-The Settings screen is a row of tabs: Providers, Models, System agents, Integrations, Security, Gateway, Data, Memory, Devices, Performance, Chat, and About. The Devices tab appears only when your install enables device pairing, so most people never see it.
+The Settings screen is a row of tabs: Providers, Models, System agents, Third-party agents, Integrations, Security, Gateway, Data, Memory, Devices, Performance, Chat, and About. The Devices tab appears only when your install enables device pairing, so most people never see it.
 
 Most settings save when changed, with an indicator confirming the save. Secret changes ask you to re-type your password. Gateway listening changes require a restart.
 
@@ -109,6 +109,7 @@ Each tab and neighbor screen has one job.
 | Settings, Providers | Connect providers, manage keys and sign-ins, set the default model |
 | Settings, Models | Context budget: per-result caps, the combined share of the model's context window used by tool results, and model context-length overrides |
 | Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
+| Settings, Third-party agents | The program and standard parameters Omnipus uses for each external command-line tool (Claude Code, Codex, opencode) |
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
 | Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
 | Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
@@ -142,6 +143,30 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 **Settings → System agents** lists Judge, Plan Supervisor and Omnipus. Judge and Plan Supervisor are internal engine agents and cannot join workspace teams. Omnipus is a hidden member of the default workspace only; open its fixed sidebar entry rather than looking for it in Team. These built-in agents cannot be deleted.
 
 **Edit** opens the shared agent editor, including Omnipus's model setting. You can repair its model here without a working model conversation. Judge and Plan Supervisor also have editable instructions; their capabilities remain fixed. There is no default-agent setting. The editor saves on its own; if the answer to a save is lost, it says **Save not confirmed — it may or may not have been stored.** with **Retry** instead of claiming it saved. The Omnipus chat's gear button opens this tab directly. While the list loads it says **Loading system agents…**; if it cannot load, the tab says **Could not load the system agents.** with **Retry**; if a refresh fails after it loaded, the rows stay with **Could not refresh — this list may be out of date.** and **Retry**.
+
+## Third-party agents
+
+**Settings → Third-party agents** sets, once per tool, which program Omnipus starts for an external worker and which standard parameters it adds to every run. There is one row each for **Claude Code**, **Codex** and **opencode**. Every worker on that tool uses these values; you do not set them per worker.
+
+| Field | What it does |
+|---|---|
+| **Program path** | The full path of the tool's program on this machine. An empty field (shown as **Not set**) means no program is set for that tool. When nothing is saved yet, Omnipus pre-fills the field with the program it found on this machine, and a **Found at …** line under the field shows where it was found. Finding the program only looks at files; it never starts the program. A pre-filled path is not saved until you press **Save**. |
+| **Parameters** | One line of free text added to every run of that tool, exactly as you type it — any parameter the tool accepts, for example `--max-turns 40`. Leave it empty for none. Omnipus shows the parameters in full and adds no filter or warning. Line breaks are refused. |
+| **Check CLI** | Optional. Runs the program at the path currently typed in that row to read its version, and shows the result as a notice, for example **Codex CLI works: version 1.2.3.** It saves nothing. |
+| **Save** | One button saves all three rows together. |
+
+What happens when you save:
+
+- Omnipus checks every row before it writes anything. If a row is refused — for example a program path inside a workspace folder — the reason appears under that field, the cursor moves to it, and **nothing is saved, the other rows included**. What you typed stays in place, so you can correct the field and save again.
+- The path is stored exactly as you typed it, and it is checked again before every run.
+- If your session has ended, the tab says to sign in again and keeps what you typed.
+- A successful save shows **Saved third-party agent settings.**
+
+Only a signed-in person can read or change this tab. Agents have no tool, setting or other route that changes it.
+
+The standard parameters are added after the worker's own **Additional CLI arguments**, so a standard parameter wins over a worker argument of the same name. A worker's own arguments still go through Omnipus's argument filter; the standard parameters do not. Parameters can widen what the tool may do — see [security](security.md#third-party-agent-programs-and-parameters) before adding one such as Codex's `--dangerously-bypass-approvals-and-sandbox`.
+
+Each worker's **Runtime** tab shows the saved program and parameters read-only, with a link back to this tab. See [agents](agents.md) for what the worker keeps per agent.
 
 ## Goal timers
 

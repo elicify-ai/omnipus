@@ -24,6 +24,10 @@ Windows has no kernel sandbox: `selectBackendPlatform` (`pkg/sandbox/sandbox_oth
 
 `/health` and `/api/v1/security/sandbox-status` both report `backend: "fallback"` and `kernel_level: false` in this configuration, and the field `disabled_by: "kernel_unsupported"` may appear when the operator asked for `enforce` but the kernel cannot deliver it.
 
+## External command-line workers run outside the Omnipus sandbox
+
+A worker that runs on Claude Code, Codex or opencode starts that tool directly in its working folder. Omnipus scrubs the tool's environment and forces its HTTP and HTTPS traffic through the runner egress proxy, but it applies no Landlock, seccomp or other filesystem confinement of its own: the tool relies on its own sandbox. A working folder is not a boundary. Claude Code runs with its own permission prompts turned off, and a Codex standard parameter such as `--dangerously-bypass-approvals-and-sandbox`, set under **Settings → Third-party agents**, removes Codex's own sandbox, so Codex can then read and write anything the operating-system account running Omnipus can. The standard parameters are person-only, unfiltered, and each run that uses them is audited; see [security](../security.md#third-party-agent-programs-and-parameters).
+
 ## Landlock rights are gated by kernel version
 
 Omnipus asks the kernel for a set of Landlock rights when it applies the sandbox. Each right arrived with a specific kernel version, so an older kernel may not know all of them. The ABI (application binary interface — here, the version of Landlock's interface your kernel exposes) is reported by the kernel; Omnipus asks only for the rights that version supports.
