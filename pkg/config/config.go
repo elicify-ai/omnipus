@@ -1090,6 +1090,10 @@ type ChannelInstanceConfig struct {
 	Identity *ChannelIdentity `json:"identity,omitempty"`
 	// WorkspaceID binds this instance to one workspace (ADR-029). Empty = unbound.
 	WorkspaceID string `json:"workspace_id,omitempty"`
+	// Outbound is the operator's start-messages setting (channels spec
+	// FR-010). Absent = reply_only. Only the dedicated outbound writer may
+	// change it; set_config refuses channels.*.outbound (FR-024).
+	Outbound *ChannelOutboundConfig `json:"outbound,omitempty"`
 
 	// --- Common per-channel fields shared across multiple channel types ---
 	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`

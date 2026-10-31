@@ -4,12 +4,10 @@ package config
 // T-8, FR-014, FR-015, FR-018). Signatures only; nothing in production calls
 // them yet.
 //
-// ChannelOutboundConfig is declared but NOT yet a field of
-// ChannelInstanceConfig: adding `Outbound *ChannelOutboundConfig
-// json:"outbound,omitempty"` makes set_config accept
-// channels.<id>.outbound[.policy] today (its schema walk resolves struct
-// fields by reflection), a behaviour change WP-0 must not make. The field
-// lands together with the set_config deny entry (FR-024) and the guard.
+// ChannelInstanceConfig.Outbound carries ChannelOutboundConfig. It landed
+// together with the set_config deny entry channels.*.outbound (FR-024):
+// set_config resolves struct fields by reflection, so without that entry the
+// field alone would have made the setting agent-writable.
 
 import "errors"
 
