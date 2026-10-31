@@ -1,10 +1,13 @@
 # Documents in chat
 
 <!-- Draft sections: "Page previews in the chat" is drafted by the frontend
-lead; the remaining sections of this page (how agents preview documents,
-what the model receives per model kind, installation, limits and platform
-notes) are drafted by the backend lead. docs-verifier audits the page
-against the code before landing. -->
+lead; the remaining sections of this page are drafted by the backend lead.
+Drafted so far: "PDFs you attach to a message" and "The Office documents
+skill". Still to draft with the renderer work (office-preview wave 2): how
+agents preview documents and what preview_document returns per model kind,
+installation components, limits (including the macOS best-effort memory
+limit), unconfined and Windows exposure, and "The Library gains no Office
+preview". docs-verifier audits the page against the code before landing. -->
 
 ## Page previews in the chat
 
@@ -53,3 +56,30 @@ After you select **Retry**:
 ### Screen readers
 
 Page images are buttons named by their caption. When a new group arrives, a screen reader announces it once, for example "Preview of report.docx: 4 pages", or "Page previews unavailable". Groups that were already there when you opened the chat are not announced again. In the viewer, each page change is announced as "Page n of N".
+
+## PDFs you attach to a message
+
+What the agent's model receives depends on whether the model reads PDFs. Omnipus
+decides this from the model catalog alone: a model whose catalog entry lists PDF
+input gets the PDF itself; every other model gets the extracted text.
+
+| The model | It receives |
+|---|---|
+| Reads PDFs (the catalog says so) | The PDF document itself, so it can see layout, tables and images on the pages |
+| Reads PDFs, but the file is larger than the media size limit (`agents.defaults.max_media_size`, 20 MB unless set) | The extracted text of the PDF instead |
+| Does not read PDFs | The extracted text of the PDF. Where the chat has a workspace, the file is also saved there so the agent can open it with its tools |
+
+How the PDF travels depends on the provider, and you do not need to set anything:
+Anthropic and Amazon Bedrock receive it as a document, and OpenAI's Responses API
+and providers that use the Chat Completions format (for example OpenRouter) as a
+file attached to your message.
+
+## The Office documents skill
+
+Mia and General Purpose come with one skill for Word, Excel, PowerPoint and PDF
+files, shown as **Office documents** (skill id `elicify-office`). It replaces the
+four separate document skills earlier versions shipped (`elicify-docx`,
+`elicify-xlsx`, `elicify-pptx`, `elicify-pdf`). The agent creates and edits files
+with Python libraries, checks the package structure with the bundled inspector
+scripts, and uses `preview_document` to look at the result. Excel formulas are
+not recalculated by Omnipus: they calculate when the workbook is opened.
