@@ -171,7 +171,9 @@ export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
       <div role="status" aria-live="polite" className="sr-only">
         {announcementText}
       </div>
-      <span className="min-w-0 truncate font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+      {/* 6b U3b — wraps, never truncates: at the narrow width the Team panel
+          leaves, the cause, countdown and "(attempt N of M)" stay readable. */}
+      <span className="min-w-0 break-words font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         {visibleText}
       </span>
     </div>
