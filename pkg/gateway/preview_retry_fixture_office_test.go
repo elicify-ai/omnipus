@@ -23,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/preview"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -75,8 +76,13 @@ func newOfficeRetryFixture(t *testing.T) *officeRetryFixture {
 	t.Cleanup(h.Wait)
 	conn := makeTestConn()
 	bindTestConnToSession(h, "retry-person", meta.ID, conn)
-	cm := channels.NewManagerForTesting(nil)
+	// Registration alone creates no delivery worker before StartAll. Use the
+	// real manager with its bus, start it, and join it before fixture teardown.
+	cm, err := channels.NewManager(cfg, credentials.SecretBundle{}, mb, api.mediaStore)
+	require.NoError(t, err)
 	cm.RegisterChannel("webchat", newWebchatChannel(h))
+	require.NoError(t, cm.StartAll(context.Background()))
+	t.Cleanup(func() { require.NoError(t, cm.StopAll(context.Background())) })
 	loop.SetChannelManager(cm)
 	f := &officeRetryFixture{api: api, bus: mb, provider: provider, ws: h, conn: conn, wsID: wsID, sid: meta.ID}
 	control := httptest.NewRecorder()
