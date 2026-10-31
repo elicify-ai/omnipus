@@ -56,21 +56,16 @@ import {
 } from './fixtures/selectors';
 import { freshChat } from './fixtures/session-setup';
 import type { DelegationFrame } from './fixtures/delegation-completion';
+import { requireLiveModelKeys } from './fixtures/e2e-model-keys';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
-// Helper: assert OPENROUTER_API_KEY_CI is present.
+// Helper: assert the live-model keys (primary and fallback) are present.
 // T0.1: no longer soft-skips. The key is required in CI; its absence is a CI
 // configuration failure. The function is kept to preserve call-site structure
 // but now validates (throws) rather than skipping.
 function requireApiKey(): void {
-  if (!process.env.OPENROUTER_API_KEY_CI) {
-    throw new Error(
-      'BLOCKED: OPENROUTER_API_KEY_CI not set. ' +
-      'This test requires a real LLM. ' +
-      'The key must be present in CI — see tests/e2e/README.md prerequisites.',
-    );
-  }
+  requireLiveModelKeys('subagent.spec.ts')
 }
 
 // Helper: start a fresh chat session and route to a delegate-capable task agent.

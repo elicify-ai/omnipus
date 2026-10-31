@@ -57,7 +57,7 @@
  * needed) and runs in CI; locally it is typechecked and linted only.
  *
  * NO LLM: no test here sends a chat message or starts a turn. The D4
- * custom agent carries E2E_MODEL purely as create-contract plumbing
+ * custom agent carries the central live model purely as create-contract plumbing
  * (agents.spec.ts precedent) and is never messaged; the D8 rows are
  * built-in rows, exercised without any turn.
  *
@@ -75,7 +75,7 @@
 
 import { expect, type Locator, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { E2E_MODEL } from './fixtures/e2e-model'
+import { e2eAgentModelFields } from './fixtures/e2e-agent-model'
 import {
   AGENT_ROW_MENU_ITEMS,
   agentRowLocator,
@@ -164,7 +164,7 @@ async function disabledReason(page: Page, item: Locator): Promise<string | null>
 
 /**
  * Create a removable team member via the PUBLIC REST API: POST /agents
- * (E2E_MODEL is create-contract plumbing — the agent is never messaged)
+ * (the live model fields are create-contract plumbing — the agent is never messaged)
  * plus the revision-guarded core_team PUT that adds it to the default
  * workspace's team (the same mutation shape the Team tab saves). Returns
  * the id and the unique name; the caller removes it via the UI (D4) and
@@ -182,7 +182,7 @@ async function createRemovableTeamMember(
       name: agentName,
       soul: 'Temporary e2e agent for the D4 remove flow; never chats.',
       type: 'Main',
-      model: E2E_MODEL,
+      ...e2eAgentModelFields('live'),
     },
   })
   expect(

@@ -221,6 +221,7 @@ import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { blockedMarker, stubCliExecutor } from './fixtures/stub-external-cli';
 import { randomUUID } from 'crypto';
+import { requireLiveModelKeys } from './fixtures/e2e-model-keys';
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
 
@@ -228,13 +229,7 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
 // loudly rather than soft-skip (project convention, T0.1: soft-skips on a
 // missing LLM key are no longer permitted anywhere in this suite).
 function requireLLMKey(): void {
-  if (!process.env.OPENROUTER_API_KEY_CI && !process.env.OPENROUTER_API_KEY) {
-    throw new Error(
-      'BLOCKED: neither OPENROUTER_API_KEY_CI nor OPENROUTER_API_KEY is set. ' +
-        'TestVerifierE2EEval (ADR-052 Test 32) requires a real LLM for the verifier ' +
-        'agent (and, for the control case, the native worker) — see tests/e2e/README.md prerequisites.',
-    );
-  }
+  requireLiveModelKeys('TestVerifierE2EEval (ADR-052 Test 32)')
 }
 
 // ── Stub external-CLI worker (delivery mechanism for the 3 adversarial cases) ──

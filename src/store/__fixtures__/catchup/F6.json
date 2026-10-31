@@ -180,6 +180,7 @@
             "id": "id-2",
             "role": "user",
             "session_id": "sess-2",
+            "timestamp": "2026-01-01T00:00:04Z",
             "type": "replay_message"
           }
         },
@@ -220,7 +221,7 @@
           "dir": "server→client",
           "frame": {
             "boot_id": "boot-1",
-            "emitted_at": "2026-01-01T00:00:04Z",
+            "emitted_at": "2026-01-01T00:00:05Z",
             "history_state": {
               "status": "available"
             },

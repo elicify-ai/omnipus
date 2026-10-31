@@ -4,14 +4,17 @@ import type { Page } from '@playwright/test';
 import { test as base } from './console-errors';
 import { GatewayProcess } from './gateway-process';
 import { requireCanonicalHistoryContext, setCanonicalHistoryContext } from './canonical-history-context';
+import { requireLiveModelKeys } from './e2e-model-keys';
 
 /** Real private gateway ownership is required by the offline canonical driver.
  * This fixture never repoints the shared shard home or fabricates a stopped owner. */
 export const test = base.extend<{ canonicalGateway: GatewayProcess; canonicalPage: Page; canonicalProviderBase: string | undefined }>({
   canonicalProviderBase: [undefined, { option: true }],
   canonicalGateway: [async ({ browserName, canonicalProviderBase }, use, info) => {
-    if (!process.env.OPENROUTER_API_KEY_CI && !process.env.OPENROUTER_API_KEY) {
-      throw new Error('BLOCKED: canonical-history real-gateway fixture requires the supplied OpenRouter key; CI-only without it');
+    // A mock-provider gateway (canonicalProviderBase set) needs no real key; a
+    // live one needs the keys for the active pair (primary and fallback).
+    if (!canonicalProviderBase) {
+      requireLiveModelKeys('the canonical-history real-gateway fixture (CI-only without the keys)');
     }
     const gateway = await GatewayProcess.start({ adminUsername: 'admin', adminPassword: 'admin123', apiBase: canonicalProviderBase });
     const authFile = info.outputPath('canonical-auth.json');

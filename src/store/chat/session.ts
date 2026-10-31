@@ -323,7 +323,15 @@ export function applyMessageArray(
     spanBySpanIdPatch = evictSpanIndexEntries(spanBySpanIdPatch, evictedMessageIds)
   }
 
-  const messagesById: Record<string, ChatMessage> = {}
+  // A historical reader's live reducers see only the current-tail projection
+  // (history-live.ts::liveProjectionBucket): its messageOrder omits the rows the
+  // reader holds, while messagesById still carries them. Rebuilding the map from
+  // `msgs` alone would erase those rows, and detachedLivePatch would then drop
+  // them from the reader (T24 B26). Keep every row the caller could not see.
+  const visibleToCaller = new Set(bucket.messageOrder)
+  const messagesById: Record<string, ChatMessage> = bucket.history.viewMode === 'historical'
+    ? Object.fromEntries(Object.entries(bucket.messagesById).filter(([id]) => !visibleToCaller.has(id)))
+    : {}
   const messageOrder: string[] = []
   for (const m of finalMsgs) {
     messagesById[m.id] = m

@@ -17,15 +17,47 @@ type chatHistoryReconcileResult struct {
 	IndexGeneration, RetentionGeneration                                               string
 }
 
+// historyFailureReason is the public reason of a derived-index failure. It
+// never exposes the private cause to a caller.
+func historyFailureReason(err error) string {
+	var unavailable *ChatHistoryUnavailableError
+	if errors.As(err, &unavailable) {
+		return unavailable.Reason
+	}
+	return "unknown"
+}
+
+// historyFailureCause is the mechanism of a derived-index failure: a catalog
+// check, a storage error. It carries no record content.
+func historyFailureCause(err error) string {
+	if cause := errors.Unwrap(err); cause != nil {
+		return cause.Error()
+	}
+	return err.Error()
+}
+
 // CheckChatHistoryReadiness validates the derived baseline and bounded suffix
 // without preparing or claiming that a public history page was loaded. The
-// gateway uses it for journal-only control catch-up.
+// gateway uses it for journal-only control catch-up. It is a demand path: an
+// index too far behind for the bounded catch-up may self-heal here.
 func (us *UnifiedStore) CheckChatHistoryReadiness(ctx context.Context, sessionID string) error {
-	_, err := us.reconcileChatHistoryIndex(ctx, sessionID)
+	_, err := us.reconcileChatHistoryIndexOnDemand(ctx, sessionID)
 	return err
 }
 
+// reconcileChatHistoryIndex is the non-healing bounded reconcile used by boot
+// and the retention sweep: it never rebuilds an index.
 func (us *UnifiedStore) reconcileChatHistoryIndex(ctx context.Context, sessionID string) (chatHistoryReconcileResult, error) {
+	return us.reconcileChatHistoryIndexWith(ctx, sessionID, false)
+}
+
+// reconcileChatHistoryIndexOnDemand is the user-demand variant (readiness and
+// page reads): a catchup_limit failure may trigger one bounded self-heal.
+func (us *UnifiedStore) reconcileChatHistoryIndexOnDemand(ctx context.Context, sessionID string) (chatHistoryReconcileResult, error) {
+	return us.reconcileChatHistoryIndexWith(ctx, sessionID, true)
+}
+
+func (us *UnifiedStore) reconcileChatHistoryIndexWith(ctx context.Context, sessionID string, heal bool) (chatHistoryReconcileResult, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return chatHistoryReconcileResult{}, err
 	}
@@ -35,7 +67,11 @@ func (us *UnifiedStore) reconcileChatHistoryIndex(ctx context.Context, sessionID
 	owner := us.historyOwner(sessionID)
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
+	defer owner.logFailure(sessionID)
 	result, err := us.reconcileHistoryOwned(ctx, sessionID)
+	if heal && historyFailureReason(err) == "catchup_limit" {
+		result, err = us.healChatHistoryOwned(ctx, sessionID, owner, err)
+	}
 	owner.failure = err
 	return result, err
 }
@@ -91,6 +127,7 @@ func (us *UnifiedStore) historyAccepted(sessionID string, addr ArchiveAddress, r
 		return
 	}
 	defer owner.mu.Unlock()
+	defer owner.logFailure(sessionID)
 	if hookErr != nil {
 		owner.failure = historyUnavailable("storage_error", hookErr)
 		return
@@ -142,6 +179,7 @@ func (us *UnifiedStore) historyDispositionAccepted(sessionID string, rec InputDi
 		return
 	}
 	defer owner.mu.Unlock()
+	defer owner.logFailure(sessionID)
 	if hookErr != nil {
 		owner.failure = historyUnavailable("storage_error", hookErr)
 		return
@@ -196,6 +234,7 @@ func (us *UnifiedStore) prepareHistoryAppend(sessionID string) {
 		return
 	}
 	defer o.mu.Unlock()
+	defer o.logFailure(sessionID)
 	_, err := us.reconcileHistoryOwned(context.Background(), sessionID)
 	o.failure = err
 }
@@ -220,9 +259,22 @@ func (us *UnifiedStore) reconcileExistingChatHistory(ctx context.Context) error 
 			continue
 		}
 		_, err := us.reconcileChatHistoryIndex(ctx, sid)
-		if err != nil {
+		if err != nil && !historyIndexStateFailure(err) {
 			failures = errors.Join(failures, err)
 		}
 	}
 	return failures
+}
+
+// historyIndexStateFailure reports a per-chat derived-index state failure
+// (catchup_limit, index_inconsistent, index_missing). It is local to that
+// chat and already reported once per episode by the owner's warning, so the
+// boot and retention passes over all chats do not fail because of it. Storage
+// and every other error stay returned.
+func historyIndexStateFailure(err error) bool {
+	switch historyFailureReason(err) {
+	case "catchup_limit", "index_inconsistent", "index_missing":
+		return true
+	}
+	return false
 }

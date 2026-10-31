@@ -13,7 +13,7 @@ import { useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import type { MessagePart, MessageTextPart, MessageToolPart } from '@/lib/messageParts'
 import { humanByteSize } from '@/lib/historyPreview'
-import { useHistoryEntryRead, useHistoryEntryReads } from '@/lib/historyEntryReads'
+import { isHistoryEntryPlaceholder, useHistoryEntryRead, useHistoryEntryReads } from '@/lib/historyEntryReads'
 import { useChatStore, type ChatMessage, type PositionedToolCall } from '@/store/chat'
 import type { HistoryDisplayPart } from '@/store/chat/types'
 import { deriveAnchor, joinParts, locateAnchor, partAnchor, partTexts } from '@/store/chat/history-parts'
@@ -146,7 +146,8 @@ function useHistoryOverlay(message: ChatMessage, sessionId: string) {
   const expandedKey = useChatStore(state => spans.map(span => state.sessionsById[sessionId]?.historyExpandedText?.[span.position] ? '1' : '0').join(''))
   const reads = useHistoryEntryReads(sessionId, spans.map((span, i) => ({ position: span.position, enabled: expandedKey[i] === '1' })))
   const full = spans.map((_, i) => {
-    const content = expandedKey[i] === '1' ? reads[i]?.data?.content : undefined
+    // The D4 placeholder is never the part's text: the saved preview stays.
+    const content = expandedKey[i] === '1' && !isHistoryEntryPlaceholder(reads[i]?.data) ? reads[i]?.data?.content : undefined
     return typeof content === 'string' ? content : undefined
   })
   // Value key over the shown full texts: an equal-length corrected suffix is a different key.
@@ -195,5 +196,5 @@ export function HistoryShowRest({ sessionId, position, originalSizeBytes }: { se
       </Button>
     )
   }
-  return <HistoryEntryReadOutcome read={read} incomplete={read.isSuccess && typeof read.data?.content !== 'string'} />
+  return <HistoryEntryReadOutcome read={read} placeholder={read.isSuccess && isHistoryEntryPlaceholder(read.data)} incomplete={read.isSuccess && typeof read.data?.content !== 'string'} />
 }

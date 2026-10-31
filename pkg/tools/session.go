@@ -83,6 +83,9 @@ type ProcessSession struct {
 	stdinWriter     io.Writer
 	outputBuffer    *bytes.Buffer
 	outputTruncated bool
+	// lastActivityAt observes real output or terminal completion without
+	// consuming output. It is private and guarded by mu, not a wire field.
+	lastActivityAt time.Time
 	// resultNote is the terminal-outcome note written by the completion
 	// goroutine once the terminal state is FULLY determined (after
 	// publication/cleanup settles — MAJ-1). It feeds poll alongside the
@@ -166,7 +169,14 @@ func (s *ProcessSession) GetStatus() string {
 func (s *ProcessSession) SetStatus(status SessionStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	wasRunning := s.Status == StatusRunning
 	s.Status = status
+	if wasRunning {
+		switch status {
+		case StatusDone, StatusKilled, StatusTimeout, StatusCanceled:
+			s.recordActivityLocked()
+		}
+	}
 }
 
 // ResultNote returns the terminal-outcome note (see the field comment); ""
@@ -296,6 +306,7 @@ func (s *ProcessSession) KillAndRelabel(status SessionStatus) error {
 
 	s.Status = status
 	s.ExitCode = -1
+	s.recordActivityLocked()
 	return nil
 }
 

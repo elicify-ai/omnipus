@@ -15,6 +15,7 @@ import { getMessageStatusSuffix } from '@/lib/truncation'
 import { OutcomeMessageContent } from './SystemMessageRows'
 import { AgentReplyLabel, ParticipantMessageRow, usePairedReplyToIds, useParticipantLabelParts } from './ParticipantLabels'
 import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
+import { assistantRowCorrelationAttributes } from './assistantRowAttributes'
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content.
 // Keeps a runaway provider error payload from blowing out the chat scroll.
@@ -191,6 +192,7 @@ export function MessageItem({ message }: MessageItemProps) {
   return (
     <div
       data-message-id={message.id}
+      {...assistantRowCorrelationAttributes(message)}
       className={cn('group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]', isUser ? 'flex-row-reverse' : undefined)}
     >
       {/* Avatar — O11 attribution: an assistant message shows the speaking

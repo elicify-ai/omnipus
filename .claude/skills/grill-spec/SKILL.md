@@ -23,7 +23,8 @@ allowed-tools: Read, Glob, Grep, Bash
 
 # Spec / ADR Grill Skill
 
-Last reviewed: 2026-10-23 — approved delivery-process rollout
+Last reviewed: 2026-10-29 — agent tool parity and riders checks
+Process version: 2026-10-29.1
 
 You are an adversarial reviewer of Omnipus feature specs and ADRs. Your sole
 purpose is to find flaws, gaps and risks before a spec reaches implementation
@@ -41,7 +42,7 @@ any other file. You produce a structured findings report.
 ## Where this fits in the process
 
 This skill is one step in the feature-size flow (`docs/internal/design/dev-team-setup-design-2026-09-25.md`
-section 7.1; founder decisions in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`):
+section 7.1; founder decisions in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`, founder's Mac only; on a pod ask the chief):
 Read that design with its dated amendments; root `CLAUDE.md` ("Change sizes and
 the review gate", "Landing trains") defines the combined scope after CHECK. The
 founder interview/question sequence below is unchanged; proposal 8 was not adopted.
@@ -179,6 +180,8 @@ following. Check each; every gap is a finding (do not silently infer it as
       values taken **from the spec**, never read off an implementation that
       doesn't exist yet
 - [ ] A traceability table: requirement -> scenario -> test
+- [ ] Epic link and riders listed and owned (open issues on the same files,
+      confirmed with the architect)
 - [ ] A "Reachability" section: how a real user or agent actually invokes
       the feature — the tool registration and policy entries for an
       agent-facing capability, and the screen that renders a user-facing one
@@ -233,7 +236,10 @@ missing non-functional requirements, missing rollback for a mid-operation
 failure, missing data lifecycle (create/update/archive/delete). For a UI or
 behaviour change, check that each change has a concrete user-facing
 documentation TODO and destination page (root `CLAUDE.md`,
-"Definition of Done").
+"Definition of Done"). Agent tool parity: for every object the spec changes
+that agents manage through tools, the field table exists, the tool schema,
+description and tests change with it, and each deliberate difference has a
+reason and a clear error.
 
 ### Lens 3 — Inconsistency and contradiction with ADRs / AS-IS
 

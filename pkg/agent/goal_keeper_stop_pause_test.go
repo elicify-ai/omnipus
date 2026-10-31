@@ -45,7 +45,7 @@ func TestKeeperStopPause_StopSuppressesIdleKeeperUntilANewTurnRuns(t *testing.T)
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
 	// Last activity far beyond the quiet window: the keeper WOULD fire.
 	gid := armGoalRecord(t, sid, "ship the report", recordedGoalCriteria("ship the report"),
-		0, time.Now().Add(-5*goalIdleQuietWindow))
+		0, time.Now().Add(-5*DefaultGoalReminderQuietWindow))
 	al.recordGoalRouting(sid, gid, "webchat", "c1", "sk1", agentInst.ID)
 
 	var mu sync.Mutex
@@ -100,7 +100,7 @@ func TestKeeperStopPause_StopSuppressesIdleKeeperUntilANewTurnRuns(t *testing.T)
 	// the quiet window, and this step is about the keeper RESUMING, not about
 	// the window math.
 	if _, err := resolveGoalRecordStore().Update(gid, func(cur *goal.Goal) error {
-		cur.LastActivityAt = time.Now().Add(-5 * goalIdleQuietWindow)
+		cur.LastActivityAt = time.Now().Add(-5 * DefaultGoalReminderQuietWindow)
 		return nil
 	}); err != nil {
 		t.Fatalf("re-age goal record: %v", err)
@@ -127,7 +127,7 @@ func TestKeeperStopPause_TheStoppedTurnFinishingDoesNotLiftIt(t *testing.T) {
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
 	gid := armGoalRecord(t, sid, "ship the report", recordedGoalCriteria("ship the report"),
-		0, time.Now().Add(-5*goalIdleQuietWindow))
+		0, time.Now().Add(-5*DefaultGoalReminderQuietWindow))
 	al.recordGoalRouting(sid, gid, "webchat", "c1", "sk1", agentInst.ID)
 
 	// The user's message that started the turn they are about to Stop.
@@ -157,7 +157,7 @@ func TestKeeperStopPause_TheStoppedTurnFinishingDoesNotLiftIt(t *testing.T) {
 		t.Fatal("the stopped turn's own graceful completion lifted the Stop-pause — the Stop was undone the instant it landed")
 	}
 	if _, err := resolveGoalRecordStore().Update(gid, func(cur *goal.Goal) error {
-		cur.LastActivityAt = time.Now().Add(-5 * goalIdleQuietWindow)
+		cur.LastActivityAt = time.Now().Add(-5 * DefaultGoalReminderQuietWindow)
 		return nil
 	}); err != nil {
 		t.Fatalf("re-age goal record: %v", err)

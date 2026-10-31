@@ -134,11 +134,13 @@ test('T16 B09: a real delayed image growing above the reader preserves the visib
   const ready = new Promise<void>((resolve) => { release = resolve; });
   let requested!: () => void;
   const seen = new Promise<void>((resolve) => { requested = resolve; });
-  // Control only image delivery. The product's unchanged CSP permits self
-  // images, NOT arbitrary external hosts. An external .invalid fixture cannot
-  // establish delivered image growth under that policy. Use the actual SPA
-  // origin (also correct for the optional dev proxy), without relaxing CSP.
-  const imageURL = new URL('/__e2e__/history-growth.svg', history.origin).href;
+  // Only the image response is controlled. Production layout/rendering
+  // decides the before/after height; no CSS or ResizeObserver stub is involved.
+  // Same-origin on purpose: the shipped SPA policy is img-src 'self' data:
+  // blob: (pkg/gateway/embed.go::spaBaseContentSecurityPolicy, ADR-083 D-C),
+  // so a foreign image host is refused before any request leaves and only
+  // ever renders "Image unavailable" — it can never grow late.
+  const imageURL = `${history.origin}/history-fixture/growth.svg`;
   await page.route(imageURL, async (route) => {
     requested(); await ready;
     await route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="640"><rect width="800" height="640" fill="navy"/></svg>' });

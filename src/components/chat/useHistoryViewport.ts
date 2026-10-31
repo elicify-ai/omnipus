@@ -5,7 +5,7 @@ import type { ChatMessage } from '@/store/chat'
 import { emptyHistoryState, useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { HistoryRowMeasurements, historyPageSizing, historyPixelTrigger, recordHistoryGeometry, forgetHistoryGeometry } from '@/lib/chat-history-sizing'
+import { HISTORY_OPENING_SCREENS, HistoryRowMeasurements, historyPageSizing, historyPixelTrigger, recordHistoryGeometry, forgetHistoryGeometry } from '@/lib/chat-history-sizing'
 import { shouldRenderJudgeVerdictInThread, shouldRenderToolCall } from '@/lib/toolVisibility'
 import { protectHistoryPositions, releaseHistoryProtection } from '@/store/chat/history-merge'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -379,7 +379,7 @@ async function runHistoryFill(env: FillEnv, direction: FillDirection, initial: b
       if (fills.current[direction] !== owner || current.current.sid !== sessionId || document.hidden || scroller.clientHeight <= 0 || !kept || kept.isReplaying || kept.awaitingCatchUp || kept.history.viewGeneration !== generation || kept.history.requests.refresh.status !== 'idle' || kept.history.requests[direction].status === 'error') break
       const selected = current.current.messages.filter(message => message.historyPosition && (!starting.has(message.historyPosition) || initial))
       const added = selected.reduce((sum, message) => sum + (heights.current.get(message.historyPosition!) ?? drawnHistoryRows(message, current.current.verbose) * samples.current.average), 0)
-      const remaining = Math.max(0, (initial ? 4 : 2) * scroller.clientHeight - added)
+      const remaining = Math.max(0, (initial ? HISTORY_OPENING_SCREENS : 2) * scroller.clientHeight - added)
       if (remaining <= 0) break
       const before = direction === 'older' ? kept.history.olderBoundary : kept.history.newerBoundary
       const previousPositions = new Set(kept.history.readerPositions)
@@ -586,7 +586,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
       // newer pages beyond it is corrected by that same read). Passive page,
       // live and reconnect updates never reach this branch: they do not move
       // the reader downward, and our own anchor correction is excluded.
-      const size = historyPageSizing(scroller.clientHeight, samples.current.average, 4)
+      const size = historyPageSizing(scroller.clientHeight, samples.current.average, HISTORY_OPENING_SCREENS)
       void useChatStore.getState().returnToLatestHistory(state.sid, size).catch(error => logViewportReadRejection('latest', error))
     }
     lastTop.current = scroller.scrollTop

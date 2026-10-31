@@ -107,6 +107,27 @@ A helper's finished result, question, blocker or failure is saved as an event li
 
 If an expected event or reply is missing, inspect the helper's current state and the gateway's delivery or storage errors before assuming the report was lost. A storage failure can leave an event pending repair, and a failed wake publication remains retryable. Report the parent and helper session IDs and whether reloading reveals the missing event or reply. Do not restart the gateway as a workaround.
 
+## A background result says the agent was not woken
+
+This warning concerns delivery of one notification, not rerunning or undoing the background work. Omnipus tries the handoff up to three times within the caller's existing window: up to five seconds per attempt, with one- and two-second cancellable waits. A caller deadline after an unsuccessful attempt still triggers the warning; intentional cancellation suppresses it and stops later attempts. A notification accepted by the bus is queued, not a guarantee that the receiving agent has executed it.
+
+Check the original conversation and any saved tool result before asking to rerun work. A real tool warning names the tool (or **background tool** if its name is unsafe) and a short tool-call reference. Generic warnings identify only a fixed source, such as a plan update; another path may still have dispatched the agent directly. Send a normal message if you want the agent to continue from the result.
+
+If saving succeeded, the same system line is used live and in reopened history for that session. Only the permitted original platform conversation gets a single best-effort external warning, with no redirect to another chat/account. A full or closed outbound queue can reject it; enqueue acceptance is not network delivery. If history cannot be written, the durable line may be absent, although an allowed live error or origin warning may still be possible. Check disk space, file permissions and session paths before relying on saved history; repairing them does not by itself replay the failed notification.
+
+The gateway's new **Async notification publish failed** records identify actual failed attempt numbers, their retry/final decision, a fixed source and a notice ID; optional tool/session references are shortened digests. They do not contain notification output, command arguments, raw routes or raw error causes. **Async notification origin warning enqueue rejected** separately means the one external enqueue was not accepted; it does not distinguish a full queue from a closed one.
+
+**Async notification secondary warning failed** is an error-level record about the warning itself, not another attempt to wake the agent:
+
+| Stage | Meaning |
+|---|---|
+| `notice_save` | Omnipus could not save the system warning: the save failed, the conversation storage was unavailable, or the notification had no conversation to save it in. |
+| `origin_read` | Omnipus could not read the saved conversation origin to decide whether an external warning was allowed. |
+
+Both stages use `error_class=secondary_warning_failure`, a fixed source and the same `notice_id` as the failed notification's other diagnostics. Only the existing validated tool name and shortened tool/session references may be added. These records contain no raw error cause or type, conversation route, notification content, command arguments, tool output, question or approval text. A refused audience without a read error does not produce this secondary-error record.
+
+Logging does not repair or replay the handoff, prove that the warning was saved or delivered, or guarantee that a configured log sink was enabled and wrote successfully. These are safe notification diagnostics, not a claim that every unrelated log record is content-free. See [Background results](tools.md#background-results).
+
 ## A task is refused before work starts
 
 Errors saying the assigned agent's store was not found, or that a task session could not be created, mean Omnipus could not create the task's conversation. A queued dispatch or manual start refuses to hand work to either a native agent or an external command-line agent in that case. It does not consume an execution attempt or add a run-history entry.

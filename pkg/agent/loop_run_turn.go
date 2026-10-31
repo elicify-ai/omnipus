@@ -192,6 +192,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		turnFailed:   rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed,
 		stopped:      rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load(),
 		turnID:       rz.rc.rx.rr.rq.ri.rf.rt.ts.turnID,
+		goalID:       rz.rc.rx.rr.rq.ri.rf.rt.ts.goalID,
 	}, nil
 }
 
@@ -423,6 +424,7 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 		EventKindTurnStart,
 		rp.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.start"),
 		TurnStartPayload{
+			ChatNotice:  rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.goalReminderFrame,
 			Channel:     rp.rc.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:      rp.rc.rx.rr.rq.ri.rf.rt.ts.chatID,
 			UserMessage: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,

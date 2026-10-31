@@ -12,7 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-const historyUnavailableCopy = "Session history is unavailable. Retry after the operator restores its index."
+const historyUnavailableCopy = "This conversation's history could not be loaded."
 const historyStorageCopy = "This session could not be read because session storage failed. Check disk space and permissions, then retry. Details are in the server log."
 
 func historyStateForError(err error) generated.SessionHistoryState {
@@ -133,6 +133,15 @@ func (a *restAPI) serveSessionHistoryEntry(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		historyHTTPFailure(r.Context(), w, id, err)
 		return
+	}
+	// A2.2: the full projection is never a HistoryResultPreview, and an
+	// ordinary (unshortened) result must not carry the reserved key. A saved
+	// result that does — valid marker shape or not — fails the server-side
+	// marker check and becomes the D4 per-item placeholder (#1452 SEC-3).
+	if historyFullEntryCarriesMarker(entry.Entry) {
+		logsafeWarn("history: saved item replaced by its placeholder", "event", "history_item_placeholder", "reason", "preview_marker_in_full_entry")
+		entry.Entry = historyPlaceholderSource(entry.Entry)
+		entry.NestedDelegateParents = nil
 	}
 	_, encoded, err := historyWireMessage(id, entry)
 	if err != nil {
