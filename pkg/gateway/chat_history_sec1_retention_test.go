@@ -29,7 +29,7 @@ func TestChatHistoryPage_NearAdmissionPreviewsRetainNoFullSources(t *testing.T) 
 		e := session.TranscriptEntry{ID: fmt.Sprintf("near-%03d", i), Type: session.EntryTypeToolCall, AgentID: "mia", Timestamp: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC), ViewMembership: session.ViewMembershipChat, ToolCalls: []session.ToolCall{{ID: session.ToolCallID(fmt.Sprintf("call-%03d", i)), Tool: "read_file", Status: "success", Parameters: map[string]any{}, Result: map[string]any{"text": payload}}}}
 		require.NoError(t, s.AppendTranscriptStrict(sid, e))
 	}
-	payload = ""
+	// payload is not used after the loop, so it is not live at the baseline GC.
 	require.NoError(t, s.Close(), "fixture work finishes before measurement")
 
 	runtime.GC()

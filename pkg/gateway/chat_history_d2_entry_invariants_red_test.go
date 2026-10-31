@@ -39,14 +39,15 @@ func TestHistoryEntryRead_RealCredentialClasses(t *testing.T) {
 			hash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(token)), bcrypt.MinCost)
 			require.NoError(t, err)
 			var cookie *http.Cookie
-			if kind == "cookie" {
+			switch kind {
+			case "cookie":
 				raw, h, e := middleware.MintSessionToken()
 				require.NoError(t, e)
 				cfg.Gateway.Users = []config.UserConfig{{Username: "d2-cookie", SessionTokenHash: config.BcryptHash(h)}}
 				cookie = &http.Cookie{Name: middleware.SessionCookieName, Value: raw}
-			} else if kind == "CLI_bearer" {
+			case "CLI_bearer":
 				cfg.Gateway.CLIToken = &config.TokenEntry{Hash: config.BcryptHash(hash)}
-			} else {
+			default:
 				cfg.Gateway.Users = []config.UserConfig{{Username: "d2-user", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(hash)}}}}
 			}
 			mux := http.NewServeMux()

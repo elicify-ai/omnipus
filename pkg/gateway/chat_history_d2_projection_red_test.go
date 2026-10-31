@@ -52,6 +52,15 @@ func d2PrepareOnlyGroup(t *testing.T, s *session.UnifiedStore, sid string, depen
 	require.NoError(t, err, "real reducer -> generated Message -> native replay projector")
 	return g
 }
+
+// d2OriginPosition returns a replay frame's history_origin.position after
+// requiring history_origin to be a JSON object.
+func d2OriginPosition(t *testing.T, frame map[string]any) any {
+	t.Helper()
+	origin, ok := frame["history_origin"].(map[string]any)
+	require.True(t, ok, "history_origin is a JSON object: %#v", frame["history_origin"])
+	return origin["position"]
+}
 func d2Result(t *testing.T, g historyPreparedGroup) map[string]any {
 	t.Helper()
 	require.NotNil(t, g.message.ToolCalls)
@@ -80,7 +89,7 @@ func TestChatHistoryPage_DisplayShortening(t *testing.T) {
 				if frame["type"] == "tool_call_result" {
 					resultFrames++
 					require.Equal(t, want, frame["result"], "REST Message and native history replay result have identical preview bytes")
-					require.Equal(t, *g.message.HistoryPosition, frame["history_origin"].(map[string]any)["position"])
+					require.Equal(t, *g.message.HistoryPosition, d2OriginPosition(t, frame))
 				}
 			}
 			require.Equal(t, 1, resultFrames)
@@ -98,7 +107,9 @@ func TestChatHistoryPage_DisplayShortening(t *testing.T) {
 		g := d2PrepareOnlyGroup(t, s, sid)
 		want := map[string]any{"_history_preview": true, "original_size_bytes": float64(len(raw)), "preview": `{"text":"` + strings.Repeat("x", 4085)}
 		require.Equal(t, want, d2Result(t, g), "first4096 bytes cut back to the previous full character")
-		require.True(t, utf8.ValidString(d2Result(t, g)["preview"].(string)))
+		preview, ok := d2Result(t, g)["preview"].(string)
+		require.True(t, ok, "preview is a string")
+		require.True(t, utf8.ValidString(preview))
 	})
 }
 

@@ -46,7 +46,7 @@ func TestChatHistoryPage_DisplayShorteningPublicCarriers(t *testing.T) {
 		if frame["type"] == "tool_call_result" {
 			found++
 			require.Equal(t, want, frame["result"])
-			require.Equal(t, *p.Entries[0].HistoryPosition, frame["history_origin"].(map[string]any)["position"])
+			require.Equal(t, *p.Entries[0].HistoryPosition, d2OriginPosition(t, frame))
 		}
 	}
 	require.Equal(t, 1, found)

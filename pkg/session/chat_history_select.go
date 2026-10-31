@@ -436,7 +436,7 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, sel
 	// attempt the cancellation surfaced, including before any cut is captured.
 	// Both causes stay matchable; the public error stays the sanitized one.
 	defer func() {
-		if err == nil || historyIsStorageFailure(err) || !(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		if err == nil || historyIsStorageFailure(err) || !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			return
 		}
 		if cleanupErr := us.historyOwner(sid).retryRetired(); cleanupErr != nil {

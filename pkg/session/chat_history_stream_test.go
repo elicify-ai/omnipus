@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"strings"
 	"testing"
@@ -196,11 +198,15 @@ func TestHistoryStreamScanner_MatchesEncodingJSONOnRandomDocuments(t *testing.T)
 
 		// The prefix encoder over stand-ins equals the real encoding's
 		// prefix and exact size, for every displayed (non-private) member.
-		for k, gv := range got.(map[string]any) {
+		gotObject, ok := got.(map[string]any)
+		require.True(t, ok, "doc %d: reduced record is an object", i)
+		wantObject, ok := want.(map[string]any)
+		require.True(t, ok, "doc %d: source record is an object", i)
+		for k, gv := range gotObject {
 			if strings.EqualFold(k, "model_message") {
 				continue
 			}
-			enc := historyEncodeJSON(t, want.(map[string]any)[k])
+			enc := historyEncodeJSON(t, wantObject[k])
 			w := &historyPrefixWriter{limit: historyStandInEncodedKeep}
 			require.NoError(t, historyEncodePrefix(w, gv, ins))
 			require.Equal(t, len(enc), w.total, "doc %d member %q: exact encoded size", i, k)
@@ -418,4 +424,35 @@ func TestChatHistoryPage_StreamUnreadableRecordFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, full.Entry.DisplayUnavailable())
 	require.Equal(t, "UNREADABLE_CANARY", full.Entry.ToolCalls[0].Parameters[key], "the full-content route is unchanged")
+}
+
+// historyFlakyReader returns its parts in order, with a single read error
+// injected after the first part; later reads succeed again.
+type historyFlakyReader struct {
+	parts []string
+	err   error
+	step  int
+}
+
+func (r *historyFlakyReader) Read(p []byte) (int, error) {
+	defer func() { r.step++ }()
+	switch {
+	case r.step == 1:
+		return 0, r.err
+	case r.step == 0:
+		return copy(p, r.parts[0]), nil
+	case len(r.parts) > 1 && r.step == 2:
+		return copy(p, r.parts[1]), nil
+	}
+	return 0, io.EOF
+}
+
+// A read error (not end of input) right after a literal fails the record
+// closed instead of being treated as end of input and skipped.
+func TestHistoryStreamScanner_ReadErrorAfterLiteralFailsClosed(t *testing.T) {
+	ok, err := historyStreamRecord(&historyFlakyReader{parts: []string{`{"a":true}` + "\n"}, err: io.EOF}, newHistoryStandIns())
+	require.NoError(t, err, "positive control: the same record without a read error is read")
+	require.JSONEq(t, `{"a":true}`, string(ok))
+	_, err = historyStreamRecord(&historyFlakyReader{parts: []string{`{"a":true`, "}\n"}, err: errors.New("disk read failed")}, newHistoryStandIns())
+	require.ErrorIs(t, err, errHistoryStreamUnreadable)
 }

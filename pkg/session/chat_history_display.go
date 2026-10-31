@@ -149,9 +149,9 @@ func historyShortenCall(tc *ToolCall, ins *historyStandIns) error {
 	_, isRef := tc.Result["_ref"]
 	if isRef || !ins.inValue(tc.Result) {
 		if !isRef {
-			display, shortened, err := historyResultDisplay(tc.Result)
-			if err != nil {
-				return err
+			display, shortened, displayErr := historyResultDisplay(tc.Result)
+			if displayErr != nil {
+				return displayErr
 			}
 			if shortened {
 				tc.Result = nil

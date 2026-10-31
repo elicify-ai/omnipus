@@ -35,7 +35,7 @@ func TestChatHistoryPage_DisplayShorteningPreservesMediaFacts(t *testing.T) {
 		require.NoError(t, json.Unmarshal(frame, &f))
 		if f["type"] == "media" {
 			found++
-			require.Equal(t, *g.message.HistoryPosition, f["history_origin"].(map[string]any)["position"])
+			require.Equal(t, *g.message.HistoryPosition, d2OriginPosition(t, f))
 			require.Contains(t, string(frame), "d2-pixel.png")
 		}
 	}
@@ -66,7 +66,7 @@ func TestChatHistoryPage_DisplayShorteningPreservesChildFact(t *testing.T) {
 				require.NoError(t, json.Unmarshal(raw, &frame))
 				if frame["type"] == "subagent_start" {
 					starts++
-					require.Equal(t, *g.message.HistoryPosition, frame["history_origin"].(map[string]any)["position"])
+					require.Equal(t, *g.message.HistoryPosition, d2OriginPosition(t, frame))
 				}
 			}
 			require.Equal(t, 1, starts, "an error after creating a child is not reclassified as a refused launch without child")

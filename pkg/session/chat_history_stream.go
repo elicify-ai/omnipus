@@ -98,15 +98,15 @@ func (s *historyStandIns) lookup(v string) (*historyLargeString, bool) {
 	return l, ok
 }
 
-// same reports whether a decoded value (possibly a token) equals a real string.
-func (s *historyStandIns) same(decoded, real string) bool {
-	if decoded == real {
+// same reports whether a decoded value (possibly a token) equals the real string want.
+func (s *historyStandIns) same(decoded, want string) bool {
+	if decoded == want {
 		return true
 	}
 	if _, ok := s.lookup(decoded); !ok {
 		return false
 	}
-	sum := sha256.Sum256([]byte(real))
+	sum := sha256.Sum256([]byte(want))
 	return decoded == s.token(sum[:])
 }
 
@@ -383,8 +383,11 @@ func (s *historyStreamScanner) literal(c byte) error {
 // literalEnd rejects a literal glued to another token (e.g. "truex", "01").
 func (s *historyStreamScanner) literalEnd() error {
 	b, err := s.r.Peek(1)
-	if err != nil {
+	if errors.Is(err, io.EOF) {
 		return nil // end of input is checked by the caller
+	}
+	if err != nil {
+		return errHistoryStreamUnreadable
 	}
 	switch b[0] {
 	case ' ', '\t', '\n', '\r', ',', '}', ']':
@@ -615,10 +618,10 @@ func (s *historyStreamScanner) str(isKey, private bool, key *[]byte) error {
 			if match == len(pattern) {
 				break
 			}
-			switch {
-			case b == pattern[match]:
+			switch b {
+			case pattern[match]:
 				match++
-			case b == '"':
+			case '"':
 				match = 1
 			default:
 				match = 0
