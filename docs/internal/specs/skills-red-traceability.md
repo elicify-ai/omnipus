@@ -17,26 +17,31 @@ addition, pending grill — its rows are flagged below).
 
 ## RED-run receipts
 
-| Log | Package(s) | New tests | Result |
+Counts are the failing top-level test (or subtest) lines in each log as it
+exists on disk; some logs are narrower re-runs of an area after a filter or
+seam change, so an area's full test count is larger than its last log's
+failing-line count (the §17.1 map above names every test).
+
+| Log | Package(s) | Failing on baseline | Result |
 |---|---|---|---|
-| `01-identity-sd28.log` | pkg/skills (identity, SD-28) | 22 | 22 FAIL / 0 PASS, EXIT=1 |
-| `02-builtin-sync.log` | pkg/skills (built-ins, retirement) | 13 | 13 FAIL / 0 PASS, EXIT=1 |
-| `03-pipeline-savecheck.log` | pkg/skills (pipeline, save check) | 23 | 23 FAIL / 0 PASS, EXIT=1 |
-| `04-undo-faults.log` | pkg/skills (undo anchors, persistence faults) | 25 | 25 FAIL / 0 PASS, EXIT=1 |
-| `05-retention-versions-recovery.log` | pkg/skills (retention, versions, recovery) | 18 | 18 FAIL / 0 PASS, EXIT=1 |
-| `06-snapshot-restore.log` | pkg/skills (snapshot domain, bounded capture, D-9) | 12 | 12 FAIL / 0 PASS, EXIT=1 |
-| `07-copy-lifecycle.log` | pkg/skills (S-5.21 legs, provenance, interference) | 18 | 18 FAIL / 0 PASS, EXIT=1 |
+| `01-identity-sd28.log` | pkg/skills (identity, SD-28) | 10 | EXIT=1 |
+| `02-builtin-sync.log` | pkg/skills (built-ins, retirement) | 9 | EXIT=1 |
+| `03-pipeline-savecheck.log` | pkg/skills (pipeline, save check) | 5 | EXIT=1 |
+| `04-undo-faults.log` | pkg/skills (undo anchors, persistence faults) | 16 | EXIT=1 |
+| `05-retention-versions-recovery.log` | pkg/skills (retention, versions, recovery) | 15 | EXIT=1 |
+| `06-snapshot-restore.log` | pkg/skills (snapshot domain, bounded capture, D-9) | 6 | EXIT=1 |
+| `07-copy-lifecycle.log` | pkg/skills (S-5.21 legs, provenance, interference) | 8 | EXIT=1 |
 | `08-sysagent-skill-read.log` + `08b` | pkg/sysagent/tools (get_skill, list_skills) | 7 FAIL + 1 baseline-green pair | EXIT=1 / EXIT=0 |
-| `09-tools-gate.log`, `09-coreagent-gate.log`, `09-config-sysagent-gate.log`, `09b-tools-textgate.log`, `09-sysagent-gate.log` | pkg/tools, pkg/coreagent, pkg/config, pkg/sysagent/tools (T-E9b) | 12 FAIL + feasibility suite baseline-green | EXIT=1 |
+| `09-tools-gate.log`, `09-coreagent-gate.log`, `09-config-sysagent-gate.log`, `09b-tools-textgate.log`, `09-sysagent-gate.log` | pkg/tools, pkg/coreagent, pkg/config, pkg/sysagent/tools (T-E9b) | 14 FAIL + feasibility suite baseline-green | EXIT=1 |
 | `10-fspolicy-boundary.log` + `10b` | pkg/fspolicy (§6.1 boundary) | 5 FAIL + 3 baseline-green | EXIT=1 / EXIT=0 |
-| `11-skills-historyseam-recheck.log` | pkg/skills (re-run after SkillHistoryRoot seam) | 12 | 12 FAIL, EXIT=1 |
+| `11-skills-historyseam-recheck.log` | pkg/skills (re-run after SkillHistoryRoot seam) | 12 | EXIT=1 |
 | `12-load-header.log` + `12b` | pkg/skills (§5.7 activation header) | 5 FAIL + S-1.4 pair baseline-green | EXIT=1 / EXIT=0 |
 | `13-gateway-rest.log` | pkg/gateway (REST surface) | 4 FAIL (8 subtests) | EXIT=1 |
 | `14-gateway-boot.log` | pkg/gateway (boot step) | 3 FAIL | EXIT=1 |
 | `15-credentials.log` | pkg/credentials (SensitiveNamedValues) | 5 FAIL | EXIT=1 |
 | `16-secret-check.log` | pkg/skills (§7.4 secret scan) | 6 FAIL | EXIT=1 |
 | `17-documentruntime.log` | pkg/documentruntime (S-1.5 app part) | 2 FAIL | EXIT=1 |
-| `18-spa-tests.log` | ui: envelope parser + SkillsScreen | 5 FAIL / 6 baseline-green across both files | EXIT=1 |
+| `18-spa-tests.log` | ui: envelope parser + SkillsScreen | 6 FAIL / 6 baseline-green across both files | EXIT=1 (vitest) |
 
 All runs: `CGO_ENABLED=0 heavy go test -p 1 -tags goolm,stdjson -count=1 -run '<targets>'
 <packages>` (build runners), full output in the named log, real exit codes captured.
