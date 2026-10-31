@@ -26,9 +26,13 @@ package skills
 // writing).
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -201,14 +205,60 @@ func TestOfficePreview_PackageInventoryAdapted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BLOCKED: ADR-090 document package inventory unreadable (T-74): %v", err)
 	}
-	s := string(data)
-	if strings.Contains(s, "elicify-docx") || strings.Contains(s, "elicify-xlsx") || strings.Contains(s, "elicify-pptx") || strings.Contains(s, "elicify-pdf") {
-		t.Fatalf("BLOCKED: inventory still lists the four retired packages — §6 requires the new adaptation statement (T-74)")
+	var inventory struct {
+		SourceCommit string            `json:"source_commit"`
+		SourcePaths  []string          `json:"source_paths"`
+		Adaptation   string            `json:"adaptation"`
+		Files        map[string]string `json:"files"`
 	}
-	if !strings.Contains(s, "elicify-office") {
-		t.Fatalf("BLOCKED: inventory lacks elicify-office — §6/AD-14 adaptation not recorded (T-74)")
+	if err := json.Unmarshal(data, &inventory); err != nil {
+		t.Fatalf("invalid document package inventory: %v", err)
 	}
-	if !strings.Contains(s, "sha256") && !strings.Contains(s, "checksum") {
-		t.Fatalf("inventory carries no checksums — §6 requires integrity to stay assertable (T-74)")
+	if inventory.SourceCommit != "687242a67612744c88aa1c6b4ac0a56a5537cde3" {
+		t.Fatalf("source revision = %q, want pinned upstream provenance 687242a67612744c88aa1c6b4ac0a56a5537cde3", inventory.SourceCommit)
+	}
+	// These are historical source paths, not the shipped package IDs. The
+	// merger must preserve true provenance rather than rewrite history.
+	wantSourcePaths := []string{"skills/elicify-docx", "skills/elicify-pdf", "skills/elicify-pptx", "skills/elicify-xlsx"}
+	slices.Sort(inventory.SourcePaths)
+	if !slices.Equal(inventory.SourcePaths, wantSourcePaths) {
+		t.Fatalf("source_paths = %v, want upstream provenance %v", inventory.SourcePaths, wantSourcePaths)
+	}
+	if !strings.Contains(inventory.Adaptation, officeSkillID) {
+		t.Fatalf("BLOCKED: adaptation lacks %s — §6/AD-14 merger must be recorded (T-74)", officeSkillID)
+	}
+	for _, path := range []string{
+		"SKILL.md", "LICENSE", "evals/evals.json",
+		"knowledge/docx-create.md", "knowledge/docx-edit.md",
+		"knowledge/xlsx-create.md", "knowledge/xlsx-edit.md",
+		"knowledge/pptx-create.md", "knowledge/pptx-edit.md",
+		"knowledge/pdf-create.md", "knowledge/pdf-edit.md",
+		"knowledge/verify.md", "knowledge/inspector-contract.md",
+		"scripts/inspect_docx.py", "scripts/inspect_workbook.py",
+		"scripts/inspect_pptx.py", "scripts/inspect_pdf.py",
+	} {
+		if _, ok := inventory.Files[officeSkillID+"/"+path]; !ok {
+			t.Errorf("inventory lacks checksum for %s/%s (AD-14, T-74)", officeSkillID, path)
+		}
+	}
+	for path, checksum := range inventory.Files {
+		if !strings.HasPrefix(path, officeSkillID+"/") {
+			t.Errorf("shipped asset %q is not under %s; old names are provenance only (T-74)", path, officeSkillID)
+			continue
+		}
+		decoded, err := hex.DecodeString(checksum)
+		if err != nil || len(decoded) != sha256.Size {
+			t.Errorf("%s checksum = %q, want SHA-256 hex (T-74)", path, checksum)
+			continue
+		}
+		body, err := readEmbeddedFile(t, path)
+		if err != nil {
+			t.Errorf("inventoried asset %s is not shipped: %v", path, err)
+			continue
+		}
+		digest := sha256.Sum256(body)
+		if got := hex.EncodeToString(digest[:]); got != checksum {
+			t.Errorf("%s checksum = %s, want inventory %s (T-74)", path, got, checksum)
+		}
 	}
 }

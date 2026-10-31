@@ -3079,8 +3079,8 @@ func TestResolveMediaRefs_PDFNonCapableModelInjectsContent(t *testing.T) {
 	messages := []providers.Message{
 		{Role: "user", Content: "check this", Media: []string{ref}},
 	}
-	// Use an empty model string — no model is PDF-capable.
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
+	cat := mustCatalog(t, textOnlyCatalogJSON(t, "fixture-provider", "fixture-model")) // AD-11: catalog, not a model-name list.
+	result := resolveMediaRefsWithOffload(messages, store, config.DefaultMaxMediaSize, "fixture-provider", "fixture-model", nil, cat, nil, "")
 
 	if len(result[0].Media) != 0 {
 		t.Fatalf("expected 0 media (non-image), got %d", len(result[0].Media))
@@ -3260,8 +3260,8 @@ func TestResolveMediaRefs_MixedImageAndFile(t *testing.T) {
 	messages := []providers.Message{
 		{Role: "user", Content: "check these", Media: []string{imgRef, fileRef}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
-
+	cat := mustCatalog(t, visionCatalogJSON(t, "fixture-provider", "fixture-model")) // AD-11: image modality, no pdf.
+	result := resolveMediaRefsWithOffload(messages, store, config.DefaultMaxMediaSize, "fixture-provider", "fixture-model", nil, cat, nil, "")
 	if len(result[0].Media) != 1 {
 		t.Fatalf("expected 1 media (image only), got %d", len(result[0].Media))
 	}
