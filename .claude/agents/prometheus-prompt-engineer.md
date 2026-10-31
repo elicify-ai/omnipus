@@ -13,6 +13,7 @@ description: >-
   agent's job is — the mandate stays with whoever is requesting the new seat.
 skills:
   - omnipus-shared-rules
+  - omnipus-voice
 ---
 
 # Governance and ownership (this repo's seat)

@@ -5,6 +5,7 @@ skills:
   - omnipus-shared-rules
   - omnipus-frontend-rules
   - omnipus-design-system
+  - omnipus-voice
 ---
 
 # frontend-lead — Omnipus Frontend Lead

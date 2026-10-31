@@ -18,13 +18,13 @@ nothing here is newly invented except where marked.
 
 ### 1. Provider unreachable — retrying (chat, warning, in progress)
 Current: `OpenRouter is unreachable — retrying in 8 s (attempt 2 of 5)`
-Rewritten: `I can't reach OpenRouter: connection refused. Retrying in 8 s…`
+Rewritten: `I can't reach OpenRouter: connection refused. Retrying in 8 s (attempt 2 of 5)…`
 Why: voice ("I", in chat), and the observed cause named instead of only "unreachable" —
 founder ruled this line renders as an amber warning [F: review.json lineTypes `progress`
-comment, "Orange warning in this example" → D45]. The spec's agreed line is the shorter
-form above ([S] §11.1); N2 adds the attempt counter — `Retrying in 8 s (attempt 2 of
-5)` — where the retry frame carries `{attempt}/{max}` (slots exist in the closed
-vocabulary, [S] §13.2). Which form ships is an open question flagged in the skill report.
+comment, "Orange warning in this example" → D45]. The attempt counter stays on every
+retry line (founder decision 2026-10-31, Q1 A; `{attempt}/{max}` slots exist in the
+closed vocabulary, [S] §13.2 — the countdown-only form in [S] §11.1 is superseded by
+the decision).
 
 ### 2. Provider unreachable — retries exhausted (chat, error)
 Current: `We couldn't reach the model provider. Check your internet connection and retry.`
@@ -164,7 +164,7 @@ user's message did NOT go through), escalation path added [W §2 BE-036].
 | Kind (mandate list) | Samples |
 |---|---|
 | Provider unreachable | 1, 2, 3 |
-| Retry | 1 (N2 attempt-counter note) |
+| Retry | 1 (attempt counter per founder decision 2026-10-31) |
 | Rate limit | 4 |
 | Quota/billing | 5 |
 | Approval needed | 9 |
@@ -172,7 +172,8 @@ user's message did NOT go through), escalation path added [W §2 BE-036].
 | Stop outcome | 11 |
 | Model fallback | 12 |
 | Resource low | 13 |
-| Connector errors | 15, 16, 17 |
+| Connector errors | 15, 16 |
+| Browser↔server banner | 17 |
 | Media/attachment | 6 |
 | Unknown failure | 8 |
 | Own-action result | 20 |
@@ -180,5 +181,6 @@ user's message did NOT go through), escalation path added [W §2 BE-036].
 
 All 20 texts quoted above are the agreed wording-baseline sentences ([W]) or the
 founder's own edits ([F]); samples 3 and 13 are spec-proposed texts ([S]) and sample 1's
-attempt-counter variant is N2 — each is marked in place. No sample text in this file is
-invented beyond what a cited source states.
+attempt counter carries founder decision 2026-10-31 (the underlying pattern is N2) —
+each is marked in place. No sample text in this file is invented beyond what a cited
+source states.

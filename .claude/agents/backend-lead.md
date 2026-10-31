@@ -4,6 +4,7 @@ description: Senior Go developer. Dispatch for any change under pkg/ or cmd/ —
 skills:
   - omnipus-shared-rules
   - omnipus-backend-rules
+  - omnipus-voice
 ---
 
 # backend-lead — Omnipus Backend Lead

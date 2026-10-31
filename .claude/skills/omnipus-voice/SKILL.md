@@ -16,6 +16,10 @@ direct founder instruction. It never overrides a contract fact: slot names, caps
 catalogue structure are owned by `contracts/components/schemas/LLMError.yaml` and the
 notifications spec, cited below.
 
+Preloaded via `skills:` for **backend-lead**, **frontend-lead**, **prometheus-prompt-engineer**
+and **docs-verifier** (founder decision 2026-10-31); every other role loads it with the
+Skill tool before writing a user- or operator-facing message.
+
 ## Sources (one line each; URLs and fetch dates in knowledge/sources.md)
 
 - **[F] Founder review data** — `review.json`, `messages-review.json`, `revised/revised.json`
@@ -90,9 +94,9 @@ register is a one-line status message, not marketing.
    ids, raw payloads and file paths like `gateway.log` are technical details — they
    belong in the Verbose/Debug "Technical details" disclosure (L9, D25), not on the main
    line. Name real things instead: provider, model, agent, tool.
-   - Do: `We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details.` → better:
-     `{provider} rejected the request for {model}: "{provider_says}". Retry; if it
-     repeats, please report it to the Omnipus.ai team.`
+   - Do: `{provider} rejected the request for {model}: "{provider_says}". Retry; if it
+     repeats, please report it to the Omnipus.ai team.` — the status code and any path
+     belong in the Verbose "Technical details" disclosure (L9).
    - Don't: `Request failed: 0x80070057` · `enqueueSteeringFromMessage: session … is stopping`
 7. **Always one way forward.** Every error and warning ends with one concrete action the
    reader can take, or one statement of what Omnipus is doing about it. Pop-up and
@@ -108,7 +112,9 @@ register is a one-line status message, not marketing.
    - Don't: `Action failed` · `Oops! Something went wrong.`
 9. **Tone stays level.** Sentence case throughout (the whole agreed corpus uses it).
    No exclamation marks, no "please", no "sorry", no "oops", no humour in failures —
-   a person reading an error is not entertained [R2, R5; F: corpus has none].
+   a person reading an error is not entertained [R2, R5; F: corpus has none]. The one
+   exception is the D48 bug-report line, whose "please report it to the Omnipus.ai
+   team" stays (rule 1).
    - Do: `Scheduled task "Nightly sync" failed: the mail server refused the connection.
      Open the app to see the run and try again.`
    - Don't: `Oops — we couldn't run your task! Sorry! Please try again later.`
@@ -135,14 +141,15 @@ The founder chose Claude Code's pattern (verified from its program text, N2) for
 transient/connection message. Its rules:
 
 - **Retry status line** while it lasts: `<what is happening> · Retrying in <time> ·
-  attempt <n>/<max>` — all three facts, every attempt. In Omnipus system-line form:
+  attempt <n>/<max>` — all three facts, every attempt (founder decision 2026-10-31: the
+  attempt counter is part of every retry line). In Omnipus system-line form:
   `I can't reach OpenRouter: connection refused. Retrying in 8 s (attempt 2 of 5)…`
   as an animated warning at every detail level (R-SL-5).
-- **Generic first, specific later.** Early attempts keep the cause generic; name the
-  real cause once it is confirmed — after ~3 attempts, or immediately when the cause is
-  the network or a certificate. In Omnipus terms: the `{reason}` words are fixed and
-  plain ("connection refused", "its address could not be found", "it did not answer in
-  time"; S §13.2).
+- **Name the cause as soon as it is observed.** A refused connection, an unresolvable
+  address, a timeout are named from the first attempt; use generic wording only when no
+  cause is known yet (founder decision 2026-10-31, refining N2's generic-first origin).
+  The `{reason}` words are fixed and plain ("connection refused", "its address could
+  not be found", "it did not answer in time"; S §13.2).
 - **Failure line names host + observed cause + one Fix.** Error lines end with a separate
   `Fix: <one concrete action>` clause — e.g. "Fix: check your network or proxy".
 - **Never claim the internet is down from failed requests.** A failed request is
@@ -206,7 +213,8 @@ every level and leave a record line at Verbose/Debug (L8, D42). Normative table:
    masked?
 5. No jargon, ids, codes or paths on the main line at Normal level — pushed to technical
    details?
-6. No blame words; no "please"/"sorry"/"oops"; no exclamation marks; no emoji?
+6. No blame words; no "please"/"sorry"/"oops" (D48 exception: the bug-report line's
+   "please report it to the Omnipus.ai team"); no exclamation marks; no emoji?
 7. Sentence case; numbers/units in corpus form ("8 s", "attempt 2 of 5"); length one to
    three short sentences?
 8. Action count ≤ 1 and it navigates to the screen where the item is handled?
