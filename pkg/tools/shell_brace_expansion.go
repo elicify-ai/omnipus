@@ -21,9 +21,11 @@
 // simple): text that cannot be parsed (unbalanced quotes, a `$(...)` the
 // tokenizer refuses, nesting deeper than maxBraceScanDepth), a long or
 // argument-taking option before -c (`bash --norc -c`, `bash -o x -c`), and a
-// shell reading its script from standard input (a pipe, a here-string, or a
-// here-document behind a wrapper such as env, command or nice). Unquoted
-// separators split words even without whitespace (`true;bash -c ...`).
+// shell reading its script from standard input (a pipe, -s, a here-string,
+// a script file named "-" or /dev/stdin, or a here-document behind a wrapper
+// such as env, command or nice). Unquoted separators end a simple command
+// even without whitespace (`true;bash -c ...`), and a shell's arguments are
+// read only from its own simple command.
 //
 // Residual, stated: a non-shell program that hands its own data to a shell
 // (Python's os.system, perl system) is not followed; the guard reads command
@@ -64,7 +66,6 @@ func mayBraceExpand(cmd string, depth int) bool {
 		return true
 	}
 	inBody := make([]bool, len(cmd))
-	var outside strings.Builder
 	for _, b := range bodies {
 		for i := b.start; i < b.end; i++ {
 			inBody[i] = true
@@ -73,6 +74,13 @@ func mayBraceExpand(cmd string, depth int) bool {
 			return true
 		}
 	}
+	// An unquoted command separator ends a simple command even without
+	// whitespace (`true;bash -c ...`). Each simple command is judged on its
+	// own words, so a shell's arguments never run on into the next command
+	// (`... | bash; echo done` must not read `echo done` as bash's script
+	// file — T11 round 5, S5).
+	var segments []string
+	var cur strings.Builder
 	for i := 0; i < len(cmd); i++ {
 		if inBody[i] {
 			continue
@@ -80,18 +88,29 @@ func mayBraceExpand(cmd string, depth int) bool {
 		if (cmd[i] == '{' || cmd[i] == '}') && !mask[i] {
 			return true
 		}
-		// An unquoted command separator splits words even without
-		// whitespace (`true;bash -c ...`), so it becomes a space here.
 		if !mask[i] && strings.IndexByte(";&|()\n", cmd[i]) >= 0 {
-			outside.WriteByte(' ')
+			segments = append(segments, cur.String())
+			cur.Reset()
 			continue
 		}
-		outside.WriteByte(cmd[i])
+		cur.WriteByte(cmd[i])
 	}
-	words, ok := tokenizeShellWords(outside.String())
-	if !ok {
-		return true
+	segments = append(segments, cur.String())
+	for _, seg := range segments {
+		words, ok := tokenizeShellWords(seg)
+		if !ok {
+			return true
+		}
+		if simpleCommandMayBraceExpand(words, depth) {
+			return true
+		}
 	}
+	return false
+}
+
+// simpleCommandMayBraceExpand judges the words of one simple command: the
+// arguments of eval and the script of any brace-expanding shell in it.
+func simpleCommandMayBraceExpand(words []string, depth int) bool {
 	for i, w := range words {
 		if w == "eval" && i+1 < len(words) {
 			if mayBraceExpand(strings.Join(words[i+1:], " "), depth+1) {
@@ -106,18 +125,19 @@ func mayBraceExpand(cmd string, depth int) bool {
 	return false
 }
 
-// nestedShellMayBraceExpand judges the words after a shell name. It follows
-// the rule "cannot be sure, withhold" (T11 round 4): only plain short options
-// (letters, none taking an argument) and the known argument-less long
-// options (knownNoArgLongShellOptions, e.g. --norc, --login) before the
-// script are understood, so the script can be located with certainty. Any
-// other long option (--rcfile FILE, an unknown one), a +option, an option
-// that takes an argument (-o, -O), or a shell that reads its script from
-// standard input
-// (no -c and no script-file argument: a pipe, a here-string, a
-// here-document behind a wrapper) all count as "may brace-expand". A shell
-// given a script FILE is not followed: the file's contents are not command
-// text.
+// nestedShellMayBraceExpand judges the words after a shell name, within one
+// simple command. It follows the rule "cannot be sure, withhold" (T11 round
+// 4): only plain short options (letters, none taking an argument) and the
+// known argument-less long options (knownNoArgLongShellOptions, e.g. --norc,
+// --login) before the script are understood, so the script can be located
+// with certainty. Any other long option (--rcfile FILE, an unknown one), a
+// +option, an option that takes an argument (-o, -O), and every way of
+// reading the script from standard input count as "may brace-expand": -s
+// (whatever positional arguments follow it), no -c and no script-file
+// argument (a pipe, a here-string, a here-document behind a wrapper), or a
+// script file named "-" or /dev/stdin (T11 round 5, S5). A redirection's
+// target word is never taken for the script. A shell given a real script
+// FILE is not followed: the file's contents are not command text.
 func nestedShellMayBraceExpand(args []string, depth int) bool {
 	j, hasC := 0, false
 	for j < len(args) && (strings.HasPrefix(args[j], "-") || strings.HasPrefix(args[j], "+")) {
@@ -129,6 +149,9 @@ func nestedShellMayBraceExpand(args []string, depth int) bool {
 		if !isPlainShortOptionCluster(opt) {
 			return true
 		}
+		if strings.ContainsRune(opt, 's') {
+			return true // -s: the script is read from standard input, whatever follows
+		}
 		if strings.ContainsRune(opt, 'c') {
 			hasC = true
 		}
@@ -138,15 +161,41 @@ func nestedShellMayBraceExpand(args []string, depth int) bool {
 		if strings.HasPrefix(strings.TrimLeft(args[j], "0123456789"), "<<<") {
 			return true // a here-string feeds the shell its script on standard input
 		}
+		if isBareRedirectionOperator(args[j]) {
+			j++ // `> out`, `< in`, `2> err`: the next word is the target, not a script
+		}
 		j++
 	}
 	if j >= len(args) {
 		return true // reads its script from standard input: cannot see it
 	}
+	if strings.HasPrefix(args[j], "-") || strings.HasPrefix(args[j], "+") {
+		return true // an option after a redirection: the script position is not certain
+	}
 	if !hasC {
+		if stdinScriptNames[args[j]] {
+			return true // the "script file" is standard input itself
+		}
 		return false // runs a script file; its contents are not command text
 	}
 	return mayBraceExpand(args[j], depth+1)
+}
+
+// stdinScriptNames are script-file arguments that make the shell read its
+// script from standard input after all.
+var stdinScriptNames = map[string]bool{
+	"-": true, "/dev/stdin": true, "/dev/fd/0": true, "/proc/self/fd/0": true,
+}
+
+// isBareRedirectionOperator reports a redirection operator written apart from
+// its target word (`>`, `>>`, `<`, `2>`, `<<`, `>|`, `<>`); the target is the
+// next word.
+func isBareRedirectionOperator(w string) bool {
+	switch strings.TrimLeft(w, "0123456789") {
+	case "<", ">", ">>", "<<", "<<-", ">|", "<>", "<&", ">&":
+		return true
+	}
+	return false
 }
 
 // knownNoArgLongShellOptions are the bash/sh long options that take no
