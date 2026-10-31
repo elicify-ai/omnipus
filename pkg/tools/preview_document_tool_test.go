@@ -2,8 +2,6 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-//go:build officepreview
-
 package tools
 
 // Office-document preview — preview_document tool surface (office-preview
@@ -11,18 +9,10 @@ package tools
 // T-15 read authorization + audit leg, T-45 thumbnail storage leg, T-70
 // size boundaries; BDD B-03/B-15).
 //
-// THIS FILE IS THE PARKED RED TIER: it does not compile until the tool
-// lands, so it is kept on the author's local branch and pushed together
-// with its fix (landing-train rule: a push must not break the branch's
-// build/tests). Unlock symbol: tools.NewPreviewDocumentTool — repo
-// constructor convention (NewReadFileTool(workspace, restrict, deps…)),
-// per spec AD-13's "registered at the read_file site". qa-lead A owns the
-// reconciliation if backend-lead names the constructor differently.
-//
-// Oracles below are the spec texts verbatim (AD-1/AD-5/MV-1), never code.
-//
-// Build tag officepreview: excluded from default builds/tests until GREEN
-// activates it (drop the tag in the same commit as the constructor).
+// Active in ordinary tagged Go runs after the wave-2 constructor landed.
+// Oracles are AD-1/AD-5/MV-1, not observed implementation output.
+// Clamp arithmetic is also checked in pkg/preview's clamp table; the actual
+// tool path is exercised by TestPreviewDocument_RealPDFPageClamps.
 
 import (
 	"context"
@@ -31,13 +21,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // TestPreviewDocument_InputPageSyntaxAndClamps (T-01, AD-1/AD-5, B-03/B-15):
 // pages syntax, default range, clamping, and every refusal message.
 func TestPreviewDocument_InputPageSyntaxAndClamps(t *testing.T) {
 	ws := t.TempDir()
-	tool := NewPreviewDocumentTool(ws, false) // UNLOCK: constructor lands with GREEN
+	tool := NewPreviewDocumentTool(ws, false)
 	ctx := testContext(t)
 
 	writeFixture := func(name string, size int) string {
@@ -85,12 +77,8 @@ func TestPreviewDocument_InputPageSyntaxAndClamps(t *testing.T) {
 		})
 	}
 
-	// AD-5 clamps on a 30-page PDF (FX-PDF30 shape): "3" → one page;
-	// "2-5" → those; default → first 10; "11-20" → that batch; "25-40" →
-	// 25–30 with "pages 25-30 of 30 (requested 25-40)".
-	// UNLOCK: page-count plumbing (renderer info op) lands with GREEN;
-	// these cases drive the real tool against the fixture set recorded at
-	// RED (see omnipus-scratch/office-preview-build-20261030).
+	// AD-5 uses en dashes in display text (pages 25–30, requested 25–40),
+	// and ASCII hyphens only in the pages argument. See the real PDF table.
 }
 
 // TestPreviewDocument_ReadAuthorizationAndAudit (T-15, FR-003): the source
@@ -98,10 +86,19 @@ func TestPreviewDocument_InputPageSyntaxAndClamps(t *testing.T) {
 // read_file; outside-policy paths refuse with read_file's result.
 func TestPreviewDocument_ReadAuthorizationAndAudit(t *testing.T) {
 	ws := t.TempDir()
-	tool := NewPreviewDocumentTool(ws, false) // UNLOCK
-	ctx := testContext(t)
+	tool := NewPreviewDocumentTool(ws, true)
+	// restrict alone does not confine reads: use the real per-turn read
+	// confinement flag, as the filesystem authorization contract specifies.
+	ctx := WithAgentID(WithReadConfined(testContext(t), true), "office-preview-test")
+	auditDir := t.TempDir()
+	log, err := audit.NewLogger(audit.LoggerConfig{Dir: auditDir, RetentionDays: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	tool.SetAuditLogger(log)
 
-	secret := filepath.Join(ws, "..", "outside-secret.pdf")
+	secret := filepath.Join(t.TempDir(), "outside-secret.pdf")
 	if err := os.WriteFile(secret, []byte("%PDF-1.4"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -111,10 +108,36 @@ func TestPreviewDocument_ReadAuthorizationAndAudit(t *testing.T) {
 	}
 	// MV-1: "read denied = read_file's result" — the refusal text matches
 	// the read_file tool's refusal for the same path.
-	readTool := NewReadFileTool(ws, false, MaxReadFileSize)
+	readTool := NewReadFileTool(ws, true, MaxReadFileSize)
+	readTool.SetAuditLogger(log)
 	want := readTool.Execute(ctx, map[string]any{"path": secret})
+	if !want.IsError || strings.Contains(want.ForLLM, "%PDF-1.4") {
+		t.Fatalf("authorization negative control failed: read_file must refuse without content, got %+v", want)
+	}
 	if result.ForLLM != want.ForLLM {
 		t.Fatalf("preview read-denial = %q, want read_file's refusal %q", result.ForLLM, want.ForLLM)
+	}
+	// Positive control: the same policy still reads inside the workspace.
+	inside := filepath.Join(ws, "inside.pdf")
+	if err := os.WriteFile(inside, []byte("%PDF-inside-control"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	allowed := readTool.Execute(ctx, map[string]any{"path": inside})
+	if allowed.IsError || !strings.Contains(allowed.ForLLM, "%PDF-inside-control") {
+		t.Fatalf("workspace positive control failed: %+v", allowed)
+	}
+	rows := readAuditRows(t, log, auditDir)
+	denials := map[string]int{}
+	for _, row := range rows {
+		if row.Event == PathAccessDeniedEvent {
+			if row.AgentID != "office-preview-test" || row.SessionID != "session-office-preview" || row.Decision != audit.DecisionDeny || row.detail("path") != secret {
+				t.Fatalf("incorrect preview/read denial attribution: %+v", row)
+			}
+			denials[row.Tool]++
+		}
+	}
+	if denials["preview_document"] != 1 || denials["read_file"] != 1 || len(denials) != 2 {
+		t.Fatalf("want one attributed denial per tool; got %v (rows %+v)", denials, rows)
 	}
 }
 
@@ -122,18 +145,14 @@ func TestPreviewDocument_ReadAuthorizationAndAudit(t *testing.T) {
 // FR-020, §5.1): stored thumbnails ride the session uploads folder under
 // the tool:inline:session scope with forget-only cleanup — the same
 // contract browser screenshots already satisfy — and never enter the
-// model-media admission path (T-63's archive/window assertion rides the
-// same execution).
+// model-media admission path. T-63's archive/window/next-request leg is
+// exercised separately in pkg/agent, not claimed by this storage test.
 func TestPreviewDocument_ThumbnailStorageFollowsScreenshotContract(t *testing.T) {
-	t.Fatal("UNLOCK: executes once NewPreviewDocumentTool lands (parked RED tier) — asserts SessionUploadsDir placement, SessionInlineScopePrefix scope, CleanupPolicyForgetOnly, and that the window Message after Execute carries no thumbnail data URLs (FR-036)")
+	assertOfficeThumbnailStorage(t)
 }
 
-// testContext mints a tool context carrying a session id so storage and
-// audit behave as in a live turn. Reconciled at GREEN with the real
-// session-id context key (ToolTranscriptSessionID's writer).
+// testContext uses the same transcript-session writer as the turn engine.
 func testContext(t *testing.T) context.Context {
 	t.Helper()
-	return context.WithValue(context.Background(), testSessionIDKey{}, "session-office-preview")
+	return WithTranscriptSessionID(context.Background(), "session-office-preview")
 }
-
-type testSessionIDKey struct{}
