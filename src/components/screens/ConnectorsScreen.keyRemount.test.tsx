@@ -23,6 +23,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
+import { ChannelConfigureResponse as ChannelConfigureResponseSchema } from '@/lib/api/generated/schemas'
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -169,6 +170,9 @@ beforeEach(() => {
   mockFetchAgents.mockResolvedValue([])
   mockFetchMailboxes.mockResolvedValue([])
   mockSetChannelRouting.mockResolvedValue({})
+  mockConfigureChannel.mockResolvedValue(
+    ChannelConfigureResponseSchema.parse({ apply_outcome: 'no_reload_needed' }),
+  )
 })
 
 describe('ConnectorsScreen — switching Configure targets while the panel stays open (round-1 CRITICAL)', () => {
