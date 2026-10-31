@@ -36,6 +36,10 @@ func TestWriteExclusionConservativelyCoversRegexMatches(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			home, base, work := t.TempDir(), t.TempDir(), t.TempDir()
+			// Isolate the specified regex escape from the host's temporary
+			// prefix alias; both spellings must pass the real write guard.
+			base, err := filepath.EvalSymlinks(base)
+			require.NoError(t, err)
 			t.Setenv("OMNIPUS_HOME", home)
 			root := filepath.Join(base, tc.folder)
 			target := officepreview.TrustedOffice(t, home, root)
@@ -51,6 +55,8 @@ func TestWriteExclusionConservativelyCoversRegexMatches(t *testing.T) {
 	for _, flag := range []string{"(?m)", "(?i)"} {
 		t.Run(flag, func(t *testing.T) {
 			home, work, root := t.TempDir(), t.TempDir(), t.TempDir()
+			root, err := filepath.EvalSymlinks(root)
+			require.NoError(t, err)
 			t.Setenv("OMNIPUS_HOME", home)
 			target := officepreview.TrustedOffice(t, home, root)
 			cfg := &config.Config{}

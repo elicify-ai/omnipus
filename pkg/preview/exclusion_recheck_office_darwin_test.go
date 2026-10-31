@@ -99,6 +99,8 @@ func TestWriteExclusionPrefixUsesFilesystemAliases(t *testing.T) {
 	for _, form := range []string{"NFC_root_NFD_write_ASCII_stem", "NFD_root_ASCII_stem", "case_prefix", "symlinked_parent_ASCII_stem"} {
 		t.Run(form, func(t *testing.T) {
 			base, home, work := t.TempDir(), t.TempDir(), t.TempDir()
+			base, err := filepath.EvalSymlinks(base)
+			require.NoError(t, err)
 			t.Setenv("OMNIPUS_HOME", home)
 			recheckAliasProbe(t, base)
 			rootName, writeName, stem := "Café", "Café", "Cafe"
@@ -121,17 +123,20 @@ func TestWriteExclusionPrefixUsesFilesystemAliases(t *testing.T) {
 			b, err := os.Stat(alias)
 			require.NoError(t, err)
 			require.True(t, os.SameFile(a, b), "the actual component, not a similarly named folder, is writable")
-			// The real file permission engine resolves the symlinked parent.
-			// Grant that physical ASCII stem; an allowance naming only the
-			// lexical parent alias does not authorize this write and is not
-			// evidence of an exclusion bypass.
-			pattern := "^" + regexp.QuoteMeta(filepath.Join(base, stem))
-			securityWrite(t, work, filepath.Join(alias, filepath.Base(target)), pattern)
+			// The real file guard requires lexical AND physical permission.
+			// Both explicit ASCII stems refer to this same proven component;
+			// neither a lexical-only nor a physical-only pattern can serve as
+			// an accepted-write control when the parent itself is a symlink.
+			patterns := []string{"^" + regexp.QuoteMeta(filepath.Join(base, stem))}
+			if writeBase != base {
+				patterns = append(patterns, "^"+regexp.QuoteMeta(filepath.Join(writeBase, stem)))
+			}
+			securityWrite(t, work, filepath.Join(alias, filepath.Base(target)), patterns...)
 			data, err := os.ReadFile(target)
 			require.NoError(t, err)
 			require.Equal(t, "authority really wrote", string(data))
 			cfg := &config.Config{}
-			cfg.Tools.AllowWritePaths = []string{pattern}
+			cfg.Tools.AllowWritePaths = patterns
 			officepreview.RequireWriterRefusal(t, securityWriterService(t, home, func() *config.Config { return cfg }))
 		})
 	}
