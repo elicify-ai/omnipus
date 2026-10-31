@@ -298,6 +298,23 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 	return nil, false, nil
 }
 
+// operatorSSRFAllowList returns the operator's SSRF allow list:
+// sandbox.ssrf.allow_internal followed by sandbox.egress_allow_cidrs
+// (order-stable). It is read regardless of sandbox.ssrf.enabled, because the
+// surfaces that block private addresses even with SSRF protection off (the
+// agent browser and fetch_url, #1516) must still honour the operator's
+// explicit exemptions. Returns a fresh slice; nil cfg yields nil.
+func operatorSSRFAllowList(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	merged := make([]string, 0,
+		len(cfg.Sandbox.SSRF.AllowInternal)+len(cfg.Sandbox.EgressAllowCIDRs))
+	merged = append(merged, cfg.Sandbox.SSRF.AllowInternal...)
+	merged = append(merged, cfg.Sandbox.EgressAllowCIDRs...)
+	return merged
+}
+
 // initializeSecurity builds sandboxing, prompt protection, and the exec proxy.
 func (nal *newAgentLoop) initializeSecurity() {
 	// SEC-01/02/03: Select the best-available sandbox backend. This never
@@ -332,11 +349,7 @@ func (nal *newAgentLoop) initializeSecurity() {
 	// both — the more specific exact-IP entry takes O(1) precedence in
 	// CheckIP's lookup map.
 	if nal.cfg.Sandbox.SSRF.Enabled {
-		merged := make([]string, 0,
-			len(nal.cfg.Sandbox.SSRF.AllowInternal)+len(nal.cfg.Sandbox.EgressAllowCIDRs))
-		merged = append(merged, nal.cfg.Sandbox.SSRF.AllowInternal...)
-		merged = append(merged, nal.cfg.Sandbox.EgressAllowCIDRs...)
-		nal.al.ssrfChecker = security.NewSSRFChecker(merged)
+		nal.al.ssrfChecker = security.NewSSRFChecker(operatorSSRFAllowList(nal.cfg))
 		logger.InfoCF("agent", "SSRF protection enabled",
 			map[string]any{
 				"allow_internal_count":     len(nal.cfg.Sandbox.SSRF.AllowInternal),

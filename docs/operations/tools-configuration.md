@@ -131,7 +131,9 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 | Config                   | Type     | Default | Description                                                    |
 |--------------------------|----------|---------|----------------------------------------------------------------|
 | `prefer_native`          | bool     | true    | Prefer provider's native search over configured search engines |
-| `private_host_whitelist` | string[] | `[]`    | Private/internal hosts allowed for web fetching                |
+| `private_host_whitelist` | string[] | `[]`    | Private/internal IPs or CIDR ranges allowed for web fetching (no host names) |
+
+`fetch_url` always refuses private, loopback and link-local addresses, whether or not SSRF protection (`sandbox.ssrf.enabled`) is on. Two lists make exceptions: `private_host_whitelist` above, and the sandbox SSRF allow list (`sandbox.ssrf.allow_internal`, plus `sandbox.egress_allow_cidrs`). The SSRF allow list applies to `fetch_url` and to the agent browser even when SSRF protection is off, and it also accepts host names such as `localhost`. Changes to either list take effect after a gateway restart.
 
 ### Default and fallback search provider
 

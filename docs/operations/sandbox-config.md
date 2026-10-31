@@ -47,7 +47,7 @@ Field reference (defaults applied by the boot validator when the field is omitte
 | `mode` | `enforce` on a fresh install, otherwise the operator's last saved value | See "Modes" below. |
 | `allowed_paths` | `[]` | Extra filesystem paths granted RW (read-write strip applied to `SystemRestrictedPaths`). |
 | `ssrf.enabled` | `false` | Activates SSRF protection on gateway-controlled HTTP clients. |
-| `ssrf.allow_internal` | `[]` | Exact IPs, CIDRs, or hostnames exempted from SSRF blocking (`pkg/security/ssrf.go:65-72`). |
+| `ssrf.allow_internal` | `[]` | Exact IPs, CIDRs, or hostnames exempted from SSRF blocking (`pkg/security/ssrf.go::NewSSRFChecker`). The agent browser and `fetch_url` block private addresses even when `ssrf.enabled` is false; they honour this list in both cases. Restart-gated: the settings API reports `requires_restart: true` when it changes. |
 | `egress_allow_cidrs` | `[]` | Extra CIDRs added to the SSRFChecker allow-list (`pkg/config/sandbox.go:286-314`). |
 | `egress_allow_list` | `["registry.npmjs.org", "github.com", "raw.githubusercontent.com"]` | Host allow-list for the egress proxy used by Tier 2/Tier 3 children. |
 | `max_concurrent_dev_servers` | `4` | Tier 3 `web_serve` dev-mode cap across all agents (`pkg/config/sandbox.go:233`). |

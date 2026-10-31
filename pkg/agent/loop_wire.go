@@ -525,12 +525,16 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 		agent.Tools.RegisterReplacing(searchTool)
 	}
 
-	fetchTool, err := tools.NewWebFetchToolWithProxy(
+	// #1516 F2: fetch_url keeps its always-on private-address block but also
+	// honours the operator's SSRF allow list, whether or not SSRF protection
+	// is switched on, so one list works for the browser and fetch_url alike.
+	fetchTool, err := tools.NewWebFetchToolWithAllowLists(
 		50000,
 		rw.cfg.Tools.Web.Proxy,
 		rw.cfg.Tools.Web.Format,
 		rw.cfg.Tools.Web.FetchLimitBytes,
-		rw.cfg.Tools.Web.PrivateHostWhitelist)
+		rw.cfg.Tools.Web.PrivateHostWhitelist,
+		operatorSSRFAllowList(rw.cfg))
 	if err != nil {
 		logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 	} else {
@@ -1116,13 +1120,13 @@ func (rw *registerSharedToolsWire3) registerBrowserTools(agentID string, agent *
 			// localhost:<gateway.port> there too — the blanket-loopback
 			// widening the ADR rejected. CloneWithGatewayOrigin returns an
 			// independent checker sharing the singleton's block-lists/allowlist
-			// but carrying its own exception. The SSRF-disabled branch already
-			// mints a fresh per-agent checker, so it takes the exception directly.
+			// but carrying its own exception. The SSRF-disabled branch mints a fresh
+			// checker with the operator allow list (#1516) and the exception directly.
 			var browserSSRF *security.SSRFChecker
 			if bw.rw.rs.al.ssrfChecker != nil {
 				browserSSRF = bw.rw.rs.al.ssrfChecker.CloneWithGatewayOrigin("localhost", bw.rw.cfg.Gateway.Port)
 			} else {
-				browserSSRF = security.NewSSRFChecker(nil)
+				browserSSRF = security.NewSSRFChecker(operatorSSRFAllowList(bw.rw.cfg))
 				browserSSRF.AllowGatewayOrigin("localhost", bw.rw.cfg.Gateway.Port)
 			}
 
