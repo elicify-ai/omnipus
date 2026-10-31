@@ -225,4 +225,3 @@ func TestEmptyAllowListRecordsNothingAndAdmitsEveryone(t *testing.T) {
 	require.Equal(t, 0, count, "S-56: nothing is recorded for an admitted sender")
 	require.Empty(t, recent, "S-56: recent stays empty")
 }
-

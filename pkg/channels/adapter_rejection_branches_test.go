@@ -35,19 +35,19 @@ import (
 // adapterRejectionBranches is the spec's S-54 table: adapter source file →
 // number of rejection branches that must call recordRejected.
 var adapterRejectionBranches = map[string]int{
-	"discord/discord.go":            1,
-	"telegram/telegram.go":          1,
-	"slack/slack.go":                3,
-	"qq/qq.go":                      2,
-	"weixin/weixin.go":              1,
-	"wecom/wecom.go":                1,
-	"feishu/feishu_64.go":           1,
-	"irc/handler.go":                1,
-	"googlechat/googlechat.go":      1,
-	"line/line.go":                  1,
+	"discord/discord.go":                 1,
+	"telegram/telegram.go":               1,
+	"slack/slack.go":                     3,
+	"qq/qq.go":                           2,
+	"weixin/weixin.go":                   1,
+	"wecom/wecom.go":                     1,
+	"feishu/feishu_64.go":                1,
+	"irc/handler.go":                     1,
+	"googlechat/googlechat.go":           1,
+	"line/line.go":                       1,
 	"whatsapp_native/whatsapp_native.go": 1,
-	"matrix/matrix.go":              1,
-	"dingtalk/dingtalk.go":          1,
+	"matrix/matrix.go":                   1,
+	"dingtalk/dingtalk.go":               1,
 }
 
 func TestS54_AllAdapterRejectionBranchesRecordRejected(t *testing.T) {
