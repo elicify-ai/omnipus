@@ -31,20 +31,21 @@ var skillsBootReport skills.SyncReport
 // bootSkills is the new start-up step (§8.5). It never stops the gateway:
 // errors are logged, counted on the boot banner, and retried at the next
 // start.
-func bootSkills(cfg *config.Config, homePath string) error {
+func bootSkills(cfg *config.Config, homePath string) (skills.SyncReport, error) {
 	_ = cfg
 	_ = homePath
-	return errRedBootSkillsNotImplemented // RED scaffold
+	skillsBootReport = skills.SyncReport{}
+	return skillsBootReport, errRedBootSkillsNotImplemented // RED scaffold
 }
 
 // replayBootSkillAudit emits the boot report's facts (skill.builtin_updated,
 // skill.builtin_retired, skill.builtin_retired_kept — §5.12) through the
 // normal audit path. One-shot per start; a replay write failure is counted by
 // the existing audit-degraded counter and logged, never fatal.
-func replayBootSkillAudit(report skills.SyncReport, l *audit.Logger) {
+func replayBootSkillAudit(report skills.SyncReport, l *audit.Logger) error {
 	_ = report
 	_ = l
-	// RED scaffold — not implemented.
+	return errRedBootSkillsNotImplemented // RED scaffold — not implemented
 }
 
 // HandleSkillCopy handles POST /api/v1/skills/{name}/copy (5.8). RED
