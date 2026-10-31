@@ -1651,6 +1651,27 @@ func NewWebFetchToolWithConfig(
 	fetchLimitBytes int64,
 	privateHostWhitelist []string,
 ) (*WebFetchTool, error) {
+	return NewWebFetchToolWithAllowLists(maxChars, proxy, format, fetchLimitBytes, privateHostWhitelist, nil)
+}
+
+// NewWebFetchToolWithAllowLists builds fetch_url with two allow lists:
+//   - privateHostWhitelist (tools.web.private_host_whitelist): IP/CIDR only,
+//     validated strictly (see validateWebFetchWhitelist).
+//   - operatorAllowList (sandbox.ssrf.allow_internal + egress_allow_cidrs,
+//     #1516): the operator's SSRF allow list, applied whether or not SSRF
+//     protection is switched on. Entries follow security.NewSSRFChecker's
+//     rules (IP, CIDR or host name); a listed host name such as "localhost"
+//     is exempt from the always-on private-host refusal.
+//
+// Everything not on either list stays blocked.
+func NewWebFetchToolWithAllowLists(
+	maxChars int,
+	proxy string,
+	format string,
+	fetchLimitBytes int64,
+	privateHostWhitelist []string,
+	operatorAllowList []string,
+) (*WebFetchTool, error) {
 	if maxChars <= 0 {
 		maxChars = defaultMaxChars
 	}
@@ -1661,7 +1682,10 @@ func NewWebFetchToolWithConfig(
 	// the doc comment on WebFetchTool.ssrf for why this is unconditional
 	// rather than threaded through from an optional, operator-toggled
 	// checker like WebSearchTool's.
-	ssrf := security.NewSSRFChecker(privateHostWhitelist)
+	allow := make([]string, 0, len(privateHostWhitelist)+len(operatorAllowList))
+	allow = append(allow, privateHostWhitelist...)
+	allow = append(allow, operatorAllowList...)
+	ssrf := security.NewSSRFChecker(allow)
 
 	client, err := utils.CreateHTTPClient(proxy, fetchTimeout)
 	if err != nil {
@@ -1704,8 +1728,9 @@ func (t *WebFetchTool) Name() string {
 
 func (t *WebFetchTool) Description() string {
 	return "Fetch a URL and extract readable content (HTML to text). Use this to get weather info, news, articles, or any web content. " +
-		"Only http/https. Private, loopback and link-local addresses are refused — you cannot fetch a local dev server or preview URL " +
-		"with this tool; use the browser tools instead. Content is truncated to maxChars."
+		"Only http/https. Private, loopback and link-local addresses are refused unless the operator listed them in the SSRF allow list " +
+		"(sandbox.ssrf.allow_internal) — otherwise you cannot fetch a local dev server or preview URL with this tool; use the browser tools instead. " +
+		"Content is truncated to maxChars."
 }
 
 func (t *WebFetchTool) Scope() ToolScope       { return ScopeGeneral }
@@ -1850,6 +1875,12 @@ func isObviousPrivateHost(host string, ssrf *security.SSRFChecker) bool {
 	h = strings.TrimSuffix(h, ".")
 	if h == "" {
 		return true
+	}
+
+	// #1516: a host name the operator listed in the SSRF allow list is
+	// exempt; the dial-time check (CheckHost) honours the same entry.
+	if ssrf.IsAllowlistedHost(h) {
+		return false
 	}
 
 	if h == "localhost" || strings.HasSuffix(h, ".localhost") {

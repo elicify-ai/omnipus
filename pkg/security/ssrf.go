@@ -447,6 +447,21 @@ func (sc *SSRFChecker) CheckIP(ip net.IP) error {
 	return nil
 }
 
+// IsAllowlistedHost reports whether host (a host name, not an IP) is an exact,
+// case-insensitive entry of the allowInternal list given to NewSSRFChecker —
+// the same lookup CheckHost uses to skip blocking for a listed name. Read-only;
+// a nil or zero-value checker has no entries and returns false.
+func (sc *SSRFChecker) IsAllowlistedHost(host string) bool {
+	if sc == nil {
+		return false
+	}
+	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if h == "" || net.ParseIP(h) != nil {
+		return false
+	}
+	return sc.allowList[h]
+}
+
 // CheckHost resolves a hostname and checks all resolved IPs against SSRF rules.
 // This provides DNS rebinding protection (SEC-24).
 //
