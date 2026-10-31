@@ -59,9 +59,9 @@ When an agent sends you a file from its workspace, the file card has **Open in L
 
 An open Library keeps its folder view up to date on its own. While the panel is open and you are actively looking at it — the tab visible and the window focused — the folder you are viewing is re-read every 10 seconds. A file an agent just wrote, a change made through a shell command, or an edit saved by another app appears in the list within about ten seconds, without you switching panels or reloading.
 
-The re-checking pauses while the panel is closed, the tab is in the background, or the window is not focused, and resumes when you come back. If a re-check cannot reach the server, the list simply stays as it is — no error pops up — and the next successful re-check brings it current again.
+The re-checking pauses while the panel is closed, the tab is in the background, or the window is not focused, and resumes when you come back. Each automatic re-check makes one attempt. If it fails, the list simply stays as it is — no error pops up — and the next successful re-check brings it current again. If the folder has not loaded successfully yet, its error and **Retry** stay on screen instead of being replaced by loading placeholders every ten seconds.
 
-If a refresh of the folder you are viewing fails while its list is already shown — for example while a file you opened is being looked up — the Library says so: a banner above the list explains that the folder could not be refreshed, with a Retry button. The list itself stays on screen.
+An explicit refresh is different: if the folder refresh requested by opening a file fails while an earlier list is already shown, a banner above that list explains the failure and offers **Retry refresh**. The earlier list stays on screen. Automatic re-checks pause on this error until a query refresh succeeds, for example after you choose **Retry refresh** or return to the tab.
 
 One deliberate limit: a file you have **open** in the preview pane is not live-updated. What you see stays as it was when you opened it, and your unsaved edits are never replaced. Switching to another tab and back does not refresh it either — to pick up the latest version of an open file, close and reopen it (if you have unsaved edits, the Library asks what to do with them first).
 
