@@ -1,11 +1,12 @@
 // rest_executor_preview.go — POST /api/v1/agents/executor-preview.
 //
 // Stateless, agent-agnostic preview of the REAL command Omnipus would spawn
-// for a subagent_3p external-CLI worker with the given cli/model/cli_path/
-// cli_args/max_tool_iterations settings. Unlike GET /api/v1/agents/
-// executor-defaults (a hand-maintained description that must be kept
-// byte-accurate to the drivers by hand — see listExecutorDefaults' doc
-// comment), this endpoint calls the REAL buildArgs() logic each driver uses
+// for a subagent_3p external-CLI worker with the given cli/model/cli_args/
+// max_tool_iterations settings. The request carries no cli_path (T11 C-B1):
+// one carrying it is refused with 400 before anything else runs. Unlike GET
+// /api/v1/agents/executor-defaults (a hand-maintained description that must
+// be kept byte-accurate to the drivers by hand — see listExecutorDefaults'
+// doc comment), this endpoint calls the REAL buildArgs() logic each driver uses
 // at actual dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go,
 // via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package
 // export in buildargs_crosspkg.go) so the previewed argv can never drift from
@@ -15,7 +16,9 @@
 package gateway
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -34,6 +37,32 @@ type executorPreviewDroppedArg = struct { // not-wire-format: mirrors the genera
 	Reason string `json:"reason"`
 }
 
+// executorFreePathRefusal is the 400 text for a preview or smoke-test request
+// that still carries cli_path (T11 C-B1, FR-12): an HTTP caller never chooses
+// which program runs; a person sets it in Settings.
+const executorFreePathRefusal = "cli_path is not accepted: the program path for each CLI is set by a person in Settings -> Third-party agents"
+
+// decodeExecutorRequestRefusingFreePath reads the bounded request body and
+// refuses a top-level cli_path member with 400 in BOTH inbound-validation
+// modes, before decoding and (when enabled) schema-validating the body into
+// dst. A body that is not a JSON object is left to decodeAndValidateBytes,
+// which refuses it with its own 400.
+func decodeExecutorRequestRefusingFreePath(w http.ResponseWriter, r *http.Request, schemaName string, dst any, validateEnabled bool) bool {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return false
+	}
+	var members map[string]json.RawMessage
+	if json.Unmarshal(raw, &members) == nil {
+		if _, present := members["cli_path"]; present {
+			jsonErr(w, http.StatusBadRequest, executorFreePathRefusal)
+			return false
+		}
+	}
+	return decodeAndValidateBytes(w, raw, schemaName, dst, validateEnabled, "")
+}
+
 // postAgentsExecutorPreview handles POST /api/v1/agents/executor-preview
 // (operationId postAgentsExecutorPreview). Decodes and validates the request
 // body, calls the real per-driver buildArgs() via the runner package's
@@ -42,7 +71,7 @@ type executorPreviewDroppedArg = struct { // not-wire-format: mirrors the genera
 func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Request) {
 	var req gen.ExecutorCommandPreviewRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "ExecutorCommandPreviewRequest", &req, validateEnabled) {
+	if !decodeExecutorRequestRefusingFreePath(w, r, "ExecutorCommandPreviewRequest", &req, validateEnabled) {
 		return
 	}
 
@@ -52,7 +81,6 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 	}
 
 	model := derefTrimStr(req.Model)
-	cliPath := derefTrimStr(req.CliPath)
 	cliArgsRaw := derefStr(req.CliArgs)
 	// Turn cap (#904 D4, FR-013): the same effective value a real dispatch
 	// passes — the single resolver over the global limit in force and the
@@ -76,7 +104,6 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 
 	opts := runner.RunOptions{
 		Model:    model,
-		CLIPath:  cliPath,
 		CLIArgs:  cliArgs,
 		MaxTurns: maxTurns,
 		// Constant placeholder: inert for claude/codex (their buildArgs never
@@ -114,10 +141,7 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 		droppedArgs = append(droppedArgs, executorPreviewDroppedArg{Flag: d.Flag, Reason: d.Reason})
 	}
 
-	binary := cliPath
-	if binary == "" {
-		binary = runner.DefaultCLIBinary(cli)
-	}
+	binary := runner.DefaultCLIBinary(cli)
 
 	var promptDelivery gen.ExecutorCommandPreviewResponsePromptDelivery
 	switch cli {

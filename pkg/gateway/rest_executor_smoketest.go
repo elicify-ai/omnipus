@@ -28,8 +28,10 @@
 //     vars' doc comments for the justification (this endpoint is materially
 //     more expensive per call: real tokens + a real subprocess held for up to
 //     smokeTestTimeoutSeconds, vs. a ~15s zero-token --version probe).
-//   - Pre-spawn guard: the resolved target (cli_path override, else the
-//     driver's own default binary name) MUST be a regular, executable file on
+//   - No free path (T11 C-B1): a request carrying cli_path is refused with
+//     400 before any runner is created, in both inbound-validation modes.
+//   - Pre-spawn guard: the resolved target (the driver's own default binary
+//     name) MUST be a regular, executable file on
 //     $PATH — reuses isRegularExecutableFile (rest_clivalidate.go) — before
 //     any subprocess is started.
 //   - Bounded run: a fixed, hardcoded trivial prompt (not operator-
@@ -190,7 +192,7 @@ var smokeTestLimiter = newAPIRateLimiter(5, 1*time.Minute)
 // newExternalDriver package var, added for the identical reason. Production
 // always uses runner.NewDriver. Tests that need to prove the REAL dispatch
 // path (argv construction, env scrubbing, NDJSON parsing) leave this at its
-// default and drive a real stub-script binary via cli_path instead — see
+// default and drive a real stub-script binary as the CLI's program — see
 // rest_executor_smoketest_test.go's happy-path/error/timeout tests.
 var smokeTestNewDriver = runner.NewDriver
 
@@ -237,7 +239,7 @@ func (a *restAPI) postAgentsExecutorSmokeTest(w http.ResponseWriter, r *http.Req
 
 	var req gen.ExecutorSmokeTestRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "ExecutorSmokeTestRequest", &req, validateEnabled) {
+	if !decodeExecutorRequestRefusingFreePath(w, r, "ExecutorSmokeTestRequest", &req, validateEnabled) {
 		return
 	}
 
@@ -258,11 +260,10 @@ func (a *restAPI) postAgentsExecutorSmokeTest(w http.ResponseWriter, r *http.Req
 	defer smokeTestInflight.release(key)
 
 	model := derefTrimStr(req.Model)
-	cliPath := derefTrimStr(req.CliPath)
 	cliArgsRaw := derefStr(req.CliArgs)
 	agentID := derefTrimStr(req.AgentId)
 
-	resp, resolvedBinary := a.runExecutorSmokeTest(r.Context(), cli, model, cliPath, cliArgsRaw, agentID)
+	resp, resolvedBinary := a.runExecutorSmokeTest(r.Context(), cli, model, cliArgsRaw, agentID)
 	a.auditExecutorSmokeTest(r, cli, resolvedBinary, resp)
 	jsonOK(w, resp)
 }
@@ -323,7 +324,7 @@ type restAPIRunExecutorSmokeTest struct {
 // wire response schema deliberately does not carry this).
 func (a *restAPI) runExecutorSmokeTest(
 	ctx context.Context,
-	cli, model, cliPath, cliArgsRaw, agentID string,
+	cli, model, cliArgsRaw, agentID string,
 ) (gen.ExecutorSmokeTestResponse, string) {
 	ra := &restAPIRunExecutorSmokeTest{cli: cli, cliArgsRaw: cliArgsRaw}
 
@@ -333,16 +334,10 @@ func (a *restAPI) runExecutorSmokeTest(
 	// Pre-spawn guard (mirrors validateCLI's fail-closed pre-spawn check in
 	// rest_clivalidate.go): resolve the spawn target the SAME way the runtime
 	// spawn does, before guarding it, so the guard is authoritative over what
-	// would actually be exec'd. Unlike cli-validate (which treats an empty
-	// cli_path as missing-binary WITHOUT a spawn — it validates a
-	// caller-typed override specifically), an empty cli_path here is the
-	// NORMAL "use the configured default" case, matching executor-preview and
-	// real dispatch — so it resolves to the driver's own default binary name
-	// via $PATH instead of short-circuiting.
-	target := cliPath
-	if target == "" {
-		target = runner.DefaultCLIBinary(ra.cli)
-	}
+	// would actually be exec'd. The request carries no path (T11 C-B1), so
+	// the target is the driver's own default binary name, resolved via $PATH
+	// exactly as the driver resolves it when RunOptions.CLIPath is empty.
+	target := runner.DefaultCLIBinary(ra.cli)
 	resolvedTarget, lpErr := exec.LookPath(target)
 	if lpErr != nil || !isRegularExecutableFile(resolvedTarget) {
 		return smokeTestFail(
@@ -501,7 +496,6 @@ func (a *restAPI) runExecutorSmokeTest(
 		Env:            sandbox.ScrubGatewayEnvForRunner(),
 		TimeoutSeconds: smokeTestTimeoutSeconds,
 		MaxTurns:       smokeTestMaxTurns,
-		CLIPath:        cliPath,
 		CLIArgs:        ra.safeArgs,
 		Model:          model,
 	})

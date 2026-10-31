@@ -19,7 +19,10 @@ description: >
   see). Omitting agent_id (the create-wizard case, before the agent has
   been saved) or naming an agent that doesn't resolve falls back to a
   disposable, ephemeral scratch directory instead — the response's
-  used_agent_workspace field says which one happened.
+  used_agent_workspace field says which one happened. There is no
+  cli_path member (T11 C-B1): the program for the CLI is the path a person
+  saved in Settings -> Third-party agents, and a request that carries
+  cli_path is refused with 400 in every inbound-validation mode.
 required:
   - cli
 additionalProperties: false
@@ -43,10 +46,6 @@ properties:
     type: string
     maxLength: 256
     description: Model slug/shape to run with, same semantics as ExecutorCommandPreviewRequest.model.
-  cli_path:
-    type: string
-    maxLength: 4096
-    description: Optional executor.cli_path override, same semantics as ExecutorCommandPreviewRequest.cli_path.
   cli_args:
     type: string
     maxLength: 4096

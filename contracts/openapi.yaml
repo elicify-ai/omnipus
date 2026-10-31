@@ -3848,7 +3848,7 @@ paths:
       summary: Preview the real command Omnipus would run for these executor settings
       description: >
         Stateless, agent-agnostic: computes the REAL argv each driver would
-        build for the given cli/model/cli_path/cli_args/max_tool_iterations by
+        build for the given cli/model/cli_args/max_tool_iterations by
         calling the same buildArgs() logic used at real dispatch time
         (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a
         hand-maintained description like GET /agents/executor-defaults.
