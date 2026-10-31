@@ -74,15 +74,21 @@ func (al *AgentLoop) judgeEvidenceRedactor() func(string) string {
 var judgeEvidencePatternRedactor = audit.NewSecretShapeRedactor()
 
 // judgeUserinfoLoginPattern is layer 3 of judgeEvidenceRedactor: the whole
-// userinfo of a URL that carries a password (scheme://USER:PASSWORD@host).
-// The user part may contain a raw "@" (an e-mail login); the greedy user
-// match backtracks to the LAST ":password@" before the first "/" or
-// whitespace, so "https://host:8080/" (no "@" before the "/") and
-// "https://user@host:8080/" (port, then "/") are left alone. Quotes,
-// backslashes, angle brackets, "?" and "#" end the match too: tool
-// parameters are rendered as space-free JSON, and without that stop a URL
-// with no path would run on into the next field and swallow a following
+// userinfo of a URL that carries a password (scheme://USER:PASSWORD@host),
+// replaced through the LAST "@" before the host. That is where Go's URL
+// parser ends the userinfo too (net/url splits the authority at the final
+// "@"), so a raw "@" inside the password ("postgres://app:p@ss9word@db") or
+// one starting it is masked WHOLE instead of leaking its tail or defeating
+// the match — security review 6b, 2026-10-30. The user part may contain a
+// raw "@" (an e-mail login); the greedy userinfo match backtracks to that
+// LAST "@" before the first "/", whitespace, quote, backslash, angle
+// bracket, "?" or "#", so "https://host:8080/" (no "@" before the "/") and
+// "https://user@host:8080/" (port, then "/") are left alone — a userinfo
+// without a password is a bare login, not a secret. Quotes, backslashes,
+// angle brackets, "?" and "#" end the match too: tool parameters are
+// rendered as space-free JSON, and without that stop a URL with no path
+// would run on into the next field and swallow a following
 // "to":"supplier@x.com". Group 1 keeps "scheme://".
 //
 //nolint:gochecknoglobals // immutable, process-wide compiled pattern.
-var judgeUserinfoLoginPattern = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://)[^\s/"'\\<>?#]*:[^\s@/"'\\<>?#]+@`)
+var judgeUserinfoLoginPattern = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://)[^\s/"'\\<>?#]*:[^\s/"'\\<>?#]+@`)
