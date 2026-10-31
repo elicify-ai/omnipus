@@ -44,8 +44,8 @@ func TestT_U1_S43_NormalizeUsageParsesReasoningTokens(t *testing.T) {
 	tests := []struct {
 		name    string
 		raw     string
-		want    any    // expected reasoning_tokens JSON value; nil = key must be absent
-		wantOut any    // expected completion_tokens value
+		want    any // expected reasoning_tokens JSON value; nil = key must be absent
+		wantOut any // expected completion_tokens value
 	}{
 		{
 			name:    "D7 row 1: reported 120 carried, output and total unchanged",
