@@ -148,14 +148,13 @@ properties:
       Deliberately named `auto_approve`, not `mode` — this schema's
       existing `mode` field is the unrelated kernel sandbox enforcement
       mode (off/permissive/enforce); reusing that key for a different
-      value domain would collide. Hot-reloaded, like the rest of this
-      handler's fields — no restart required.
+      value domain would collide. Hot-reloaded — no restart required.
     example: true
   requires_restart:
     type: boolean
     description: >
       Present in PUT responses. True when the change requires a gateway
-      restart to take effect (mode, allowed_paths).
+      restart to take effect (mode, allowed_paths, ssrf_enabled, ssrf.allow_internal).
   saved:
     type: boolean
     description: Present in PUT responses. Always true on success.

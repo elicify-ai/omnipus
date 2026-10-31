@@ -5,9 +5,9 @@ description: >
   At least one field must be supplied (the server returns 400 otherwise).
   Flat fields take precedence over nested equivalents when both are present
   in the same request body.
-  mode and allowed_paths are restart-gated
-  (the response includes requires_restart=true when either changes).
-  ssrf.allow_internal and auto_approve are hot-reloaded.
+  mode, allowed_paths, ssrf_enabled and ssrf.allow_internal are restart-gated
+  (the response includes requires_restart=true when any of them changes).
+  auto_approve is hot-reloaded.
   This endpoint is the routing target for ADR-092's global Auto-approve
   default write (auto_approve below) specifically because it already
   gates every write behind requireReAuth (see putSandboxConfig ->
@@ -56,7 +56,9 @@ properties:
       - "/home/user/workspace"
   ssrf_enabled:
     type: boolean
-    description: Enable SSRF (server-side request forgery) protection for HTTP tool calls.
+    description: >
+      Enable SSRF (server-side request forgery) protection for HTTP tool calls.
+      Restart-gated.
     example: true
   ssrf_allow_internal:
     type: array
@@ -64,7 +66,9 @@ properties:
       type: string
     description: >
       Flat version of ssrf.allow_internal. Takes precedence when both are present.
-      CIDR ranges or IP addresses the agent may reach despite SSRF blocking.
+      CIDR ranges, IP addresses or host names the agent may reach despite SSRF blocking.
+      Honoured by the agent browser and fetch_url even when SSRF protection is off.
+      Restart-gated.
     example:
       - "10.0.0.1/32"
   ssrf:

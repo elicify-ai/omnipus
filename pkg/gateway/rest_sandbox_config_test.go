@@ -303,14 +303,38 @@ func TestHandleSandboxConfig_SSRFAllowInternal_IPv6LinkLocal(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
-func TestHandleSandboxConfig_SSRFAllowInternal_HotReload(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	w := sandboxConfigPUT(t, api, `{"ssrf":{"allow_internal":["10.0.0.0/8"]}}`)
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, false, resp["requires_restart"],
-		"ssrf.allow_internal hot-reloads via 2s config poll")
+// #1516 F3: the shared SSRF checker is built once at boot
+// (agent.newAgentLoop.initializeSecurity), so an allow-list edit only takes
+// effect after a restart. The response must say so instead of claiming hot
+// reload. (Replaces the former _HotReload test, whose premise was wrong.)
+func TestHandleSandboxConfig_SSRFAllowInternal_RequiresRestart(t *testing.T) {
+	for _, body := range []string{
+		`{"ssrf":{"allow_internal":["10.0.0.0/8"]}}`,
+		`{"ssrf_allow_internal":["10.0.0.0/8"]}`,
+	} {
+		api := newTestRestAPIWithHome(t)
+		w := sandboxConfigPUT(t, api, body)
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, true, resp["requires_restart"],
+			"ssrf.allow_internal is read once at boot; the change needs a restart (%s)", body)
+	}
+}
+
+// #1516 F3: sandbox.ssrf.enabled is read by the same boot-time construction
+// (initializeSecurity builds the shared checker only when it is true), so a
+// change to it needs a restart too.
+func TestHandleSandboxConfig_SSRFEnabled_RequiresRestart(t *testing.T) {
+	for _, body := range []string{`{"ssrf_enabled":true}`, `{"ssrf_enabled":false}`} {
+		api := newTestRestAPIWithHome(t)
+		w := sandboxConfigPUT(t, api, body)
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, true, resp["requires_restart"],
+			"ssrf.enabled is read once at boot; the change needs a restart (%s)", body)
+	}
 }
 
 // --- shared handler tests ---

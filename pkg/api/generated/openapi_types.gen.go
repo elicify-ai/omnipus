@@ -23632,7 +23632,7 @@ type SandboxConfig struct {
 
 	// AutoApprove ADR-092's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear (ADR-092 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool. [2026-09-24, founder decision] Auto no longer additionally requires an enforcing kernel sandbox: it applies to bash and every other tool whether or not a kernel sandbox is confining spawned children (see SandboxStatus.kernel_sandbox_active, now purely informational for this purpose). Without a kernel sandbox, the D7/D8 pre-flights and the surviving text-based guards are the only checks on what a bash command touches — a disguised command can slip past a text-based check where a kernel boundary would have caught it; this is the accepted, founder-approved risk, not an oversight.
 	// This is the GLOBAL default only. One narrower scope layers on top, not stored here: a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
-	// Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
+	// Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded — no restart required.
 	AutoApprove *bool `json:"auto_approve,omitempty"`
 
 	// FilesystemModel The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
@@ -23648,7 +23648,7 @@ type SandboxConfig struct {
 	// Mode Configured sandbox enforcement mode.
 	Mode *SandboxConfigMode `json:"mode,omitempty"`
 
-	// RequiresRestart Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths).
+	// RequiresRestart Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths, ssrf_enabled, ssrf.allow_internal).
 	RequiresRestart *bool `json:"requires_restart,omitempty"`
 
 	// Saved Present in PUT responses. Always true on success.
@@ -23680,7 +23680,7 @@ type SandboxConfigFilesystemModel string
 // SandboxConfigMode Configured sandbox enforcement mode.
 type SandboxConfigMode string
 
-// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and auto_approve are hot-reloaded. This endpoint is the routing target for ADR-092's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it.
+// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode, allowed_paths, ssrf_enabled and ssrf.allow_internal are restart-gated (the response includes requires_restart=true when any of them changes). auto_approve is hot-reloaded. This endpoint is the routing target for ADR-092's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it.
 type SandboxConfigUpdate struct {
 	// AllowNetworkOutbound Allow agent tool calls to make outbound network connections.
 	AllowNetworkOutbound *bool `json:"allow_network_outbound,omitempty"`
@@ -23705,10 +23705,10 @@ type SandboxConfigUpdate struct {
 		AllowInternal *[]string `json:"allow_internal,omitempty"`
 	} `json:"ssrf,omitempty"`
 
-	// SsrfAllowInternal Flat version of ssrf.allow_internal. Takes precedence when both are present. CIDR ranges or IP addresses the agent may reach despite SSRF blocking.
+	// SsrfAllowInternal Flat version of ssrf.allow_internal. Takes precedence when both are present. CIDR ranges, IP addresses or host names the agent may reach despite SSRF blocking. Honoured by the agent browser and fetch_url even when SSRF protection is off. Restart-gated.
 	SsrfAllowInternal *[]string `json:"ssrf_allow_internal,omitempty"`
 
-	// SsrfEnabled Enable SSRF (server-side request forgery) protection for HTTP tool calls.
+	// SsrfEnabled Enable SSRF (server-side request forgery) protection for HTTP tool calls. Restart-gated.
 	SsrfEnabled *bool `json:"ssrf_enabled,omitempty"`
 
 	// WorkspacePathGuard ADR-068 §6. Turns the IN-PROCESS bash workspace path guard on or off. Distinct from `mode`, which is the kernel sandbox — the two are separate boundaries and setting one has no effect on the other (UAT defect 002 was operators expecting otherwise). When true, a WRITE outside the agent's working directory needs an approved workspace mount; reads outside it are allowed either way. Restart-gated: it resolves into AgentDefaults.RestrictToWorkspace at boot. Ignored at runtime while OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE is set, which outranks it — see workspace_path_guard_env_override on the GET response.

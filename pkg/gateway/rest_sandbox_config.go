@@ -43,8 +43,10 @@ var validSandboxModes = map[string]bool{
 // {mode, allow_network_outbound, allowed_paths, ssrf_enabled,
 // ssrf_allow_internal, ssrf.allow_internal, auto_approve}. On validation
 // success each changed field is persisted atomically via safeUpdateConfigJSON.
-// mode and allowed_paths are restart-gated (requires_restart=true).
-// ssrf.allow_internal and auto_approve are hot-reload (requires_restart=false).
+// mode, allowed_paths, ssrf_enabled and ssrf.allow_internal are restart-gated
+// (requires_restart=true). auto_approve is hot-reload (requires_restart=false).
+// The two SSRF fields are restart-gated because the SSRF checkers are built
+// once at boot (agent.newAgentLoop.initializeSecurity and the tool wiring, #1516).
 // auto_approve is ADR-092 D1's global Auto-approve default — this handler is
 // its routing target specifically because it already gates every write
 // behind requireReAuth (see authenticateAndDecode below).
@@ -251,7 +253,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if ps.changedAutoApprove {
-			// Hot-reload, like ssrf.allow_internal — no restart flag.
+			// Hot-reload — no restart flag.
 			if prev, ok := sandbox["auto_approve"].(bool); ok {
 				oldAutoApprove = prev
 			}
@@ -445,10 +447,12 @@ func (ps *restAPIPutSandboxConfig) resolveAndValidate() bool {
 
 // respond returns the saved configuration and whether the changes require a restart.
 func (ps *restAPIPutSandboxConfig) respond() {
-	// mode and allowed_paths are restart-gated (each is consumed at boot or
-	// agent-wiring time). ssrf.allow_internal and auto_approve are
-	// hot-reload via the config-poll loop.
-	partialRestartRequired := ps.changedMode || ps.changedAllowedPaths || ps.changedWorkspacePathGuard
+	// mode, allowed_paths, ssrf_enabled and ssrf.allow_internal are
+	// restart-gated (each is consumed at boot or agent-wiring time; the SSRF
+	// checkers are built once at boot, #1516). auto_approve is hot-reload via
+	// the config-poll loop.
+	partialRestartRequired := ps.changedMode || ps.changedAllowedPaths ||
+		ps.changedWorkspacePathGuard || ps.changedSSRFEnabled || ps.changedAllowInternal
 
 	// Return the updated config so the UI can cache-update without a follow-up GET.
 	// Include both flat fields and nested ssrf object for backward-compatible clients.
