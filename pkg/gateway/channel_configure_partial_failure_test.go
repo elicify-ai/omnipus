@@ -211,8 +211,10 @@ func TestT07_CredentialSavedNotSaved_SavedReferenceStillNamesR(t *testing.T) {
 	// fixture surgery through the real config write path).
 	require.NoError(t, f.store.Set("QA1277_CARD_REF", "qa1277-card-R-value"))
 	require.NoError(t, f.api.safeUpdateConfigJSON(func(doc map[string]any) error {
-		channels := doc["channels"].(map[string]any)
-		inst := channels["line.healthy"].(map[string]any)
+		channels, ok := doc["channels"].(map[string]any)
+		require.True(t, ok, "instrument: config must carry channels")
+		inst, ok := channels["line.healthy"].(map[string]any)
+		require.True(t, ok, "instrument: line.healthy instance must exist")
 		inst["channel_access_token_ref"] = "QA1277_CARD_REF"
 		return nil
 	}))
@@ -239,7 +241,8 @@ func TestT07_CredentialSavedNotSaved_SavedReferenceStillNamesR(t *testing.T) {
 	// R is still the saved reference (the write did not land), and R's value
 	// is intact in the main store; B sits only in the loop's store.
 	after := readConfigChannelsFile(t, f)
-	inst := after["line.healthy"].(map[string]any)
+	inst, ok := after["line.healthy"].(map[string]any)
+	require.True(t, ok, "instrument: line.healthy instance must survive the failed save")
 	require.Equal(t, "QA1277_CARD_REF", inst["channel_access_token_ref"],
 		"FR-057: the saved reference must still name R after the failed save")
 	rValue, err := f.store.Get("QA1277_CARD_REF")
