@@ -194,7 +194,7 @@ func pagingNearAdmissionProbe(t *testing.T) {
 	require.True(t, p.Response.PageInfo.ByteBudgetExceeded)
 	require.NotNil(t, p.Response.PageInfo.BudgetOverride)
 	require.Equal(t, "height_floor", *p.Response.PageInfo.BudgetOverride)
-	require.NotEqual(t, "byte_budget", p.Response.PageInfo.StopReason, "no hard byte defense below the floor")
+	require.Equal(t, "end", p.Response.PageInfo.StopReason, "three records below the 100-row limit exhaust the nearest history: the page stops at end, never a byte-budget or range artifact")
 	var actual int64
 	for _, raw := range p.ReplayFrames {
 		actual += int64(len(raw))
