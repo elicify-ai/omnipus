@@ -21,7 +21,11 @@ properties:
     type: string
     nullable: true
     enum: [allow, ask, deny]
-    description: The agent's own stored override; null when the agent rides the global ceiling.
+    description: >
+      The stored value of this tool's exact key in the agent's per-agent
+      policy map; null when there is none. A value inherited through a
+      stored wildcard shows in `effective` and in
+      AgentDetail.stored_overrides, not here.
     example: null
   description:
     type: string

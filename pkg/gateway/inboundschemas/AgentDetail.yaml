@@ -4,9 +4,11 @@ description: >
   effective model chain. Stored fields stay as stored; model_chain is the
   resolved view (primary first, then each fallback). Only id and revision
   are always present: the get_agent `fields` tool parameter filters the
-  result, and the size bound may cut long fields (listed in
-  truncated_fields). Extension point: the effort fields of the effort
-  feature are added here when that feature lands.
+  result, and the size bound may cut long fields. absent_fields and
+  truncated_fields are result metadata, never selectable through `fields`.
+  A new-agent preview (get_agent with new_agent_type) returns AgentPreview
+  instead. Extension point: the effort fields of the effort feature are
+  added here when that feature lands.
 type: object
 additionalProperties: false
 required:
@@ -30,6 +32,9 @@ properties:
       - Subagent
       - subagent_3p
     description: Agent type, as in Agent.type.
+  locked:
+    type: boolean
+    description: As Agent.locked — identity is fixed on built-ins.
   model:
     type: string
     description: The stored primary model slug ("" when the agent inherits the default).
@@ -76,6 +81,14 @@ properties:
     items:
       $ref: './AgentToolPermission.yaml'
     description: Per-tool effective policy and the agent's own stored override.
+  stored_overrides:
+    type: object
+    additionalProperties:
+      type: string
+      enum: [allow, ask, deny]
+    description: >
+      The agent's raw stored per-agent policy map, exactly as stored: MCP
+      wildcards and stale keys included.
   connectors:
     type: array
     items:
@@ -113,14 +126,17 @@ properties:
     type: array
     items:
       type: string
-    description: Names of fields cut by the result size bound. Absent or empty when nothing was cut.
-  preview_of:
-    type: string
-    enum:
-      - Main
-      - Subagent
-      - subagent_3p
-    description: Present only on a new-agent preview; names the type being previewed.
+    description: >
+      Result metadata, never selectable: names of fields cut by the result
+      size bound; the cut text ends with "…[cut: 8,000 of <n> characters]".
+      Absent or empty when nothing was cut.
+  absent_fields:
+    type: array
+    items:
+      type: string
+    description: >
+      Result metadata, never selectable: requested properties the full
+      object does not carry. Absent or empty when none.
   model_chain:
     type: array
     items:

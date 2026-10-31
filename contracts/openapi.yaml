@@ -1469,6 +1469,8 @@ components:
       $ref: ./components/schemas/AgentModelChainEntry.yaml
     AgentToolPermission:
       $ref: ./components/schemas/AgentToolPermission.yaml
+    AgentPreview:
+      $ref: ./components/schemas/AgentPreview.yaml
     AgentExecutorSettingsResult:
       $ref: ./components/schemas/AgentExecutorSettingsResult.yaml
     ExecutorDefaults:

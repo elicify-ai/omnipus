@@ -1,0 +1,38 @@
+title: AgentPreview
+description: >
+  Result of the get_agent tool with new_agent_type: a preview of what a new
+  agent of that type would get. The agent does not exist, so there is no id
+  and no revision. absent_fields and truncated_fields are result metadata.
+type: object
+additionalProperties: false
+required: [preview_of]
+properties:
+  preview_of:
+    type: string
+    enum:
+      - Main
+      - Subagent
+      - subagent_3p
+    description: The agent type being previewed.
+  tool_permissions:
+    type: array
+    items:
+      $ref: './AgentToolPermission.yaml'
+    description: Per-tool effective policy a new agent of this type would get.
+  connectors:
+    type: array
+    items:
+      $ref: './AgentMCPBinding.yaml'
+    description: Connector (MCP server) bindings a new agent of this type would get.
+  absent_fields:
+    type: array
+    items:
+      type: string
+    description: "Result metadata: requested properties the preview does not carry."
+  truncated_fields:
+    type: array
+    items:
+      type: string
+    description: >
+      Result metadata: names of fields cut by the result size bound; the cut
+      text ends with "…[cut: 8,000 of <n> characters]".

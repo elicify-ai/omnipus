@@ -9328,7 +9328,7 @@ export interface components {
         };
         /**
          * AgentDetail
-         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields (listed in truncated_fields). Extension point: the effort fields of the effort feature are added here when that feature lands.
+         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Extension point: the effort fields of the effort feature are added here when that feature lands.
          */
         AgentDetail: {
             /** @example 550e8400-e29b-41d4-a716-446655440000 */
@@ -9341,6 +9341,8 @@ export interface components {
              * @enum {string}
              */
             type?: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
+            /** @description As Agent.locked — identity is fixed on built-ins. */
+            locked?: boolean;
             /** @description The stored primary model slug ("" when the agent inherits the default). */
             model?: string;
             /** @description The stored primary provider key ("" when not pinned). */
@@ -9360,6 +9362,10 @@ export interface components {
             skills?: string[];
             /** @description Per-tool effective policy and the agent's own stored override. */
             tool_permissions?: components["schemas"]["AgentToolPermission"][];
+            /** @description The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included. */
+            stored_overrides?: {
+                [key: string]: "allow" | "ask" | "deny";
+            };
             /** @description The agent's explicitly assigned connector (MCP server) bindings. */
             connectors?: components["schemas"]["AgentMCPBinding"][];
             /** @description SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul). */
@@ -9376,13 +9382,10 @@ export interface components {
             program_warning?: string;
             /** @description True when the agent has a main chat. */
             has_main_chat?: boolean;
-            /** @description Names of fields cut by the result size bound. Absent or empty when nothing was cut. */
+            /** @description Result metadata, never selectable: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]". Absent or empty when nothing was cut. */
             truncated_fields?: string[];
-            /**
-             * @description Present only on a new-agent preview; names the type being previewed.
-             * @enum {string}
-             */
-            preview_of?: "Main" | "Subagent" | "subagent_3p";
+            /** @description Result metadata, never selectable: requested properties the full object does not carry. Absent or empty when none. */
+            absent_fields?: string[];
             /** @description The effective model chain: primary first, then each fallback in order, derived through the real resolver; unknown values are null. */
             model_chain?: components["schemas"]["AgentModelChainEntry"][];
         };
@@ -9441,7 +9444,7 @@ export interface components {
              */
             effective: "allow" | "ask" | "deny";
             /**
-             * @description The agent's own stored override; null when the agent rides the global ceiling.
+             * @description The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
              * @example null
              * @enum {string|null}
              */
@@ -9451,6 +9454,25 @@ export interface components {
              * @example Search the web
              */
             description?: string;
+        };
+        /**
+         * AgentPreview
+         * @description Result of the get_agent tool with new_agent_type: a preview of what a new agent of that type would get. The agent does not exist, so there is no id and no revision. absent_fields and truncated_fields are result metadata.
+         */
+        AgentPreview: {
+            /**
+             * @description The agent type being previewed.
+             * @enum {string}
+             */
+            preview_of: "Main" | "Subagent" | "subagent_3p";
+            /** @description Per-tool effective policy a new agent of this type would get. */
+            tool_permissions?: components["schemas"]["AgentToolPermission"][];
+            /** @description Connector (MCP server) bindings a new agent of this type would get. */
+            connectors?: components["schemas"]["AgentMCPBinding"][];
+            /** @description Result metadata: requested properties the preview does not carry. */
+            absent_fields?: string[];
+            /** @description Result metadata: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]". */
+            truncated_fields?: string[];
         };
         /**
          * AgentExecutorSettingsResult
@@ -28218,6 +28240,7 @@ export type ExecutorConfigUpdate = components["schemas"]["ExecutorConfigUpdate"]
 export type AgentDetail = components["schemas"]["AgentDetail"];
 export type AgentModelChainEntry = components["schemas"]["AgentModelChainEntry"];
 export type AgentToolPermission = components["schemas"]["AgentToolPermission"];
+export type AgentPreview = components["schemas"]["AgentPreview"];
 export type AgentExecutorSettingsResult = components["schemas"]["AgentExecutorSettingsResult"];
 export type ExecutorDefaults = components["schemas"]["ExecutorDefaults"];
 export type ExecutorCommandPreviewRequest = components["schemas"]["ExecutorCommandPreviewRequest"];
