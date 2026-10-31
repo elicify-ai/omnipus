@@ -61,6 +61,21 @@ A failure of the whole Credential Vault is different: a locked store, an unreada
 
 A fresh install with no credential-store file and no secret references can still start normally. A missing secret, or an entry that fails authentication while another stored entry can be decrypted, remains scoped to the integrations that depend on it rather than becoming a whole-vault failure.
 
+## What a connection's save message means
+
+When you press **Save** or **Save & Enable** in a connection's settings on the **Connectors** screen, the message you see says what happened to the running connection, not only to the saved settings. Only the first two messages below are success messages; after any other message, **Save & Enable** does not turn the connection on.
+
+| Message | What it means | What to do |
+|---|---|---|
+| `Saved. The connection restarted with the new settings.` | The settings were saved and the connection restarted and is running with them. A second note says a restart was attempted and that other connections and scheduled services may have paused briefly while it ran. | Nothing. |
+| `Saved.` | The settings were saved and nothing needed restarting: the connection is turned off, or it already runs these settings. With **Save & Enable**, the enable step shows its own result instead. | Nothing. |
+| `Saved, but the connection is not running: <reason>.` | The settings were saved and applied, but the connection did not start. The reason comes from the connection, for example a rejected token. | Fix the reason and save again. |
+| `Saved. The restart was not confirmed yet; check the connection status in a moment.` | The settings were saved, but the restart did not confirm in time. | Check the connection's status on the Connectors screen shortly. |
+| `Saved, but applying the change did not complete: <reason>. Check the connection status before retrying.` | The settings were saved, but applying them to the running connection failed. This message does not mean the old settings are still running. When Omnipus can read the connection's state, a second message follows: `The connection is currently: running.`, `not running.` or `not loaded.` | Check the status, fix the reason, then save again. |
+| `settings saved, but the running configuration could not be refreshed; the connection was not restarted` | The settings are on disk, but the running configuration was not updated and the connection was not restarted. | Save again. The next successful save, or the next configuration reload, loads the saved settings. |
+| `The credential was saved, but the configuration change was not: …` | A token or other secret from this save was stored, then saving the rest failed. Nothing else was applied, and the connection keeps its previous token until it next restarts. A restart picks up the new value only when the saved settings refer to the credential this form writes (the usual case); if they refer to a different stored credential, the new value stays stored but unused. | Save again: a successful save of the same form applies everything. |
+| `could not save config` or another error | Nothing was saved. | Fix the cause shown and save again. |
+
 ## Every request returns 401 Unauthorized
 
 The web app signs you in once, then rides a session cookie. Scripts must present a Bearer token belonging to a configured account or the gateway's CLI token, or match `OMNIPUS_BEARER_TOKEN`.
