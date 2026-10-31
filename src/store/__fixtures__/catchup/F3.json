@@ -172,6 +172,7 @@
             "has_later": false,
             "page_info": {
               "byte_budget_exceeded": false,
+              "byte_ceiling": 8388608,
               "context": {
                 "duplicate_ids": [],
                 "spans": []

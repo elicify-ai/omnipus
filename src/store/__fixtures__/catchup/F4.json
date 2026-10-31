@@ -160,6 +160,7 @@
             "has_later": false,
             "page_info": {
               "byte_budget_exceeded": false,
+              "byte_ceiling": 8388608,
               "context": {
                 "duplicate_ids": [],
                 "spans": []
@@ -221,7 +222,8 @@
             "content": "p0 p1 p2 p3 p4 p5 p6 p7 ",
             "history_origin": {
               "entry_id": "msg-1",
-              "position": "hp1_psGlCMLbE6Mp_w1MkKdpQHv5wWiwD0lFE8xVGxR5KX0"
+              "position": "hp1_psGlCMLbE6Mp_w1MkKdpQHv5wWiwD0lFE8xVGxR5KX0",
+              "turn_id": "turn-1"
             },
             "id": "msg-1",
             "model": "controllable-test-model",
