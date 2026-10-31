@@ -33,6 +33,19 @@ type HistoryResultDisplay struct {
 	// TextNamesSessionID records that the full value's "text" string member
 	// contains the quoted key "session_id" (a delegate run's JSON text).
 	TextNamesSessionID bool
+	// SavedReservedKey records that the saved result itself carried the
+	// reserved "_history_preview" key. Such a result is malformed (A2.2) and
+	// the projector must show the D4 placeholder; shortening must not erase
+	// that fact (#1452 SEC-R5-3).
+	SavedReservedKey bool
+}
+
+// historyReservedPreviewKey is the key reserved for reader-made previews.
+const historyReservedPreviewKey = "_history_preview"
+
+func historySavedReservedKey(result map[string]any) bool {
+	_, ok := result[historyReservedPreviewKey]
+	return ok
 }
 
 // HistoryDisplayPreview reports the display preview that replaced this call's
@@ -218,7 +231,7 @@ func historyResultDisplay(result map[string]any) (HistoryResultDisplay, bool, er
 	}
 	// Convert only the bounded prefix: string(encoded) would copy the whole
 	// encoding and the preview would keep that copy alive (SEC-1).
-	d := HistoryResultDisplay{Preview: string(encoded[:historyUTF8Cut(encoded, ChatHistoryResultPreviewBytes)]), OriginalSizeBytes: len(encoded)}
+	d := HistoryResultDisplay{Preview: string(encoded[:historyUTF8Cut(encoded, ChatHistoryResultPreviewBytes)]), OriginalSizeBytes: len(encoded), SavedReservedKey: historySavedReservedKey(result)}
 	d.Media, d.HasMedia = result["media"]
 	if sid, ok := result["session_id"].(string); ok {
 		d.ChildSessionID = sid
@@ -368,7 +381,7 @@ func historyResultDisplayStandIns(result map[string]any, ins *historyStandIns) (
 	if w.total <= ChatHistoryInlineResultMaxBytes {
 		return HistoryResultDisplay{}, errHistoryStandInUnresolved // cannot happen; never guess
 	}
-	d := HistoryResultDisplay{Preview: string(w.buf[:historyUTF8Cut(w.buf, ChatHistoryResultPreviewBytes)]), OriginalSizeBytes: w.total}
+	d := HistoryResultDisplay{Preview: string(w.buf[:historyUTF8Cut(w.buf, ChatHistoryResultPreviewBytes)]), OriginalSizeBytes: w.total, SavedReservedKey: historySavedReservedKey(result)}
 	if media, ok := result["media"]; ok {
 		if ins.inValue(media) {
 			return d, errHistoryStandInUnresolved // media is shown whole

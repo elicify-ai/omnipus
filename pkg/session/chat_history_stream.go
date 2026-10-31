@@ -26,9 +26,11 @@ import (
 // canonical record is streamed from disk with a running SHA-256; every JSON
 // string whose canonical encoding exceeds the inline threshold is replaced by
 // a bounded stand-in before the record is decoded; the private model_message
-// member is skipped. The scanner mirrors encoding/json (v1) decoding exactly:
-// escapes, surrogate pairs, invalid UTF-8 coerced to U+FFFD, and its syntax
-// checks. A record it cannot read fails closed (errHistoryStreamUnreadable).
+// member is skipped without being kept (it reaches the reduced document as
+// null). The scanner mirrors encoding/json (v1) decoding exactly: escapes,
+// surrogate pairs, invalid UTF-8 coerced to U+FFFD, and its syntax checks. A
+// record it cannot read fails closed (errHistoryStreamUnreadable), including
+// after any non-EOF read error from the source (sticky, never retried).
 
 var (
 	// historyStandInThreshold: a string whose canonical encoding, quotes
@@ -48,7 +50,30 @@ const historyStreamMaxDepth = 10000
 var (
 	errHistoryStreamUnreadable  = errors.New("history display stream: unreadable record")
 	errHistoryStandInUnresolved = errors.New("history display stream: value shown whole")
+	// errHistoryStreamPrivateShape: the skipped model_message member does
+	// not decode as a ModelPayload, which the full read also refuses.
+	errHistoryStreamPrivateShape = errors.New("history display stream: invalid private member")
 )
+
+// historyStickyReader remembers the first non-EOF read error of its source
+// and returns it for every later read, so a transient storage failure can
+// never be skipped over by a lookahead that resumes reading afterwards
+// (#1452 SEC-R5-2). bufio.Reader reports a source error only once.
+type historyStickyReader struct {
+	r   io.Reader
+	err error
+}
+
+func (s *historyStickyReader) Read(p []byte) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	n, err := s.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.err = err
+	}
+	return n, err
+}
 
 // historyLargeString is the bounded stand-in of one large JSON string.
 type historyLargeString struct {
@@ -145,10 +170,25 @@ func (s *historyStandIns) unresolvedIn(encoded []byte) bool {
 }
 
 type historyStreamScanner struct {
-	r    *bufio.Reader
-	out  *bytes.Buffer
-	ins  *historyStandIns
-	last byte
+	r      *bufio.Reader
+	out    *bytes.Buffer
+	ins    *historyStandIns
+	last   byte
+	failed bool // a lookahead met a non-EOF read error
+	// privateShapeBad: a skipped model_message member does not decode as
+	// a ModelPayload. Syntax is still the scanner's only verdict.
+	privateShapeBad bool
+}
+
+// peek is bufio Peek whose short result is only acceptable at end of input:
+// any other read error fails the record closed.
+func (s *historyStreamScanner) peek(n int) ([]byte, error) {
+	b, err := s.r.Peek(n)
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.failed = true
+		return nil, errHistoryStreamUnreadable
+	}
+	return b, nil
 }
 
 func (s *historyStreamScanner) next() (byte, error) {
@@ -177,7 +217,24 @@ func (s *historyStreamScanner) skipSpace() (byte, error) {
 // historyStreamRecord reduces one framed canonical record (JSON object plus
 // newline) to a small JSON document with stand-ins.
 func historyStreamRecord(r io.Reader, ins *historyStandIns) ([]byte, error) {
-	s := &historyStreamScanner{r: bufio.NewReaderSize(r, 64<<10), out: &bytes.Buffer{}, ins: ins}
+	reduced, _, err := historyStreamRecordChecked(r, ins)
+	return reduced, err
+}
+
+// historyStreamRecordChecked is historyStreamRecord that also reports
+// whether every skipped model_message member decodes as a ModelPayload, the
+// type check the full read's decode applies to it.
+func historyStreamRecordChecked(r io.Reader, ins *historyStandIns) (reduced []byte, privateOK bool, err error) {
+	src := &historyStickyReader{r: r}
+	s := &historyStreamScanner{r: bufio.NewReaderSize(src, 64<<10), out: &bytes.Buffer{}, ins: ins}
+	reduced, err = s.record()
+	if err != nil || s.failed || src.err != nil {
+		return nil, false, errHistoryStreamUnreadable
+	}
+	return reduced, !s.privateShapeBad, nil
+}
+
+func (s *historyStreamScanner) record() ([]byte, error) {
 	c, err := s.skipSpace()
 	if err != nil {
 		return nil, err
@@ -202,7 +259,7 @@ func historyStreamRecord(r io.Reader, ins *historyStandIns) ([]byte, error) {
 }
 
 // value scans one JSON value. private marks the model_message subtree, which
-// display never reads: its large strings keep no prefix.
+// display never reads: it is checked, but nothing of it is kept.
 func (s *historyStreamScanner) value(c byte, depth int, top, private bool) error {
 	switch c {
 	case '{':
@@ -251,8 +308,12 @@ func (s *historyStreamScanner) object(depth int, top, private bool) error {
 			return err
 		}
 		// encoding/json matches struct fields case-insensitively.
-		sub := private || (top && strings.EqualFold(string(key), "model_message"))
-		if err = s.value(c, depth, false, sub); err != nil {
+		if top && strings.EqualFold(string(key), "model_message") {
+			err = s.skipPrivate(c, depth)
+		} else {
+			err = s.value(c, depth, false, private)
+		}
+		if err != nil {
 			return err
 		}
 		if c, err = s.skipSpace(); err != nil {
@@ -270,6 +331,28 @@ func (s *historyStreamScanner) object(depth int, top, private bool) error {
 			return errHistoryStreamUnreadable
 		}
 	}
+}
+
+// skipPrivate checks the private model_message value with the same syntax
+// rules and the same ModelPayload type decoding as the full read, then
+// writes null in its place: no string of it is kept, it creates no stand-in,
+// and its checked skeleton (structure, keys and literals, every string empty)
+// is dropped before the next member (A2.8; #1452 SEC-R5-1).
+func (s *historyStreamScanner) skipPrivate(c byte, depth int) error {
+	out := s.out
+	s.out = &bytes.Buffer{}
+	err := s.value(c, depth, false, true)
+	skeleton := s.out.Bytes()
+	s.out = out
+	if err != nil {
+		return err
+	}
+	var payload *ModelPayload
+	if json.Unmarshal(skeleton, &payload) != nil {
+		s.privateShapeBad = true
+	}
+	s.out.WriteString("null")
+	return nil
 }
 
 func (s *historyStreamScanner) array(depth int, private bool) error {
@@ -330,6 +413,9 @@ func (s *historyStreamScanner) literal(c byte) error {
 		num = append(num, c)
 		b, err := s.r.ReadByte()
 		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				s.failed = true // a read error never ends a number
+			}
 			eof = true
 			c = 0
 			return
@@ -370,6 +456,9 @@ func (s *historyStreamScanner) literal(c byte) error {
 			return errHistoryStreamUnreadable
 		}
 	}
+	if s.failed {
+		return errHistoryStreamUnreadable
+	}
 	if !eof {
 		if err := s.r.UnreadByte(); err != nil {
 			return errHistoryStreamUnreadable
@@ -382,12 +471,12 @@ func (s *historyStreamScanner) literal(c byte) error {
 
 // literalEnd rejects a literal glued to another token (e.g. "truex", "01").
 func (s *historyStreamScanner) literalEnd() error {
-	b, err := s.r.Peek(1)
-	if errors.Is(err, io.EOF) {
-		return nil // end of input is checked by the caller
-	}
+	b, err := s.peek(1)
 	if err != nil {
-		return errHistoryStreamUnreadable
+		return err
+	}
+	if len(b) == 0 {
+		return nil // end of input is checked by the caller
 	}
 	switch b[0] {
 	case ' ', '\t', '\n', '\r', ',', '}', ']':
@@ -478,7 +567,8 @@ func (s *historyStreamScanner) str(isKey, private bool, key *[]byte) error {
 	)
 	keep, encKeep := historyStandInDecodedKeep, historyStandInEncodedKeep
 	if private {
-		keep, encKeep = historyStandInThreshold, 0
+		// A private string is checked, but nothing of it is kept.
+		keep, encKeep = 0, 0
 	}
 	for {
 		// Fast path: a buffered run of plain printable ASCII decodes and
@@ -500,7 +590,7 @@ func (s *historyStreamScanner) str(isKey, private bool, key *[]byte) error {
 			switch {
 			case sum != nil:
 				sum.Write(run)
-			case encodedLen > historyStandInThreshold && !isKey:
+			case encodedLen > historyStandInThreshold && !isKey && !private:
 				// Every earlier decoded byte is held: decoded <= encoded <= threshold.
 				sum = sha256.New()
 				sum.Write(decoded[:before])
@@ -557,7 +647,10 @@ func (s *historyStreamScanner) str(isKey, private bool, key *[]byte) error {
 					return errHistoryStreamUnreadable
 				}
 				if utf16.IsSurrogate(r) {
-					peek, _ := s.r.Peek(6)
+					peek, err := s.peek(6)
+					if err != nil {
+						return err
+					}
 					if dec := utf16.DecodeRune(r, historyHex4(peek)); dec != utf8.RuneError {
 						last := peek[5]
 						if _, err := s.r.Discard(6); err != nil {
@@ -578,7 +671,10 @@ func (s *historyStreamScanner) str(isKey, private bool, key *[]byte) error {
 			r = rune(c)
 		default:
 			seq := append(seqBuf[:0], c)
-			more, _ := s.r.Peek(utf8.UTFMax - 1)
+			more, err := s.peek(utf8.UTFMax - 1)
+			if err != nil {
+				return err
+			}
 			seq = append(seq, more...)
 			var size int
 			r, size = utf8.DecodeRune(seq)
@@ -608,7 +704,7 @@ func (s *historyStreamScanner) str(isKey, private bool, key *[]byte) error {
 		switch {
 		case sum != nil:
 			sum.Write(raw)
-		case encodedLen > historyStandInThreshold && !isKey:
+		case encodedLen > historyStandInThreshold && !isKey && !private:
 			// From here on the value is a stand-in; hash it whole. Every
 			// decoded byte so far is still held: decoded <= encoded <= threshold.
 			sum = sha256.New()
@@ -631,6 +727,10 @@ func (s *historyStreamScanner) str(isKey, private bool, key *[]byte) error {
 done:
 	if isKey {
 		*key = decoded
+	}
+	if private {
+		s.out.WriteString(`""`) // the checked skeleton keeps the type, not the text
+		return nil
 	}
 	if sum == nil {
 		// The whole decoded value is held: decoded <= encoded <= threshold.
@@ -660,7 +760,7 @@ func historyStreamArchive(ctx context.Context, dir string, r historyRecord, cut 
 		return rec, errors.New("invalid history read bounds")
 	}
 	e := chatHistoryReadEvent{SessionID: cut.sessionID, Scope: scope, Purpose: purpose, Cut: cut, Stream: "archive", Address: &r.Address}
-	f, err := os.Open(path)
+	f, err := historyStreamOpenArchive(path)
 	if err != nil {
 		return rec, err
 	}
@@ -680,7 +780,7 @@ func historyStreamArchive(ctx context.Context, dir string, r historyRecord, cut 
 	}
 	h := sha256.New()
 	counted := &historyCountingReader{r: io.TeeReader(io.NewSectionReader(f, off, length), h)}
-	reduced, scanErr := historyStreamRecord(counted, ins)
+	reduced, privateOK, scanErr := historyStreamRecordChecked(counted, ins)
 	if _, drainErr := io.Copy(io.Discard, counted); drainErr != nil {
 		return rec, drainErr
 	}
@@ -700,6 +800,10 @@ func historyStreamArchive(ctx context.Context, dir string, r historyRecord, cut 
 	if scanErr != nil {
 		return rec, scanErr
 	}
+	if !privateOK {
+		// The full read's decode refuses the same record the same way.
+		return rec, historyBuildFailure("corrupt_archive", errHistoryStreamPrivateShape)
+	}
 	if err = json.Unmarshal(reduced, &rec); err != nil {
 		return rec, historyBuildFailure("corrupt_archive", err)
 	}
@@ -710,6 +814,20 @@ func historyStreamArchive(ctx context.Context, dir string, r historyRecord, cut 
 		return rec, errors.New("history checked address mismatch")
 	}
 	return rec, nil
+}
+
+// historyStreamFile is the opened canonical partition the display read
+// streams one record from.
+type historyStreamFile interface {
+	io.ReaderAt
+	io.Closer
+}
+
+// historyStreamOpenArchive opens a canonical partition for the streamed
+// display read. Production always uses os.Open; a test may replace it to
+// inject read faults at the real archive boundary.
+var historyStreamOpenArchive = func(path string) (historyStreamFile, error) {
+	return os.Open(path)
 }
 
 type historyCountingReader struct {

@@ -92,12 +92,17 @@ func historyStoredMarkerInvalid(e session.TranscriptEntry) (bool, error) {
 
 // historySavedMarkerPresent reports a saved (not reader-made) tool result
 // that carries the reserved `_history_preview` key. A reader preview replaces
-// its result with nil, so any such key is saved data. An ordinary result must
-// not carry it (A2.2): on every carrier, valid marker shape or not, the item
-// becomes the D4 placeholder and the key is never sent.
+// its result with nil, so any such key is saved data; when the saved result
+// was itself shortened, the preview records the key (SEC-R5-3). An ordinary
+// result must not carry it (A2.2): on every carrier, valid marker shape or
+// not and whatever its size, the item becomes the D4 placeholder and the key
+// is never sent.
 func historySavedMarkerPresent(e session.TranscriptEntry) bool {
 	for _, tc := range e.ToolCalls {
-		if _, preview := tc.HistoryDisplayPreview(); preview {
+		if display, preview := tc.HistoryDisplayPreview(); preview {
+			if display.SavedReservedKey {
+				return true
+			}
 			continue
 		}
 		if _, marker := tc.Result["_history_preview"]; marker {
