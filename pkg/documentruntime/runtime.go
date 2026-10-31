@@ -148,7 +148,7 @@ func Ready(layout Layout) error {
 	return nil
 }
 
-var DocumentSkillIDs = []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
+var DocumentSkillIDs = []string{"elicify-office"}
 
 func IsDocumentSkill(id string) bool {
 	for _, candidate := range DocumentSkillIDs {

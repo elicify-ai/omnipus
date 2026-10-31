@@ -423,7 +423,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 func coreAgentSkills(id CoreAgentID) []string {
 	switch id {
 	case IDMia:
-		return []string{"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
+		return []string{"interview", "define-goal", "inbox-triage", "elicify-office"}
 	case IDJim:
 		return []string{"interview", "orchestrate", "plan", "define-goal"}
 	case IDOmnipus:
@@ -439,7 +439,7 @@ func coreAgentSkills(id CoreAgentID) []string {
 	case IDResearcher:
 		return []string{"deep-research"}
 	case IDWorker:
-		return []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
+		return []string{"elicify-office"}
 	default:
 		return nil
 	}
