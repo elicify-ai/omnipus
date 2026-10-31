@@ -427,7 +427,7 @@ export interface paths {
         put?: never;
         /**
          * Retry the page thumbnails of a document preview
-         * @description Re-renders the page thumbnails of one earlier preview_document call (office-preview spec §5.2, §5.3; FQ2 r2 A) when its thumbnail outcome was unavailable or partial. Same limits and admission as the tool; authorization is the requesting person's access to the session AND the preview's source file. The source must be unchanged: its current SHA-256 (first 12 hex) must equal the recorded MediaPreview.source_version. Returns 202 once the retry is admitted and started; the result arrives asynchronously as a new MediaFrame (presentation "page_thumbnails") with the same tool_call_id, never in this response. No request body.
+         * @description Re-renders the page thumbnails of one earlier preview_document call (office-preview spec §5.2, §5.3; FQ2 r2 A) when its thumbnail outcome was unavailable or partial. Same limits and admission as the tool; authorization is the requesting person's access to the session and to the preview's source as a file of the session workspace's Library (work folder and mounts, under the Library's own protected-file rules); a source outside that Library cannot be retried. The source must be unchanged: its current SHA-256 (first 12 hex) must equal the recorded MediaPreview.source_version. Returns 202 once the retry is admitted and started; the result arrives asynchronously as a new MediaFrame (presentation "page_thumbnails") with the same tool_call_id, never in this response. No request body.
          */
         post: operations["retrySessionPreview"];
         delete?: never;
@@ -19573,7 +19573,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            /** @description The requester has no access to the session or to the preview's source file (ErrorResponse; the source path is never echoed). */
+            /** @description The preview's source is not a file of the session workspace's Library, or the Library refuses it. ErrorResponse.code is exactly `preview_source_not_in_library`; the source path is never echoed. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19582,7 +19582,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Unknown preview (no preview_document call with this id in the session). */
+            /** @description Unknown session, no access to the session (indistinguishable, as on every session route), or no preview_document call with this id in the session. */
             404: {
                 headers: {
                     [name: string]: unknown;
