@@ -205,7 +205,7 @@ func TestTaskTriggerBoot_InterruptedRecurringFire_RunsIsNotMissed(t *testing.T) 
 	dtstart := clk.Now().Add(time.Minute).UnixMilli()
 
 	// Process 1: arm a recurring trigger and die while its fire is running.
-	blocker := &crashRunRecorder{entered: make(chan struct{}), release: make(chan struct{})}
+	blocker := newCrashRunRecorder(store, clk)
 	s1 := NewTaskTriggerScheduler(storePath, store, nil)
 	s1.dispatch = blocker.dispatch
 	s1.SetClock(clk)

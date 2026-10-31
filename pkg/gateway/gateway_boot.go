@@ -336,6 +336,13 @@ func setupAndStartServices(
 		return nil, err
 	}
 
+	// Recover tasks left "in_progress" by the dead previous process BEFORE any
+	// scheduler, drain or trigger can claim a task in this one: run later, it
+	// would fail runs this process had already started — such as the owed
+	// rerun of a crashed one-time trigger (6b review I2). Also before the HTTP
+	// listener accepts connections, so no handler can race it.
+	agent.ReconcileInterruptedTasks(agent.GetTaskStore(stg.agentLoop))
+
 	if runningServices, stop, err := stg.startSchedulers(); stop {
 		return runningServices, err
 	}
@@ -1376,14 +1383,10 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	startKnowledgeLifecycle(stg.homePath, stg.wsHandler, 0,
 		knowledgeDriftNotifier(stg.runningServices.notifStore, stg.agentLoop, stg.agentLoop.GetConfig))
 
-	// Recover tasks left "in_progress" by a crashed/abandoned previous process.
-	// Runs before the HTTP listener accepts connections (StartAll, below), so no
-	// handler can race reconciliation.
-	stg.api.reconcileStuckTasks()
-
 	// Drop blocked_by edges pointing at task files that no longer exist, so the
 	// dependency graph self-heals on boot (a waiting task gated only on an orphan
-	// would otherwise never advance). Same pre-listener safety window as above.
+	// would otherwise never advance). Runs before the HTTP listener accepts
+	// connections (StartAll, below), so no handler can race it.
 	stg.api.reconcileOrphanBlockedByEdges()
 
 	// Register additional endpoints for frontend features.

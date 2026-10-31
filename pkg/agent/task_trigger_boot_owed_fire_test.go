@@ -38,17 +38,37 @@ import (
 )
 
 // crashRunRecorder is a dispatch seam for building a crash image: the first
-// dispatch closes entered (the run has started), then blocks until release,
-// so the test can capture the trigger-store file exactly as a process death
-// mid-run would leave it on disk.
+// dispatch claims the task durably exactly as production does
+// (SpawnTriggeredRun -> ExecuteTask calls store.ClaimForRun before it
+// returns, leaving the task in_progress on disk), closes entered (the run has
+// started), then blocks until release, so the test can capture the
+// trigger-store file AND the task file exactly as a process death mid-run
+// would leave them (6b review I2: a recorder that skipped the claim hid the
+// dead in_progress claim the next boot must deal with).
 type crashRunRecorder struct {
+	store   *task.Store
+	clk     *triggerFakeClock
 	mu      sync.Mutex
 	entered chan struct{}
 	closed  bool
 	release chan struct{}
 }
 
-func (r *crashRunRecorder) dispatch(_ context.Context, _ string, _ *int64) error {
+// newCrashRunRecorder returns a recorder that claims through store at clk's
+// time, as the production dispatch does.
+func newCrashRunRecorder(store *task.Store, clk *triggerFakeClock) *crashRunRecorder {
+	return &crashRunRecorder{
+		store:   store,
+		clk:     clk,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (r *crashRunRecorder) dispatch(_ context.Context, taskID string, _ *int64) error {
+	if _, err := r.store.ClaimForRun(taskID, r.clk.Now()); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	first := !r.closed
 	r.closed = true
@@ -76,7 +96,7 @@ func TestTaskTriggerBoot_CrashedOnceRun_RerunsOnceAtNextBoot(t *testing.T) {
 	// NextRunAtMS cleared (RunDueJobs persists before dispatch), Running
 	// persisted true (executeJobByID persists when the run starts), and no
 	// outcome saved yet.
-	blocker := &crashRunRecorder{entered: make(chan struct{}), release: make(chan struct{})}
+	blocker := newCrashRunRecorder(store, clk)
 	s1 := NewTaskTriggerScheduler(storePath, store, nil)
 	s1.dispatch = blocker.dispatch
 	s1.SetClock(clk)
@@ -209,7 +229,7 @@ func TestTaskTriggerBoot_PlainStartIsNotABoot_NoReplay(t *testing.T) {
 	storePath := filepath.Join(dir, "triggers", "jobs.json")
 	clk := newTriggerFakeClock()
 
-	blocker := &crashRunRecorder{entered: make(chan struct{}), release: make(chan struct{})}
+	blocker := newCrashRunRecorder(store, clk)
 	s1 := NewTaskTriggerScheduler(storePath, store, nil)
 	s1.dispatch = blocker.dispatch
 	s1.SetClock(clk)

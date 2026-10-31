@@ -162,34 +162,28 @@ type TaskTriggerScheduler struct {
 	// longer reports it (the file became readable again, or was deleted).
 	unreadableSweeps map[string]int
 
-	// bootOwedPending and bootOwedFire implement the boot-only start fix for
-	// crashed one-time triggers (founder decision 2026-10-29, Q1 A; the
-	// task-trigger half of #1484). A one-time fire the dead prior process had
-	// started but never finished is owed its run at the next boot. The
-	// engine's own physical-boot restore (#1484) re-arms the interrupted
-	// job, but every job here is DERIVED from the task store: the boot
-	// Reconcile immediately after Start re-derives each job and would
-	// replace the past-due armed fire with a not-due re-registration
-	// (computeNextRun gives a past at-job no next run), silently dropping
-	// the owed run again. markBootOwedFires records the interrupted jobs'
-	// task IDs while the dead process's Running flags are still on the
-	// store; confirmBootOwedFires — after the engine has cleared those flags
-	// and re-armed the owed jobs — blesses each tracked job that still
-	// matches its task's current trigger content with the bootOwedFire
-	// marker, which makes OnTaskUpserted's idempotency guard treat that
-	// exact job as armed so the reconcile cannot take the fire away.
+	// bootOwedFire implements the boot-only start fix for crashed one-time
+	// triggers (founder decision 2026-10-29, Q1 A; the task-trigger half of
+	// #1484). A one-time fire the dead prior process had started but never
+	// finished is owed its run at the next boot. The engine's physical-boot
+	// restore re-arms only the interrupted jobs markBootOwedFires accepts,
+	// but every job here is DERIVED from the task store: the boot Reconcile
+	// after the start re-derives each job and would replace the past-due
+	// armed fire with a not-due re-registration (computeNextRun gives a past
+	// at-job no next run), silently dropping the owed run again. The marker
+	// makes OnTaskUpserted treat that exact job as armed — also when the
+	// task's dead claim was reconciled to failed/interrupted — so the
+	// reconcile cannot take the fire away.
 	//
 	// "Once, and only at boot": the marker exists only on the
 	// StartAfterPhysicalBoot path (a plain Start — gateway reload, same
 	// process — never sets it and replays nothing), it is consumed by the
 	// one owed fire (any later registration or removal clears it), and a
-	// trigger edited while the process was down never confirms — the edit
-	// wins. A fire that merely came due while down is not touched: it never
-	// had Running set, stays skipped, never replayed (docs/calendar.md).
-	// Both are guarded by mu; bootOwedPending lives only across the
-	// mark→engine-restore→confirm sequence of one physical boot.
-	bootOwedPending []string
-	bootOwedFire    map[string]bool
+	// trigger edited while the process was down is not owed — the edit wins.
+	// A fire that merely came due while down is not touched: it never had
+	// Running set, stays skipped, never replayed (docs/calendar.md).
+	// Guarded by mu.
+	bootOwedFire map[string]bool
 }
 
 // NewTaskTriggerScheduler creates a scheduler that uses a dedicated CronService
@@ -241,13 +235,23 @@ func (s *TaskTriggerScheduler) Start() error {
 // one-time triggers"; the task-trigger half of #1484 — dbee8a193 fixed the
 // user-schedules instance).
 //
-// More than the engine call is needed: the jobs here are derived from the
-// task store, and the boot Reconcile that follows this start re-derives each
-// job from its task. Without the bootOwedFire marker that reconcile would
-// replace the past-due armed fire with a not-due re-registration (a past
-// at-job gets no next run) and drop the owed run again. A one-time fire that
-// merely came due while Omnipus was down is NOT replayed — it never had
-// Running set and stays skipped, as docs/calendar.md states.
+// The owed set is settled in full BEFORE the engine starts, because the
+// engine's run loop may fire a re-armed job at once — before the gateway's
+// boot Reconcile (6b review I2, I3):
+//
+//   - markBootOwedFires decides which interrupted jobs are owed (one-time
+//     triggers whose content is unchanged), releases a dead in_progress
+//     claim on such a task so the overlap guard cannot mistake it for a live
+//     run, and marks the owed job so the boot Reconcile keeps it armed;
+//   - the engine's physical-boot restore re-arms ONLY those jobs
+//     (StartAfterPhysicalBootReplaying). An interrupted recurring occurrence
+//     is stored as an at-job too, but it is never replayed: it loses its
+//     dead Running flag, gets no next run, and Reconcile re-anchors the
+//     series to its next future occurrence.
+//
+// A one-time fire that merely came due while Omnipus was down is NOT
+// replayed — it never had Running set and stays skipped, as docs/calendar.md
+// states.
 //
 // Must be called at most once per instance (the engine rejects a second
 // physical-boot window) and before Reconcile, like Start.
@@ -255,103 +259,117 @@ func (s *TaskTriggerScheduler) StartAfterPhysicalBoot() error {
 	if err := s.restoreStoredJobs(); err != nil {
 		return err
 	}
-	s.markBootOwedFires()
+	owedJobs := s.markBootOwedFires()
 	s.markMissedFires()
 	s.cs.SetRunner(s)
-	if err := s.cs.StartAfterPhysicalBoot(); err != nil {
+	if err := s.cs.StartAfterPhysicalBootReplaying(func(job *cron.CronJob) bool {
+		return owedJobs[job.ID]
+	}); err != nil {
 		return err
 	}
-	s.confirmBootOwedFires()
 	s.startSweep()
 	return nil
 }
 
-// markBootOwedFires records the task IDs whose trigger job is a one-time
-// ("at") fire the dead prior process had started without its outcome saved —
-// cron.InterruptedOneTimeFire on the store exactly as the death left it,
-// with Running still set. Must run BEFORE the engine's physical-boot restore
-// clears those flags (restoreStoredJobs has already loaded the store, and
-// the engine is not started yet, so the job slice is quiescent). Only jobs
-// in this scheduler's "task:<id>" payload shape are owed here; everything
-// else on this store is not a derived trigger job.
-func (s *TaskTriggerScheduler) markBootOwedFires() {
-	jobs := s.cs.ListJobs(true)
-	owed := make([]string, 0, len(jobs))
-	for i := range jobs {
-		job := &jobs[i]
-		if !cron.InterruptedOneTimeFire(job) {
+// markBootOwedFires settles which interrupted jobs are owed their run at this
+// boot and returns their job IDs. It reads the store exactly as the death
+// left it — cron.InterruptedOneTimeFire needs the dead process's Running
+// flags, so it must run BEFORE the engine's physical-boot restore clears
+// them (restoreStoredJobs has already loaded the store and the engine is not
+// started, so the job slice is quiescent and no fire of this scheduler can
+// run yet). Only jobs in this scheduler's "task:<id>" payload shape are
+// considered; everything else on this store is not a derived trigger job.
+//
+// A job is owed when, all at once:
+//   - it is the job currently bound to its task (restoreStoredJobs kept it);
+//   - the task still has a one-time trigger whose content matches the job —
+//     a trigger changed, removed, made recurring or invalid while down is
+//     not owed: the edit wins and Reconcile re-derives the job;
+//   - the task's run is not over: it is not yet terminal, still carries the
+//     dead process's in_progress claim, or that claim was already reconciled
+//     to failed with InterruptedTaskResult (the gateway reconciles
+//     interrupted tasks before it starts the schedulers). A task that is
+//     done, or failed for another reason, has its outcome and is not rerun.
+//
+// A dead in_progress claim on an owed task is released here, as one boot
+// recovery operation with the owed fire (6b review I2): the overlap guard in
+// RunScheduled would otherwise treat it as a live run, record a skip and let
+// the engine delete the one-time job. Nothing in this process can hold a
+// live claim on the task yet, so the claim is the dead process's. The owed
+// task is then marked with bootOwedFire so the boot Reconcile keeps its job.
+func (s *TaskTriggerScheduler) markBootOwedFires() map[string]bool {
+	nowMs := s.now().UnixMilli()
+	owedJobs := make(map[string]bool)
+	var owedTasks []string
+	for _, job := range s.cs.ListJobs(true) {
+		if !cron.InterruptedOneTimeFire(&job) {
 			continue
 		}
-		if id := job.Payload.Message; id != "" && job.Name == fmt.Sprintf("task:%s", id) {
-			owed = append(owed, id)
+		id := job.Payload.Message
+		if id == "" || job.Name != fmt.Sprintf("task:%s", id) {
+			continue
 		}
-	}
-	s.mu.Lock()
-	s.bootOwedPending = owed
-	s.mu.Unlock()
-	if len(owed) > 0 {
-		slog.Warn("task_trigger: one-time trigger was running when the previous process stopped; running it again at this boot",
-			"task_ids", owed)
-	}
-}
-
-// confirmBootOwedFires turns the pre-start bootOwedPending list into
-// bootOwedFire markers. It runs after the engine's physical-boot restore has
-// cleared the dead Running flags and re-armed the owed jobs, and blesses a
-// tracked job only when it still matches its task's CURRENT trigger content
-// — the same match restoreStoredJobs applies. A confirmed marker makes
-// OnTaskUpserted's idempotency guard treat the engine-armed owed job as
-// armed, so the boot reconcile cannot replace it with a not-due
-// re-derivation.
-//
-// No match means the trigger changed (or was removed, exhausted, or made
-// invalid) while the process was down: the edit wins, the task is left
-// unmarked and Reconcile re-derives its job from the new content. A
-// recurring (rrule) task never confirms — its persisted job carries the
-// interrupted occurrence, not the next one, so the content match fails and
-// the documented boot re-anchor to the next future occurrence stands.
-func (s *TaskTriggerScheduler) confirmBootOwedFires() {
-	s.mu.Lock()
-	pending := s.bootOwedPending
-	s.bootOwedPending = nil
-	s.mu.Unlock()
-
-	nowMs := s.now().UnixMilli()
-	for _, id := range pending {
 		s.mu.Lock()
-		tracked, ok := s.taskToJob[id]
+		tracked, isTracked := s.taskToJob[id]
 		s.mu.Unlock()
-		if !ok {
-			continue // task deleted or its job pruned while down: nothing to run
+		if !isTracked || tracked.jobID != job.ID {
+			continue // task deleted, heartbeat-owned, or this job was a duplicate
 		}
 		t, err := s.store.Get(id)
 		if err != nil {
-			continue // unreadable: Reconcile logs it and recovery retries later
+			slog.Warn("task_trigger: interrupted trigger fire not rerun: task unreadable",
+				"task_id", id, "job_id", job.ID, "error", err)
+			continue
 		}
-		if t.EffectiveSurface() == task.SurfaceHeartbeat ||
-			t.Trigger == nil || t.Trigger.Type == task.TriggerManual {
-			continue // no time trigger any more
+		if t.EffectiveSurface() == task.SurfaceHeartbeat || t.Trigger == nil ||
+			t.Trigger.Type != task.TriggerOnce {
+			// A recurring occurrence is never replayed (docs/calendar.md);
+			// Reconcile re-anchors its series to the next future occurrence.
+			continue
 		}
-		if task.IsTerminal(t.Status) && !t.Trigger.IsRepeating() {
-			continue // a terminal non-repeating trigger is over; nothing is owed
+		deadClaim := t.Status == task.StatusInProgress
+		interrupted := t.Status == task.StatusFailed && t.Result == InterruptedTaskResult
+		if task.IsTerminal(t.Status) && !interrupted {
+			continue // the run finished and saved its outcome; nothing is owed
 		}
 		sched, err := triggerToCronSchedule(t.Trigger, nowMs)
 		if err != nil {
-			continue // invalid or exhausted now: Reconcile retires it
+			continue // invalid now: Reconcile retires it
 		}
 		spec := s.jobSpecFor(t, sched)
-		job, ok := s.cs.GetJob(tracked.jobID)
-		if !ok || !job.Enabled || job.State.Running ||
-			job.AgentID != spec.AgentID || job.Payload.Command != spec.Command ||
+		if !job.Enabled || job.AgentID != spec.AgentID || job.Payload.Command != spec.Command ||
 			!reflect.DeepEqual(job.Schedule, sched) {
 			continue // trigger content changed while down: the edit wins
 		}
-		gen := triggerGeneration(t.Trigger)
+		if deadClaim {
+			if err := recoverInterruptedTask(s.store, id); err != nil {
+				slog.Error("task_trigger: interrupted one-time fire not rerun: cannot release the dead process's claim",
+					"task_id", id, "job_id", job.ID, "error", err)
+				continue
+			}
+		}
 		s.mu.Lock()
-		s.taskToJob[id] = trackedTrigger{jobID: tracked.jobID, generation: gen}
+		s.taskToJob[id] = trackedTrigger{jobID: job.ID, generation: triggerGeneration(t.Trigger)}
 		s.bootOwedFire[id] = true
 		s.mu.Unlock()
+		owedJobs[job.ID] = true
+		owedTasks = append(owedTasks, id)
 	}
+	if len(owedTasks) > 0 {
+		slog.Warn("task_trigger: one-time trigger was running when the previous process stopped; running it again at this boot",
+			"task_ids", owedTasks)
+	}
+	return owedJobs
+}
+
+// isBootOwedFireLocked reports whether t's tracked job is the owed fire of a
+// crashed one-time trigger for t's CURRENT trigger content. Caller holds mu.
+func (s *TaskTriggerScheduler) isBootOwedFireLocked(t *task.Task) bool {
+	if !s.bootOwedFire[t.ID] {
+		return false
+	}
+	tracked, ok := s.taskToJob[t.ID]
+	return ok && tracked.generation == triggerGeneration(t.Trigger)
 }
 
 // markMissedFires is the boot sweep behind the Calendar's visible "missed"
@@ -364,11 +382,12 @@ func (s *TaskTriggerScheduler) confirmBootOwedFires() {
 // the engine's own recompute gives a past-due pending instant no next run.
 //
 // Detection (per job, on the store exactly as the death left it — this runs
-// before cs.StartAfterPhysicalBoot clears the dead Running flags):
+// before the engine physical-boot restore clears the dead Running flags):
 //
 //   - recurring (rrule) task, pending instant still armed in the past
-//     (State.NextRunAtMS non-nil and <= now): that occurrence came due
-//     unattended and is recorded, with the instant as the calendar join key
+//     (State.NextRunAtMS non-nil and <= now): that occurrence and every
+//     later instant of the rule up to now came due unattended, and each is
+//     recorded with its instant as the calendar join key
 //     so the occurrences overlay (occurrence_runs) can show it. A dead
 //     process's Running flag is deliberately NOT an exclusion here: the
 //     boot re-anchor stands for recurring triggers (StartAfterPhysicalBoot's
@@ -390,14 +409,13 @@ func (s *TaskTriggerScheduler) confirmBootOwedFires() {
 // at-least-once window the engine's #1484 restore has. No machinery is
 // added for it.
 //
-// One record per missed instant is the store's suppression rule
-// (RecordMissedOccurrence), and the sweep is capped at the documented 20
-// most recent records per job per boot. That cap is structural, not
-// loop-enforced: a job carries at most one pending instant — the next
-// occurrence the engine had armed when the process died — so this sweep
-// writes at most one record per job per boot and no enforcement could ever
-// bind; if a future detection shape can yield several instants per job, it
-// must enforce the 20-most-recent cap here.
+// One record per missed instant (docs/calendar.md): for a recurring task
+// every instant of its rule from the pending one up to now came due while
+// down — a minutely task down for 4½ minutes missed four — so each one gets
+// its own record, at most the maxMissedInstantsPerBoot most recent per job
+// per boot (missedRruleInstants), each passed through the store's
+// per-instant suppression (RecordMissedOccurrence) so an instant that
+// already has a run, or a record from an earlier boot, is never relabelled.
 func (s *TaskTriggerScheduler) markMissedFires() {
 	jobs := s.cs.ListJobs(true)
 	nowMs := s.now().UnixMilli()
@@ -419,8 +437,6 @@ func (s *TaskTriggerScheduler) markMissedFires() {
 			continue
 		}
 
-		var occurrenceMs *int64
-		var instant int64
 		isRrule := t.Trigger.Type == task.TriggerRecurring &&
 			t.Trigger.Config.Rrule != nil && *t.Trigger.Config.Rrule != ""
 		switch {
@@ -428,9 +444,19 @@ func (s *TaskTriggerScheduler) markMissedFires() {
 			if job.State.NextRunAtMS == nil || *job.State.NextRunAtMS > nowMs {
 				continue // nothing pending, or the pending occurrence is still future
 			}
-			instant = *job.State.NextRunAtMS
-			v := instant
-			occurrenceMs = &v
+			pending := *job.State.NextRunAtMS
+			instants, expErr := missedRruleInstants(t.Trigger, pending, nowMs)
+			if expErr != nil {
+				// The pending instant is known to have come due; the rest of
+				// the downtime cannot be expanded from this rule.
+				slog.Warn("task_trigger: cannot expand missed occurrences; recording the pending one only",
+					"task_id", id, "occurrence_ms", pending, "error", expErr)
+				instants = []int64{pending}
+			}
+			for _, instant := range instants {
+				v := instant
+				s.recordMissed(id, &v, instant)
+			}
 		case t.Trigger.Type == task.TriggerOnce:
 			if job.State.Running {
 				continue // interrupted: owed its rerun at this boot, not missed
@@ -441,30 +467,83 @@ func (s *TaskTriggerScheduler) markMissedFires() {
 			if last := job.State.LastRunAtMS; last != nil && *last >= *job.Schedule.AtMS {
 				continue // the once fire ran; its outcome saved
 			}
-			instant = *job.Schedule.AtMS
-			occurrenceMs = nil // TaskRun contract: a once run's occurrence_ms is null
-		default:
-			continue
-		}
-
-		// One record per missed instant is the store's suppression rule
-		// (RecordMissedOccurrence). The documented cap of the 20 most recent
-		// records per job per boot is structural, not loop-enforced: a job
-		// carries at most one pending instant, so this sweep writes at most
-		// one record per job per boot and any enforcement here would be dead
-		// code. If a future detection shape can yield several instants per
-		// job, enforce the cap here, keeping the 20 most recent.
-		run, recorded, err := s.store.RecordMissedOccurrence(id, occurrenceMs)
-		if err != nil {
-			slog.Warn("task_trigger: failed to record missed fire, continuing",
-				"task_id", id, "occurrence_ms", instant, "error", err)
-			continue
-		}
-		if recorded {
-			slog.Warn("task_trigger: scheduled fire was missed while Omnipus was down; recorded, not replayed",
-				"task_id", id, "occurrence_ms", instant, "run_id", run.RunID)
+			// TaskRun contract: a once run's occurrence_ms is null.
+			s.recordMissed(id, nil, *job.Schedule.AtMS)
 		}
 	}
+}
+
+// recordMissed writes one missed record through the store's suppression rule
+// and logs the outcome. A write failure is logged and the sweep continues:
+// a missing bookkeeping record must not stop the boot.
+func (s *TaskTriggerScheduler) recordMissed(taskID string, occurrenceMs *int64, instant int64) {
+	run, recorded, err := s.store.RecordMissedOccurrence(taskID, occurrenceMs)
+	if err != nil {
+		slog.Warn("task_trigger: failed to record missed fire, continuing",
+			"task_id", taskID, "occurrence_ms", instant, "error", err)
+		return
+	}
+	if recorded {
+		slog.Warn("task_trigger: scheduled fire was missed while Omnipus was down; recorded, not replayed",
+			"task_id", taskID, "occurrence_ms", instant, "run_id", run.RunID)
+	}
+}
+
+// maxMissedInstantsPerBoot is the documented bound on missed records per
+// task per boot: the 20 most recent missed instants (docs/calendar.md).
+const maxMissedInstantsPerBoot = 20
+
+// missedExpandPage is the page size for expanding a downtime window.
+const missedExpandPage = 1000
+
+// missedRruleInstants returns the instants of the rule in [pendingMs, nowMs]
+// — the occurrences that came due while the process was down, starting at
+// the pending one the engine had armed — keeping only the
+// maxMissedInstantsPerBoot most recent, ascending. It searches backwards
+// from now in doubling windows, so a long downtime of a frequent rule costs
+// a bounded expansion rather than one walk over every missed instant.
+func missedRruleInstants(tr *task.Trigger, pendingMs, nowMs int64) ([]int64, error) {
+	if tr.Config.Rrule == nil || tr.Config.DtstartMs == nil || tr.Config.Tz == nil {
+		return nil, fmt.Errorf("rrule trigger is missing rrule, dtstart_ms or tz")
+	}
+	rule, dtstart, tz := *tr.Config.Rrule, *tr.Config.DtstartMs, *tr.Config.Tz
+	hi := nowMs + 1 // the range is half-open; an instant at now is due
+	span := time.Minute.Milliseconds()
+	for {
+		lo := pendingMs
+		if hi-pendingMs > span {
+			lo = hi - span
+		}
+		got, err := expandRruleTail(rule, dtstart, tz, lo, hi, maxMissedInstantsPerBoot)
+		if err != nil {
+			return nil, err
+		}
+		if len(got) >= maxMissedInstantsPerBoot || lo == pendingMs {
+			return got, nil
+		}
+		span *= 2
+	}
+}
+
+// expandRruleTail returns the last keep instants of the rule in [lo, hi),
+// ascending, paging through the capped expansion of task.ExpandRRULE.
+func expandRruleTail(rule string, dtstart int64, tz string, lo, hi int64, keep int) ([]int64, error) {
+	var tail []int64
+	for lo < hi {
+		page, truncated, err := task.ExpandRRULE(rule, dtstart, tz, lo, hi, missedExpandPage)
+		if err != nil {
+			return nil, err
+		}
+		tail = append(tail, page...)
+		if len(tail) > keep {
+			tail = append([]int64(nil), tail[len(tail)-keep:]...)
+		}
+		if !truncated || len(page) == 0 {
+			break
+		}
+		lo = page[len(page)-1] + 1
+	}
+	return tail, nil
 }
 
 // startSweep launches the recovery-sweep goroutine if it is not already
@@ -739,7 +818,14 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 	// do not "fix" it into a backoff/auto-pause without an explicit decision.
 	isRepeating := t.Trigger.IsRepeating()
 
-	if noTrigger || (task.IsTerminal(t.Status) && !isRepeating) {
+	// The owed fire of a crashed one-time trigger survives a terminal status:
+	// the dead run's claim is reconciled to failed/interrupted at boot, and
+	// that status must not take away the rerun it is owed (6b review I2).
+	s.mu.Lock()
+	owedTerminal := !noTrigger && s.isBootOwedFireLocked(t)
+	s.mu.Unlock()
+
+	if noTrigger || (task.IsTerminal(t.Status) && !isRepeating && !owedTerminal) {
 		// Remove any existing job for this task (trigger was cleared, the
 		// task ended with a non-repeating trigger, or there is nothing to
 		// track).

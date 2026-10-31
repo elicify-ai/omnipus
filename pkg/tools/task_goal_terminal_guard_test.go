@@ -81,7 +81,9 @@ var knownStatusWriters = []statusWriter{
 	{where: "pkg/agent.TaskExecutor.failTask", mustHook: true},
 	{where: "pkg/agent.TaskExecutor.failTaskBeforeDispatch", mustHook: true},
 	{where: "pkg/gateway.taskPatch.buildPatch", mustHook: true},
-	{where: "pkg/gateway.restAPI.reconcileStuckTasks", mustHook: true},
+	// Boot reconcile of dead in_progress claims (moved from the gateway's
+	// restAPI.reconcileStuckTasks, which now delegates here; 6b review I2).
+	{where: "pkg/agent.recoverInterruptedTask", mustHook: true},
 	{where: "pkg/tools.taskUpdateToolExecute.buildPatchFields", mustHook: true},
 
 	// ---- the one classified exemption that REACHES a terminal status -----
