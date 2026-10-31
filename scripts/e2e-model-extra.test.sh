@@ -238,6 +238,46 @@ else
   bad "leak seed-agent-fallbacks-cleans-up-on-failure" "want exit 1 and an empty TMPDIR; got $rc, left: $(find "$leakdir" -mindepth 1 -maxdepth 1 -printf '%f ')" "$tmp/leak.err"
 fi
 
+# seed-revision: the agent update carries the agent's own revision (the server
+# answers 400 "revision is required" without it), one PUT per listed agent.
+python3 -I -c '
+import json, os, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+LOG = sys.argv[1]
+class H(BaseHTTPRequestHandler):
+    def reply(self, code, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def do_GET(self):
+        self.reply(200, [{"id": "mia", "revision": "rev-mia"}, {"id": "jim", "revision": "rev-jim"}])
+    def do_PUT(self):
+        req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        agent = self.path.rsplit("/", 1)[1]
+        ok = req.get("revision") == "rev-" + agent
+        open(LOG, "a").write(agent + (" ok" if ok else " bad") + "\n")
+        self.reply(200 if ok else 400, {} if ok else {"error": "revision is required"})
+    def log_message(self, *a):
+        pass
+s = HTTPServer(("127.0.0.1", 0), H)
+print(s.server_address[1], flush=True)
+s.timeout = 10
+for _ in range(3):
+    s.handle_request()
+' "$tmp/seed-rev.log" >"$tmp/seed-rev.port" 2>/dev/null &
+seed_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$tmp/seed-rev.port" ] && break; sleep 0.2; done
+rc=0
+bash "$READER" seed-agent-fallbacks "http://127.0.0.1:$(cat "$tmp/seed-rev.port")" fake-token --file "$spec_json" >/dev/null 2>"$tmp/seed-rev.err" || rc=$?
+wait "$seed_pid" 2>/dev/null
+if [ "$rc" -eq 0 ] && [ "$(sort "$tmp/seed-rev.log" | tr '\n' ',')" = "jim ok,mia ok," ]; then
+  pass "seed sends-each-agents-revision"
+else
+  bad "seed sends-each-agents-revision" "want exit 0 and both agents updated with their own revision; got $rc, log: $(tr '\n' ',' <"$tmp/seed-rev.log" 2>/dev/null)" "$tmp/seed-rev.err"
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "e2e-model-extra.test: FAILED" >&2
   exit 1

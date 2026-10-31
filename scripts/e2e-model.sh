@@ -27,7 +27,8 @@
 #       the fallback pair the default model; the rows are unchanged.
 #
 #   seed-agent-fallbacks <base-url> <token> [--file PATH]
-#       GET <base-url>/api/v1/agents, then PUT {"fallback_models":[fallback]}
+#       GET <base-url>/api/v1/agents, then PUT {"revision":<that agent's revision>,
+#       "fallback_models":[fallback]}
 #       on every returned agent. Exit 1 on any non-2xx answer.
 #
 #   preflight [--file PATH] [--route-out PATH] [--strict]
@@ -286,15 +287,18 @@ cmd_seed_agent_fallbacks() {
     || die 1 "GET $base/api/v1/agents failed (curl error)"
   [[ "$status" =~ ^2[0-9][0-9]$ ]] || die 1 "GET $base/api/v1/agents answered HTTP $status"
 
+  # One "<id><TAB><revision>" line per agent: the server refuses an agent update
+  # that does not carry the agent's current revision ("revision is required").
   local ids
-  ids="$(jq -r 'if type == "array" then .[] | .id // empty else error("not an array") end' "$BODY_FILE" 2>/dev/null)" \
+  ids="$(jq -r 'if type == "array" then .[] | select(.id) | "\(.id)\t\(.revision // "")" else error("not an array") end' "$BODY_FILE" 2>/dev/null)" \
     || die 1 "GET $base/api/v1/agents did not return a JSON array"
   [ -n "$ids" ] || die 1 "GET $base/api/v1/agents returned no agents; nothing to give a fallback"
 
-  local body id n=0
-  body="$(jq -cn --arg p "$F_PROVIDER" --arg m "$F_MODEL" '{fallback_models: [{provider: $p, model: $m}]}')"
-  while IFS= read -r id; do
+  local body id rev n=0
+  while IFS=$'\t' read -r id rev; do
     [ -n "$id" ] || continue
+    [ -n "$rev" ] || die 1 "GET $base/api/v1/agents returned no revision for agent $id"
+    body="$(jq -cn --arg p "$F_PROVIDER" --arg m "$F_MODEL" --arg r "$rev" '{revision: $r, fallback_models: [{provider: $p, model: $m}]}')"
     status="$(curl_auth "$token" --max-time 30 -X PUT -H 'Content-Type: application/json' \
       --data "$body" "$base/api/v1/agents/$id")" \
       || die 1 "PUT $base/api/v1/agents/$id failed (curl error)"

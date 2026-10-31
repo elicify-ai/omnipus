@@ -166,8 +166,8 @@ func selfHealRequireIndexed(t testing.TB, f *selfHealFixture) {
 			return nil
 		}
 		var record historyRecord
-		if err := json.Unmarshal(n.Value, &record); err != nil {
-			return err
+		if decodeErr := json.Unmarshal(n.Value, &record); decodeErr != nil {
+			return decodeErr
 		}
 		addresses = append(addresses, record.Address)
 		return nil
@@ -281,7 +281,17 @@ func selfHealRequireLogBase(t testing.TB, record map[string]any, sid string, att
 	require.Equal(t, "catchup_limit", record["trigger"], "the structured trigger is the reason for self-heal")
 	require.Equal(t, attempt, selfHealLogNumber(t, record, "attempt"))
 	require.GreaterOrEqual(t, selfHealLogNumber(t, record, "duration_ms"), int64(0))
-	require.NotContains(t, record, "cause", "unwrapped errors may contain private home paths")
+	if record["msg"] == selfHealBadLog {
+		// 6a H1: every failure class names its cause, sanitized: no path and
+		// no file name. selfHealRequirePrivateLogs checks the store's paths.
+		cause, ok := record["cause"].(string)
+		require.True(t, ok, "a heal failure warning must carry its cause, got %v", record["cause"])
+		require.NotEmpty(t, cause)
+		require.NotEqual(t, "unknown", cause, "the failure cause must not be dropped")
+		require.NotRegexp(t, `[/\\]|\.jsonl|\.json\b|\.chi\b`, cause, "the logged cause must carry no path or file name")
+		return
+	}
+	require.NotContains(t, record, "cause", "a successful rebuild has no failure cause")
 }
 
 func selfHealRequirePrivateLogs(t testing.TB, l *selfHealLogs, f *selfHealFixture) {
@@ -331,8 +341,8 @@ func selfHealFiles(t testing.TB, root string, excludeIndex bool) map[string]self
 		}
 		h := sha256.New()
 		_, copyErr := io.Copy(h, file)
-		if err := errors.Join(copyErr, file.Close()); err != nil {
-			return err
+		if joinErr := errors.Join(copyErr, file.Close()); joinErr != nil {
+			return joinErr
 		}
 		var digest [sha256.Size]byte
 		copy(digest[:], h.Sum(nil))

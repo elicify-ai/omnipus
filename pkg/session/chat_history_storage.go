@@ -348,18 +348,40 @@ func (o *chatHistoryOwner) retain(path string) func() error {
 
 // removeRetiredLocked keeps failed cleanup pending. The caller holds refsMu;
 // neither this path nor a reader release waits for owner.mu/session shards.
+// A Windows sharing violation (another process, such as a virus scanner,
+// holds the file) is not a failure: the file stays pending and the next
+// reconcile or reader release retries it (package rule: genuine Windows
+// sharing-busy is not proof of anything).
 func (o *chatHistoryOwner) removeRetiredLocked(path string) error {
 	if !o.retired[path] || o.refs[path] > 0 {
 		return nil
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if isArchiveSharingBusy(err) {
+			return nil
+		}
 		return err
 	}
 	delete(o.retired, path)
 	return nil
 }
 
+// historyRetirementError marks a failure to remove old index generation
+// files: cleanup after a published checkpoint, not a failed publication.
+// Error and Unwrap expose the OS error unchanged.
+type historyRetirementError struct{ err error }
+
+func (e *historyRetirementError) Error() string { return e.err.Error() }
+func (e *historyRetirementError) Unwrap() error { return e.err }
+
 func (o *chatHistoryOwner) retire(dir, keep string) error {
+	if err := o.retireFiles(dir, keep); err != nil {
+		return &historyRetirementError{err: err}
+	}
+	return nil
+}
+
+func (o *chatHistoryOwner) retireFiles(dir, keep string) error {
 	o.refsMu.Lock()
 	defer o.refsMu.Unlock()
 	entries, err := os.ReadDir(dir)

@@ -47,6 +47,23 @@ export class ReloadHarness {
         expect(completedBefore, `${this.phase}: same-session no-op must have a proven prior native completion`).toBe(true);
         expect(currentSocketProof, `${this.phase}: same-document reuse is the exact current socket's prior completion`).toEqual(priorSocketProof);
         await this.info.attach('same-socket-addressed-readiness', { contentType: 'application/json', body: JSON.stringify({ alreadyActive, priorSocketProof, currentSocketProof }) });
+      } else if (!reload && navigation === null && !newAttach && !priorSocketProof) {
+        // Same document right after a fixture gateway restart (seedOrdinary):
+        // the page's OWN socket reconnect re-attaches this session and races
+        // this method. Its attach can be sent before arm() above (so the
+        // waiter correctly ignores it as older than the arm) yet complete only
+        // after priorSocketProof was read; waiting on the waiter alone then
+        // hangs to the test deadline (CI run 40893972010, T40 B52 B53). The
+        // proof is the CURRENT socket's completed attach addressed to this
+        // session: an observed outbound attach_session answered by its
+        // catch_up_complete, never replay done or another socket generation.
+        // Bounded only by the unchanged whole-test deadline (timeout 0).
+        await expect.poll(() => this.attachReadiness.completedOnCurrentSocket(sessionId) !== undefined,
+          { message: `${this.phase}: the current socket's own reconnect attach completes`, timeout: 0 }).toBe(true);
+        const proof = this.attachReadiness.completedOnCurrentSocket(sessionId)!;
+        expect(proof.request.session_id, `${this.phase}: real outbound attach addresses this session`).toBe(sessionId);
+        expect(proof.completion.session_id, `${this.phase}: real completion answers that addressed attach`).toBe(sessionId);
+        await this.info.attach('same-socket-reconnect-addressed-readiness', { contentType: 'application/json', body: JSON.stringify({ alreadyActive, proof }) });
       } else {
         // Native completion is the readiness barrier, under the unchanged test
         // deadline. A short DOM poll must not measure unrelated cold app boot.

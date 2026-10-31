@@ -24,7 +24,7 @@ func TestChatHistoryHeal_AliasedRootPreservesPinnedReader(t *testing.T) {
 	for _, alias := range []string{"symlink", "relative"} {
 		t.Run(alias, func(t *testing.T) {
 			physical := t.TempDir()
-			root := physical
+			var root string
 			if alias == "symlink" {
 				root = filepath.Join(t.TempDir(), "session-alias")
 				if err := os.Symlink(physical, root); err != nil {
@@ -282,6 +282,7 @@ func TestChatHistoryHeal_DeadlineIsTransientAndBounded(t *testing.T) {
 		now = base.Add(step.elapsed)
 		// Each demand starts live; only the attempt's seam cancels its caller.
 		// The one-hour caller deadline is not a timing oracle or a sleep.
+		//nolint:fatcontext // fresh Background parent every step, not nested; the cancel seam reads the outer variables
 		request, cancelRequest = context.WithDeadline(context.WithValue(context.Background(), requestKey{}, f.sid), time.Now().Add(time.Hour))
 		err := f.store.CheckChatHistoryReadiness(request, f.sid)
 		cancelRequest()

@@ -21,9 +21,10 @@ func TestChatHistoryHeal_PublishedProofFailureIsNeverBlessed(t *testing.T) {
 			logs := selfHealCaptureLogs(t)
 			withExpiry := kind == "corrupt_child_with_expired_position" || kind == "healthy_child_with_expired_position"
 			s, sid, addresses, expired := healFixPublishedProofFixture(t, withExpiry)
-			if kind == "invalid_saved_rank" {
+			switch kind {
+			case "invalid_saved_rank":
 				healFixInvalidateSavedRank(t, s, sid, addresses[0])
-			} else if kind == "corrupt_child" || kind == "corrupt_child_with_expired_position" {
+			case "corrupt_child", "corrupt_child_with_expired_position":
 				healFixCorruptPublishedChild(t, s, sid)
 			}
 			before := selfHealFiles(t, historyIndexDir(s, sid), false)

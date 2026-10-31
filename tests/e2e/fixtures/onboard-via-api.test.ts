@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { onboardViaAPI } from './onboard-via-api.js'
 
-type Hit = { method: string; path: string; body: unknown }
+type Hit = { method: string; path: string; body: unknown; reauth: string | undefined }
 
 const KEYS = ['MINIMAX_API_KEY_CI', 'MINIMAX_API_KEY', 'OPENROUTER_API_KEY_CI', 'OPENROUTER_API_KEY'] as const
 
@@ -28,10 +28,22 @@ function startGateway(): Promise<{ url: string; hits: Hit[]; close: () => Promis
       const raw = Buffer.concat(chunks).toString('utf8')
       let body: unknown = null
       if (raw !== '') body = JSON.parse(raw) as unknown
-      hits.push({ method: req.method ?? '', path: req.url ?? '', body })
+      const reauth = req.headers['x-reauth-token']
+      hits.push({
+        method: req.method ?? '',
+        path: req.url ?? '',
+        body,
+        reauth: typeof reauth === 'string' ? reauth : undefined,
+      })
       res.setHeader('content-type', 'application/json')
+      // The real server refuses a provider save without a re-auth consent token.
+      if (req.method === 'PUT' && req.url?.startsWith('/api/v1/providers/') && reauth !== 'eval-token') {
+        res.statusCode = 403
+        res.end(JSON.stringify({ error: 'this change requires re-typing your password' }))
+        return
+      }
       if (req.method === 'GET' && req.url === '/api/v1/agents') {
-        res.end(JSON.stringify([{ id: 'mia' }, { id: 'jim' }]))
+        res.end(JSON.stringify([{ id: 'mia', revision: 'rev-mia' }, { id: 'jim', revision: 'rev-jim' }]))
         return
       }
       res.end(JSON.stringify({ token: 'eval-token' }))
@@ -59,6 +71,7 @@ describe('onboardViaAPI seeds the fallback (design.md §7 R9)', () => {
       await onboardViaAPI({ baseURL: gw.url })
       expect(gw.hits.map((h) => `${h.method} ${h.path}`)).toEqual([
         'POST /api/v1/onboarding/complete',
+        'POST /api/v1/auth/reauth',
         'PUT /api/v1/providers/openrouter',
         'GET /api/v1/agents',
         'PUT /api/v1/agents/mia',
@@ -72,16 +85,17 @@ describe('onboardViaAPI seeds the fallback (design.md §7 R9)', () => {
           model: 'MiniMax-M3.1-Flash-Preview',
         },
       })
-      expect(gw.hits[1].body).toEqual({
+      expect(gw.hits[1].body).toEqual({ password: 'admin123' })
+      expect(gw.hits[2].reauth).toBe('eval-token')
+      expect(gw.hits[2].body).toEqual({
         auth_method: 'api_key',
         api_key: 'test-key-bbbb',
         model: 'deepseek/deepseek-v4.1-flash',
       })
-      const fallbackBody = {
-        fallback_models: [{ provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' }],
-      }
-      expect(gw.hits[3].body).toEqual(fallbackBody)
-      expect(gw.hits[4].body).toEqual(fallbackBody)
+      const fallback_models = [{ provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' }]
+      // Each agent update carries the revision that agent's list entry reported.
+      expect(gw.hits[4].body).toEqual({ revision: 'rev-mia', fallback_models })
+      expect(gw.hits[5].body).toEqual({ revision: 'rev-jim', fallback_models })
     } finally {
       await gw.close()
     }

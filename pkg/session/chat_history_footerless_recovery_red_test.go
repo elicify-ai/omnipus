@@ -50,8 +50,8 @@ func gate0ReadSavedNodeTail(t *testing.T, fixture gate0SavedNodeTail, pending in
 		if pending > 64 {
 			// Retargeted, oracle unchanged: selfheal-design.md §1 keeps
 			// boot/sweep reconciliation bounded, while demand may rebuild.
-			_, err := reopened.reconcileChatHistoryIndex(context.Background(), fixture.sid)
-			return ChatHistoryPage{}, err
+			_, reconcileErr := reopened.reconcileChatHistoryIndex(context.Background(), fixture.sid)
+			return ChatHistoryPage{}, reconcileErr
 		}
 		return reopened.ReadChatHistoryPage(context.Background(), fixture.sid, historyOptions(100))
 	}
