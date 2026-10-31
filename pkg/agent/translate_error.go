@@ -1109,6 +1109,20 @@ func TranslateTurnError(err error) LLMError {
 		pe = nil
 	}
 	llm := TranslateLLMError(pe, err.Error())
+	// 6b F1: the text classifier sees only err's message, and a dropped send
+	// reads just `Post "...": EOF`. Its typed cause (*url.Error wrapping
+	// io.EOF) is still on THIS chain, so ask the shared transport check on
+	// the original error rather than its re-wrapped text. Only an otherwise
+	// unknown verdict is named network; every more specific code stands.
+	if llm.Code == CodeUnknown && providers.IsTransportFailure(err) {
+		llm.Code = CodeNetwork
+		llm.Message = defaultUserMessage(CodeNetwork)
+		llm.Retryable = isRetryable(CodeNetwork)
+		if sentence := providerMessageFor(CodeNetwork, llm.Provider, llm.Model); sentence != "" {
+			llm.Message = sentence
+			llm.ProviderMessage = true
+		}
+	}
 	// This is a terminal presentation, AFTER the recovery classifier had its
 	// chance. Keep inconclusive400 unknown inside TranslateLLMError so media
 	// strip-retry remains reachable, but name the known rejection on failure.
