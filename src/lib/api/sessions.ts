@@ -15,6 +15,7 @@ import {
   SessionPage as WireSessionPageSchema,
   OperationResult as OperationResultSchema,
   SessionDetail as WireSessionDetailSchema,
+  PreviewRetryResponse as PreviewRetryResponseSchema,
 } from '@/lib/api/generated/schemas'
 import type {
   GoalOutcome as WireGoalOutcome,
@@ -24,6 +25,7 @@ import type {
   OperationResult,
   JudgeVerdict,
   Message as WireMessage,
+  PreviewRetryResponse,
 } from '@/lib/api/generated/openapi-types'
 import type { SubagentEndFrame, SubagentMessageFrame, SubagentStartFrame, SubagentStateFrame } from '@/lib/api/generated/asyncapi-types'
 import { ApiSchemaError, _recordApiSchemaError, request } from './http'
@@ -1280,4 +1282,18 @@ export async function renameSession(id: string, title: string): Promise<Session>
 
 export function deleteSession(id: string): Promise<OperationResult> {
   return request<OperationResult>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }, OperationResultSchema as ZodType<OperationResult>)
+}
+
+// Office-preview spec §5.2 (FQ2 r2 A): re-render the page thumbnails of one
+// earlier preview_document call whose thumbnails were unavailable. 202 means
+// admitted and started — the result arrives later as a new `media` frame with
+// the same tool_call_id, never in this response. Errors surface as ApiError:
+// 409 code `preview_source_changed` (the file changed since the preview),
+// 503 code `preview_renderer_unavailable`, 403 no access, 404 unknown preview.
+export function retrySessionPreview(sessionId: string, toolCallId: string): Promise<PreviewRetryResponse> {
+  return request<PreviewRetryResponse>(
+    `/sessions/${encodeURIComponent(sessionId)}/previews/${encodeURIComponent(toolCallId)}/retry`,
+    { method: 'POST' },
+    PreviewRetryResponseSchema as ZodType<PreviewRetryResponse>,
+  )
 }
