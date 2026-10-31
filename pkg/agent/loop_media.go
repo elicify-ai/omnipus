@@ -216,7 +216,10 @@ func resolveMediaRefsWithOffload(
 			// back to step-6 text extraction (FR-022) and step-7 honest marker.
 			if isPDF(mime, meta.Filename) {
 				if modelSupportsPDF(cat, provider, model) {
-					dataURL := encodePDFToDataURL(localPath, info, maxSize)
+					// The provider's documented PDF size limit tightens the
+					// agent media limit (catalog pdf_limits, D2 A).
+					pdfLimit, _ := nativePDFLimits(cat, provider, model, maxSize)
+					dataURL := encodePDFToDataURL(localPath, info, pdfLimit)
 					if dataURL != "" {
 						resolved = append(resolved, dataURL)
 					} else {

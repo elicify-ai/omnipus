@@ -62,8 +62,15 @@ type providerDTO struct {
 	AuthMethods       []string            `json:"auth_methods"`
 	Aliases           []string            `json:"aliases"`
 	ResizeLimits      *resizeLimitsDTO    `json:"resize_limits"`
+	PDFLimits         *pdfLimitsDTO       `json:"pdf_limits"`
 	Models            []modelDTO          `json:"models"`
 	// locality, if published, is ignored: it is derived on load (FR-039).
+}
+
+// pdfLimitsDTO is the optional provider `pdf_limits` object.
+type pdfLimitsDTO struct {
+	MaxDocumentBytes       int `json:"max_document_bytes"`
+	MaxDocumentsPerRequest int `json:"max_documents_per_request"`
 }
 
 // providerRegionDTO is one entry of the issue #800 (Bedrock region
@@ -201,6 +208,18 @@ func parseResizeLimits(path string, dto *resizeLimitsDTO, inherit *ResizeLimits)
 		return ResizeLimits{}, invalid(path+".max_bytes", "must be positive, got %d", dto.MaxBytes)
 	}
 	return ResizeLimits{LongEdgePx: dto.LongEdgePx, MaxBytes: dto.MaxBytes}, nil
+}
+
+// parsePDFLimits validates a present pdf_limits object: both limits must
+// be positive.
+func parsePDFLimits(path string, dto pdfLimitsDTO) (PDFLimits, error) {
+	if dto.MaxDocumentBytes <= 0 {
+		return PDFLimits{}, invalid(path+".max_document_bytes", "must be positive, got %d", dto.MaxDocumentBytes)
+	}
+	if dto.MaxDocumentsPerRequest <= 0 {
+		return PDFLimits{}, invalid(path+".max_documents_per_request", "must be positive, got %d", dto.MaxDocumentsPerRequest)
+	}
+	return PDFLimits(dto), nil
 }
 
 // isKnownRegionGroup reports whether s is one of the closed cross-region
@@ -392,6 +411,15 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		return Provider{}, err
 	}
 
+	var pdfLimits *PDFLimits
+	if dto.PDFLimits != nil {
+		parsed, pdfErr := parsePDFLimits(path+".pdf_limits", *dto.PDFLimits)
+		if pdfErr != nil {
+			return Provider{}, pdfErr
+		}
+		pdfLimits = &parsed
+	}
+
 	company := dto.Company
 	if company == "" {
 		company = dto.Name // X-10 default
@@ -413,6 +441,7 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		Aliases:           append([]string(nil), dto.Aliases...),
 		Locality:          locality,
 		Regions:           regions,
+		PDFLimits:         pdfLimits,
 		ResizeLimits:      limits,
 		Models:            make([]Model, 0, len(dto.Models)),
 	}

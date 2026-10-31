@@ -1684,6 +1684,10 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					if err != nil {
 						return nil, err
 					}
+					m, err = attachTurnDocumentPreviews(ctx, m, rt.documentPreviews, rt.previewForms(cat, provider, model, budget))
+					if err != nil {
+						return nil, err
+					}
 					if rt.providerCallAttachCache != nil {
 						rt.providerCallAttachCache[attachKey] = m
 					}

@@ -1914,7 +1914,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	rz.rc.rx.rr.rq.ri.rf = &agentLoopRunTurnFallbacks{}
 
-	rz.rc.rx.rr.rq.ri.rf.rt = &agentLoopRunTurn{al: al, ts: ts}
+	rz.rc.rx.rr.rq.ri.rf.rt = &agentLoopRunTurn{al: al, ts: ts, documentPreviews: &turnDocumentPreviews{}}
+	defer rz.rc.rx.rr.rq.ri.rf.rt.documentPreviews.release()
 
 	// H1: guard against an already-canceled or timed-out context before doing any work.
 

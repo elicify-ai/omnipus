@@ -112,6 +112,17 @@ func (h Handle) DefaultRegion() string {
 	return h.p.Region
 }
 
+// PDFLimits returns the provider's documented native-PDF limits, or nil
+// when the provider id is unknown or records none (the caller then applies
+// its own media size limit).
+func (h Handle) PDFLimits() *PDFLimits {
+	if h.p == nil || h.p.PDFLimits == nil {
+		return nil
+	}
+	l := *h.p.PDFLimits
+	return &l
+}
+
 // Budget is the resize budget the media pipeline must honour: the
 // provider's own limits on a hit, the catalog default on a miss, the
 // package default when no document is loaded.

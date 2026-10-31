@@ -55,6 +55,10 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 		if imageErr != nil {
 			return nil, imageErr
 		}
+		messagesForCall, imageErr = attachTurnDocumentPreviews(ctx, messagesForCall, rt.documentPreviews, rt.previewForms(cat, providerName, model, budget))
+		if imageErr != nil {
+			return nil, imageErr
+		}
 		if rt.providerCallAttachCache != nil {
 			rt.providerCallAttachCache[attachKey] = messagesForCall
 		}

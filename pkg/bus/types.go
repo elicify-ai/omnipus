@@ -1,5 +1,7 @@
 package bus
 
+import "github.com/elicify-ai/omnipus/pkg/api/generated"
+
 // PeerKind classifies the routing peer type for a message.
 type PeerKind string
 
@@ -239,6 +241,9 @@ type MediaPart struct {
 	Caption     string `json:"caption,omitempty"`      // optional caption text
 	Filename    string `json:"filename,omitempty"`     // original filename hint
 	ContentType string `json:"content_type,omitempty"` // MIME type hint
+	// PageNumber is the 1-based source page of a document-preview
+	// thumbnail (office-preview spec §5.2); 0 otherwise.
+	PageNumber int `json:"page_number,omitempty"`
 }
 
 // OutboundMediaMessage carries media attachments from Agent to channels via the bus.
@@ -266,4 +271,11 @@ type OutboundMediaMessage struct {
 	// than needing this comment rewritten first.
 	AgentID string      `json:"agent_id,omitempty"`
 	Parts   []MediaPart `json:"parts"`
+	// ToolCallID, Presentation and Preview mark one preview_document
+	// thumbnail group (office-preview spec §5.2): Presentation is
+	// "page_thumbnails" and Parts may be empty only when Preview.Outcome is
+	// "unavailable". Empty/nil on ordinary inline media.
+	ToolCallID   string                  `json:"tool_call_id,omitempty"`
+	Presentation string                  `json:"presentation,omitempty"`
+	Preview      *generated.MediaPreview `json:"preview,omitempty"`
 }

@@ -190,9 +190,20 @@ type Provider struct {
 	// the regions this provider row may be pointed at, each with its
 	// cross-region inference profile group. Empty on a provider with no
 	// such picker.
-	Regions      []ProviderRegion
+	Regions []ProviderRegion
+	// PDFLimits are the provider's documented native-PDF input limits
+	// (catalog field pdf_limits); nil when none is recorded.
+	PDFLimits    *PDFLimits
 	ResizeLimits ResizeLimits
 	Models       []Model
+}
+
+// PDFLimits are a provider's documented limits on native PDF input.
+type PDFLimits struct {
+	// MaxDocumentBytes is the largest single PDF accepted.
+	MaxDocumentBytes int
+	// MaxDocumentsPerRequest is the most PDFs accepted in one request.
+	MaxDocumentsPerRequest int
 }
 
 // Model is one model row under a provider.
