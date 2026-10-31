@@ -46,6 +46,7 @@ import (
 	auditcmd "github.com/elicify-ai/omnipus/pkg/app/internal/audit"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/browser"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/clitoken"
+	componentscmd "github.com/elicify-ai/omnipus/pkg/app/internal/components"
 	credcmd "github.com/elicify-ai/omnipus/pkg/app/internal/credentials"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/doctor"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/gateway"
@@ -449,6 +450,8 @@ Commands:
   credentials  Manage secrets: set, list, delete, rotate.
   audit        View the audit log.
   doctor       Diagnose configuration issues.
+  office       Register or unregister LibreOffice for Office document previews.
+  pdf-renderer Register or unregister the PDF renderer for document previews.
   version      Print build version.
 
 Examples:
@@ -459,7 +462,7 @@ Examples:
   omnipus start
   omnipus stop
 
-Reserved names (shadowed by subcommands): onboard, start, stop, credentials, audit, doctor, version.
+Reserved names (shadowed by subcommands): onboard, start, stop, credentials, audit, doctor, office, pdf-renderer, version.
 If an agent shares a name with a subcommand, use the agent's ID directly via the API or rename it.
 `, internal.Logo, config.GetVersion(), onboardHelpLine()),
 		Example: `  omnipus jim "summarize the last 10 commits"
@@ -510,6 +513,8 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 		recordscmd.NewRecordsCommand(),
 		doctor.NewDoctorCommand(),
 		gateway.NewGatewayCommand(),
+		componentscmd.NewOfficeCommand(),
+		componentscmd.NewPDFRendererCommand(),
 		stopcmd.NewStopCommand(),
 		version.NewVersionCommand(),
 	)
