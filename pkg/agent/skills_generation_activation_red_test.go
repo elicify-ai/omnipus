@@ -4,7 +4,9 @@ package agent
 // snapshot, old live instance, reconstruction from disk and a real store
 // regrant. The initial raw row is fixture input (NOT proof of binding at
 // persist). Only the model transport is replaced; no resolver is injected.
-// Stale wording/menu expectations depend on open Q-S3 recommendation A.
+// Q-S3 answered, 2026-10-31: managed deletion removes grants best effort.
+// Outside filesystem replacement bypasses that hygiene; SD-30 must still
+// reject the surviving G1 binding independently of cleanup.
 import (
 	"context"
 	"encoding/json"
@@ -70,17 +72,19 @@ func TestSD30_ActualSkillStaleInstanceRestartAndRealRegrant(t *testing.T) {
 	first := sd30ActualLoad(t, old)
 	require.False(t, first.IsError, "positive control: registered matching-generation Skill load succeeds: %s", first.ForLLM)
 	require.Contains(t, first.ForLLM, "Body.")
+	// This is an outside filesystem operation, not ApplyChange deletion:
+	// no managed hygiene runs, so the durable G1 row remains a safety fixture.
 	require.NoError(t, os.RemoveAll(dir))
 	menuSkill(t, root, "foo", "RECREATED-G2", menuG2)
 	const stale = "skill 'foo' is not available: your grant is for a previous skill with this name that no longer exists; ask the owner to re-grant the current 'foo'"
 	res := sd30ActualLoad(t, old)
 	assert.True(t, res.IsError, "old live instance cannot load the recreation")
-	assert.Contains(t, res.ForLLM, "SKILL_GRANT_STALE", "depends on Q-S3 A")
-	assert.Contains(t, res.ForLLM, stale, "exact Q-S3 A refusal text")
+	assert.Contains(t, res.ForLLM, "SKILL_GRANT_STALE", "SD-30 rejects an old binding even when no managed hygiene ran")
+	assert.Contains(t, res.ForLLM, stale, "exact §5.10 stale-generation refusal text")
 	assert.NotContains(t, old.ContextBuilder.BuildSystemPromptWithCache(), "RECREATED-G2")
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Equal(t, before, after, "replacement/load do not clean up or rebuild any grant row")
+	assert.Equal(t, before, after, "outside filesystem replacement and read-only activation do not rewrite durable grant rows")
 	al.Close()
 	_, restarted := sd30LoopFromDurableRow(t, home)
 	res = sd30ActualLoad(t, restarted)

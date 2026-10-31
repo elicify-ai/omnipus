@@ -1,25 +1,21 @@
 package skills
 
 // RED tests — landing/skills (T9): SD-30 grant-identity binding
-// (spec §5.13a, revision 15; supersedes the r13 SD-28 deletion-time-removal
-// mechanism and the r14 gate G-1–G-6/SD-29; founder Q-S2 = A stands,
-// 2026-10-31).
+// (spec §5.13a, revision 15; supersedes the r13 SD-28 correctness mechanism
+// and the r14 gate G-1–G-6/SD-29; founder Q-S2 = A stands).
 //
-// ⚠️ OPEN QUESTION Q-S3: what the owner sees when a stored grant row goes
-// inert (the SKILL_GRANT_STALE surface on the Agents screen and the load
-// refusal text) proceeds on Q-S3's RECOMMENDATION — §5.10 marks the code
-// "proceeds on Q-S3's recommendation" while Q-S3 itself is still open.
-// These tests pin the RECOMMENDED behaviour (the §5.10 SKILL_GRANT_STALE
-// text byte-exact and the "row heals at the agent's next skills persist"
-// rule) and are flagged "depends on Q-S3" in
-// docs/internal/specs/skills-red-traceability.md; a Q-S3 ruling that changes
-// the surface changes these legs, not the binding mechanics.
+// Q-S3 ANSWERED by the founder, 2026-10-31: deleting a skill removes its
+// grants on a best-effort basis. A removal failure must not prevent deletion.
+// SD-30 remains the safety rule: a surviving G1 binding never authorizes a
+// same-name G2 recreation. Cleanup is hygiene, not a correctness dependency.
+// The §5.10 stale-refusal text remains pinned for surviving old bindings.
 //
 // Traces to: skills-spec-r15.md §5.13a (SD-30), §5.4 copy row + copy text,
 // §5.10 SKILL_GRANT_STALE, §7.1 step 7 (r15), §16 S-6.12, S-6.18 (r15),
 // §17.1 row 29 (T-K2), E-4, E-5, E-14, SR-5a, FR-046.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -84,13 +80,12 @@ func createSkillViaPipeline(t *testing.T, root, slug, description, body string) 
 	return out, m[1]
 }
 
-// TestDelete_TouchesNoGrantRecord_RowSurvivesInert (S-6.12 main leg, E-4,
-// E-5; §7.1 step 7 r15). BDD: agent A granted foo (bound to generation G1);
-// foo is deleted — Then the deletion commits, touches NO grant record
-// (no removal, no rebuild, no sweep — SD-30), and A's stored row still
-// lists foo: inert, bound to a generation no live skill carries.
-// Traces to: skills-spec-r15.md §5.13a, E-4, E-5, S-6.12.
-func TestDelete_TouchesNoGrantRecord_RowSurvivesInert(t *testing.T) {
+// TestDelete_RemovesSkillGrant_BestEffortHygiene (Q-S3 answered, 2026-10-31).
+// BDD: agent A has foo/G1 and an unrelated grant; deleting foo commits,
+// removes foo's grant, and preserves the unrelated grant. Identity matching,
+// not successful hygiene, remains the SD-30 safety rule.
+// Traces to: founder Q-S3 amendment; skills-spec-r15.md §5.13a, S-6.12.
+func TestDelete_RemovesSkillGrant_BestEffortHygiene(t *testing.T) {
 	root := t.TempDir()
 
 	// foo created through the pipeline (a creation event stamps G1).
@@ -100,7 +95,7 @@ func TestDelete_TouchesNoGrantRecord_RowSurvivesInert(t *testing.T) {
 	require.True(t, uuidShape.MatchString(g1), "the creation stamped a UUID-format generation, got %q", g1)
 
 	grants := &recordingGrants{}
-	grants.seededSet("foo")
+	grants.seededSet("foo", "other-skill")
 
 	out, err := ApplyChange(root, ChangeRequest{
 		Kind: KindDelete, Slug: "foo",
@@ -111,24 +106,75 @@ func TestDelete_TouchesNoGrantRecord_RowSurvivesInert(t *testing.T) {
 	require.NoError(t, err, "delete must commit (RED: pipeline not implemented → this fails first)")
 	assert.Equal(t, PersistenceComplete, out.PersistenceStatus)
 
-	// SD-30: the pipeline runs no grant removal and no rebuild — the editor
-	// is never consulted, the row survives.
-	assert.Empty(t, grants.removed,
-		"deletion touches no grant record (§5.13a SD-30: no removal at deletion time)")
-	assert.True(t, grants.holdsGrant("foo"),
-		"the stored row still lists foo — inert, bound to the retired generation")
+	// Q-S3: managed deletion attempts hygiene and removes only foo's grant.
+	// Do not constrain an implementation's permitted retry count.
+	require.NotEmpty(t, grants.removed, "deletion must actually remove the skill grant")
+	for _, name := range grants.removed {
+		assert.Equal(t, "foo", name, "hygiene targets only the deleted skill")
+	}
+	assert.False(t, grants.holdsGrant("foo"), "the deleted skill's permission is removed")
+	assert.True(t, grants.holdsGrant("other-skill"), "unrelated permissions are preserved")
 	_, statErr := os.Stat(fooDir)
 	assert.True(t, os.IsNotExist(statErr), "the live folder is gone")
+}
+
+// TestDelete_GrantRemovalFails_StaleGrantCannotAuthorizeRecreation covers the
+// Q-S3 answered fault leg. The storage-edge error must actually fire; it must
+// neither roll back deletion nor let the surviving G1 grant authorize G2.
+func TestDelete_GrantRemovalFails_StaleGrantCannotAuthorizeRecreation(t *testing.T) {
+	root := t.TempDir()
+	outCreate, _ := createSkillViaPipeline(t, root, "foo", "first generation", "first body")
+	fooDir := filepath.Join(root, "foo")
+	g1 := generationOf(t, fooDir)
+	require.NoError(t, staleLoad(t, root, "foo", map[string]string{"foo": g1}),
+		"positive control: the original G1 binding loads before deletion")
+
+	grants := &failingDeleteGrantEditor{
+		recordingGrants: recordingGrants{err: errors.New("injected grant-store write failure")},
+	}
+	grants.seededSet("foo", "other-skill")
+	out, err := ApplyChange(root, ChangeRequest{
+		Kind: KindDelete, Slug: "foo",
+		Expect: Expectation{Revision: outCreate.Revision},
+		Actor:  ChangeActor{Kind: "agent", AgentID: "a", Tool: "edit_skill"},
+		Grants: grants,
+	})
+	require.NoError(t, err, "best-effort grant removal failure must not fail the skill deletion")
+	assert.Equal(t, PersistenceComplete, out.PersistenceStatus, "the deletion is complete, not partial")
+	require.NotEmpty(t, grants.attempted, "the actual deletion must reach the failing grant-storage edge")
+	for _, name := range grants.attempted {
+		assert.Equal(t, "foo", name, "even failed hygiene targets only the deleted skill")
+	}
+	_, statErr := os.Stat(fooDir)
+	require.True(t, os.IsNotExist(statErr), "grant-storage failure cannot keep the live skill folder")
+	assert.Empty(t, grants.removed, "the injected storage error really prevented removal")
+	assert.True(t, grants.holdsGrant("foo"), "the failed removal leaves the old grant row")
+	assert.True(t, grants.holdsGrant("other-skill"), "the unrelated grant remains intact")
+
+	// Creation must still work while the stale name is present in storage.
+	outRecreated, _ := createSkillViaPipeline(t, root, "foo", "recreated generation", "replacement body")
+	assert.Equal(t, PersistenceComplete, outRecreated.PersistenceStatus)
+	g2 := generationOf(t, fooDir)
+	require.NotEqual(t, g1, g2, "Q-S2 = A: a recreated skill never inherits the retired identity")
+	err = staleLoad(t, root, "foo", map[string]string{"foo": g1})
+	require.Error(t, err, "a failed hygiene write must never make a G1 grant authorize G2")
+	assert.Contains(t, err.Error(), "SKILL_GRANT_STALE")
+	assert.Contains(t, err.Error(),
+		"skill 'foo' is not available: your grant is for a previous skill with this name that no longer exists; ask the owner to re-grant the current 'foo'",
+		"SD-30 refuses the surviving stale row even when deletion cleanup failed")
+	require.NoError(t, staleLoad(t, root, "foo", map[string]string{"foo": g2}),
+		"positive control: an explicit binding to the live G2 generation can load")
+	assert.True(t, grants.holdsGrant("foo"), "the stale-load refusal does not rely on removing the row")
 }
 
 // TestRecreation_NewGeneration_StaleGrantInertAtUse (S-6.12, E-14, §5.4 copy
 // text). BDD: after the deletion, plan is copied to foo — the recreation
 // ALWAYS commits (no holder gate, no SKILL_NAME_GRANTED — withdrawn with the
 // gate), stamped with a FRESH generation G2; the copy starts ungranted and
-// its result text offers granting; former holder A's stale row (bound G1) is
-// refused at use with SKILL_GRANT_STALE without rebuild or restart; an
-// explicit re-grant binds G2 and A loads. Restart leg: deletion and a restart
-// change nothing observable — the row survives, still inert.
+// its result text offers granting. Deletion removes the durable foo grant,
+// but a former holder's old in-memory G1 snapshot must still be refused at
+// use with SKILL_GRANT_STALE without rebuild or restart. Reconstruction from
+// G1 stays inert after recovery; an explicit G2 binding restores loading.
 // Traces to: skills-spec-r15.md §5.13a, E-14, S-6.12, §5.4 copy text,
 // §5.10 SKILL_GRANT_STALE.
 func TestRecreation_NewGeneration_StaleGrantInertAtUse(t *testing.T) {
@@ -141,7 +187,7 @@ func TestRecreation_NewGeneration_StaleGrantInertAtUse(t *testing.T) {
 	g1 := generationOf(t, filepath.Join(root, "foo"))
 
 	grants := &recordingGrants{}
-	grants.seededSet("foo", "other-skill") // two rows: no mutation may touch either
+	grants.seededSet("foo", "other-skill") // deletion cleans foo, never the unrelated row
 	_, err := ApplyChange(root, ChangeRequest{
 		Kind: KindDelete, Slug: "foo",
 		Expect: Expectation{Revision: outCreate.Revision},
@@ -149,6 +195,7 @@ func TestRecreation_NewGeneration_StaleGrantInertAtUse(t *testing.T) {
 		Grants: grants,
 	})
 	require.NoError(t, err)
+	require.False(t, grants.holdsGrant("foo"), "deletion removed the permission before recreation")
 
 	// The recreation commits — no holder gate exists any more (E-14: "the
 	// recreation always commits").
@@ -162,14 +209,16 @@ func TestRecreation_NewGeneration_StaleGrantInertAtUse(t *testing.T) {
 	require.True(t, uuidShape.MatchString(g2))
 	require.NotEqual(t, g1, g2, "a recreated name is a NEW generation (never reused)")
 
-	// The copy starts ungranted: the pipeline mutated NO stored row —
-	// deletion removed nothing and creation added nothing (§5.4: "no grant
-	// is created"); the untouched second row proves no wholesale rewrite.
-	assert.Empty(t, grants.removed, "no grant mutation anywhere in delete+recreate (SD-30)")
-	assert.True(t, grants.holdsGrant("foo"),
-		"the stored row still lists foo — unchanged, bound to the retired generation")
+	// The copy starts ungranted: deletion removed foo's durable permission,
+	// and creation did not grant the new generation (§5.4; Q-S2 = A).
+	// The old in-memory G1 snapshot below remains a separate safety case.
+	require.NotEmpty(t, grants.removed, "Q-S3 deletion hygiene removed the former permission")
+	for _, name := range grants.removed {
+		assert.Equal(t, "foo", name, "deletion does not remove unrelated grants")
+	}
+	assert.False(t, grants.holdsGrant("foo"), "recreation does not restore the deleted permission")
 	assert.True(t, grants.holdsGrant("other-skill"),
-		"the unrelated row is untouched too — no wholesale grant rewrite")
+		"the unrelated row is untouched — no wholesale grant rewrite")
 
 	// The copy result text offers granting (§5.4, byte-exact).
 	assert.Contains(t, outCopy.Message,
@@ -183,17 +232,18 @@ func TestRecreation_NewGeneration_StaleGrantInertAtUse(t *testing.T) {
 	assert.True(t, strings.Contains(err.Error(), "SKILL_GRANT_STALE"), "want SKILL_GRANT_STALE, got %v", err)
 	assert.Contains(t, err.Error(),
 		"skill 'foo' is not available: your grant is for a previous skill with this name that no longer exists; ask the owner to re-grant the current 'foo'",
-		"byte-exact §5.10 SKILL_GRANT_STALE text (Q-S3's recommended surface)")
+		"byte-exact §5.10 SKILL_GRANT_STALE text for a surviving G1 snapshot")
 
 	// An unbound row (binding matching nothing) authorizes nothing either:
 	// inert means no load without an explicit re-grant.
 	err = staleLoad(t, root, "foo", nil)
 	require.Error(t, err, "no binding at all authorizes nothing (fail-closed)")
 
-	// Restart leg: deletion and a restart change nothing observable — the
-	// row survives, still inert.
+	// Recovery cannot revive a removed permission, and reconstructing from
+	// an older G1 snapshot still cannot authorize the live G2 recreation.
 	require.NoError(t, RecoverInterrupted(root, historyRoot), "the restart (§9.3 recovery) runs clean")
-	assert.True(t, grants.holdsGrant("foo"), "the restart did not touch the row (no sweep exists)")
+	assert.False(t, grants.holdsGrant("foo"), "recovery does not restore the deleted permission")
+	assert.Equal(t, g2, generationOf(t, filepath.Join(root, "foo")), "recovery preserves the recreated generation")
 	err = staleLoad(t, root, "foo", map[string]string{"foo": g1})
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "SKILL_GRANT_STALE"),
@@ -371,4 +421,15 @@ func TestGenerationAuthorization_Table(t *testing.T) {
 }
 
 // recordingGrants lives in skill_identity_red_test.go (shared GrantEditor
-// test double: records RemoveGrant calls, models seeded stored rows).
+// test double: records successful removals, models seeded stored rows).
+// The wrapper also records attempted removals before returning the injected
+// storage error; an uncalled failure hook cannot satisfy the fault test.
+type failingDeleteGrantEditor struct {
+	recordingGrants
+	attempted []string
+}
+
+func (g *failingDeleteGrantEditor) RemoveGrant(name string) error {
+	g.attempted = append(g.attempted, strings.ToLower(name))
+	return g.recordingGrants.RemoveGrant(name)
+}

@@ -2,8 +2,9 @@ package agentstore
 
 // RED — r15 §5.13a SD-30 / S-6.18. Real entity persistence, not a map supplied
 // to a loader. All four public create/update paths derive bindings wholesale
-// from their own observation. Q-S3 recommended A affects UI/error wording,
-// not these identity mechanics. No deletion-time cleanup is expected.
+// from their own observation. Q-S3 answered, 2026-10-31: deletion removes
+// grants best effort; that hygiene does not replace these identity mechanics.
+// Successful/failed deletion hygiene is covered by the skills-package tests.
 import (
 	"encoding/json"
 	"os"
