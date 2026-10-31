@@ -158,6 +158,10 @@ func TestConverterRegistryNamespaceIdentity(t *testing.T) {
 			if err := verifyFilteredRegistry(data, 1, 1); err == nil || !strings.Contains(err.Error(), "namespace") {
 				t.Errorf("foreign element accepted by filtered validation: %v", err)
 			}
+			// AD-3 moves validation to packaging; namespace refusal survives.
+			if _, err := FilterConverterRegistry(data); err == nil || !strings.Contains(err.Error(), "namespace") {
+				t.Errorf("foreign element accepted by packaging entrypoint: %v", err)
+			}
 		})
 	}
 	t.Run("qualified-name-is-not-identity", func(t *testing.T) {
@@ -168,6 +172,9 @@ func TestConverterRegistryNamespaceIdentity(t *testing.T) {
 		}
 		if err := verifyFilteredRegistry(data, 1, 1); err != nil {
 			t.Fatal(err)
+		}
+		if packaged, packageErr := FilterConverterRegistry(data); packageErr != nil || !bytes.Equal(packaged, data) {
+			t.Fatalf("qualified non-identity attribute must survive packaging unchanged: err=%v result=%q", packageErr, packaged)
 		}
 	})
 	t.Run("prefix-alias-resolves-same-namespace", func(t *testing.T) {
@@ -180,6 +187,9 @@ func TestConverterRegistryNamespaceIdentity(t *testing.T) {
 		got, stripped, err := filterMacSpellChecker([]byte(data))
 		if err != nil || !stripped || strings.Contains(string(got), "MacOSXSpellChecker") || !strings.Contains(string(got), "MySpellSpellChecker") {
 			t.Fatalf("valid prefix filtering failed: stripped=%v err=%v", stripped, err)
+		}
+		if packaged, packageErr := FilterConverterRegistry([]byte(data)); packageErr != nil || !bytes.Equal(packaged, got) {
+			t.Fatalf("equivalent namespace prefix must package the filtered registry: err=%v result=%q", packageErr, packaged)
 		}
 	})
 }
