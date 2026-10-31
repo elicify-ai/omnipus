@@ -81,7 +81,7 @@ func TestRestore_ReproducesNestedDotContent(t *testing.T) {
 // §17.1 row 41, S-5.17.
 func TestSnapshot_SymlinkCanary(t *testing.T) {
 	root := t.TempDir()
-	historyRoot := t.TempDir()
+	historyRoot := SkillHistoryRoot(root)
 	commitWrite(t, root, "foo", "SKILL.md", validSkillMD("foo", "v1", "v1 body"), "")
 
 	// External edit 1: in-skill symlink inner.md → SKILL.md; capture V2.
@@ -153,7 +153,7 @@ func TestSnapshot_SymlinkCanary(t *testing.T) {
 // Traces to: skills-spec-r13.md §7.2 restore row, §9.5, §17.1 row 41, S-5.18.
 func TestSnapshot_RetainedNotRestorable(t *testing.T) {
 	root := t.TempDir()
-	historyRoot := t.TempDir()
+	historyRoot := SkillHistoryRoot(root)
 	out1, v1 := commitWrite(t, root, "foo", "SKILL.md", validSkillMD("foo", "v1", "v1 body"), "")
 
 	// External edit removes SKILL.md (helpers left → present-but-broken).
@@ -259,7 +259,7 @@ func TestBoundedCapture_MutationRefusedBeforeAnythingChanges(t *testing.T) {
 	build := func(t *testing.T, oversized func(appDir string)) string {
 		t.Helper()
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		t.Cleanup(func() { _ = historyRoot })
 		appDir := writeSkillFixture(t, root, "foo")
 		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))

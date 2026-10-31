@@ -77,7 +77,7 @@ func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 
 	t.Run("leg a existing history — blob set returns to before-state", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		appDir := writeSkillFixture(t, root, "foo")
 		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
 		before := snapshotHistory(t, historyRoot, "foo")
@@ -102,7 +102,7 @@ func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 
 	t.Run("leg b no manifest yet — cleanup without consulting versions", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		barDir := writeSkillFixture(t, root, "bar") // never loaded or mutated
 		oversize(t, barDir, "huge-helper.bin")
 
@@ -117,7 +117,7 @@ func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 
 	t.Run("leg c valid early file, later limit violation", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		appDir := writeSkillFixture(t, root, "foo")
 		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
 		require.NoError(t, os.WriteFile(filepath.Join(appDir, "good-early.md"), []byte("valid early file\n"), 0o644))
@@ -138,7 +138,7 @@ func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 
 	t.Run("leg d three repeated attempts leave the blob set identical", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		appDir := writeSkillFixture(t, root, "foo")
 		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
 		before := snapshotHistory(t, historyRoot, "foo")
@@ -177,7 +177,7 @@ func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 func TestS521_LegsEF_ManifestFaultAndPartialPromotion(t *testing.T) {
 	t.Run("leg e1 manifest fault after finalization — twin kept, new final removed", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		appDir := writeSkillFixture(t, root, "foo")
 		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
 		before := snapshotHistory(t, historyRoot, "foo")
@@ -204,7 +204,7 @@ func TestS521_LegsEF_ManifestFaultAndPartialPromotion(t *testing.T) {
 
 	t.Run("leg e2 faulted removal — suffix observable, residual acknowledged", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		appDir := writeSkillFixture(t, root, "foo")
 		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
 		before := snapshotHistory(t, historyRoot, "foo")
@@ -238,7 +238,7 @@ func TestS521_LegsEF_ManifestFaultAndPartialPromotion(t *testing.T) {
 
 	t.Run("leg f partial promotion — promoted blob removed with the temporaries", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		appDir := writeSkillFixture(t, root, "foo")
 		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
 		before := snapshotHistory(t, historyRoot, "foo")
@@ -278,7 +278,7 @@ func TestS521_LegsEF_ManifestFaultAndPartialPromotion(t *testing.T) {
 // Traces to: skills-spec-r13.md §9.5 rule 5, S-5.21 leg g.
 func TestS521_LegG_SuccessByReuse_ThreeDistinctDestinations(t *testing.T) {
 	root := t.TempDir()
-	historyRoot := t.TempDir()
+	historyRoot := SkillHistoryRoot(root)
 	srcDir := writeSkillFixture(t, root, "src")
 	seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
 	before := snapshotHistory(t, historyRoot, "src")
@@ -311,7 +311,7 @@ func TestS521_LegG_SuccessByReuse_ThreeDistinctDestinations(t *testing.T) {
 func TestS521_LegH_BuiltinSource_NoHistoryEver(t *testing.T) {
 	t.Run("main — copy succeeds, no built-in history, staging scratch disposed", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		exportShipped(t, "plan", filepath.Join(root, "plan"))
 		builtinMarkerFixture(t, filepath.Join(root, "plan"))
 
@@ -327,7 +327,7 @@ func TestS521_LegH_BuiltinSource_NoHistoryEver(t *testing.T) {
 
 	t.Run("variant — faulted staging-scratch disposal surfaces the class-3 warning", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		exportShipped(t, "plan", filepath.Join(root, "plan"))
 		builtinMarkerFixture(t, filepath.Join(root, "plan"))
 
@@ -352,7 +352,7 @@ func TestS521_LegH_BuiltinSource_NoHistoryEver(t *testing.T) {
 // Traces to: skills-spec-r13.md §9.5 rule 4, S-5.21 leg i.
 func TestS521_LegI_RepeatedCommits_NoTemporariesAccumulate(t *testing.T) {
 	root := t.TempDir()
-	historyRoot := t.TempDir()
+	historyRoot := SkillHistoryRoot(root)
 	appDir := writeSkillFixture(t, root, "chk")
 	seedHistory(t, historyRoot, "chk", singleManifest("v1", "edit"))
 
@@ -401,7 +401,7 @@ func TestS521_LegI_RepeatedCommits_NoTemporariesAccumulate(t *testing.T) {
 func TestCopyProvenance(t *testing.T) {
 	t.Run("S-6.13 unversioned source records a baseline", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		writeSkillFixture(t, root, "src") // created externally, never loaded — no manifest
 
 		out, err := copySrcToDst(t, root, "src", "dst")
@@ -419,7 +419,7 @@ func TestCopyProvenance(t *testing.T) {
 
 	t.Run("S-6.14 source changed since its last version — external_change provenance + transform", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		writeSkillFixture(t, root, "src")
 		seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
 
@@ -481,7 +481,7 @@ func TestCopyProvenance(t *testing.T) {
 func TestCopyInterference_CaptureThenStage(t *testing.T) {
 	t.Run("leg 1 interference before the capture — B captured and provenanced", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		writeSkillFixture(t, root, "src")
 		seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
 
@@ -525,7 +525,7 @@ func TestCopyInterference_CaptureThenStage(t *testing.T) {
 
 	t.Run("leg 3 interference after the capture — destination from captured A", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		srcDir := writeSkillFixture(t, root, "src")
 		seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
 		_ = srcDir
@@ -603,7 +603,7 @@ func TestS617_OversizedCopySource(t *testing.T) {
 
 	t.Run("leg a oversized helper refuses, nothing created, lock released", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		srcDir := writeSkillFixture(t, root, "src")
 		seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
 		require.NoError(t, os.WriteFile(filepath.Join(srcDir, "huge.bin"),
@@ -631,7 +631,7 @@ func TestS617_OversizedCopySource(t *testing.T) {
 
 	t.Run("leg c retention disabled, content-twin early file — referenced finals intact", func(t *testing.T) {
 		root := t.TempDir()
-		historyRoot := t.TempDir()
+		historyRoot := SkillHistoryRoot(root)
 		srcDir := writeSkillFixture(t, root, "src")
 		seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
 		before := snapshotHistory(t, historyRoot, "src")

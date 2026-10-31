@@ -26,6 +26,7 @@ package skills
 
 import (
 	"errors"
+	"path/filepath"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/credentials"
@@ -102,7 +103,7 @@ type SyncReport struct {
 	SweptGrants []string         // §5.13a dangling-grant sweep removals (by slug)
 }
 
-// SyncBuiltins replaces SeedDefaults (§8.2). It runs at every gateway start
+// SyncBuiltins replaces the legacy embedded-skills seed routine (§8.2). It runs at every gateway start
 // under the mutation lock, after .swap recovery, before any agent is built:
 // removes stale skills/.seed-* entries, installs missing built-ins, replaces
 // every built-in folder that differs from the shipped version (F-28: an
@@ -302,4 +303,34 @@ func RetentionSweep(historyRoot string, windowDays int, disabled bool, now time.
 func ContentRevision(dir string) (string, error) {
 	_ = redNotImplemented
 	return "", redNotImplemented // RED scaffold
+}
+
+// SkillHistoryRoot derives §5.11's history location from the skills root:
+// `<parent-of-skills>/system/skill-history/` ($OMNIPUS_HOME is the skills
+// root's parent). RED scaffolding: declares the one derivation every test
+// and the pipeline share; the implementation replaces the body.
+func SkillHistoryRoot(skillsRoot string) string {
+	return filepath.Join(filepath.Dir(filepath.Clean(skillsRoot)), "system", "skill-history")
+}
+
+// LoadActivationOptions carries what §5.7's activation header needs beyond
+// the slug.
+type LoadActivationOptions struct {
+	// BuiltinRoot is the shipped built-ins root; a slug resolved there
+	// loads with shelf="builtin" (no revision/version, §5.7).
+	BuiltinRoot string
+	// EditAllowed reports whether the effective edit_skill policy is not
+	// deny (§5.7's `edit:` clause).
+	EditAllowed bool
+	// PATHEnv is the PATH the agent's bash gets; omnipus-requires names are
+	// PATH-looked-up against it ("" = the process PATH).
+	PATHEnv string
+}
+
+// LoadForActivation renders §5.7's activation document (header +
+// instructions) for one granted skill, running outside-change detection
+// first (§9.4) and recording "seen" (§7.3). RED scaffolding: the §5.7
+// renderer replaces this body.
+func LoadForActivation(skillsRoot, slug string, opts LoadActivationOptions) (string, error) {
+	return "", redNotImplemented
 }
