@@ -107,7 +107,14 @@ func TestChatHistoryPage_Atomic101RowsAndOversizedToolRemainWhole(t *testing.T) 
 	pagingShape(t, p, true, false)
 }
 
-func TestChatHistoryPage_NearAdmission100FloorHasNoHardByteDefense(t *testing.T) {
+// Renamed from TestChatHistoryPage_NearAdmission100FloorHasNoHardByteDefense
+// (#1541): the fixture no longer requests the 100-row floor, so the name keeps
+// only what the test still proves — near-admission records are admitted, the
+// floor forces them into one over-budget page, and no byte defense cuts below
+// that floor. The bounded 100-row floor-vs-budget outcome stays covered by
+// TestChatHistoryPage_SoftBytesRespectTwoScreenFloor/advisory_floor_equals_cap
+// (100 groups x 48 KiB, limit=100, min_rows=100).
+func TestChatHistoryPage_NearAdmissionRecordsHaveNoHardByteDefense(t *testing.T) {
 	pagingNearAdmissionProbe(t)
 }
 

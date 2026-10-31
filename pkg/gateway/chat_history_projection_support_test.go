@@ -161,16 +161,25 @@ func pagingProjectionProbe(t *testing.T, mode string) {
 	require.NotContains(t, err.Error(), "private-weigh-canary")
 }
 
-// Remote-only heavy data case:100 admitted records just below8MiB. The real
-// prepared factory is required BEFORE allocating/seeding this synthetic corpus.
+// Near-admission heavy data case: three admitted records just below8MiB. The
+// real prepared factory is required BEFORE allocating/seeding this synthetic
+// corpus. The record count is three deliberately (#1541): the earlier fixture
+// seeded 100 such records (~0.8 GB of source data) and carried them as one
+// limit=100 page, which holds several complete encoded copies at once — peak
+// RSS 6.49 GB under -race on a build runner, killed (exit 137), taking the CI
+// gateway race job with it. Nothing under test branches on the row count: the
+// contract is per-record (canonical admission at the 8-MiB boundary, floor
+// forcing heavy-but-admitted rows into one page, honest carrier bytes), and the
+// bounded 100-row floor outcome is covered by
+// TestChatHistoryPage_SoftBytesRespectTwoScreenFloor/advisory_floor_equals_cap.
 func pagingNearAdmissionProbe(t *testing.T) {
 	t.Helper()
 	s, sid, home := pagingProjectionFixture(t)
-	r, err := newHistoryPageRequest(sid, session.ChatHistoryPageOptions{Limit: 100, MinRows: 100}, historyPageProjectionDeps{ToolStore: newToolResultStore(home)})
+	r, err := newHistoryPageRequest(sid, session.ChatHistoryPageOptions{Limit: 100, MinRows: 3}, historyPageProjectionDeps{ToolStore: newToolResultStore(home)})
 	require.NoError(t, err, "real near-admission factory")
 	require.NotNil(t, r)
 	payload := strings.Repeat("x", 8*1024*1024-4096)
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 3; i++ {
 		e := session.TranscriptEntry{ID: fmt.Sprintf("near-%03d", i), Type: session.EntryTypeToolCall, AgentID: "mia", Timestamp: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC), ViewMembership: session.ViewMembershipChat, ToolCalls: []session.ToolCall{{ID: session.ToolCallID(fmt.Sprintf("call-%03d", i)), Tool: "read_file", Status: "success", Parameters: map[string]any{}, Result: map[string]any{"text": payload}}}}
 		encoded, encodeErr := json.Marshal(session.ArchiveRecord{TranscriptEntry: e})
 		require.NoError(t, encodeErr)
@@ -180,12 +189,12 @@ func pagingNearAdmissionProbe(t *testing.T) {
 	}
 	p, err := r.Read(context.Background(), s)
 	require.NoError(t, err)
-	require.Len(t, p.Response.Entries, 100)
-	require.Equal(t, 100, p.Response.PageInfo.RowCount)
+	require.Len(t, p.Response.Entries, 3, "floor forces all near-admitted heavy rows into the page")
+	require.Equal(t, 3, p.Response.PageInfo.RowCount)
 	require.True(t, p.Response.PageInfo.ByteBudgetExceeded)
 	require.NotNil(t, p.Response.PageInfo.BudgetOverride)
 	require.Equal(t, "height_floor", *p.Response.PageInfo.BudgetOverride)
-	require.Contains(t, []string{"row_target", "source_cap"}, p.Response.PageInfo.StopReason)
+	require.NotEqual(t, "byte_budget", p.Response.PageInfo.StopReason, "no hard byte defense below the floor")
 	var actual int64
 	for _, raw := range p.ReplayFrames {
 		actual += int64(len(raw))

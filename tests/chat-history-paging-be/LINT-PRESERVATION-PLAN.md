@@ -11,7 +11,7 @@ The test oracles remain the paging specification and existing independently deri
 | CLI projection_parity | Name append error distinctly | TestHistoryRepairCommand_SharedProjectionEffectAndIdentityParity |
 | Gateway storage diagnostic | Check outcome string assertion | TestHistoryPageDiagnostics_RawPositionStorageFailureAndPlantedLeak |
 | Gateway attach canonical-copy helper | Name donor read error distinctly | TestUnavailableHistory_CanonicalAppendAndLiveOnlyControls |
-| Gateway near-admission projection | Name marshal error distinctly | TestChatHistoryPage_NearAdmission100FloorHasNoHardByteDefense |
+| Gateway near-admission projection | Name marshal error distinctly | TestChatHistoryPage_NearAdmissionRecordsHaveNoHardByteDefense |
 | Session fixture builder/driver | Name stat/path errors distinctly | TestChatHistoryFixture_DayBuilderUsesAppendDayAndRealRollover; TestChatHistoryFixtureDriver with a REAL explicit seed_days plan |
 | Session recovery | Name repair-build/open errors distinctly | TestChatHistoryRepair_SharedPublicationCrashAndRepeat/lookups_staged; TestChatHistoryRecovery_CorruptSavedPrefixNeverTrimsCanonical/torn_canonical |
 | Session retention | Name tombstone error distinctly | TestChatHistoryRetention_ActualRetainedContinuation |
