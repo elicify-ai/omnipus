@@ -109,12 +109,10 @@ describe('T10 #1243 editor save request (transport characterization, not backend
 
 describe('T10 authoritative Calendar armed occurrence', () => {
   // Traces to: schedules-t10-spec-r6.md lines 950–957, 1301; TDD 25, D-11.6.
-  it('generated runtime schema preserves both live and null armed instants', () => {
-    for (const value of [future, null]) {
-      armed = value
-      const parsed = OccurrenceSchema.parse(occurrenceSet())
-      expect(parsed).toHaveProperty('armed_occurrence_ms', value)
-    }
+  it.each([future, null])('generated runtime schema preserves armed instant %s', value => {
+    armed = value
+    const parsed = OccurrenceSchema.parse(occurrenceSet())
+    expect(parsed).toHaveProperty('armed_occurrence_ms', value)
   })
 
   // Traces to: schedules-t10-spec-r6.md lines 950–957, 1296, 1303; D-11.1/4/8.

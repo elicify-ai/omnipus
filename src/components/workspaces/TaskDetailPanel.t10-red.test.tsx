@@ -45,8 +45,8 @@ describe('T10 schedule-bearing task panel', () => {
     open(type)
     const selector = await screen.findByRole('combobox', { name: 'Status' })
     fireEvent.click(selector)
-    expect(screen.queryByRole('option', { name: 'Next', exact: true })).not.toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: 'In Progress', exact: true })).not.toBeInTheDocument()
+    expect.soft(screen.queryByRole('option', { name: 'Next', exact: true })).not.toBeInTheDocument()
+    expect.soft(screen.queryByRole('option', { name: 'In Progress', exact: true })).not.toBeInTheDocument()
   })
 
   // Traces to: schedules-t10-spec-r6.md lines 985–990, 1304; D-11.9 manual control.
