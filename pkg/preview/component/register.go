@@ -5,12 +5,10 @@
 package component
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -108,64 +106,90 @@ type officeLayout struct {
 
 var officeVersionLine = regexp.MustCompile(`(?m)^\s*(?:ProductVersion|ProductMajor|buildid)\s*=`)
 
-func detectOffice(folder, goos string) (*officeLayout, error) {
+// locateOffice finds the install's layout from file names alone: nothing in
+// the candidate folder is executed or parsed here, so the writer exclusion
+// can run before anything else touches the folder (W2-S01).
+func locateOffice(folder, goos string) (*officeLayout, error) {
 	root, err := realDir(folder)
 	if err != nil {
 		return nil, err
 	}
+	need := func(rel ...string) error {
+		for _, f := range rel {
+			if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(f))); statErr != nil {
+				return fmt.Errorf("not a LibreOffice folder (%s missing)", f)
+			}
+		}
+		return nil
+	}
 	switch goos {
 	case "darwin":
-		// Accept the .app itself.
+		// Accept the .app itself or the folder holding it.
 		if !strings.HasSuffix(root, ".app") {
 			if _, statErr := os.Stat(filepath.Join(root, "LibreOffice.app")); statErr == nil {
-				root = filepath.Join(root, "LibreOffice.app")
+				if root, err = realDir(filepath.Join(root, "LibreOffice.app")); err != nil {
+					return nil, err
+				}
 			}
 		}
 		exe := "Contents/MacOS/soffice"
 		if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(exe))); statErr != nil {
 			return nil, errors.New("not a LibreOffice app bundle (Contents/MacOS/soffice missing)")
 		}
-		version, verErr := plistVersion(filepath.Join(root, "Contents", "Info.plist"))
-		if verErr != nil {
-			return nil, verErr
-		}
-		return &officeLayout{root: root, executable: exe, version: version,
+		return &officeLayout{root: root, executable: exe,
 			services: filepath.Join(root, "Contents", "Resources", "services")}, nil
 	case "windows":
 		if filepath.Base(root) == "program" {
 			root = filepath.Dir(root)
 		}
-		for _, f := range []string{"program/soffice.exe", "program/soffice.bin"} {
-			if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(f))); statErr != nil {
-				return nil, fmt.Errorf("not a LibreOffice folder (%s missing)", f)
-			}
+		if err := need("program/soffice.exe", "program/soffice.bin"); err != nil {
+			return nil, err
 		}
-		version, verErr := iniVersion(filepath.Join(root, "program", "version.ini"))
-		if verErr != nil {
-			version, verErr = binaryVersion(filepath.Join(root, "program", "soffice.exe"))
-		}
-		if verErr != nil {
-			return nil, verErr
-		}
-		return &officeLayout{root: root, executable: "program/soffice.exe", extra: []string{"program/soffice.bin"}, version: version}, nil
+		return &officeLayout{root: root, executable: "program/soffice.exe", extra: []string{"program/soffice.bin"}}, nil
 	default:
 		if filepath.Base(root) == "program" {
 			root = filepath.Dir(root)
 		}
-		for _, f := range []string{"program/soffice", "program/soffice.bin"} {
-			if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(f))); statErr != nil {
-				return nil, fmt.Errorf("not a LibreOffice folder (%s missing)", f)
-			}
+		if err := need("program/soffice", "program/soffice.bin"); err != nil {
+			return nil, err
 		}
-		version, verErr := iniVersion(filepath.Join(root, "program", "versionrc"))
-		if verErr != nil {
-			version, verErr = binaryVersion(filepath.Join(root, "program", "soffice"))
-		}
-		if verErr != nil {
-			return nil, verErr
-		}
-		return &officeLayout{root: root, executable: "program/soffice.bin", extra: nil, version: version}, nil
+		return &officeLayout{root: root, executable: "program/soffice.bin"}, nil
 	}
+}
+
+// insideRoot refuses a layout file that resolves (through symlinks) outside
+// the install root: the writer exclusion checked the root only.
+func (l *officeLayout) insideRoot(rel string) error {
+	resolved, err := filepath.EvalSymlinks(filepath.Join(l.root, filepath.FromSlash(rel)))
+	if err != nil {
+		return fmt.Errorf("LibreOffice file %s: %w", rel, err)
+	}
+	if r, relErr := filepath.Rel(l.root, resolved); relErr != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("LibreOffice file %s points outside the LibreOffice folder", rel)
+	}
+	return nil
+}
+
+// officeVersion reads the version from the install's metadata files. It
+// never runs the candidate (W2-S01): macOS reads Info.plist; Linux and
+// Windows read program/versionrc or program/version.ini and then the
+// product registry (share/registry/main.xcd, ooSetupVersionAboutBox), which
+// official 26.8 Linux builds need because their versionrc carries no
+// product version (measured O3, 2026-10-31).
+func (l *officeLayout) officeVersion(goos string) (string, error) {
+	switch goos {
+	case "darwin":
+		return plistVersion(filepath.Join(l.root, "Contents", "Info.plist"))
+	case "windows":
+		if v, err := iniVersion(filepath.Join(l.root, "program", "version.ini")); err == nil {
+			return v, nil
+		}
+	default:
+		if v, err := iniVersion(filepath.Join(l.root, "program", "versionrc")); err == nil {
+			return v, nil
+		}
+	}
+	return registryVersion(filepath.Join(l.root, "share", "registry", "main.xcd"))
 }
 
 var plistShortVersion = regexp.MustCompile(`<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>`)
@@ -199,22 +223,18 @@ func iniVersion(p string) (string, error) {
 	return string(m[1]), nil
 }
 
-var binaryVersionLine = regexp.MustCompile(`LibreOffice ([0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
+var registryAboutVersion = regexp.MustCompile(`oor:name="ooSetupVersionAboutBox"[^>]*>\s*<value>([0-9][0-9.]*)</value>`)
 
-// binaryVersion asks the operator-named install for its version. It runs
-// only from the operator CLI at registration, never from the gateway.
-func binaryVersion(exe string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	// #nosec G204 -- exe is inside the folder the operator named on the
-	// command line; this is the operator's own registration step.
-	out, err := exec.CommandContext(ctx, exe, "--headless", "--version").Output()
+// registryVersion reads the full product version from LibreOffice's
+// product registry file.
+func registryVersion(p string) (string, error) {
+	data, err := os.ReadFile(p)
 	if err != nil {
 		return "", fmt.Errorf("LibreOffice version unreadable: %w", err)
 	}
-	m := binaryVersionLine.FindSubmatch(out)
+	m := registryAboutVersion.FindSubmatch(data)
 	if m == nil {
-		return "", errors.New("LibreOffice version unreadable")
+		return "", errors.New("LibreOffice version unreadable (no ooSetupVersionAboutBox in share/registry/main.xcd)")
 	}
 	return string(m[1]), nil
 }
@@ -222,15 +242,26 @@ func binaryVersion(exe string) (string, error) {
 // RegisterOffice registers an official LibreOffice 26.8.x install. On macOS
 // it also writes the filtered services registry (AD-3) next to the manifest.
 func RegisterOffice(opts RegisterOptions) (*Manifest, error) {
-	layout, err := detectOffice(opts.Folder, opts.goos())
+	// Order matters (W2-S01): locate by file names, refuse an
+	// agent-writable folder, check the layout stays inside it, and only
+	// then read anything from it. Nothing in the candidate is executed.
+	layout, err := locateOffice(opts.Folder, opts.goos())
 	if err != nil {
+		return nil, err
+	}
+	if overlap := FirstOverlap(layout.root, opts.WriteRoots); overlap != nil {
+		return nil, fmt.Errorf("LibreOffice folder is writable by an agent (%s); choose a folder no agent can write", overlap.Grant)
+	}
+	for _, f := range append([]string{layout.executable}, layout.extra...) {
+		if outsideErr := layout.insideRoot(f); outsideErr != nil {
+			return nil, outsideErr
+		}
+	}
+	if layout.version, err = layout.officeVersion(opts.goos()); err != nil {
 		return nil, err
 	}
 	if !strings.HasPrefix(layout.version, SupportedOfficeSeries) {
 		return nil, fmt.Errorf("LibreOffice %s is not supported; install the official %sx release", layout.version, SupportedOfficeSeries)
-	}
-	if overlap := FirstOverlap(layout.root, opts.WriteRoots); overlap != nil {
-		return nil, fmt.Errorf("LibreOffice folder is writable by an agent (%s); choose a folder no agent can write", overlap.Grant)
 	}
 	files := map[string]string{}
 	for _, f := range append([]string{layout.executable}, layout.extra...) {

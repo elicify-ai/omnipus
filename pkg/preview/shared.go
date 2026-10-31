@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
 )
 
@@ -23,8 +24,9 @@ func SetShared(s *Service) { shared.Store(s) }
 func Shared() *Service { return shared.Load() }
 
 // StartGateway builds the gateway's Service for home, runs AD-8 startup
-// recovery and installs it. cfg feeds the writer exclusion (may be nil).
-func StartGateway(home string, cfg func() *config.Config) (*Service, RecoveryReport, error) {
+// recovery and installs it. auth feeds the writer exclusion and is read at
+// every component check.
+func StartGateway(home string, auth WriteAuthority) (*Service, RecoveryReport, error) {
 	resolver, err := component.NewResolver(home)
 	if err != nil {
 		return nil, RecoveryReport{}, err
@@ -35,10 +37,14 @@ func StartGateway(home string, cfg func() *config.Config) (*Service, RecoveryRep
 		Resolver: resolver,
 		WriteRoots: func() []component.WriteRoot {
 			var c *config.Config
-			if cfg != nil {
-				c = cfg()
+			if auth.Config != nil {
+				c = auth.Config()
 			}
-			return ConfiguredWriteRoots(home, c)
+			var grants []fspolicy.PathGrant
+			if auth.PathGrants != nil {
+				grants = auth.PathGrants()
+			}
+			return ConfiguredWriteRoots(home, c, grants)
 		},
 	})
 	if err != nil {
