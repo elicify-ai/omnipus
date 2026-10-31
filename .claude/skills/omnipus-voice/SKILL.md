@@ -81,7 +81,7 @@ register is a one-line status message, not marketing.
    could not be reached at all"; an API failure is "the provider answered with an
    error" (R-EV-2, D32, REQ §4 vocabulary). Never diagnose beyond the evidence.
    - Do: `I can't reach OpenRouter: connection refused.` / `OpenRouter answered with an
-     error (503): "…".`
+     error: "…".`
    - Don't: `OpenRouter is having problems.` (one sentence for both sides) ·
      `The internet is down.` (claimed from failed requests — N2: never)
 5. **No blame.** The message states the situation, not the reader's failure; no
@@ -199,7 +199,17 @@ every level and leave a record line at Verbose/Debug (L8, D42). Normative table:
 - Placeholders come from the closed slot vocabulary only ([S] §13.2:
   `{provider} {model} {provider_says} {reason} {status} {n} {seconds} {minutes} {tool}
   {agent} {path} {model_requested} {model_used} {limit_name} {value} {task} {attempt}
-  {max} {countdown} {answered_model} {unavailable_model}`).
+  {max} {countdown} {answered_model} {unavailable_model} {host} {fix}`).
+- **`{fix}` is a closed slot.** Its only values are the Fix sentences in [S] §13.2,
+  copied verbatim:
+
+| Situation | `{fix}` value |
+|---|---|
+| Network `dns_failure` | `check your network or the provider's address in Settings → Providers.` |
+| Network `tls_failure` | `check your proxy or certificate settings.` |
+| Every other network reason | `check your network or proxy.` |
+| API final | `retry in a moment; if it repeats, switch model.` |
+| Stalled final | `retry; if it happens again, switch model.` |
 
 ## Self-check before committing a message
 

@@ -28,19 +28,19 @@ the decision).
 
 ### 2. Provider unreachable — retries exhausted (chat, error)
 Current: `We couldn't reach the model provider. Check your internet connection and retry.`
-Rewritten: `I couldn't reach OpenRouter: connection refused. Retry, or switch model if it repeats.`
+Rewritten: `I couldn't reach {provider} ({host}): {reason}. Fix: {fix}`
 Why: the old text was one message for both network and API failures — the founder made
 the split mandatory ([F: review.json O4 comment: "we need be able to clearly
 differentiate network connection issues or api issues"]; D32) and banned "we" (D50).
-The exact sentence is the spec's proposed "network, retries exhausted" line [S §13.2];
+The exact sentence is the spec's N2 "network, final" line [S §13.2];
 the split's origin is [W §1 `network`].
 
 ### 3. Provider answered with an API error (chat, error)
 Current: (same old `network` text as sample 2 — one line for both sides)
-Rewritten: `OpenRouter answered with an error (503): "Upstream connect error". Retry, or switch model if it repeats.`
+Rewritten: `OpenRouter answered with an error: "Upstream connect error". Retry, or switch model if it repeats.`
 Why: the other half of the network/API split — the provider was reached and refused;
-status belongs on the main line here because the provider's own words carry the cause
-[W §1; S §13.2 "API, final" row].
+the HTTP status belongs in the Verbose/Debug "Technical details" disclosure, not on the
+Normal main line (hard rule 6) [W §1; S §13.2 "API, final" row].
 
 ### 4. Rate limit (chat, error/warning)
 Current: `The model provider is temporarily overloaded. Wait a moment, then retry.`
@@ -113,10 +113,10 @@ founded on the review's event catalogue; F: review.json events `resources_low` O
 
 ### 14. Provider stalled (chat, error)
 Current: `The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details.`
-Rewritten: `{provider} stopped sending data for 5 minutes, so I ended the call. Retry; if it happens again, try another model.`
+Rewritten: `{provider} ({host}) stopped sending data for {minutes} min, so I ended the call. Fix: {fix}`
 Why: one plain cause with the real number, voice, action; the parenthetical
 config detail ("or the silence limit set for this provider") is operator knowledge, not
-chat content [W §1 `provider_stalled`, voice rule].
+chat content [S §13.2 "stalled (`provider_stalled`), final", N2].
 
 ### 15. Message delivery failed (channel chat, error)
 Current: `[message delivery failed]`
