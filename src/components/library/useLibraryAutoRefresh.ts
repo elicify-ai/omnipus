@@ -14,9 +14,11 @@
 // refetchIntervalInBackground would only pause on document.hidden, so a
 // visible but unfocused window would keep polling without this gate.
 //
-// Consumers:
-//   - LibraryExplorer: refetchInterval on the on-screen listing queries, and
-//     the re-fetch of the open file's content query (R2)
+// Consumer:
+//   - LibraryExplorer: a setInterval tick that re-fetches only the shown
+//     folder listing (or the workspace list at the root) and writes it with
+//     setQueryData. The open file's content is deliberately never re-fetched
+//     by the timer (epic #1517: an open file is not live-updated).
 // The interval constant lives here so every consumer ticks on one cadence.
 
 import { useEffect, useState } from 'react'
