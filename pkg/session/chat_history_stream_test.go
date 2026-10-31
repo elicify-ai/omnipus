@@ -124,10 +124,14 @@ func historyEncodeJSON(t *testing.T, v any) []byte {
 	return b
 }
 
-// historyCheckStandIns compares the decoded reduced value with the value
-// encoding/json decodes from the whole document.
+// historyCheckStandIns compares every public value with encoding/json; A2.8
+// requires the top-level private member to be null, with nothing retained.
 func historyCheckStandIns(t *testing.T, ins *historyStandIns, want, got any, private bool, top bool, path string) {
 	t.Helper()
+	if private {
+		require.Nil(t, got, "%s: A2.8 private member is skipped without being kept", path)
+		return
+	}
 	switch w := want.(type) {
 	case map[string]any:
 		g, ok := got.(map[string]any)
@@ -162,9 +166,6 @@ func historyCheckStandIns(t *testing.T, ins *historyStandIns, want, got any, pri
 		require.Equal(t, strings.Contains(w, `"session_id"`), l.namesSessionID, path)
 		require.True(t, strings.HasPrefix(w, string(l.decodedPrefix)), "%s: decoded prefix", path)
 		keep, encKeep := historyStandInDecodedKeep, historyStandInEncodedKeep
-		if private {
-			keep, encKeep = historyStandInThreshold, 0
-		}
 		require.GreaterOrEqual(t, len(l.decodedPrefix), min(len(w), keep), path)
 		require.Equal(t, string(enc[1:1+min(len(enc)-2, encKeep)]), string(l.encodedPrefix), "%s: encoded prefix", path)
 	default:
@@ -172,20 +173,65 @@ func historyCheckStandIns(t *testing.T, ins *historyStandIns, want, got any, pri
 	}
 }
 
+// historyDisplayOracle applies only A2.8's private-member nulling using the
+// standard decoder. Public RawMessages retain their original bytes, order and
+// duplicate members; a map would hide an earlier overwritten decode error.
+func historyDisplayOracle(t *testing.T, doc []byte) ([]byte, int) {
+	t.Helper()
+	d := json.NewDecoder(bytes.NewReader(doc))
+	token, err := d.Token()
+	require.NoError(t, err)
+	require.Equal(t, json.Delim('{'), token)
+	var out bytes.Buffer
+	out.WriteByte('{')
+	privateMembers := 0
+	for i := 0; d.More(); i++ {
+		token, err = d.Token()
+		require.NoError(t, err)
+		key, ok := token.(string)
+		require.True(t, ok, "source member key is a string")
+		var value json.RawMessage
+		require.NoError(t, d.Decode(&value))
+		if strings.EqualFold(key, "model_message") {
+			value = json.RawMessage("null")
+			privateMembers++
+		}
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		out.Write(historyEncodeJSON(t, key))
+		out.WriteByte(':')
+		out.Write(value)
+	}
+	token, err = d.Token()
+	require.NoError(t, err)
+	require.Equal(t, json.Delim('}'), token)
+	require.ErrorIs(t, d.Decode(new(any)), io.EOF, "the source has exactly one object")
+	out.WriteByte('}')
+	return out.Bytes(), privateMembers
+}
+
 func TestHistoryStreamScanner_MatchesEncodingJSONOnRandomDocuments(t *testing.T) {
 	historyLowerStandIns(t, 48, 64, 20)
 	r := rand.New(rand.NewSource(1452_2026_10_30))
-	var standIns, decodeErrors int
+	var checked, privateMembers, standIns, decodeErrors int
 	for i := 0; i < 400; i++ {
 		doc := historyGenDoc(r)
-		var want any
-		wantErr := json.Unmarshal(doc, &want)
 		ins := newHistoryStandIns()
 		reduced, err := historyStreamRecord(bytes.NewReader(append(append([]byte(nil), doc...), '\n')), ins)
 		require.Equal(t, json.Valid(doc), err == nil, "doc %d: syntax verdict differs from encoding/json: %q", i, doc)
+		checked++
 		if err != nil {
 			continue
 		}
+		// Derive the display oracle from the source, never the scanner output.
+		// Keep public values AND member order/duplicates exact: even a public
+		// overflow number overwritten by a later key must still fail decoding.
+		// Only a top-level private value is replaced with null (A2.8).
+		oracle, skipped := historyDisplayOracle(t, doc)
+		privateMembers += skipped
+		var want any
+		wantErr := json.Unmarshal(oracle, &want)
 		var got any
 		gotErr := json.Unmarshal(reduced, &got)
 		require.Equal(t, wantErr == nil, gotErr == nil, "doc %d: decode verdict differs: %v / %v", i, wantErr, gotErr)
@@ -218,7 +264,9 @@ func TestHistoryStreamScanner_MatchesEncodingJSONOnRandomDocuments(t *testing.T)
 			}
 		}
 	}
-	t.Logf("history_stream_property docs=400 stand_ins=%d decode_errors=%d", standIns, decodeErrors)
+	require.Equal(t, 400, checked, "all seeded documents retain their syntax and public-value checks")
+	t.Logf("history_stream_property docs=%d private_members=%d stand_ins=%d decode_errors=%d", checked, privateMembers, standIns, decodeErrors)
+	require.Positive(t, privateMembers, "positive control: the corpus exercises private-member nulling")
 	require.Positive(t, standIns, "positive control: the corpus exercises stand-ins")
 	require.Positive(t, decodeErrors, "positive control: the corpus exercises decode errors (1e400)")
 }
