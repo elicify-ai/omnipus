@@ -64,6 +64,28 @@ describe('I2 D5 latest100 distinct stable drawn-row samples', () => {
     expect([samples.count, samples.average], 'reset clears old identity and total, not only the count').toStrictEqual([1, 160])
   })
 
+  it('retains opaque room positions and digest positions without retaining neighboring sequence prefixes', () => {
+    // #1449 architect 7a / ADR A1.3: keys equal p or start with p + ':'.
+    // The owning position may itself contain colons; tool ids may too.
+    const samples = new HistoryRowMeasurements()
+    const digest = 'A'.repeat(43) // ordinary 32-byte base64url position, no colon
+    for (const [key, height] of [
+      ['room:3', 20], ['room:3:text', 40], ['room:3:tool:x', 60], ['room:3:tool:a:b', 80],
+      [digest, 100], [`${digest}:text`, 120], [`${digest}:tool:a:b`, 140],
+      ['room:31:text', 200], ['room:32:tool:x', 300],
+    ] as const) {
+      expect(samples.observe(key, height), `instrument: distinct stable sample ${key} was accepted`).toBe(true)
+    }
+
+    samples.retainPositions(new Set(['room:3', digest]))
+    // Retained heights 20+40+60+80+100+120+140 = 560; exactly 7 samples.
+    expect([samples.count, samples.average], 'room:3 owns bare/text/tool keys, never room:31 or room:32').toStrictEqual([7, 80])
+    samples.retainPositions(new Set([digest]))
+    expect([samples.count, samples.average], 'digest ownership is unchanged: (100+120+140)/3').toStrictEqual([3, 120])
+    samples.retainPositions(new Set())
+    expect([samples.count, samples.average], 'releasing all owners restores the empty estimator').toStrictEqual([0, 80])
+  })
+
   it('drops every narration/tool sample for a released source but preserves distinct retained tool rows', () => {
     const samples = new HistoryRowMeasurements()
     samples.observe('keep:text', 20)

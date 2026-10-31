@@ -12,7 +12,8 @@
  */
 import { useState, type ComponentType } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import type { RoomHistoryResponse } from '@/lib/api/generated/openapi-types'
 import { Button } from '@/components/ui/button'
 import { roomsQueryKeys } from '@/lib/api/rooms'
 import { queryClient } from '@/lib/queryClient'
@@ -30,7 +31,8 @@ let RoomScreen: ComponentType<RoomScreenProps>
 let connection: ReturnType<typeof connectSocket>['connection'] | undefined
 let net: Network
 let layout: ReturnType<typeof installHistoryLayout> | undefined
-let assignments: number[]
+// not-wire-format: browser-edge observations, not viewport behavior or wire data.
+let assignments: { top: number; bottom: number; covered: boolean }[]
 
 function message(seq: number) {
   return entry({ seq, id: `message-${seq}`, client_message_id: `client-${seq}`, text: `entry-${seq}` })
@@ -47,8 +49,8 @@ function SwitchableRoom({ initialRoomId }: { initialRoomId: string }) {
   )
 }
 
-async function mountCachedRoom(initialRoomId = ROOM_ID) {
-  const cached = snapshot({ seq: 5, entries: [message(3), message(4), message(5)] })
+async function mountCachedRoom(initialRoomId = ROOM_ID, hasOlder = false) {
+  const cached = snapshot({ seq: 5, entries: [message(3), message(4), message(5)], has_older: hasOlder })
   act(() => useRoomStore.getState().applyRoomFrame(cached))
   // The old room WAS ready. Caching this REST result also makes the stale
   // transcript render before RoomScreen's passive attach effect can reset it.
@@ -69,6 +71,10 @@ async function mountCachedRoom(initialRoomId = ROOM_ID) {
 
 function logElement(): HTMLElement {
   return screen.getByRole('region', { name: 'Conversation history' })
+}
+
+function historyRequests() {
+  return net.requests.filter(request => request.method === 'GET' && request.path === `/api/v1/rooms/${ROOM_ID}/messages`)
 }
 
 function visibleBottomOf(text: string): number {
@@ -94,7 +100,13 @@ beforeEach(() => {
   if (!setTop) throw new Error('instrument: shared history layout must install a scrollTop setter')
   vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set').mockImplementation(function (this: HTMLElement, value: number) {
     setTop.call(this, value)
-    if (this.getAttribute('aria-label') === 'Conversation history') assignments.push(this.scrollTop)
+    if (this.getAttribute('aria-label') === 'Conversation history') {
+      assignments.push({
+        top: this.scrollTop,
+        bottom: this.scrollHeight - this.clientHeight,
+        covered: document.querySelector('[data-testid="chat-open-cover"]') !== null,
+      })
+    }
   })
 })
 
@@ -108,11 +120,54 @@ afterEach(() => {
 
 describe('F-a — cached opening waits for this attach snapshot', () => {
   it('does not spend the opening jump on cached rows carrying the previous ready flag', async () => {
-    await mountCachedRoom()
+    const socket = await mountCachedRoom()
 
-    expect(screen.getByText('entry-5')).toBeInTheDocument()
+    expect(screen.getByText('entry-5'), 'cached rows are actually mounted').toBeInTheDocument()
+    expect(useRoomStore.getState().rooms[ROOM_ID]?.snapshotReceived, 'S-42 this attach is not ready').toBe(false)
+    const cover = screen.getByTestId('chat-open-cover')
+    expect(within(cover).getByRole('status'), 'S-42 the loading cover is still shown').toHaveTextContent('Loading messages…')
+    expect(historyRequests(), 'opening fill cannot read history before this snapshot').toEqual([])
+    expect(useRoomStore.getState().rooms[ROOM_ID]?.viewMode ?? 'latest', 'application placement is not reader movement').toBe('latest')
+    expect(screen.queryByRole('button', { name: /^Return to latest$/ })).toBeNull()
+    // Architect 7b: a router pin beneath the cover is allowed. Its count is
+    // irrelevant; every write that does happen must be a covered bottom pin.
+    for (const write of assignments) {
+      expect(write, 'any pre-snapshot placement stays at the hidden bottom').toEqual({
+        top: write.bottom, bottom: write.bottom, covered: true,
+      })
+    }
+
+    await socket.emit(snapshot({ seq: 7, entries: [message(6), message(7)] }))
+    await waitFor(() => expect(screen.queryByTestId('chat-open-cover'), 'S-42 current live view reveals').toBeNull())
+    expect(logElement().scrollTop, 'five 300px rows minus the 400px viewport').toBe(1100)
+    expect(visibleBottomOf('entry-7'), 'the newest catch-up row is at the viewport bottom').toBe(VIEWPORT_HEIGHT)
+  })
+
+  it('starts a short cached opening fill only after this attach snapshot, even when older rows already exist', async () => {
+    // S-44 / architect 7b: 4 × 80px + the 32px earlier control is shorter
+    // than this 400px viewport (and therefore below either opening fill goal).
+    layout!.state.rowHeight = 80
+    const requestReadiness: boolean[] = []
+    net.respond('GET', `/api/v1/rooms/${ROOM_ID}/messages`, () => {
+      requestReadiness.push(useRoomStore.getState().rooms[ROOM_ID]?.snapshotReceived === true)
+      return json({ entries: [message(1), message(2)], has_older: false } satisfies RoomHistoryResponse)
+    })
+    const socket = await mountCachedRoom(ROOM_ID, true)
+    expect(useRoomStore.getState().rooms[ROOM_ID]?.hasOlder, 'older rows exist before the current snapshot').toBe(true)
     expect(useRoomStore.getState().rooms[ROOM_ID]?.snapshotReceived).toBe(false)
-    expect(assignments).toEqual([])
+    expect(historyRequests(), 'cached rows cannot spend the opening fill').toEqual([])
+    expect(within(screen.getByTestId('chat-open-cover')).getByRole('status')).toHaveTextContent('Loading messages…')
+
+    await socket.emit(snapshot({ seq: 6, entries: [message(6)] }))
+    expect(useRoomStore.getState().rooms[ROOM_ID]?.snapshotReceived, 'the current snapshot was actually consumed').toBe(true)
+    await waitFor(() => expect(historyRequests(), 'short ready opening must request its first older page').toHaveLength(1))
+    expect(requestReadiness, 'the history GET itself observes this attach ready, not just the eventual state').toEqual([true])
+    const query = new URLSearchParams(historyRequests()[0].query)
+    expect(query.get('before_seq'), 'exclusive cursor is the oldest cached entry').toBe('3')
+    expect(Number(query.get('limit')), 'S-44 minimum page size').toBeGreaterThanOrEqual(20)
+    expect(Number(query.get('limit')), 'S-44 maximum page size').toBeLessThanOrEqual(100)
+    await waitFor(() => expect(useRoomStore.getState().rooms[ROOM_ID]?.historyStatus).toBe('idle'))
+    expect(useRoomStore.getState().rooms[ROOM_ID]?.entries.map(row => row.seq), 'real terminal page prepends once').toEqual([1, 2, 3, 4, 5, 6])
   })
 
   it('lands on the newest catch-up row even when the reserved complete flag is false', async () => {
