@@ -30,7 +30,8 @@
  },
  "default_resize_limits": {
   "long_edge_px": 7680,
-  "max_bytes": 10485760
+  "max_bytes": 10485760,
+  "max_patches": 30000
  },
  "providers": [
   {
@@ -122245,7 +122246,8 @@
    ],
    "resize_limits": {
     "long_edge_px": 7680,
-    "max_bytes": 10485760
+    "max_bytes": 10485760,
+    "max_patches": 30000
    },
    "models": [
     {

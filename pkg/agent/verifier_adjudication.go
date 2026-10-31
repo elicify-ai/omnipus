@@ -400,11 +400,10 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 		logger.WarnCF("agent", "verifier: could not read session for window feed", fields)
 		return ""
 	}
-	// FR-105: redact tier-1 tool-call parameters/errors through the SAME
-	// RegisterSensitiveValues path every other tool-result-derived text the
-	// Judge sees already goes through (judge.go's evidenceStore() redact
-	// closure) — this feed puts recipients/tokens/paths in front of a model
-	// that did not previously see them.
+	// FR-105 / issue #721: redact the whole window (narration, tool-call
+	// parameters, errors and output) through the SAME unconditional scrubber
+	// judge.go's evidenceStore() uses — registered credential values plus
+	// the secret-shape patterns, whatever tools.filter_sensitive_data says.
 	return renderVerifierWindowText(entries, budgetTokens, withTierOneRedact(al.tierOneRedactFn()))
 }
 
@@ -497,8 +496,9 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 //
 // FR-105/FR-106 (ADR-084 revision 9, D14, wave E10): tool calls now render
 // as "{tool, parameters, status, error}" (judge_evidence_tiers.go's
-// formatTierOneToolCall), durable fields only, bounded and optionally
-// redacted per opts — replacing the old name+status-only summary (C26's
+// formatTierOneToolCall) plus, since issue #1484, the model-visible tool
+// output (Result["text"], with the FR-106 projection marker kept when the
+// result was capped or emptied), bounded and redacted per opts — replacing the old name+status-only summary (C26's
 // defect: "the change is at renderTranscriptEntriesForWindow"). Signature
 // stays backward-compatible (opts is a variadic tail) because
 // verifier_adjudication_test.go — E9's write-set, not this wave's — calls
@@ -527,7 +527,14 @@ func renderTranscriptEntriesForWindow(
 			if role == "" {
 				role = "assistant"
 			}
-			items = append(items, item{msg: providers.Message{Role: role, Content: e.Content}})
+			content := e.Content
+			if redact != nil {
+				// Issue #721: narration is part of the window the Judge
+				// reads; a credential the agent quoted back must not reach
+				// it either.
+				content = redact(content)
+			}
+			items = append(items, item{msg: providers.Message{Role: role, Content: content}})
 		}
 		for _, tc := range e.ToolCalls {
 			content := formatTierOneToolCall(tc, redact)

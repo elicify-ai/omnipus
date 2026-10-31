@@ -142,6 +142,21 @@ type FileMediaStore struct {
 	// snapshots were taken. Lock order: registryMu, then mu. Never acquired
 	// while holding saveMu.
 	registryMu sync.Mutex
+	// retired is set by HandoverTo under registryMu once dst owns the live
+	// state and registry.json. SaveRegistry checks it under the same lock, so
+	// a save admitted before the handover (a debounce callback that passed
+	// saveStopped and then queued on registryMu) cannot write this store's
+	// stale snapshot after the handover.
+	retired bool
+
+	// successor is the store this store handed its state over to at a reload
+	// (#1439), set by HandoverTo. A retired store still receives
+	// registrations from a turn in flight across the swap and forwards each
+	// one down the chain (forwardToSuccessors) so the live store resolves
+	// and persists it. succMu guards the pointer and is a LEAF lock: never
+	// held while acquiring any other lock.
+	succMu    sync.Mutex
+	successor *FileMediaStore
 }
 
 // saveDebounce is the coalescing window for SaveRegistry. Calls landing
@@ -178,6 +193,12 @@ func NewFileMediaStoreWithCleanup(cfg MediaCleanerConfig) *FileMediaStore {
 }
 
 // Store registers a local file under the given scope. The file must exist.
+//
+// On a store retired by a reload handover (HandoverTo) Store still works —
+// a turn in flight across the swap creates media through the snapshot it
+// holds — and additionally forwards every new ref to the store it handed
+// over to, so the live store resolves it (serveMedia, the next turn) and
+// persists it.
 func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (string, error) {
 	if _, err := os.Stat(localPath); err != nil {
 		return "", fmt.Errorf("media store: %s: %w", localPath, err)
@@ -186,8 +207,28 @@ func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (
 	ref := "media://" + uuid.New().String()
 	meta.CleanupPolicy = normalizeCleanupPolicy(meta.CleanupPolicy)
 
+	s.storeRef(ref, localPath, meta, scope)
+	s.scheduleSave()
+	s.forwardToSuccessors(ref, localPath, meta, scope)
+	return ref, nil
+}
+
+// storeRef records one ref's mappings under s.mu. Store and the handover
+// forwarder share this primitive so a forwarded ref keeps the exact ref ID
+// its caller already received.
+func (s *FileMediaStore) storeRef(ref, localPath string, meta MediaMeta, scope string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Registering a ref this store already holds is a no-op. Ref IDs are
+	// unique per Store call, so a repeat is the same registration arriving
+	// twice: HandoverTo copied it into this store between the caller's
+	// storeRef and its forwardToSuccessors. Counting it again would leave the
+	// path's refCount above the number of refs, and releasing the last ref
+	// would then never delete a store-managed file.
+	if _, exists := s.refs[ref]; exists {
+		return
+	}
 
 	s.refs[ref] = mediaEntry{path: localPath, meta: meta, storedAt: s.nowFunc()}
 	if s.scopeToRefs[scope] == nil {
@@ -207,9 +248,27 @@ func (s *FileMediaStore) Store(localPath string, meta MediaMeta, scope string) (
 	}
 	pathState.refCount++
 	s.pathStates[localPath] = pathState
+}
 
-	s.scheduleSave()
-	return ref, nil
+// forwardToSuccessors walks s's handover-successor chain, registering ref in
+// every store and arming a save on each. Hops are not nested — each storeRef
+// takes and releases its own mu, succMu is a leaf lock — so the chain cannot
+// deadlock. Retired successors' saves are no-ops (saveStopped is set at
+// handover), so only the live store at the chain's end actually persists;
+// intermediate stores merely keep the ref resolvable for any consumer still
+// holding them.
+func (s *FileMediaStore) forwardToSuccessors(ref, localPath string, meta MediaMeta, scope string) {
+	s.succMu.Lock()
+	succ := s.successor
+	s.succMu.Unlock()
+	for succ != nil {
+		succ.storeRef(ref, localPath, meta, scope)
+		succ.scheduleSave()
+		succ.succMu.Lock()
+		next := succ.successor
+		succ.succMu.Unlock()
+		succ = next
+	}
 }
 
 // RefByPath returns the most-recently-registered ref pointing at localPath,
@@ -559,6 +618,146 @@ func (s *FileMediaStore) Stop() {
 	s.stopOnce.Do(func() {
 		close(s.stop)
 	})
+}
+
+// HandoverTo copies s's live ref state into dst and retires s's registry
+// saving, for the gateway's reload-time media-store swap (#1439).
+//
+// Why it exists: the reload swap builds the new store, LoadRegistry()s it,
+// swaps the live pointer and only then Stop()s the old store — whose final
+// flush writes registry.json AFTER the new store already loaded it. Refs that
+// lived only in the old store's memory inside the last saveDebounce window
+// (200 ms) therefore reach the file but never the live map: every consumer
+// that fetches the live pointer per request (serveMedia, the upload handlers,
+// the next turn) misses them until the next process restart. HandoverTo
+// closes that window memory-to-memory, before the swap:
+//
+//   - dst's freshly loaded state is REPLACED with the old store's live maps.
+//     The old store's in-memory state is authoritative: it is a superset of
+//     the file, and it may already have dropped (released or expired) refs
+//     the file's last snapshot still contains — replacing wholesale cannot
+//     resurrect them, a merge would.
+//   - The copy (not move) semantics are load-bearing: the turn engine
+//     snapshots the media store once per turn (turnMediaStore), so a turn in
+//     flight across the swap keeps resolving through the OLD store — that
+//     half of #1439's evidence ("the agent's own turn still resolves") must
+//     keep working. s itself is retired by the caller right after the swap.
+//   - s is retired under s.registryMu: any save already running on s
+//     finishes before the state moves, its debounced-save machinery is
+//     disabled, and SaveRegistry refuses to write for a retired store — also
+//     for a debounce callback admitted before the handover and still queued
+//     on registryMu. s can never write registry.json again: a stale snapshot
+//     cannot overwrite a newer one the new store writes after the swap.
+//     s.Stop() after a handover only closes its cleanup goroutine.
+//   - A save is armed on dst immediately: until then the handed-over refs
+//     exist only in memory while registry.json still holds the pre-handover
+//     snapshot, so a restart in that gap would lose exactly the refs the
+//     handover exists to rescue.
+//   - Registrations on s after the handover — media a turn in flight across
+//     the swap creates through its snapshot — are forwarded to dst (same ref
+//     ID, forwardToSuccessors), so the live store resolves them and, being
+//     the only store with saves armed, persists them.
+//
+// Only the five ref-state maps are copied; dst keeps its own cleaner config,
+// cleanup goroutine, workspace-library provider and save machinery. A ref
+// whose file was deleted externally stays handled exactly as before the swap
+// (it resolves to a path that fails on open) — handover preserves the old
+// store's live view rather than re-applying LoadRegistry's drop-on-missing.
+// HandoverTo is a no-op when dst is nil or s itself.
+func (s *FileMediaStore) HandoverTo(dst *FileMediaStore) {
+	if dst == nil || dst == s {
+		return
+	}
+
+	// Wire the forwarding edge before anything else. succMu is a leaf lock,
+	// so this ordering cannot interact with the lock order taken below.
+	s.succMu.Lock()
+	s.successor = dst
+	s.succMu.Unlock()
+
+	// Lock order: s.registryMu, then dst.registryMu — this is the package's
+	// only two-store operation, and every caller passes old then new. Holding
+	// s.registryMu makes any SaveRegistry already running on s finish before
+	// the state moves, and blocks later ones. saveMu is acquired under
+	// registryMu; no existing path holds saveMu while taking registryMu (see
+	// registryMu's doc), so the order cannot deadlock.
+	s.registryMu.Lock()
+	defer s.registryMu.Unlock()
+	dst.registryMu.Lock()
+	defer dst.registryMu.Unlock()
+
+	// Retire s's registry writes. saveStopped below only stops saves that have
+	// not passed their admission check yet; a debounce callback admitted
+	// earlier may already be queued on s.registryMu. It sees retired once it
+	// gets the lock and returns without writing (SaveRegistry), so nothing has
+	// to wait for it here while holding the lock it needs.
+	s.retired = true
+
+	// Retire s's debounced saves: from here on its snapshots are stale — dst
+	// owns both the live state and registry.json, and s.Stop() (called by the
+	// swap after the pointer is already flipped) must not flush this store's
+	// pre-handover snapshot over a newer one dst has written.
+	s.saveMu.Lock()
+	if s.saveTimer != nil {
+		s.saveTimer.Stop()
+		s.saveTimer = nil
+	}
+	s.saveStopped = true
+	s.saveMu.Unlock()
+
+	// Copy the live ref state onto dst under both stores' data locks, taking
+	// the locks in the same old-then-new order as the registry locks. Copies,
+	// not map moves: the old store must keep serving an in-flight turn's
+	// turnMediaStore snapshot until the caller retires it.
+	s.mu.Lock()
+	dst.mu.Lock()
+	dst.refs = copyRefEntries(s.refs)
+	dst.scopeToRefs = copyScopeSets(s.scopeToRefs)
+	dst.refToScope = copyStringMap(s.refToScope)
+	dst.refToPath = copyStringMap(s.refToPath)
+	dst.pathStates = copyPathStates(s.pathStates)
+	dst.mu.Unlock()
+	s.mu.Unlock()
+
+	// Persist the handed-over state on dst: saves on s are retired from this
+	// point, so dst's save machinery is the only path to registry.json.
+	dst.scheduleSave()
+}
+
+func copyRefEntries(src map[string]mediaEntry) map[string]mediaEntry {
+	dst := make(map[string]mediaEntry, len(src))
+	for ref, entry := range src {
+		dst[ref] = entry
+	}
+	return dst
+}
+
+func copyScopeSets(src map[string]map[string]struct{}) map[string]map[string]struct{} {
+	dst := make(map[string]map[string]struct{}, len(src))
+	for scope, refs := range src {
+		set := make(map[string]struct{}, len(refs))
+		for ref := range refs {
+			set[ref] = struct{}{}
+		}
+		dst[scope] = set
+	}
+	return dst
+}
+
+func copyStringMap(src map[string]string) map[string]string {
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func copyPathStates(src map[string]pathRefState) map[string]pathRefState {
+	dst := make(map[string]pathRefState, len(src))
+	for path, state := range src {
+		dst[path] = state
+	}
+	return dst
 }
 
 // scheduleSave coalesces registry persistence: callers within saveDebounce

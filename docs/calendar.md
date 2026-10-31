@@ -10,7 +10,7 @@ In a narrow panel or on a phone, the toolbar controls wrap onto extra rows so th
 
 The Board and List hide scheduled tasks; use Calendar to manage scheduled and repeating work. The split keeps a repeating series separate from the task's last-run status: a run can be **Done** while future occurrences remain scheduled. Old web addresses still resolve: `/tasks` redirects to the Tasks panel and `/automations` redirects to the Calendar.
 
-The calendar also records outcomes. In Week and Day, individual recurring-occurrence chips use the recorded run's status icon when a run exists, or the scheduled or no-record state when it does not. One-time scheduled-task chips use a clock icon, with colour taken from the task's status. Clicking a recorded occurrence lets you inspect its status and, when available, its result and a link to the chat it ran in.
+The calendar also records outcomes. In Week and Day, individual recurring-occurrence chips use the recorded run's status icon when a run exists (done, failed, skipped, or missed), or the scheduled or no-record state when it does not — no record means the run's history is unavailable (retention expired or the schedule changed), which is different from a run missed while Omnipus was down. One-time scheduled-task chips use a clock icon, with colour taken from the task's status. Clicking a recorded occurrence lets you inspect its status and, when available, its result and a link to the chat it ran in.
 
 ```mermaid
 flowchart LR
@@ -55,7 +55,7 @@ Week and Day use labelled chips with the meanings below. Month represents the ev
 
 | Chip in Week or Day | What it means |
 |---|---|
-| Recurring occurrence chip | One scheduled occurrence of a repeating task, at its fire time; the icon reflects its recorded run or its scheduled or no-record state |
+| Recurring occurrence chip | One scheduled occurrence of a repeating task, at its fire time; the icon reflects its recorded run — done, failed, skipped, or a muted missed chip ("Omnipus was not running at this time; the run was skipped and will not be replayed.") — or its scheduled or no-record state |
 | One-time chip | A one-time task's scheduled fire, shown with a clock icon and the task's status colour |
 | More not shown | The server capped how many runs it expanded for that task; the days beyond the marker are not empty. This marker does not open run details |
 | Due chip | A workspace task's deadline, including a task that also has a schedule, shown on its due date |
@@ -66,7 +66,8 @@ An agent heartbeat is separate from scheduled task work and does not appear on t
 
 - **A scheduled run has no time limit.** It runs until the agent finishes or someone stops it. Older versions stopped a run after five minutes (`schedules.run_timeout_seconds`, or a per-schedule timeout); those settings are now ignored. Runs recorded with the status **timeout** by an older version keep that status in the history.
 - Restarting or reloading the gateway does not add extra triggers for a scheduled task. If earlier starts left duplicate internal triggers, startup keeps one per task and logs each removed duplicate before the scheduler can fire. This cleanup does not change your task definitions or recorded task runs.
-- A missed run is skipped, never replayed. If the server was down at the fire time, that occurrence is gone, and After N occurrences counts planned runs, not completed ones.
+- A missed run is skipped, never replayed. If the server was down at the fire time, that occurrence is gone, and After N occurrences counts planned runs, not completed ones. The exception is a one-time run the server actually started and then crashed in the middle of: the next gateway start runs that one again, once.
+- A fire that came due while the server was down is marked **missed** on the Calendar (in the occurrence's chip status), so the gap is visible instead of silent. One record per missed instant, at most the 20 most recent per task per boot; the run itself is never replayed. A one-time task's missed fire shows on the task's run history (the Calendar grid renders recurring schedules).
 - A failed run does not stop the series. The next occurrence fires anyway; the failure is shown on its Week/Day chip.
 - The fastest repeat is once a minute.
 - Monthly on day 29, 30, or 31 lands on the last day of shorter months, so nothing is skipped in February.

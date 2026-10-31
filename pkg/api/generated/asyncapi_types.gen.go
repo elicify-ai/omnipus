@@ -1043,6 +1043,20 @@ type ProviderRetryFrame struct {
 	Type      string `json:"type"`
 }
 
+// ProviderStatusFrame — Server → client (issues #1478 and #1280). The state of the model-provider call a running turn is waiting on: `waiting` (nothing has arrived since silent_since; the silence limit ends the call at stall_at when known), `responding` (data arrives again, or the call returned, after a `waiting` notice), `recovered` (the call succeeded after `retries` automatic retries). Named fields only, never provider text. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
+type ProviderStatusFrame struct {
+	Retries *int   `json:"retries,omitempty"`
+	SentAt  string `json:"sent_at"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
+	Seq         *int64  `json:"seq,omitempty"`
+	SessionId   string  `json:"session_id"`
+	SilentSince *string `json:"silent_since,omitempty"`
+	StallAt     *string `json:"stall_at,omitempty"`
+	State       string  `json:"state"`
+	TurnId      string  `json:"turn_id"`
+	Type        string  `json:"type"`
+}
+
 // RateLimitFrame — Server → client rate limit applied (SEC-26). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (c) per the ADR-057 W5 audit (FR-089) — a DOCUMENTED PRE-EXISTING GAP, audited and recorded here rather than fixed (operator decision 11): the underlying RateLimitPayload (pkg/agent/events.go) carries no SessionID field at all; this frame's session_id is reconstructed downstream from the connection's chat→session map at serialization time.
 type RateLimitFrame struct {
 	AgentId           *string `json:"agent_id,omitempty"`
@@ -1871,6 +1885,7 @@ const (
 	WsFrameTypeReplayProviderFallback   WsFrameType = "replay_provider_fallback"
 	WsFrameTypeRateLimit                WsFrameType = "rate_limit"
 	WsFrameTypeProviderRetry            WsFrameType = "provider_retry"
+	WsFrameTypeProviderStatus           WsFrameType = "provider_status"
 	WsFrameTypeContextWindowNotice      WsFrameType = "context_window_notice"
 	WsFrameTypeProviderFallback         WsFrameType = "provider_fallback"
 	WsFrameTypeMedia                    WsFrameType = "media"

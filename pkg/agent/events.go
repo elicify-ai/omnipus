@@ -162,6 +162,12 @@ const (
 	EventKindProviderFallback
 	// EventKindHelperEvent follows a durable immutable helper-event chat row.
 	EventKindHelperEvent
+	// EventKindProviderStatus (issues #1478, #1280) reports the state of the
+	// provider call a running turn waits on: waiting (silent for a while),
+	// responding (data again, or the call returned, after waiting) and
+	// recovered (the call succeeded after automatic retries). Payload:
+	// ProviderStatusPayload. The hub forwards it as a provider_status frame.
+	EventKindProviderStatus
 
 	eventKindCount
 )
@@ -208,6 +214,7 @@ var eventKindNames = [...]string{
 	"provider_retry",
 	"provider_fallback",
 	"helper_event",
+	"provider_status",
 }
 
 // String returns the stable string form of an EventKind.

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -66,14 +67,25 @@ func (j *FileJournal) roomDir(roomID string) (string, error) {
 	return filepath.Join(j.dir, roomID), nil
 }
 
-// validID accepts the ids this package mints (uuids) and refuses anything
-// that could escape the directory.
+// validID accepts only the UUID format this package mints for room IDs
+// (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx). It refuses anything that could
+// escape the directory or address Windows NTFS alternate data streams (:).
 func validID(id string) bool {
-	if id == "" || len(id) > 128 || id == "." || id == ".." {
+	if id == "" || len(id) != 36 {
 		return false
 	}
-	return !strings.ContainsAny(id, `/\`) && !strings.Contains(id, "..")
+	// UUIDs are exactly 36 chars: 8-4-4-4-12 hex with hyphens at positions 8,13,18,23.
+	// Reject ':' early for Windows NTFS ADS safety even before the regex (the
+	// regex would also reject it, but an explicit check makes the intent clear).
+	if strings.Contains(id, ":") {
+		return false
+	}
+	// Matches the canonical uuid.NewString() / uuid.New().String() form.
+	return uuidRegexp.MatchString(id)
 }
+
+// uuidRegexp matches canonical UUID strings (lower-hex with hyphens).
+var uuidRegexp = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // Create makes the room directory.
 func (j *FileJournal) Create(roomID string) error {

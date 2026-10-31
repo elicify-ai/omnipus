@@ -86,6 +86,9 @@ func bootTimerServices(t *testing.T, provider providers.LLMProvider) (
 	stage = &setupAndStartServicesState{
 		ctx: context.Background(), cfg: cfg, agentLoop: al, msgBus: msgBus, homePath: home,
 	}
+	// The production order: prepare (boot classification) before
+	// startSchedulers starts any task producer (re-review N1).
+	require.NoError(t, stage.prepareTaskTrigger())
 	_, stop, err := stage.startSchedulers()
 	if stage.runningServices != nil {
 		t.Cleanup(func() { stopAndCleanupServices(stage.runningServices, 5*time.Second, false) })

@@ -57,6 +57,7 @@ function renderIndicator(overrides: Partial<Parameters<typeof ProviderRetryIndic
     receivedAt: SENT_AT.toISOString(), // live start: receipt == sent_at, elapsed 0
     attempt: 2,
     maxAttempts: 3,
+    errorCode: 'rate_limited',
     ...overrides,
   }
   return render(<ProviderRetryIndicator {...props} />)
@@ -74,7 +75,7 @@ describe('ProviderRetryIndicator — waiting state (row 17, D3 row 1)', () => {
     vi.setSystemTime(SENT_AT) // client clock == sent_at → serverNow == sent_at → 120 s left
     const { container } = renderIndicator()
     expect(container.textContent).toContain(
-      'OpenRouter is busy. Retrying automatically in 2:00 (attempt 2 of 3).',
+      'OpenRouter is rate-limiting requests right now. Retrying automatically in 2:00 (attempt 2 of 3).',
     )
   })
 
@@ -103,7 +104,7 @@ describe('ProviderRetryIndicator — waiting state (row 17, D3 row 1)', () => {
       model: 'model-b',
     })
     expect(container.textContent).toContain(
-      'OpenRouter (model-b) is busy. Retrying automatically in 2:00 (attempt 2 of 3).',
+      'OpenRouter (model-b) is rate-limiting requests right now. Retrying automatically in 2:00 (attempt 2 of 3).',
     )
   })
 
@@ -115,7 +116,7 @@ describe('ProviderRetryIndicator — waiting state (row 17, D3 row 1)', () => {
       previousModel: 'claude-x',
     })
     expect(container.textContent).toContain(
-      'OpenRouter is busy. Retrying automatically in 2:00 (attempt 2 of 3).',
+      'OpenRouter is rate-limiting requests right now. Retrying automatically in 2:00 (attempt 2 of 3).',
     )
     expect(container.textContent).not.toContain('(model-b)')
   })
@@ -164,7 +165,7 @@ describe('ProviderRetryIndicator — live region (MAJ-016)', () => {
     const live = container.querySelector('[aria-live]')
     expect(live).not.toBeNull()
     expect(live?.textContent).toContain(
-      'OpenRouter is busy. Retrying automatically in 2:00 (attempt 2 of 3).',
+      'OpenRouter is rate-limiting requests right now. Retrying automatically in 2:00 (attempt 2 of 3).',
     )
 
     // One second passes: the mm:ss ticks visually OUTSIDE the live region.
@@ -198,5 +199,101 @@ describe('ProviderRetryIndicator — mid-wait attach and skew (row 25, C-11/MAJ-
     const { container } = renderIndicator({ receivedAt: new Date(SENT_AT.getTime() + 30_000).toISOString() })
     expect(container.textContent).toContain('0:20')
     expect(container.textContent).not.toContain('2:00')
+  })
+})
+
+// ── #1280/#1478 wording round: the cause in plain words, per error_code ──────
+//
+// The founder's #1280/#1478 wording round supersedes the spec's blanket
+// "is busy" clause: the retry line must say WHAT IS WRONG in plain English
+// per the frame's error_code, and never render a raw code. The code set is
+// the backend's own retry-cause vocabulary (pkg/providers/retry_plan.go:
+// network, rate_limited, overloaded, stream_interrupted — the gateway's
+// providerRetryErrorCode maps the C-8 "rate_limit" spelling onto
+// "rate_limited" before the frame ships). A missing or unrecognized code
+// (forward compat: a newer backend, an older frame) renders the generic
+// clause — never the code text itself.
+
+describe('ProviderRetryIndicator — plain-English cause per error_code (#1280/#1478)', () => {
+  it('rate_limited says the provider is rate-limiting requests', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(SENT_AT)
+    const { container } = renderIndicator({ errorCode: 'rate_limited' })
+    expect(container.textContent).toContain(
+      'OpenRouter is rate-limiting requests right now. Retrying automatically in 2:00 (attempt 2 of 3).',
+    )
+  })
+
+  it('network says the provider could not be reached (network problem)', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(SENT_AT)
+    const { container } = renderIndicator({ errorCode: 'network' })
+    expect(container.textContent).toContain(
+      'OpenRouter could not be reached (network problem). Retrying automatically in 2:00 (attempt 2 of 3).',
+    )
+  })
+
+  it('overloaded says the provider is overloaded or returning server errors', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(SENT_AT)
+    const { container } = renderIndicator({ errorCode: 'overloaded' })
+    expect(container.textContent).toContain(
+      'OpenRouter is overloaded or returning server errors. Retrying automatically in 2:00 (attempt 2 of 3).',
+    )
+  })
+
+  it('stream_interrupted says the provider stopped responding mid-answer', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(SENT_AT)
+    const { container } = renderIndicator({ errorCode: 'stream_interrupted' })
+    expect(container.textContent).toContain(
+      'OpenRouter stopped responding mid-answer. Retrying automatically in 2:00 (attempt 2 of 3).',
+    )
+  })
+
+  it('a missing code renders the generic clause — still plain English, never a raw code', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(SENT_AT)
+    const { container } = renderIndicator({ errorCode: undefined })
+    expect(container.textContent).toContain(
+      'OpenRouter ran into a problem. Retrying automatically in 2:00 (attempt 2 of 3).',
+    )
+    expect(container.textContent).not.toContain('undefined')
+  })
+
+  it('an unrecognized (future-backend) code renders the generic clause, never the code text', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(SENT_AT)
+    const { container } = renderIndicator({ errorCode: 'timeout' })
+    expect(container.textContent).toContain('OpenRouter ran into a problem.')
+    expect(container.textContent).not.toContain('timeout')
+  })
+
+  it('no code-shaped token ever leaks into the rendered line as text', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(SENT_AT)
+    // Codes whose spelling is not itself a plain English word must never
+    // appear verbatim. ('network' and 'overloaded' are pinned separately to
+    // full human sentences — there the English word IS the wording; the
+    // forbidden thing is a bare code token standing in for a diagnosis.)
+    for (const errorCode of ['rate_limited', 'stream_interrupted', 'something_new']) {
+      const { container } = renderIndicator({ errorCode })
+      expect(container.textContent).not.toContain(errorCode)
+    }
+    // And no rendering ever degrades to the code ALONE (the code as the
+    // whole diagnosis, with or without punctuation around it).
+    for (const errorCode of ['rate_limited', 'network', 'overloaded', 'stream_interrupted', 'something_new']) {
+      const { container } = renderIndicator({ errorCode })
+      expect(container.textContent?.trim()).not.toBe(errorCode)
+      expect(container.textContent).not.toBe(`${errorCode}. Retrying automatically in 2:00 (attempt 2 of 3).`)
+    }
+  })
+
+  it('the live-region announcement carries the per-code wording too (MAJ-016)', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(SENT_AT)
+    const { container } = renderIndicator({ errorCode: 'network' })
+    const live = container.querySelector('[aria-live]')
+    expect(live?.textContent).toContain('OpenRouter could not be reached (network problem).')
   })
 })

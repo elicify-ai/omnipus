@@ -56,7 +56,10 @@ func TestCallProviderOnce_SingleCandidateRetriesWithFrame_F1(t *testing.T) {
 						t.Fatalf("provider_retry payload is %T, want LLMRetryPayload", evt.Payload)
 					}
 					assert.Equal(t, 2, p.Attempt, "the retry event announces the call ABOUT to be made (C-8)")
-					assert.Equal(t, 3, p.MaxAttempts)
+					// Issue #1280: the single candidate is the last one the
+					// chain can try, so its rate limit runs the retry plan
+					// (1 call + 5 retries), superseding C-8's 3 calls.
+					assert.Equal(t, providers.RetryPlanMaxAttempts, p.MaxAttempts)
 					assert.Equal(t, "test-model", p.Model)
 				}
 			default:
@@ -88,7 +91,12 @@ func TestCallProviderOnce_SingleCandidateRetriesWithFrame_F1(t *testing.T) {
 // throwaway tracker, so nothing was ever marked).
 func TestCallProviderOnce_SingleCandidateAlways429_ExhaustsThreeCalls_F1(t *testing.T) {
 	provider := &failingThenSuccessProvider{
+		// Issue #1280: more failures than the retry plan's 6 calls, so the
+		// candidate really rate-limits on EVERY attempt.
 		failures: []error{
+			errors.New("429 Too Many Requests"),
+			errors.New("429 Too Many Requests"),
+			errors.New("429 Too Many Requests"),
 			errors.New("429 Too Many Requests"),
 			errors.New("429 Too Many Requests"),
 			errors.New("429 Too Many Requests"),

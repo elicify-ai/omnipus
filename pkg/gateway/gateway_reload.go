@@ -934,6 +934,16 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 }
 
 // replaceMediaStore installs a fresh media store before flushing and stopping the previous store.
+//
+// #1439: refs that lived only in the outgoing store's memory — created inside
+// the last saveDebounce window, or after its last successful save — reach
+// registry.json in the old store's Stop flush below, AFTER the new store's
+// LoadRegistry has already read the file, so no live consumer ever sees them.
+// HandoverTo (step 2) moves that in-memory state into the new store before the
+// swap and retires the old store's save machinery, which also makes the final
+// Stop a save no-op: it cannot overwrite a newer snapshot the new store writes
+// after the pointer flip. Copy, not move: a turn in flight across the reload
+// keeps resolving through its turnMediaStore snapshot (the old store).
 func (rs *restartServicesState) replaceMediaStore() {
 	// N-D fix: build and wire the NEW store BEFORE stopping the old one so that
 	// any upload whose scheduleSave fires in the narrow window between the Stop
@@ -942,12 +952,15 @@ func (rs *restartServicesState) replaceMediaStore() {
 	//
 	// Order:
 	//   1. Create new store (inactive; Start() below begins the cleanup goroutine).
-	//   2. Swap the agent-loop pointer so new uploads land in the new store.
-	//   3. Flush the old store (pending debounced saves) and stop its goroutines.
+	//   2. Hand over the old store's live ref state (#1439) and load the
+	//      persisted registry.
+	//   3. Swap the agent-loop pointer so new uploads land in the new store.
+	//   4. Stop the old store: saves were retired at handover, so this only
+	//      closes its cleanup goroutine.
 	//
 	// The old store is retained via oldStore until after Stop() completes so the
-	// GC does not reclaim it while the debounced save goroutine may still be
-	// running.
+	// GC does not reclaim it while a turn in flight across the swap may still
+	// resolve refs through it.
 	oldStore := rs.runningServices.MediaStore
 	rs.runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  rs.cfg.Tools.MediaCleanup.Enabled,
@@ -960,6 +973,13 @@ func (rs *restartServicesState) replaceMediaStore() {
 		// Best-effort — a load failure should not block boot.
 		if loadErr := fms.LoadRegistry(); loadErr != nil {
 			slog.Warn("media: failed to load persisted registry", "error", loadErr)
+		}
+		// #1439: the old store's in-memory refs are authoritative over the
+		// just-loaded file (it is a superset, and may have released refs the
+		// file still contains) — hand them over before the swap. No-op when
+		// the outgoing store is not a FileMediaStore.
+		if oldFMS, ok := oldStore.(*media.FileMediaStore); ok {
+			oldFMS.HandoverTo(fms)
 		}
 		fms.Start()
 		// Re-wire workspace-library provider onto the new store (same shared

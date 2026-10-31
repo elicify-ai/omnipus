@@ -34,6 +34,8 @@ import {
 // it can no longer go stale QUIETLY.
 const ALL_CODES: LLMErrorCode[] = [
   'media_unsupported',
+  // Issues #1435/#1483: a provider image-SIZE rejection, never relabelled media_unsupported.
+  'media_too_large',
   'provider_rejected',
   'request_too_large',
   'provider_auth_failed',

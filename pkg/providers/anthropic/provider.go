@@ -40,6 +40,12 @@ type Provider struct {
 	baseURL            string
 	providerID         string        // catalog identity, preserved when api_base points at a proxy
 	streamStallTimeout time.Duration // streaming silence limit; 0 = common.DefaultStreamStallTimeout
+	// requestTimeout is the client-level request timeout; explicitRequestTimeout
+	// is the operator's request_timeout (issue #1485), zero when the shipped
+	// default applies. Only an explicit value is a hard ceiling on a
+	// non-streaming call that carries a longer deadline.
+	requestTimeout         time.Duration
+	explicitRequestTimeout time.Duration
 
 	// streamHTTPClient is the streaming request's HTTP client: the default
 	// transport plus a response-header CONNECTION guard (issue #1306 — with
@@ -75,15 +81,21 @@ func (p *Provider) WithConnectionGuardTimeout(d time.Duration) *Provider {
 // SupportsThinking implements providers.ThinkingCapable.
 func (p *Provider) SupportsThinking() bool { return true }
 
+// defaultRequestTimeout is the shipped request timeout (a var so tests can
+// shorten it).
+var defaultRequestTimeout = common.DefaultRequestTimeout //nolint:gochecknoglobals // test seam
+
 func NewProvider(token string) *Provider {
 	return NewProviderWithBaseURL(token, "")
 }
 
 func NewProviderWithBaseURL(token, apiBase string, timeoutSeconds ...int) *Provider {
 	baseURL := normalizeBaseURL(apiBase)
-	timeout := common.DefaultRequestTimeout
+	timeout := defaultRequestTimeout
+	var explicit time.Duration
 	if len(timeoutSeconds) > 0 && timeoutSeconds[0] > 0 {
 		timeout = time.Duration(timeoutSeconds[0]) * time.Second
+		explicit = timeout
 	}
 	client := anthropic.NewClient(
 		option.WithAuthToken(""),
@@ -99,10 +111,29 @@ func NewProviderWithBaseURL(token, apiBase string, timeoutSeconds ...int) *Provi
 		option.WithMaxRetries(0),
 	)
 	return &Provider{
-		client:           &client,
-		baseURL:          baseURL,
-		streamHTTPClient: newStreamHTTPClient(timeout),
+		client:                 &client,
+		baseURL:                baseURL,
+		streamHTTPClient:       newStreamHTTPClient(timeout),
+		requestTimeout:         timeout,
+		explicitRequestTimeout: explicit,
 	}
+}
+
+// ExplicitRequestTimeout implements providers.RequestTimeoutReporter: the
+// operator's request_timeout, or zero when the shipped default applies.
+func (p *Provider) ExplicitRequestTimeout() time.Duration { return p.explicitRequestTimeout }
+
+// deadlineGovernsRequest reports whether a non-streaming call should be
+// bounded by ctx alone (issue #1485): no explicit request_timeout, and the
+// caller granted a deadline longer than the client-level default. The
+// fallback chain's size-scaled per-attempt limit must not be undercut by the
+// shipped 120 s default.
+func (p *Provider) deadlineGovernsRequest(ctx context.Context) bool {
+	if p.explicitRequestTimeout > 0 || p.requestTimeout <= 0 {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	return ok && time.Until(deadline) > p.requestTimeout
 }
 
 // NewProviderWithTimeout preserves the factory's canonical Messages endpoint
@@ -187,6 +218,11 @@ func (p *Provider) Chat(
 
 	boundary := sdkErrorBoundary{baseURL: p.baseURL}
 	opts = append(opts, option.WithMiddleware(boundary.middleware))
+	if p.deadlineGovernsRequest(ctx) {
+		// Issue #1485: zero disables the client-level default for this one
+		// call; the longer ctx deadline bounds it instead.
+		opts = append(opts, option.WithRequestTimeout(0))
+	}
 	resp, err := p.client.Messages.New(ctx, params, opts...)
 	if err = boundary.wrap(err); err != nil {
 		return nil, fmt.Errorf("claude API call: %w", err)

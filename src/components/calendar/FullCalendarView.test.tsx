@@ -68,6 +68,12 @@ describe('occurrenceStatusLabel (H3 — accessible name)', () => {
     expect(occurrenceStatusLabel('next')).toBe('Next')
   })
 
+  it('maps the missed run outcome to its own human label (founder decision 2026-10-29, Calendar 6b)', () => {
+    expect(occurrenceStatusLabel('missed')).toBe('Missed')
+    // never the raw status string as the label
+    expect(occurrenceStatusLabel('missed')).not.toBe('missed')
+  })
+
   it('never silently mislabels "scheduled"/"no_record" as "Inbox" (the H3 regression)', () => {
     expect(occurrenceStatusLabel('scheduled')).not.toBe('Inbox')
     expect(occurrenceStatusLabel('no_record')).not.toBe('Inbox')

@@ -93,3 +93,12 @@ func (p *HTTPProvider) APIBase() string {
 	}
 	return p.delegate.APIBase()
 }
+
+// ExplicitRequestTimeout implements RequestTimeoutReporter (issue #1485) by
+// forwarding the transport's operator-set request_timeout (zero = default).
+func (p *HTTPProvider) ExplicitRequestTimeout() time.Duration {
+	if p == nil || p.delegate == nil {
+		return 0
+	}
+	return p.delegate.ExplicitRequestTimeout()
+}

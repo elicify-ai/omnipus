@@ -363,6 +363,31 @@ func (cs *CronService) clockNowUnsafeMS() int64 {
 // hold cs.mu. It returns started=true only on a stopped→running transition (so
 // Start knows to launch the runLoop exactly once).
 func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err error) {
+	return cs.initRunStateReplayingUnsafe(physicalBoot, nil)
+}
+
+// BootReplay is what a physical-boot restore does with one interrupted
+// one-time job (see StartAfterPhysicalBootReplaying).
+type BootReplay int
+
+const (
+	// BootReplayDecline clears the dead Running flag and leaves the job
+	// unarmed: a past at-job gets no next run, so it never fires.
+	BootReplayDecline BootReplay = iota
+	// BootReplayRun re-arms the job for its owed run (#1484).
+	BootReplayRun
+	// BootReplayKeep leaves the job exactly as the dead process left it —
+	// Running still set, unarmed — so it is still an interrupted fire at the
+	// next physical boot. For a caller that owes the run but cannot settle it
+	// yet; within this process the persisted Running flag keeps the job from
+	// firing.
+	BootReplayKeep
+)
+
+// initRunStateReplayingUnsafe is initRunStateUnsafe with a physical-boot
+// replay decision per interrupted one-time job. A nil replay runs every
+// interrupted job (the #1484 default).
+func (cs *CronService) initRunStateReplayingUnsafe(physicalBoot bool, replay func(*CronJob) BootReplay) (started bool, err error) {
 	if physicalBoot && cs.runWindowUsed {
 		return false, fmt.Errorf("cron: physical-boot restore requires an unused service instance")
 	}
@@ -373,15 +398,38 @@ func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err 
 	if err := cs.loadStore(); err != nil {
 		return false, fmt.Errorf("failed to load store: %w", err)
 	}
+	var interrupted []int
 	if physicalBoot {
 		// The prior process has no live lane. Preserve all schedule/history data;
 		// normal Start/reload deliberately retain the same-process overlap flag.
 		for i := range cs.store.Jobs {
-			cs.store.Jobs[i].State.Running = false
+			job := &cs.store.Jobs[i]
+			if interruptedOneTimeFire(job) {
+				decision := BootReplayRun
+				if replay != nil {
+					decision = replay(job)
+				}
+				switch decision {
+				case BootReplayRun:
+					interrupted = append(interrupted, i)
+				case BootReplayKeep:
+					continue // keep Running: the evidence survives to the next boot
+				}
+			}
+			job.State.Running = false
 		}
 	}
 
 	cs.recomputeNextRuns()
+	// Issue #1484: a one-time job whose run the dead process had started but
+	// never finished is still owed that run; it fires on the first tick.
+	for _, i := range interrupted {
+		job := &cs.store.Jobs[i]
+		at := *job.Schedule.AtMS
+		job.State.NextRunAtMS = &at
+		slog.Warn("cron: one-time job was running when the previous process stopped; running it again",
+			"job_id", job.ID, "job", job.Name)
+	}
 	if err := cs.saveStoreUnsafe(); err != nil {
 		return false, fmt.Errorf("failed to save store: %w", err)
 	}
@@ -401,19 +449,34 @@ func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err 
 }
 
 func (cs *CronService) Start() error {
-	return cs.startRunWindow(false)
+	return cs.startRunWindow(false, nil)
 }
 
 // StartAfterPhysicalBoot restores only the dead prior process's running flags.
 // Gateway physical boot is its sole production caller. Reload and Stop/Start use
 // Start, so an old lane still unwinding after a bounded drain remains protected.
 func (cs *CronService) StartAfterPhysicalBoot() error {
-	return cs.startRunWindow(true)
+	return cs.startRunWindow(true, nil)
 }
 
-func (cs *CronService) startRunWindow(physicalBoot bool) error {
+// StartAfterPhysicalBootReplaying is StartAfterPhysicalBoot for a store whose
+// jobs are derived from another source of truth: replay decides, per
+// interrupted one-time job, whether it is re-armed for its owed run, declined
+// or kept as interrupted evidence for a later boot. The decisions are applied
+// before the run loop starts, so a declined or kept job can never fire from
+// this restore — not even in the window before the caller reconciles its
+// derived jobs (6b review I3: the task-trigger scheduler stores each
+// recurring occurrence as an at-job, and an interrupted occurrence must not
+// be replayed; re-review N3: an owed run whose task cannot be settled yet is
+// kept, not lost). replay runs under the service lock: it must not call back
+// into this CronService.
+func (cs *CronService) StartAfterPhysicalBootReplaying(replay func(job *CronJob) BootReplay) error {
+	return cs.startRunWindow(true, replay)
+}
+
+func (cs *CronService) startRunWindow(physicalBoot bool, replay func(*CronJob) BootReplay) error {
 	cs.mu.Lock()
-	started, err := cs.initRunStateUnsafe(physicalBoot)
+	started, err := cs.initRunStateReplayingUnsafe(physicalBoot, replay)
 	stop := cs.stopChan
 	var done chan struct{}
 	if started {
@@ -999,6 +1062,47 @@ func (cs *CronService) recomputeNextRuns() {
 		}
 	}
 }
+
+// interruptedOneTimeFire reports whether job is a one-time ("at") job whose
+// run had STARTED in a process that is now gone, without its outcome saved.
+// Only meaningful at a physical boot, where every persisted Running flag
+// belongs to a dead process.
+//
+// Issue #1484, the window: RunDueJobs persists the cleared NextRunAtMS before
+// the run, executeJobByID persists Running=true when the run starts, and only
+// the outcome save after the run disables or deletes a one-time job. A
+// process that died in between left the job on disk with no next run; the
+// physical-boot restore cleared Running and the recompute gave a past
+// one-time job no next run, so the job sat in the store and never ran again,
+// with nothing recording that its run never finished.
+//
+// A one-time fire the process missed while it was not running is a
+// different case and stays skipped, as the calendar documentation states
+// ("a missed run is skipped, never replayed"): it never had Running set.
+// Running the interrupted job again is at-least-once — a run that finished
+// but died before its outcome was saved runs a second time.
+func interruptedOneTimeFire(job *CronJob) bool {
+	if !job.State.Running || !job.Enabled || job.Schedule.Kind != "at" || job.Schedule.AtMS == nil {
+		return false
+	}
+	if last := job.State.LastRunAtMS; last != nil && *last >= *job.Schedule.AtMS {
+		return false
+	}
+	return true
+}
+
+// InterruptedOneTimeFire is the exported form of the physical-boot predicate
+// initRunStateUnsafe applies (#1484): a one-time ("at") job whose run had
+// started in a process that is now gone, without its outcome saved. It is
+// only meaningful while that dead process's Running flags are still on the
+// store — before StartAfterPhysicalBoot clears them.
+//
+// Derived-job schedulers call it on their persisted jobs BEFORE the engine's
+// physical-boot restore, so a crashed fire of a derived one-time trigger can
+// be marked as owed and protected from the boot re-derivation that would
+// otherwise replace the armed job with a not-due one (a past at-job gets no
+// next run) and silently drop the run a second time.
+func InterruptedOneTimeFire(job *CronJob) bool { return interruptedOneTimeFire(job) }
 
 func (cs *CronService) getNextWakeMS() *int64 {
 	var nextWake *int64

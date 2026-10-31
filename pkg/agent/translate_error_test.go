@@ -327,6 +327,7 @@ func TestUserMessages_EveryCodeHasMessageAndAttribution(t *testing.T) {
 func allClassifierCodes() []LLMErrorCode {
 	return []LLMErrorCode{
 		CodeMediaUnsupported,
+		CodeMediaTooLarge,
 		CodeProviderRejected,
 		CodeRequestTooLarge,
 		CodeProviderAuthFailed,

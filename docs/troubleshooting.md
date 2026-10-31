@@ -87,8 +87,8 @@ A provider can also report an error after it has already started streaming a rep
 
 | What the provider reported | What you see | Retried? |
 |---|---|---|
-| A temporary fault (server error, overloaded, timeout) | The connection-failure message | Yes, inline, like a dropped connection |
-| Rate limit (429) | The rate-limit message | Handed to the fallback chain |
+| A temporary fault (server error, overloaded, timeout) | The connection-failure message | Yes, when nothing of the reply was shown yet — see the next section |
+| Rate limit (429) | The rate-limit message | Yes — see the next section |
 | Billing or credit (402) | The billing message | No |
 | Bad or missing key (401, 403) | The provider-rejected-your-key message | No |
 | The request itself was rejected (400, 422) | The provider-rejected message | No |
@@ -146,8 +146,38 @@ Read the gateway diagnostic log. These cron warnings remain visible at the defau
 |---|---|---|
 | `previous run still in progress` (`reason: overlap`) | Omnipus still considers an earlier run in progress and skips this tick rather than starting overlapping work. | Inspect that job's current work and cleanup before retrying it. |
 | `no owning agent` (`reason: owner-missing`) | The job has no owning agent ID, so it cannot run through the agent runner. | Check its agent assignment and workspace heartbeat configuration. |
+| `one-time job was running when the previous process stopped; running it again` | At gateway startup, a one-time schedule of the gateway's own scheduler was found mid-run from the previous process, which stopped before saving the outcome. It runs again once, so it may repeat work the stopped run already did. A one-time time that passed while the gateway was not running is still skipped, not replayed. | Check whether the stopped run already did the work. |
+| `one-time trigger was running when the previous process stopped; running it again at this boot` | The same recovery for a scheduled task's one-time trigger (a task set to run once): the previous process started that run and stopped before saving the outcome, so the next gateway start runs it again once. A one-time time that passed while the gateway was not running is still skipped, not replayed, and a trigger you edited while the gateway was down keeps the edited rule instead. | Check whether the stopped run already did the work. |
+| `scheduled fire was missed while Omnipus was down; recorded, not replayed` | A task's scheduled fire (its next pending occurrence, or a one-time time) came due while the gateway was not running. It is recorded once as a `missed` entry on the task's run history and the Calendar, so the gap is visible; it is never replayed. | Nothing to do — the entry is informational. Re-run the task manually with Run-now if it should catch up. |
 
 Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed to persist Running reset` diagnostics are logged at **ERROR**, with `job_id` (or `job_ids` for a batch) and the underlying storage error. Work may already have happened even though its latest state was not saved. Resolve the disk, permissions or path problem before relying on the saved state after a restart. The error does not undo completed work, and retrying may repeat earlier actions.
+
+## The model provider can't be reached or is busy
+
+When a request to the model provider fails for a reason that usually passes — the connection drops, the name cannot be looked up, the provider is overloaded (429, 503, 529) or it stops in the middle of an answer — Omnipus tries again automatically. It makes up to **5 more attempts**, waiting about **2, 5, 10, 20 and 40 seconds** in between (about a minute and a half in total). When the provider says how long to wait (a `Retry-After` of up to 120 seconds), that wait is used instead.
+
+While it waits, the chat shows a live line from the first failed attempt on, saying what went wrong in plain words — a rate limit ("is rate-limiting requests right now"), a connection problem ("could not be reached"), an overloaded or erroring provider ("is overloaded or returning server errors"), a reply that stopped midway ("stopped responding mid-answer") or a general "ran into a problem" — together with the attempt number ("attempt 2 of 6") and a countdown to the next try. **Stop** ends the wait at once. On a channel such as Telegram you get one "Retrying — please wait..." message. A helper's own chat shows the same line for the helper's requests.
+
+When a retry succeeds, the chat notes that the connection came back and after how many retries.
+
+If the last attempt also fails, the turn ends with the cause in plain words — for example "We couldn't reach the model provider" — and your message stays in the chat, so you can retry or switch models.
+
+What is not retried:
+
+| Failure | What happens |
+|---|---|
+| A wrong or missing key, or no credit (401, 402, 403) | The error appears at once; every retry would fail the same way |
+| The request itself is rejected (unknown model, conversation too long) | The error appears at once |
+| The provider is slow or silent rather than unreachable | Handled by the per-request time limit and the 5-minute silence limit instead, because each such attempt can already take minutes |
+| Part of the reply was already shown when the failure happened | Not retried, so you never see half an answer followed by a second copy |
+
+When the agent has a fallback model, the first model hands over to the fallback at once on a dropped connection or an overload (a rate limit is retried up to 3 times first). The automatic retries above apply to the last model Omnipus can still try.
+
+## The model has gone quiet
+
+A provider can stop sending anything in the middle of a reply. Omnipus waits up to the silence limit before it ends the call — 5 minutes by default, or the `stream_stall_timeout` set for that model; that limit is unchanged. So you can tell a slow answer from a stalled one, the chat shows a calm notice once the model has said nothing for **30 seconds** ("the model hasn't responded for … seconds, still waiting"). When the model is streaming, the notice also says when the silence limit would end the call. The notice disappears as soon as anything arrives again, and **Stop** stays available the whole time.
+
+Anything the provider sends counts as a sign of life, including the model's hidden reasoning and the provider's keep-alive messages, so a model that is thinking without showing text does not trigger the notice. A reply that is not streamed (an agent's fallback model is called that way) counts as silent until it arrives. A wait between automatic retries is shown by the retry line, not as silence.
 
 ## The provider rejects your model requests
 
@@ -356,6 +386,22 @@ Other session reads and writes that hit a storage failure answer in the same way
 export TMPDIR=/path/to/workspace/tmp
 mkdir -p "$TMPDIR"
 ```
+
+## Attachment and image size limits
+
+Omnipus shrinks images automatically before it sends them to a model, so they fit that model's limits: longest edge, file size, and — for providers that count them — vision-patch budgets such as ChatGPT's limit of 30,000 patches (32×32-pixel tiles) per image. This covers files you attach, images an agent captures itself (for example a full-page `browser_screenshot` of a very long page), and images already stored in the conversation: an oversized image in history is resized again on every send, so one large screenshot can no longer make every following reply on that model fail. When a turn falls back to another model, the image is fitted to that model's limits too.
+
+If the provider still rejects an image for its size, the reply says so — never the generic "unsupported format" message:
+
+| Notice | Meaning and next step |
+|---|---|
+| "An image in this conversation is too large for this model's size limit…" | The provider rejected the image for its size, even after automatic resizing. Send a smaller image — for example capture a viewport screenshot instead of a full-page capture of a very long page — or switch to a model with a larger image limit. Technical detail is available live under **Verbose chat**. |
+
+Things to watch:
+
+- A resized image may be visibly smaller than the capture; the model sees the resized version.
+- Very tall full-page captures are the usual cause of size limits: a 2560-pixel-wide capture of a very long page can need more patches than a model allows even though its file size is modest.
+- When a tool's image cannot be made to fit even after resizing, the tool result carries the exact marker `[attachment unavailable: <filename> (image too large to fit the model's size limits, even after resizing)]` — for example `[attachment unavailable: browser-screenshot.png (image too large to fit the model's size limits, even after resizing)]` — instead of the image. The surrounding tool text is preserved. An older image in the conversation that cannot be made to fit is replaced, for that request only, by `[attachment unavailable: image (too large to fit the model's size limits, even after resizing)]`. An older image whose data is corrupt or truncated (so it cannot even be decoded) and that is also over the size limit is replaced by `[attachment unavailable: image (data unreadable: corrupt or truncated, and over the model's size limits)]` — sending it would only earn a media-too-large rejection on every later iteration, and the marker says the real cause.
 
 ## Limits and things to watch
 

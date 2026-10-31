@@ -76,6 +76,8 @@ func (h *WSHandler) hubSyncTap(evt agent.Event) {
 		h.hubContextWindowNotice(evt)
 	case agent.EventKindProviderRetry:
 		h.hubProviderRetry(evt)
+	case agent.EventKindProviderStatus:
+		h.hubProviderStatus(evt)
 	case agent.EventKindProviderFallback:
 		h.hubProviderFallback(evt)
 	case agent.EventKindWhatsAppPairing:

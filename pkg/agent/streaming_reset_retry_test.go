@@ -23,6 +23,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -286,10 +287,12 @@ func TestRetryOnStreamingReset_ExhaustsMaxRetries(t *testing.T) {
 	}
 
 	streamErr := errors.New("streaming read error: http2: response body closed")
-	// Enough failures to exhaust maxRetries (currently 2; provide one extra so
-	// exhausted == all calls were errors regardless of exact maxRetries value).
+	// Enough failures to exhaust every retry. Issue #1280: a connection
+	// failure on the last candidate now runs the chain's retry plan (1 call
+	// + 5 retries), so the fixture fails more calls than the plan allows;
+	// the property under test (persistent resets end the turn) is unchanged.
 	provider := &failingThenSuccessProvider{
-		failures: []error{streamErr, streamErr, streamErr, streamErr},
+		failures: []error{streamErr, streamErr, streamErr, streamErr, streamErr, streamErr, streamErr},
 		successResp: &providers.LLMResponse{
 			Content:   "unreachable",
 			ToolCalls: []providers.ToolCall{},
@@ -466,7 +469,12 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 func TestRetryOnStreamingReset_NothingToTrimStillRetries(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	streamingResetErr := errors.New("streaming read error: http2: response body closed")
+	// Issue #1280: a connection drop is now retried in place by the fallback
+	// chain's retry plan and never reaches the agent loop's timeout recovery.
+	// This test targets that recovery branch (windowTrim before the retry),
+	// so it fails the first call with a request deadline, which stays a
+	// timeout-class failure outside the retry plan.
+	streamingResetErr := fmt.Errorf("provider call: %w", context.DeadlineExceeded)
 	provider := &failingThenSuccessProvider{
 		failures: []error{streamingResetErr},
 		successResp: &providers.LLMResponse{
@@ -581,7 +589,12 @@ func (p *recallSpanInjectingProvider) Chat(
 func TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	streamingResetErr := errors.New("streaming read error: http2: response body closed")
+	// Issue #1280: a connection drop is now retried in place by the fallback
+	// chain's retry plan and never reaches the agent loop's timeout recovery.
+	// This test targets that recovery branch (windowTrim before the retry),
+	// so it fails the first call with a request deadline, which stays a
+	// timeout-class failure outside the retry plan.
+	streamingResetErr := fmt.Errorf("provider call: %w", context.DeadlineExceeded)
 	inner := &failingThenSuccessProvider{
 		failures: []error{streamingResetErr},
 		successResp: &providers.LLMResponse{

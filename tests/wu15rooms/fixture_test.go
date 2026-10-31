@@ -51,7 +51,17 @@ func newFixture(t *testing.T) *fixture {
 		Defaults: config.AgentDefaults{Home: filepath.Join(home, "work"), DefaultModel: config.DefaultModel{Model: "wu15-unpriced"}, MaxTokens: 4096},
 		List:     []config.AgentConfig{{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom}, {ID: "jim", Name: "Jim", Type: config.AgentTypeCustom}},
 	}}
+	// Seed the three policies the fixture needs to exercise; reconcile fills the rest
+	// from the shipped ceiling the same way production boot does (ADR-076/ADR-077).
 	cfg.Sandbox.ToolPolicies = map[string]string{"send_message": "allow", "answer_request": "allow", tools.AskUserQuestionToolName: "allow"}
+	// Reconcile the global tool-policy ceiling exactly as gateway does at boot.
+	// This ensures set_todos (and every other shipped builtin) has its default entry,
+	// so the fixture runs against the same ceiling a real install would.
+	known := map[string]struct{}{}
+	for k := range config.DefaultConfig().Sandbox.ToolPolicies {
+		known[k] = struct{}{}
+	}
+	config.ReconcileToolPolicyCeiling(cfg, known)
 	require.NoError(t, os.MkdirAll(cfg.Agents.Defaults.Home, 0o700))
 	ids, owner := []string{"mia", "jim"}, "qa"
 	ws := gen.Workspace{Id: workspaceID, Name: "Sales", Status: gen.WorkspaceStatusActive, CoreTeam: &ids, Owner: &owner, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}

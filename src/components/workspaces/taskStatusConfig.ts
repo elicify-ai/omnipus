@@ -44,5 +44,9 @@ export const STATUS_OPTIONS: { value: Task['status']; label: string }[] = [
 export function statusLabel(status: Task['status'] | TaskRun['status']): string {
   if (status === 'blocked') return 'Blocked'
   if (status === 'skipped') return 'Skipped'
+  // `missed` (founder decision 2026-10-29, Calendar 6b): a run-status-only
+  // value with no Task lifecycle member — without this, the raw lowercase
+  // status string would render as the label.
+  if (status === 'missed') return 'Missed'
   return STATUS_OPTIONS.find((o) => o.value === status)?.label ?? status
 }

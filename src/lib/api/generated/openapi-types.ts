@@ -11020,6 +11020,11 @@ export interface components {
              * @example 5242880
              */
             max_bytes: number;
+            /**
+             * @description Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+             * @example 30000
+             */
+            max_patches?: number;
         };
         /**
          * ContextWindowNotice
@@ -14298,11 +14303,11 @@ export interface components {
                  */
                 occurrence_ms: number;
                 /**
-                 * @description The matched run's status.
+                 * @description The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
                  * @example done
                  * @enum {string}
                  */
-                status: "in_progress" | "done" | "failed" | "skipped";
+                status: "in_progress" | "done" | "failed" | "skipped" | "missed";
                 /**
                  * @description The matched run's ID (ULID).
                  * @example 01J8Z3K2R9G4S6M0N1P2Q3R4S5
@@ -14413,11 +14418,11 @@ export interface components {
              */
             occurrence_ms: number | null;
             /**
-             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
              * @example done
              * @enum {string}
              */
-            status: "in_progress" | "done" | "failed" | "skipped";
+            status: "in_progress" | "done" | "failed" | "skipped" | "missed";
             /**
              * @description Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
              * @example Found 3 anomalies in the gateway logs.
