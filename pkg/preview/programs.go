@@ -332,18 +332,18 @@ func reseedOfficeProfile(dir string) error {
 		return errors.New("the LibreOffice profile folder was replaced during the first start")
 	}
 	name := filepath.Join(dir, "registrymodifications.xcu")
-	if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err = os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return errors.New("the LibreOffice profile settings could not be restored")
 	}
 	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return errors.New("the LibreOffice profile settings could not be restored")
 	}
-	if _, err := f.WriteString(profileSettings); err != nil {
+	if _, err = f.WriteString(profileSettings); err != nil {
 		_ = f.Close()
 		return errors.New("the LibreOffice profile settings could not be restored")
 	}
-	if err := f.Close(); err != nil {
+	if err = f.Close(); err != nil {
 		return errors.New("the LibreOffice profile settings could not be restored")
 	}
 	return nil

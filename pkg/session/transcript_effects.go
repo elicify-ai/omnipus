@@ -331,7 +331,7 @@ func (us *UnifiedStore) readTranscriptIndexed(sessionID string) ([]TranscriptEnt
 // applied), for a later SettleToolCall against it. found is false when no
 // chat record carries the id; the physically last carrier wins.
 func (us *UnifiedStore) LocateChatToolCall(sessionID string, id ToolCallID) (addr ArchiveAddress, call ToolCall, found bool, err error) {
-	if err := validateSessionID(sessionID); err != nil {
+	if err = validateSessionID(sessionID); err != nil {
 		return ArchiveAddress{}, ToolCall{}, false, err
 	}
 	entries, index, err := us.readTranscriptIndexed(sessionID)
