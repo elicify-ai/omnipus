@@ -1,0 +1,24 @@
+title: ChannelRejectedSenders
+description: >
+  Senders a running connection ignored because they are not on its allowed
+  list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt
+  adapter starts empty.
+type: object
+additionalProperties: false
+required:
+  - count
+  - recent
+properties:
+  count:
+    type: integer
+    description: How many messages were ignored since the adapter started.
+    minimum: 1
+    example: 2
+  recent:
+    type: array
+    description: Canonical sender ids of the latest ignored senders, most recent first.
+    maxItems: 20
+    items:
+      type: string
+    example:
+      - "discord:9"

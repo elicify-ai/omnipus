@@ -86,3 +86,19 @@ properties:
       When this channel last dropped an inbound message it could not route
       (K15). Present only while the routing degradation is active.
     example: "2026-10-14T09:30:00Z"
+  outbound_policy:
+    type: string
+    description: >
+      The connection's outbound setting, for the row's summary text (channels
+      spec "Contract Changes"). reply_only = "Only answer"; agent_may_start =
+      "Answer and also start messages".
+    enum:
+      - reply_only
+      - agent_may_start
+    example: reply_only
+  rejected_senders:
+    $ref: './ChannelRejectedSenders.yaml'
+    description: >
+      Senders the running connection ignored because they are not on its
+      allowed list. Present only when at least one message was ignored
+      (FR-061).

@@ -1,0 +1,104 @@
+title: ChannelOutboundRejection
+description: >
+  Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502
+  (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
+
+  Safe-echo set: every string of this schema (error, target_errors[].target,
+  target_errors[].reason) is restricted by its pattern to printable ASCII
+  (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes
+  (double quote, backslash, <, >, &). The server drops any other character
+  before serializing; it never escapes or substitutes. Each string character
+  therefore serializes to exactly one byte, which keeps the worst-case body at
+  about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable
+  characters for its binary sniff.
+type: object
+additionalProperties: false
+required:
+  - error
+  - code
+properties:
+  error:
+    type: string
+    description: >
+      Human-readable reason, in the safe-echo set. For 502 lookup_unavailable
+      it is "Discord could not be reached to check <ids>; nothing was saved;
+      try again", listing unavailable ids in request order until the next id
+      would exceed 500 characters, then "+<N> more".
+    maxLength: 500
+    pattern: '^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$'
+    example: some targets are not valid ids
+  code:
+    type: string
+    description: >
+      Machine-readable reason. 400: invalid_targets, too_many_targets. 409:
+      stale_revision, connect_first, saved_live_mismatch. 422:
+      platform_cannot_start, platform_cannot_message_people. 502:
+      lookup_unavailable.
+    enum:
+      - invalid_targets
+      - too_many_targets
+      - platform_cannot_start
+      - platform_cannot_message_people
+      - stale_revision
+      - connect_first
+      - lookup_unavailable
+      - saved_live_mismatch
+    example: invalid_targets
+  target_errors:
+    type: array
+    description: >
+      Per-target errors: the first 10 invalid entries in request order.
+    maxItems: 10
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - index
+        - target
+        - code
+      properties:
+        index:
+          type: integer
+          description: >
+            0-based position of the entry in the request's targets array (the
+            client shows it on textarea line index + 1). This is the
+            identifier; target is only a hint.
+          minimum: 0
+          example: 0
+        target:
+          type: string
+          description: >
+            A sanitized hint of the entry: its first 20 safe-echo characters
+            after dropping every other character, plus "..." when more than 20
+            survived.
+          maxLength: 24
+          pattern: '^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$'
+          example: "@alice"
+        code:
+          type: string
+          description: Why this entry was refused.
+          enum:
+            - invalid_id
+            - wildcard_not_allowed
+            - username_not_allowed
+            - wrong_platform
+            - not_found
+            - unsupported_channel_kind
+            - cannot_message_people
+            - lookup_unavailable
+          example: username_not_allowed
+        reason:
+          type: string
+          description: >
+            Fixed catalog text for the code, in the safe-echo set (the longest,
+            unsupported_channel_kind's, is 115 characters).
+          maxLength: 120
+          pattern: '^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$'
+          example: a message cannot be sent to a name; use the numeric id
+  omitted_count:
+    type: integer
+    description: >
+      Present only when more than 10 entries were invalid: how many invalid
+      entries are not listed in target_errors.
+    minimum: 1
+    example: 3

@@ -1,0 +1,37 @@
+title: ChannelConfigureError
+description: >
+  500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056,
+  FR-057, T-6b, T-6c). The code says what the request durably changed.
+type: object
+additionalProperties: false
+required:
+  - error
+  - code
+properties:
+  error:
+    type: string
+    description: >
+      The normative text for the code. could_not_save: "could not save
+      config". credential_saved_not_saved: "The credential was saved, but the
+      configuration change was not: nothing else was applied. ..." (T-6b).
+      saved_not_refreshed: "settings saved, but the running configuration
+      could not be refreshed; the connection was not restarted".
+    example: could not save config
+  code:
+    type: string
+    description: >
+      could_not_save = nothing durable changed (no credential of this request
+      was stored and the configuration was not written).
+      credential_saved_not_saved = at least one credential of this request was
+      stored, then the write path failed; never reported as "nothing changed".
+      saved_not_refreshed = the file was written but the running configuration
+      could not be refreshed; the connection was not restarted.
+    enum:
+      - could_not_save
+      - credential_saved_not_saved
+      - saved_not_refreshed
+    example: could_not_save
+  detail:
+    type: string
+    description: Short reason, never a secret.
+    maxLength: 500

@@ -747,7 +747,7 @@ export interface paths {
         put?: never;
         /**
          * Resolve a pending tool approval (FR-011, FR-082)
-         * @description Approve, deny, or cancel a pending tool call approval.
+         * @description Approve, deny, or cancel a pending tool call approval. For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038, T-10 row 15) the action allow (approve and record a grant) is refused with 400 "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" and nothing is recorded; only allow_once, deny and cancel are accepted, and no approval of such a tool is ever remembered. Every other tool is unchanged.
          */
         post: operations["postToolApproval"];
         delete?: never;
@@ -1195,9 +1195,33 @@ export interface paths {
         get?: never;
         /**
          * Configure a channel
-         * @description Merges request body fields into the channel's config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. Returns the updated config with credential fields redacted.
+         * @description Merges request body fields into the channel's config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. `outbound`, `workspace_id` and `identity` cannot be set here, in any letter case: 400 (the outbound setting is changed only with PUT /api/v1/channels/{id}/outbound; the binding only with the routing route). `apply_outcome`, `apply_reason` and `apply_note` are stripped from the body. When the save changes an access field or stores a credential, or the connection is not current, the one connection is restarted and the response reports the outcome in `apply_outcome` (channels spec T-6, FR-050). Returns the updated config with credential fields redacted.
          */
         put: operations["configureChannel"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/{id}/outbound": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a connection's outbound (start messages) setting
+         * @description Returns whether the agent bound to this connection may start messages and to whom, the live revision token, whether the connection is running and whether its platform can start messages (channels spec FR-021). Read from one live configuration snapshot.
+         */
+        get: operations["getChannelOutbound"];
+        /**
+         * Set a connection's outbound (start messages) setting
+         * @description Replaces the connection's outbound policy and target list (channels spec FR-020, FR-022). Targets are canonicalized and de-duplicated; added Discord targets are looked up through the running connection outside the settings lock, each call bounded by a 5-second deadline that covers the rate-limit wait. The revision is re-checked under the settings lock before saving. A permission-extending write needs the saved and running configurations of the connection to correspond; switching to reply_only or removing targets always works, in any connection state. This is the only way to change the setting; every other save path keeps it as stored. Admin only.
+         */
+        put: operations["setChannelOutbound"];
         post?: never;
         delete?: never;
         options?: never;
@@ -9651,6 +9675,14 @@ export interface components {
              * @example 2026-10-14T09:30:00Z
              */
             last_dropped_at?: string;
+            /**
+             * @description The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+             * @example reply_only
+             * @enum {string}
+             */
+            outbound_policy?: "reply_only" | "agent_may_start";
+            /** @description Senders the running connection ignored because they are not on its allowed list. Present only when at least one message was ignored (FR-061). */
+            rejected_senders?: components["schemas"]["ChannelRejectedSenders"];
         };
         /**
          * RetentionConfig
@@ -12673,6 +12705,203 @@ export interface components {
             message: string;
         };
         /**
+         * ChannelOutbound
+         * @description Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+         */
+        ChannelOutbound: {
+            /**
+             * @description reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+             * @example reply_only
+             * @enum {string}
+             */
+            policy: "reply_only" | "agent_may_start";
+            /**
+             * @description Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+             * @example [
+             *       "telegram:-1001234567890"
+             *     ]
+             */
+            targets: string[];
+        };
+        /**
+         * ChannelAvailability
+         * @description Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+         */
+        ChannelAvailability: {
+            /**
+             * @description running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+             * @example running
+             * @enum {string}
+             */
+            state: "running" | "not_running" | "not_loaded";
+            /**
+             * @description Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+             * @example not started
+             */
+            reason?: string;
+        };
+        /**
+         * ChannelOutboundRead
+         * @description Response of GET /api/v1/channels/{id}/outbound (channels spec FR-021), read from one live configuration snapshot.
+         */
+        ChannelOutboundRead: {
+            /** @description The connection's outbound setting. When config.json has none, this is {policy: reply_only, targets: []}. */
+            outbound: components["schemas"]["ChannelOutbound"];
+            /**
+             * @description The channel revision token (FR-088) computed over the live configuration — the same token list_channels returns and the writer compares against expected_revision. "absent" when the connection is not configured.
+             * @example absent
+             */
+            revision: string;
+            /** @description Whether the connection is running right now. */
+            availability: components["schemas"]["ChannelAvailability"];
+            /**
+             * @description True only for platforms that can start messages in this release (Discord and Telegram). Other platforms show "not supported yet".
+             * @example true
+             */
+            start_supported: boolean;
+        };
+        /**
+         * ChannelOutboundUpdateRequest
+         * @description Request body of PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-022). The whole target list replaces the stored one. Targets are raw input: the server trims, canonicalizes, removes duplicates and then enforces the limit of 20 (too_many_targets).
+         */
+        ChannelOutboundUpdateRequest: {
+            /**
+             * @description reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+             * @example agent_may_start
+             * @enum {string}
+             */
+            policy: "reply_only" | "agent_may_start";
+            /**
+             * @description Raw target entries, one per textarea line: a bare id or "platform:id". Rejections refer to an entry by its 0-based index in this array.
+             * @example [
+             *       "-1001234567890"
+             *     ]
+             */
+            targets: string[];
+            /**
+             * @description The revision returned by GET /api/v1/channels/{id}/outbound (or list_channels). A different current revision is refused with 409 stale_revision.
+             * @example absent
+             */
+            expected_revision: string;
+        };
+        /**
+         * ChannelOutboundWriteResponse
+         * @description Response of a successful PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-027, T-6b).
+         */
+        ChannelOutboundWriteResponse: {
+            /** @description The saved setting, in canonical form. */
+            outbound: components["schemas"]["ChannelOutbound"];
+            /**
+             * @description The new channel revision token (FR-088) over the live configuration.
+             * @example r1-3f9a
+             */
+            revision: string;
+            /** @description Present only when the file was written but the rest of the running configuration could not be refreshed. The saved list is in force anyway. Text: "Saved and in force for starting messages. Other settings could not be refreshed: <short reason>. Check the server log." */
+            warning?: string;
+        };
+        /**
+         * ChannelOutboundRejection
+         * @description Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502 (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
+         *     Safe-echo set: every string of this schema (error, target_errors[].target, target_errors[].reason) is restricted by its pattern to printable ASCII (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes (double quote, backslash, <, >, &). The server drops any other character before serializing; it never escapes or substitutes. Each string character therefore serializes to exactly one byte, which keeps the worst-case body at about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable characters for its binary sniff.
+         */
+        ChannelOutboundRejection: {
+            /**
+             * @description Human-readable reason, in the safe-echo set. For 502 lookup_unavailable it is "Discord could not be reached to check <ids>; nothing was saved; try again", listing unavailable ids in request order until the next id would exceed 500 characters, then "+<N> more".
+             * @example some targets are not valid ids
+             */
+            error: string;
+            /**
+             * @description Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+             * @example invalid_targets
+             * @enum {string}
+             */
+            code: "invalid_targets" | "too_many_targets" | "platform_cannot_start" | "platform_cannot_message_people" | "stale_revision" | "connect_first" | "lookup_unavailable" | "saved_live_mismatch";
+            /** @description Per-target errors: the first 10 invalid entries in request order. */
+            target_errors?: {
+                /**
+                 * @description 0-based position of the entry in the request's targets array (the client shows it on textarea line index + 1). This is the identifier; target is only a hint.
+                 * @example 0
+                 */
+                index: number;
+                /**
+                 * @description A sanitized hint of the entry: its first 20 safe-echo characters after dropping every other character, plus "..." when more than 20 survived.
+                 * @example @alice
+                 */
+                target: string;
+                /**
+                 * @description Why this entry was refused.
+                 * @example username_not_allowed
+                 * @enum {string}
+                 */
+                code: "invalid_id" | "wildcard_not_allowed" | "username_not_allowed" | "wrong_platform" | "not_found" | "unsupported_channel_kind" | "cannot_message_people" | "lookup_unavailable";
+                /**
+                 * @description Fixed catalog text for the code, in the safe-echo set (the longest, unsupported_channel_kind's, is 115 characters).
+                 * @example a message cannot be sent to a name; use the numeric id
+                 */
+                reason?: string;
+            }[];
+            /**
+             * @description Present only when more than 10 entries were invalid: how many invalid entries are not listed in target_errors.
+             * @example 3
+             */
+            omitted_count?: number;
+        };
+        /**
+         * ChannelConfigureError
+         * @description 500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056, FR-057, T-6b, T-6c). The code says what the request durably changed.
+         */
+        ChannelConfigureError: {
+            /**
+             * @description The normative text for the code. could_not_save: "could not save config". credential_saved_not_saved: "The credential was saved, but the configuration change was not: nothing else was applied. ..." (T-6b). saved_not_refreshed: "settings saved, but the running configuration could not be refreshed; the connection was not restarted".
+             * @example could not save config
+             */
+            error: string;
+            /**
+             * @description could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+             * @example could_not_save
+             * @enum {string}
+             */
+            code: "could_not_save" | "credential_saved_not_saved" | "saved_not_refreshed";
+            /** @description Short reason, never a secret. */
+            detail?: string;
+        };
+        /**
+         * ChannelConfigureResponse
+         * @description 200 body of PUT /api/v1/channels/{id}/configure: the updated channel configuration with credential fields redacted (structure varies by channel type), plus how the save was applied to the running connection (channels spec T-6, FR-050, FR-052).
+         */
+        ChannelConfigureResponse: {
+            /**
+             * @description applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason has its short text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+             * @example applied
+             * @enum {string}
+             */
+            apply_outcome: "applied" | "applied_not_running" | "unconfirmed" | "failed" | "no_reload_needed";
+            /** @description Present for applied_not_running (the availability reason) and failed (the error's short text). Never a secret. */
+            apply_reason?: string;
+            /** @description Present whenever a reload was attempted (every outcome except no_reload_needed): "A connection restart was attempted; other connections and scheduled services may have paused briefly while it ran." */
+            apply_note?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ChannelRejectedSenders
+         * @description Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+         */
+        ChannelRejectedSenders: {
+            /**
+             * @description How many messages were ignored since the adapter started.
+             * @example 2
+             */
+            count: number;
+            /**
+             * @description Canonical sender ids of the latest ignored senders, most recent first.
+             * @example [
+             *       "discord:9"
+             *     ]
+             */
+            recent: string[];
+        };
+        /**
          * ChannelRouting
          * @description Routing configuration for a single communication channel instance, as read back by GET and returned by PUT /channels/{id}/routing. Every channel is bound to a workspace and names that binding's main agent (omnipus-system-agent FR-127, K14); there is no global default agent and no unbound routing mode. An instance that has no binding yet is reported truthfully (FR-128): `bound` is false and both ids are empty strings — never an invented or legacy destination.
          */
@@ -14622,7 +14851,7 @@ export interface components {
          */
         ToolApprovalActionRequest: {
             /**
-             * @description Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+             * @description Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
              * @example allow_once
              * @enum {string}
              */
@@ -19625,7 +19854,15 @@ export interface operations {
                     "application/json": components["schemas"]["Agent"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
+            /** @description Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
@@ -19636,7 +19873,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. */
+            /** @description Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -19827,7 +20064,15 @@ export interface operations {
                     "application/json": components["schemas"]["AgentToolsResponse"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
+            /** @description Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
@@ -19838,7 +20083,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. */
+            /** @description Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -20195,7 +20440,7 @@ export interface operations {
                     "application/json": components["schemas"]["ToolApprovalResponse"];
                 };
             };
-            /** @description Malformed body or unknown action. */
+            /** @description Malformed body or unknown action, or action allow for an always-ask tool ("set_channel_outbound always asks for approval; it can be set to ask or deny, not allow"; nothing recorded). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -20284,7 +20529,7 @@ export interface operations {
                     "application/json": components["schemas"]["GlobalToolPolicies"];
                 };
             };
-            /** @description Invalid policy values. */
+            /** @description Invalid policy values. Also refused, nothing saved: storing allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 row 15). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -21368,18 +21613,16 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated channel configuration (credentials redacted). */
+            /** @description Updated channel configuration (credentials redacted) plus apply_outcome, and apply_reason / apply_note where T-6 says. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ChannelConfigureResponse"];
                 };
             };
-            /** @description Invalid JSON body. */
+            /** @description Invalid JSON body, or a field that cannot be set here. Texts: "outbound cannot be set via configure; use PUT /api/v1/channels/{id}/outbound"; the existing workspace_id and identity refusals (set the binding with PUT /api/v1/channels/{id}/routing). Matched in any spelling encoding/json would bind to those fields. Nothing was changed. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -21398,6 +21641,147 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description The save did not complete; code says what durably changed: could_not_save (nothing), credential_saved_not_saved (a credential of this request was stored, the configuration was not), or saved_not_refreshed (the file was written, the running configuration was not refreshed and the connection was not restarted). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelConfigureError"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    getChannelOutbound: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel instance ID.
+                 * @example telegram
+                 */
+                id: components["schemas"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The outbound setting. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRead"];
+                };
+            };
+            /** @description Malformed channel id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown channel type. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    setChannelOutbound: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel instance ID.
+                 * @example telegram
+                 */
+                id: components["schemas"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelOutboundUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved and in force. warning is present only when the file was written but the rest of the running configuration could not be refreshed (the saved list is in force anyway, T-6b). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundWriteResponse"];
+                };
+            };
+            /** @description invalid_targets (per-target errors in target_errors) or too_many_targets (more than 20 after de-duplication). Nothing was saved. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown channel. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description stale_revision (the setting changed since it was read; reload and retry), connect_first (adding a Discord target needs the connection running), or saved_live_mismatch (the saved and running configurations differ because an earlier change did not finish applying; a permission-extending write waits until they correspond again). Nothing was saved. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            /** @description platform_cannot_start ("starting messages is not supported yet on <Platform>") or platform_cannot_message_people ("this platform can only answer, not start a direct message"). Nothing was saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            /** @description "could not save the setting; nothing was changed" — the failure happened before the file was written (no credential is involved on this route). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description lookup_unavailable: Discord could not be reached or timed out while checking an added target, including a rate-limit wait past the deadline. Nothing was saved; try again. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     testChannel: {
@@ -28028,6 +28412,15 @@ export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnableRequest = components["schemas"]["ChannelEnableRequest"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
+export type ChannelOutbound = components["schemas"]["ChannelOutbound"];
+export type ChannelAvailability = components["schemas"]["ChannelAvailability"];
+export type ChannelOutboundRead = components["schemas"]["ChannelOutboundRead"];
+export type ChannelOutboundUpdateRequest = components["schemas"]["ChannelOutboundUpdateRequest"];
+export type ChannelOutboundWriteResponse = components["schemas"]["ChannelOutboundWriteResponse"];
+export type ChannelOutboundRejection = components["schemas"]["ChannelOutboundRejection"];
+export type ChannelConfigureError = components["schemas"]["ChannelConfigureError"];
+export type ChannelConfigureResponse = components["schemas"]["ChannelConfigureResponse"];
+export type ChannelRejectedSenders = components["schemas"]["ChannelRejectedSenders"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
 export type ChannelRoutingUpdateRequest = components["schemas"]["ChannelRoutingUpdateRequest"];
 export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"];

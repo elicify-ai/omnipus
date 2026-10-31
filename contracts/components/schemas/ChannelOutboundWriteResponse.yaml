@@ -1,0 +1,25 @@
+title: ChannelOutboundWriteResponse
+description: >
+  Response of a successful PUT /api/v1/channels/{id}/outbound (channels spec
+  FR-020, FR-027, T-6b).
+type: object
+additionalProperties: false
+required:
+  - outbound
+  - revision
+properties:
+  outbound:
+    $ref: './ChannelOutbound.yaml'
+    description: The saved setting, in canonical form.
+  revision:
+    type: string
+    description: The new channel revision token (FR-088) over the live configuration.
+    example: r1-3f9a
+  warning:
+    type: string
+    description: >
+      Present only when the file was written but the rest of the running
+      configuration could not be refreshed. The saved list is in force anyway.
+      Text: "Saved and in force for starting messages. Other settings could not
+      be refreshed: <short reason>. Check the server log."
+    maxLength: 500

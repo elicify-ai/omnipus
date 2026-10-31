@@ -1821,11 +1821,17 @@ type ChannelEntry = {
   degraded?: boolean | undefined;
   degraded_reason?: string | undefined;
   last_dropped_at?: string | undefined;
+  outbound_policy?: ("reply_only" | "agent_may_start") | undefined;
+  rejected_senders?: ChannelRejectedSenders | undefined;
 };
 type ChannelId = string;
 type ChannelIdentity = {
   kind: "agent" | "user";
   id?: string | undefined;
+};
+type ChannelRejectedSenders = {
+  count: number;
+  recent: Array<string>;
 };
 type AuditLogResponse = {
   entries: Array<AuditEntry>;
@@ -2321,6 +2327,25 @@ type AgentToolEntry = {
 type ChannelEnabledResponse = {
   id: ChannelId;
   enabled: boolean;
+};
+type ChannelOutboundRead = {
+  outbound: ChannelOutbound;
+  revision: string;
+  availability: ChannelAvailability;
+  start_supported: boolean;
+};
+type ChannelOutbound = {
+  policy: "reply_only" | "agent_may_start";
+  targets: Array<string>;
+};
+type ChannelAvailability = {
+  state: "running" | "not_running" | "not_loaded";
+  reason?: string | undefined;
+};
+type ChannelOutboundWriteResponse = {
+  outbound: ChannelOutbound;
+  revision: string;
+  warning?: string | undefined;
 };
 type MailboxListResponse = {
   mailboxes: Array<Mailbox>;
@@ -5218,6 +5243,11 @@ export const ChannelIdentity: z.ZodType<ChannelIdentity> = z.object({
   kind: z.enum(["agent", "user"]),
   id: z.string().optional(),
 });
+export const ChannelRejectedSenders: z.ZodType<ChannelRejectedSenders> =
+  z.object({
+    count: z.number().int().gte(1),
+    recent: z.array(z.string()).max(20),
+  });
 export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
   instance_id: z.string().optional(),
@@ -5239,6 +5269,8 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   degraded: z.boolean().optional(),
   degraded_reason: z.string().optional(),
   last_dropped_at: z.string().datetime({ offset: true }).optional(),
+  outbound_policy: z.enum(["reply_only", "agent_may_start"]).optional(),
+  rejected_senders: ChannelRejectedSenders.optional(),
 });
 export const ChannelCreateRequest = z.object({
   type: z.string(),
@@ -5262,6 +5294,97 @@ export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
     id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
     enabled: z.boolean(),
   });
+export const ChannelConfigureResponse = z
+  .object({
+    apply_outcome: z.enum([
+      "applied",
+      "applied_not_running",
+      "unconfirmed",
+      "failed",
+      "no_reload_needed",
+    ]),
+    apply_reason: z.string().optional(),
+    apply_note: z.string().optional(),
+  })
+  .passthrough();
+export const ChannelConfigureError = z.object({
+  error: z.string(),
+  code: z.enum([
+    "could_not_save",
+    "credential_saved_not_saved",
+    "saved_not_refreshed",
+  ]),
+  detail: z.string().max(500).optional(),
+});
+export const ChannelOutbound: z.ZodType<ChannelOutbound> = z.object({
+  policy: z.enum(["reply_only", "agent_may_start"]),
+  targets: z.array(z.string().min(1).max(64)).max(20),
+});
+export const ChannelAvailability: z.ZodType<ChannelAvailability> = z.object({
+  state: z.enum(["running", "not_running", "not_loaded"]),
+  reason: z.string().max(500).optional(),
+});
+export const ChannelOutboundRead: z.ZodType<ChannelOutboundRead> = z.object({
+  outbound: ChannelOutbound,
+  revision: z.string(),
+  availability: ChannelAvailability,
+  start_supported: z.boolean(),
+});
+export const ChannelOutboundUpdateRequest = z.object({
+  policy: z.enum(["reply_only", "agent_may_start"]),
+  targets: z.array(z.string().max(256)).max(64),
+  expected_revision: z.string().min(1),
+});
+export const ChannelOutboundWriteResponse: z.ZodType<ChannelOutboundWriteResponse> =
+  z.object({
+    outbound: ChannelOutbound,
+    revision: z.string(),
+    warning: z.string().max(500).optional(),
+  });
+export const ChannelOutboundRejection = z.object({
+  error: z
+    .string()
+    .max(500)
+    .regex(/^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$/),
+  code: z.enum([
+    "invalid_targets",
+    "too_many_targets",
+    "platform_cannot_start",
+    "platform_cannot_message_people",
+    "stale_revision",
+    "connect_first",
+    "lookup_unavailable",
+    "saved_live_mismatch",
+  ]),
+  target_errors: z
+    .array(
+      z.object({
+        index: z.number().int().gte(0),
+        target: z
+          .string()
+          .max(24)
+          .regex(/^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$/),
+        code: z.enum([
+          "invalid_id",
+          "wildcard_not_allowed",
+          "username_not_allowed",
+          "wrong_platform",
+          "not_found",
+          "unsupported_channel_kind",
+          "cannot_message_people",
+          "lookup_unavailable",
+        ]),
+        reason: z
+          .string()
+          .max(120)
+          .regex(/^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$/)
+          .optional(),
+      })
+    )
+    .max(10)
+    .optional(),
+  omitted_count: z.number().int().gte(1).optional(),
+});
 export const ChannelTestResponse = z
   .object({ success: z.boolean(), message: z.string() })
   .passthrough();
@@ -8630,7 +8753,8 @@ Includes session_start events from all agent stores and task lifecycle events.
     errors: [
       {
         status: 400,
-        description: `Bad request — missing or invalid field.`,
+        description: `Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; (channels spec FR-037, T-10 rows 15-16).
+`,
         schema: ErrorResponse,
       },
       {
@@ -8655,7 +8779,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 422,
-        description: `Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of &#x60;ask&#x60; for Omnipus is refused — &quot;Omnipus takes no per-agent Ask; set Ask globally or use Deny&quot;. &#x60;deny&#x60; is accepted. No writes occurred.
+        description: `Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of &#x60;ask&#x60; for Omnipus is refused — &quot;Omnipus takes no per-agent Ask; set Ask globally or use Deny&quot;. &#x60;deny&#x60; is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9).
 `,
         schema: ErrorResponse,
       },
@@ -9057,7 +9181,8 @@ Includes session_start events from all agent stores and task lifecycle events.
     errors: [
       {
         status: 400,
-        description: `Bad request — missing or invalid field.`,
+        description: `Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; (channels spec FR-037, T-10 rows 15-16).
+`,
         schema: ErrorResponse,
       },
       {
@@ -9082,7 +9207,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 422,
-        description: `Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of &#x60;ask&#x60; for Omnipus is refused — &quot;Omnipus takes no per-agent Ask; set Ask globally or use Deny&quot;. &#x60;deny&#x60; is accepted. No writes occurred.
+        description: `Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of &#x60;ask&#x60; for Omnipus is refused — &quot;Omnipus takes no per-agent Ask; set Ask globally or use Deny&quot;. &#x60;deny&#x60; is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9).
 `,
         schema: ErrorResponse,
       },
@@ -9656,7 +9781,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/channels/:id/configure",
     alias: "configureChannel",
-    description: `Merges request body fields into the channel&#x27;s config section. Fields absent from the request body are not touched (merge, not replace). The &quot;enabled&quot; field is reserved and ignored if sent. Returns the updated config with credential fields redacted.
+    description: `Merges request body fields into the channel&#x27;s config section. Fields absent from the request body are not touched (merge, not replace). The &quot;enabled&quot; field is reserved and ignored if sent. &#x60;outbound&#x60;, &#x60;workspace_id&#x60; and &#x60;identity&#x60; cannot be set here, in any letter case: 400 (the outbound setting is changed only with PUT /api/v1/channels/{id}/outbound; the binding only with the routing route). &#x60;apply_outcome&#x60;, &#x60;apply_reason&#x60; and &#x60;apply_note&#x60; are stripped from the body. When the save changes an access field or stores a credential, or the connection is not current, the one connection is restarted and the response reports the outcome in &#x60;apply_outcome&#x60; (channels spec T-6, FR-050). Returns the updated config with credential fields redacted.
 `,
     requestFormat: "json",
     parameters: [
@@ -9673,11 +9798,24 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.string(),
       },
     ],
-    response: z.object({}).partial().passthrough(),
+    response: z
+      .object({
+        apply_outcome: z.enum([
+          "applied",
+          "applied_not_running",
+          "unconfirmed",
+          "failed",
+          "no_reload_needed",
+        ]),
+        apply_reason: z.string().optional(),
+        apply_note: z.string().optional(),
+      })
+      .passthrough(),
     errors: [
       {
         status: 400,
-        description: `Invalid JSON body.`,
+        description: `Invalid JSON body, or a field that cannot be set here. Texts: &quot;outbound cannot be set via configure; use PUT /api/v1/channels/{id}/outbound&quot;; the existing workspace_id and identity refusals (set the binding with PUT /api/v1/channels/{id}/routing). Matched in any spelling encoding/json would bind to those fields. Nothing was changed.
+`,
         schema: ErrorResponse,
       },
       {
@@ -9688,6 +9826,17 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The save did not complete; code says what durably changed: could_not_save (nothing), credential_saved_not_saved (a credential of this request was stored, the configuration was not), or saved_not_refreshed (the file was written, the running configuration was not refreshed and the connection was not restarted).
+`,
+        schema: ChannelConfigureError,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -9775,6 +9924,107 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 503,
         description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/channels/:id/outbound",
+    alias: "getChannelOutbound",
+    description: `Returns whether the agent bound to this connection may start messages and to whom, the live revision token, whether the connection is running and whether its platform can start messages (channels spec FR-021). Read from one live configuration snapshot.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
+      },
+    ],
+    response: ChannelOutboundRead,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed channel id.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Unknown channel type.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/channels/:id/outbound",
+    alias: "setChannelOutbound",
+    description: `Replaces the connection&#x27;s outbound policy and target list (channels spec FR-020, FR-022). Targets are canonicalized and de-duplicated; added Discord targets are looked up through the running connection outside the settings lock, each call bounded by a 5-second deadline that covers the rate-limit wait. The revision is re-checked under the settings lock before saving. A permission-extending write needs the saved and running configurations of the connection to correspond; switching to reply_only or removing targets always works, in any connection state. This is the only way to change the setting; every other save path keeps it as stored. Admin only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ChannelOutboundUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
+      },
+    ],
+    response: ChannelOutboundWriteResponse,
+    errors: [
+      {
+        status: 400,
+        description: `invalid_targets (per-target errors in target_errors) or too_many_targets (more than 20 after de-duplication). Nothing was saved.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Unknown channel.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `stale_revision (the setting changed since it was read; reload and retry), connect_first (adding a Discord target needs the connection running), or saved_live_mismatch (the saved and running configurations differ because an earlier change did not finish applying; a permission-extending write waits until they correspond again). Nothing was saved.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 422,
+        description: `platform_cannot_start (&quot;starting messages is not supported yet on &lt;Platform&gt;&quot;) or platform_cannot_message_people (&quot;this platform can only answer, not start a direct message&quot;). Nothing was saved.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 500,
+        description: `&quot;could not save the setting; nothing was changed&quot; — the failure happened before the file was written (no credential is involved on this route).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `lookup_unavailable: Discord could not be reached or timed out while checking an added target, including a rate-limit wait past the deadline. Nothing was saved; try again.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -14422,7 +14672,8 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     errors: [
       {
         status: 400,
-        description: `Invalid policy values.`,
+        description: `Invalid policy values. Also refused, nothing saved: storing allow for an always-ask tool — &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; (channels spec FR-037, T-10 row 15).
+`,
         schema: ErrorResponse,
       },
       {
@@ -15843,7 +16094,7 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "post",
     path: "/tool-approvals/:approval_id",
     alias: "postToolApproval",
-    description: `Approve, deny, or cancel a pending tool call approval.
+    description: `Approve, deny, or cancel a pending tool call approval. For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038, T-10 row 15) the action allow (approve and record a grant) is refused with 400 &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; and nothing is recorded; only allow_once, deny and cancel are accepted, and no approval of such a tool is ever remembered. Every other tool is unchanged.
 `,
     requestFormat: "json",
     parameters: [
@@ -15862,7 +16113,8 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     errors: [
       {
         status: 400,
-        description: `Malformed body or unknown action.`,
+        description: `Malformed body or unknown action, or action allow for an always-ask tool (&quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot;; nothing recorded).
+`,
         schema: ErrorResponse,
       },
       {

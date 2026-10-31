@@ -1853,6 +1853,48 @@ func (e CatalogProviderRegionGroup) Valid() bool {
 	}
 }
 
+// Defines values for ChannelAvailabilityState.
+const (
+	ChannelAvailabilityStateNotLoaded  ChannelAvailabilityState = "not_loaded"
+	ChannelAvailabilityStateNotRunning ChannelAvailabilityState = "not_running"
+	ChannelAvailabilityStateRunning    ChannelAvailabilityState = "running"
+)
+
+// Valid indicates whether the value is a known member of the ChannelAvailabilityState enum.
+func (e ChannelAvailabilityState) Valid() bool {
+	switch e {
+	case ChannelAvailabilityStateNotLoaded:
+		return true
+	case ChannelAvailabilityStateNotRunning:
+		return true
+	case ChannelAvailabilityStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelConfigureErrorCode.
+const (
+	ChannelConfigureErrorCodeCouldNotSave            ChannelConfigureErrorCode = "could_not_save"
+	ChannelConfigureErrorCodeCredentialSavedNotSaved ChannelConfigureErrorCode = "credential_saved_not_saved"
+	ChannelConfigureErrorCodeSavedNotRefreshed       ChannelConfigureErrorCode = "saved_not_refreshed"
+)
+
+// Valid indicates whether the value is a known member of the ChannelConfigureErrorCode enum.
+func (e ChannelConfigureErrorCode) Valid() bool {
+	switch e {
+	case ChannelConfigureErrorCodeCouldNotSave:
+		return true
+	case ChannelConfigureErrorCodeCredentialSavedNotSaved:
+		return true
+	case ChannelConfigureErrorCodeSavedNotRefreshed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelConfigureRequestIdentityKind.
 const (
 	ChannelConfigureRequestIdentityKindAgent ChannelConfigureRequestIdentityKind = "agent"
@@ -1871,6 +1913,33 @@ func (e ChannelConfigureRequestIdentityKind) Valid() bool {
 	}
 }
 
+// Defines values for ChannelConfigureResponseApplyOutcome.
+const (
+	ChannelConfigureResponseApplyOutcomeApplied           ChannelConfigureResponseApplyOutcome = "applied"
+	ChannelConfigureResponseApplyOutcomeAppliedNotRunning ChannelConfigureResponseApplyOutcome = "applied_not_running"
+	ChannelConfigureResponseApplyOutcomeFailed            ChannelConfigureResponseApplyOutcome = "failed"
+	ChannelConfigureResponseApplyOutcomeNoReloadNeeded    ChannelConfigureResponseApplyOutcome = "no_reload_needed"
+	ChannelConfigureResponseApplyOutcomeUnconfirmed       ChannelConfigureResponseApplyOutcome = "unconfirmed"
+)
+
+// Valid indicates whether the value is a known member of the ChannelConfigureResponseApplyOutcome enum.
+func (e ChannelConfigureResponseApplyOutcome) Valid() bool {
+	switch e {
+	case ChannelConfigureResponseApplyOutcomeApplied:
+		return true
+	case ChannelConfigureResponseApplyOutcomeAppliedNotRunning:
+		return true
+	case ChannelConfigureResponseApplyOutcomeFailed:
+		return true
+	case ChannelConfigureResponseApplyOutcomeNoReloadNeeded:
+		return true
+	case ChannelConfigureResponseApplyOutcomeUnconfirmed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelEntryIdentityKind.
 const (
 	ChannelEntryIdentityKindAgent ChannelEntryIdentityKind = "agent"
@@ -1883,6 +1952,24 @@ func (e ChannelEntryIdentityKind) Valid() bool {
 	case ChannelEntryIdentityKindAgent:
 		return true
 	case ChannelEntryIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelEntryOutboundPolicy.
+const (
+	ChannelEntryOutboundPolicyAgentMayStart ChannelEntryOutboundPolicy = "agent_may_start"
+	ChannelEntryOutboundPolicyReplyOnly     ChannelEntryOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelEntryOutboundPolicy enum.
+func (e ChannelEntryOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelEntryOutboundPolicyAgentMayStart:
+		return true
+	case ChannelEntryOutboundPolicyReplyOnly:
 		return true
 	default:
 		return false
@@ -1937,6 +2024,171 @@ func (e ChannelIdentityKind) Valid() bool {
 	case ChannelIdentityKindAgent:
 		return true
 	case ChannelIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundPolicy.
+const (
+	ChannelOutboundPolicyAgentMayStart ChannelOutboundPolicy = "agent_may_start"
+	ChannelOutboundPolicyReplyOnly     ChannelOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundPolicy enum.
+func (e ChannelOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundReadAvailabilityState.
+const (
+	ChannelOutboundReadAvailabilityStateNotLoaded  ChannelOutboundReadAvailabilityState = "not_loaded"
+	ChannelOutboundReadAvailabilityStateNotRunning ChannelOutboundReadAvailabilityState = "not_running"
+	ChannelOutboundReadAvailabilityStateRunning    ChannelOutboundReadAvailabilityState = "running"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundReadAvailabilityState enum.
+func (e ChannelOutboundReadAvailabilityState) Valid() bool {
+	switch e {
+	case ChannelOutboundReadAvailabilityStateNotLoaded:
+		return true
+	case ChannelOutboundReadAvailabilityStateNotRunning:
+		return true
+	case ChannelOutboundReadAvailabilityStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundReadOutboundPolicy.
+const (
+	ChannelOutboundReadOutboundPolicyAgentMayStart ChannelOutboundReadOutboundPolicy = "agent_may_start"
+	ChannelOutboundReadOutboundPolicyReplyOnly     ChannelOutboundReadOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundReadOutboundPolicy enum.
+func (e ChannelOutboundReadOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundReadOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundReadOutboundPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundRejectionCode.
+const (
+	ChannelOutboundRejectionCodeConnectFirst                ChannelOutboundRejectionCode = "connect_first"
+	ChannelOutboundRejectionCodeInvalidTargets              ChannelOutboundRejectionCode = "invalid_targets"
+	ChannelOutboundRejectionCodeLookupUnavailable           ChannelOutboundRejectionCode = "lookup_unavailable"
+	ChannelOutboundRejectionCodePlatformCannotMessagePeople ChannelOutboundRejectionCode = "platform_cannot_message_people"
+	ChannelOutboundRejectionCodePlatformCannotStart         ChannelOutboundRejectionCode = "platform_cannot_start"
+	ChannelOutboundRejectionCodeSavedLiveMismatch           ChannelOutboundRejectionCode = "saved_live_mismatch"
+	ChannelOutboundRejectionCodeStaleRevision               ChannelOutboundRejectionCode = "stale_revision"
+	ChannelOutboundRejectionCodeTooManyTargets              ChannelOutboundRejectionCode = "too_many_targets"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundRejectionCode enum.
+func (e ChannelOutboundRejectionCode) Valid() bool {
+	switch e {
+	case ChannelOutboundRejectionCodeConnectFirst:
+		return true
+	case ChannelOutboundRejectionCodeInvalidTargets:
+		return true
+	case ChannelOutboundRejectionCodeLookupUnavailable:
+		return true
+	case ChannelOutboundRejectionCodePlatformCannotMessagePeople:
+		return true
+	case ChannelOutboundRejectionCodePlatformCannotStart:
+		return true
+	case ChannelOutboundRejectionCodeSavedLiveMismatch:
+		return true
+	case ChannelOutboundRejectionCodeStaleRevision:
+		return true
+	case ChannelOutboundRejectionCodeTooManyTargets:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundRejectionTargetErrorsCode.
+const (
+	ChannelOutboundRejectionTargetErrorsCodeCannotMessagePeople    ChannelOutboundRejectionTargetErrorsCode = "cannot_message_people"
+	ChannelOutboundRejectionTargetErrorsCodeInvalidId              ChannelOutboundRejectionTargetErrorsCode = "invalid_id"
+	ChannelOutboundRejectionTargetErrorsCodeLookupUnavailable      ChannelOutboundRejectionTargetErrorsCode = "lookup_unavailable"
+	ChannelOutboundRejectionTargetErrorsCodeNotFound               ChannelOutboundRejectionTargetErrorsCode = "not_found"
+	ChannelOutboundRejectionTargetErrorsCodeUnsupportedChannelKind ChannelOutboundRejectionTargetErrorsCode = "unsupported_channel_kind"
+	ChannelOutboundRejectionTargetErrorsCodeUsernameNotAllowed     ChannelOutboundRejectionTargetErrorsCode = "username_not_allowed"
+	ChannelOutboundRejectionTargetErrorsCodeWildcardNotAllowed     ChannelOutboundRejectionTargetErrorsCode = "wildcard_not_allowed"
+	ChannelOutboundRejectionTargetErrorsCodeWrongPlatform          ChannelOutboundRejectionTargetErrorsCode = "wrong_platform"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundRejectionTargetErrorsCode enum.
+func (e ChannelOutboundRejectionTargetErrorsCode) Valid() bool {
+	switch e {
+	case ChannelOutboundRejectionTargetErrorsCodeCannotMessagePeople:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeInvalidId:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeLookupUnavailable:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeNotFound:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeUnsupportedChannelKind:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeUsernameNotAllowed:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeWildcardNotAllowed:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeWrongPlatform:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundUpdateRequestPolicy.
+const (
+	ChannelOutboundUpdateRequestPolicyAgentMayStart ChannelOutboundUpdateRequestPolicy = "agent_may_start"
+	ChannelOutboundUpdateRequestPolicyReplyOnly     ChannelOutboundUpdateRequestPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundUpdateRequestPolicy enum.
+func (e ChannelOutboundUpdateRequestPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundUpdateRequestPolicyAgentMayStart:
+		return true
+	case ChannelOutboundUpdateRequestPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundWriteResponseOutboundPolicy.
+const (
+	ChannelOutboundWriteResponseOutboundPolicyAgentMayStart ChannelOutboundWriteResponseOutboundPolicy = "agent_may_start"
+	ChannelOutboundWriteResponseOutboundPolicyReplyOnly     ChannelOutboundWriteResponseOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundWriteResponseOutboundPolicy enum.
+func (e ChannelOutboundWriteResponseOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundWriteResponseOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundWriteResponseOutboundPolicyReplyOnly:
 		return true
 	default:
 		return false
@@ -15387,6 +15639,33 @@ type ChangePasswordRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
+// ChannelAvailability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+type ChannelAvailability struct {
+	// Reason Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+	Reason *string `json:"reason,omitempty"`
+
+	// State running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+	State ChannelAvailabilityState `json:"state"`
+}
+
+// ChannelAvailabilityState running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+type ChannelAvailabilityState string
+
+// ChannelConfigureError 500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056, FR-057, T-6b, T-6c). The code says what the request durably changed.
+type ChannelConfigureError struct {
+	// Code could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+	Code ChannelConfigureErrorCode `json:"code"`
+
+	// Detail Short reason, never a secret.
+	Detail *string `json:"detail,omitempty"`
+
+	// Error The normative text for the code. could_not_save: "could not save config". credential_saved_not_saved: "The credential was saved, but the configuration change was not: nothing else was applied. ..." (T-6b). saved_not_refreshed: "settings saved, but the running configuration could not be refreshed; the connection was not restarted".
+	Error string `json:"error"`
+}
+
+// ChannelConfigureErrorCode could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+type ChannelConfigureErrorCode string
+
 // ChannelConfigureRequest Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
 type ChannelConfigureRequest struct {
 	// AppId Application ID (used by Slack, Discord).
@@ -15438,6 +15717,22 @@ type ChannelConfigureRequest struct {
 
 // ChannelConfigureRequestIdentityKind Routing kind for this channel instance.
 type ChannelConfigureRequestIdentityKind string
+
+// ChannelConfigureResponse 200 body of PUT /api/v1/channels/{id}/configure: the updated channel configuration with credential fields redacted (structure varies by channel type), plus how the save was applied to the running connection (channels spec T-6, FR-050, FR-052).
+type ChannelConfigureResponse struct {
+	// ApplyNote Present whenever a reload was attempted (every outcome except no_reload_needed): "A connection restart was attempted; other connections and scheduled services may have paused briefly while it ran."
+	ApplyNote *string `json:"apply_note,omitempty"`
+
+	// ApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason has its short text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+	ApplyOutcome ChannelConfigureResponseApplyOutcome `json:"apply_outcome"`
+
+	// ApplyReason Present for applied_not_running (the availability reason) and failed (the error's short text). Never a secret.
+	ApplyReason          *string                `json:"apply_reason,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// ChannelConfigureResponseApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason has its short text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+type ChannelConfigureResponseApplyOutcome string
 
 // ChannelCreateRequest Request body for POST /channels — creates a new channel instance. The instance key is derived as "<type>.<slug>" (ADR-029 FR-017).
 type ChannelCreateRequest struct {
@@ -15519,12 +15814,27 @@ type ChannelEntry struct {
 	// NativeAvailable WhatsApp only: whether the native (whatsmeow) transport is compiled into this binary. False on a lite build or an architecture where it is excluded. Omitted for channels to which it does not apply. When false, clients MUST NOT offer native mode (the QR pairing flow cannot work).
 	NativeAvailable *bool `json:"native_available,omitempty"`
 
+	// OutboundPolicy The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+	OutboundPolicy *ChannelEntryOutboundPolicy `json:"outbound_policy,omitempty"`
+
+	// RejectedSenders Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+	RejectedSenders *struct {
+		// Count How many messages were ignored since the adapter started.
+		Count int `json:"count"`
+
+		// Recent Canonical sender ids of the latest ignored senders, most recent first.
+		Recent []string `json:"recent"`
+	} `json:"rejected_senders,omitempty"`
+
 	// Transport Transport mechanism used by this channel.
 	Transport ChannelEntryTransport `json:"transport"`
 }
 
 // ChannelEntryIdentityKind Routing kind for this channel instance.
 type ChannelEntryIdentityKind string
+
+// ChannelEntryOutboundPolicy The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+type ChannelEntryOutboundPolicy string
 
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
@@ -15543,6 +15853,130 @@ type ChannelIdentity struct {
 
 // ChannelIdentityKind Routing kind for this channel instance.
 type ChannelIdentityKind string
+
+// ChannelOutbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+type ChannelOutbound struct {
+	// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+	Policy ChannelOutboundPolicy `json:"policy"`
+
+	// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+	Targets []string `json:"targets"`
+}
+
+// ChannelOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundPolicy string
+
+// ChannelOutboundRead Response of GET /api/v1/channels/{id}/outbound (channels spec FR-021), read from one live configuration snapshot.
+type ChannelOutboundRead struct {
+	// Availability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+	Availability struct {
+		// Reason Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+		Reason *string `json:"reason,omitempty"`
+
+		// State running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+		State ChannelOutboundReadAvailabilityState `json:"state"`
+	} `json:"availability"`
+
+	// Outbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+	Outbound struct {
+		// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+		Policy ChannelOutboundReadOutboundPolicy `json:"policy"`
+
+		// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+		Targets []string `json:"targets"`
+	} `json:"outbound"`
+
+	// Revision The channel revision token (FR-088) computed over the live configuration — the same token list_channels returns and the writer compares against expected_revision. "absent" when the connection is not configured.
+	Revision string `json:"revision"`
+
+	// StartSupported True only for platforms that can start messages in this release (Discord and Telegram). Other platforms show "not supported yet".
+	StartSupported bool `json:"start_supported"`
+}
+
+// ChannelOutboundReadAvailabilityState running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+type ChannelOutboundReadAvailabilityState string
+
+// ChannelOutboundReadOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundReadOutboundPolicy string
+
+// ChannelOutboundRejection Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502 (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
+// Safe-echo set: every string of this schema (error, target_errors[].target, target_errors[].reason) is restricted by its pattern to printable ASCII (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes (double quote, backslash, <, >, &). The server drops any other character before serializing; it never escapes or substitutes. Each string character therefore serializes to exactly one byte, which keeps the worst-case body at about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable characters for its binary sniff.
+type ChannelOutboundRejection struct {
+	// Code Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+	Code ChannelOutboundRejectionCode `json:"code"`
+
+	// Error Human-readable reason, in the safe-echo set. For 502 lookup_unavailable it is "Discord could not be reached to check <ids>; nothing was saved; try again", listing unavailable ids in request order until the next id would exceed 500 characters, then "+<N> more".
+	Error string `json:"error"`
+
+	// OmittedCount Present only when more than 10 entries were invalid: how many invalid entries are not listed in target_errors.
+	OmittedCount *int `json:"omitted_count,omitempty"`
+
+	// TargetErrors Per-target errors: the first 10 invalid entries in request order.
+	TargetErrors *[]struct {
+		// Code Why this entry was refused.
+		Code ChannelOutboundRejectionTargetErrorsCode `json:"code"`
+
+		// Index 0-based position of the entry in the request's targets array (the client shows it on textarea line index + 1). This is the identifier; target is only a hint.
+		Index int `json:"index"`
+
+		// Reason Fixed catalog text for the code, in the safe-echo set (the longest, unsupported_channel_kind's, is 115 characters).
+		Reason *string `json:"reason,omitempty"`
+
+		// Target A sanitized hint of the entry: its first 20 safe-echo characters after dropping every other character, plus "..." when more than 20 survived.
+		Target string `json:"target"`
+	} `json:"target_errors,omitempty"`
+}
+
+// ChannelOutboundRejectionCode Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+type ChannelOutboundRejectionCode string
+
+// ChannelOutboundRejectionTargetErrorsCode Why this entry was refused.
+type ChannelOutboundRejectionTargetErrorsCode string
+
+// ChannelOutboundUpdateRequest Request body of PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-022). The whole target list replaces the stored one. Targets are raw input: the server trims, canonicalizes, removes duplicates and then enforces the limit of 20 (too_many_targets).
+type ChannelOutboundUpdateRequest struct {
+	// ExpectedRevision The revision returned by GET /api/v1/channels/{id}/outbound (or list_channels). A different current revision is refused with 409 stale_revision.
+	ExpectedRevision string `json:"expected_revision"`
+
+	// Policy reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+	Policy ChannelOutboundUpdateRequestPolicy `json:"policy"`
+
+	// Targets Raw target entries, one per textarea line: a bare id or "platform:id". Rejections refer to an entry by its 0-based index in this array.
+	Targets []string `json:"targets"`
+}
+
+// ChannelOutboundUpdateRequestPolicy reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+type ChannelOutboundUpdateRequestPolicy string
+
+// ChannelOutboundWriteResponse Response of a successful PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-027, T-6b).
+type ChannelOutboundWriteResponse struct {
+	// Outbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+	Outbound struct {
+		// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+		Policy ChannelOutboundWriteResponseOutboundPolicy `json:"policy"`
+
+		// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+		Targets []string `json:"targets"`
+	} `json:"outbound"`
+
+	// Revision The new channel revision token (FR-088) over the live configuration.
+	Revision string `json:"revision"`
+
+	// Warning Present only when the file was written but the rest of the running configuration could not be refreshed. The saved list is in force anyway. Text: "Saved and in force for starting messages. Other settings could not be refreshed: <short reason>. Check the server log."
+	Warning *string `json:"warning,omitempty"`
+}
+
+// ChannelOutboundWriteResponseOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundWriteResponseOutboundPolicy string
+
+// ChannelRejectedSenders Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+type ChannelRejectedSenders struct {
+	// Count How many messages were ignored since the adapter started.
+	Count int `json:"count"`
+
+	// Recent Canonical sender ids of the latest ignored senders, most recent first.
+	Recent []string `json:"recent"`
+}
 
 // ChannelRouting Routing configuration for a single communication channel instance, as read back by GET and returned by PUT /channels/{id}/routing. Every channel is bound to a workspace and names that binding's main agent (omnipus-system-agent FR-127, K14); there is no global default agent and no unbound routing mode. An instance that has no binding yet is reported truthfully (FR-128): `bound` is false and both ids are empty strings — never an invented or legacy destination.
 type ChannelRouting struct {
@@ -26752,7 +27186,7 @@ type TokenUsageSummary struct {
 
 // ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `deny` and `cancel` remain distinct non-approval resolution actions.
 type ToolApprovalActionRequest struct {
-	// Action Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+	// Action Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
 	Action ToolApprovalActionRequestAction `json:"action"`
 
 	// Scope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
@@ -26761,7 +27195,7 @@ type ToolApprovalActionRequest struct {
 	Scope *ToolApprovalActionRequestScope `json:"scope,omitempty"`
 }
 
-// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
 type ToolApprovalActionRequestAction string
 
 // ToolApprovalActionRequestScope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
@@ -28888,6 +29322,9 @@ type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
 // EnableChannelJSONRequestBody defines body for EnableChannel for application/json ContentType.
 type EnableChannelJSONRequestBody = ChannelEnableRequest
 
+// SetChannelOutboundJSONRequestBody defines body for SetChannelOutbound for application/json ContentType.
+type SetChannelOutboundJSONRequestBody = ChannelOutboundUpdateRequest
+
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
 type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest
 
@@ -29358,6 +29795,102 @@ func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
 		object["webhook_secret"], err = json.Marshal(a.WebhookSecret)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'webhook_secret': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ChannelConfigureResponse. Returns the specified
+// element and whether it was found
+func (a ChannelConfigureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ChannelConfigureResponse
+func (a *ChannelConfigureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ChannelConfigureResponse to handle AdditionalProperties
+func (a *ChannelConfigureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["apply_note"]; found {
+		err = json.Unmarshal(raw, &a.ApplyNote)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_note': %w", err)
+		}
+		delete(object, "apply_note")
+	}
+
+	if raw, found := object["apply_outcome"]; found {
+		err = json.Unmarshal(raw, &a.ApplyOutcome)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_outcome': %w", err)
+		}
+		delete(object, "apply_outcome")
+	}
+
+	if raw, found := object["apply_reason"]; found {
+		err = json.Unmarshal(raw, &a.ApplyReason)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_reason': %w", err)
+		}
+		delete(object, "apply_reason")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ChannelConfigureResponse to handle AdditionalProperties
+func (a ChannelConfigureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.ApplyNote != nil {
+		object["apply_note"], err = json.Marshal(a.ApplyNote)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'apply_note': %w", err)
+		}
+	}
+
+	object["apply_outcome"], err = json.Marshal(a.ApplyOutcome)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'apply_outcome': %w", err)
+	}
+
+	if a.ApplyReason != nil {
+		object["apply_reason"], err = json.Marshal(a.ApplyReason)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'apply_reason': %w", err)
 		}
 	}
 

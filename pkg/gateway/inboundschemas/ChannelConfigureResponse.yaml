@@ -1,0 +1,40 @@
+title: ChannelConfigureResponse
+description: >
+  200 body of PUT /api/v1/channels/{id}/configure: the updated channel
+  configuration with credential fields redacted (structure varies by channel
+  type), plus how the save was applied to the running connection (channels
+  spec T-6, FR-050, FR-052).
+type: object
+additionalProperties: true
+required:
+  - apply_outcome
+properties:
+  apply_outcome:
+    type: string
+    description: >
+      applied = reload confirmed and the connection is running.
+      applied_not_running = reload confirmed but the connection is not
+      running (apply_reason says why). unconfirmed = the reload was not
+      confirmed within the wait window. failed = the reload returned an error
+      (apply_reason has its short text); it does not claim the old settings
+      are still running. no_reload_needed = the instance is disabled, or
+      nothing changed, no credential was stored and the connection is current.
+    enum:
+      - applied
+      - applied_not_running
+      - unconfirmed
+      - failed
+      - no_reload_needed
+    example: applied
+  apply_reason:
+    type: string
+    description: >
+      Present for applied_not_running (the availability reason) and failed
+      (the error's short text). Never a secret.
+  apply_note:
+    type: string
+    description: >
+      Present whenever a reload was attempted (every outcome except
+      no_reload_needed): "A connection restart was attempted; other
+      connections and scheduled services may have paused briefly while it
+      ran."

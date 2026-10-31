@@ -1790,6 +1790,24 @@ components:
       $ref: ./components/schemas/ChannelEnabledResponse.yaml
     ChannelTestResponse:
       $ref: ./components/schemas/ChannelTestResponse.yaml
+    ChannelOutbound:
+      $ref: ./components/schemas/ChannelOutbound.yaml
+    ChannelAvailability:
+      $ref: ./components/schemas/ChannelAvailability.yaml
+    ChannelOutboundRead:
+      $ref: ./components/schemas/ChannelOutboundRead.yaml
+    ChannelOutboundUpdateRequest:
+      $ref: ./components/schemas/ChannelOutboundUpdateRequest.yaml
+    ChannelOutboundWriteResponse:
+      $ref: ./components/schemas/ChannelOutboundWriteResponse.yaml
+    ChannelOutboundRejection:
+      $ref: ./components/schemas/ChannelOutboundRejection.yaml
+    ChannelConfigureError:
+      $ref: ./components/schemas/ChannelConfigureError.yaml
+    ChannelConfigureResponse:
+      $ref: ./components/schemas/ChannelConfigureResponse.yaml
+    ChannelRejectedSenders:
+      $ref: ./components/schemas/ChannelRejectedSenders.yaml
     ChannelRouting:
       $ref: ./components/schemas/ChannelRouting.yaml
     ChannelRoutingUpdateRequest:
@@ -3506,7 +3524,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/Agent'
         '400':
-          $ref: '#/components/responses/400BadRequest'
+          description: >
+            Bad request — missing or invalid field. Also refused, nothing
+            saved: a tool policy of allow for an always-ask tool —
+            "set_channel_outbound always asks for approval; it can be set to
+            ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -3520,7 +3546,11 @@ paths:
             Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a
             per-agent tool policy of `ask` for Omnipus is refused — "Omnipus
             takes no per-agent Ask; set Ask globally or use Deny". `deny` is
-            accepted. No writes occurred.
+            accepted. No writes occurred. To return Omnipus to an always-ask
+            tool such as set_channel_outbound, clear the per-agent entry:
+            inheritance restores always-ask only while the global policy is
+            not deny (with a global deny the tool stays off; channels spec
+            FR-037, T-10 rows 8-9).
           content:
             application/json:
               schema:
@@ -3741,7 +3771,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/AgentToolsResponse'
         '400':
-          $ref: '#/components/responses/400BadRequest'
+          description: >
+            Bad request — missing or invalid field. Also refused, nothing
+            saved: a tool policy of allow for an always-ask tool —
+            "set_channel_outbound always asks for approval; it can be set to
+            ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -3755,7 +3793,11 @@ paths:
             Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a
             per-agent tool policy of `ask` for Omnipus is refused — "Omnipus
             takes no per-agent Ask; set Ask globally or use Deny". `deny` is
-            accepted. No writes occurred.
+            accepted. No writes occurred. To return Omnipus to an always-ask
+            tool such as set_channel_outbound, clear the per-agent entry:
+            inheritance restores always-ask only while the global policy is
+            not deny (with a global deny the tool stays off; channels spec
+            FR-037, T-10 rows 8-9).
           content:
             application/json:
               schema:
@@ -4091,9 +4133,14 @@ paths:
     post:
       operationId: postToolApproval
       summary: Resolve a pending tool approval (FR-011, FR-082)
-      description: 'Approve, deny, or cancel a pending tool call approval.
-
-        '
+      description: >
+        Approve, deny, or cancel a pending tool call approval. For an
+        always-ask tool (today exactly set_channel_outbound; channels spec
+        FR-038, T-10 row 15) the action allow (approve and record a grant) is
+        refused with 400 "set_channel_outbound always asks for approval; it
+        can be set to ask or deny, not allow" and nothing is recorded; only
+        allow_once, deny and cancel are accepted, and no approval of such a
+        tool is ever remembered. Every other tool is unchanged.
       tags:
       - Tools
       parameters:
@@ -4118,7 +4165,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ToolApprovalResponse'
         '400':
-          description: Malformed body or unknown action.
+          description: >
+            Malformed body or unknown action, or action allow for an
+            always-ask tool ("set_channel_outbound always asks for approval;
+            it can be set to ask or deny, not allow"; nothing recorded).
           content:
             application/json:
               schema:
@@ -4194,7 +4244,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/GlobalToolPolicies'
         '400':
-          description: Invalid policy values.
+          description: >
+            Invalid policy values. Also refused, nothing saved: storing allow
+            for an always-ask tool — "set_channel_outbound always asks for
+            approval; it can be set to ask or deny, not allow" (channels spec
+            FR-037, T-10 row 15).
           content:
             application/json:
               schema:
@@ -5205,9 +5259,19 @@ paths:
     put:
       operationId: configureChannel
       summary: Configure a channel
-      description: 'Merges request body fields into the channel''s config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. Returns the updated config with credential fields redacted.
-
-        '
+      description: >
+        Merges request body fields into the channel's config section. Fields
+        absent from the request body are not touched (merge, not replace). The
+        "enabled" field is reserved and ignored if sent. `outbound`,
+        `workspace_id` and `identity` cannot be set here, in any letter case:
+        400 (the outbound setting is changed only with PUT
+        /api/v1/channels/{id}/outbound; the binding only with the routing
+        route). `apply_outcome`, `apply_reason` and `apply_note` are stripped
+        from the body. When the save changes an access field or stores a
+        credential, or the connection is not current, the one connection is
+        restarted and the response reports the outcome in `apply_outcome`
+        (channels spec T-6, FR-050). Returns the updated config with
+        credential fields redacted.
       tags:
       - Channels
       parameters:
@@ -5232,14 +5296,21 @@ paths:
                 token: your-telegram-bot-token
       responses:
         '200':
-          description: Updated channel configuration (credentials redacted).
+          description: >
+            Updated channel configuration (credentials redacted) plus
+            apply_outcome, and apply_reason / apply_note where T-6 says.
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: true
+                $ref: '#/components/schemas/ChannelConfigureResponse'
         '400':
-          description: Invalid JSON body.
+          description: >
+            Invalid JSON body, or a field that cannot be set here. Texts:
+            "outbound cannot be set via configure; use PUT
+            /api/v1/channels/{id}/outbound"; the existing workspace_id and
+            identity refusals (set the binding with PUT
+            /api/v1/channels/{id}/routing). Matched in any spelling
+            encoding/json would bind to those fields. Nothing was changed.
           content:
             application/json:
               schema:
@@ -5252,6 +5323,158 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: >
+            The save did not complete; code says what durably changed:
+            could_not_save (nothing), credential_saved_not_saved (a credential
+            of this request was stored, the configuration was not), or
+            saved_not_refreshed (the file was written, the running
+            configuration was not refreshed and the connection was not
+            restarted).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelConfigureError'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+  /channels/{id}/outbound:
+    get:
+      operationId: getChannelOutbound
+      summary: Get a connection's outbound (start messages) setting
+      description: >
+        Returns whether the agent bound to this connection may start messages
+        and to whom, the live revision token, whether the connection is
+        running and whether its platform can start messages (channels spec
+        FR-021). Read from one live configuration snapshot.
+      tags:
+      - Channels
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel instance ID.
+        schema:
+          $ref: '#/components/schemas/ChannelId'
+        example: telegram
+      responses:
+        '200':
+          description: The outbound setting.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundRead'
+        '400':
+          description: Malformed channel id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Unknown channel type.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: setChannelOutbound
+      summary: Set a connection's outbound (start messages) setting
+      description: >
+        Replaces the connection's outbound policy and target list (channels
+        spec FR-020, FR-022). Targets are canonicalized and de-duplicated;
+        added Discord targets are looked up through the running connection
+        outside the settings lock, each call bounded by a 5-second deadline
+        that covers the rate-limit wait. The revision is re-checked under the
+        settings lock before saving. A permission-extending write needs the
+        saved and running configurations of the connection to correspond;
+        switching to reply_only or removing targets always works, in any
+        connection state. This is the only way to change the setting; every
+        other save path keeps it as stored. Admin only.
+      tags:
+      - Channels
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel instance ID.
+        schema:
+          $ref: '#/components/schemas/ChannelId'
+        example: telegram
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelOutboundUpdateRequest'
+      responses:
+        '200':
+          description: >
+            Saved and in force. warning is present only when the file was
+            written but the rest of the running configuration could not be
+            refreshed (the saved list is in force anyway, T-6b).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundWriteResponse'
+        '400':
+          description: >
+            invalid_targets (per-target errors in target_errors) or
+            too_many_targets (more than 20 after de-duplication). Nothing was
+            saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundRejection'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Unknown channel.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            stale_revision (the setting changed since it was read; reload and
+            retry), connect_first (adding a Discord target needs the
+            connection running), or saved_live_mismatch (the saved and running
+            configurations differ because an earlier change did not finish
+            applying; a permission-extending write waits until they correspond
+            again). Nothing was saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundRejection'
+        '422':
+          description: >
+            platform_cannot_start ("starting messages is not supported yet on
+            <Platform>") or platform_cannot_message_people ("this platform can
+            only answer, not start a direct message"). Nothing was saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundRejection'
+        '500':
+          description: >
+            "could not save the setting; nothing was changed" — the failure
+            happened before the file was written (no credential is involved
+            on this route).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            lookup_unavailable: Discord could not be reached or timed out
+            while checking an added target, including a rate-limit wait past
+            the deadline. Nothing was saved; try again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundRejection'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /channels/{id}/test:
     post:
       operationId: testChannel

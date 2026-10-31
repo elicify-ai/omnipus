@@ -1,0 +1,34 @@
+title: ChannelOutboundRead
+description: >
+  Response of GET /api/v1/channels/{id}/outbound (channels spec FR-021), read
+  from one live configuration snapshot.
+type: object
+additionalProperties: false
+required:
+  - outbound
+  - revision
+  - availability
+  - start_supported
+properties:
+  outbound:
+    $ref: './ChannelOutbound.yaml'
+    description: >
+      The connection's outbound setting. When config.json has none, this is
+      {policy: reply_only, targets: []}.
+  revision:
+    type: string
+    description: >
+      The channel revision token (FR-088) computed over the live
+      configuration — the same token list_channels returns and the writer
+      compares against expected_revision. "absent" when the connection is not
+      configured.
+    example: absent
+  availability:
+    $ref: './ChannelAvailability.yaml'
+    description: Whether the connection is running right now.
+  start_supported:
+    type: boolean
+    description: >
+      True only for platforms that can start messages in this release
+      (Discord and Telegram). Other platforms show "not supported yet".
+    example: true
