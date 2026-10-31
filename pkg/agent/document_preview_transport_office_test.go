@@ -14,6 +14,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
+	"github.com/elicify-ai/omnipus/pkg/preview"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -168,8 +169,22 @@ func TestOfficeUpload_CatalogDocumentCountKeepsNewestFive(t *testing.T) {
 }
 
 func TestOfficeUpload_ImageOnlyPDFOffersPagesAndActionablePath(t *testing.T) {
-	// This resolver has no preview-service input yet. Preserve the missing
-	// integration as loud RED; do not inject fake page images into its result.
+	// Upload routing uses the gateway's shared preview service. Install the
+	// real registered renderer, never inject canned page images, and restore
+	// the previous service so this test cannot alter another test's gateway.
+	previous := preview.Shared()
+	t.Cleanup(func() { preview.SetShared(previous) })
+	svc := officepreview.Service(t, false, true)
+	preview.SetShared(svc)
+	// Instrument control: this service actually renders before the resolver
+	// is tested. A missing component is not a routing-failure oracle.
+	admission, err := svc.Admit(context.Background(), false)
+	require.NoError(t, err)
+	t.Cleanup(admission.Release)
+	control, controlErr := svc.Preview(context.Background(), admission, preview.Request{Name: "control.pdf", Ext: ".pdf", Data: officepreview.PDF(1), Default: true})
+	admission.Release()
+	require.NoError(t, controlErr)
+	require.Len(t, control.Pages, 1)
 	cat, err := catalog.NewCatalog(catalogDocJSON(t, "office-provider", "office-model", "text", "image"))
 	require.NoError(t, err)
 	store := mediatest.NewFileMediaStore(t)

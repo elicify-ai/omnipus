@@ -99,7 +99,15 @@ func TestPreviewDocument_ReadAuthorizationAndAudit(t *testing.T) {
 	tool.SetAuditLogger(log)
 
 	secret := filepath.Join(t.TempDir(), "outside-secret.pdf")
-	if err := os.WriteFile(secret, []byte("%PDF-1.4"), 0o600); err != nil {
+	if writeErr := os.WriteFile(secret, []byte("%PDF-1.4"), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	// read_file's audit contract records the canonical existing path. On
+	// macOS the default temporary prefix /var is an alias of /private/var;
+	// keep the supplied alias in the call, but derive the expected identity
+	// independently from the filesystem rather than from an audit row.
+	canonicalSecret, err := filepath.EvalSymlinks(secret)
+	if err != nil {
 		t.Fatal(err)
 	}
 	result := tool.Execute(ctx, map[string]any{"file": secret})
@@ -130,7 +138,7 @@ func TestPreviewDocument_ReadAuthorizationAndAudit(t *testing.T) {
 	denials := map[string]int{}
 	for _, row := range rows {
 		if row.Event == PathAccessDeniedEvent {
-			if row.AgentID != "office-preview-test" || row.SessionID != "session-office-preview" || row.Decision != audit.DecisionDeny || row.detail("path") != secret {
+			if row.AgentID != "office-preview-test" || row.SessionID != "session-office-preview" || row.Decision != audit.DecisionDeny || row.detail("path") != canonicalSecret {
 				t.Fatalf("incorrect preview/read denial attribution: %+v", row)
 			}
 			denials[row.Tool]++

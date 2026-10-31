@@ -31,17 +31,13 @@ func init() {
 	}
 }
 
-type fakeOfficeReceipt struct {
-	Args  []string `json:"args"`
-	Env   []string `json:"env"`
-	PID   int      `json:"pid"`
-	Child int      `json:"child"`
-}
-
 func fakeOfficeProcess() int {
 	behavior, err := os.ReadFile("behavior")
 	if err != nil {
 		return 80
+	}
+	if strings.HasPrefix(string(behavior), "retry_") {
+		return officeRetryProcess(string(behavior))
 	}
 	receipt := fakeOfficeReceipt{Args: os.Args[1:], Env: os.Environ(), PID: os.Getpid()}
 	if string(behavior) == "tree" {
@@ -90,18 +86,6 @@ func fakeOfficeProcess() int {
 		_, _ = os.Stdout.WriteString("convert document.xlsx as a Calc document -> document.pdf using filter calc_pdf_Export\n")
 	}
 	return 0
-}
-
-func fakeOfficeCall(t *testing.T, home, behavior string) (officeConversion, *call) {
-	t.Helper()
-	self, err := os.Executable()
-	require.NoError(t, err)
-	start, err := processStart(os.Getpid())
-	require.NoError(t, err)
-	c, err := newCall(home, os.Getpid(), start)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(c.dir, "behavior"), []byte(behavior), 0600))
-	return officeConversion{self: self, executable: self, root: filepath.Dir(self), call: c}, c
 }
 
 // T-06 / MV-2: exact child argv and environment (captured inside the real
