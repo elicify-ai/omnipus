@@ -583,3 +583,67 @@ func TestGuard_LongOptionScriptPositionKeptCertain(t *testing.T) {
 		require.Empty(t, got, "a known argument-less option must not withhold on its own\ncommand: %s\nrefusal: %s", cmd, got)
 	})
 }
+
+// TestGuard_RedirectionGluedToShellStillWithholdsExemption is the round-6
+// redirection continuation (security re-check + team-lead proof on
+// 544e9856f). A redirection operator written NEXT TO the shell name leaves
+// the interpreter inside one whitespace-delimited word (`bash>out.txt`), so
+// the nested-shell scan never sees it and the pipe-fed script's unseen text
+// escapes the brace withholding. Every glued operator form must withhold
+// like its separated form. Fixtures are print-only (echo); nothing is
+// written or launched; /tm must be absent so the glue literal's condition 4
+// holds.
+//
+// Grammar decisions (cited, not guessed):
+//   - `bash2>x` is NOT a shell invocation: under POSIX 2.3 Token Recognition
+//     and 2.7 Redirection an IO_NUMBER is recognized only when the token
+//     immediately before the operator is all digits; `bash2` is an ordinary
+//     command word, so the simple command is "run bash2 with stdout
+//     redirected" and no interpreter reads the pipe. It must stay allowed —
+//     including after the fix.
+//   - `bash&>out.txt`: bash lexes `&>` as its combined stdout+stderr
+//     redirection operator; POSIX sh has no `&>` and reads `&` as the async
+//     separator (an asynchronous bash still reading the pipe, then an empty
+//     `>out.txt` command). Under BOTH readings a stdin-reading shell is
+//     present, so the shape stays refused.
+func TestGuard_RedirectionGluedToShellStillWithholdsExemption(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	require.False(t, t11FirstExists("/tm"), "fixture: /tm exists, so the glue literal's condition 4 would not hold")
+	glue := `echo {'/tm',}p/x`
+
+	// Refused: glued operators (allowed at 544e9856f — the bypass), plus the
+	// separated contrast forms (refused there) and the two-reading &> shape.
+	refused := []struct{ cmd, why string }{
+		{`echo "` + glue + `" | bash>out.txt`, "an operator glued to the name must not hide the interpreter (proof: allowed at 544e9856f)"},
+		{`echo "` + glue + `" | bash> out.txt`, "an operator glued to the name must not hide the interpreter (proof: allowed at 544e9856f)"},
+		{`echo "` + glue + `" | bash>>out.txt`, "an append operator glued to the name must not hide the interpreter (proof: allowed at 544e9856f)"},
+		{`echo "` + glue + `" | sh>out.txt`, "the same glued shape must refuse for sh (proof: allowed at 544e9856f)"},
+		{`echo "` + glue + `" | zsh>out.txt`, "the same glued shape must refuse for zsh (the guard lists it)"},
+		{`echo "` + glue + `" | dash>out.txt`, "the same glued shape must refuse for dash (the guard lists it)"},
+		{`echo "` + glue + `" | bash<in.txt`, "input redirection glued to the name still reads the script from standard input (proof family: allowed at 544e9856f)"},
+		{`echo "` + glue + `" | bash&>out.txt`, "bash reads &> as one redirection operator and POSIX sh reads & as async: a stdin-reading shell is present under both"},
+		{`echo "` + glue + `" | bash > out.txt`, "separated contrast: refused at 544e9856f and must stay so"},
+		{`echo "` + glue + `" | bash >out.txt`, "separated contrast: refused at 544e9856f and must stay so"},
+		{`echo "` + glue + `" | bash 2>err.txt`, "separated fd-redirect contrast: refused at 544e9856f and must stay so"},
+		{`echo "` + glue + `" | bash 2>&1`, "separated fd-duplicate contrast: refused at 544e9856f and must stay so"},
+		{`echo "` + glue + `" | bash < in.txt`, "separated input redirection contrast: the script is read from standard input redirected from a file"},
+	}
+	for _, c := range refused {
+		t.Run(c.cmd, func(t *testing.T) {
+			t11RequireRefused(t, tool, cwd, c.cmd, "path outside working dir", c.why)
+		})
+	}
+
+	t.Run("bash2>x is a different command word and stays allowed", func(t *testing.T) {
+		// POSIX 2.3/2.7: the fd number is recognized only when the token
+		// before the operator is all digits, so `bash2` is an ordinary
+		// command word and no interpreter reads the pipe. Refusing this
+		// would break everyday `tool2>err.log` shapes, so it must stay
+		// allowed before and after the fix.
+		cmd := `echo "` + glue + `" | bash2>x`
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Empty(t, got, "a word that is not an interpreter name (bash2) must not withhold on its own\ncommand: %s\nrefusal: %s", cmd, got)
+	})
+}
