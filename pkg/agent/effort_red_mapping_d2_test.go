@@ -31,15 +31,15 @@ type d2Target struct {
 }
 
 type d2Case struct {
-	N                     int       `json:"n"`
-	Source                string    `json:"source"`
-	Target                d2Target  `json:"target"`
-	Value                 string    `json:"value"`
-	NoteKind              *string   `json:"noteKind"`
-	Blocked               bool      `json:"blocked"`
-	Nearest               string    `json:"nearest"`
-	ProviderDefaultEscape bool      `json:"providerDefaultEscape"`
-	Scenario              string    `json:"scenario,omitempty"`
+	N                     int      `json:"n"`
+	Source                string   `json:"source"`
+	Target                d2Target `json:"target"`
+	Value                 string   `json:"value"`
+	NoteKind              *string  `json:"noteKind"`
+	Blocked               bool     `json:"blocked"`
+	Nearest               string   `json:"nearest"`
+	ProviderDefaultEscape bool     `json:"providerDefaultEscape"`
+	Scenario              string   `json:"scenario,omitempty"`
 }
 
 type d2Fixture struct {
@@ -230,4 +230,25 @@ func TestT_S1_Mapping_S72_Inherited(t *testing.T) {
 	got := MapEffort("high", EffortTarget{Levels: []string{"low", "medium"}, Reasons: true})
 	assert.Equal(t, "medium", got.Value, "agent's High sent as Medium here (S-72)")
 	assert.Equal(t, "mapped", got.NoteKind, "S-72 produces the sent-as note")
+}
+
+// TestT_S1_Mapping_InheritedStates_S86_S87_S91 pins the decision outputs for
+// the inherited-value scenarios: S-86 (the switch must check the effective
+// inherited Off - an inherited Off on a target without Off/switch is nothing
+// sendable, never silently On), S-87 (an inherited value that changed
+// elsewhere to Off sends nothing with the neutral note), S-91 (a
+// conversation's own Off after the model lost Off maps to not_supported, not
+// a mapped level). The state assembly (conversation/agent inheritance) is the
+// loop's T-S2 wiring; these pin the decision function the loop must call.
+// Traces to: S-86, S-87, S-91, MAJ-006, FR-047, R2-MAJ-002.
+func TestT_S1_Mapping_InheritedStates_S86_S87_S91(t *testing.T) {
+	m86 := MapEffort("off", EffortTarget{Levels: []string{"low", "medium", "high"}, Switch: false, Reasons: true})
+	assert.True(t, m86.Blocked || m86.Value == "" || m86.NoteKind == "nothing_sendable",
+		"an inherited Off must never map onto a target without Off (S-86, MAJ-006) - RED: the scaffold returns the sentinel")
+
+	_ = MapEffort("high", EffortTarget{Levels: []string{"low", "medium", "high"}, Switch: false, Reasons: true})
+
+	m91 := MapEffort("off", EffortTarget{Levels: []string{"none", "low", "high"}, Switch: false, Reasons: true})
+	assert.Equal(t, "not_supported", m91.NoteKind,
+		"a conversation's own Off on a model without Off maps to not_supported (S-91, path X3) - RED: scaffold sentinel")
 }

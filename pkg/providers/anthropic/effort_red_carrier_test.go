@@ -122,3 +122,21 @@ func TestT_P5_S33_ThinkingBlocksAreTheOnlyAnthropicCarrier(t *testing.T) {
 	assert.NotContains(t, string(raw2), "hidden steps",
 		"display reasoning text never reaches the wire (S-33) — PIN")
 }
+
+// TestT_P5_S23_EffortClearsTemperature pins S-23 with the new option: an
+// effort High turn on native Anthropic clears a set temperature (the same
+// rule the legacy thinking_level path already implements).
+// Traces to: S-23, US-3 AS4, T-P5.
+func TestT_P5_S23_EffortClearsTemperature(t *testing.T) {
+	params, err := buildParams(
+		[]Message{{Role: "user", Content: "hello"}}, nil, "claude-m",
+		map[string]any{"reasoning_effort": "high", "temperature": 0.7},
+	)
+	require.NoError(t, err)
+	m := marshalParams(t, params)
+	require.Contains(t, m, "thinking",
+		"effort high enables thinking (S-23 precondition) - RED")
+	_, hasTemp := m["temperature"]
+	assert.False(t, hasTemp,
+		"extended thinking clears a set temperature (S-23) - RED: the ignored effort leaves temperature on the wire")
+}
