@@ -983,7 +983,7 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	// main per eligible member — the same get-or-create the membership write
 	// path runs, so a member's identity does not depend on which surface
 	// established the membership. Best-effort and idempotent.
-	if mainsErr := a.ensureMainsForTeam(ws); mainsErr != nil {
+	if mainsErr := a.ensureMainsForTeamFor(ws, requestUsername(r)); mainsErr != nil {
 		logsafeError("rest: workspace create: some team mains were not created; each is re-attempted when its chat is opened",
 			"workspace_id", ws.ID, "error", mainsErr)
 	}

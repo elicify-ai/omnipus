@@ -949,7 +949,7 @@ export interface WhatsAppPairingSubscribeFrame {
 export interface NotificationFrame {
   type: "notification";
   id: string;
-  notification_type: "schedule_failed" | "knowledge_drift" | "stop_notice";
+  notification_type: "schedule_failed" | "knowledge_drift" | "goal_paused" | "stop_notice";
   title: string;
   body?: string;
   severity: "info" | "warning" | "error";

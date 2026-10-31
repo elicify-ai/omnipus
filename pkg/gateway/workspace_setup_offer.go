@@ -210,7 +210,7 @@ func (p restAPISetupOfferPoster) PostWorkspaceSetupOffer(ctx context.Context, wo
 	if !mainSessionPairEligible(a.agentLoop.GetConfig(), defaultWS, omnipusID) {
 		return errors.New("omnipus is not an eligible member of the default workspace")
 	}
-	mainID, err := a.ensureMainSession(defaultID, omnipusID)
+	mainID, err := a.ensureMainSession(defaultID, omnipusID, "")
 	if err != nil {
 		return fmt.Errorf("prepare Omnipus's main: %w", err)
 	}

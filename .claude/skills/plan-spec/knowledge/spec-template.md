@@ -1,5 +1,7 @@
 # Spec Output Template
 
+Process version: 2026-10-29.1 (template header only; removed from the final spec with the rest of this block)
+
 Structural template for `docs/internal/specs/<name>-spec.md`. Fill in every section.
 Replace all `[bracketed placeholders]` with actual content. A section marked
 "remove if not applicable" may be dropped, but only with an explicit one-line reason
@@ -24,6 +26,11 @@ never invent a placeholder pattern here). If none: `ADR: none — no open design
 
 **Created**: [YYYY-MM-DD]
 **Input**: interview-me output at `[path]`; ADR at `[path]` (if any)
+**Epic**: #[n] (Stage/Horizon on the board)
+**Riders**: [open issues on the same files, confirmed with the architect — or "none found"]
+**Agent tool field table**: [for every agent-managed object this spec changes: object,
+property, user can set, agent can set, reason if different — or "no agent-managed
+object changed"]
 
 ---
 

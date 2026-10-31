@@ -109,8 +109,15 @@ jobs:
         # 20m is the per-test-binary deadline (~2× the 602s worst case; a genuine
         # hang still trips it). The job's timeout-minutes is 45 so the SPA build,
         # the Go build, and those two packages fit under one ceiling.
+        #
+        # 2026-10-29: pkg/gateway alone now runs about 20 minutes on the 4-core
+        # ubuntu runners (release b7d4483c9: amd64 hit the 20m deadline, arm64
+        # passed just under it; the previous release run passed). The package
+        # grew; nothing was stuck. -timeout is raised to 30m while the slow
+        # tests are identified and cut (founder 2026-10-29: find out why they
+        # are slow). A real hang still trips it; the job limit stays 45.
         shell: bash
-        run: go test -tags goolm,stdjson -short -timeout 20m ./...
+        run: go test -tags goolm,stdjson -short -timeout 30m ./...
 
       - name: Smoke boot + /health
         # Run the compiled binary once with --allow-empty on the local runner

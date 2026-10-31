@@ -1,10 +1,20 @@
 # Dispatch and watch — keep workers observable and resumable
 
-Last reviewed: 2026-10-23 — text contradictions and implemented tooling
+Last reviewed: 2026-10-29 — controller located in the coordination repo, pod launch notes
+Process version: 2026-10-29.1
 
 Mechanics for the planning loop's "Dispatch and watch" step. Launcher selection stays
 in the personal rules, outside this repo; set `OMNIPUS_WORKER_CLI` from those rules
 explicitly rather than relying on the controller's default.
+
+**Where the controller lives.** The controller is the coordination repo's
+`tools/steerable_worker_current_turn.py` (`$OMNIPUS_COORDINATION_DIR/tools/`; the
+founder's Mac keeps the older copy under its coordination directory). Mac and pod paths
+differ; see root `CLAUDE.md` ("Running CLI agents"). `$CONTROLLER` below stands for the
+resolved absolute path. The coordination repo notes that the controller and slot runner
+still contain Mac paths: inspect it before use on a pod and report BLOCKED if a Mac-only
+path would be used. On a pod, launch with the pod's launchers named in the personal
+rules and run heavy commands through `/usr/local/bin/heavy`.
 
 ## Pre-flight before a long run or resume
 
@@ -18,10 +28,8 @@ Controller locks, load refusal, local-receipt quota pre-flight and worker-owned
 process-group stop are **implemented** in the controller invoked below. Read its
 `lock_paths`, `acquire_lock`, `quota_refusal` and `main` before changing the launch
 procedure. Every launch keeps its output-base lock; ordinary worktrees also get
-a working-directory lock with live-PID checks. Exactly the shared launch roots
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus` and
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination` skip that directory
-lock, not the output-base, load or quota gates. Workers launched there still create
+a working-directory lock with live-PID checks. Exactly the shared launch roots (the
+Omnipus checkout root and the coordination repo root) skip that directory lock, not the output-base, load or quota gates. Workers launched there still create
 their own writer worktrees; never use the exemption to edit the shared checkout or
 resume over a live predecessor.
 
@@ -38,7 +46,7 @@ Use the existing controller with the role, absolute worktree path, brief file an
 unique, extension-less output base (absolute paths for both files):
 
 ```bash
-OMNIPUS_WORKER_CLI="$WORKER_LAUNCHER" python3 -I /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/recovery-20261002/logs/steerable_worker_current_turn.py "$ROLE" "$WORKTREE" "$BRIEF" "$OUTPUT_BASE"
+OMNIPUS_WORKER_CLI="$WORKER_LAUNCHER" python3 -I "$CONTROLLER" "$ROLE" "$WORKTREE" "$BRIEF" "$OUTPUT_BASE"
 ```
 
 It retains streamed input/output and writes `.stream.jsonl`, `.control.jsonl` and
@@ -62,8 +70,8 @@ Append a newline-terminated user message to that worker's `.control.jsonl` to st
 ```
 
 For Agent-tool workers, observe their progress and use `SendMessage` to the original
-worker for steering and resuming. New work goes directly to specialists; the retained
-#1266 squad lead still uses its own foreground goal-loop wait.
+worker for steering and resuming. New work goes directly to specialists; a separate
+team-lead session running an independent stream uses its own foreground goal-loop wait.
 
 ## Resume the same session
 
@@ -73,7 +81,7 @@ the controller with the same role and worktree, a follow-up brief and a fresh ou
 base; the **fifth argument is the original session id**:
 
 ```bash
-OMNIPUS_WORKER_CLI="$WORKER_LAUNCHER" python3 -I /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/recovery-20261002/logs/steerable_worker_current_turn.py "$ROLE" "$WORKTREE" "$FOLLOW_UP" "$NEW_OUTPUT_BASE" "$SESSION_ID"
+OMNIPUS_WORKER_CLI="$WORKER_LAUNCHER" python3 -I "$CONTROLLER" "$ROLE" "$WORKTREE" "$FOLLOW_UP" "$NEW_OUTPUT_BASE" "$SESSION_ID"
 ```
 
 Arm a watcher on the new stream immediately. Resume the worker in its own session with

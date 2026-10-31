@@ -6,7 +6,7 @@ import { Agent, Workspace, Session, SessionDetail, SessionHistoryResponse } from
 import type { AgentCreateRequestMain, WorkspaceCreateRequest, SessionCreateRequest } from '../../../../src/lib/api/generated/openapi-types';
 import { GatewayProcess } from '../gateway-process';
 import { chatInput } from '../selectors';
-import { E2E_MODEL } from '../e2e-model';
+import { e2eAgentModelFields } from '../e2e-agent-model';
 import { observeTraffic, settled, historyScroller } from './harness';
 import { assertNativeBashPolicy } from './agent-tool-policy';
 import { observeAddressedAttachReadiness } from '../addressed-attach-readiness';
@@ -47,6 +47,23 @@ export class ReloadHarness {
         expect(completedBefore, `${this.phase}: same-session no-op must have a proven prior native completion`).toBe(true);
         expect(currentSocketProof, `${this.phase}: same-document reuse is the exact current socket's prior completion`).toEqual(priorSocketProof);
         await this.info.attach('same-socket-addressed-readiness', { contentType: 'application/json', body: JSON.stringify({ alreadyActive, priorSocketProof, currentSocketProof }) });
+      } else if (!reload && navigation === null && !newAttach && !priorSocketProof) {
+        // Same document right after a fixture gateway restart (seedOrdinary):
+        // the page's OWN socket reconnect re-attaches this session and races
+        // this method. Its attach can be sent before arm() above (so the
+        // waiter correctly ignores it as older than the arm) yet complete only
+        // after priorSocketProof was read; waiting on the waiter alone then
+        // hangs to the test deadline (CI run 40893972010, T40 B52 B53). The
+        // proof is the CURRENT socket's completed attach addressed to this
+        // session: an observed outbound attach_session answered by its
+        // catch_up_complete, never replay done or another socket generation.
+        // Bounded only by the unchanged whole-test deadline (timeout 0).
+        await expect.poll(() => this.attachReadiness.completedOnCurrentSocket(sessionId) !== undefined,
+          { message: `${this.phase}: the current socket's own reconnect attach completes`, timeout: 0 }).toBe(true);
+        const proof = this.attachReadiness.completedOnCurrentSocket(sessionId)!;
+        expect(proof.request.session_id, `${this.phase}: real outbound attach addresses this session`).toBe(sessionId);
+        expect(proof.completion.session_id, `${this.phase}: real completion answers that addressed attach`).toBe(sessionId);
+        await this.info.attach('same-socket-reconnect-addressed-readiness', { contentType: 'application/json', body: JSON.stringify({ alreadyActive, proof }) });
       } else {
         // Native completion is the readiness barrier, under the unchanged test
         // deadline. A short DOM poll must not measure unrelated cold app boot.
@@ -233,7 +250,7 @@ export const test = base.extend<{ reload: ReloadHarness }>({
       fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
       await gateway.restart();
       const agentResult = await gateway.apiFetch('POST', '/api/v1/agents', { type: 'Main', name: 'Reload parity',
-        soul: 'Execute the requested harmless native command and answer the user.', provider: 'openrouter', model: E2E_MODEL,
+        soul: 'Execute the requested harmless native command and answer the user.', ...e2eAgentModelFields('mock'),
         tool_policy_changes: { set: { bash: 'allow' } },
         max_tool_iterations: 8 } satisfies AgentCreateRequestMain);
       expect(agentResult.ok, agentResult.raw).toBe(true);

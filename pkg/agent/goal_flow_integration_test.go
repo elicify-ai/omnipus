@@ -640,6 +640,7 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 		fallback: "unexpected extra call",
 	}
 	al, judgeInst := newGoalLoopTestLoop(t, provider, nil)
+	grPrepareLegacyReminderRuntime(t, al)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 	if !ok {
 		t.Fatal("native-agent not registered")
@@ -799,8 +800,8 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 	if afterCycle1.Round != 0 {
 		t.Fatalf("cycle 1: rounds_used = %d, want 0 (idle settlement must never consume a round, JUDGE-FR-095)", afterCycle1.Round)
 	}
-	if afterCycle1.ZeroOutputPushes != 1 {
-		t.Fatalf("cycle 1: goal record ZeroOutputPushes = %d, want 1 (the unified push ladder dispatched a bounded continue-push)", afterCycle1.ZeroOutputPushes)
+	if afterCycle1.ZeroOutputPushes != 0 {
+		t.Fatalf("cycle 1: assessed outcomes = %d, want 0 before first reminder outcome (R6)", afterCycle1.ZeroOutputPushes)
 	}
 
 	var steerMsg bus.InboundMessage
@@ -822,29 +823,20 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 
 	// --- A SECOND idle cycle must be able to fire (C-7). ---
 	//
-	// wave R7C: the continuation-push turn processed above (a bare TEXT
-	// reply, "Continuing to work on the unmet items.", no tool calls) does
-	// not reset GoalZeroOutputPushes — nothing in checkGoalLoopAfterTurn's
-	// ordinary-turn path resets a RECORDED goal's push counter; only a
-	// fresh activation or the recordless engine-fallback compile zero it
-	// (goal_loop.go, goal_triggers.go::dispatchGoalFallbackCompile). Under
-	// the unified push ladder every idle cycle for a recorded goal is a
-	// push, never an adjudication (JUDGE-FR-095/FR-097), so the counter is
-	// monotonic across cycles: push 1 (above) then push 2 (below). This
-	// assertion proves the SECOND cycle genuinely fires (the push counter
-	// advances) rather than silently doing nothing — the un-wedge invariant
-	// itself was already proven above (idleSettling cleared after the steer
-	// turn was accepted).
+	// R6: the actual text-only reminder above is one unproductive outcome.
+	// The second cycle assesses it as 1; a real published second reminder
+	// independently proves the keeper re-armed rather than silently wedging.
 	rewindGoalLastActivity(t, store, sid)
 	al.goalQuietWindowSettle(time.Now()) // cycle 2: push 2
 	if got := cp.callCount(); got != 0 {
 		t.Fatalf("cycle 2: Judge calls = %d, want 0 (unchanged — idle settlement never adjudicates, JUDGE-FR-095)", got)
 	}
 	afterCycle2 := mustActiveGoalRecord(t, sid)
-	if afterCycle2.ZeroOutputPushes != 2 {
-		t.Fatalf("cycle 2: goal record ZeroOutputPushes = %d, want 2 (a second full idle cycle must complete — no wedge; monotonic push counter, no adjudication ever resets it)",
+	if afterCycle2.ZeroOutputPushes != 1 {
+		t.Fatalf("cycle 2: assessed outcomes = %d, want 1 after the first text-only reminder (R6)",
 			afterCycle2.ZeroOutputPushes)
 	}
+	grTakePublishedReminder(t, al, sid)
 }
 
 // rewindGoalLastActivity pushes sid's goal-record LastActivityAt into the

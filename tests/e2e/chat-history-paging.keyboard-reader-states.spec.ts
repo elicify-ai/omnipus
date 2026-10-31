@@ -126,11 +126,16 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
     });
     // D8 / architect Q1: prefetch is its own request transition, not an
     // announcement to discard or charge to the later keyboard attempt.
+    const earlier = page.getByRole('button', { name: 'Show earlier messages', exact: true });
     const prefetch = await holdPage(page, (url) => url.searchParams.has('before'));
     const beforePrefetch = await geometry(page);
     let prefetchAnnouncements: string[];
     try {
-      await scrollToDistance(page, 0);
+      // D-K1 keyboard-only: focus arriving on Show earlier scrolls the reader
+      // to the loaded top, and that real pixel trigger (FR-007, <=2H) IS the
+      // automatic prefetch. Focusing it only after a scrolled prefetch would
+      // fire a second automatic prefetch on arrival, not a keyboard attempt.
+      await earlier.focus();
       const prefetchRoute = await prefetch.requested;
       expect(prefetch.requests, 'one real automatic prefetch before keyboard activation').toHaveLength(1);
       await expect(page.getByRole('status').filter({ hasText: 'Loading earlier messages…' })).toHaveCount(1);
@@ -154,11 +159,8 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
     } finally { prefetch.release(); await prefetch.dispose(); }
     const held = await holdPage(page, (url) => url.searchParams.has('before'));
     try {
-      const earlier = page.getByRole('button', { name: 'Show earlier messages', exact: true });
-      // Native focus scrolling to this offscreen boundary would itself start
-      // ANOTHER automatic prefetch before Enter. Focus without navigation so
-      // this phase really is the separate keyboard action named by the test.
-      await earlier.evaluate(element => (element as HTMLElement).focus({ preventScroll: true }));
+      // Focus stays on the control while the settled prefetch prepends above
+      // the anchored reader; no new focus arrival, so no new pixel trigger.
       await expect(earlier, 'keyboard input targets the actual focused recovery control').toBeFocused();
       await settled(page);
       await expect(earlier, 'the distinct keyboard attempt starts only after the prefetch guard clears').not.toHaveAttribute('aria-disabled', 'true');

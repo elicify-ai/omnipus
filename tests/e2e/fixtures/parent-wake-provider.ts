@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { E2E_MODEL } from './e2e-model';
+import { E2E_FALLBACK } from './e2e-model';
 
 export const PARENT_WAKE_TASK = 'Reply with the single word HELLO_HELPER and then stop.';
 export const PARENT_WAKE_HELPER = 'HELLO_HELPER';
@@ -41,7 +41,7 @@ export async function startParentWakeProvider(): Promise<ParentWakeProvider> {
     req.on('end', () => {
       if (req.method === 'GET' && req.url?.includes('/models')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ object: 'list', data: [{ id: E2E_MODEL, object: 'model' }] }));
+        res.end(JSON.stringify({ object: 'list', data: [{ id: E2E_FALLBACK.model, object: 'model' }] }));
         return;
       }
       if (req.method !== 'POST' || !req.url?.includes('/chat/completions')) {
@@ -62,7 +62,7 @@ export async function startParentWakeProvider(): Promise<ParentWakeProvider> {
       if (body.stream !== true) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-          id: 'parent-wake-validation', object: 'chat.completion', model: E2E_MODEL,
+          id: 'parent-wake-validation', object: 'chat.completion', model: E2E_FALLBACK.model,
           choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }));
@@ -164,7 +164,7 @@ function toolNames(tools: unknown): string[] {
 
 function chunk(delta: Record<string, unknown>, finishReason: string | null): string {
   return 'data: ' + JSON.stringify({
-    id: 'parent-wake-stream', object: 'chat.completion.chunk', model: E2E_MODEL,
+    id: 'parent-wake-stream', object: 'chat.completion.chunk', model: E2E_FALLBACK.model,
     created: Math.floor(Date.now() / 1000),
     choices: [{ index: 0, delta, finish_reason: finishReason }],
   }) + '\n\n';

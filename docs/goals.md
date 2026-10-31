@@ -11,6 +11,8 @@ Goals come from two places:
 - **Chat.** Type `/goal` and what you want. The goal activates and work starts in the same turn. No form, nothing to confirm.
 - **Tasks.** Every task on the Board carries a goal: the task form's required **Goal** field, criteria and Definition of Done become the record when the task runs. See [tasks](tasks.md).
 
+An agent can also start a goal itself with `set_goal`; it then appears like any goal.
+
 From there the two are one machine: same loop, same claim, same Judge. Only visibility differs.
 
 The working agent writes the goal record itself, as its opening move, and shows it in the chat as working assumptions. You do not approve them; if they are wrong you say so, and the agent updates the record and shows what changed. If the agent is unsure it understands you, it asks — one round of questions per goal. On the web app that is a question card; on a connector, a plain question in chat.
@@ -40,7 +42,7 @@ For a quick answer, plain chat is the right tool. A goal adds verification, and 
 4. Answer the question card if one appears.
 5. To change direction, send a normal message such as "make it dark-themed only". The agent updates the record and shows what changed. Nothing asks you to confirm.
 6. To restate the goal outright, type `/goal` with the new wording; the new intent replaces the working prompt.
-7. To check on progress, type `/goal` alone (or `/goal status`) for elapsed time, tries used, the latest Judge reason and the record.
+7. To check on progress, type `/goal` alone (or `/goal status`) for elapsed time, tries used, the latest goal or Judge reason and the record.
 8. To stop it, type `/goal clear`; the words `stop`, `off`, `reset`, `cancel` and `none` do the same.
 
 A goal runs as a loop:
@@ -74,6 +76,78 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 | cleared | You stopped it | Restart if needed |
 | expired | Quiet for seven days with nothing running — a goal whose agent or helper is still working never expires | Restart it |
 
+### Automatic reminders
+
+An idle goal normally waits **60 seconds** without activity before another automatic reminder is eligible. In **Settings → Performance**, the reminder quiet window accepts a whole number from **30 to 3600 seconds**. It applies only when the goal is idle; it has no off switch and zero is not an off value. Busy-work check-ins use their own independent interval and switch, described below.
+
+When an automatic reminder starts another work turn for a goal in your own chat—not a helper or task run—the web app shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line is saved in that chat's history and remains after you reload it.
+
+If that line cannot be saved, the live chat shows a generic turn error. The goal stays active, and this failed start leaves the reminder count unchanged. If chat history is unwritable, the explanation may not be saved either. A later reminder can continue the same goal once saving works again.
+
+The same system line also appears when the Judge sends the agent back to keep working in that chat. Those Judge follow-ups are not automatic idle reminders and do not add to the no-progress count.
+
+There is no lifetime limit on reminders. Instead, Omnipus counts consecutive automatic idle-reminder turns that **finish without progress**. Sending a reminder does not itself use up one of these outcomes, and a turn that is still running is not counted as finished. Progress resets the count to zero.
+
+| Counts as progress | Does not count by itself |
+|---|---|
+| New goal evidence; a new saved change snapshot (commit) in the goal's workspace since the last check; an executed tool call other than `set_todos` or a claim-only `goal_claim` call; activity in a delegated helper; output or completion from background work owned by the goal session | A text-only answer, a prose completion claim, a claim-only message, or a turn that only updates `set_todos` |
+
+A saved task check counts only when its recorded time sits strictly inside one run that belongs to this goal: after the clock second that run started and, if the run has finished, before the clock second it finished. A check written after the run closed, a check from a run started outside this goal, a check with no saved run, and a check whose time could belong to more than one run do not count. Those times are stored only to the second, so a check that lands in the same second a run starts or finishes is left out on purpose. An executed tool, helper output, background work, and a finished run still count on their own.
+
+The file-change check reads committed workspace history, not uncommitted edits. Another chat's commit in the same workspace can count too. A file-writing tool that actually runs still counts under the tool-call rule, without needing a commit.
+
+After **five consecutive completed reminders without progress**, automatic reminders pause. The chat shows this system line:
+
+> No progress after 5 reminders — goal paused. Reply to continue.
+
+The pause message is a goal status reason, not a Judge verdict. A normal reply clears it.
+
+After three failed automatic reminder turns in a row, the same active goal also pauses; a successful reminder resets this failure count, failed turns never add to the separate five-reminder no-progress count, and a normal reply resumes it.
+
+For this pause, the chat shows:
+
+> 3 reminder turns failed in a row — goal paused. Reply to continue.
+
+`/goal status` is read-only: it does not resume the goal or reset either reminder count. Rebuilding reminder tracking from saved state normally keeps the same failure-pause notice rather than adding another one; this is not a guarantee against duplicates at every possible crash moment. A normal reply starts a new cycle, so three later failed automatic reminders earn a fresh pause notice.
+
+If Omnipus detects a failure while saving a reminder's final conversation state, it does not assess that reminder or add to either pause count. It reports that storage problem separately. Correct the underlying storage problem, then send a normal reply to start a new recovery turn on the same active goal. Repairing storage does not automatically retry the old turn's final save.
+
+A reply on its own is no progress: if an automatic reminder completes without a real tool call (other than `set_todos` or `goal_claim`), helper or background activity, new evidence, or a goal-scoped committed file change, five such turns in a row pause the goal.
+
+Send a normal reply to resume the goal and reset that count. This is a pause, not a failed or ended goal. The same rule applies before and after the agent writes its working goal record; there is no separate two-nudge fallback.
+
+Ordinary automatic reminders wait while the goal session's background commands, dispatched tasks or plans, or delegated helpers are still working. Their output or completion counts as progress. An ordinary reminder that has already finished also waits for that work before its outcome is assessed. The stalled-work check-in below is the one exception. A Stop, an unanswered question or a blocked or waiting-on-you claim still holds automatic reminders, including check-ins. If a Stop is accepted before a waiting reminder is admitted, that reminder does not start. An ended goal receives none.
+
+### A bell notice when a goal pauses
+
+The notification bell shows a warning when the goal first pauses after five completed reminders without progress, after three failed automatic reminders in a row, or when the agent claims it is blocked or waiting for your reply. The warning names the chat and a short reason, for example **Goal paused in Jim - Main Session: blocked**. A chat with a title is named by that title. An agent's main chat is named the way the sidebar shows it: the agent's display name followed by **- Main Session**, as in the example for an agent named Jim. A main chat whose agent has no display name, and any other chat without a title, appear as **an untitled chat**; the warning never shows an agent or chat ID in their place. Clicking it marks it read and opens that chat. It is not a Judge verdict.
+
+There is at most one **unread** warning for the same goal in each recipient's saved bell history. A later pause updates that unread item rather than stacking another one. After you mark it read, a genuinely later pause can create a new item. Replying to resume the goal does **not** mark the warning read or remove it; read it or use the bell's mark-as-read control separately.
+
+For a chat with a recorded owner, only that owner receives the warning. A genuinely shared or unowned chat notifies the configured accounts. With no accounts configured, it is a live-only broadcast to connected clients: there is no per-account saved item to recover after reload. If the chat's ownership metadata cannot be read, Omnipus logs the delivery problem instead of treating the chat as shared.
+
+Saving a bell item can fail independently of pausing the goal. Omnipus logs that failure and still sends a live warning, but that live-only item cannot be recovered from saved history. Pausing and saving the bell item are not one transaction: a crash between them can leave a pause without a bell warning, and retrying an already-saved brake pause does not recreate its warning. Use the chat and goal status to check the goal itself; the bell is a notification, not its authoritative state.
+
+### One check-in for stalled background work
+
+While the goal's own background work is still busy, Omnipus observes the same progress signals listed above. By default, after **30 minutes without new progress**, measured from the first busy observation or the last fresh progress observation, it can start one system check-in on the same goal. **Settings → Performance** accepts a whole-number interval from **5 to 1440 minutes**. Stalled-work check-ins are **on by default**; their switch is the only way to turn them off. Turning them off retains the chosen minutes, and those minutes must stay within range even while off. It does not turn off ordinary idle reminders.
+
+The two timers are independent. For example, a **5-minute** busy-work check-in can become due while a **3600-second** idle quiet window has not elapsed. Busy progress is observed on each sweep, not held behind idle quiet. Merely reserving or sending a check-in does not restart the separate idle quiet clock; real activity and the admitted turn keep their usual activity rules.
+
+Both timers use the existing fixed **30-second** sweep. Successfully applied settings take effect on the next sweep without a restart, including for an already-active goal. A due reminder or check-in can therefore be noticed up to **30 seconds late**; this is scheduling delay, not a promise about when the agent will answer or finish. A save reported as not applied yet is not a successful live update; see [Goal timers in Settings](settings.md#goal-timers).
+
+A check-in is not a message from you and grants no extra permissions. The agent is asked to inspect the listed work's actual status and available output, then choose whether to keep waiting, fix it or stop it—not start replacement work in parallel or replace the goal.
+
+The check-in lists at most ten owned work identifiers, plus a count of any remaining items. It does not copy command lines, tool output, questions or approval requests, and preparing the list does not consume a background command's buffered output. The list is not proof that every helper or job was detected.
+
+A successfully sent check-in is not repeated for the same observed stall. Fresh real progress re-arms it; an old retained progress signal does not restart the clock on every poll. If sending the check-in actually fails, a later check can try again. This tracking is in memory only: after a server restart the observation clock starts again, which can delay a check-in and can allow an extra one for work that had already been checked.
+
+An accepted notification is not yet a started work turn. If a storage read fails before the check-in can be admitted as a work turn, repairing storage lets a later check-in try again without a reply just to unblock it. That failed start does not add to either reminder-pause count; the usual Stop, question and goal-state holds still apply.
+
+The check-in is a real reminder turn, not just a notification. Only after the whole turn has finished is it assessed under the ordinary progress and failure rules—even if the background work is still busy. A completed check-in without progress adds to the five-reminder count; a failed check-in uses the separate failure count. A real tool call during the check-in counts as progress under the same rule as any other reminder. Sending it or merely finishing its answer does not itself spend an outcome.
+
+A helper still in the middle of a live turn is **not** covered by this check-in. The existing suppression remains even if that turn appears wedged: Omnipus warns in the server log after its stall grace, but does not start a check-in, cancel it or start replacement work from that branch. Stop, pending questions, claim pauses and either reminder brake continue to take precedence.
+
 ## What controls a goal
 
 These numbers shape a goal's life:
@@ -83,6 +157,9 @@ These numbers shape a goal's life:
 | Tries per goal | 20 by default | Settings, Performance, "Goal completion budget" |
 | Task attempts | 3 by default | On the task |
 | Question rounds | 1 per goal | Fixed |
+| Automatic-reminder pause | 5 consecutive completed reminders without progress, or 3 consecutive failed reminder turns; no lifetime reminder limit | Fixed |
+| Idle reminder quiet window | 60 seconds by default; whole numbers from 30 to 3600 seconds; no off value | Settings, Performance; live without restart |
+| Stalled-background-work check-in | On by default; 30 minutes without new progress by default, adjustable from 5 to 1440 minutes; one per observed stall, re-armed by fresh progress | Settings, Performance; independent switch and live interval; off retains minutes |
 | Idle expiry | 7 days, never while work is running | Server setting |
 | Active chat goals | 16 at a time | Server setting; tasks count separately |
 

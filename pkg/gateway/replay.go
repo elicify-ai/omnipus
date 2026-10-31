@@ -898,6 +898,10 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 	if n := entry.DisplayContentOriginalSizeBytes(); n > 0 {
 		sr.msgFrame.ContentOriginalSizeBytes = &n
 	}
+	if !entry.Timestamp.IsZero() {
+		timestamp := entry.Timestamp.UTC().Format(time.RFC3339Nano)
+		sr.msgFrame.Timestamp = &timestamp
+	}
 	if entry.AgentID != "" {
 		agentIDCopy := entry.AgentID
 		sr.msgFrame.AgentId = &agentIDCopy

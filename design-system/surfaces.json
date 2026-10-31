@@ -6486,6 +6486,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/assistantRowAttributes.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/AttachmentCard.tsx",
       "lane": 3
     },
@@ -6531,6 +6535,10 @@
     },
     {
       "source": "src/components/chat/ChatThread.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ChatHeaderSlot.tsx",
       "lane": 3
     },
     {
@@ -6791,6 +6799,10 @@
     },
     {
       "source": "src/components/chat/useChatDelegationEvents.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useOpenReveal.ts",
       "lane": 3
     },
     {
