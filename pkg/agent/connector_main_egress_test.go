@@ -219,11 +219,18 @@ func t40CaptureLog(t *testing.T) func() []map[string]any {
 func t40CountRefusalLines(entries []map[string]any) int {
 	n := 0
 	for _, e := range entries {
-		if e["msg"] == t40RefusalLogLine {
+		if e["message"] == t40RefusalLogLine {
 			n++
 		}
 	}
 	return n
+}
+
+func TestT40_LogCaptureInstrument_ReadsRealFileMessageKey(t *testing.T) {
+	readLog := t40CaptureLog(t)
+	logger.InfoCF("t40-instrument", t40RefusalLogLine, map[string]any{"channel": "telegram"})
+	require.Equal(t, 1, t40CountRefusalLines(readLog()),
+		"instrument: the real file sink's message field must be observable before absence is trusted")
 }
 
 // --- the five sites ---------------------------------------------------------
@@ -250,23 +257,44 @@ func TestT40_MainConnectorTurn_ToolMediaIsKeptAndNeverPublished(t *testing.T) {
 	// and exactly one appended note line with the FR-070 text.
 	entries, err := f.store.ReadTranscript(f.main.ID)
 	require.NoError(t, err)
-	toolTexts := 0
+	toolResults := 0
 	for _, e := range entries {
-		if e.Role != "tool" {
+		if e.Type != session.EntryTypeToolCall {
 			continue
 		}
-		toolTexts++
-		require.NotEqual(t, "error", e.Status,
-			"S-60 row 1/m-03: the result must not be replaced with ErrorResult")
-		require.Contains(t, e.Content, "Attachment delivered by tool.",
-			"S-60 row 1/m-03: the original result text stays")
-		require.Len(t, e.Attachments, 1,
-			"S-60 row 1/m-03: the media descriptor is preserved for replay")
-		note := "Note: the file was not sent to telegram: in a main conversation, files stay in this conversation. Nothing was sent outside it."
-		require.Equal(t, 1, strings.Count(e.Content, note),
-			"S-60 row 1/FR-070: exactly one appended note line; content: %q", e.Content)
+		for _, call := range e.ToolCalls {
+			if call.Tool != "handled_media_tool" {
+				continue
+			}
+			toolResults++
+			require.Equal(t, "success", call.Status,
+				"S-60 row 1/m-03: the successful result is not replaced with ErrorResult")
+			text, ok := call.Result["text"].(string)
+			require.True(t, ok, "instrument: persisted tool result carries its text")
+			require.Contains(t, text, "Attachment delivered by tool.",
+				"S-60 row 1/m-03: the original result text stays")
+			rawMedia, err := json.Marshal(call.Result["media"])
+			require.NoError(t, err)
+			var descriptors []map[string]any
+			require.NoError(t, json.Unmarshal(rawMedia, &descriptors))
+			require.Len(t, descriptors, 1, "S-60 row 1/m-03: the media descriptor is preserved for replay")
+			require.Equal(t, filepath.Base(f.imagePath), descriptors[0]["filename"])
+			require.Equal(t, "image/png", descriptors[0]["content_type"])
+			ref, ok := descriptors[0]["ref"].(string)
+			require.True(t, ok)
+			path, _, err := f.mediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{})
+			require.NoError(t, err, "the persisted reference still resolves to the retained file")
+			original, err := os.ReadFile(f.imagePath)
+			require.NoError(t, err)
+			retained, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, original, retained, "m-03: the retained media bytes are unchanged")
+			note := "Note: the file was not sent to telegram: in a main conversation, files stay in this conversation. Nothing was sent outside it."
+			require.Equal(t, 1, strings.Count(text, note),
+				"S-60 row 1/FR-070: exactly one appended note line; text: %q", text)
+		}
 	}
-	require.Equal(t, 1, toolTexts, "instrument: exactly one tool entry expected")
+	require.Equal(t, 1, toolResults, "instrument: exactly one persisted handled_media_tool result expected")
 }
 
 func TestT40_MainConnectorTurn_AsyncForUserTextNotPublished(t *testing.T) {

@@ -61,7 +61,7 @@ func TestS54_AllAdapterRejectionBranchesRecordRejected(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(repoRoot, "pkg", "channels", filepath.FromSlash(adapterFile)))
 			require.NoError(t, err, "instrument: the spec's branch file must exist")
 
-			got := strings.Count(string(data), "recordRejected(")
+			got := strings.Count(string(data), "RecordRejected(")
 			require.GreaterOrEqual(t, got, wantBranches,
 				"S-54: %s must call recordRejected at each of its %d rejection branch(es); found %d — unlisted senders are silently dropped there today",
 				adapterFile, wantBranches, got)

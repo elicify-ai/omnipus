@@ -75,7 +75,7 @@ func TestT07_SavedNotRefreshed_CodeAndTextAndFileHoldsNewList(t *testing.T) {
 	// S-58: the live refresh fails after the file write (real locked vault:
 	// the actual live loader refuses the locked prerequisite), no credential
 	// in the body → 500 saved_not_refreshed; the file holds the new list.
-	f, _, _ := orderingWriterFixture(t)
+	f := t02Fixture(t)
 	previous := f.api.credStore
 	f.api.credStore = credentials.NewStore(filepath.Join(f.f1277.home, "locked-credentials.json"))
 	t.Cleanup(func() { f.api.credStore = previous })
@@ -101,7 +101,7 @@ func TestT07_CouldNotSave_BeforeWriteWithNoCredential_FileUnchanged(t *testing.T
 	// S-58 second half: a failure before the write with no credential in the
 	// body → 500 could_not_save; the file is unchanged. The injection is the
 	// existing read-only-directory pattern (the write cannot land).
-	f, _, _ := orderingWriterFixture(t)
+	f := t02Fixture(t)
 	before := readConfigChannelsFile(t, f)
 
 	dir := filepath.Dir(f.f1277.configPath)
@@ -125,10 +125,10 @@ func TestT07_CredentialSavedNotSaved_SingleSecretStoreSucceedsWriteFails(t *test
 	// S-47 shape 1: the credential store accepts B (second real store outside
 	// the read-only config dir), then the configuration write fails →
 	// credential_saved_not_saved with the T-6b text; never could_not_save.
-	f, _, _ := orderingWriterFixture(t)
+	f := t02Fixture(t)
 	before := readConfigChannelsFile(t, f)
 
-	alt := credentials.NewStore(filepath.Join(f.f1277.home, "alt-store"))
+	alt := credentials.NewStore(filepath.Join(t.TempDir(), "alt-store"))
 	require.NoError(t, credentials.Unlock(alt))
 	previous := f.api.credStore
 	f.api.credStore = alt
@@ -175,7 +175,7 @@ func TestT07_ZeroCredentialsStored_CouldNotSave(t *testing.T) {
 	// S-47 zero-write case: the first credential store already fails (locked
 	// real store) and the write path fails → could_not_save with ZERO
 	// credentials stored (the pre-credential failure path, precisely named).
-	f, _, _ := orderingWriterFixture(t)
+	f := t02Fixture(t)
 	locked := credentials.NewStore(filepath.Join(f.f1277.home, "locked-store"))
 	previous := f.api.credStore
 	f.api.credStore = locked
@@ -205,7 +205,7 @@ func TestT07_CredentialSavedNotSaved_SavedReferenceStillNamesR(t *testing.T) {
 	// B is stored, then the write fails → credential_saved_not_saved; the
 	// saved reference still names R (a restart resolves R, not B — FR-057's
 	// reference-conditional recovery).
-	f, _, _ := orderingWriterFixture(t)
+	f := t02Fixture(t)
 
 	// Point the saved instance at card-approved R and store R (post-boot
 	// fixture surgery through the real config write path).
@@ -219,7 +219,7 @@ func TestT07_CredentialSavedNotSaved_SavedReferenceStillNamesR(t *testing.T) {
 		return nil
 	}))
 
-	alt := credentials.NewStore(filepath.Join(f.f1277.home, "alt-store-r"))
+	alt := credentials.NewStore(filepath.Join(t.TempDir(), "alt-store-r"))
 	require.NoError(t, credentials.Unlock(alt))
 	previous := f.api.credStore
 	f.api.credStore = alt
@@ -255,11 +255,8 @@ func TestT07_CredentialSavedNotSaved_SavedReferenceStillNamesR(t *testing.T) {
 }
 
 func TestT07_MultiSecretSecondStoreFailureNeedsSeam(t *testing.T) {
-	// S-47 shape 2 (r4): Slack bot_token stored, the app_token store then
-	// fails → credential_saved_not_saved (bot_token is in the store), never
-	// could_not_save. There is no way to fail exactly the second store of a
-	// multi-secret request with real components: the credential loop has no
-	// injectable per-store failure seam. WP-1 must expose the seam named in
-	// the RED report (an injectable credential-loop store step).
-	t.Fatalf("BLOCKED: no seam to fail exactly the second credential store of a multi-secret request — required by S-47 shape 2 / R3-MAJ-004 A / FR-056; WP-1 must provide an injectable credential-loop store step named in the RED report")
+	// S-47 shape 2: the implementation branch adds the package-level
+	// configureStoreCredential seam. It is absent on this pre-change base;
+	// directly naming it here would make the RED pack fail to compile.
+	t.Fatal("BLOCKED: configureStoreCredential exists only on the implementation branch, not this pre-change base; required by S-47 shape 2 / R3-MAJ-004 A / FR-056. Reconcile the seam into the authoring base before replacing this fatal with the real second-store failure case")
 }
