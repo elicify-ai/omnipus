@@ -124,6 +124,12 @@ import type { Workspace } from '@/lib/api'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { ChannelConfigPanel } from './ChannelConfigPanel'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
+import { ChannelConfigureResponse as ChannelConfigureResponseSchema } from '@/lib/api/generated/schemas'
+
+// FR-055 / T-6c: successful Configure mocks must carry a validated outcome.
+// vi.fn is the process-edge API stub across the old Promise<void> signature
+// and the new generated response signature; the response itself is not cast.
+const NO_RELOAD_RESPONSE = ChannelConfigureResponseSchema.parse({ apply_outcome: 'no_reload_needed' })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -686,7 +692,7 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
     // so deleting (omitting) deselected fields would leave the previously-stored
     // service_account_json_ref alive in config.json + the credential store.
     // Sending '' triggers the backend's clear path (rest.go ~4532-4537).
-    vi.mocked(configureChannel).mockResolvedValue(undefined)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
 
     const client = makeQueryClient()
     // Seed with a service_account_json already set (simulates a switch from SA → Webhook)
@@ -743,7 +749,7 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
     // through PUT routing, which enforces CoreTeam membership) — so hydrating
     // them into formValues broke Save/Save & Enable for every bound instance
     // (live-UAT: the WhatsApp QR never appeared because enable always 400'd).
-    vi.mocked(configureChannel).mockResolvedValue(undefined)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
 
     const client = makeQueryClient()
     client.setQueryData(['channel-config', 'telegram.sales'], {
@@ -793,7 +799,7 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
-    vi.mocked(configureChannel).mockResolvedValue(undefined)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
   })
 
   function renderWithConfig(config: Record<string, unknown>) {
@@ -1058,7 +1064,7 @@ describe('ChannelConfigPanel — Save & Enable panel close behavior (#358)', () 
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
-    vi.mocked(configureChannel).mockResolvedValue(undefined as never)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
     vi.mocked(enableChannel).mockResolvedValue(undefined as never)
     vi.mocked(useWhatsAppPairingStore).mockImplementation(
       ((selector: (s: { byChannel: Record<string, unknown>; clear: () => void }) => unknown) =>
@@ -1114,7 +1120,7 @@ describe('ChannelConfigPanel — client-side save validation', () => {
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
-    vi.mocked(configureChannel).mockResolvedValue(undefined as never)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
     vi.mocked(enableChannel).mockResolvedValue(undefined as never)
   })
 
