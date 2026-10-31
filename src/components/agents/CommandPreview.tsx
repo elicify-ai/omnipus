@@ -12,7 +12,7 @@
 // spawn, computed by the same buildArgs() logic each driver
 // (claude/codex/opencode) uses at real dispatch time — not a
 // hand-maintained approximation. Live-updates (debounced 400ms) as the
-// operator edits model / cli_path / cli_args, so the command line visibly
+// operator edits model / cli_args, so the command line visibly
 // tracks what they type instead of only refreshing on blur.
 //
 // `AutoAppliedFlags`/`useExecutorDefaults`/`fetchExecutorDefaults`/
@@ -44,7 +44,9 @@
 // free live preview above it. Deliberately a plain sibling (not nested
 // inside the preview's own status div) so it renders regardless of whether
 // the preview itself is loading/ready/degraded — the smoke test only needs
-// `req`'s cli/model/cli_path/cli_args, not a successful preview fetch.
+// `req`'s cli/model/cli_args, not a successful preview fetch. Neither
+// request carries a program path: the server uses the path a person saved
+// for the CLI in Settings → Third-party agents (T11 C-B1).
 
 import { useEffect, useRef } from 'react'
 import { CheckCircle, Copy, PaperPlaneTilt, Spinner, WarningCircle, XCircle } from '@phosphor-icons/react'
@@ -69,7 +71,7 @@ export interface CommandPreviewProps {
    *
    *  Irrelevant to the free, stateless command-line preview above (that
    *  endpoint is agent-agnostic — it only computes argv from cli/model/
-   *  cli_path/cli_args) — used exclusively by `SmokeTestSection`'s real
+   *  cli_args) — used exclusively by `SmokeTestSection`'s real
    *  `POST /agents/executor-smoke-test` call, where it decides whether the
    *  test spawns a subprocess in the agent's real, persistent workspace
    *  (`used_agent_workspace: true`) or a disposable ephemeral scratch
@@ -241,7 +243,6 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
       <SmokeTestSection
         cli={req.cli}
         model={req.model}
-        cliPath={req.cli_path}
         cliArgs={req.cli_args}
         agentId={agentId}
         testId={testId}
@@ -263,7 +264,6 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
 interface SmokeTestSectionProps {
   cli: ExecutorCommandPreviewRequest['cli']
   model: ExecutorCommandPreviewRequest['model']
-  cliPath: ExecutorCommandPreviewRequest['cli_path']
   cliArgs: ExecutorCommandPreviewRequest['cli_args']
   /** The real, saved agent whose own bound workspace the test should run
    *  in — see `CommandPreviewProps.agentId`'s doc comment. `undefined` from
@@ -273,15 +273,15 @@ interface SmokeTestSectionProps {
   testId?: string
 }
 
-function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: SmokeTestSectionProps) {
+function SmokeTestSection({ cli, model, cliArgs, agentId, testId }: SmokeTestSectionProps) {
   const { status, run, cancel } = useExecutorSmokeTest()
   const smokeTestId = testId ? `${testId}-smoke-test` : undefined
   const isPending = status.kind === 'pending'
 
   // Guards against a stale smoke-test result being mistaken for a fresh one:
-  // this section holds its own status independent of the cli/model/cliPath/
-  // cliArgs props it receives, so if the operator runs a test, gets a
-  // result, then changes the CLI/model dropdown (or edits cli_path/cli_args)
+  // this section holds its own status independent of the cli/model/cliArgs
+  // props it receives, so if the operator runs a test, gets a
+  // result, then changes the CLI/model dropdown (or edits cli_args)
   // WITHOUT re-clicking the button, the previous result would otherwise
   // stay rendered as if it still described the current settings — a real
   // risk given the entire point of this feature is "prove this
@@ -300,10 +300,10 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: Smo
       return
     }
     cancel()
-  }, [cli, model, cliPath, cliArgs, agentId, cancel])
+  }, [cli, model, cliArgs, agentId, cancel])
 
   const handleClick = () => {
-    run({ cli, model, cli_path: cliPath, cli_args: cliArgs, agent_id: agentId })
+    run({ cli, model, cli_args: cliArgs, agent_id: agentId })
   }
 
   return (

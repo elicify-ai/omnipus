@@ -65,7 +65,7 @@ export interface UseCommandPreview {
 
 /**
  * Fetches a live preview of the real command Omnipus would spawn for the
- * given `req` (cli/model/cli_path/cli_args/max_tool_iterations), debounced
+ * given `req` (cli/model/cli_args/max_tool_iterations), debounced
  * >=400ms and re-fetching automatically whenever any of those field values
  * change. Pass `undefined` (or a `req` with no `cli`) when no CLI is
  * selected yet — resolves to `{ kind: 'idle' }` without a network call.
@@ -85,7 +85,6 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
     ? JSON.stringify({
         cli: req.cli,
         model: req.model ?? '',
-        cli_path: req.cli_path ?? '',
         cli_args: req.cli_args ?? '',
         max_tool_iterations: req.max_tool_iterations ?? null,
       })
@@ -155,7 +154,7 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
 
 /**
  * buildExecutorPreviewRequest builds an `ExecutorCommandPreviewRequest` from
- * the loose CLI/model/cli_path/cli_args values each caller owns in its own
+ * the loose CLI/model/cli_args values each caller owns in its own
  * state shape — `AgentProfile.tsx` (edit form: `executor`/top-level `model`)
  * and `Step1Identity.tsx`'s `ExecutorInputs` (create wizard: the flat
  * `WizardSubmitPayload`). Both previously duplicated identical
@@ -176,14 +175,12 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
 export function buildExecutorPreviewRequest(
   cli: ExecutorCommandPreviewRequest['cli'],
   model: string,
-  cliPath: string | undefined,
   cliArgs: string | undefined,
   maxToolIterations?: number,
 ): ExecutorCommandPreviewRequest {
   return {
     cli,
     model: model.trim() !== '' ? model.trim() : undefined,
-    cli_path: cliPath,
     cli_args: cliArgs,
     ...(maxToolIterations !== undefined &&
     maxToolIterations >= MAX_TOOL_ITERATIONS_MIN &&

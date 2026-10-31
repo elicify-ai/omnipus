@@ -640,7 +640,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // and /api/v1/performance is an admin-only read (503 under dev-mode bypass).
   const globalToolIterationLimit = useGlobalToolIterationLimit({ enabled: isOpen })
   const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = executor?.cli
-    ? buildExecutorPreviewRequest(executor.cli, model, executor.effective_cli_path, executor.cli_args, ownToolIterationLimit ?? undefined)
+    ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_args, ownToolIterationLimit ?? undefined)
     : undefined
 
   const formData = useMemo(() => {
