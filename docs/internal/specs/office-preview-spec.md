@@ -4,7 +4,7 @@ Status: Draft
 
 | Field | Value |
 |---|---|
-| Created / revised | 2026-10-30 (architect, plan-spec) / fix round 1 (grill 1: BLOCK 1C/10M/4m) / RQ update (native pdfium program, gpt-6-luna row) / **final correction after grill 2 (BLOCK 1C/12M/2m/2obs) — no third grill** |
+| Created / revised | 2026-10-30 (architect, plan-spec) / fix round 1 (grill 1: BLOCK 1C/10M/4m) / RQ update (native pdfium program, gpt-6-luna row) / **final correction after grill 2 (BLOCK 1C/12M/2m/2obs) — no third grill** / **2026-10-31 architect amendment after the O3 Linux measurement (§3.1): Linux memory limit = data limit, launcher order unchanged, LibreOffice exit-81 retry, shared pdfium library (D1 A)** |
 | Size | Feature (tools, agent media path, providers, sandbox, packaging, chat UI, skills) → RED/GREEN/CHECK, 5-reviewer gate, hands-on UAT (touches `pkg/agent`) |
 | Baseline | `origin/release/v0.1.1` at `4cad412bf` (read-only); grill 2 used `b7d4483c9`. backend-lead re-checks every cited symbol on the planning commit |
 | Supersedes | T11 spec (`landing/t11:docs/internal/specs/t11-documents-and-3p-agents-spec-full.md`) §2.4: the on-hold `convert_document` design (#1489) is retired, not built |
@@ -40,6 +40,8 @@ Agents keep creating Office files and PDFs with the skills' Python libraries; wh
 | **FQ1 (r2)** | Founder, 2026-10-30 | **B**: best-effort macOS memory boundary for this release; strongest measured controls (wall deadline, page/size/pixel caps, Stop, process-group kill); truthful UI/docs; **no claim of a hard memory cap on macOS**; Linux keeps enforced limits. |
 | **FQ2 (r2)** | Team-lead at founder's instruction ("q7 you decide") | **A**: explicit partial success — the model receives the authorized native PDF; the person sees a persistent "page previews unavailable" explanation with Retry; never claim pages were rendered or visually verified; never start a damaged program or fall back to another renderer. |
 | E-1 | Spike `office-preview-spike-20261029/` | LibreOffice 26.8.0.3, Intel Mac: 2.3–8.1 s per file; 105–124 MB; macOS sandbox works with 3 socket rules + `OSL_SOCKET_PATH` (< 104 chars) + filtered registry; stock registry → exit 134. Historical fixtures 6/3/4 pages, not this spec's fixtures. |
+| D1 | Founder, spike decision D1 (2026-10-30) | **A**: the prebuilt pdfium exists only as a shared library, so `omnipus-pdfium` ships with `libpdfium.*` beside it; the manifest fingerprints both and both are re-hashed before every launch. Recorded as D1 A in `native/omnipus-pdfium/build.sh` (header) and `pkg/preview/component/component.go`; AD-2/AD-4 text aligned 2026-10-31. |
+| O3 | backend-lead, Linux measurement on Fly, 2026-10-31 (founder "O7 A") | Linux 6.12, no Landlock. Allocation bombs (C malloc, C mmap, Python) stop at 448 MiB under **both** a 512 MiB address-space and a 512 MiB data limit; the Go `extract-text` mode cannot start under a 512 MiB address-space limit (30/30, `failed to reserve page summary memory`) but starts under the data limit; 1 launcher Go-runtime crash in 180 launches under the address-space limit; LibreOffice converts identically under address-space and data 1 GiB; `soffice.bin` exits 81 on its first start with a fresh profile, second start converts. Report: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/office-preview-build-20261030/spikes/SPIKE-REPORT.md` ("O3"), receipts `spikes/o3-receipts/`. Decided in §3.1. |
 | E-2 | Security review B | No LaunchServices; registry bound to the converter run and delivered only to that child; no patching the bundle; visible failure; two Mach services unchanged; Windows has no child file confinement. |
 
 ## 2. Round responses
@@ -73,10 +75,10 @@ All round-1 items were addressed in the previous revision; grill 2 confirmed clo
 **AD-1 One tool.** `preview_document(file, pages?)`; `pages` = `"N"` or `"N-M"`, default first 10, at most 20 per call. `file` is a workspace path (uploads are materialized there, §4.1). The result text states the source name, its SHA-256 (first 12 hex), what the model received, "pages a–b of N", the next batch when more exist, and the thumbnail outcome. Amends ADR-090 D6 (W0).
 
 **AD-2 Engines outside the Omnipus process.** The Go binary stays standalone and starts without either component (Hard Constraints #1/#2 apply to it; the components are founder-approved exceptions under ADR-090).
-- **`omnipus-pdfium`**: small C program built in CI, statically linked to a pinned prebuilt pdfium (version + SHA-256), per platform: darwin arm64/amd64, linux amd64/arm64 (glibc), linux musl if available, windows amd64. Opens no file and no socket; all I/O over stdin/stdout. Operations: `info` (page count, encryption), `render` (pages at 2×, forms drawn, longest side ≤ 2000 px, bitmap size checked **before** allocation), `text` (per-page text).
+- **`omnipus-pdfium`**: small C program built in CI, linked against a pinned prebuilt pdfium **shared library shipped beside it** (version + SHA-256; D1 A, 2026-10-31 text: the prebuilt release has no static library). The library is resolved only from the program's own folder (`$ORIGIN` on Linux, `@executable_path` on macOS with the install name rewritten, the DLL next to the `.exe` on Windows), never from the working folder or a search path. Per platform: darwin arm64/amd64, linux amd64/arm64 (glibc), linux musl if available, windows amd64. Opens no file and no socket; all I/O over stdin/stdout. Operations: `info` (page count, encryption), `render` (pages at 2×, forms drawn, longest side ≤ 2000 px, bitmap size checked **before** allocation), `text` (per-page text).
 - **LibreOffice**: always a separate child per conversion; never linked or loaded into the gateway; no LibreOfficeKit, no UNO bridge, no long-running converter. The gateway writes the input copy into scratch and reads the output PDF.
 - **`extract-text`**: hidden mode of the `omnipus` binary used only when the renderer is absent; runs the existing Go extractor on bytes from stdin, same protocol `text`/`info` frames.
-- **Launcher `run-limited`** (hidden mode of `omnipus`): started through the existing hardened spawn (sandbox per AD-7). It applies limits, waits for one **go-byte** on stdin, then starts the target. Per platform: **Linux** sets address-space/CPU/file-size/open-file limits and parent-death signal (SIGKILL), then `execve` the target in its own process group. **macOS** sets CPU/file-size/open-file limits (memory best effort, AD-6), then `execve`; no parent-death signal — the target exits on stdin EOF and startup recovery covers the rest. **Windows** creates a Job Object with memory, process-count and kill-on-close limits, assigns itself, starts the target as its child (inheriting the job), relays stdio and exit code; the gateway holds the launcher's handle; killing the launcher or the gateway's death closes the job and ends the whole tree. In all cases untrusted input reaches the target only after limits are in force (go-byte after record publication, AD-8).
+- **Launcher `run-limited`** (hidden mode of `omnipus`): started through the existing hardened spawn (sandbox per AD-7). It applies limits, waits for one **go-byte** on stdin, then starts the target. Per platform: **Linux** sets data (`RLIMIT_DATA`)/stack/CPU/file-size/open-file limits and parent-death signal (SIGKILL), then `execve` the target in its own process group (no address-space limit; amendment §3.1, 2026-10-31). **macOS** sets CPU/file-size/open-file limits (memory best effort, AD-6), then `execve`; no parent-death signal — the target exits on stdin EOF and startup recovery covers the rest. **Windows** creates a Job Object with memory, process-count and kill-on-close limits, assigns itself, starts the target as its child (inheriting the job), relays stdio and exit code; the gateway holds the launcher's handle; killing the launcher or the gateway's death closes the job and ends the whole tree. In all cases untrusted input reaches the target only after limits are in force (go-byte after record publication, AD-8). **Order, reaffirmed 2026-10-31 (§3.1):** limits → parent-death signal (Linux) → read the go-byte → `execve`; the limits are never moved after the go-byte.
 
 **Protocol v1 (private, Go ↔ `omnipus-pdfium` / `extract-text`).** All integers little-endian.
 
@@ -96,8 +98,8 @@ Anything else — wrong version, unknown type, oversize, duplicate/out-of-range 
 
 **AD-4 Component identity and trust.**
 - **Sources.** (a) Packaged slots next to the executable (§10, mirroring `pkg/tools/browser/package_chrome.go::packageChromeRootCandidates`), each with a shipped `manifest.json`; (b) an **operator-registered** component: `omnipus office register <folder>` / `omnipus pdf-renderer register <folder>` (operator CLI) validates the layout (supported LibreOffice: official 26.8.x program folder; renderer: our release zip), computes the fingerprints and writes the manifest into Omnipus's protected data directory, marked `trust: operator-registered` with the operator, time and path. `omnipus office unregister` removes it. Used for Windows (no installer until #113), the Intel dev Mac and the Docker image build. No environment-variable roots, never `PATH`, a workspace, a tool argument or agent-editable configuration.
-- **Manifest.** Component version, build ID and protocol version (renderer), SHA-256 of `omnipus-pdfium` / `soffice` (and `soffice.bin` on Windows), of the filtered registry (macOS) and of the file list.
-- **Checks.** Renderer: re-hashed before every launch. LibreOffice: executable and registry re-hashed at gateway start and whenever size/modification time changed. Mismatch → "damaged", nothing launched, no fallback program. The verified real path is resolved once per call and passed to the spawn unchanged.
+- **Manifest.** Component version, build ID and protocol version (renderer), SHA-256 of `omnipus-pdfium` and its `libpdfium.*` (D1 A) / `soffice` (and `soffice.bin` on Windows), of the filtered registry (macOS) and of the file list.
+- **Checks.** Renderer: program and library re-hashed before every launch. LibreOffice: executable and registry re-hashed at gateway start and whenever size/modification time changed. Mismatch → "damaged", nothing launched, no fallback program. The verified real path is resolved once per call and passed to the spawn unchanged.
 - **Writer exclusion (R2-MAJ-012).** A component is usable only while its root is not inside, and does not contain, any write root of **any** agent: workspaces, mounts, operator allowances and grants from configuration. Checked at gateway start, on every configuration reload and mount/grant approval, and per call against the calling turn. If any overlap exists the component is disabled for everyone: "unsafe location", plus a `doctor` line naming the overlapping grant. Not re-hashed per call: the bundle's libraries and configuration; their protection is this exclusion plus the kernel sandbox where active. **Honest boundary:** on Windows (Q5) and in unconfined mode (FQ2 r1) agents with `bash` are not kernel-prevented from writing an install folder; operator-registered components rest on the operator's registration. Documented.
 
 **AD-5 Input and page rules.** Exactly `.docx .xlsx .pptx .pdf`, content matching the extension, ≤ 50 MiB, not encrypted. (1) `pages` syntax (digits, 1 ≤ N ≤ M ≤ 9999, M − N < 20) and file checks before any work — refusal starts nothing. (2) After `info`: default range clamps; partial overlap clamps ("pages 9–12 of 12 (requested 9–20)"); wholly beyond → "the document has N pages". Macro-enabled, legacy, OpenDocument and template formats are out of scope.
@@ -110,7 +112,7 @@ Anything else — wrong version, unknown type, oversize, duplicate/out-of-range 
 | Whole call | 120 s incl. queue wait; Stop at any time | deadline / Stop → kill group (Unix) or launcher (Windows), release admission and buffers |
 | Renderer / extract run | 60 s wall, 60 s CPU | deadline; CPU limit (all Unix incl. macOS) / job time limit (Windows) |
 | Upload rendering | 20 s per PDF | then text fallback |
-| Program memory | renderer and extract 512 MiB; LibreOffice 1 GiB | **Linux**: address-space (or data) limit chosen in S-1, proven by allocation bombs; **Windows**: Job Object memory limit; **macOS: best effort (FQ1 r2)** — CPU limit, wall deadline, pre-allocation bitmap/pixel caps, output caps, Stop, process-group kill, plus a parent-side resident-memory watchdog (kill above the budget, sampled every 250 ms) **only if** S-1 finds a pure-Go sampling method; no hard-cap claim in UI or docs |
+| Program memory | renderer and extract 512 MiB; LibreOffice 1 GiB | **Linux**: data limit (`RLIMIT_DATA`, chosen by the O3 measurement, §3.1) plus a stack limit of 8 MiB (never raised above the inherited one); where the kernel cannot enforce the data limit on `mmap` (kernel older than 4.7, or boot option `ignore_rlimit_data`) the memory limit is reported as not enforced (§3.1 D1.4); **Windows**: Job Object memory limit; **macOS: best effort (FQ1 r2)** — CPU limit, wall deadline, pre-allocation bitmap/pixel caps, output caps, Stop, process-group kill, plus a parent-side resident-memory watchdog (kill above the budget, sampled every 250 ms) **only if** S-1 finds a pure-Go sampling method; no hard-cap claim in UI or docs |
 | Program output | renderer stdout ≤ 80 MiB, frames ≤ 4 MiB; LibreOffice PDF ≤ 200 MiB (file-size limit on Unix; checked after on Windows) | protocol reader / limits |
 | In-flight bytes in the gateway | ≤ 1 frame (4 MiB) per running program → ≤ 8 MiB | frames streamed straight to the live store or the thumbnail file |
 | Live-turn model media (images + native PDFs) | ≤ 64 MiB per turn, ≤ 256 MiB per gateway | on overflow the oldest tool-call batches' **bytes are freed** (marker becomes "evicted; call again"); an item larger than the per-turn budget is refused |
@@ -125,7 +127,7 @@ Anything else — wrong version, unknown type, oversize, duplicate/out-of-range 
 1. Write `owner.json` atomically: state `preparing`, gateway PID + start time.
 2. Spawn `run-limited` (it waits for the go-byte; if stdin closes first it exits without starting anything).
 3. Record child identity atomically: state `running`, launcher PID + process start time + executable, process-group ID, intended target executable, socket folder.
-4. Send the go-byte. 5. On exit: state `done`, then remove folders.
+4. Send the go-byte. 5. On exit: state `done`, then remove folders. A second start within the same call (LibreOffice exit-81 retry, §3.1 D3) repeats steps 2–4 for the new launcher after the first one's exit and group kill.
 - **Startup:** for each folder whose owner gateway is dead (PID + start time): `preparing` → nothing can have started; remove. `running` → for each recorded process, kill only if PID, start time **and** executable (launcher, `omnipus-pdfium`, `soffice`/`soffice.bin` of the verified component) all match; then confirm termination (poll ≤ 5 s) before removing. Unconfirmed, unreadable record, or a live owner gateway (two gateways sharing a home) → keep, warn in log and `doctor`. Windows: the gateway's death already closed the job; only folders remain.
 
 **AD-9 Rendered-page cache.** Key = (PDF content SHA-256, page, render settings, renderer build ID + protocol version). Looked up only after this request's authorization of the source; checked before starting the renderer.
@@ -157,6 +159,59 @@ Layout: `knowledge/{docx,xlsx,pptx,pdf}-{create,edit}.md`, shared `knowledge/ver
 **AD-15 Outcomes without or with a failed renderer (R2-MAJ-006, FQ2 r2).** §4.3. With the renderer absent, damaged or failed: no page images, no thumbnails; a native-PDF model still gets the authorized PDF (partial success); other models get text from `extract-text` (absent renderer) or the renderer's `text` op is not available (damaged/failed) → `extract-text`. Office conversion validity without a renderer = `extract-text` `info` opens the PDF and reports ≥ 1 page ("structurally valid, not rendered"). Never claim rendered or visually verified pages.
 
 **Packaging.** Q2: untouched official LibreOffice app now; trimmed copy and renderer signing after #1506.
+
+### 3.1 Dated amendment 2026-10-31 — Linux memory-limit kind, launcher order, LibreOffice first start (architect, after O3)
+
+Status: decided 2026-10-31 (architect). Amends AD-2, AD-4, AD-6, AD-8 above; adds T-76…T-80. AD-6 delegated the Linux choice "address-space (or data) limit chosen in S-1, proven by allocation bombs" to measurement; this records that choice. No founder decision is reopened: budgets, FQ1 (r2) "Linux keeps enforced limits" and the go-byte rule stand.
+
+**Context.** The O3 Linux run (§1 row O3) found three defects:
+
+| # | Defect | Evidence (receipts under `spikes/o3-receipts/`) |
+|---|---|---|
+| 1 | The Go `extract-text` mode cannot start under a 512 MiB address-space limit; it starts under 1 GiB / 2 GiB address space and under a 512 MiB data limit | `logs-r2/10-diag.log`, `logs-r2/11-diag2.log` (exit 2, `fatal error: failed to reserve page summary memory` in `runtime.(*pageAlloc).sysInit`); `logs-r2/09-stress.log` 30/30 `extract-info` and `extract-text` failures on both PDFs |
+| 2 | LibreOffice: every conversion through `preview.Service` failed, `soffice.bin` exit 81 on the first start with a fresh profile | `logs-r2/06-memory.log`, `logs-r2/12-lo-exit81.log` (attempt 1 exit 81, attempt 2 converts, under address-space and data limits alike) |
+| 3 | One launcher Go-runtime crash in 180 renderer launches under the address-space limit (exit 2, stack ends in `runtime.(*cleanupQueue).createGs`); 0 in 500 bare launcher runs | `logs-r2/09-stress.log` line `renderer-text1-6#1` (pdf30), `logs-r2/10-diag.log`, `logs-r2/11-diag2.log` |
+
+Mechanism, verified against sources on 2026-10-31:
+- The Go runtime reserves its large bookkeeping ranges as no-access mappings (`src/runtime/mem_linux.go::sysReserveOS`: `mmap(…, _PROT_NONE, …)`) and makes memory usable later with a read-write mapping (`::sysMapOS`). The address-space limit counts both; Linux's data limit counts only private, writable, non-stack mappings (`mm/vma.h::is_data_mapping`: `(flags & (VM_WRITE|VM_SHARED|VM_STACK)) == VM_WRITE`), checked on every `mmap`, `mremap`, `brk` and on `mprotect` that makes a private mapping writable (`mm/mmap.c::may_expand_vm`, `mm/mprotect.c::mprotect_fixup` "Check space limits when area turns into data"). So the reservation that defect 1 trips over is invisible to the data limit, while every byte the Go program actually uses still counts.
+- `run-limited` is a mode of the same `omnipus` binary as `extract-text`; that binary's start-up reservation alone exceeds 512 MiB (defect 1). `launcher/child_unix.go::Main` sets the limit on itself **after** start-up and then keeps running Go until the go-byte, so it sits above its own address-space limit and any new runtime mapping in that window (a goroutine stack, heap growth) is fatal. That is the Inferred cause of defect 3 (the crash stack is a runtime-created goroutine); it does not apply under the data limit, where the launcher's writable memory is small.
+- LibreOffice's own start programs restart `soffice.bin` with all arguments when it exits 81 (`EXITHELPER_NORMAL_RESTART = 81`, `include/desktop/exithelper.h`; `desktop/unx/source/start.cxx` "re-start with all arguments"; `desktop/win32/source/loader.cxx` loops on 81 and 79). The product starts `soffice.bin` directly (fingerprinted, AD-4), so nothing performs that restart.
+
+**Decision.**
+
+D1 (defect 1 and 3) — **Linux uses the data limit for every program `run-limited` starts** (renderer, `extract-text`, LibreOffice), and for the launcher itself, which passes it to the target across `execve`. The address-space kind is deleted, not kept as an option.
+1. Budgets unchanged: 512 MiB renderer and `extract-text`, 1 GiB LibreOffice (AD-6).
+2. The launcher also sets a stack limit (`RLIMIT_STACK`) of 8 MiB, lowered to the inherited soft limit when that is smaller, never raised; the hard limit is set to the same value. Reason: the data limit does not count the main thread's growing stack (`VM_STACK`), which the address-space limit did; without this a deep-recursion document under an inherited unlimited stack would escape the budget.
+3. Soft and hard limits stay equal (as `launcher/child_unix.go::setRlimit` does today), so the program cannot raise them.
+4. Enforcement check at gateway start (Linux): the data limit governs `mmap` only on kernel 4.7 and later (getrlimit(2): "and (since Linux 4.7) mmap(2)") and becomes warn-only under the boot option `ignore_rlimit_data` (`mm/mmap.c::may_expand_vm`). If the kernel is older than 4.7, or `/sys/module/kernel/parameters/ignore_rlimit_data` reads `Y`, the programs still run with the limits set, and every result, the audit record and `doctor` say `memory limit not enforced: <reason>` — the same disclosure pattern as the unconfined case (AD-7, FQ2 r1). Unreadable parameter file: treated as enforcing (the default) and noted once in the log.
+5. macOS: unchanged — the kernel rejects address-space, data and resident-size limits (S-1), so memory stays best effort with the watchdog (FQ1 r2); no limit kind applies. Windows: unchanged — the Job Object limit counts committed memory, which, like the data limit, excludes reserved-only address space; Go's reservations are reserve-only there too (Inferred, not measured — T-79 measures it).
+
+D2 (defect 3) — **The launcher order stays as AD-2/AD-8 define it: limits, parent-death signal, go-byte, `execve`.** Under D1 the launcher no longer runs above its own limit, which removes the crash mechanism; the go-byte guarantee (untrusted input reaches the target only after limits are in force and after the owner record is published) is kept unchanged.
+
+D3 (defect 2) — **Team-lead's ruling stands and does not conflict with the design**: when `soffice.bin` exits with exactly 81 and wrote no output PDF, the same call starts it once more with the same arguments and the same per-call profile; any other code (79 included) or a second 81 is a visible failure ("LibreOffice produced no readable PDF (exit status 81)"). Conditions that keep it inside the design:
+1. The retry holds the same LibreOffice admission slot (AD-6) — not released and re-taken — and runs inside the same 120 s call deadline and Stop.
+2. The second start is a full AD-8 cycle: the first launcher has exited and its group has been killed (`launcher.Process.Wait`), then a new `run-limited` is spawned, its identity recorded (state `running`, new PID + start time) and only then its go-byte sent. The record never names a process that is not running.
+3. Same verified executable path, same sandbox derivation, same environment and limits as the first start; `out/` must hold no `document.pdf` before the retry.
+4. The profile's macro, link and recalculation settings (AD-7) must still be in force on the second start; T-78 proves it rather than assuming LibreOffice's first start leaves the seeded `registrymodifications.xcu` intact.
+5. Validity is still judged only by the output (FR-011, "ignore exit codes"): exit 81 only decides whether a second start is attempted when no readable PDF exists; it never makes a result valid or invalid.
+6. Applies on every platform (the Windows loader also restarts on 81); harmless where the first start already converts.
+
+**Consequences.**
+- Positive: `extract-text` works on Linux, so the AD-15 fallbacks (renderer absent or failed, Office validity without a renderer) work; Office conversion works on Linux; the launcher crash mechanism is gone without touching the go-byte order; one limit kind for every program and one code path.
+- Negative: (a) the data limit does not count shared writable mappings (`VM_SHARED`: shared anonymous memory, `memfd`). The parsers allocate through `malloc`/`mmap` private memory, and the measured bombs stopped at 448 MiB under both kinds (O3), so for hostile *input* the two kinds are equivalent. A program already taken over by hostile code could allocate shared memory outside the budget — but the address-space limit never bounded that case either, because a taken-over program can `fork` and each child receives a fresh 512 MiB (the Linux spawn here sets no process-count limit for preview programs, `pkg/preview/confine_linux.go::hooksFor`). Only a memory cgroup would bound it; not in scope. (b) File-backed read-only mappings (program code, libraries) no longer count, so the same number allows somewhat more working memory than before — the budget now measures what costs RAM. (c) Hosts with kernel < 4.7 or `ignore_rlimit_data=Y` get a disclosed unenforced limit instead of an enforced one. (d) Every Office conversion on a fresh profile pays one extra short start (measured 165–218 ms, `logs-r2/06-memory.log`).
+- Neutral: AD-6 numbers, macOS behaviour, the Windows job design and the protocol are unchanged.
+
+**Alternatives rejected.**
+
+| Option | Why rejected |
+|---|---|
+| Q1 B: raise `extract-text` to an address-space limit of 1 GiB or more | Gives Go children twice the budget of the C renderer for the same job, and still counts reservations: the start-up reservation size changes with the Go release (the binary is built with the release-pinned toolchain), so a toolchain bump can silently break it again. Leaves defect 3 in place for the launcher. |
+| Q2 A: read the go-byte first, then set the limits and `execve` at once | Changes the AD-2/AD-8 order for no gain once D1 holds. It also does not close the mechanism: the launcher would still set a limit below its own current address space, the Go runtime's other threads keep running between `setrlimit` and `execve`, and `golang.org/x/sys/unix.Exec` builds its argument arrays on the Go heap, so a heap growth in that window is still fatal. Only shrinks the window. |
+| Keep the address-space limit for the C renderer and use data only for Go children | Two limit kinds, two code paths, and the launcher (Go) still has to run under the target's address-space limit, so defect 3 remains. The extra coverage (shared mappings, stack) is closed by D1.2 for the stack and was not real for shared mappings (fork, above). |
+| Q3 B: start `program/soffice` (script + `oosplash`) | Brings an unfingerprinted shell script and a second binary into the trusted launch path (AD-4) and an unbounded restart loop (`start.cxx` restarts on every 81/79). |
+| Q3 C: seed one profile per gateway and share it | A shared, writable profile across calls breaks the per-call scratch isolation (AD-7, AD-8). |
+
+**Affected components.** `pkg/preview/launcher/child_linux.go::applyLimits`, `pkg/preview/launcher/launcher.go::Limits` / `::parseArgs` / `Limits.args`, `pkg/preview/launcher/child_unix.go` (order unchanged), `pkg/preview/programs.go` (office conversion retry; limits), the Linux `doctor` and result-text disclosure path used for `unconfined`, `docs/documents.md` and `docs/operations/sandbox-limitations.md` (§17).
 
 ## 4. What the model and the person receive
 
@@ -365,6 +420,9 @@ Resolver candidates mirror `packageChromeRootCandidates` (`<exe>/../office`, `<e
 | B-50 | Windows CI with one new test family excluded / job runs / fails | Error | US-7 |
 | B-51 | Document runtime without `soffice` / probe and bash run / ready; no converter demanded | Happy | US-6 |
 | B-52 | Inspector mutation applied / its suite runs / at least one case fails | Error | US-6 |
+| B-53 | Linux, renderer absent / PDF preview for a text-only model / `extract-text` starts under its 512 MiB data limit and returns text; an allocation beyond the budget in it is stopped (§3.1 D1) | Happy/Error | US-5.3 |
+| B-54 | Fresh per-call profile, `soffice.bin` exits 81 on first start / Office preview / one second start in the same call converts; a second 81 or any other failure is a visible failure (§3.1 D3) | Alt/Error | US-5 |
+| B-55 | Linux host whose data limit cannot govern `mmap` (kernel < 4.7 or `ignore_rlimit_data=Y`) / preview / runs, result, audit and `doctor` say `memory limit not enforced: <reason>` (§3.1 D1.4) | Edge | US-5.3 |
 
 ## 13. TDD plan
 
@@ -447,6 +505,11 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | T-73 | Document runtime ready without `soffice` | Unit | B-51 |
 | T-74 | Package inventory adaptation + integrity test updated deliberately | Unit | B-30 |
 | T-75 | Inspector mutations (review §4 lists) each turn a T-72 case red | Mutation | B-52 |
+| T-76 | Linux limit kind (§3.1 D1): for renderer, `extract-text` and LibreOffice starts, `/proc/<target>/limits` shows data = budget (soft = hard), stack ≤ 8 MiB and ≤ the inherited stack, address-space limit not set by the launcher (equal to the gateway's own); stack limit never raised (inherited 4 MiB stays 4 MiB); the `--mem-kind` flag is rejected as unknown. C malloc bomb, C mmap bomb and a Go allocation loop under the launcher each fail at the data budget (not killed by the wall deadline); deep-recursion program dies on the stack limit. Mutation: switch the kind back to address space → the `extract-text` start case fails | Integration (Linux) | B-53, B-24 |
+| T-77 | Launcher stability under the data limit (§3.1 D2): ≥ 1,000 renderer launches and ≥ 300 `extract-text` launches, 2 concurrent, zero launcher exits with a Go runtime `fatal error`; the crash classifier is first proven on a known runtime fatal (the binary started directly under `prlimit --as=536870912`, O3 receipt) so a zero count is meaningful; order unchanged: a launcher whose stdin closes before the go-byte starts nothing, and `/proc/<launcher>/limits` already shows the limits while it waits | Integration (Linux) | B-38 |
+| T-78 | LibreOffice exit-81 retry (§3.1 D3), with a fake `soffice.bin` that exits 81 N times then converts: N = 1 → converts, exactly 2 launches, two distinct identity records each written before its go-byte; N = 2 → visible failure, exactly 2 launches; exit 79 and exit 1 → no retry; 81 with a readable PDF present → no retry; Stop and the 120 s deadline during the second start end it; the admission slot is held across both starts (a parallel conversion waits). With the real LibreOffice on Linux, fresh profile: FX-MACRO converts through the retry path and its macro does not run; the profile settings of AD-7 are in force on the second start | Integration (fake: all OS; real: Linux) | B-54, B-19 |
+| T-79 | Windows Job Object (§3.1 D1.5): `extract-text` starts and returns text inside a 512 MiB job; an allocation bomb as target ends the whole tree with the result "memory limit exceeded", not a launcher crash or "protocol" | CI (Windows) | B-24, B-33 |
+| T-80 | Data-limit enforcement check (§3.1 D1.4): injected kernel release 4.6 and injected `ignore_rlimit_data` = `Y` each produce `memory limit not enforced: <reason>` in the result text, audit field and `doctor`; 4.7 and `N` produce none; unreadable parameter file → enforcing plus one log line | Unit | B-55 |
 
 **Windows inventory (T-41):** `TestPreviewDocument_Windows*`, `TestRunLimited_WindowsJob*`, `TestPreviewRecovery_Windows*`, `TestOfficeRegister_Windows*`, `TestInspectors_Windows*` and the renderer's own smoke/limits/cancel tests built from the C sources; the receipt step lists every expected test name and fails on a missing, skipped or failed one.
 
@@ -531,15 +594,15 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | FR-004 | US-1 | B-03 | T-01 |
 | FR-005 | US-1, US-2 | B-06, B-07, B-04 | T-16, T-34 |
 | FR-006 | US-2, US-5 | B-01, B-02, B-32 | T-02, T-03, T-32, T-49 |
-| FR-007 | US-5 | B-21, B-22 | T-06, T-08, T-09 |
+| FR-007 | US-5 | B-21, B-22, B-54 | T-06, T-08, T-09, T-78 |
 | FR-008 | US-5 | B-17, B-18, B-28 | T-04, T-05, T-29 |
 | FR-009 | US-1, US-5 | B-05, B-19, B-20 | T-06, T-10, T-17, T-18 |
 | FR-010 | US-5 | B-20, B-27 | T-11, T-30, T-50 |
 | FR-011 | US-3, US-5 | B-15, B-34, B-42 | T-07, T-52, T-70 |
-| FR-012 | US-5 | B-21, B-22, B-24, B-25 | T-12, T-35, T-36, T-37, T-38, T-39, T-40 |
+| FR-012 | US-5 | B-21, B-22, B-24, B-25, B-53, B-55 | T-12, T-35, T-36, T-37, T-38, T-39, T-40, T-76, T-79, T-80 |
 | FR-013 | US-5 | B-21, B-23, B-38, B-39 | T-13, T-14, T-58 |
 | FR-014 | US-4 | B-15, B-16 | T-01, T-05 |
-| FR-015 | US-4, US-7 | B-16, B-34 | T-28, T-52 |
+| FR-015 | US-4, US-7 | B-16, B-34, B-53 | T-28, T-52, T-76 |
 | FR-016 | US-5 | B-29 | T-20, T-21, T-22, T-23 |
 | FR-017 | US-2 | B-07, B-26 | T-24, T-25, T-26 |
 | FR-018 | US-2 | B-09, B-10 | T-43, T-25, T-51 |
@@ -558,7 +621,7 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | FR-031 | US-5 | B-45, B-24 | T-31, T-59 |
 | FR-032 | US-5 | B-22, B-46 | T-60, T-70 |
 | FR-033 | US-5 | B-37 | T-56 |
-| FR-034 | US-5 | B-38, B-33 | T-57 |
+| FR-034 | US-5 | B-38, B-33 | T-57, T-77 |
 | FR-035 | US-3 | B-40, B-12 | T-46, T-62 |
 | FR-036 | US-3 | B-06 | T-63 |
 | FR-037 | US-3 | B-14, B-41 | T-64, T-65 |
@@ -612,7 +675,7 @@ Installer rows need Apple silicon; the Intel dev Mac uses operator registration.
 | `docs/skills.md` | `elicify-office`, table, calculate-on-open note |
 | `docs/getting-started.md` | components, sizes, `--without-*`, `omnipus-nooffice`, `omnipus office register` |
 | `docs/docker.md` | image contents |
-| `docs/security.md`, `docs/operations/sandbox-limitations.md` | separate programs and limits; macOS best effort; writer exclusion; unconfined and Windows exposure |
+| `docs/security.md`, `docs/operations/sandbox-limitations.md` | separate programs and limits; macOS best effort; writer exclusion; unconfined and Windows exposure; Linux memory limit counts the program's working memory (data limit), and the `memory limit not enforced: <reason>` disclosure on kernels older than 4.7 or with `ignore_rlimit_data` (§3.1 D1.4; also one sentence in `docs/documents.md` "Limits and isolation") |
 | `docs/providers-and-models.md` | catalog decides native PDF; size limit; paging |
 | `docs/operations/platform-support.md` | per platform/route |
 
