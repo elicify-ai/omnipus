@@ -126,7 +126,7 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	wu23R1OwnerWritable(t, filepath.Join(layout.Bin, "python"))
 	input := filepath.Join(f.Work, "input.docx")
 	original := wu23R1DocumentArtifact(t, input)
-	inspector := filepath.Join(layout.Skills, "elicify-docx", "scripts", "inspect_docx.py")
+	inspector := filepath.Join(layout.Skills, "elicify-office", "scripts", "inspect_docx.py")
 	want := map[string]any{"paragraphs": float64(2), "tables": float64(1), "revision_marks": float64(0), "field_instructions": float64(0), "external_relationships": []any{}, "media_parts": []any{}}
 	t.Run("real_unsandboxed_inspector_control", func(t *testing.T) {
 		cmd := exec.Command(python, "-I", inspector, input)
@@ -144,7 +144,7 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	})
 	// The helper is reached from the actual document environment, not a host
 	// PATH fallback or fake interpreter. The input is a literal Word package.
-	code := `import os,runpy,sys; cache=os.environ["XDG_CACHE_HOME"]; open(os.path.join(cache,"document-cache.txt"),"w").write("document-cache"); assert open(os.path.join(cache,"document-cache.txt")).read()=="document-cache"; sys.argv=["inspect_docx.py","input.docx"]; runpy.run_path(os.path.join(os.environ["OMNIPUS_DOCUMENT_SKILLS"],"elicify-docx","scripts","inspect_docx.py"),run_name="__main__")`
+	code := `import os,runpy,sys; cache=os.environ["XDG_CACHE_HOME"]; open(os.path.join(cache,"document-cache.txt"),"w").write("document-cache"); assert open(os.path.join(cache,"document-cache.txt")).read()=="document-cache"; sys.argv=["inspect_docx.py","input.docx"]; runpy.run_path(os.path.join(os.environ["OMNIPUS_DOCUMENT_SKILLS"],"elicify-office","scripts","inspect_docx.py"),run_name="__main__")`
 	result := wu23R1Bash(t, bash, ctx, "python -I -c "+wu23R1Quote(code))
 	if result.IsError || result.ExitCode == nil || *result.ExitCode != 0 {
 		t.Fatalf("real managed document tool must execute under god=%t: %s", god, result.ForLLM)

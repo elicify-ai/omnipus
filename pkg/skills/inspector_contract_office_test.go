@@ -8,17 +8,12 @@ package skills
 // contracts (office-preview spec §6 P4/FR-046, TDD rows T-72/T-75, BDD
 // B-36/B-52).
 //
-// Oracles are the four inspector-contract.md files (read before writing
-// this test), never the scripts' observed output. Fixtures: docx from
-// literal XML (per its contract), pptx decks via python-pptx and the pdf
-// via pypdf (both installed on this Mac — verified before writing), the
-// workbook per its case table — locally BLOCKED because openpyxl is not
-// installed and no managed document runtime is provisioned on this Mac
-// (the CI/managed-interpreter leg owns that leg).
-//
-// A Go test cannot reference the managed interpreter's layout without the
-// runtime present, so the runnable legs drive the system python3; the
-// interpreter seam is one function (pythonBin) to re-point at GREEN.
+// Oracles are the merged elicify-office inspector contract (AD-14), never
+// the scripts' observed output. Fixtures use literal XML and real python-pptx,
+// pypdf and openpyxl libraries. pythonBin selects python3 from the test PATH;
+// missing dependencies remain loud failures, not skips. The configured test
+// virtualenv proves script behavior, not live-product runtime readiness or
+// the three-platform managed-runtime acceptance required by T-72.
 
 import (
 	"archive/zip"
@@ -36,10 +31,11 @@ import (
 )
 
 const (
-	docxScript = "embedded/elicify-docx/scripts/inspect_docx.py"
-	pptxScript = "embedded/elicify-pptx/scripts/inspect_pptx.py"
-	pdfScript  = "embedded/elicify-pdf/scripts/inspect_pdf.py"
-	xlsxScript = "embedded/elicify-xlsx/scripts/inspect_workbook.py"
+	// Office-preview AD-14: all four inspectors ship under the single office ID.
+	docxScript = "embedded/elicify-office/scripts/inspect_docx.py"
+	pptxScript = "embedded/elicify-office/scripts/inspect_pptx.py"
+	pdfScript  = "embedded/elicify-office/scripts/inspect_pdf.py"
+	xlsxScript = "embedded/elicify-office/scripts/inspect_workbook.py"
 	slideEMU   = 1000000 // pptx contract: fixed 1,000,000 × 1,000,000 EMU decks
 )
 
@@ -72,7 +68,7 @@ try:
 except Exception as exc:
     print(json.dumps({"err": type(exc).__name__ + ": " + str(exc)}))
 `, scriptLit, callExpr)
-	out, err := exec.Command(pythonBin(t), "-c", code).CombinedOutput()
+	out, err := exec.Command(pythonBin(t), "-I", "-B", "-c", code).CombinedOutput()
 	if err != nil {
 		t.Fatalf("inspector run failed: %v\n%s", err, out)
 	}
@@ -150,7 +146,11 @@ func buildDocx(t *testing.T, parts map[string]string) string {
 
 func num(t *testing.T, got map[string]any, key string) float64 {
 	t.Helper()
-	v, ok := got["ok"].(map[string]any)[key].(float64)
+	result, ok := got["ok"].(map[string]any)
+	if !ok {
+		t.Fatalf("inspector did not return an object: %v", got)
+	}
+	v, ok := result[key].(float64)
 	if !ok {
 		t.Fatalf("result lacks numeric %s: %v", key, got)
 	}
@@ -158,7 +158,7 @@ func num(t *testing.T, got map[string]any, key string) float64 {
 }
 
 // TestOfficePreview_InspectorDocx_ContractCases (T-72): counts and errors
-// per elicify-docx/knowledge/inspector-contract.md.
+// per elicify-office/knowledge/inspector-contract.md (Word section).
 func TestOfficePreview_InspectorDocx_ContractCases(t *testing.T) {
 	// Empty document: all counts zero.
 	parts := map[string]string{
@@ -219,16 +219,26 @@ func TestOfficePreview_InspectorDocx_ContractCases(t *testing.T) {
 	}
 	path = buildDocx(t, parts)
 	got = runInspector(t, docxScript, fmt.Sprintf("insp.inspect_docx(%q)", path))
-	res = got["ok"].(map[string]any)
-	ext := res["external_relationships"].([]any)
-	if len(ext) != 2 {
-		t.Fatalf("external_relationships = %v, want 2", ext)
+	res, ok := got["ok"].(map[string]any)
+	if !ok {
+		t.Fatalf("relationship fixture must return an object: %v", got)
 	}
-	first, _ := ext[0].(map[string]any)["target"].(string)
-	if first != "http://a.example" {
-		t.Fatalf("external_relationships must be sorted by (part, target); first target = %q", first)
+	ext, ok := res["external_relationships"].([]any)
+	if !ok || len(ext) != 2 {
+		t.Fatalf("external_relationships = %v, want 2 entries", res["external_relationships"])
 	}
-	media := res["media_parts"].([]any)
+	firstRelationship, ok := ext[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first external relationship must be an object: %v", ext[0])
+	}
+	first, ok := firstRelationship["target"].(string)
+	if !ok || first != "http://a.example" {
+		t.Fatalf("external_relationships must be sorted by (part, target); first target = %v", firstRelationship["target"])
+	}
+	media, ok := res["media_parts"].([]any)
+	if !ok {
+		t.Fatalf("media_parts must be an array: %v", res["media_parts"])
+	}
 	if len(media) != 1 || media[0] != "word/media/img1.png" {
 		t.Fatalf("media_parts = %v, want [word/media/img1.png]", media)
 	}
@@ -253,7 +263,7 @@ func TestOfficePreview_InspectorDocx_ContractCases(t *testing.T) {
 // ---- pptx: real decks via python-pptx (installed here) ----
 
 // TestOfficePreview_InspectorPptx_ContractCases (T-72): geometry, ordering,
-// error texts per elicify-pptx/knowledge/inspector-contract.md.
+// error texts per elicify-office/knowledge/inspector-contract.md (PowerPoint section).
 func TestOfficePreview_InspectorPptx_ContractCases(t *testing.T) {
 	buildFixture := func(shapeLines []string) (string, []int) {
 		lit := shapeLines // each line is already a python list literal
@@ -277,7 +287,7 @@ deck.save(path)
 print(json.dumps(ids))
 `
 		fixture := filepath.Join(t.TempDir(), "deck.pptx")
-		out, err := exec.Command(pythonBin(t), "-c", code, fixture).CombinedOutput()
+		out, err := exec.Command(pythonBin(t), "-I", "-B", "-c", code, fixture).CombinedOutput()
 		if err != nil {
 			t.Fatalf("python-pptx fixture failed: %v\n%s", err, out)
 		}
@@ -362,14 +372,14 @@ print(json.dumps(ids))
 
 // TestOfficePreview_InspectorPdf_ContractCases (T-72): page geometry in
 // MediaBox points BEFORE rotation, rotation, fields, encryption, error
-// texts, byte preservation — per elicify-pdf/knowledge/inspector-contract.md.
+// texts, byte preservation — per elicify-office/knowledge/inspector-contract.md (PDF section).
 func TestOfficePreview_InspectorPdf_ContractCases(t *testing.T) {
 	buildPDF := func(body string) string {
 		code := `
 import sys
 ` + body
 		fixture := filepath.Join(t.TempDir(), "fixture.pdf")
-		out, err := exec.Command(pythonBin(t), "-c", code, fixture).CombinedOutput()
+		out, err := exec.Command(pythonBin(t), "-I", "-B", "-c", code, fixture).CombinedOutput()
 		if err != nil {
 			t.Fatalf("pypdf fixture failed: %v\n%s", err, out)
 		}
@@ -502,12 +512,11 @@ with open(sys.argv[1], "wb") as fh:
 
 // ---- workbook (openpyxl): the managed-interpreter leg ----
 
-// TestOfficePreview_InspectorWorkbook_ManagedInterpreter (T-72): the
-// workbook inspector runs through the managed interpreter (openpyxl). This
-// Mac has neither openpyxl nor a provisioned document runtime, so the leg
-// is BLOCKED here and owned by the CI/managed-interpreter lanes.
+// TestOfficePreview_InspectorWorkbook_ManagedInterpreter (T-72) retains its
+// original row name. Run the complete workbook contract through the configured
+// document Python; a missing openpyxl dependency is still a loud BLOCKED result.
 func TestOfficePreview_InspectorWorkbook_ManagedInterpreter(t *testing.T) {
-	hasOpenpyxl := exec.Command(pythonBin(t), "-c", "import openpyxl").Run() == nil
+	hasOpenpyxl := exec.Command(pythonBin(t), "-I", "-B", "-c", "import openpyxl").Run() == nil
 	if hasOpenpyxl {
 		// openpyxl available: run the contract's core cases here.
 		runWorkbookCases(t)
@@ -519,6 +528,5 @@ func TestOfficePreview_InspectorWorkbook_ManagedInterpreter(t *testing.T) {
 	t.Fatal("BLOCKED: managed interpreter with openpyxl not provisioned on this machine — office-preview spec §6 P4/T-72 requires the workbook inspector tested through the managed interpreter (contract cases: empty sheet 1x1, formula without cache, cached zero, stored and cached errors, two sheets in order, unsupported extension, corrupt package, valid ZIP without workbook part, undersized declared dimensions, macro/external-link package presence, byte non-mutation); owned by the CI/managed-interpreter leg")
 }
 
-func runWorkbookCases(t *testing.T) {
-	t.Fatal("workbook contract cases to be activated on a managed interpreter (see the case list in the BLOCKED message)")
-}
+// Workbook cases live in inspector_workbook_office_test.go so the fixture and
+// full contract checks stay separate from the other three format inspectors.

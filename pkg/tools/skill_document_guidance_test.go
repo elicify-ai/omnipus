@@ -1,9 +1,9 @@
 // skill_document_guidance_test.go — ADR-090 §6.5 / ES-FR-05 (self-serve
 // environment_setup route for document workflows).
 //
-// The portable elicify-* SKILL bodies stay unchanged (hash-pinned upstream
-// bytes). Omnipus-specific routing is appended only when Skill loads a
-// first-party document package AND a document runtime is wired. The appended
+// Office-preview AD-14 replaces the four portable document packages with
+// elicify-office, an integrity-pinned adaptation. Omnipus-specific routing is
+// appended only when Skill loads that package AND a document runtime is wired. The appended
 // guidance is CALLER-INDEPENDENT (ES-FR-05: any permitted native agent uses
 // the same route) and must carry the full recovery workflow:
 //
@@ -174,7 +174,7 @@ func assertSelfServeGuidance(t *testing.T, text string) {
 
 func TestDocumentSkillLoad_MiaSelfServesMissingDependencies(t *testing.T) {
 	layout := documentGuidanceLayout(t, "mia")
-	result := loadSkillAs(t, "mia", "elicify-docx", &layout, "portable document instructions")
+	result := loadSkillAs(t, "mia", "elicify-office", &layout, "portable document instructions")
 	if result.IsError {
 		t.Fatalf("load failed: %+v", result)
 	}
@@ -182,7 +182,7 @@ func TestDocumentSkillLoad_MiaSelfServesMissingDependencies(t *testing.T) {
 	if !strings.Contains(text, "portable document instructions") {
 		t.Fatalf("portable body dropped: %s", text)
 	}
-	if !strings.Contains(text, filepath.Join(layout.Skills, "elicify-docx")) {
+	if !strings.Contains(text, filepath.Join(layout.Skills, "elicify-office")) {
 		t.Fatalf("missing authorized package root: %s", text)
 	}
 	probe := strings.Join(documentruntime.ProbeArgv(layout), " ")
@@ -197,7 +197,7 @@ func TestDocumentSkillLoad_MiaSelfServesMissingDependencies(t *testing.T) {
 
 func TestDocumentSkillLoad_WorkerSelfServesMissingDependencies(t *testing.T) {
 	layout := documentGuidanceLayout(t, "worker")
-	result := loadSkillAs(t, "worker", "elicify-pptx", &layout, "portable slides instructions")
+	result := loadSkillAs(t, "worker", "elicify-office", &layout, "portable slides instructions")
 	if result.IsError {
 		t.Fatalf("load failed: %+v", result)
 	}
@@ -210,7 +210,7 @@ func TestDocumentSkillLoad_WorkerSelfServesMissingDependencies(t *testing.T) {
 
 func TestDocumentSkillLoad_AdminCallerGetsSameSelfServeRoute(t *testing.T) {
 	layout := documentGuidanceLayout(t, "admin")
-	result := loadSkillAs(t, "admin", "elicify-xlsx", &layout, "portable xlsx instructions")
+	result := loadSkillAs(t, "admin", "elicify-office", &layout, "portable xlsx instructions")
 	if result.IsError {
 		t.Fatalf("load failed: %+v", result)
 	}
@@ -219,7 +219,7 @@ func TestDocumentSkillLoad_AdminCallerGetsSameSelfServeRoute(t *testing.T) {
 
 func TestDocumentSkillLoad_UnknownCallerGetsSameRouteWithLimitationPath(t *testing.T) {
 	layout := documentGuidanceLayout(t, "custom-doc")
-	result := loadSkillAs(t, "custom-writer", "elicify-xlsx", &layout, "portable xlsx")
+	result := loadSkillAs(t, "custom-writer", "elicify-office", &layout, "portable xlsx")
 	text := result.ForLLM
 	if !strings.Contains(text, strings.Join(documentruntime.ProbeArgv(layout), " ")) {
 		t.Fatalf("still publishes the probe: %s", text)
@@ -229,7 +229,7 @@ func TestDocumentSkillLoad_UnknownCallerGetsSameRouteWithLimitationPath(t *testi
 
 func TestDocumentSkillLoad_AllFirstPartyDocumentSlugsGetGuidance(t *testing.T) {
 	layout := documentGuidanceLayout(t, "mia")
-	for _, slug := range []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"} {
+	for _, slug := range []string{"elicify-office"} { // AD-14: exactly one first-party office slug.
 		result := loadSkillAs(t, "mia", slug, &layout, "body")
 		if result.IsError || !strings.Contains(result.ForLLM, "environment_setup") {
 			t.Fatalf("slug %s: %+v", slug, result)
@@ -237,6 +237,20 @@ func TestDocumentSkillLoad_AllFirstPartyDocumentSlugsGetGuidance(t *testing.T) {
 		if !strings.Contains(result.ForLLM, filepath.Join(layout.Skills, slug)) {
 			t.Fatalf("slug %s missing own package root", slug)
 		}
+	}
+}
+
+// Office-preview AD-14 deletes the four IDs without aliases. Even a resolver
+// returning legacy content must not opt a retired slug into document guidance.
+func TestDocumentSkillLoad_RetiredDocumentSlugsDoNotGetGuidance(t *testing.T) {
+	layout := documentGuidanceLayout(t, "mia")
+	for _, slug := range []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"} {
+		t.Run(slug, func(t *testing.T) {
+			result := loadSkillAs(t, "mia", slug, &layout, "legacy body only")
+			if result.IsError || result.ForLLM != "legacy body only" {
+				t.Fatalf("retired slug must not receive runtime guidance: %+v", result)
+			}
+		})
 	}
 }
 
@@ -252,7 +266,7 @@ func TestDocumentSkillLoad_DoesNotInjectOnOtherSkillPackages(t *testing.T) {
 }
 
 func TestDocumentSkillLoad_NoInjectionWithoutRuntime(t *testing.T) {
-	result := loadSkillAs(t, "mia", "elicify-docx", nil, "portable only")
+	result := loadSkillAs(t, "mia", "elicify-office", nil, "portable only")
 	if result.ForLLM != "portable only" {
 		t.Fatalf("unwired runtime must not append guidance, got %q", result.ForLLM)
 	}
@@ -265,7 +279,7 @@ func TestDocumentSkillSearch_DoesNotAppendRuntimeGuidance(t *testing.T) {
 		func(context.Context, string) SkillLoadOutcome { return SkillLoadOutcome{} },
 		func(context.Context, string) bool { return true },
 		func(context.Context) []SkillSearchDoc {
-			return []SkillSearchDoc{{Slug: "elicify-docx", Description: "Word documents"}}
+			return []SkillSearchDoc{{Slug: "elicify-office", Description: "Word documents"}}
 		},
 	)
 	tool.SetDocumentRuntime(layout)

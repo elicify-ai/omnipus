@@ -93,6 +93,45 @@ func TestFilterMacSpellCheckerPassthroughAndRefusals(t *testing.T) {
 	}
 }
 
+// AD-3 keeps a packaging entrypoint, not a runtime store. Exercise its actual
+// exported filter in addition to the lower-level XML/identity tests above.
+func TestOfficePreview_PackagingFilterPreservesUnrelatedRegistry(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{
+			name:  "shared_component",
+			input: registryXML(componentXML("libmergedlo", macSpellFixture, mySpellFixture)),
+			want:  registryXML(componentXML("libmergedlo", mySpellFixture)),
+		},
+		{
+			name:  "sole_component",
+			input: registryXML(componentXML("libmacspelllo", macSpellFixture), componentXML("libmergedlo", mySpellFixture)),
+			want:  registryXML(componentXML("libmergedlo", mySpellFixture)),
+		},
+		{
+			name:  "already_filtered",
+			input: registryXML(componentXML("libmergedlo", mySpellFixture)),
+			want:  registryXML(componentXML("libmergedlo", mySpellFixture)),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FilterConverterRegistry([]byte(tc.input))
+			if err != nil || string(got) != tc.want {
+				t.Fatalf("packaging registry = %q, err=%v; want exact %q (AD-3)", got, err, tc.want)
+			}
+			again, err := FilterConverterRegistry(got)
+			if err != nil || !bytes.Equal(again, got) {
+				t.Fatalf("packaging filter not idempotent: err=%v got=%q", err, again)
+			}
+		})
+	}
+	duplicate := registryXML(componentXML("libmergedlo", macSpellFixture, macSpellFixture, mySpellFixture))
+	if _, err := FilterConverterRegistry([]byte(duplicate)); err == nil || !strings.Contains(err.Error(), "registrations") {
+		t.Fatalf("ambiguous spell-checker registrations must be rejected: %v", err)
+	}
+}
+
 func TestConverterRegistryNamespaceIdentity(t *testing.T) {
 	const uno = "http://openoffice.org/2010/uno-components"
 	valid := registryXML(componentXML("libmergedlo", mySpellFixture))

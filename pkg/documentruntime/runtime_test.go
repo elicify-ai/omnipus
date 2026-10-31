@@ -125,9 +125,7 @@ func TestProvisionFirstPartyIsProbeableBeforeDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Assets) < 20 {
-		t.Fatalf("assets=%d, want packaged helpers and knowledge", len(manifest.Assets))
-	}
+	assertOfficePackageInventory(t, manifest) // AD-14 replaces the four-package count.
 	if _, err := os.Stat(filepath.Join(layout.Lib, "python", "omnipus_document_probe", "__main__.py")); err != nil {
 		t.Fatal(err)
 	}

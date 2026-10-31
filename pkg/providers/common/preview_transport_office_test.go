@@ -89,7 +89,7 @@ func TestOfficePreview_ToolResultPDF_NoBytesInsideToolMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	var messages []map[string]any
-	if err := json.Unmarshal(raw, &messages); err != nil {
+	if err = json.Unmarshal(raw, &messages); err != nil {
 		t.Fatal(err)
 	}
 	toolIndex, companionIndex := -1, -1

@@ -101,19 +101,10 @@ func TestProvisionFirstPartyRebuildsEmptyInventoryManifest(t *testing.T) {
 			if len(got.Assets) == 0 {
 				t.Fatal("matching revision with empty asset inventory must be rebuilt")
 			}
-			// Pin the four required bundled packages independently of DocumentSkillIDs.
-			for _, id := range []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"} {
-				rel := "skills/" + id + "/SKILL.md"
-				found := false
-				for _, asset := range got.Assets {
-					if asset.Path == rel {
-						found = true
-						break
-					}
-				}
-				if !found {
-					t.Errorf("rebuilt inventory is missing %s", rel)
-				}
+			// AD-14: require every merged-package asset, not just SKILL.md.
+			assertOfficePackageInventory(t, got)
+			if err = VerifyAssets(layout.Prefix, got.Assets); err != nil {
+				t.Fatalf("rebuilt inventory integrity: %v", err)
 			}
 			data, err = os.ReadFile(layout.Manifest)
 			if err != nil {

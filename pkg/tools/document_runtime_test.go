@@ -676,8 +676,8 @@ func TestDocumentSkillLoadPublishesAuthorizedRuntimeRoot(t *testing.T) {
 		return SkillLoadOutcome{Status: SkillLoadLoaded, Content: "instructions"}
 	}, func(context.Context, string) bool { return true }, nil)
 	tool.SetDocumentRuntime(layout)
-	result := tool.Execute(bashCtx(t), map[string]any{"name": "elicify-docx"})
-	wantRoot := filepath.Join(layout.Skills, "elicify-docx")
+	result := tool.Execute(bashCtx(t), map[string]any{"name": "elicify-office"})
+	wantRoot := filepath.Join(layout.Skills, "elicify-office")
 	if result.IsError || !strings.Contains(result.ForLLM, wantRoot) || !strings.Contains(result.ForLLM, layout.Manifest) {
 		t.Fatalf("result=%+v", result)
 	}

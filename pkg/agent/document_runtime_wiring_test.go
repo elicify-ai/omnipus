@@ -105,12 +105,12 @@ func TestNewAgentLoopDocumentSkillPublishesProvisionedRuntime(t *testing.T) {
 		registered.SetResolver(func(context.Context, string) tools.SkillLoadOutcome {
 			return tools.SkillLoadOutcome{Status: tools.SkillLoadLoaded, Content: "document instructions"}
 		}, func(context.Context, string) bool { return true }, nil)
-		result := skill.Execute(tools.WithAgentID(context.Background(), id), map[string]any{"name": "elicify-docx"})
+		result := skill.Execute(tools.WithAgentID(context.Background(), id), map[string]any{"name": "elicify-office"})
 		if result.IsError {
 			t.Fatalf("agent %q document skill load failed: %s", id, result.ForLLM)
 		}
 		layout := agent.DocumentRuntime
-		if layout == nil || !strings.Contains(result.ForLLM, filepath.Join(layout.Skills, "elicify-docx")) || !strings.Contains(result.ForLLM, strings.Join(documentruntime.ProbeArgv(*layout), " ")) {
+		if layout == nil || !strings.Contains(result.ForLLM, filepath.Join(layout.Skills, "elicify-office")) || !strings.Contains(result.ForLLM, strings.Join(documentruntime.ProbeArgv(*layout), " ")) {
 			t.Fatalf("agent %q skill omitted provisioned runtime: %s", id, result.ForLLM)
 		}
 	}

@@ -9,7 +9,8 @@ import (
 	"testing"
 )
 
-// Expected bytes come from the pinned Elicify source commit, not the copied bundle.
+// Office-preview AD-14/T-74 deliberately adapts the pinned upstream packages.
+// Expected bytes come from the reviewed adaptation inventory, never from seeding output.
 func TestADR090_DocumentPackagesSeedPinnedAssets(t *testing.T) {
 	data, err := os.ReadFile("../../docs/internal/specs/adr-090-document-package-inventory.json")
 	if err != nil {
@@ -25,7 +26,7 @@ func TestADR090_DocumentPackagesSeedPinnedAssets(t *testing.T) {
 	if inventory.SourceCommit != "687242a67612744c88aa1c6b4ac0a56a5537cde3" {
 		t.Fatal("unexpected source revision")
 	}
-	for _, name := range []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"} {
+	for _, name := range []string{"elicify-office"} {
 		if _, ok := inventory.Files[name+"/SKILL.md"]; !ok {
 			t.Fatalf("missing inventory for %s", name)
 		}
@@ -39,7 +40,7 @@ func TestADR090_DocumentPackagesSeedPinnedAssets(t *testing.T) {
 	for _, name := range result.Seeded {
 		seeded[name] = true
 	}
-	for _, name := range []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"} {
+	for _, name := range []string{"elicify-office"} {
 		if !seeded[name] {
 			t.Errorf("fresh install did not seed %s", name)
 		}

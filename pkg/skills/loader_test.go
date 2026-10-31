@@ -214,9 +214,9 @@ func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
 
 	// The WU-9 workflow set (FR-010): the Ava/Admin-era skills are removed
 	// from the embedded set and the W1–W18 workflow skills ship instead,
-	// alongside the four pinned Elicify document packages and the shared
-	// helpers. Labels are each skill's metadata display_name (the Elicify
-	// document packages keep their H1 labels by design).
+	// alongside the merged office package and shared helpers. Office-preview
+	// AD-14's canonical-ID amendment names its display label Office documents;
+	// identity remains the slug elicify-office.
 	want := map[string]string{
 		"add-connector":     "Add Connector (W10)",
 		"add-provider":      "Add or Change Provider (W12)",
@@ -229,10 +229,7 @@ func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
 		"dependency-check":  "Dependency Check",
 		"disable-channel":   "Disable Channel (W14)",
 		"doctor-usage":      "Doctor and Usage (W16)",
-		"elicify-docx":      "DOCX",
-		"elicify-pdf":       "PDF",
-		"elicify-pptx":      "PPTX",
-		"elicify-xlsx":      "XLSX",
+		"elicify-office":    "Office documents",
 		"inbox-triage":      "Inbox Triage",
 		"install-skill":     "Install Skill (W6)",
 		"interview":         "Interview",

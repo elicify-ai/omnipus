@@ -158,7 +158,7 @@ func TestOfficePreview_ReplayProjection_UnavailableFrame(t *testing.T) {
 			if frame.Preview == nil || frame.Preview.Outcome != "unavailable" {
 				t.Fatalf("preview record outcome = %v, want unavailable (spec §5.2)", frame.Preview)
 			}
-			if frame.Preview.UnavailableReason == nil || string(*frame.Preview.UnavailableReason) != reason {
+			if frame.Preview.UnavailableReason == nil || *frame.Preview.UnavailableReason != reason {
 				t.Fatalf("unavailable_reason = %v, want persisted reason %q (§5.2)", frame.Preview.UnavailableReason, reason)
 			}
 		})
