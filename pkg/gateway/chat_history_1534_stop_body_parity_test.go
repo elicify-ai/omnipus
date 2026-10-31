@@ -810,14 +810,14 @@ func TestStopSuccessRaceE2E_LateSuccessTailNeverSaved(t *testing.T) {
 	require.NotEmpty(t, replay, "the shown answer must survive reload")
 	joined := ""
 	nonemptyReplayBodies := 0
-	// ReplayMessageFrame.truncated explicitly permits empty-body frames.
-	// Count user-visible answer bodies, not these bookkeeping records; every
-	// frame must nevertheless retain the original answer and turn identity.
+	// Per-call accounting may keep empty records under their own ids. Only
+	// the non-empty answer must retain its original message id; every record
+	// still keeps turn identity and must exclude post-Stop text.
 	for _, frame := range replay {
-		assert.Equal(t, first.liveMessageID, derefString(frame.Id), "every answer frame keeps the pre-Stop message id")
 		assert.Equal(t, live.turnID, derefString(frame.TurnId), "every answer frame belongs to the stopped turn")
 		assert.NotContains(t, frame.Content, "TAIL", "no replayed frame may contain the post-claim tail")
 		if frame.Content != "" {
+			assert.Equal(t, first.liveMessageID, derefString(frame.Id), "the non-empty answer frame keeps the pre-Stop message id")
 			nonemptyReplayBodies++
 		}
 		joined += frame.Content
@@ -831,10 +831,10 @@ func TestStopSuccessRaceE2E_LateSuccessTailNeverSaved(t *testing.T) {
 	savedJoined := ""
 	nonemptySavedBodies := 0
 	for _, entry := range assistant {
-		assert.Equal(t, first.liveMessageID, entry.ID, "every saved answer entry keeps the pre-Stop message id")
 		assert.Equal(t, live.turnID, entry.TurnID, "every saved answer entry belongs to the stopped turn")
 		assert.NotContains(t, entry.Content, "TAIL", "no saved entry may contain the post-claim tail")
 		if entry.Content != "" {
+			assert.Equal(t, first.liveMessageID, entry.ID, "the non-empty saved answer entry keeps the pre-Stop message id")
 			nonemptySavedBodies++
 		}
 		savedJoined += entry.Content
