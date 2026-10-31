@@ -84,6 +84,10 @@ var allStaticToolNames = []string{
 	// workspace's own .library/ dual-write directory (D-1) — see
 	// pkg/agent.LibraryDirName / pkg/tools/library_tool.go.
 	"library_list", "library_read",
+	// preview_document (office-preview spec AD-13): Allow for ordinary roles
+	// and custom agents, explicit Deny for Omnipus and the hidden system
+	// agents. Lands with the ceiling entry in pkg/config/defaults.go.
+	"preview_document",
 	// request_mount (ADR-063 FR-7.2): seeded "ask" everywhere — the whole
 	// point is that the operator approves each folder.
 	"request_mount",
@@ -419,7 +423,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 func coreAgentSkills(id CoreAgentID) []string {
 	switch id {
 	case IDMia:
-		return []string{"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
+		return []string{"interview", "define-goal", "inbox-triage", "elicify-office"}
 	case IDJim:
 		return []string{"interview", "orchestrate", "plan", "define-goal"}
 	case IDOmnipus:
@@ -435,7 +439,7 @@ func coreAgentSkills(id CoreAgentID) []string {
 	case IDResearcher:
 		return []string{"deep-research"}
 	case IDWorker:
-		return []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
+		return []string{"elicify-office"}
 	default:
 		return nil
 	}
@@ -944,6 +948,7 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"browser_handover":      allow,
 				"browser_upload_file":   ask,
 				"read_file":             allow,
+				"preview_document":      allow,
 				"list_directory":        allow,
 				"grep":                  allow,
 				"list_mounts":           allow,

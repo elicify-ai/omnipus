@@ -591,8 +591,20 @@ func anthropicToolResult(msg Message) anthropic.ContentBlockParamUnion {
 		return anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)
 	}
 	content := []anthropic.ToolResultBlockParamContentUnion{{OfText: &anthropic.TextBlockParam{Text: msg.Content}}}
-	unsupported, unsupportedFormat, malformed := 0, 0, 0
+	unsupported, unsupportedFormat, malformed, malformedPDF := 0, 0, 0, 0
 	for _, dataURL := range msg.Media {
+		// Native PDF from a tool result travels as a document block inside
+		// the tool result — the Messages API documents document content in
+		// tool_result (office-preview spec §4.2, S-2).
+		if strings.HasPrefix(dataURL, "data:application/pdf;base64,") {
+			data := strings.TrimPrefix(dataURL, "data:application/pdf;base64,")
+			if _, err := base64.StdEncoding.DecodeString(data); err != nil || data == "" {
+				malformedPDF++
+				continue
+			}
+			content = append(content, anthropic.ToolResultBlockParamContentUnion{OfDocument: &anthropic.DocumentBlockParam{Source: anthropic.DocumentBlockParamSourceUnion{OfBase64: &anthropic.Base64PDFSourceParam{Data: data}}}})
+			continue
+		}
 		if !strings.HasPrefix(dataURL, "data:image/") {
 			unsupported++
 			continue
@@ -616,8 +628,8 @@ func anthropicToolResult(msg Message) anthropic.ContentBlockParamUnion {
 		}
 		content = append(content, anthropic.ToolResultBlockParamContentUnion{OfImage: &anthropic.ImageBlockParam{Source: anthropic.ImageBlockParamSourceUnion{OfBase64: &anthropic.Base64ImageSourceParam{Data: data, MediaType: anthropic.Base64ImageSourceMediaType(mediaType)}}}})
 	}
-	if unsupported > 0 || unsupportedFormat > 0 || malformed > 0 {
-		parts := make([]string, 0, 3)
+	if unsupported > 0 || unsupportedFormat > 0 || malformed > 0 || malformedPDF > 0 {
+		parts := make([]string, 0, 4)
 		if unsupported > 0 {
 			parts = append(parts, fmt.Sprintf("unsupported media type (%d)", unsupported))
 		}
@@ -627,12 +639,16 @@ func anthropicToolResult(msg Message) anthropic.ContentBlockParamUnion {
 		if unsupportedFormat > 0 {
 			parts = append(parts, fmt.Sprintf("unsupported image format (%d)", unsupportedFormat))
 		}
+		if malformedPDF > 0 {
+			parts = append(parts, fmt.Sprintf("malformed PDF data (%d)", malformedPDF))
+		}
 		warning := "[Tool-result media omitted for Anthropic: " + strings.Join(parts, ", ") + ". Re-read the attachment in a supported image format.]"
 		content = append(content, anthropic.ToolResultBlockParamContentUnion{OfText: &anthropic.TextBlockParam{Text: warning}})
 		logger.WarnCF("anthropic", "tool-result media omitted", map[string]any{
 			"unsupported_media_type_count":   unsupported,
 			"unsupported_image_format_count": unsupportedFormat,
 			"malformed_image_data_count":     malformed,
+			"malformed_pdf_data_count":       malformedPDF,
 		})
 	}
 	return anthropic.ContentBlockParamUnion{OfToolResult: &anthropic.ToolResultBlockParam{ToolUseID: msg.ToolCallID, Content: content}}

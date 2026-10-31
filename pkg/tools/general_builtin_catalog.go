@@ -74,6 +74,10 @@ func GeneralBuiltinMetadata() []Tool {
 	// library_list / library_read (D3, library-spec): scoped facades over
 	// the workspace's .library/ dual-write directory where chat uploads
 	// land (D-1) — see pkg/agent.LibraryDirName.
+	// preview_document (office-preview spec AD-13): catalogued beside the
+	// read_file family so the Constraint #6 coverage universe and
+	// GET /api/v1/tools see it.
+	out = append(out, NewPreviewDocumentTool("", false))
 	out = append(out, NewLibraryListTool("", false))
 	out = append(out, NewLibraryReadTool("", false, 0))
 	// request_mount (ADR-063 FR-7.2): the agent's way to ASK for write access

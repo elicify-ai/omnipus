@@ -267,6 +267,9 @@ func (nai *newAgentInstance) registerTools() {
 	nai.toolsRegistry.Register(readFileTool)
 	nai.toolsRegistry.Register(tools.NewWriteFileTool(nai.workspace, nai.restrict, nai.allowWritePaths))
 	nai.toolsRegistry.Register(tools.NewListDirTool(nai.workspace, nai.readRestrict, nai.allowReadPaths))
+	// preview_document (office-preview spec AD-13): registered at the
+	// read_file site; policy decides who may call it.
+	nai.toolsRegistry.Register(tools.NewPreviewDocumentTool(nai.workspace, nai.readRestrict))
 	// library_list / library_read (D3, library-spec): scoped facades over
 	// this agent's own workspace .library/ dual-write directory, where chat
 	// uploads land (D-1) so file tools can actually reach them (ADR-046).

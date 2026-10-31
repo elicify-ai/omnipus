@@ -209,13 +209,13 @@ func resolveMediaRefsWithOffload(
 				continue
 			}
 
-			// PDF: route to native document blocks for capable models, else
-			// extract text. When the capability catalog says the model lacks
-			// the pdf modality (step-1 gate), skip native send and route to
-			// step-5 offload with document-class guidance, falling back to
-			// step-6 text extraction (FR-022) and step-7 honest marker.
+			// PDF: the model catalog alone decides (office-preview spec AD-11,
+			// FR-018). A model whose catalog entry lists the pdf modality gets
+			// the native document; otherwise (step-1 gate) skip native send and
+			// route to step-5 offload with document-class guidance, falling
+			// back to step-6 text extraction (FR-022) and step-7 honest marker.
 			if isPDF(mime, meta.Filename) {
-				if modelSupportsPDF(cat, provider, model) && pdfCapableModel(model) {
+				if modelSupportsPDF(cat, provider, model) {
 					dataURL := encodePDFToDataURL(localPath, info, maxSize)
 					if dataURL != "" {
 						resolved = append(resolved, dataURL)
@@ -223,21 +223,16 @@ func resolveMediaRefsWithOffload(
 						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
 						contentInjections = append(contentInjections, inj)
 					}
-				} else if !modelSupportsPDF(cat, provider, model) {
-					// Step-1 gate: text-only model + PDF → offload with
-					// document-class guidance + text extraction (step 5 + 6).
+				} else {
+					// Step-1 gate: model without the pdf modality + PDF →
+					// offload with document-class guidance + text extraction
+					// (step 5 + 6).
 					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
 					if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
 						contentInjections = append(contentInjections, offInj+textInj)
 					} else {
 						contentInjections = append(contentInjections, textInj)
 					}
-				} else {
-					// Model not in the PDF-capable allow-list but capability
-					// gate passed (or catalog is nil/text-only model wasn't
-					// recognized) — extract text (step 6).
-					inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					contentInjections = append(contentInjections, inj)
 				}
 				continue
 			}
@@ -285,70 +280,6 @@ func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
 		return ""
 	}
 	return "\n\n[user uploaded: " + workPath + "]"
-}
-
-// pdfCapableModel returns true for models known to support native PDF document
-// blocks (base64 application/pdf content). Any model that returns false gets the
-// text-extraction fallback, which works for every model.
-//
-// The allow-list is deliberately CONSERVATIVE. The failure modes are asymmetric:
-// a false negative merely sends extracted text (slightly less rich, but always
-// works), whereas a false positive sends a native PDF block to a model whose
-// upstream provider rejects it with a hard HTTP 400 — which aborts the whole
-// turn with an empty reply. When in doubt, prefer text.
-//
-// Known exclusions (matched first, before the allow-list):
-//
-//   - Claude *Haiku* — OpenRouter routes Haiku via Amazon Bedrock, which returns
-//     "'claude-3-5-haiku-...' does not support PDF input." (verified 2026-06-01).
-//     Only Claude Sonnet/Opus (3.5+) and Claude 4 reliably accept PDF.
-//
-// Allow-list substrings (case-insensitive, matched against the full model id):
-//
-//	Anthropic: claude-3.5-sonnet / claude-3-7-sonnet / sonnet-4 / opus-4 / claude-4
-//	OpenAI:    gpt-4o, gpt-4.1, o1-, o3-
-//	Google:    gemini-1.5, gemini-2
-func pdfCapableModel(model string) bool {
-	lower := strings.ToLower(model)
-
-	// Exclusions take precedence: these match an allow-list substring but their
-	// upstream provider rejects PDF input, so they MUST fall back to text.
-	for _, deny := range []string{"haiku"} {
-		if strings.Contains(lower, deny) {
-			return false
-		}
-	}
-
-	capableSubstrings := []string{
-		// Anthropic — only Sonnet/Opus 3.5+ and Claude 4 accept PDF. Bare
-		// "claude-3" is intentionally NOT listed (it matched Haiku and the
-		// original Claude 3 models that lack PDF support).
-		"claude-3.5-sonnet", "claude-3-5-sonnet",
-		"claude-3.7-sonnet", "claude-3-7-sonnet",
-		"claude-sonnet-4", "claude-opus-4", "claude-4",
-		"sonnet-4", "opus-4",
-		// OpenAI GPT-4o and 4.1 family
-		"gpt-4o",
-		"gpt-4.1",
-		"openai/gpt-4o",
-		"openai/gpt-4.1",
-		// OpenAI o1/o3 reasoning models
-		"o1-",
-		"o3-",
-		"openai/o1",
-		"openai/o3",
-		// Google Gemini 1.5+
-		"gemini-1.5",
-		"gemini-2",
-		"google/gemini-1.5",
-		"google/gemini-2",
-	}
-	for _, sub := range capableSubstrings {
-		if strings.Contains(lower, sub) {
-			return true
-		}
-	}
-	return false
 }
 
 // downgradePDFMediaToText converts any native PDF data URL in each message's

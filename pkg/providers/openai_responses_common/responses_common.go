@@ -90,6 +90,10 @@ func TranslateMessages(messages []protocoltypes.Message) (input responses.Respon
 				for _, mediaURL := range msg.Media {
 					if strings.HasPrefix(mediaURL, "data:image/") {
 						items = append(items, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{ImageURL: openai.Opt(mediaURL), Detail: responses.ResponseInputImageContentDetailAuto}})
+					} else if strings.HasPrefix(mediaURL, pdfDataURLPrefix) {
+						// The function-call output may carry files (office-preview
+						// spec §4.2, S-2): the PDF stays inside the tool result.
+						items = append(items, responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{FileData: openai.Opt(mediaURL), Filename: openai.Opt("document.pdf")}})
 					}
 				}
 				output = responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfResponseFunctionCallOutputItemArray: items}
@@ -106,8 +110,12 @@ func TranslateMessages(messages []protocoltypes.Message) (input responses.Respon
 	return input, instructions
 }
 
+// pdfDataURLPrefix marks a native PDF in a message's media list.
+const pdfDataURLPrefix = "data:application/pdf;base64,"
+
 // BuildMultipartContent constructs a ResponseInputMessageContentListParam from
-// text content and media URLs (data:image/... and data:audio/... URIs).
+// text content and media URLs (data:image/..., data:application/pdf;base64,...
+// and data:audio/... URIs).
 func BuildMultipartContent(text string, media []string) responses.ResponseInputMessageContentListParam {
 	parts := make(responses.ResponseInputMessageContentListParam, 0, 1+len(media))
 
@@ -125,6 +133,15 @@ func BuildMultipartContent(text string, media []string) responses.ResponseInputM
 				OfInputImage: &responses.ResponseInputImageParam{
 					ImageURL: openai.Opt(mediaURL),
 					Detail:   responses.ResponseInputImageDetailAuto,
+				},
+			})
+		} else if strings.HasPrefix(mediaURL, pdfDataURLPrefix) {
+			// Native PDF upload (office-preview spec §4.2): the full data URL
+			// is the documented file_data form.
+			parts = append(parts, responses.ResponseInputContentUnionParam{
+				OfInputFile: &responses.ResponseInputFileParam{
+					FileData: openai.Opt(mediaURL),
+					Filename: openai.Opt("attachment.pdf"),
 				},
 			})
 		} else if strings.HasPrefix(mediaURL, "data:audio/") {

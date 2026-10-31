@@ -224,6 +224,9 @@ func defaultToolPoliciesGeneral() map[string]string {
 		"append_file":    "allow",
 		"library_list":   "allow",
 		"library_read":   "allow",
+		// preview_document (office-preview spec AD-13): read-only document
+		// preview; one commit with allStaticToolNames and the per-agent seeds.
+		"preview_document": "allow",
 		// The operator approves each grant; see ADR-063 FR-7.2.
 		"request_mount": "ask",
 		// environment_setup (ADR-090 ES-FR-01): ceiling "ask" — the

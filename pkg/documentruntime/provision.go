@@ -49,7 +49,6 @@ func ProvisionFirstParty(layout Layout) (Manifest, error) {
 		Revision:  ManifestRevision,
 		Python:    filepath.Join(layout.Bin, "python"),
 		Node:      filepath.Join(layout.Bin, "node"),
-		Converter: filepath.Join(layout.Bin, "soffice"),
 		Platforms: []string{"darwin", "linux", "windows"},
 		PythonRequirements: []Requirement{
 			{Import: "docx", Distribution: "python-docx", Version: "1.2.0"},
