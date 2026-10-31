@@ -7,9 +7,11 @@ package component
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
+	"syscall"
 
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
@@ -17,13 +19,11 @@ import (
 // WriteRoot is one place an agent may write: a workspace work tree, a mount,
 // an operator allowance or a grant.
 type WriteRoot struct {
-	// Path is the folder (or, with Prefix, the path text) the authority
-	// covers.
+	// Path is the folder the authority covers (everything at or below it).
+	// A regex allowance that names a text prefix rather than a folder is
+	// reduced to the folder holding that prefix before it gets here
+	// (pkg/preview/writeroots.go::allowanceRoots).
 	Path string
-	// Prefix marks a path-text prefix rather than a folder: the authority
-	// covers every path whose text starts with Path ("^/srv/data" also
-	// covers "/srv/data2/..."). Set for regex write allowances.
-	Prefix bool
 	// All marks an authority whose extent cannot be determined (a write
 	// allowance Omnipus cannot reduce to a folder, or a write source that
 	// could not be read). It overlaps every component: preview stays off
@@ -37,13 +37,18 @@ type WriteRoot struct {
 // FirstOverlap returns the first write root that is inside, equal to, or
 // contains root (AD-4 writer exclusion, R2-MAJ-012), or nil.
 //
-// Containment is decided by filesystem identity where the paths exist
-// (pkg/fspolicy::CoversForDeny: device + inode along the ancestor chain), so
-// a case or Unicode-normalization spelling of the same folder on macOS, or a
-// symlinked spelling, still overlaps; where identity cannot answer, the
-// case-folded comparison — the refusing direction — decides.
+// Both paths are compared in two spellings: as written, and with every
+// symlink in the longest existing part resolved (so a writable alias that
+// points into the component, or a component reached through a symlink, keeps
+// its physical ancestry, W2-S02 R2). Each pair is decided by filesystem
+// identity where the paths exist (pkg/fspolicy::CoversForDeny: device +
+// inode along the ancestor chain, so a case or Unicode-normalization
+// spelling of the same folder on macOS still overlaps), else by the
+// case-folded comparison — the refusing direction. A path whose symlinks
+// cannot be resolved (a permission error, a dangling link) overlaps: an
+// undecidable authority keeps preview off.
 func FirstOverlap(root string, roots []WriteRoot) *WriteRoot {
-	r := absClean(root)
+	rs, rok := spellings(root)
 	for i := range roots {
 		w := roots[i]
 		if w.All {
@@ -52,75 +57,63 @@ func FirstOverlap(root string, roots []WriteRoot) *WriteRoot {
 		if w.Path == "" {
 			continue
 		}
-		if w.Prefix {
-			prefix := absClean(w.Path)
-			if strings.HasSuffix(w.Path, string(filepath.Separator)) && !strings.HasSuffix(prefix, string(filepath.Separator)) {
-				prefix += string(filepath.Separator)
-			}
-			if prefixOverlaps(prefix, r) {
-				return &roots[i]
-			}
-			continue
-		}
-		p := absClean(w.Path)
-		if fspolicy.CoversForDeny(p, r) || fspolicy.CoversForDeny(r, p) {
+		ws, wok := spellings(w.Path)
+		if !rok || !wok || overlapsAny(rs, ws) {
 			return &roots[i]
 		}
 	}
 	return nil
 }
 
-// prefixOverlaps reports whether any path whose text starts with prefix can
-// be root, lie under root, or contain root. The prefix splits into a folder
-// (dir) and the start of one name inside it (stem): writable paths are dir's
-// entries whose names start with stem, and everything below them.
-func prefixOverlaps(prefix, root string) bool {
-	dir, stem := prefix, ""
-	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
-		dir, stem = filepath.Dir(prefix), filepath.Base(prefix)
-	}
-	if !isASCII(stem) {
-		// Case folding of non-ASCII names and Unicode normalization cannot
-		// be decided from text: treat the whole folder as writable.
-		stem = ""
-	}
-	if stem == "" {
-		return fspolicy.CoversForDeny(dir, root) || fspolicy.CoversForDeny(root, dir)
-	}
-	// Writable paths below root: dir itself is inside root.
-	if fspolicy.CoversForDeny(root, dir) {
-		return true
-	}
-	// root (or one of its ancestors) is an entry of dir named stem...
-	for a := root; ; {
-		parent := filepath.Dir(a)
-		if parent == a {
-			return false
+func overlapsAny(as, bs []string) bool {
+	for _, a := range as {
+		for _, b := range bs {
+			if fspolicy.CoversForDeny(a, b) || fspolicy.CoversForDeny(b, a) {
+				return true
+			}
 		}
-		if strings.HasPrefix(strings.ToLower(filepath.Base(a)), strings.ToLower(stem)) && sameDir(parent, dir) {
-			return true
-		}
-		a = parent
 	}
+	return false
 }
 
-// sameDir is identity equality with the refusing (case-folded) fallback.
-func sameDir(a, b string) bool {
-	if ai, err := os.Stat(a); err == nil {
-		if bi, err := os.Stat(b); err == nil {
-			return os.SameFile(ai, bi)
-		}
+// spellings returns p as written (absolute, cleaned) and with its existing
+// part's symlinks resolved; ok is false when resolution hit anything other
+// than a missing component.
+func spellings(p string) ([]string, bool) {
+	lexical := absClean(p)
+	resolved, err := resolveExisting(lexical)
+	if err != nil {
+		return []string{lexical}, false
 	}
-	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	if resolved == lexical {
+		return []string{lexical}, true
+	}
+	return []string{lexical, resolved}, true
 }
 
-func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 {
-			return false
+// resolveExisting resolves every symlink in the longest existing ancestor of
+// p and appends the missing rest unchanged. A dangling symlink is an error:
+// its target is where a write through it would land, and that is unknown.
+func resolveExisting(p string) (string, error) {
+	rest := ""
+	for cur := p; ; {
+		r, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			return filepath.Join(r, rest), nil
 		}
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			return "", err
+		}
+		if info, lerr := os.Lstat(cur); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("dangling symlink " + cur)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p, nil
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
 	}
-	return true
 }
 
 func absClean(p string) string {

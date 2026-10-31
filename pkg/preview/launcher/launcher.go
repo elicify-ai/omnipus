@@ -56,11 +56,9 @@ const (
 
 // Limits are the per-program limits (AD-6). Zero means "do not set".
 type Limits struct {
-	// MemoryBytes: Linux address space (or data segment, MemoryKind), Windows
-	// job memory, macOS watchdog budget (best effort).
+	// MemoryBytes: Linux data limit (RLIMIT_DATA, plus an 8 MiB stack limit;
+	// spec §3.1 D1), Windows job memory, macOS watchdog budget (best effort).
 	MemoryBytes uint64
-	// MemoryKind selects the Linux memory limit: "as" (default) or "data".
-	MemoryKind string
 	// CPUSeconds: RLIMIT_CPU on Unix, per-job user time on Windows.
 	CPUSeconds uint64
 	// FileSizeBytes: RLIMIT_FSIZE on Unix (Windows checks output after).
@@ -80,9 +78,6 @@ func (l Limits) args() []string {
 		}
 	}
 	add("mem", l.MemoryBytes)
-	if l.MemoryKind != "" {
-		out = append(out, "--mem-kind="+l.MemoryKind)
-	}
 	add("cpu", l.CPUSeconds)
 	add("fsize", l.FileSizeBytes)
 	add("nofile", l.OpenFiles)
@@ -106,12 +101,11 @@ func parseArgs(args []string) (Limits, []string, error) {
 		if !ok || !strings.HasPrefix(a, "--") {
 			return l, nil, fmt.Errorf("run-limited: bad argument %q", a)
 		}
-		if name == "mem-kind" {
-			if val != "as" && val != "data" {
-				return l, nil, fmt.Errorf("run-limited: bad mem-kind %q", val)
-			}
-			l.MemoryKind = val
-			continue
+		switch name {
+		case "mem", "cpu", "fsize", "nofile", "procs":
+		default:
+			// Includes the deleted "mem-kind" (spec §3.1 D1): unknown.
+			return l, nil, fmt.Errorf("run-limited: unknown limit %q", name)
 		}
 		n, err := strconv.ParseUint(val, 10, 64)
 		if err != nil || n == 0 {

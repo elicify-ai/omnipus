@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
 	"github.com/elicify-ai/omnipus/pkg/preview/extracttext"
 	"github.com/elicify-ai/omnipus/pkg/preview/protocol"
@@ -77,6 +78,10 @@ type Service struct {
 
 	officeMu sync.Mutex
 	office   *component.Component
+
+	// memoryUnenforced is the §3.1 D1.4 reason, "" when the memory limit is
+	// enforced (computed once at New).
+	memoryUnenforced string
 }
 
 // New builds a Service. It does not touch any component yet.
@@ -88,13 +93,21 @@ func New(cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("preview: identify gateway: %w", err)
 	}
+	unenforced, note := hostMemoryLimitUnenforced()
+	if note != "" {
+		logger.InfoCF("preview", "document preview memory limit check: "+note, nil)
+	}
+	if unenforced != "" {
+		logger.WarnCF("preview", "document preview: memory limit not enforced: "+unenforced, nil)
+	}
 	return &Service{
-		cfg:          cfg,
-		rendererRuns: make(chan struct{}, maxRendererRuns),
-		officeRuns:   make(chan struct{}, maxOfficeRuns),
-		cache:        newPageCache(pageCacheBytes),
-		gatewayPID:   os.Getpid(),
-		gatewayStart: start,
+		cfg:              cfg,
+		rendererRuns:     make(chan struct{}, maxRendererRuns),
+		officeRuns:       make(chan struct{}, maxOfficeRuns),
+		cache:            newPageCache(pageCacheBytes),
+		gatewayPID:       os.Getpid(),
+		gatewayStart:     start,
+		memoryUnenforced: unenforced,
 	}, nil
 }
 
@@ -203,6 +216,9 @@ type Result struct {
 	Validity string
 	// Unconfined is the "converted without sandbox" reason, if any.
 	Unconfined string
+	// MemoryUnenforced is the "memory limit not enforced" reason, if any
+	// (spec §3.1 D1.4).
+	MemoryUnenforced string
 	// RendererBuild identifies the renderer for the cache key, if used.
 	RendererBuild string
 }
@@ -326,6 +342,7 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 		res.TextTruncated = total >= protocol.MaxTextTotalBytes
 	}
 	res.Unconfined = c.unconfinedReason()
+	res.MemoryUnenforced = s.memoryUnenforced
 	return res, nil
 }
 

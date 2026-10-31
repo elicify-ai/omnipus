@@ -108,23 +108,39 @@ agent may not read is refused with the same answer `read_file` gives.
 - Registering LibreOffice never runs it: Omnipus reads the version from the
   installation's own files. A copy whose version files are missing is refused
   with `LibreOffice version unreadable`.
-- "A folder an agent can write" covers every way an agent can get write access:
-  agent and workspace folders, workspace mounts, the sandbox's allowed paths,
-  the write allowances in `tools.allow_write_paths`, and write access you
-  approved in a chat. Omnipus checks this again before every preview, so
-  access added later (a settings change or a new approval) turns the
-  component off until that access is removed; the preview then says which
-  access is in the way. A write allowance pattern Omnipus cannot reduce to a
-  folder (for example one without a leading `^/…` folder, or one that ignores
-  letter case) counts as covering every folder, so previews stay off while it
-  is set. If the settings file cannot be read, registration is refused.
+- "A folder an agent can write" covers these kinds of write access: agent and
+  workspace folders, workspace mounts, the sandbox's allowed paths, the write
+  allowances in `tools.allow_write_paths`, write access you approved for the
+  rest of a chat, and the previewing agent's own access. A path that is a
+  link into the component's folder counts as that folder. Omnipus checks this
+  again before every preview, so access added later (a settings change or a
+  new approval) turns the component off until that access is removed; the
+  preview then says which access is in the way.
+- A write allowance that names the start of a path rather than a whole folder
+  (for example `^/srv/data`, which also matches `/srv/data2`) counts as
+  covering the folder it sits in (`/srv`). A pattern Omnipus cannot reduce to
+  a folder (for example one without a leading `^/…` folder, one with
+  alternatives at the top level, or one that ignores letter case) counts as
+  covering every folder, so previews stay off while it is set. The same
+  applies when Omnipus cannot read a source of write access: an unreadable
+  settings file refuses registration, and an unreadable or partly invalid
+  mount record keeps previews off.
+- What the check does not cover yet: an **Allow once** approval for a single
+  command that is still running in another chat, access granted while a
+  preview is already running (it is seen by the next preview), and links
+  inside the component's own folder that point to a folder an agent can
+  write.
 
 ### Limits and isolation
 
 LibreOffice and the PDF renderer run as separate programs, never inside
 Omnipus. At most two renderer runs and one LibreOffice conversion run at a
 time; other previews wait. Each run is limited to 60 seconds and, for memory,
-512 MiB (renderer) or 1 GiB (LibreOffice). On macOS the memory limit is best
+512 MiB (renderer) or 1 GiB (LibreOffice). On Linux the memory limit counts
+the memory a program actually uses (the kernel's data limit), not address
+space it only reserves; on kernels older than 4.7, or with the boot option
+`ignore_rlimit_data`, the kernel does not enforce it, and the result says
+`memory limit not enforced: <reason>`. On macOS the memory limit is best
 effort: Omnipus checks memory use every 100 ms and stops a program above its
 limit, so use may briefly exceed it.
 

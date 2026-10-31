@@ -24,6 +24,22 @@ Windows has no kernel sandbox: `selectBackendPlatform` (`pkg/sandbox/sandbox_oth
 
 `/health` and `/api/v1/security/sandbox-status` both report `backend: "fallback"` and `kernel_level: false` in this configuration, and the field `disabled_by: "kernel_unsupported"` may appear when the operator asked for `enforce` but the kernel cannot deliver it.
 
+## Document preview programs
+
+The programs behind document previews (LibreOffice, the PDF renderer and the
+PDF text extractor; see [Documents in chat](../documents.md)) run as separate,
+resource-limited processes. Their memory limit differs by platform:
+
+| Platform | Memory limit |
+|---|---|
+| Linux 4.7 and later | Kernel-enforced data limit (`RLIMIT_DATA`): counts the private writable memory a program uses, not address space it only reserves; plus a stack limit of 8 MiB (never above the inherited one). Shared writable memory is not counted. |
+| Linux older than 4.7, or booted with `ignore_rlimit_data` | The limit is set but the kernel does not enforce it on `mmap`. Every preview result says `memory limit not enforced: <reason>`, and the gateway logs it at start. |
+| macOS | Best effort: a watchdog samples memory use and stops a program above its budget; use may briefly exceed it. |
+| Windows | Job Object memory limit; there is no file isolation. |
+
+When the kernel sandbox cannot be set up for these programs, they run with
+the limits only and the result says `converted without sandbox: <reason>`.
+
 ## Landlock rights are gated by kernel version
 
 Omnipus asks the kernel for a set of Landlock rights when it applies the sandbox. Each right arrived with a specific kernel version, so an older kernel may not know all of them. The ABI (application binary interface — here, the version of Landlock's interface your kernel exposes) is reported by the kernel; Omnipus asks only for the rights that version supports.

@@ -29,23 +29,27 @@ type WriteAuthority struct {
 	PathGrants func() []fspolicy.PathGrant
 }
 
-// ConfiguredWriteRoots gathers every agent write authority known from the
-// home folder, configuration and approved grants, for the AD-4 writer
-// exclusion: agent homes and workspace trees under $OMNIPUS_HOME, every
-// workspace mount, the operator's write allowances (cfg.Tools.AllowWritePaths,
-// every pattern — one Omnipus cannot reduce to a folder disables preview),
-// the kernel sandbox's read-write paths (cfg.Sandbox.AllowedPaths), and every
-// session's approved write grants. A source that cannot be read fails closed.
-// The calling turn's own policy is added per call (TurnWriteRoots).
+// ConfiguredWriteRoots gathers the agent write authorities Omnipus can see
+// from the home folder, configuration and recorded grants, for the AD-4
+// writer exclusion: agent homes and workspace trees under $OMNIPUS_HOME,
+// every workspace mount, the operator's write allowances
+// (cfg.Tools.AllowWritePaths; a pattern Omnipus cannot reduce to folders
+// disables preview), the kernel sandbox's read-write paths
+// (cfg.Sandbox.AllowedPaths), and every session's recorded write grants. A
+// source that cannot be read — including an unknown (nil) configuration and
+// a single unreadable or partly invalid mount record — fails closed with an
+// All root. The calling turn's own policy is added per call (TurnWriteRoots).
 func ConfiguredWriteRoots(home string, cfg *config.Config, grants []fspolicy.PathGrant) []component.WriteRoot {
 	roots := []component.WriteRoot{
 		{Path: filepath.Join(home, "agents"), Grant: "agent home folders"},
 		{Path: filepath.Join(home, "workspaces"), Grant: "workspace folders"},
 	}
 	roots = append(roots, mountRoots(home)...)
-	if cfg != nil {
+	if cfg == nil {
+		roots = append(roots, component.WriteRoot{All: true, Grant: "agent write settings (the configuration is not known)"})
+	} else {
 		for _, pattern := range cfg.Tools.AllowWritePaths {
-			roots = append(roots, allowanceRoot(pattern))
+			roots = append(roots, allowanceRoots(pattern)...)
 		}
 		for _, p := range cfg.Sandbox.AllowedPaths {
 			roots = append(roots, sandboxPathRoot(p))
@@ -73,10 +77,17 @@ func mountRoots(home string) []component.WriteRoot {
 		if !ok || e.IsDir() {
 			continue
 		}
-		// An unreadable mount record grants no write access to any turn
-		// either (pkg/workspace::AllowedMountRoots reads the same store), so
-		// it adds no authority here.
-		mounts, _ := workspace.LoadMounts(home, id)
+		// A record that cannot be read now (or whose entries were partly
+		// dropped) may still have granted write access to a turn that is
+		// running: "no new grants" is not "no writers", so it fails closed.
+		mounts, readable, dropped := workspace.LoadMountsWithDropStatus(home, id)
+		if !readable {
+			roots = append(roots, component.WriteRoot{All: true, Grant: "mounts of workspace " + id + " (the mount record could not be read)"})
+			continue
+		}
+		if dropped {
+			roots = append(roots, component.WriteRoot{All: true, Grant: "mounts of workspace " + id + " (the mount record has invalid entries)"})
+		}
 		for _, m := range mounts {
 			roots = append(roots, component.WriteRoot{Path: m.HostPath, Grant: "mount " + m.Name + " of workspace " + id})
 		}
@@ -101,55 +112,102 @@ func sandboxPathRoot(p string) component.WriteRoot {
 	return component.WriteRoot{Path: filepath.Clean(p), Grant: grant}
 }
 
-// allowanceRoot maps one write-allowance regex (pkg/tools/filesystem.go::
-// matchesAllowedPath: an unanchored regexp match on the cleaned path, plus
-// the literal-root rule) to the authority it grants:
-//   - "^<literal>(?:/|$)" (or the Windows separator form): that folder;
-//   - "^<literal>..." otherwise: every path whose text starts with the
-//     literal part (a quantified last character is not part of it);
-//   - anything else (unanchored, alternation at the top, case-insensitive,
-//     no absolute literal start, unparsable): All — preview stays off.
-func allowanceRoot(pattern string) component.WriteRoot {
+// allowanceRoots maps one write-allowance regex to folders that contain
+// every path the file tool lets it write (pkg/tools/filesystem.go::
+// matchesAllowedPath: an unanchored regexp match on the cleaned path, OR the
+// tool's own literal-root rule). Both halves are covered:
+//   - the regexp itself, reduced from its parsed form (regexp/syntax, the
+//     parser regexp.Compile uses) — "^<literal>(?:/|$)" is that folder; any
+//     other "^<literal>..." is the folder holding the literal's last
+//     separator (a text prefix also matches sibling names); anything else
+//     (unanchored, top-level alternation, case-insensitive, a non-literal
+//     start, a relative start, unparsable) is All — preview stays off;
+//   - the tool's literal-root rule (toolLiteralRoot), which reads escapes
+//     differently from the regexp ("\d" is the letter d there, a digit in
+//     the regexp), so it can name a different folder.
+func allowanceRoots(pattern string) []component.WriteRoot {
 	grant := "operator write allowance " + pattern
-	for _, suffix := range []string{"(?:/|$)", `(?:\\|$)`} {
-		if body, ok := strings.CutSuffix(pattern, suffix); ok {
-			if root, literal := literalPrefix(body); literal {
-				return component.WriteRoot{Path: root, Grant: grant}
-			}
-		}
+	folder, reason := regexFolder(pattern)
+	if reason != "" {
+		return []component.WriteRoot{{All: true, Grant: grant + " (" + reason + ")"}}
 	}
+	roots := []component.WriteRoot{{Path: folder, Grant: grant}}
+	if lit, ok := toolLiteralRoot(pattern); ok && lit != folder {
+		roots = append(roots, component.WriteRoot{Path: lit, Grant: grant})
+	}
+	return roots
+}
+
+// regexFolder reduces a pattern to one folder containing every string the
+// pattern matches (as an unanchored search on a cleaned absolute path), or
+// returns why it cannot.
+func regexFolder(pattern string) (folder, reason string) {
+	const unknown = "Omnipus cannot tell which folders it covers"
 	re, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
-		return component.WriteRoot{All: true, Grant: grant + " (not a valid pattern)"}
+		return "", "not a valid pattern"
 	}
 	re = re.Simplify()
-	var start *syntax.Regexp
-	switch {
-	case re.Op == syntax.OpConcat && len(re.Sub) >= 2 && re.Sub[0].Op == syntax.OpBeginText:
-		start = re.Sub[1]
-	default:
-		return component.WriteRoot{All: true, Grant: grant + " (Omnipus cannot tell which folders it covers)"}
+	if re.Op != syntax.OpConcat || len(re.Sub) < 2 || re.Sub[0].Op != syntax.OpBeginText {
+		return "", unknown
 	}
+	start := re.Sub[1]
 	if start.Op != syntax.OpLiteral || start.Flags&syntax.FoldCase != 0 {
-		return component.WriteRoot{All: true, Grant: grant + " (Omnipus cannot tell which folders it covers)"}
+		return "", unknown
 	}
 	lit := string(start.Rune)
 	if !filepath.IsAbs(lit) {
-		return component.WriteRoot{All: true, Grant: grant + " (does not start with an absolute folder)"}
+		return "", "does not start with an absolute folder"
 	}
-	return component.WriteRoot{Path: lit, Prefix: true, Grant: grant}
+	if len(re.Sub) == 3 && isFolderEnd(re.Sub[2]) {
+		// "^<lit>(?:/|$)": <lit> itself or anything below it.
+		return filepath.Clean(lit), ""
+	}
+	// Every match starts with the text <lit>, so it lies in the folder
+	// holding <lit>'s last separator ("^/srv/data" also matches
+	// "/srv/data2/...": the folder is /srv).
+	cut := strings.LastIndexAny(lit, "/"+string(filepath.Separator))
+	dir := lit[:cut+1]
+	if !filepath.IsAbs(dir) {
+		return "", "does not start with an absolute folder"
+	}
+	return filepath.Clean(dir), ""
 }
 
-// literalPrefix extracts the folder a "^<literal>" pattern body names: any
-// unescaped regex operator means the body is not a literal.
-func literalPrefix(pattern string) (string, bool) {
-	raw, ok := strings.CutPrefix(pattern, "^")
+// isFolderEnd reports whether re is exactly "(?:<sep>|$)" for a separator a
+// cleaned path on this platform can contain.
+func isFolderEnd(re *syntax.Regexp) bool {
+	if re.Op != syntax.OpAlternate || len(re.Sub) != 2 {
+		return false
+	}
+	sep, end := false, false
+	for _, sub := range re.Sub {
+		switch {
+		case sub.Op == syntax.OpEndText:
+			end = true
+		case sub.Op == syntax.OpLiteral && sub.Flags&syntax.FoldCase == 0 && len(sub.Rune) == 1 &&
+			(sub.Rune[0] == '/' || sub.Rune[0] == filepath.Separator):
+			sep = true
+		}
+	}
+	return sep && end
+}
+
+// toolLiteralRoot is the file tool's literal-root rule, reproduced exactly
+// (pkg/tools/filesystem.go::extractAllowedPathRoot,
+// ::containsUnescapedRegexMeta, ::unescapeRegexLiteral; pkg/tools imports
+// this package, so it cannot be called directly). The tool grants
+// everything at or below the returned folder.
+func toolLiteralRoot(pattern string) (string, bool) {
+	literal, ok := strings.CutPrefix(pattern, "^")
 	if !ok {
 		return "", false
 	}
+	literal = strings.TrimSuffix(literal, "(?:/|$)")
+	literal = strings.TrimSuffix(literal, `(?:\\|$)`)
 	var b strings.Builder
 	escaped := false
-	for _, r := range raw {
+	for _, r := range literal {
 		if escaped {
 			b.WriteRune(r)
 			escaped = false
@@ -159,16 +217,17 @@ func literalPrefix(pattern string) (string, bool) {
 			escaped = true
 			continue
 		}
-		if strings.ContainsRune(".*+?()|[]{}^$", r) {
+		switch r {
+		case '.', '+', '*', '?', '(', ')', '[', ']', '{', '}', '|':
 			return "", false
 		}
 		b.WriteRune(r)
 	}
-	lit := b.String()
-	if escaped || lit == "" || !filepath.IsAbs(lit) {
+	unescaped := b.String()
+	if escaped || unescaped == "" || !filepath.IsAbs(unescaped) {
 		return "", false
 	}
-	return filepath.Clean(lit), true
+	return filepath.Clean(unescaped), true
 }
 
 // TurnWriteRoots lists the calling turn's write roots: its work folder,

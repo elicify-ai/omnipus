@@ -259,7 +259,7 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 		"--convert-to", "pdf", "--outdir", dirs["out"], inPath,
 	}
 	hooks := hooksFor(conf)
-	proc, err := launcher.Start(launcher.Spec{
+	spec := launcher.Spec{
 		Self:    o.self,
 		Target:  o.executable,
 		Args:    args,
@@ -269,11 +269,60 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 		Prepare: hooks.prepare,
 		Start:   hooks.start,
 		Stdout:  io.Discard,
-	})
-	if err != nil {
-		return nil, hooks.unconfined, programFailure("conversion failed: LibreOffice could not start (" + err.Error() + ")")
 	}
+	out := filepath.Join(dirs["out"], "document.pdf")
 	defer func() { _ = o.call.idle() }()
+	// At most two starts (spec §3.1 D3): soffice.bin exits 81 ("restart
+	// requested") on its first start with a fresh profile, and LibreOffice's
+	// own start programs then start it again. The second start reuses this
+	// call's admission slot, deadline (ctx) and profile, and is a full AD-8
+	// cycle: the first launcher has exited and its group was killed (Wait),
+	// and the new launcher's identity is recorded before its go-byte.
+	for attempt := 1; ; attempt++ {
+		proc, fail := o.startOnce(ctx, spec)
+		if fail != nil {
+			return nil, hooks.unconfined, fail
+		}
+		waitErr := proc.Wait() // already waited: returns the recorded result
+		pdf, readable := readConvertedPDF(out)
+		if readable {
+			return pdf, hooks.unconfined, nil
+		}
+		if attempt == 1 && proc.ExitCode() == officeRestartExit {
+			// "out/ holds no document.pdf before the retry" (D3.3): an
+			// unreadable leftover is removed; a removal failure ends here.
+			if err := os.Remove(out); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, hooks.unconfined, programFailure("conversion failed: scratch unavailable")
+			}
+			if err := o.call.idle(); err != nil {
+				return nil, hooks.unconfined, programFailure("conversion failed: " + err.Error())
+			}
+			continue
+		}
+		tail := filteredTail(proc.Stderr())
+		msg := "conversion failed: LibreOffice produced no readable PDF"
+		if waitErr != nil && tail == "" {
+			tail = waitErr.Error()
+		}
+		if tail != "" {
+			msg += " (" + tail + ")"
+		}
+		return nil, hooks.unconfined, programFailure(msg)
+	}
+}
+
+// officeRestartExit is LibreOffice's EXITHELPER_NORMAL_RESTART
+// (include/desktop/exithelper.h).
+const officeRestartExit = 81
+
+// startOnce runs one LibreOffice start under the launcher: identity record
+// (state running) before the go-byte, Stop ends it, Wait kills the group.
+// A non-nil failure ends the conversion (start failure, Stop, memory).
+func (o officeConversion) startOnce(ctx context.Context, spec launcher.Spec) (*launcher.Process, *failure) {
+	proc, err := launcher.Start(spec)
+	if err != nil {
+		return nil, programFailure("conversion failed: LibreOffice could not start (" + err.Error() + ")")
+	}
 	id, err := identify(proc.PID, o.self)
 	if err == nil {
 		err = o.call.running(id, proc.PID, append([]string{o.self, o.executable}, o.extraExes...))
@@ -284,7 +333,7 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 	if err != nil {
 		proc.Kill("record")
 		_ = proc.Wait()
-		return nil, hooks.unconfined, programFailure("conversion failed: " + err.Error())
+		return nil, programFailure("conversion failed: " + err.Error())
 	}
 	go func() {
 		select {
@@ -296,34 +345,29 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 	// LibreOffice reads nothing from stdin; close it after the go-byte so a
 	// stray read sees EOF instead of blocking.
 	_ = proc.Stdin.Close()
-	waitErr := proc.Wait()
+	_ = proc.Wait()
 	if ctx.Err() != nil {
-		return nil, hooks.unconfined, stopFailure(ctx)
+		return nil, stopFailure(ctx)
 	}
 	if proc.KillCause() == launcher.MemoryKillCause {
-		return nil, hooks.unconfined, programFailure("conversion failed: memory limit exceeded")
+		return nil, programFailure("conversion failed: memory limit exceeded")
 	}
-	out := filepath.Join(dirs["out"], "document.pdf")
-	info, statErr := os.Lstat(out)
-	if statErr != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > officeOutputLimit {
-		tail := filteredTail(proc.Stderr())
-		msg := "conversion failed: LibreOffice produced no readable PDF"
-		if waitErr != nil && tail == "" {
-			tail = waitErr.Error()
-		}
-		if tail != "" {
-			msg += " (" + tail + ")"
-		}
-		return nil, hooks.unconfined, programFailure(msg)
+	return proc, nil
+}
+
+// readConvertedPDF returns the converted document when out holds a regular,
+// non-empty, size-capped file that starts like a PDF (FR-011: validity is
+// judged by the output, never by exit codes).
+func readConvertedPDF(out string) ([]byte, bool) {
+	info, err := os.Lstat(out)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > officeOutputLimit {
+		return nil, false
 	}
 	pdf, err := os.ReadFile(out)
-	if err != nil {
-		return nil, hooks.unconfined, programFailure("conversion failed: LibreOffice produced no readable PDF")
+	if err != nil || !bytes.HasPrefix(pdf, []byte("%PDF-")) {
+		return nil, false
 	}
-	if !bytes.HasPrefix(pdf, []byte("%PDF-")) {
-		return nil, hooks.unconfined, programFailure("conversion failed: LibreOffice produced no readable PDF")
-	}
-	return pdf, hooks.unconfined, nil
+	return pdf, true
 }
 
 // filteredTail keeps the last lines of a program's stderr, passed through

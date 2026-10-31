@@ -201,6 +201,9 @@ func (t *PreviewDocumentTool) buildResult(ctx context.Context, name string, res 
 	if res.Unconfined != "" {
 		fmt.Fprintf(&b, "converted without sandbox: %s\n", res.Unconfined)
 	}
+	if res.MemoryUnenforced != "" {
+		fmt.Fprintf(&b, "memory limit not enforced: %s\n", res.MemoryUnenforced)
+	}
 	if doc.ImagesUnavailable != "" {
 		fmt.Fprintf(&b, "page images unavailable: %s\n", doc.ImagesUnavailable)
 		doc.Record.Outcome = PreviewOutcomeUnavailable
