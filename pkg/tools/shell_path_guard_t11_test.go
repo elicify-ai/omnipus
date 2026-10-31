@@ -492,3 +492,94 @@ func TestGuard_ProbeErrorOneShot(t *testing.T) {
 	require.Contains(t, strings.ToLower(got), "could not complete",
 		"SF-5: the refusal says the safety check could not complete\ngot: %s", got)
 }
+
+// TestGuard_ScriptFromStdinStillWithholdsExemption is round 6, S5
+// (security round 5). A nested shell that reads its script from standard
+// input — a bare pipe-fed shell, explicit `bash -s` with a positional
+// argument, or any words belonging to a LATER command after a `;`, `&&` or
+// `|` boundary — has script text the guard cannot see, so that unseen text
+// may hold unquoted braces and the stand-alone exemption stays withheld
+// (spec §3.1: the allowance holds only when no text the shell will parse has
+// an unquoted brace). A shell given a genuine script FILE is different: the
+// file leg stays, and the exemption machinery is unchanged for it. Fixtures
+// are print-only (echo, cat); nothing is written or launched. /tm must be
+// absent so the glue literal's condition 4 holds.
+func TestGuard_ScriptFromStdinStillWithholdsExemption(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	require.False(t, t11FirstExists("/tm"), "fixture: /tm exists, so the glue literal's condition 4 would not hold")
+	absent := t11AbsentTop(t)
+	glue := `echo {'/tm',}p/x`
+
+	t.Run("pipe into a bare bash is refused", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `echo "`+glue+`" | bash`, "path outside working dir",
+			"bash with no argument reads its script from stdin, which the guard cannot see (control: refused at a2062d926 too)")
+	})
+	t.Run("words after a semicolon boundary are not the script file", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `echo "`+glue+`" | bash; echo done`, "path outside working dir",
+			"a later command's words after ; must not be taken as the nested shell's script file")
+	})
+	t.Run("words after an and-and boundary are not the script file", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `echo "`+glue+`" | bash && echo done`, "path outside working dir",
+			"a later command's words after && must not be taken as the nested shell's script file")
+	})
+	t.Run("words after a pipe boundary are not the script file", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `echo "`+glue+`" | bash | cat`, "path outside working dir",
+			"a later command's words after | must not be taken as the nested shell's script file")
+	})
+	t.Run("bash -s positional is not a script file", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `echo "`+glue+`" | bash -s t11-positional`, "path outside working dir",
+			"-s is standard-input mode, so the positional argument is $0, not a script file")
+	})
+	t.Run("repo inert literal stays allowed", func(t *testing.T) {
+		got := tool.guardCommand(context.Background(),
+			fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent), cwd)
+		require.Empty(t, got, "the stand-alone exemption itself must stay operative\nrefusal: %s", got)
+	})
+	t.Run("genuine script file keeps the file leg", func(t *testing.T) {
+		// The file word is relative on purpose: an outside path would give an
+		// independent refusal leg (bash is not on the read-only allowlist) and
+		// the assertion would no longer isolate the stdin/script-file rule.
+		cmd := `echo "python3 -c \"print('` + absent + `/v1/users')\"" | bash t11-script-file; echo done`
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Empty(t, got, "a shell given a script file reads that file, not stdin, so no stdin withholding applies\ncommand: %s\nrefusal: %s", cmd, got)
+	})
+}
+
+// TestGuard_LongOptionScriptPositionKeptCertain kills CHECK round 5's
+// surviving mutant (R5-CHECK-1): replacing the knownNoArgLongShellOptions
+// lookup with strings.HasPrefix(opt, "--") treats every long option as
+// argument-less. An argument-taking option (--rcfile, --init-file) or an
+// unknown one would then swallow the FILE word as the script and stop
+// following the real -c script, so glue text there would silently regain the
+// stand-alone exemption. The refusals below must come from the brace scan
+// only, so the FILE words are relative (no outside path that could give an
+// independent refusal leg). The admitted argument-less --norc with a real
+// Python inner script stays allowed (allowed in the round-4 red run).
+func TestGuard_LongOptionScriptPositionKeptCertain(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	require.False(t, t11FirstExists("/tm"), "fixture: /tm exists, so the glue literal's condition 4 would not hold")
+	glue := `echo {'/tm',}p/x`
+
+	t.Run("argument-taking long option keeps following the -c script", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `bash --rcfile t11-rcfile -c "`+glue+`"`, "path outside working dir",
+			"--rcfile consumes the next word, so the script position is only certain when the exemption is withheld")
+	})
+	t.Run("second argument-taking long option keeps following the -c script", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `bash --init-file t11-rcfile -c "`+glue+`"`, "path outside working dir",
+			"--init-file consumes the next word, so the script position is only certain when the exemption is withheld")
+	})
+	t.Run("unknown long option keeps following the -c script", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `bash --t11-unknown-opt t11-file -c "`+glue+`"`, "path outside working dir",
+			"an unknown long option makes the script position uncertain, so the exemption is withheld")
+	})
+	t.Run("admitted argument-less option stays allowed", func(t *testing.T) {
+		absent := t11AbsentTop(t)
+		cmd := `bash --norc -c "python3 -c \"print('` + absent + `/v1/users')\""`
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Empty(t, got, "a known argument-less option must not withhold on its own\ncommand: %s\nrefusal: %s", cmd, got)
+	})
+}
