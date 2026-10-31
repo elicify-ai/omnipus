@@ -13,6 +13,7 @@ package gateway
 
 import (
 	"errors"
+	"net/http"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -44,4 +45,13 @@ func replayBootSkillAudit(report skills.SyncReport, l *audit.Logger) {
 	_ = report
 	_ = l
 	// RED scaffold — not implemented.
+}
+
+// HandleSkillCopy handles POST /api/v1/skills/{name}/copy (5.8). RED
+// scaffolding: the implementing worker replaces the body with the real
+// copy route (ApplyChange kind=copy, 201 Skill envelope) and registers it
+// in HandleSkills' router, keeping this method as the handler.
+func (a *restAPI) HandleSkillCopy(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "gateway: RED scaffold - copy route not implemented (landing/skills T9)",
+		http.StatusNotImplemented)
 }
