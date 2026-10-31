@@ -1,37 +1,22 @@
-// Omnipus - Ultra-lightweight personal AI agent
-// License: MIT
-// Copyright (c) 2026 Omnipus contributors
-
-// RED pack for T11 slice B, "Agents: cannot edit presets by any route"
-// (t11 spec §4 Agents row; §8 FR-11).
-//
-// Spec oracle: "update_agent/create_agent have no path or preset fields, and
-// set_config already refuses sandbox.* (Verified: pkg/sysagent/tools/
-// config.go::blockedConfigKeys). Agents may read the effective path."
-//
-// RED today: create_agent still ADVERTISES a cli_path parameter (the legacy
-// per-agent program path T11/T8 removes — a person sets the program in
-// Settings, never an agent). TestAgentCreateTool_NoPathOrPresetParameters
-// fails on it. The update_agent and set_config assertions are pins: they were
-// already true before this pack existed and cannot go red without a
-// production regression; they are labelled as pins, not counted as RED.
-//
-// NOTE for the T8 implementer: the create tool's Description() text also
-// still tells the model "cli_path is optional" (and agent_type's description
-// repeats it) — that text must go with the parameter.
+// T11-B §4 Agents / FR-11. Schemas AND the real argument-validation seam
+// must refuse path/preset writes. Existing update/set_config protection is
+// labelled a regression pin, never claimed as observed RED.
 package systools
 
 import (
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/agentmutation"
+	"github.com/stretchr/testify/require"
 )
 
-// t11bPathOrPresetKeys returns the tool's advertised parameters that carry a
-// program path or preset parameters — the fields an agent must have no route
-// to (spec §4 Agents row).
 func t11bPathOrPresetKeys(t *testing.T, params map[string]any) []string {
 	t.Helper()
-	props, _ := params["properties"].(map[string]any)
+	props, ok := params["properties"].(map[string]any)
+	require.True(t, ok, "instrument: the real tool schema must expose properties")
+	require.Contains(t, props, "name", "instrument: inspect a known real property before trusting no forbidden fields")
 	var found []string
 	for key := range props {
 		low := strings.ToLower(key)
@@ -39,32 +24,49 @@ func t11bPathOrPresetKeys(t *testing.T, params map[string]any) []string {
 			found = append(found, key)
 		}
 	}
+	sort.Strings(found)
 	return found
 }
 
 func TestAgentCreateTool_NoPathOrPresetParameters(t *testing.T) {
 	tool := &AgentCreateTool{}
-	found := t11bPathOrPresetKeys(t, tool.Parameters())
-	if len(found) > 0 {
-		t.Fatalf("create_agent must have no path or preset fields (spec §4 Agents row / FR-11); "+
-			"found %v — the program and its parameters are set by a person in Settings → "+
-			"Third-party agents, never by an agent", found)
-	}
+	require.Empty(t, t11bPathOrPresetKeys(t, tool.Parameters()), "FR-11: create_agent must not advertise path/preset writes; a person owns Settings")
 }
 
-// Pin (not RED): update_agent already has no executor/path/preset parameters.
-// If this ever fails, an agent-facing preset write path was re-introduced.
+// Regression pin: absence from the schema alone cannot prove Execute refuses.
 func TestAgentUpdateTool_NoPathOrPresetParameters(t *testing.T) {
 	tool := &AgentUpdateTool{}
-	found := t11bPathOrPresetKeys(t, tool.Parameters())
-	if len(found) > 0 {
-		t.Fatalf("update_agent must have no path or preset fields (spec §4 Agents row / FR-11); found %v", found)
+	require.Empty(t, t11bPathOrPresetKeys(t, tool.Parameters()), "FR-11: update_agent must not advertise path/preset writes")
+}
+
+func TestAgentTools_RejectPathOrPresetArguments(t *testing.T) {
+	// The real create/update Execute paths both call this validator. Probe
+	// that seam without requiring unrelated model credentials or persistence.
+	for _, tool := range []struct {
+		name    string
+		allowed map[string]struct{}
+	}{
+		{"create_agent", agentCreateArgNames},
+		{"update_agent", agentUpdateArgNames},
+	} {
+		for _, field := range []string{"cli_path", "preset_args"} {
+			t.Run(tool.name+"/"+field, func(t *testing.T) {
+				// Passing control: an allowed property must clear validation.
+				require.NoError(t, rejectUnknownAgentFields(map[string]any{"name": "Codex worker"}, tool.allowed))
+				err := rejectUnknownAgentFields(map[string]any{field: "/agent/attempt"}, tool.allowed)
+				require.Error(t, err, "FR-11: %s must refuse %s, not silently discard or accept it", tool.name, field)
+				fe, ok := err.(*agentmutation.FieldError)
+				require.True(t, ok, "a forbidden write needs a field-attributed input error; got %T", err)
+				require.Equal(t, agentmutation.InvalidInput, fe.Code)
+				require.Equal(t, []string{field}, fe.Fields)
+				require.Contains(t, fe.Error(), field)
+			})
+		}
 	}
 }
 
-// Pin (not RED): the sandbox subtree — third_party_agents included — is
-// already write-blocked for set_config (blockedConfigKeys' "sandbox" subtree
-// root). This pins the settings key specifically against a future carve-out.
+// Regression pin: sandbox is already write-blocked; assert the refusal is
+// specifically a write-policy refusal rather than an unrelated unknown key.
 func TestSetConfig_BlocksThirdPartyAgentSettingsKeys(t *testing.T) {
 	for _, key := range []string{
 		"sandbox.third_party_agents",
@@ -72,8 +74,11 @@ func TestSetConfig_BlocksThirdPartyAgentSettingsKeys(t *testing.T) {
 		"sandbox.third_party_agents.clis.codex.path",
 		"sandbox.third_party_agents.clis.codex.preset_args",
 	} {
-		if err := validateConfigKey(nil, key); err == nil {
-			t.Errorf("set_config must refuse %q (spec §4 Agents row / FR-11): the preset store is person-only", key)
-		}
+		t.Run(key, func(t *testing.T) {
+			err := validateConfigKey(nil, key)
+			require.Error(t, err, "FR-11: the preset store is person-only")
+			require.Contains(t, err.Error(), "not writable via this tool")
+			require.Contains(t, err.Error(), key)
+		})
 	}
 }

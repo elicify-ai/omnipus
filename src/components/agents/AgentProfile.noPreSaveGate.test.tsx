@@ -8,19 +8,18 @@
  * (Verified that it exists), so a person can always save the key that fixes
  * a broken sign-in."
  *
- * Today the gate exists (AgentProfile.tsx runs testAgentRunner before any
- * save when executor.kind === 'external-cli'), so BOTH tests are RED with a
- * real behavioural failure: the runner test is called (test 1), and a save
- * that would fix the sign-in is blocked (test 2). Same rendering/mocking
- * pattern as AgentProfile.commandPreview.test.tsx — real timers, generous
- * waitFor for the ~400ms auto-save debounce.
+ * The pre-change gate tests the first save for an external executor. The
+ * intended failures are the unwanted test call (test 1) and the blocked
+ * repair save (test 2). Logs, not this comment, establish observed RED.
+ * Same rendering/mocking pattern as AgentProfile.commandPreview.test.tsx;
+ * real timers, with a 5s observation window for the 1500ms save debounce.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
-import type { Agent } from '@/lib/api'
+import type { Agent } from '@/lib/api/generated/openapi-types'
 
 const mockNavigate = vi.fn()
 
@@ -115,7 +114,7 @@ async function openRuntimeTab() {
   )
   await screen.findByText('Codex Worker')
   const trigger = screen.getByTestId('tab-runtime')
-  trigger.focus()
+  act(() => { trigger.focus() })
   fireEvent.keyDown(trigger, { key: 'Enter' })
   fireEvent.click(trigger)
 }
@@ -127,8 +126,12 @@ async function addEnvKey(key: string, value: string) {
   const keyInput = await screen.findByLabelText('Environment variable name')
   const valueInput = screen.getByLabelText('Environment variable value')
   fireEvent.change(keyInput, { target: { value: key } })
-  fireEvent.change(valueInput, { target: { value } })
+  // A person leaves the key field BEFORE entering the value. Reversing this
+  // blur/change order fabricates a redundant same-value parent update.
   fireEvent.blur(keyInput)
+  fireEvent.change(valueInput, { target: { value } })
+  expect(keyInput).toHaveValue(key)
+  expect(valueInput).toHaveValue(value)
 }
 
 beforeEach(() => {
@@ -167,11 +170,10 @@ describe('AgentProfile Runtime — no pre-save sign-in gate (spec §4; FR-8)', (
     await addEnvKey('ANTHROPIC_API_KEY', 'sk-fix-signin-1')
 
     // The save must go through without any pre-save runner test.
-    await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 5000 })
-    const payload = vi.mocked(updateAgent).mock.calls[0][1] as {
-      executor?: { env_overrides?: Record<string, string> }
-    }
-    expect(payload.executor?.env_overrides?.ANTHROPIC_API_KEY).toBe('sk-fix-signin-1')
+    await waitFor(() => expect(updateAgent, `save must reach updateAgent; runner calls=${vi.mocked(testAgentRunner).mock.calls.length}; state=${screen.queryByTestId('last-saved-indicator')?.textContent}; toasts=${JSON.stringify(useUiStore.getState().toasts)}`).toHaveBeenCalled(), { timeout: 5000 })
+    const [agentId, payload] = vi.mocked(updateAgent).mock.calls[0]
+    expect(agentId).toBe('codex-worker')
+    expect(payload.executor?.env_overrides).toEqual({ ANTHROPIC_API_KEY: 'sk-fix-signin-1' })
     // THE RED ASSERTION (spec: "the current pre-save testAgentRunner gate …
     // is removed"): today the gate fires before every first save.
     expect(testAgentRunner).not.toHaveBeenCalled()
@@ -189,10 +191,10 @@ describe('AgentProfile Runtime — no pre-save sign-in gate (spec §4; FR-8)', (
     await openRuntimeTab()
     await addEnvKey('ANTHROPIC_API_KEY', 'sk-fix-signin-2')
 
-    await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 5000 })
-    const payload = vi.mocked(updateAgent).mock.calls[0][1] as {
-      executor?: { env_overrides?: Record<string, string> }
-    }
-    expect(payload.executor?.env_overrides?.ANTHROPIC_API_KEY).toBe('sk-fix-signin-2')
+    await waitFor(() => expect(updateAgent, `save must reach updateAgent; runner calls=${vi.mocked(testAgentRunner).mock.calls.length}; state=${screen.queryByTestId('last-saved-indicator')?.textContent}; toasts=${JSON.stringify(useUiStore.getState().toasts)}`).toHaveBeenCalled(), { timeout: 5000 })
+    const [agentId, payload] = vi.mocked(updateAgent).mock.calls[0]
+    expect(agentId).toBe('codex-worker')
+    expect(payload.executor?.env_overrides).toEqual({ ANTHROPIC_API_KEY: 'sk-fix-signin-2' })
+    expect(testAgentRunner).not.toHaveBeenCalled()
   })
 })

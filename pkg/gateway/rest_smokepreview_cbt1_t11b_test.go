@@ -1,71 +1,108 @@
-// Omnipus - Ultra-lightweight personal AI agent
-// License: MIT
-// Copyright (c) 2026 Omnipus contributors
-
-// RED pack for T11 slice B / contract change C-B1 (t11 spec §4 "Smoke test /
-// command preview (X4)" and §8 FR-12): "Remove the free `cli_path` field from
-// both requests. The routes use the saved Settings path for the request's
-// CLI." Named test: TestSmokeAndPreview_RejectFreePath ("Given a request with
-// cli_path / When received / Then 400").
-//
-// The routes take NO program path from the caller anymore: the program for
-// the request's CLI comes from Settings → Third-party agents (spec §4; T8's
-// contract commit 1243ed887 owns the settings store). A request body that
-// still carries `cli_path` must therefore be refused 400 — after C-B1 the
-// field is no longer in ExecutorSmokeTestRequest / ExecutorCommandPreviewRequest
-// (both additionalProperties:false), and the handler decode must reject it in
-// BOTH validation modes the way decodeAndValidateStrict does for
-// additionalProperties:false contracts (a silent json-decode drop would leave
-// the caller's free path silently ignored — the exact shape this refusal
-// exists to prevent).
-//
-// REAL: the two registered routes (HandleAgents carve-out).
-// MOCK: none. The smoke-test request's cli_path names a nonexistent binary so
-// today's pre-C-B1 handler fails fast at binary resolution — no subprocess,
-// no model call (the TestPostAgentsExecutorSmokeTest_MissingBinary shape).
-//
-// RECONCILIATION NOTE for the T8/C-B1 implementer: the existing happy-path
-// tests rest_executor_preview_test.go::TestPostAgentsExecutorPreview_Codex_HappyPath
-// and rest_executor_smoketest_test.go::TestPostAgentsExecutorSmokeTest_HappyPath
-// still DRIVE the free cli_path and will need updating in the same change.
-//
-// RED TODAY: both routes still accept cli_path (the fields exist in the
-// contract until C-B1 lands), so each subtest fails with got-200-want-400.
+// T11-B §4 X4 / C-B1 / FR-12: neither request may choose a free cli_path.
+// Real handlers and generated carriers; a fake external-driver edge prevents
+// any host CLI/model execution, including when the rejection regresses.
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/stretchr/testify/require"
 )
 
+// Inject the forbidden member only at the raw malformed-request boundary;
+// never add a handwritten request struct that outlives C-B1 regeneration.
+func t11bWithForbiddenPath(t *testing.T, request any) string {
+	t.Helper()
+	raw, err := json.Marshal(request)
+	require.NoError(t, err)
+	var object map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &object))
+	path, err := json.Marshal(filepath.Join(t.TempDir(), "does-not-exist"))
+	require.NoError(t, err)
+	object["cli_path"] = path
+	raw, err = json.Marshal(object)
+	require.NoError(t, err)
+	return string(raw)
+}
+
 func TestSmokeAndPreview_RejectFreePath(t *testing.T) {
-	t.Run("command preview refuses a free cli_path", func(t *testing.T) {
-		api := executorDefaultsTestAPI(t)
-		code, resp := postExecutorPreview(t, api, map[string]any{
-			"cli":      "codex",
-			"model":    "gpt-5-codex",
-			"cli_path": "/usr/local/bin/codex",
-		})
-		require.Equal(t, http.StatusBadRequest, code,
-			"C-B1: executor-preview takes no free cli_path — the program comes from Settings; body binary=%q",
-			resp.Binary)
-	})
+	for _, validate := range []bool{false, true} {
+		for _, endpoint := range []string{"executor-preview", "executor-smoke-test"} {
+			t.Run(endpoint+"/validate="+strconv.FormatBool(validate), func(t *testing.T) {
+				api, cleanup := newTestRestAPI(t)
+				defer cleanup()
+				api.agentLoop.GetConfig().Gateway.ValidateInbound = validate
+				factoryCalls := 0
+				original := smokeTestNewDriver
+				smokeTestNewDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
+					factoryCalls++
+					return &capturingFakeDriver{}, nil
+				}
+				t.Cleanup(func() { smokeTestNewDriver = original })
+				var body string
+				if endpoint == "executor-preview" {
+					body = t11bWithForbiddenPath(t, gen.ExecutorCommandPreviewRequest{Cli: gen.ExternalCliToolCodex})
+				} else {
+					body = t11bWithForbiddenPath(t, gen.ExecutorSmokeTestRequest{Cli: gen.ExternalCliToolCodex})
+				}
+				r := httptest.NewRequest(http.MethodPost, "/api/v1/agents/"+endpoint, strings.NewReader(body))
+				r.Header.Set("Content-Type", "application/json")
+				r.RemoteAddr = t.Name() + ":0"
+				w := httptest.NewRecorder()
+				api.HandleAgents(w, r)
+				require.Equal(t, http.StatusBadRequest, w.Code, "C-B1: cli_path is forbidden in BOTH validation modes; body=%s", w.Body.String())
+				var refusal gen.ErrorResponse
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &refusal))
+				require.Contains(t, refusal.Error, "cli_path", "the refusal must identify the forbidden field, not pass because no Settings path is saved")
+				require.Zero(t, factoryCalls, "free path refused before creating a runner")
+			})
+		}
+	}
+}
 
-	t.Run("smoke test refuses a free cli_path before any spawn", func(t *testing.T) {
-		api, cleanup := newTestRestAPI(t)
-		defer cleanup()
-		t.Setenv("OMNIPUS_HOME", t.TempDir())
+func TestCommandPreview_WithoutFreePathUsesSavedSettingsPath(t *testing.T) {
+	api, mux, _, _ := t11bSettingsAPI(t)
+	path := t11bWriteExe(t, "codex-saved-preview")
+	body := t11bSettingsBody(t, gen.CliPreset{}, gen.CliPreset{Path: path}, gen.CliPreset{})
+	w := t11bPut(t, mux, body)
+	require.Equal(t, http.StatusOK, w.Code, "save prerequisite: %s", w.Body.String())
+	request := gen.ExecutorCommandPreviewRequest{Cli: gen.ExternalCliToolCodex}
+	code, preview := postExecutorPreview(t, api, request)
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, path, preview.Binary, "C-B1: preview without cli_path reads Settings, not $PATH or a per-agent path")
+}
 
-		// A nonexistent path: pre-C-B1 the handler accepts the body and only
-		// then fails at binary resolution (200 + ok:false) — no spawn, no
-		// model call; post-C-B1 the decode refuses the field with 400 before
-		// any of that.
-		code, resp := postExecutorSmokeTest(t, api,
-			`{"cli":"codex","cli_path":"/nonexistent/t11b-codex"}`)
-		require.Equal(t, http.StatusBadRequest, code,
-			"C-B1: executor-smoke-test takes no free cli_path — the program comes from Settings; respOk=%v",
-			resp.Ok)
-	})
+func TestSmokeTest_WithoutFreePathUsesSavedSettingsPath(t *testing.T) {
+	api, mux, _, _ := t11bSettingsAPI(t)
+	path := t11bWriteExe(t, "codex-saved-smoke")
+	body := t11bSettingsBody(t, gen.CliPreset{}, gen.CliPreset{Path: path}, gen.CliPreset{})
+	w := t11bPut(t, mux, body)
+	require.Equal(t, http.StatusOK, w.Code, "save prerequisite: %s", w.Body.String())
+	fake := &capturingFakeDriver{}
+	original := smokeTestNewDriver
+	smokeTestNewDriver = func(cli string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
+		require.Equal(t, "codex", cli)
+		return fake, nil
+	}
+	t.Cleanup(func() { smokeTestNewDriver = original })
+	request := gen.ExecutorSmokeTestRequest{Cli: gen.ExternalCliToolCodex}
+	raw, err := json.Marshal(request)
+	require.NoError(t, err)
+	code, result := postExecutorSmokeTest(t, api, string(raw))
+	require.Equal(t, http.StatusOK, code)
+	require.True(t, result.Ok, "fake process yields an actual output; body error=%v", result.Error)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	require.True(t, fake.captured, "smoke test must actually reach its external process boundary")
+	want, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+	require.Equal(t, want, fake.gotOpts.CLIPath, "C-B1: smoke uses the resolved saved program, never $PATH")
 }

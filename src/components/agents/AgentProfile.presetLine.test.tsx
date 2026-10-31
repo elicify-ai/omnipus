@@ -19,10 +19,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, within, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
-import type { Agent } from '@/lib/api'
+import type { Agent } from '@/lib/api/generated/openapi-types'
 
 const mockNavigate = vi.fn()
 
@@ -116,6 +116,7 @@ function makeClient() {
 }
 
 function renderProfile(agent: Agent) {
+  vi.mocked(fetchAgent).mockResolvedValue(agent)
   return render(
     <QueryClientProvider client={makeClient()}>
       <AgentProfile agentId={agent.id} />
@@ -127,7 +128,7 @@ async function openRuntimeTab(agent: Agent) {
   renderProfile(agent)
   await screen.findByText(agent.name)
   const trigger = screen.getByTestId('tab-runtime')
-  trigger.focus()
+  act(() => { trigger.focus() })
   fireEvent.keyDown(trigger, { key: 'Enter' })
   fireEvent.click(trigger)
 }
