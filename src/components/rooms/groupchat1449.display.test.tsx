@@ -1,19 +1,21 @@
 // RED — #1449 US-1, US-6, US-12. Oracles: docs/internal/specs/1449-group-chat-spec.md
 // S-01, S-02, S-05, S-07, S-08, S-09, S-41, S-104, S-105, S-106.
 // Real RoomScreen through the l1-room-ui harness. Only the socket and fetch are doubled.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { act } from 'react'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/store/chat'
 import {
-  Network, ROOM_ID, entry, openRoom, resetRealStores, snapshot, stopHarness, WS,
+  Network, ROOM_ID, entry, loadRoomScreen, openRoom, resetRealStores, snapshot, stopHarness, WS,
 } from '../../../tests/l1-room-ui/harness'
 import type { WsConnection } from '@/lib/ws'
 
 let net: Network
 let connection: WsConnection | undefined
 
+// #616: transform the real room screen in setup using the existing hook budget.
+beforeAll(async () => { await loadRoomScreen() })
 beforeEach(() => {
   resetRealStores()
   net = new Network()
@@ -192,8 +194,12 @@ describe('group messages use the normal chat renderer (US-1, US-12)', () => {
           addressees: [],
         })],
       }))
-      expect(hits, 'S-106: no request to the remote image').toEqual([])
-      expect(document.querySelector('img[src*="tracker.example"]')).toBeNull()
+      expect(hits, 'S-106: no fetch request to the remote image').toEqual([])
+      // FR-069 / accepted finding I8: jsdom does not load <img> resources or
+      // enforce the page's policy, so DOM absence is not the security oracle.
+      // T-56 is the proof: real browser + embedded SPA, an allowed-request
+      // positive control and the policy img-src 'self' data: blob: blocking
+      // network contact. This unit check covers explicit fetch calls only.
     } finally {
       window.fetch = original
     }

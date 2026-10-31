@@ -2,7 +2,7 @@
 // Backend effects (admission, cost allocation, audit, pause fences) are not
 // proven by these socket fixtures; see the browser/UAT rows in the RED plan.
 import type { ComponentType } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -23,6 +23,9 @@ let net: Network
 let connection: WsConnection | undefined
 let panelRoot: Root | undefined
 let panelHolder: HTMLElement | undefined
+// #616 / vite.config.ts: module transformation belongs to the existing
+// 60-second setup budget, not the first scenario's 30-second test budget.
+beforeAll(async () => { await loadRoomScreen() })
 beforeEach(() => { resetRealStores(); net = new Network(); connection = undefined })
 afterEach(() => {
   panelRoot?.unmount()
@@ -141,7 +144,9 @@ describe('RoomScreen header and request states — FR-171/175/201; §6.11', () =
     if (state === 'unknown' || state === 'held') expect(screen.queryByText('working', { exact: true })).toBeNull()
     if (state === 'interrupted') expect(screen.getByRole('button', { name: /^ask again$/i })).toBeEnabled()
     if (state === 'awaiting_approval' || state === 'waiting_on_user') {
-      const link = screen.getByRole('link', { name: /Jim.*main chat|main chat.*Jim/i })
+      // #1449 FR-028 adds a second Jim link on the working line;
+      // FR-035 / S-52 separately require this link in Participants.
+      const link = within(panel).getByRole('link', { name: /Jim.*main chat|main chat.*Jim/i })
       expect(link.getAttribute('href')).toMatch(/main-jim-sales|agent_id=jim/)
       expect(screen.queryByRole('button', { name: /approve|deny|save secret/i })).toBeNull()
     }
@@ -281,7 +286,11 @@ describe('RoomScreen transcript, pause and reachability — FR-166/170/217; K45'
   it('[FR-207; BDD-17.24] a room created from a main chat starts empty and has a link back to that main', async () => {
     net.currentRoom = room({ kind: 'adhoc', members: ['mia', 'jim'], origin_session_id: 'main-mia-sales' })
     await open(snapshot({ members: ['mia', 'jim'], entries: [] }))
-    const back = screen.getByRole('link', { name: /Mia.*main chat|main chat.*Mia|back to.*chat/i })
+    // FR-207 requires the link, not a header location. #1449 D13 removes
+    // the header member list; FR-035 / S-52 put member links in the panel.
+    await showParticipants()
+    const panel = await screen.findByTestId('participants-panel')
+    const back = within(panel).getByRole('link', { name: /Mia.*main chat|main chat.*Mia|back to.*chat/i })
     expect(back.getAttribute('href')).toMatch(/main-mia-sales|agent_id=mia/)
     const log = messageRegion()
     expect(within(log).queryByText('status?', { exact: true })).toBeNull()

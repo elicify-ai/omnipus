@@ -283,11 +283,13 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
       window.matchMedia = (query: string) => ({
         matches: false,
         media: query,
+        addListener: () => {},
+        removeListener: () => {},
         addEventListener: () => {},
         removeEventListener: () => {},
         dispatchEvent: () => false,
         onchange: null,
-      }) as MediaQueryList
+      }) satisfies MediaQueryList
     }
     let resolveRoom: (room: Room) => void = () => {}
     fetchRoom.mockReturnValue(new Promise<Room>((resolve) => {
@@ -309,7 +311,9 @@ describe('ChatHeaderSlot — the chat controls in the header line', () => {
       allocated_cost_micro_usd: 0,
       allocated_cost_unpriced: false,
       hidden: false,
-    } as Room)
+      // S-98: this idle two-member room has no pending attention state.
+      needs_attention: false,
+    } satisfies Room)
     const button = await screen.findByRole('button', { name: 'Participants, 2 members' })
     expect(button).toBeVisible()
     expect(screen.getByTestId('chat-header-slot').contains(button)).toBe(true)

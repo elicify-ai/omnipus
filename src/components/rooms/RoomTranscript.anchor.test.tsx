@@ -1,29 +1,28 @@
 /**
- * RoomTranscript.anchor.test.tsx — architect N2 / code-reviewer R2-N02 (Train 3
- * gate round 2): the older-page prepend must keep the reader's CURRENT place.
+ * #1449 S-40 / FR-030; architect N2 / code-reviewer R2-N02: an older-page
+ * prepend must keep the reader's CURRENT message and viewport offset.
+ * docs/group-chats.md::Opening a group and reading earlier messages promises
+ * that scrolling back does not move the message being read.
  *
- * Oracle: ROOM-HISTORY-PAGING-1332-20261018.md D6/T23 ("the currently visible
- * message/offset stays put") as promised to users by docs/group-chats.md
- * "Scrolling back" — "The room keeps your place while older messages are added
- * above it". Two failure modes are pinned, both present pre-fix where the
- * anchor used the position captured when the request STARTED and compensated
- * with the whole scroll-height delta:
- *   1. scrolling during the pending GET is undone (request-start position
- *      restored), and
- *   2. a live message appended at the BOTTOM during the pending GET is counted
- *      as prepended height, pushing the reader down by that height.
+ * This is an explicitly limited component snapshot, not the 10,005-entry
+ * browser scenario. Six 300px rows cover the shared opening fill goal in a
+ * 400px viewport, so only the reader's scroll starts the one older-page GET.
+ * The terminal page reaches seq 1. A 200px live row lands BELOW the reader.
  *
- * jsdom does no layout, so the test installs a real-DOM-order geometry model:
- * an entry's content top is the sum of its preceding siblings' heights, and
- * getBoundingClientRect maps content space to viewport space through the live
- * scrollTop — the same arithmetic a browser performs. The anchor assertion is
- * the reader's message viewport position (not just "attached").
+ * jsdom has no layout. Reuse the normal-chat tests' browser-edge geometry for
+ * shared history-anchor wrappers, including the 32px boundary controls. The
+ * list, viewport coordinator, room source and store remain real. This plain
+ * list test does not certify browser painting or the virtualizer.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { act, screen, fireEvent, waitFor } from '@testing-library/react'
 import type { RoomEntry } from '@/lib/api/generated/asyncapi-types'
 import type { RoomHistoryResponse } from '@/lib/api/generated/openapi-types'
-import { Network, entry, openRoom, snapshot, stopHarness, ROOM_ID } from '../../../tests/l1-room-ui/harness'
+import { useRoomStore } from '@/store/rooms'
+import {
+  Network, entry, loadRoomScreen, openRoom, resetRealStores, snapshot, stopHarness, ROOM_ID,
+} from '../../../tests/l1-room-ui/harness'
+import { installHistoryLayout } from '../../../tests/chat-history-paging/measurement-layout'
 
 const fetchRoomHistory = vi.hoisted(() => vi.fn<(roomId: string, opts?: { beforeSeq?: number; limit?: number }) => Promise<RoomHistoryResponse>>())
 vi.mock('@/lib/api/rooms', async (importOriginal) => ({
@@ -31,85 +30,77 @@ vi.mock('@/lib/api/rooms', async (importOriginal) => ({
   fetchRoomHistory,
 }))
 
-const displayed = (): RoomEntry[] => [
-  entry({ seq: 3, id: 'room-message-3', client_message_id: 'c3', text: 'entry-3' }),
-  entry({ seq: 4, id: 'room-message-4', client_message_id: 'c4', text: 'entry-4' }),
-  entry({ seq: 5, id: 'room-message-5', client_message_id: 'c5', text: 'entry-5' }),
-]
-
-const olderPage = (entries: RoomEntry[], hasOlder: boolean): RoomHistoryResponse => ({
-  entries, has_older: hasOlder,
-  ...(hasOlder ? { next_before_seq: entries[0]?.seq } : {}),
+const displayed = (): RoomEntry[] => Array.from({ length: 6 }, (_, index) => {
+  const seq = index + 3
+  return entry({ seq, id: `room-message-${seq}`, client_message_id: `c${seq}`, text: `entry-${seq}` })
 })
 
-const firstPage = () => olderPage([
-  entry({ seq: 1, id: 'room-message-1', client_message_id: 'c1', text: 'entry-1' }),
-  entry({ seq: 2, id: 'room-message-2', client_message_id: 'c2', text: 'entry-2' }),
-], true)
+const firstPage = (): RoomHistoryResponse => ({
+  entries: [
+    entry({ seq: 1, id: 'room-message-1', client_message_id: 'c1', text: 'entry-1' }),
+    entry({ seq: 2, id: 'room-message-2', client_message_id: 'c2', text: 'entry-2' }),
+  ],
+  // RoomHistoryResponse: reaching the first entry is terminal, so the shared
+  // fill must not ask for a second page before seq 1.
+  has_older: false,
+})
 
-// Layout model: heights per entry TEXT (stable across the fix), the log
-// viewport, and the live scroll position the "browser" reports.
-const HEIGHTS: Record<string, number> = {
-  'entry-1': 300, 'entry-2': 300, 'entry-3': 300, 'entry-4': 300, 'entry-5': 300,
-  'entry-6': 200, // the tall live message that lands during the pending GET
-}
+const ROW_HEIGHT = 300
 const LOG_VIEWPORT = 400
-
-let logEl: HTMLElement | null = null
-let scrollTopValue = 0
-let lastAssignedScrollTop: number | undefined
-let originalGetBoundingClientRect: typeof Element.prototype.getBoundingClientRect
-
-function entryHeightOf(el: Element): number {
-  return HEIGHTS[el.querySelector('p')?.textContent ?? ''] ?? 0
-}
-
-function contentTopOf(el: Element): number {
-  let top = 0
-  for (let sib = el.previousElementSibling; sib; sib = sib.previousElementSibling) top += entryHeightOf(sib)
-  return top
-}
-
-function rect(top: number, height: number): DOMRect {
-  return { top, height, bottom: top + height, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) } as unknown as DOMRect
-}
-
-/** The message's position in the VIEWPORT, exactly what the reader sees. */
-function viewportTopOf(text: string): number {
-  const article = screen.getByText(text).closest('article')
-  expect(article).not.toBeNull()
-  return article!.getBoundingClientRect().top
-}
-
-function installLogGeometry(log: HTMLElement): void {
-  logEl = log
-  Object.defineProperty(log, 'scrollTop', {
-    configurable: true,
-    get: () => scrollTopValue,
-    set: (value: number) => { scrollTopValue = value; lastAssignedScrollTop = value },
-  })
-  Object.defineProperty(log, 'scrollHeight', {
-    configurable: true,
-    get: () => [...log.children].reduce((sum, child) => sum + entryHeightOf(child), 0),
-  })
-}
-
+const CONTROL_HEIGHT = 32
+const READER_OFFSET = -100
+let layout: ReturnType<typeof installHistoryLayout> | undefined
 let mounted: Awaited<ReturnType<typeof openRoom>> | undefined
+
+function logElement(): HTMLElement {
+  return screen.getByRole('region', { name: 'Conversation history' })
+}
+
+/** The shared row's position in the VIEWPORT, exactly what the reader sees. */
+function viewportTopOf(text: string): number {
+  const row = screen.getByText(text).closest<HTMLElement>('[data-history-anchor]')
+  expect(row, `instrument: ${text} has a shared history anchor`).not.toBeNull()
+  expect(row!.getBoundingClientRect().height, 'instrument: rows have physical height').toBe(ROW_HEIGHT)
+  return row!.getBoundingClientRect().top - logElement().getBoundingClientRect().top
+}
 
 async function mountRoom() {
   mounted = await openRoom(new Network(), snapshot({
-    entries: displayed(), members: ['mia', 'jim'],
+    seq: 8, entries: displayed(), members: ['mia', 'jim'],
     muted: [], member_states: [], paused: false, generation: 1,
     allocated_cost_micro_usd: 1_000, allocated_cost_unpriced: false,
     complete: true, has_older: true,
   }))
-  installLogGeometry(screen.getByRole('region', { name: 'Conversation history' }))
+  // S-40 starts from an opened group at newest, not a still-covered list.
+  await waitFor(() => expect(screen.queryByTestId('chat-open-cover')).toBeNull())
+  expect(logElement().clientHeight, 'instrument: nonzero shared viewport').toBe(LOG_VIEWPORT)
+  expect(logElement().scrollTop, 'instrument: six rows plus the earlier-page button, at newest')
+    .toBe(6 * ROW_HEIGHT + CONTROL_HEIGHT - LOG_VIEWPORT)
+  expect(useRoomStore.getState().rooms[ROOM_ID]?.snapshotReceived).toBe(true)
+  expect(useRoomStore.getState().rooms[ROOM_ID]?.hasOlder).toBe(true)
+  expect(fetchRoomHistory, 'the fixture already covers the opening fill goal').not.toHaveBeenCalled()
   return mounted
 }
 
 function scrollLogToTop(): void {
-  scrollTopValue = 0
-  fireEvent.scroll(logEl!)
+  const log = logElement()
+  // FR-030: a real reader scroll leaves follow-latest and captures a new
+  // anchor. Merely changing a JS variable no longer drives the shared list.
+  fireEvent.wheel(log, { deltaY: -1 })
+  log.scrollTop = 0
+  fireEvent.scroll(log)
+  expect(log.scrollTop, 'instrument: the reader reached the loaded top').toBe(0)
+  expect(useRoomStore.getState().rooms[ROOM_ID]?.viewMode, 'instrument: the real store received reader intent')
+    .toBe('historical')
+}
+
+function moveReaderDuringGet(): void {
+  const log = logElement()
+  // Pending GET: one 32px button + one 32px status above the rows. Moving
+  // 400px into row content puts entry-4 at -100, independently of product code.
+  log.scrollTop = 2 * CONTROL_HEIGHT + ROW_HEIGHT - READER_OFFSET
+  fireEvent.scroll(log)
+  expect(viewportTopOf('entry-4')).toBe(READER_OFFSET)
 }
 
 function deferredPage(): { promise: Promise<RoomHistoryResponse>; resolve: (page: RoomHistoryResponse) => void } {
@@ -118,24 +109,26 @@ function deferredPage(): { promise: Promise<RoomHistoryResponse>; resolve: (page
   return { promise, resolve }
 }
 
+// #616: module transformation uses the existing beforeAll hook budget.
+beforeAll(async () => { await loadRoomScreen() })
 beforeEach(() => {
   vi.clearAllMocks()
   fetchRoomHistory.mockReset()
-  logEl = null
-  scrollTopValue = 0
-  lastAssignedScrollTop = undefined
-  originalGetBoundingClientRect = Element.prototype.getBoundingClientRect
-  Element.prototype.getBoundingClientRect = function (this: Element) {
-    if (this === logEl) return rect(0, LOG_VIEWPORT)
-    if (logEl && logEl.contains(this)) return rect(contentTopOf(this) - scrollTopValue, entryHeightOf(this))
-    return originalGetBoundingClientRect.call(this)
-  }
+  // Install before resetRealStores so its missing-scrollTo stand-in does not
+  // shadow the shared layout helper's functional browser-edge scrollTo.
+  layout = installHistoryLayout()
+  layout.state.height = LOG_VIEWPORT
+  layout.state.rowHeight = ROW_HEIGHT
+  layout.state.controlHeight = CONTROL_HEIGHT
+  layout.state.rowHeights.set('room:9', 200)
+  resetRealStores()
 })
 
-afterEach(async () => {
-  Element.prototype.getBoundingClientRect = originalGetBoundingClientRect
+afterEach(() => {
   stopHarness(mounted?.connection)
   mounted = undefined
+  layout?.restore()
+  layout = undefined
 })
 
 describe('N2/R2-N02 — the prepend keeps the reader CURRENT place, not the request-start place', () => {
@@ -146,29 +139,23 @@ describe('N2/R2-N02 — the prepend keeps the reader CURRENT place, not the requ
 
     scrollLogToTop()
     await waitFor(() => expect(fetchRoomHistory).toHaveBeenCalledTimes(1))
+    moveReaderDuringGet()
 
-    // While the GET is pending the reader scrolls 400 px down into the loaded
-    // messages: they are now reading entry-4 at viewport top −100.
-    scrollTopValue = 400
-    expect(viewportTopOf('entry-4')).toBe(-100)
-
-    // A live answer (200 px tall) is appended BELOW the reader mid-flight.
     await emit({
-      type: 'room_entry', room_id: ROOM_ID, seq: 6,
-      entry: entry({ seq: 6, id: 'room-message-6', client_message_id: 'c6', text: 'entry-6' }),
+      type: 'room_entry', room_id: ROOM_ID, seq: 9,
+      entry: entry({ seq: 9, id: 'room-message-9', client_message_id: 'c9', text: 'entry-9' }),
     })
-    expect(screen.getByText('entry-6')).toBeInTheDocument()
+    expect(screen.getByText('entry-9')).toBeInTheDocument()
+    expect(viewportTopOf('entry-4'), 'a bottom append does not move the reader').toBe(READER_OFFSET)
 
-    // The older page (600 px) lands. Only the height added ABOVE the reader's
-    // entry may be compensated: scrollTop 400 + 600 = 1000, never the live 200.
-    await act(async () => {
-      pending.resolve(firstPage())
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    })
+    await act(async () => { pending.resolve(firstPage()) })
+    await screen.findByText('entry-1')
 
-    expect(lastAssignedScrollTop).toBe(1000)
-    // The message the reader was on sits at the SAME viewport position.
-    expect(viewportTopOf('entry-4')).toBe(-100)
+    // Final content: two older rows (600) + entry-3 (300), no older-page
+    // controls, minus the reader's -100 offset = 1000, never + the live 200.
+    expect(logElement().scrollTop).toBe(3 * ROW_HEIGHT - READER_OFFSET)
+    expect(viewportTopOf('entry-4')).toBe(READER_OFFSET)
+    expect(fetchRoomHistory).toHaveBeenCalledTimes(1)
   })
 
   it('scrolling during the pending GET is preserved — the request-start position is not restored', async () => {
@@ -178,27 +165,27 @@ describe('N2/R2-N02 — the prepend keeps the reader CURRENT place, not the requ
 
     scrollLogToTop()
     await waitFor(() => expect(fetchRoomHistory).toHaveBeenCalledTimes(1))
+    moveReaderDuringGet()
 
-    scrollTopValue = 400
-    expect(viewportTopOf('entry-4')).toBe(-100)
+    await act(async () => { pending.resolve(firstPage()) })
+    await screen.findByText('entry-1')
 
-    await act(async () => {
-      pending.resolve(firstPage())
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    })
-
-    expect(lastAssignedScrollTop).toBe(1000)
-    expect(viewportTopOf('entry-4')).toBe(-100)
+    expect(logElement().scrollTop).toBe(3 * ROW_HEIGHT - READER_OFFSET)
+    expect(viewportTopOf('entry-4')).toBe(READER_OFFSET)
+    expect(fetchRoomHistory).toHaveBeenCalledTimes(1)
   })
 
-  it('control — no mid-load scroll, no live traffic: the page still shifts the reader by exactly the prepended height', async () => {
+  it('control — no mid-load scroll, no live traffic: only the prepend and removed boundary affect scrollTop', async () => {
     await mountRoom()
     fetchRoomHistory.mockResolvedValueOnce(firstPage())
 
     scrollLogToTop()
     await waitFor(() => expect(fetchRoomHistory).toHaveBeenCalledTimes(1))
+    await screen.findByText('entry-1')
 
-    await waitFor(() => expect(screen.getByText('entry-1')).toBeInTheDocument())
-    expect(lastAssignedScrollTop).toBe(600)
+    // S-40: preserve entry-3 at its original +32 screen position. The terminal
+    // page adds 600px and removes the original 32px earlier-history button.
+    expect(logElement().scrollTop).toBe(2 * ROW_HEIGHT - CONTROL_HEIGHT)
+    expect(viewportTopOf('entry-3')).toBe(CONTROL_HEIGHT)
   })
 })

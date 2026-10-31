@@ -1,20 +1,30 @@
 // RED — US-17 AS-3/12, FR-164/168/175/189/205/206, §6.13, K26.
 // REAL RoomScreen, stores, QueryClient, parser and room API. Only HTTP/socket
 // edges are doubled. Server fan-out and command execution remain backend/UAT.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { act } from 'react'
-import { screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { act, type ComponentType } from 'react'
+import { screen, waitFor, within } from '@testing-library/react'
+import type { PanelContentProps } from '@/components/panel-shell/types'
 import userEvent from '@testing-library/user-event'
 import type { RoomMessageRequest } from '@/lib/api/generated/openapi-types'
 import type { WsConnection } from '@/lib/ws'
 import { queryClient } from '@/lib/queryClient'
 import {
-  agents, Network, entry, json, openRoom, resetRealStores, room, ROOM_ID,
-  snapshot, stopHarness, WS,
+  agents, Network, entry, json, loadRoomScreen, mountAt, openRoom, requiredExport,
+  resetRealStores, room, ROOM_ID, snapshot, stopHarness, WS,
 } from '../../../tests/l1-room-ui/harness'
 
 let net: Network
 let connection: WsConnection | undefined
+let ParticipantsPanel: ComponentType<{ shellProps?: PanelContentProps }>
+// #616: use the existing hookTimeout for the real screen's module graph;
+// neither testTimeout nor hookTimeout is increased.
+beforeAll(async () => {
+  await loadRoomScreen()
+  ParticipantsPanel = await requiredExport(
+    '/src/components/rooms/ParticipantsPanel.tsx', 'ParticipantsPanel', '#1449 FR-035; S-52',
+  )
+})
 beforeEach(() => { resetRealStores(); net = new Network(); connection = undefined })
 afterEach(() => stopHarness(connection))
 
@@ -53,7 +63,11 @@ describe('Room composer — user addressing, not main-chat steering', () => {
     net.currentRoom = room({ members: ['mia', 'jim'] })
     await open(snapshot({ members: ['mia', 'jim'] }))
     await userEvent.setup().type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
-    expect(await screen.findByRole('option', { name: /^@?all$/i })).toBeVisible()
+    // #1449 S-14 / FR-011 require the all token, not a separator between
+    // its label and description in the computed accessible name. Match the
+    // name start, then require the exact visible token to reject @alligator.
+    const all = await screen.findByRole('option', { name: /^@all/i })
+    expect(within(all).getByText('@all', { exact: true })).toBeVisible()
     expect(screen.getByRole('option', { name: /Mia/ })).toBeVisible()
     expect(screen.getByRole('option', { name: /Jim/ })).toBeVisible()
     expect(screen.getAllByRole('option')).toHaveLength(3)
@@ -77,7 +91,9 @@ describe('Room composer — user addressing, not main-chat steering', () => {
     await open()
     const user = userEvent.setup()
     await user.type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
-    await user.click(await screen.findByRole('option', { name: /^@?all$/i }))
+    const all = await screen.findByRole('option', { name: /^@all/i })
+    expect(within(all).getByText('@all', { exact: true })).toBeVisible()
+    await user.click(all)
     await user.type(screen.getByRole('combobox', { name: 'Message the group' }), ' go')
     await user.click(screen.getByRole('button', { name: /^send(?: message)?$/i }))
     const request = await posted()
@@ -92,9 +108,18 @@ describe('Room composer — user addressing, not main-chat steering', () => {
     await user.type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
     await user.click(await screen.findByRole('option', { name: /Jim Smith/ }))
     await user.type(screen.getByRole('combobox', { name: 'Message the group' }), ' review this')
+    // #1449 D6 / FR-035: current member names live in Participants, not
+    // the retired header list. S-15 / FR-011 still require the picked ID.
+    await mountAt(<ParticipantsPanel shellProps={{
+      context: { workspaceId: WS, roomId: ROOM_ID }, presentation: 'docked',
+      close() {}, expand() {}, registerExpandContext() {}, onWidthSettle() {},
+    }} />)
+    const jim = await screen.findByTestId('participant-row-jim')
+    expect(within(jim).getByText('Jim Smith', { exact: true })).toBeVisible()
     net.roster = net.roster.map((agent) => agent.id === 'jim' ? { ...agent, name: 'James' } : agent)
     await act(async () => { await queryClient.invalidateQueries({ queryKey: ['agents'] }) })
-    expect(await screen.findByText('James', { exact: true })).toBeVisible()
+    expect(await within(jim).findByText('James', { exact: true })).toBeVisible()
+    expect(within(jim).queryByText('Jim Smith', { exact: true })).toBeNull()
     await user.click(screen.getByRole('button', { name: /^send(?: message)?$/i }))
     expect((await posted()).mentions).toEqual(['jim'])
   })
