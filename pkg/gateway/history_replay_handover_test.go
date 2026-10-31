@@ -156,6 +156,11 @@ func TestHistoryReplay_MultiTurnToolHistoryServesCompletePage(t *testing.T) {
 			ID: answerID, Type: session.EntryTypeMessage, Role: "assistant",
 			Content: fmt.Sprintf("answer %d", n), Timestamp: now.Add(time.Duration(n)*time.Minute + 20*time.Second), AgentID: "mia",
 		})
+		// S11d: this source alone recorded a turn; unknown neighbours stay unknown.
+		origin := origins[toolID]
+		turnID := fmt.Sprintf("e4-turn-%d", n)
+		origin.TurnId = &turnID
+		origins[toolID] = origin
 	}
 	turn(1)
 	turn(2)

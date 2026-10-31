@@ -15,6 +15,8 @@ import { WebSearchBlock } from './WebSearchResult'
 import { WebFetchBlock } from './WebFetchPreview'
 import { GoalSetupFailureLine } from './GoalSetupFailureLine'
 import { delegationSlotted } from '../DelegationEventLine'
+import { isHistoryResultPreview } from '@/lib/historyPreview'
+import { HistoryPreviewToolCall } from './HistoryPreviewToolCall'
 
 /**
  * F2: derives the replay MessagePartStatus object from the store's resolved
@@ -32,15 +34,7 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled')
   return status === 'cancelled' ? { type: 'incomplete', reason: 'cancelled' } : { type: 'complete' }
 }
 
-export function renderHistoricalToolCall({
-  tc,
-  callId,
-  inlineEvents,
-  activeSessionId,
-  verboseChatEnabled,
-  goalRecordEmpty,
-  liteMode,
-}: {
+interface HistoricalToolCallArgs {
   tc: ToolCall
   callId: string
   inlineEvents: readonly DelegationEvent[] | undefined
@@ -48,7 +42,35 @@ export function renderHistoricalToolCall({
   verboseChatEnabled: boolean
   goalRecordEmpty: boolean
   liteMode: boolean
-}): ReactNode {
+  /** The saved occurrence owning this call (#1452 D2: addresses its full result). */
+  historyPosition?: string
+}
+
+export function renderHistoricalToolCall(args: HistoricalToolCallArgs): ReactNode {
+  const { tc, callId, inlineEvents, activeSessionId, verboseChatEnabled, historyPosition } = args
+  // #1452 D2 A2.4: a result the history page shortened reaches no
+  // tool-specific renderer (they would try to parse the marker as their own
+  // result shape); every tool falls back to the one preview display.
+  // The thread's one visibility filter still applies (toolVisibility.ts).
+  if (isHistoryResultPreview(tc.result)) {
+    const visible = shouldRenderToolCall(tc.tool, tc.params as Record<string, unknown> | undefined, verboseChatEnabled, tc.status === 'error')
+    return delegationSlotted(callId, inlineEvents, visible ? (
+      <HistoryPreviewToolCall key={callId} tc={tc} marker={tc.result} sessionId={activeSessionId ?? ''} historyPosition={historyPosition} />
+    ) : null)
+  }
+  return renderSavedToolCall(args)
+}
+
+/** The tool-specific replay renderers, for a result that was not shortened. */
+function renderSavedToolCall({
+  tc,
+  callId,
+  inlineEvents,
+  activeSessionId,
+  verboseChatEnabled,
+  goalRecordEmpty,
+  liteMode,
+}: HistoricalToolCallArgs): ReactNode {
   // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
   // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
   // here too, so replayed sessions render the preview link (or the malformed

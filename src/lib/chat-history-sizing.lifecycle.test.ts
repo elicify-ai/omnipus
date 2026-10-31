@@ -94,11 +94,11 @@ describe('I2 D5 B07 independent request sizing', () => {
   })
 
   it.each([
-    { height: 800, average: 40, expected: { limit: 80, min_rows: 40 } },
+    { height: 800, average: 40, expected: { limit: 60, min_rows: 40 } },
     { height: 800, average: 400, expected: { limit: 20, min_rows: 4 } },
     { height: 1600, average: 10, expected: { limit: 100, min_rows: 100 } },
-  ])('opening H$height/A$average uses4H target but2H floor', ({ height, average, expected }) => {
-    expect(historyPageSizing(height, average, 4), 'D5 opening formula is not the prefetch formula').toStrictEqual(expected)
+  ])('opening H$height/A$average uses3H target but2H floor', ({ height, average, expected }) => {
+    expect(historyPageSizing(height, average, 3), 'D5 opening formula is not the prefetch formula').toStrictEqual(expected)
     recordHistoryGeometry(SESSION, height, average)
     expect(historyAttachSizing(SESSION), 'actual attach consumer carries those exact sizes').toStrictEqual({ history_limit: expected.limit, history_min_rows: expected.min_rows })
   })
@@ -106,7 +106,7 @@ describe('I2 D5 B07 independent request sizing', () => {
   it('omits both attach sizes before geometry and after forgetting it', () => {
     expect(historyAttachSizing(SESSION), 'D5 unknown geometry leaves server40/20 defaults').toStrictEqual({})
     recordHistoryGeometry(SESSION, 800, 40)
-    expect(historyAttachSizing(SESSION), 'positive control: known geometry affects actual attach').toStrictEqual({ history_limit: 80, history_min_rows: 40 })
+    expect(historyAttachSizing(SESSION), 'positive control: known geometry affects actual attach').toStrictEqual({ history_limit: 60, history_min_rows: 40 })
     forgetHistoryGeometry(SESSION)
     expect(historyAttachSizing(SESSION), 'forgotten session cannot reuse old dimensions').toStrictEqual({})
   })

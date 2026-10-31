@@ -264,6 +264,20 @@ export type ChatMessage = Message & {
    */
   mergedReplayIds?: string[]
   /**
+   * #1452 D1 (chat-history-paging-spec S1/S7): the body-free ordered part
+   * list of a row that combines several sources (every site that appends to
+   * `mergedReplayIds` records the part). Lets a later saved record bind to
+   * its own part instead of the whole row; see history-parts.ts. Client-local,
+   * released with the row, never persisted or sent.
+   */
+  historyParts?: HistoryDisplayPart[]
+  /**
+   * #1452 S11 reading position: the stable client-local render identity of a
+   * row whose display key or slot moved when a turn segment folded into it
+   * (the drawn row it grew from). Never persisted or sent.
+   */
+  historyRenderKey?: string
+  /**
    * #823 catch-up redesign, Opus review round 3 item N1 (BE-DESIGN.md §6.5):
    * set ONCE, directly, by the `catch_up_complete` reducer's own sweep — NOT
    * recomputed reactively from `turnId !== activeTurnId` on every render.
@@ -464,6 +478,12 @@ export interface SessionChatState {
   /** Body-free source/display aliases and hidden current-tail order, released on leave. */
   historySourceAliases?: Record<string, string>
   historyLiveOrder?: string[]
+  /**
+   * #1452 D2: saved text positions whose full text the user asked to see
+   * ("Show the rest"). Flags only — the full text lives in the query cache,
+   * never here. Released with the reader (D9).
+   */
+  historyExpandedText?: Record<string, true>
   /** Private source hydration only: a synthetic tool owner is not yet narration coverage. */
   historyPendingNarrationId?: string
   // Map-indexed ring buffer. Use getMessages(bucket) to get the ordered array.
@@ -849,6 +869,31 @@ export interface SessionChatState {
 export type PositionedToolCall = ToolCall & { textOffset?: number }
 
 /**
+ * One source of a combined display row (#1452 D1, S1). `start` is the
+ * part's offset in UTF-16 code units in the row's stored text, `joiner` the
+ * exact text inserted before it (S2a), `position` its bound saved history
+ * position once known, `text` whether it currently shows live or saved text.
+ */
+export interface HistoryDisplayPart { // not-wire-format: client-local display bookkeeping
+  sourceId: string
+  start: number
+  joiner: string
+  position?: string
+  text: 'live' | 'saved'
+  /** S9 (#1452 D2): the full text's UTF-8 size when the part shows a saved display preview. */
+  originalSizeBytes?: number
+  /** S10: tool-call anchors relative to this part, in UTF-16 units (call id -> offset). Body-free. */
+  anchors?: Record<string, number>
+  /** Ids of the tool calls recorded on this part's saved source (fetching a call's full result addresses this position). */
+  callIds?: string[]
+  /**
+   * S11b: the joiner was derived while no text preceded this part, so it is
+   * not yet a recorded seam and is derived again when earlier text arrives.
+   */
+  joinerOpen?: true
+}
+
+/**
  * Filter the span-index map (typed shape `{ messageId: string }`), returning
  * a NEW map with all entries whose `messageId` is in `evictedMessageIds`
  * removed.
@@ -909,6 +954,8 @@ export interface HistorySlice {
   retryHistory(sessionId: string, action: HistoryActionKind): Promise<void>
   enterHistoryReading(sessionId: string): void
   releaseSessionHistory(sessionId: string): void
+  /** #1452 D2: show the full text of one shortened saved message part. */
+  expandHistoryText(sessionId: string, position: string): void
 }
 export type HistorySliceContext = {
   get: StoreApi<import('@/store/chat/types').ChatStore>['getState']

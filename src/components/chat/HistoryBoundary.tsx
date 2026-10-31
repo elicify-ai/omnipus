@@ -7,7 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import type { HistoryActionKind } from '@/store/chat/types'
-import { historyPageSizing } from '@/lib/chat-history-sizing'
+import { HISTORY_OPENING_SCREENS, historyPageSizing } from '@/lib/chat-history-sizing'
 import { reachedClosedClear } from '@/store/chat/history-merge'
 import { logDiagnostic } from '@/lib/telemetry'
 
@@ -71,7 +71,7 @@ export function HistoryBoundary({ action, average = 80, placement = 'history' }:
       const clear = bucket && reachedClosedClear(bucket)
       void (clear ? state.showEarlierHistory(sid, clear.historyPosition, size) : state.loadOlderHistory(sid, size)).catch(logHistoryRejection(action))
     } else if (action === 'newer') void state.loadNewerHistory(sid, size).catch(logHistoryRejection(action))
-    else if (action === 'latest') void state.returnToLatestHistory(sid, { ...size, limit: Math.min(100, Math.max(20, Math.ceil(4 * (region?.clientHeight || 800) / average))) }).catch(logHistoryRejection(action))
+    else if (action === 'latest') void state.returnToLatestHistory(sid, { ...size, limit: Math.min(100, Math.max(20, Math.ceil(HISTORY_OPENING_SCREENS * (region?.clientHeight || 800) / average))) }).catch(logHistoryRejection(action))
     else void state.refreshLoadedHistory(sid).catch(logHistoryRejection(action))
   }
   const recover = () => {

@@ -28,6 +28,12 @@ export class HistoryRowMeasurements {
   }
   reset(): void { this.samples.clear(); this.total = 0 }
 }
+/**
+ * How many screens of history a conversation opens with, and a return to the
+ * latest end loads (D5; founder decision 2026-10-30: three, was four). The
+ * older-scroll trigger and every later prefetch stay at two screens.
+ */
+export const HISTORY_OPENING_SCREENS = 3
 export function historyPageSizing(height: number, average: number, screens = 2): HistoryPageSizing {
   const floor = Math.max(1, Math.ceil(2 * height / Math.max(1, average)))
   const limit = Math.min(100, Math.max(20, Math.ceil(screens * height / Math.max(1, average))))
@@ -42,6 +48,6 @@ export function forgetHistoryGeometry(sessionId: string): void { geometry.delete
 export function historyAttachSizing(sessionId: string): Pick<AttachSessionFrame, 'history_limit' | 'history_min_rows'> {
   const sample = geometry.get(sessionId)
   if (!sample || !Number.isFinite(sample.height) || sample.height <= 0) return {}
-  const size = historyPageSizing(sample.height, sample.average, 4)
+  const size = historyPageSizing(sample.height, sample.average, HISTORY_OPENING_SCREENS)
   return { history_limit: size.limit, history_min_rows: size.min_rows }
 }

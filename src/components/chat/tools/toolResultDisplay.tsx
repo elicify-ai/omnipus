@@ -45,6 +45,7 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { fetchToolResult } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { humanByteSize } from '@/lib/historyPreview'
 import type { TruncatedResult, MarshalErrorResult } from '@/lib/ws'
 import type {
   ToolResultRef,
@@ -208,11 +209,6 @@ export function resolveToolResult(result: unknown, error?: unknown): ResolvedToo
 // ── Shared sentinel displays (moved verbatim from GenericToolCall.tsx) ───────
 
 /** Format bytes into a human-readable size string (e.g. "2.3 MiB"). */
-function humanSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
-}
 
 /** Renders a server-side ToolResultRef sentinel; full body fetched lazily on click. */
 export function ToolResultRefDisplay({
@@ -241,7 +237,7 @@ export function ToolResultRefDisplay({
       <div className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
         <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
         <span>
-          Result stored server-side ({humanSize(sentinel.original_size_bytes)}) — preview only
+          Result stored server-side ({humanByteSize(sentinel.original_size_bytes)}) — preview only
         </span>
       </div>
 
@@ -299,7 +295,7 @@ export function ClientTruncatedDisplay({ sentinel }: { sentinel: ClientTruncated
       <div className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
         <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
         <span>
-          Truncated client-side — showing first 4 KiB of {humanSize(sentinel.original_size_bytes)}.
+          Truncated client-side — showing first 4 KiB of {humanByteSize(sentinel.original_size_bytes)}.
           The full result is preserved in the server transcript.
         </span>
       </div>
@@ -458,7 +454,7 @@ export function ToolResultSentinelBody({
         >
           <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
           <span>
-            Truncated — showing first 10 KiB of {humanSize(resolved.sentinel.original_size_bytes)}
+            Truncated — showing first 10 KiB of {humanByteSize(resolved.sentinel.original_size_bytes)}
           </span>
         </div>
         <pre
