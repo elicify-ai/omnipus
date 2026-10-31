@@ -75,11 +75,11 @@ const (
 
 // BuiltinOutcome records what SyncBuiltins did for one built-in skill.
 type BuiltinOutcome struct {
-	Slug     string
-	Case     BuiltinSyncCase
-	OldRev   string // content revision before the change ("" when absent)
-	NewRev   string // shipped revision after the change ("" when unchanged)
-	Stamped  bool   // stamp present after the case
+	Slug    string
+	Case    BuiltinSyncCase
+	OldRev  string // content revision before the change ("" when absent)
+	NewRev  string // shipped revision after the change ("" when unchanged)
+	Stamped bool   // stamp present after the case
 }
 
 // RetiredOutcome records one §8.4 retirement case.
@@ -94,10 +94,10 @@ type RetiredOutcome struct {
 // from it later, at the existing wiring point, because no audit logger exists
 // yet when SyncBuiltins runs.
 type SyncReport struct {
-	Updated    []BuiltinOutcome // replaced built-ins (skill.builtin_updated)
-	Installed  []string         // newly installed built-in slugs
-	Retired    []RetiredOutcome // §8.4 outcomes
-	SweptGrants []string        // §5.13a dangling-grant sweep removals (by slug)
+	Updated     []BuiltinOutcome // replaced built-ins (skill.builtin_updated)
+	Installed   []string         // newly installed built-in slugs
+	Retired     []RetiredOutcome // §8.4 outcomes
+	SweptGrants []string         // §5.13a dangling-grant sweep removals (by slug)
 }
 
 // SyncBuiltins replaces SeedDefaults (§8.2). It runs at every gateway start
@@ -160,16 +160,16 @@ type ChangeActor struct {
 // ChangeRequest is one ApplyChange operation (§7.1). Exactly the fields the
 // Kind needs are read; the rest must stay zero.
 type ChangeRequest struct {
-	Kind       ChangeKind
-	Slug       string // target skill slug (for copy: the SOURCE; To is the destination)
-	To         string // copy destination slug (KindCopy only)
-	Path       string // delete_file path, relative to the folder
-	Version    string // restore version id
-	Content    []byte // single-file writes (edit, create SKILL.md)
-	StagedDir  string // staged folder for restore / copy / install publication
-	Expect     Expectation
-	Actor      ChangeActor
-	Grants     GrantEditor // §5.13a: delete-time grant removal (may be nil in tests)
+	Kind      ChangeKind
+	Slug      string // target skill slug (for copy: the SOURCE; To is the destination)
+	To        string // copy destination slug (KindCopy only)
+	Path      string // delete_file path, relative to the folder
+	Version   string // restore version id
+	Content   []byte // single-file writes (edit, create SKILL.md)
+	StagedDir string // staged folder for restore / copy / install publication
+	Expect    Expectation
+	Actor     ChangeActor
+	Grants    GrantEditor // §5.13a: delete-time grant removal (may be nil in tests)
 }
 
 // PublishOutcome is reused unchanged from the pinned code (§7.6).
@@ -246,6 +246,12 @@ var (
 	CaptureOpenProbe     func(op, path string)
 	CaptureConsumedProbe func(path string, n int64)
 )
+
+// ShippedExportHook overrides where SyncBuiltins copies the shipped package
+// from (nil = the real ExportEmbeddedPackage). Test seam for S-7.9's
+// "a current built-in install fails" case; the implementation routes its
+// built-in staging through this seam.
+var ShippedExportHook func(name, destDir string) error
 
 // RecoverInterrupted is §9.3's start-up recovery (bootSkills step 1), under
 // the lock, before SyncBuiltins: .swap and legacy <slug>.replace-backup
