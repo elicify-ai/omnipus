@@ -1,16 +1,17 @@
 # Feature Specification: Notifications and chat system messages
 
-**Created**: 2026-10-30 · **Revised**: 2026-10-31 (grill round-1 fix — the one fix round after grill 1)
-**Status**: Draft — round-1 findings fixed; founder decisions of 2026-10-31 (N1–N4 and the 14 accepted recommendations) recorded as D63–D80 (§32); two questions still open for the founder (§30.2, OQ-1 and OQ-2); awaiting grill round 2
+**Created**: 2026-10-30 · **Revised**: 2026-10-31 (grill round-1 fix); 2026-11-01 (grill round-2 correction — the one final fix round; no third grill)
+**Status**: Draft — round-2 correction applied (R2-MAJ-002…014 and R2-MIN-001…004; dispositions in §34); founder decisions D63–D80 unchanged (§32); three items pending the founder and marked "pending founder" where they apply: NS1 (R2-MAJ-001, masking before first-line extraction), OQ-1 and OQ-2 (§30.2)
 **Author**: architect (spec author), for team-lead (Mac squad)
 **Branch / base**: `landing/notifications`, created from `release/v0.1.1` at `4cad412bf`; requirements merged at `e21febf4f`; round-0 spec `eafa2b1c5`; voice skill landed at `e77af6cc9`
-**Change size**: feature (structural, cross-tree: `contracts/`, `pkg/notifications`, `pkg/gateway`, `pkg/agent`, `pkg/providers`, `src/`, user docs under `docs/`). Flow: grill round 2 (fixed, the last spec grill) → RED/GREEN/CHECK → **one** 5-reviewer gate on the one frozen Part-1 cut (D63) → candidate CI → hands-on UAT on the exact commit (touches `pkg/agent` and gateway WebSocket handlers) → founder's yes → one landing.
+**Change size**: feature (structural, cross-tree: `contracts/`, `pkg/notifications`, `pkg/gateway`, `pkg/agent`, `pkg/providers`, `src/`, user docs under `docs/`). Flow: grill round 2 done (the last spec grill) → round-2 correction (this revision) → founder answers to NS1, OQ-1, OQ-2 applied → RED/GREEN/CHECK → **one** 5-reviewer gate on the one frozen Part-1 cut (D63) → candidate CI → hands-on UAT on the exact commit (touches `pkg/agent` and gateway WebSocket handlers) → founder's yes → one landing.
 **Input (founder-confirmed)**:
 - Requirements, stable `R-…` ids, Decisions Log D1–D62, build order: `docs/internal/specs/notifications-and-chat-system-messages-requirements-2026-10-22.md` (cited below as **REQ**)
 - Agreed wording baseline: `docs/internal/specs/notifications-and-chat-system-messages-wording-2026-10-22.md` (cited as **WORDING**)
 - The Omnipus voice skill: `.claude/skills/omnipus-voice/SKILL.md` and `knowledge/` (cited as **VOICE**; founder decision N3 = D65). Its section "The N2 pattern" is the pattern for every transient and connection message (N2 = D64). This spec references it and does not copy it.
 - Founder review data (read only): `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/notification-review-20261022/review.json`, `messages-review.json`, `revised/revised.json`, `toast-audit/result-w1..w4.jsonl`
 - Round-1 review: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/notifications-spec-20261030/notifications-spec-review.md` (21 MAJOR, 5 MINOR, 2 OBSERVATION; dispositions in §33)
+- Round-2 review: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/notifications-spec-20261030/notifications-spec-review-round2.md` (14 MAJOR, 4 MINOR, no new founder questions; dispositions, author clarifications and process receipts in §34)
 - Issues: #645 (superseded open question; its hardening list is itemised as riders in §1.5), #177 (mobile notification preferences — compatibility only, §9.5), #1421 (extra accounts see every chat — the access model the recipient rule depends on, §8.1)
 - ADR changed by decision D36: **ADR-051 — Provider-Capability-Aware Media Handling and User-Facing Error Translation** (`docs/internal/architecture/ADR-051-media-handling-and-provider-error-translation.md`; not the two other ADR-051 files). The proposed amendment text is §28; ADR-051 itself is not edited by this spec.
 - Prior approved spec this one partly supersedes: `docs/internal/specs/provider-messages-spec.md` (#711, Status Approved) — its founder decision D1 ("raw provider text is sent but displayed only under Verbose chat") is replaced by REQ D28 for the provider's own message, and its D5 (residual key fragments accepted in the raw Verbose view) is reconciled in §15.1 and §28.
@@ -46,10 +47,11 @@
 | §26–§27 | Integration boundaries, holdout evaluation |
 | §28 | ADR-051 amendment — exact proposed text |
 | §29 | Part 2 — external delivery (second step) |
-| §30 | Founder questions: answered (FQ-1…FQ-17, Q1–Q7) and still open (OQ-1, OQ-2) |
+| §30 | Founder questions: answered (FQ-1…FQ-17, Q1–Q7) and pending (NS1, OQ-1, OQ-2) |
 | §31 | Ambiguity warnings, assumptions, accidental findings, clarifications |
 | §32 | Decisions Log D63–D80 (continues REQ D1–D62) |
 | §33 | Round-1 finding dispositions |
+| §34 | Round-2 finding dispositions, author clarifications, process receipts |
 
 Phases §4–§5 follow plan-spec's no-implementation-detail rule. Every later section (§6 onward) is design detail and cites `file::symbol`.
 
@@ -122,7 +124,7 @@ WP-6 is not a separate writer: its manifest (§13.5) is a task list, and each te
 
 | Item | State |
 |---|---|
-| Epic | **None exists** — `gh issue list --repo elicify-ai/omnipus --search "notifications OR \"system messages\" OR toast"` (2026-10-31) shows no notifications Epic. Team-lead creates or names one before RED; this spec does not create it |
+| Epic | The notifications Epic waits on the founder (E1). |
 | Riders (same file areas, chief to confirm) | #645 itemised below; #1513 (`pkg/notifications/goal_pause_b1_store_contract_test.go` marked "SCRATCH DRAFT ONLY", AF-1) — same package, proposed as a rider. Chief confirmation: **Unknown** until team-lead records it |
 
 | #645 item | Disposition in this spec |
@@ -169,12 +171,12 @@ WP-6 is not a separate writer: its manifest (§13.5) is a task list, and each te
 | `pkg/gateway/websocket_forward_hub.go` (`EventKindLLMRetry` → `hubContextWindowNotice`, `EventKindProviderRetry` → `hubProviderRetry`) | modifies | Hub-forwarded, sequenced session frames |
 | `pkg/gateway/websocket.go` (`slog.Debug("ws: connection closed unexpectedly"…)`) | modifies | Browser↔server close invisible at the default log level |
 | `pkg/agent/task_trigger.go::TaskTriggerScheduler.RunScheduled` → `TaskExecutor.SpawnTriggeredRun` | calls | The Calendar-task dispatch path (round-1 MAJ-004); a dispatch error returns before a run opens |
-| `pkg/agent/task_executor.go::TaskExecutor.ExecuteTask`, `StartOccurrenceRun`; `pkg/agent/task_executor_run.go::TaskExecutor.closeRun`, `emitRunStatus` | calls | Run lifecycle: automatic runs are `TaskRunKindScheduled`, Run now is `TaskRunKindManual`; `closeRun` → `emitRunStatus` carries task, run, occurrence, status |
+| `pkg/agent/task_executor.go::TaskExecutor.ExecuteTask`, `StartOccurrenceRun`; `pkg/agent/task_executor_run.go::TaskExecutor.runTask`, `openRun`, `closeRun`, `emitRunStatus`; `pkg/agent/task_executor_judge.go::TaskExecutor.completeTaskWithResult` | calls / modifies (additive) | Run lifecycle: automatic runs are `TaskRunKindScheduled`, Run now is `TaskRunKindManual`. Run history is best-effort (`openRun` degrades to nil, `closeRun` returns before `emitRunStatus` on a nil run or failed close), so task notifications use the dispatch origin captured in `runTask` and the applied completion in `completeTaskWithResult` (§8.1, round-2 R2-MAJ-009) |
 | `pkg/task/task.go::Task` (`Owner` / `CreatedBy` NAMESPACE WARNING, `CancelReason`, trigger types) | calls | Attribution fields may hold a person's or an agent's name — never a recipient (round-1 MAJ-005) |
 | `pkg/agent/loop_scheduler.go::LoopScheduler.RunScheduled` | — (not a producer) | `/loop` fires inside the user's chat; no notification today or in Part 1 |
-| `pkg/agent/prompt_cache_accounting.go::agentLoopRunTurn.accountProviderAttempt` (called from `loop_run_turn_attempt.go::runProviderAttempt` and the `loop_run_turn.go` candidate closure) | modifies (additive) | The single per-attempt observation seam (round-1 MAJ-009) |
+| `pkg/agent/prompt_cache_accounting.go::agentLoopRunTurn.accountProviderAttempt` (called from `loop_run_turn_attempt.go::runProviderAttempt` and the `loop_run_turn.go` candidate closure) | modifies (additive) | The single per-attempt observation seam (round-1 MAJ-009), guarded by an explicit call-started fact from both callers (round-2 R2-MAJ-008, §14.2) |
 | `pkg/gateway/history_replay_entry.go::stampHistoryOrigin`; `pkg/gateway/history_page_prepare.go::validateHistorySourceFrame`, `prepareGroup`, `historyWireMessage` | modifies | Each rejects an unknown carrier today; all four gain `system_line` (round-1 MAJ-002) |
-| `pkg/fileutil/sidecar_lock.go::SidecarLockPath`; `pkg/fileutil/flock_windows.go::WithFlock`; `pkg/fileutil/file.go::WriteFileAtomic` | calls / hook | Sidecar lock convention (in-process only on Windows); the disk-full hook point (D73) |
+| `pkg/fileutil/sidecar_lock.go::SidecarLockPath`; `pkg/fileutil/flock_windows.go::WithFlock`; `pkg/fileutil/file.go::WriteFileAtomic` | calls / hook | Sidecar lock convention (in-process only on Windows); the disk-full observation point, reported through a non-blocking queue (D73; round-2 R2-MAJ-005, §14.3) |
 | `pkg/logger/sensitive.go::ScrubSensitiveValues` | calls | Registered exact values only; cannot see unregistered or cut fragments (round-1 MAJ-006) |
 | `src/store/notifications.ts::useNotificationsStore` (`apply`, `hydrate`, `markRead`, `markAllRead`) | modifies | `apply` upserts by id; `hydrate` replaces the whole list |
 | `src/components/layout/NotificationPanel.tsx::NotificationPanel` | modifies | Right-hand sheet; click marks read and navigates to session or `/tasks` |
@@ -200,7 +202,7 @@ WP-6 is not a separate writer: its manifest (§13.5) is a task list, and each te
 | `addToast` | HIGH (breadth) | 328 call sites in 101 files | WP-5 |
 | `accountProviderAttempt` | MEDIUM | `loop_run_turn_attempt.go`, `loop_run_turn.go` | additive observation; accounting unchanged |
 | `stampHistoryOrigin` / `validateHistorySourceFrame` / `historyWireMessage` | MEDIUM | every history page and replay | additive case per function; byte budget unchanged |
-| `TaskExecutor.closeRun` | MEDIUM | every task run close | classification hook only; status semantics unchanged |
+| `TaskExecutor.runTask`, `TaskExecutor.completeTaskWithResult` | MEDIUM | every task execution | origin capture and outcome publication only; status and run-history semantics unchanged |
 
 HIGH rows: the change to `TranslateLLMError`/`WireLLMError`/`ClassifyError` is flagged to team-lead before GREEN; the design keeps retry and failover *decisions* byte-identical and only adds labels, masked text and log lines (FR-063).
 
@@ -209,7 +211,7 @@ HIGH rows: the change to `TranslateLLMError`/`WireLLMError`/`ClassifyError` is f
 | Flow | Relevance |
 |---|---|
 | Turn → provider call → fallback chain → classify → retry/fallback/terminal error → transcript + live frame | Network vs API label, provider message on the main line, per-attempt logs, provider incidents |
-| Calendar trigger → `TaskTriggerScheduler.RunScheduled` → `SpawnTriggeredRun` → `ExecuteTask` → `closeRun` → `emitRunStatus` | Calendar `schedule_finished` / `schedule_failed` (§8.1) |
+| Calendar trigger → `TaskTriggerScheduler.RunScheduled` → `SpawnTriggeredRun` → `ExecuteTask` → `runTask` (origin captured) → `completeTaskWithResult` (applied) | Calendar `schedule_finished` / `schedule_failed` (§8.1) |
 | Gateway schedule (heartbeat, API schedule) → `scheduledRunner` → success/failure | gateway-job `schedule_finished` (new) and `schedule_failed` (existing) |
 | Tool approval park → broadcast → decision from any tab → `tool_approval_resolved` | Needs-you notification and resolve-everywhere |
 | Ask-user park → broadcast → answered/cancelled | Needs-you notification and resolve-everywhere |
@@ -273,7 +275,7 @@ The requirements were captured at `c90310f1f` (22 Oct); 1,398 commits landed bef
 | N15 | Calendar tasks are **not** run by the gateway's `scheduledRunner`: they run through `TaskTriggerScheduler.RunScheduled` → `SpawnTriggeredRun` → `ExecuteTask` (run kind `TaskRunKindScheduled`, which queue drain, dependency unblock and plan dispatch also use); Run now is `TaskRunKindManual` | The producer map classifies at run close (§8.1, round-1 MAJ-004) | `pkg/agent/task_trigger.go`, `pkg/agent/task_executor.go`, `pkg/agent/task_executor_run.go::closeRun` |
 | N16 | `Task.Owner` / `Task.CreatedBy` carry a NAMESPACE WARNING: either a person's or an agent's name | Never a recipient (§8.1 R2) | `pkg/task/task.go::Task` |
 | N17 | No per-account access gate exists for workspace objects ("all post-gate role/multi-user checks were removed"); issue #1421 tracks extra accounts seeing every chat | Workspace-object recipients = every configured account until an access model exists (OQ-2) | `pkg/gateway/rest_workspaces.go` (caller comment); `pkg/gateway/schedules.go::resolveRecipients` ("Single-user product"); #1421 |
-| N18 | `accountProviderAttempt` already owns per-attempt accounting at the real call boundary, before a retry or fallback replaces the failed candidate | The one place to observe every dispatched attempt exactly once (§14.2, round-1 MAJ-009) | `pkg/agent/prompt_cache_accounting.go` |
+| N18 | `accountProviderAttempt` already owns per-attempt accounting at the real call boundary, before a retry or fallback replaces the failed candidate | The one place to observe every dispatched attempt exactly once (§14.2, round-1 MAJ-009) | `pkg/agent/prompt_cache_accounting.go`; note (round-2 R2-MAJ-008): `runProviderAttempt` reaches it also for an image-attachment failure before the call, so the observation is guarded by a call-started fact (§14.2) |
 | N19 | The four history stages reject an unknown carrier: `stampHistoryOrigin` (exhaustive switch), `validateHistorySourceFrame` (names map, "unclassified historical frame"), `prepareGroup` byte weighing, `historyWireMessage` projection | All four are named in §7.5 (round-1 MAJ-002) | `pkg/gateway/history_replay_entry.go`, `pkg/gateway/history_page_prepare.go` |
 | N20 | `/loop` fires run through a third scheduler (`LoopScheduler.RunScheduled`) inside the user's own chat | Not a producer (§8.1) | `pkg/agent/loop_scheduler.go` |
 | N21 | `fileutil.WithFlock` is in-process only on Windows (warns) | Lock limitation stated (§15.3, round-1 MIN-005) | `pkg/fileutil/flock_windows.go` |
@@ -491,7 +493,7 @@ Machine-verifiable constraints:
 | Size | Provider message on the main line ≤ 300 code points (+ "…"); stored provider message ≤ 2,000 bytes; outage report body ≤ 4 KiB |
 | Pop-ups | ≤ 3 visible; info/success 5,000 ms, warning 10,000 ms, error and Needs-you until dismissed or handled; hover or focus pauses the countdown |
 | Logging | Every dispatched provider request that fails produces exactly one WARN line "provider attempt failed" with `failure_class` ∈ {`network`, `api`, `unknown`}; every accepted browser outage report produces exactly one WARN line with `client_outage_kind` ∈ {`offline`, `server_unreachable`} |
-| Voice | A guard fails CI if any in-chat sentence in a scanned source contains `Omnipus` as a word (except the D48 sentence) or `we`, `our`, `us`; if any outside-chat sentence contains `I`, `my`, `me`, `we`, `our`, `us`; or if any scanned sentence contains `!`, an emoji, `sorry` or `oops` (§13.4) |
+| Voice | A guard fails CI if any in-chat sentence in a scanned source contains `Omnipus` as a word (except the D48 sentence) or `we`, `our`, `us`; if any outside-chat sentence contains `I`, `my`, `me`, `we`, `our`, `us`; or if any scanned sentence contains `!`, an emoji, `sorry`, `oops`, or `please` outside the D48 sentence (§13.4) |
 | Reflow | No horizontal scrolling of the centre, preferences, pop-ups or system lines at 320 CSS px width |
 
 ---
@@ -558,39 +560,44 @@ Rules:
 | `read` | yes | per-user read state |
 | `resolved_at_ms` | no, **new** | set when handled anywhere / condition cleared (R-NC-3) |
 | `created_at_ms`, `updated_at_ms` | yes / no | unchanged |
-| `revision` | yes, **new** | int64 ≥ 0: the recipient store's revision at this item's last change; 0 only when `persisted` is false (§8.4) |
-| `persisted` | yes, **new** | bool: false when the store write failed or no account exists (live-only item) |
+| `revision` | yes, **new** | int64 ≥ 0: the recipient store's revision at this item's last **saved** change; 0 when the item was never saved (§8.4) |
+| `persisted` | yes, **new** | bool: false while the item's latest change exists only in the server's memory — a **volatile** item (store write failed, or no account exists; §8.4.2) |
+| `live_seq` | yes, **new** | int64 ≥ 0: 0 when the item's latest state is saved; otherwise the recipient's volatile counter at its latest unsaved change (§8.4.1) |
 | `workspace_id` | no, **new** | per-workspace preferences and navigation |
 | `target` | yes, **new** | `NotificationTarget`, §7.6 |
 | `provider_id`, `provider` | no, **new** | provider id and display name for System-wide provider kinds |
 | `affected_chat_count` | no, **new** | int ≥ 0, updated on coalesce for provider incidents |
-| `causes` | no, **new** | array (≤ 10) of `{ provider: string, reason: FailureReason }` — only for `provider_connections_failing`: the observed causes (D64) |
+| `causes` | no, **new** | array (≤ 10) of `{ provider: string, reason: FailureReason }` — only for `provider_connections_failing`: the observed causes (D64), ordered by when each provider's incident opened (earliest first, then provider id) |
+| `causes_omitted` | no, **new** | int ≥ 0 — only for `provider_connections_failing`: how many further failing providers are not listed in `causes` (R2-MAJ-004); never silently truncated |
 | `agent_id` | no | display only |
 
 `schedule_id` and `session_id` move into `target` (greenfield, removed from the top level).
 
-`NotificationList` = `{ items: Notification[], unread_count: int, revision: int64 }` — `revision` is the store revision at the moment the snapshot was read (§8.4). `unread_count` = items with `read: false` (a resolved item is read).
+`NotificationList` = `{ items: Notification[], unread_count: int, revision: int64, live_seq: int64 }` — `revision` is the store revision and `live_seq` the recipient's volatile counter at the moment the snapshot was read (§8.4). `items` holds the saved entries **and** the volatile ones (`persisted: false`). `unread_count` = items with `read: false` (a resolved item is read).
 
 ### 7.2 Changed: the notification frames (`contracts/asyncapi.yaml`)
 
-The single flat `NotificationFrame` is replaced by **three strict frame types**, each delivered only to the recipient's own connections (today's forwarder filter on the user), none session-sequenced:
+The single flat `NotificationFrame` is replaced by **four strict frame types**, each delivered only to the recipient's own connections (today's forwarder filter on the user), none session-sequenced. Every invariant is expressed by the schema itself — a closed `type`, `required`, enums and `additionalProperties: false` — so the generated Go types and the generated Zod schemas both enforce it; no rule depends on a conditional `if/then` or on a server-only assertion (round-2 R2-MAJ-013):
 
-| Frame `type` | Required fields | Forbidden | Meaning |
-|---|---|---|---|
-| `notification` | `change` ∈ {`created`, `updated`, `read`, `resolved`}, `notification` (full `Notification`), `popup` (bool) | — | upsert of one item. `popup: true` is valid **only** with `change: created` (the server's verdict from preferences; the browser never re-derives it). A schema `if/then` (or, if the AsyncAPI generators cannot express it, a server-side assertion plus a contract test) enforces `popup: false` for the other three changes |
-| `notification_deleted` | `id` (non-empty), `revision` (int64 ≥ 1) | `notification`, `popup` | one item removed (user delete or sweep of one item) |
-| `notification_cleared` | `cleared_ids` (array of non-empty ids, 1…1,000, unique), `revision` | `notification`, `popup` | several items removed at once (Clear all, or a sweep). Idempotent: removing an absent id is a no-op, so a replayed or duplicated frame changes nothing |
+| Frame `type` | Required fields | Meaning |
+|---|---|---|
+| `notification_created` | `notification` (full `Notification`), `popup` (bool) | a new item. `popup` is the server's verdict from preferences; the browser never re-derives it |
+| `notification_changed` | `change` ∈ {`updated`, `read`, `resolved`}, `notification` (full `Notification`) | a change to an existing item. It has **no** `popup` field, so a change can never raise a pop-up |
+| `notification_deleted` | `id` (non-empty), `revision` (int64 ≥ 0), `live_seq` (int64 ≥ 0) | one item removed (user delete or sweep of one item) |
+| `notification_cleared` | `cleared_ids` (array of non-empty ids, 1…1,000, unique), `revision`, `live_seq` | several items removed at once (Clear all, or a sweep). Idempotent: removing an absent id is a no-op, so a replayed or duplicated frame changes nothing |
 
-`WsFrameType` gains `notification_deleted`, `notification_cleared`. Positive and negative contract fixtures exist for every variant (DS-FRAME, §20). Live-only items (`persisted: false`) are delivered by `notification` frames with `revision: 0`.
+- **Counters on removals.** Removal frames carry both counters as they stand right after the removal; §8.4.3 says which counter governs each local item (`revision` for a saved item, `live_seq` for a volatile one).
+- **Batches (round-2 R2-MAJ-004).** One operation that removes more than 1,000 items (Clear all, a sweep — D80 allows any number of waiting entries) is still **one** store change with one revision, sent as consecutive `notification_cleared` batches of at most 1,000 ids that all carry that operation's counters. Batches hold disjoint ids and each id is applied on its own by the per-item rule of §8.4.3, so no batch can invalidate another and their arrival order does not matter.
+- `WsFrameType` loses `notification` and gains `notification_created`, `notification_changed`, `notification_deleted`, `notification_cleared` (greenfield, no alias). Positive and negative contract fixtures exist for every variant, including 1,000 vs 1,001 ids and 10 vs 11 causes (DS-FRAME, §20). Volatile items travel in the same frames with `persisted: false` and `live_seq` > 0.
 
 ### 7.3 New and changed REST operations (`contracts/openapi.yaml`, tag `notifications`)
 
 | Operation id | Method + path | Request | Responses |
 |---|---|---|---|
 | `listNotifications` (existing) | GET `/notifications` | — | 200 `NotificationList` (now with `revision`) |
-| `markNotificationRead` / `markAllNotificationsRead` (existing paths) | unchanged | — | 204; each change is pushed to every connection (FR-007) |
-| `deleteNotification` | DELETE `/notifications/{id}` | — | 204; 404 unknown id. **No 409**: a waiting Needs-you entry may be deleted (D80) |
-| `clearNotifications` | DELETE `/notifications` | — | 204; removes every entry of the caller, waiting ones included (D80) |
+| `markNotificationRead` / `markAllNotificationsRead` (existing paths) | unchanged | — | 204 for saved and volatile items; each change is pushed to every connection (FR-007). A read state that cannot be written is kept as a volatile change (§8.4.2), not reported as a failure; 404 unknown id |
+| `deleteNotification` | DELETE `/notifications/{id}` | — | 204 for a saved or a volatile item; 404 only when the id is neither saved nor volatile; 500 `notification_store_unwritable` when removing a saved item could not be written (nothing removed, nothing pushed; §8.6). **No 409**: a waiting Needs-you entry may be deleted (D80) |
+| `clearNotifications` | DELETE `/notifications` | — | 204; removes every saved and volatile entry of the caller, waiting ones included (D80), as one store change sent in batches (§7.2); 500 `notification_store_unwritable` when the file could not be written (nothing removed, nothing pushed) |
 | `getNotificationPreferences` | GET `/notification-preferences` | — | 200 `NotificationPreferences` |
 | `updateNotificationPreferences` | PATCH `/notification-preferences` | `NotificationPreferencesUpdate` | 200 `NotificationPreferences`; 400 codes of §5.3; 409 `preferences_changed` (body `NotificationPreferences`, current) or `preferences_unreadable` |
 | `reportConnectionOutage` | POST `/client-events/connection-outage` | `ConnectionOutageReport` | 204 (also for a repeated `report_id`); 400 `invalid_outage_report`; 429 with `Retry-After` |
@@ -607,15 +614,19 @@ New schema files (`contracts/components/schemas/`):
 | `ConnectionOutageReport` | `{ report_id: string (UUID, required), kind: offline · server_unreachable, started_at: date-time (first unexpected close observed), last_confirmed_at: date-time (last moment the connection was confirmed alive, ≤ started_at), ended_at: date-time, reconnect_attempts: int ≥ 0, page_reloaded: bool }`, `additionalProperties: false` |
 | `SystemLine` | §7.5 |
 
-### 7.4 Changed: provider error, retry and fallback shapes (round-1 MAJ-008)
+### 7.4 Changed: provider error, retry and fallback shapes (round-1 MAJ-008; round-2 R2-MAJ-006, R2-MAJ-007, R2-MAJ-011, R2-MAJ-013)
 
-| Schema | Change |
+| Schema (owner) | Change |
 |---|---|
-| `LLMError` (`LLMError.yaml`) | **new optional `provider_says`** (string ≤ 2,000 bytes): the provider's own error message, extracted (§13.3), masked (§15.1), **persisted and replayed** (amends ADR-051, §28). **New optional `failure_class`** enum `network` · `api` (absent for non-provider codes and for `unknown` class). `facts` gains optional `http_status` (int) and `host` (string ≤ 253) — rendered only in technical details at Verbose/Debug, except `host`, which the final network/API failure sentence names (D64). Enum: **new code `provider_error`** (API failure, provider side: 401/403 account-level, 408, 5xx, 529 — D71) — `network` keeps only network-class failures. `message` stays the finished, server-assembled sentence and `provider_message` stays the trust flag (`src/lib/llm-error.ts::getLLMErrorDisplay`); `x-user-messages` is replaced per §13.2 |
-| `ReplayErrorPayload`, `ReplayErrorFrame` | carry the same `provider_says`, `failure_class` and `facts.host`; the persisted transcript error entry stores them (§13.7); `facts.http_status` and `detail` stay live-only |
-| `ProviderRetryFrame` | `error_code` may now be `network` or `provider_error` (today always `rate_limited`); **new optional `reason`** (`FailureReason`); **new optional `http_status`** int; **new optional `provider_says`** (masked, API class only). Existing `attempt` and `max_attempts` stay required and feed the attempt counter on every retry line (D64) |
-| `ProviderFallbackFrame` (live) and `ProviderFallbackNote` (replay) | **new optional `provider_says`** (masked) and **`failure_class`**, so a reply changed by a fallback quotes why the first model failed (L3); persisted with the existing fallback note |
-| `WsFrameType` | adds `system_line`, `notification_deleted`, `notification_cleared` |
+| `LLMError` (`LLMError.yaml`) | **new optional `provider_says`** (string ≤ 2,000 bytes): the provider's own error message, extracted (§13.3), masked (§15.1), **persisted and replayed** (amends ADR-051, §28). **New optional `failure_class`** enum `network` · `api` (absent for non-provider codes and for `unknown` class). `facts` gains optional `http_status` (int) and `host` (string ≤ 253) — `http_status` renders only in technical details at Verbose/Debug, never on the Normal main line (VOICE hard rule 6, §13.1 VS-2); `host` is named by the final network/API sentence (D64). Enum: **new code `provider_error`** for a provider-side API failure that has no more specific code (408, 5xx, 529, other account-level failures) — `network` keeps only network-class failures. An authentication rejection (401, or 403 for a bad key) keeps code `provider_auth_failed` and its own remedy: the **code** decides the chat line and its action; the **incident kind** of §14.1 is decided separately, so a 401 shows the auth remedy in the chat and raises the account-level `provider_error` incident (D71). `message` stays the finished, server-assembled sentence. **The trust flag `provider_message` (bool) is replaced by `message_assembled` (bool)** with the meaning of §11.4 item 4 (greenfield, no alias). `x-user-messages` is replaced per §13.2 |
+| `ReplayErrorPayload`, `ReplayErrorFrame` | carry the same `provider_says`, `failure_class`, `facts.host` and `message_assembled`; the persisted transcript error entry stores them (§13.7); `detail`, `facts.http_status` and `facts.request_id` stay live-only |
+| `ProviderRetryFrame` (`ProviderRetryFrame.yaml`) | **new required `text`** (string 1…4,096): the finished cause sentence assembled by the server **without the retry clause**, e.g. `I can't reach OpenRouter: connection refused.` (R2-MAJ-006). `error_code` may now be `network` or `provider_error` (today always `rate_limited`); **new optional `reason`** (`FailureReason`); **new optional `http_status`** int (technical details only); **new optional `provider_says`** (masked, API class only). The existing required `retry_at`, `retry_after_seconds`, `sent_at`, `attempt` and `max_attempts` keep their meaning and feed the retry clause (below) |
+| `ProviderFallbackFrame` (live; `ProviderFallbackFrame.yaml` **and** its hand-synced inline copy under `components.schemas` in `contracts/asyncapi.yaml`) | **new required `text`** (string 1…4,096): the finished note sentence, byte-identical to the note text persisted for that turn; **new optional `provider_says`** (masked) and **`failure_class`**, so a reply changed by a fallback quotes why the first model failed (L3) |
+| `ProviderFallbackNote` (replay; `ProviderFallbackNote.yaml` **and** its hand-synced inline copy in `contracts/asyncapi.yaml`) | `message` stays the persisted note text verbatim; **new optional `provider_says`** and **`failure_class`**, read from the persisted transcript entry |
+| `Message` (`Message.yaml`, REST history; the `provider_fallback` entry) | **new optional `provider_says`** and **`failure_class`** beside the existing `model` / `unavailable_model` / `unavailable_code` facts, so REST history and replay carry the same facts |
+| `WsFrameType` | adds `system_line` and the four notification frame types of §7.2; removes `notification` |
+
+**Who writes what on a retry line (R2-MAJ-006).** The server owns every word except the countdown: the line is the frame's `text` followed by **one fixed retry clause**, `Retrying in {countdown} (attempt {attempt} of {max})…`, a single string listed in the wording manifest (§13.5) and checked with the voice skill. The existing `ProviderRetryIndicator` fills that clause from the frame's typed facts only: the countdown from `retry_at` and `sent_at` with today's skew-immune rule (whole seconds, "8 s"), and `attempt` / `max_attempts`. This is the one place the browser fills slots; it fills numbers only, and there is exactly one countdown composer, so no server text can carry a stale "8 s". The finished fallback note is not composed in the browser at all: live it is `ProviderFallbackFrame.text`, after reload and in paged history it is the persisted `message` — the same bytes.
 
 ### 7.5 New: `SystemLine` content, `SystemLineFrame` transport and `Message.system_line` history (round-1 MAJ-002)
 
@@ -648,7 +659,7 @@ Parity is semantic: live, reload and paged history render the same `SystemLine` 
 
 ### 7.6 Targets and actions — required identifiers per screen (round-1 MAJ-013)
 
-`NotificationTarget` = `{ screen, workspace_id?, session_id?, task_id?, run_id?, plan_id?, agent_id?, knowledge_base_id?, provider_id? }`. Every entry has a usable screen (R-NC-6); there is no `none`.
+`NotificationTarget` = `{ screen, workspace_id?, session_id?, task_id?, run_id?, plan_id?, agent_id?, root_path?, collection_id?, provider_id? }`. Every entry has a usable screen (R-NC-6); there is no `none`.
 
 | `screen` | Required ids | Used by | When the target is gone |
 |---|---|---|---|
@@ -658,7 +669,7 @@ Parity is semantic: live, reload and paged history render the same `SystemLine` 
 | `agent` | `agent_id` | a gateway schedule job (heartbeat) that failed before any session existed (`scheduledRunner.RunScheduled` calls `onFailure` with an empty session on owner/setup failures) | "This agent no longer exists." |
 | `providers_settings` | `provider_id` optional | provider kinds | Settings → Providers opens without a selection |
 | `performance_settings` | — | `resources_low`, `concurrency_reduced` | — |
-| `knowledge_base` | `workspace_id`, `knowledge_base_id` | `knowledge_drift` | "This knowledge base no longer exists." |
+| `knowledge_base` | `workspace_id`, `root_path` (workspace-relative, the same form as `KnowledgeBaseInfo.root_path`), `collection_id` (opaque, as `KnowledgeBaseInfo.collection_id`) | `knowledge_drift` (mapping below) | the destination loads `getKnowledgeBaseInfo` (`GET /library/{workspace_id}/knowledge?path={root_path}`); a 404, `is_knowledge_base: false` or a different `collection_id` → "This knowledge base is no longer available here." |
 
 | Line action `kind` | Required ids | Behaviour |
 |---|---|---|
@@ -670,6 +681,13 @@ Parity is semantic: live, reload and paged history render the same `SystemLine` 
 | `review` | `session_id` | opens the chat with the pending card |
 
 Navigation never trusts a carried id: the destination screen loads its object through the normal authenticated REST call and shows the "no longer exists" text on 404. Ids are never parsed from text and no session id is fabricated.
+
+**Knowledge-drift mapping (round-2 R2-MAJ-012).** The producer `knowledgeDriftNotifier` (`pkg/gateway/knowledge_drift_notify.go`) receives a `knowledge.DriftReport`, whose only identity is `Root`, the collection root's resolved real path (`pkg/knowledge/drift.go::DriftReport`). The target is built from the existing mount registry, never guessed: `KnowledgeLifecycle` (`pkg/gateway/knowledge_lifecycle.go`) keys every collection on that same resolved root and records the mounts holding it (`knowledgeCollection.holders`, keyed by `knowledgeMountKey{workspaceID, name}`), and `KnowledgeLifecycle.CollectionIDFor` derives the `collection_id`. One new lifecycle accessor returns a root's holders as `(workspace_id, root_path)` pairs, where `root_path` is the collection root relative to that workspace's work tree (a mount sits in `work/` under its name, a single path segment — `pkg/workspace/mount.go::Mount`); the backend owner reuses the path rules `getKnowledgeBaseInfo` applies to `root_path`, and T-43 pins the mapping against the real lifecycle.
+- **One mount**: the target names it.
+- **Several mounts** (one folder mounted into several workspaces, sharing one `collection_id`): the first pair in (`workspace_id`, mount name) order — deterministic; the entry body names the folder, so the reader knows which collection it is.
+- **No mount at the moment of the report** (the last mount was just removed): no entry is created and one WARN "knowledge drift without a mount" is logged; the drift schedule stops when the last holder leaves, so this is a race, not a state.
+- **Mount removed later**: the destination's own check above shows "This knowledge base is no longer available here."
+Recipients are unchanged (`knowledgeDriftRecipients`: every account, §8.1); the coalesce key stays `knowledge_drift:<root>`.
 
 ---
 
@@ -685,23 +703,28 @@ Every kind has exactly one producing source in today's code. Producers listen to
 | `question_asked` | `WSHandler.broadcastAskUserCard` (`pkg/gateway/ws_ask_user.go`) with a `pending` card | every pending card | R1 |
 | `goal_paused` | `AgentLoop.notifyGoalPaused` (`pkg/agent/goal_pause_notify.go`) → `goalPausedNotifier` (`pkg/gateway/goal_pause_notify.go`) — existing | existing | R1 (keeps today's unreadable-owner rule) |
 | `goal_reached`, `goal_given_up` | goal outcome event (`pkg/agent/events.go::EventKindGoalOutcome`, `pkg/agent/goal_outcome.go`) | `met` → reached; `rounds_exhausted`, `other` → given up; `stopped_by_user` → nothing (own action) | R1 |
-| `schedule_finished`, `schedule_failed` (Calendar task) | `TaskTriggerScheduler.RunScheduled` (`pkg/agent/task_trigger.go`) → `TaskExecutor.SpawnTriggeredRun` → `ExecuteTask` → `TaskExecutor.closeRun` → `emitRunStatus` (`pkg/agent/task_executor_run.go`) | at run close: run kind `TaskRunKindScheduled` **and** the task's trigger type is `once` or `recurring` → schedule kind; status `done` → finished, `failed` without `CancelReason` → failed; a run the user stopped (`Task.CancelReason` set) → nothing | R2 (workspace object) |
+| `schedule_finished`, `schedule_failed` (Calendar task) | `TaskTriggerScheduler.RunScheduled` (`pkg/agent/task_trigger.go`) → `TaskExecutor.SpawnTriggeredRun` → `ExecuteTask` → `TaskExecutor.runTask` (dispatch origin captured) → `TaskExecutor.completeTaskWithResult` (`pkg/agent/task_executor_judge.go`, outcome applied) — see "Task outcome source" below | by the **dispatch origin**: run kind `TaskRunKindScheduled` **and** trigger type `once` or `recurring` at dispatch → schedule kind; status `done` → finished, `failed` without `CancelReason` → failed; a run the user stopped (`Task.CancelReason` set) → nothing | R2 (workspace object) |
 | `schedule_failed` (Calendar dispatch failure) | `TaskTriggerScheduler.RunScheduled` returning an error **before** a run opens (task missing, spawn refused) | one `schedule_failed`, target `task` without `run_id` | R2 |
 | `schedule_finished`, `schedule_failed` (gateway job: heartbeat or API schedule) | `scheduledRunner.RunScheduled` (`pkg/gateway/schedules.go`) success path (new hook) and `onFailure` (existing) | coalesce key `schedule:<job_id>`; a failure before any session exists (owner unavailable, worker, session pick) gets target `agent` | R1 when the run has a session; otherwise R2 |
-| `task_started`, `task_finished`, `task_failed` (task) | the same run lifecycle (`ExecuteTask` open, `closeRun` close) | **automatic runs** that are not Calendar-scheduled (queue drain, dependency unblock, plan dispatch: `TaskRunKindScheduled` with trigger `manual`): started, finished, failed. **Manual runs** (`TaskRunKindManual`: Run now, `StartOccurrenceRun`): finished and failed only — starting it is the user's own action. A user Stop (`CancelReason`) → nothing | R2 |
+| `task_started`, `task_finished`, `task_failed` (task) | the same execution (`runTask` entry → started; applied `completeTaskWithResult` → finished / failed) — see "Task outcome source" below | **automatic runs** that are not Calendar-scheduled (queue drain, dependency unblock, plan dispatch: `TaskRunKindScheduled` with trigger `manual`): started, finished, failed. **Manual runs** (`TaskRunKindManual`: Run now, `StartOccurrenceRun`): finished and failed only — starting it is the user's own action. A user Stop (`CancelReason`) → nothing | R2 |
 | `task_started`, `task_finished`, `task_failed` (plan) | `EmitPlanStatusChanged` (`pkg/agent/loop_events.go`) with a new internal, **non-wire** `origin` (`engine` · `rest`) on the plan-status hook | only `origin: engine`; `running` (first time) → started, `done` → finished, `failed` → failed; REST mutations are own actions → nothing | R2 |
 | `provider_*`, `provider_connections_failing`, `connection_restored` | incident tracker (§14.3) fed by the per-attempt observation (§14.2) | §14.3 | R3 |
 | `resources_low` (memory), `concurrency_reduced` | `config.MemoryPressureHigh` transitions; `applyMemoryCap` (`pkg/agent/admission.go`) becoming memory-binding on a measured host (D74) | §14.3 | R3 |
 | `resources_low` (disk) | `fileutil.WriteFileAtomic` (`pkg/fileutil/file.go`) failing with no-space (Unix `ENOSPC`; Windows `ERROR_DISK_FULL`, `ERROR_HANDLE_DISK_FULL`) (D73) | §14.3 | R3 |
-| `knowledge_drift` | `knowledgeDriftNotifier` (`pkg/gateway/knowledge_drift_notify.go`) — existing | existing | existing (`knowledgeDriftRecipients`: every account) |
+| `knowledge_drift` | `knowledgeDriftNotifier` (`pkg/gateway/knowledge_drift_notify.go`) — existing; its target is built from the mount registry (§7.6, "Knowledge-drift mapping") | existing | existing (`knowledgeDriftRecipients`: every account) |
+
+**Task outcome source (round-2 R2-MAJ-009).** Run history is best-effort by design: `TaskExecutor.openRun` logs ERROR and returns nil when the run record cannot be opened, and execution continues; `TaskExecutor.closeRun` returns before `emitRunStatus` for a nil run or a failed `CloseRun` (`pkg/agent/task_executor_run.go`). Task and schedule notifications therefore do **not** hang off `emitRunStatus`:
+1. **Dispatch origin.** At execution entry, `TaskExecutor.runTask` captures one immutable value: task id, workspace id, task session id, run kind, the trigger type as dispatched, occurrence time, plan id when the task belongs to a plan, and the run id when `openRun` succeeded. It is a copy, never re-read from the task later: a task edit can replace `Trigger` (`pkg/task/store.go::storeUpdateLocked.applyRemainingFields`), and an execution keeps the class it was launched with. `task_started` (automatic runs only) is published here.
+2. **Outcome.** The terminal outcome is published from the authoritative completion write, `TaskExecutor.completeTaskWithResult` (`pkg/agent/task_executor_judge.go`), only when it reports `applied`; its conditional status update is the duplicate suppression, so a second close (panic recovery, post-completion housekeeping) never notifies twice. Every other terminal path (user Stop, a failure after the origin was captured) is enumerated by T-37 and publishes through the same function.
+3. **Run id.** The target carries `run_id` only when a run record exists. A failed run open or close is still logged ERROR exactly as today; no `run_id` is invented.
 
 Not a producer in Part 1 (unchanged behaviour): `/loop` fires (`LoopScheduler.RunScheduled`, `pkg/agent/loop_scheduler.go`) run inside the chat the user started the loop in and report there; they raise no notification today and none is added (§31.1). The Stop outcome (`publishStopNotice`) becomes a chat line (D68).
 
 **Recipient rules.**
-- **R1 — session-scoped.** The root session's `UnifiedMeta.Owner` (stamped by authentication when the session is created, `pkg/session/unified.go`). Readable and set → that user. Readable but empty (a session created by a schedule or channel with no authenticated user) → every configured account (OQ-2, recommended A). Unreadable → **no** recipient and one ERROR line (keeps `notifyGoalPaused`'s rule; D24).
-- **R2 — workspace object** (task, plan, Calendar schedule). **Every configured account** (OQ-2, recommended A). Reason: no per-account access gate exists for workspace objects today (`pkg/gateway/rest_workspaces.go` caller comment: "all post-gate role/multi-user checks were removed"; issue #1421), so every account can already see and act on them; and `Task.Owner` / `Task.CreatedBy` / `Plan.Owner` / `job.CreatedBy` may hold either a person's or an agent's name (`pkg/task/task.go` NAMESPACE WARNING), so they are never used as recipients.
+- **R1 — session-scoped.** The root session's `UnifiedMeta.Owner` (stamped by authentication when the session is created, `pkg/session/unified.go`). Readable and set → that user. Readable but empty (a session created by a schedule or channel with no authenticated user) → **pending founder: OQ-2** (§30.2; recommendation A: every configured account). Unreadable → **no** recipient and one ERROR line (keeps `notifyGoalPaused`'s rule; D24).
+- **R2 — workspace object** (task, plan, Calendar schedule). **pending founder: OQ-2** (§30.2; recommendation A: every configured account). Background for the choice: no per-account access gate exists for workspace objects today (`pkg/gateway/rest_workspaces.go` caller comment: "all post-gate role/multi-user checks were removed"; issue #1421), so every account can already see and act on them; and `Task.Owner` / `Task.CreatedBy` / `Plan.Owner` / `job.CreatedBy` may hold either a person's or an agent's name (`pkg/task/task.go` NAMESPACE WARNING), so they are never used as recipients.
 - **R3 — system-wide.** Every configured account.
-- **No accounts at all** (first start before onboarding): live-only item with a minted id, `persisted: false`, `revision: 0`, log WARN (closes #645 Defect 1).
+- **No accounts at all** (first start before onboarding): a volatile item (§8.4.2) with a minted id, `persisted: false`, `revision: 0`, log WARN (closes #645 Defect 1).
 - Recipient lists are computed per call; nothing assumes one user (D24).
 
 ### 8.2 One producer path — the router
@@ -717,45 +740,70 @@ producer ──> router.Notify(kind, recipient input, title, body, target, coale
               │ 5. mint id at construction (never empty), mask title/body (§15.1)
               │ 6. under the recipient's sidecar lock (§15.3): coalesce on the unresolved key or
               │    create; bump the store revision; write atomically
-              │    write fails → log ERROR, deliver live with persisted:false, revision:0
-              │ 7. emit `notification` frame {change, notification, popup} to that recipient
+              │    write fails → log ERROR, keep the change in the volatile table, deliver it
+              │    with persisted:false and a new live_seq (§8.4.2)
+              │ 7. emit `notification_created` {notification, popup} or
+              │    `notification_changed` {change, notification} to that recipient
               v
              store file  +  live frame  ──> SPA store (reconciliation §8.4) ──> centre / pop-up
 ```
 
-Resolution, read, delete and clear take the same lock and emit the same frames (§7.2). "Handled anywhere = resolved everywhere" (D19): the approval path already emits `tool_approval_resolved`; the router resolves `approval:<id>` in the same step and emits `change: resolved`.
+Resolution, read, delete and clear take the same lock and emit the same frames (§7.2). "Handled anywhere = resolved everywhere" (D19): the approval path already emits `tool_approval_resolved`; the router resolves `approval:<id>` in the same step and emits `notification_changed` with `change: resolved`.
 
 ### 8.3 Lifecycle
 
 | State | Set by | Frame | Effect |
 |---|---|---|---|
-| created (unread) | router | `notification` `created` | badge +1; pop-up if `popup` |
-| updated | router coalesce | `notification` `updated` | content refreshed (e.g. `affected_chat_count`, `causes`); no new pop-up; read state unchanged |
-| read | user opens it or marks read | `notification` `read` | badge −1 |
-| resolved | condition cleared (§6 resolve trigger), or handled through its action anywhere | `notification` `resolved` | also read; pop-up removed in every tab; entry greyed "Handled" |
-| re-opened | incident re-fails within 10 min of resolving (§14.3) | `notification` `updated` (resolved_at_ms removed) | unread again; **no** new pop-up |
+| created (unread) | router | `notification_created` | badge +1; pop-up if `popup` |
+| updated | router coalesce | `notification_changed` `updated` | content refreshed (e.g. `affected_chat_count`, `causes`); no new pop-up; read state unchanged |
+| read | user opens it or marks read | `notification_changed` `read` | badge −1 |
+| resolved | condition cleared (§6 resolve trigger), or handled through its action anywhere | `notification_changed` `resolved` | also read; pop-up removed in every tab; entry greyed "Handled" |
+| re-opened | incident re-fails within 10 min of resolving (§14.3) | `notification_changed` `updated` (resolved_at_ms removed) | unread again; **no** new pop-up |
 | deleted | user, or sweep of one item | `notification_deleted` | gone from storage (R-SEC-2) |
 | cleared | user Clear all, or a sweep of several | `notification_cleared` | gone from storage |
 
 Deleting or clearing never touches the underlying request (D80): an approval or question stays pending in its chat, its sidebar cue stays, and its resolve trigger simply finds nothing to resolve.
 
-### 8.4 Reconciliation between tabs, pushes and refetches (round-1 MAJ-003)
+### 8.4 Reconciliation between tabs, pushes and refetches (round-1 MAJ-003; round-2 R2-MAJ-002, R2-MAJ-003)
 
-The server keeps one monotonic **store revision** per recipient, persisted in the recipient's file; every persisted change (create, update, read, resolve, delete, clear, sweep) increments it once under the lock. Each persisted item carries the revision of its last change; each delete/clear frame carries the revision of the removal.
+#### 8.4.1 Two counters
 
-Browser rules (one module, `src/store/notifications.ts`, replacing today's replace-on-hydrate):
-1. **Upsert** a `notification` frame only if its item revision is greater than both the local copy's revision and any **tombstone** for that id.
-2. **Delete/clear** frames remove the ids and record a tombstone (id → removal revision), kept until a snapshot with a higher revision arrives.
-3. **Snapshot** (`GET /notifications`, list revision R): for persisted local items — remove those absent from the snapshot whose revision ≤ R (they were deleted while this tab missed the frame); keep those with revision > R (newer than the snapshot, already received live); replace the rest by the snapshot copy. **Live-only items** (`persisted: false`) are kept until the user deletes them or the page reloads.
-4. **Refetch** on every successful WebSocket (re-)authentication and on window focus; the unread badge is recomputed from the merged list.
+The server keeps two monotonic counters per recipient:
+- the **store revision**, persisted in the recipient's file and incremented once per saved change (create, update, read, resolve, delete, clear, sweep) under the lock;
+- the **volatile counter** `live_seq`, in memory, incremented once per unsaved change (§8.4.2); its next value is max(previous + 1, current Unix time in microseconds), so it keeps increasing across a server restart unless the system clock steps back.
 
-Result: a tab that was offline during a delete loses the entry on reconnect (US-2 AC-4), and a slow GET can never roll back a newer pushed change.
+Every item carries `revision` (the store revision of its last saved change; 0 if never saved) and `live_seq` (0 when its latest state is saved). Every removal frame and every snapshot carries both counters, as they stand right after the removal or at the moment the snapshot was read.
+
+#### 8.4.2 Volatile items (store write failed, or no account)
+
+When the recipient's store cannot be written, the router keeps the change in an in-memory **volatile table** for that recipient and pushes it with `persisted: false`, a new `live_seq`, and `revision` = the item's last saved revision (0 if it was never saved). This covers both a never-saved item and a failed update of a saved one (the file keeps the older saved state). The table holds at most 200 items per recipient (eviction like the count cap of §8.5, never an unresolved Needs-you item) and is lost when the server process stops. Volatile items:
+- are updated, coalesced and resolved by the router like saved ones (the router looks in the store, then in the volatile table);
+- are included in `GET /notifications` with `persisted: false`, so a page reload while the same server process runs keeps them; each id appears once — a volatile overlay is listed instead of the saved copy it overlays;
+- accept mark read, delete and Clear all through the normal REST calls (204; 404 only for an id that is neither saved nor volatile, §7.3);
+- become saved at the recipient's next successful write: the router first folds that recipient's volatile items into the file and pushes each one as a saved change (`persisted: true`, a new `revision`, `live_seq: 0`);
+- show "Not saved — lost if the server restarts" in the centre (§8.6).
+
+A failed **delete or clear** of a saved item is never turned into a volatile change, because that would claim a removal that did not happen: the call returns 500 `notification_store_unwritable`, nothing is pushed, and the browser restores the item (§8.6).
+
+#### 8.4.3 One ordering rule for upserts, removals and snapshots
+
+One module, `src/store/notifications.ts`, replacing today's replace-on-hydrate. For every id the browser keeps a **known revision** and a **known volatile value** — each the larger of the local item's value and the id's tombstone value — and two **snapshot floors**, F_r and F_v: the counters of the newest snapshot applied. The rule:
+
+> An incoming item state, or a removal, applies to an id only if it is newer **on the counter that governs it**. A saved state (`live_seq` 0) and the removal of a saved local item are governed by `revision`: they apply only if their revision is greater than the id's known revision **and** greater than F_r. A volatile state (`live_seq` > 0) and the removal of a volatile local item are governed by `live_seq`: they apply only if their `live_seq` is greater than the id's known volatile value **and** greater than F_v, and the volatile state's `revision` is not older than the local item's saved revision. A saved state whose revision is greater than a volatile local item's saved base replaces it — the saved write is newer.
+
+Applied to each input:
+1. **Upsert** (`notification_created`, `notification_changed`): applies by the rule.
+2. **Removal** (`notification_deleted`, each id of a `notification_cleared` batch): removes the local item if the rule says the removal is newer (so a late old delete never removes a re-created item), and records a tombstone (id → both counters) unless a newer local item exists — also for an id this tab never saw, so a later stale upsert of it is rejected.
+3. **Snapshot** (`GET /notifications`, counters R and L): a snapshot that is not newer than the floors (R < F_r, or R = F_r and L ≤ F_v) is stale and ignored entirely. Otherwise each snapshot item is accepted by the rule (a tombstone or a newer local copy wins); local items the snapshot covers but does not contain are removed (saved items with revision ≤ R, volatile items with `live_seq` ≤ L — a volatile item missing from a newer snapshot was deleted or lost in a server restart); local items newer than the snapshot are kept. Then F_r = R and F_v = L, and every tombstone at or below the new floors is retired: the floor now rejects any older state, so the tombstone is no longer needed.
+4. **Refetch** on every successful WebSocket (re-)authentication and on window focus; the unread badge is recomputed from the merged list after every frame and every snapshot.
+
+Results (each pinned by a DS-RECON row, T-40): a tab offline during a delete loses the entry on reconnect (US-2 AC-4); a slow GET never rolls back a newer push; a delayed older snapshot cannot bring back an entry deleted after it was read; an old upsert arriving after its tombstone was retired is rejected by the floor; a late old delete never removes a re-created entry; volatile updates and resolutions apply in order; a volatile entry turns into a saved one without flicker.
 
 ### 8.5 Retention (R-NC-4, R-SEC-2; D23, D80)
 
-- **Age.** Every entry with `created_at_ms` ≥ 30 × 24 h old is deleted — waiting Needs-you entries included (D80; the request keeps waiting). Sweep at start-up, every 6 h, and on every write to that recipient's file; the sweep emits one `notification_cleared` frame per recipient when it removed anything. Quarantined corrupt files (`<file>.corrupt-<unixnano>`, written by `pkg/notifications/store.go`) older than 30 days are deleted by the same sweep.
+- **Age.** Every entry with `created_at_ms` ≥ 30 × 24 h old is deleted — waiting Needs-you entries included (D80; the request keeps waiting). Sweep at start-up, every 6 h, and on every write to that recipient's file; the sweep removes everything due for a recipient in one store change and sends the ids in `notification_cleared` batches of at most 1,000 (§7.2). Quarantined corrupt files (`<file>.corrupt-<unixnano>`, written by `pkg/notifications/store.go`) older than 30 days are deleted by the same sweep.
 - **Count.** The cap of 50 stays as a safety bound, but eviction removes only handled or informational entries, oldest first; unresolved Needs-you entries are **never** evicted, so a file may hold more than 50 entries when more than 50 requests are waiting (MIN-002). The cap is therefore not a hard bound; the age rule is.
-- **Delete one / Clear all.** Real removal from the file, waiting entries included (D80); no 409.
+- **Delete one / Clear all.** Real removal from the file, waiting entries included (D80); no 409. A Clear all of more than 1,000 entries is one store change sent as several batches (§7.2).
 
 ### 8.6 Centre UI and states (R-NC-2, R-NC-6; round-1 MAJ-016, MAJ-017)
 
@@ -773,8 +821,8 @@ Result: a tab that was offline during a delete loses the entry on reconnect (US-
 | Empty (filter) | items exist, none in this category | `empty-state` "Nothing under {category}" with **Show all** |
 | Load failed, nothing cached | fetch failed | `query-error-state` "Notifications could not be loaded." with **Retry**; never an empty list |
 | Load failed, cached items | refetch failed | cached list stays; a `FormError` line "Could not refresh — showing the last loaded list." with **Retry** |
-| Item not saved | `persisted: false` | row shows "Not saved — shown on this screen only" |
-| Mutation failed | delete / clear / mark read rejected or network error | the item is restored (no optimistic loss) and the row or header shows "Could not delete — Retry" |
+| Item not saved | `persisted: false` (volatile, §8.4.2) | row shows "Not saved — lost if the server restarts"; it can be opened, marked read and deleted like any entry, in every tab, and survives a page reload while the server keeps running |
+| Mutation failed | delete or Clear all rejected (500 `notification_store_unwritable`) or a network error | the item is restored (no optimistic loss) and the row or header shows "Could not delete — Retry" (or "Could not clear — Retry"); **Retry** repeats the same call. A read state that cannot be saved is not a failure: it becomes a not-saved change (§8.4.2) |
 | Target gone | navigation found 404 | the destination says "This … no longer exists." (§7.6); the entry stays |
 
 ---
@@ -831,7 +879,7 @@ Chat lines (always shown per detail level), logs, transcripts, the sidebar atten
 
 | Rule | Design |
 |---|---|
-| Source | Only a `notification` frame with `popup: true` and `change: created`. Never a re-open, an update or an own-action result. Browser-local conditions never pop up (§10.2, D77) |
+| Source | Only a `notification_created` frame with `popup: true`. Never a re-open, an update or an own-action result. Browser-local conditions never pop up (§10.2, D77) |
 | Host | The existing bottom-right `ToastContainer` (`toast-container`, design-system catalogue) becomes the pop-up host; `addToast` is deleted when WP-5 has removed every call |
 | Duration | info / success 5,000 ms; warning 10,000 ms; error and needs_you until dismissed or handled. Pointer hover **or** keyboard focus inside pauses the countdown; leaving resumes it with the remaining time (not a fresh full duration) |
 | Cap | ≤ 3 visible, newest at the bottom; further ones collapse into one line "+N more — open notifications" that opens the centre, where every hidden pop-up is a centre entry (all pop-ups are centre-backed, so overflow is always recoverable — MAJ-015). A resolved pop-up frees its slot and the oldest queued one takes it with its full duration |
@@ -890,8 +938,8 @@ Existing typed frames and transcript entries stay; each maps through **one adapt
 | Carrier (today) | Renderer today | Line type | In progress | Min level | Action |
 |---|---|---|---|---|---|
 | `ErrorFrame` / `ReplayErrorFrame` with `LLMError` (turn ended in failure) | inline error + `ErrorDetailDisclosure` | error (`turn_canceled` → info "You stopped this reply.") | no | normal | by code: Switch model (`provider_rejected`, `rate_limited`, `model_retired`, `bad_model`, `media_unsupported`, `request_too_large`, `context_too_long`, `content_policy`, `network`, `provider_error`, `unknown`); Open provider settings (`provider_auth_failed`, `quota_billing`, `needs_provider`, `model_route_unavailable`, `context_window_unknown`); Open settings (`judge_time_limit`); Open task (`delegated_task_limit`); none otherwise (unchanged from round 0) |
-| `ProviderRetryFrame` | `ProviderRetryIndicator` | warning | yes (countdown + attempt counter) | every level while the turn waits | — |
-| `ProviderFallbackFrame` / persisted fallback note | `ProviderFallbackNoteLine` | info, quoting why the first model failed (`provider_says`) | no | normal while the turn runs; **verbose after the reply ends** (D75, L8 literal) | Pick a new model when `model_retired` |
+| `ProviderRetryFrame` | `ProviderRetryIndicator` | warning: the frame's `text` + the one fixed retry clause (§7.4) | yes (countdown + attempt counter, filled from the frame's typed facts) | every level while the turn waits | — |
+| `ProviderFallbackFrame` / persisted fallback note | `ProviderFallbackNoteLine` | info: `ProviderFallbackFrame.text` live, the persisted `message` after reload (the same bytes), quoting why the first model failed (`provider_says`) | no | normal while the turn runs; **verbose after the reply ends** (D75, L8 literal) | Pick a new model when `model_retired` |
 | `RateLimitFrame` (Omnipus's own limiter, SEC-26) | `RateLimitIndicator` | warning | yes until `retry_after` | normal | — |
 | `ContextWindowNoticeFrame` | system pill | info | yes during compaction | normal while happening; verbose after | — |
 | `CancelStageFrame` | stop-button state | info | yes | normal | — |
@@ -909,16 +957,17 @@ Existing typed frames and transcript entries stay; each maps through **one adapt
 
 ### 11.3 Connection lines (R-SL-5, R-SL-6; D10, D18, D42, D64)
 
-- **Omnipus↔provider problem while a reply waits**: in-progress Warning at every level, driven by `ProviderRetryFrame` with network or API class. Every retry line carries the observed cause (as soon as observed), the countdown and the attempt counter (§13.2). On success: at Normal the line disappears; the server appends one `SystemLine` record (`line_type: resolved`, `min_level: verbose`) "Connection to {provider} restored after {n} retries ({seconds} s)." On final failure: the terminal Error line (L3, N2 final form naming host, cause and one fix) replaces it at every level.
-- **Browser↔server loss**: one app-wide indicator (the `AppShell` banner area, shown in every reconnecting phase, not only on terminal errors) plus the chat line; both client-only, neither enters history; the outage is reported to the server when back (§14.4). The chat line distinguishes "Can't reach the server right now. Your agents keep working." (server unreachable) from the offline form; after reconnect, "Up to date" shows briefly and the chat refetches history, so the user sees what the agents did meanwhile.
+- **Omnipus↔provider problem while a reply waits**: in-progress Warning at every level, driven by `ProviderRetryFrame` with network or API class. Every retry line carries the observed cause (as soon as observed), the countdown and the attempt counter (§13.2). On **this turn's own** successful attempt after at least one failed one: at Normal the line disappears; the turn's execution appends one `SystemLine` record (`line_type: resolved`, `min_level: verbose`) "Connection to {provider} restored after {n} retries ({seconds} s)." with **its own** retry count and waiting time. On final failure: the terminal Error line (L3, N2 final form naming host, cause and one fix) replaces it at every level. **Only the turn that waited resolves its line (round-2 R2-MAJ-010):** a provider-wide recovery (§14.3) closes the centre incident but never resolves, rewrites or records another chat's turn — a turn still retrying keeps its warning line, and a turn that then runs out of attempts gets its final Error line and no record line.
+- **Browser↔server loss**: one app-wide indicator (the `AppShell` banner area, shown in every reconnecting phase, not only on terminal errors) plus the chat line; both client-only, neither enters history; the outage is reported to the server when back (§14.4). The browser cannot tell a dropped connection from a stopped gateway, so neither surface claims what the server is doing (round-2 R2-MAJ-013): server unreachable → "Can't reach the server right now. This page reconnects on its own when it's back."; offline → the offline form (VOICE samples §18). After reconnect, "Up to date" shows briefly and the chat refetches history. If only the connection dropped, the user then sees what the agents did meanwhile; if the gateway restarted, the existing restart behaviour applies (`docs/using-omnipus-ui.md`, "If the gateway restarts during a reply": a restart ends an in-flight answer and the chat shows **Interrupted**). The baseline's "Your agents keep working." (WORDING FE-076, VOICE samples §17) is dropped from both surfaces for that reason (§13.1, VS-5).
 
-### 11.4 Sentence composition (round-1 MAJ-008)
+### 11.4 Sentence composition (round-1 MAJ-008; round-2 R2-MAJ-006, R2-MAJ-007, R2-MAJ-011)
 
-The server assembles the finished sentence; the browser never composes wording from facts.
-1. At the emit site (`TranslateLLMError` and the retry/fallback emitters), the server picks the sentence variant by the facts it actually has: *no facts* · *provider/model known, no provider message* · *provider/model known and `provider_says` present* · for `network`/`provider_error` additionally *retrying* vs *final* (§13.2).
+The server assembles the finished sentence; the browser never composes wording from facts, with one named exception (the retry clause, item 3).
+1. At the emit site, **one assembly function** in `pkg/agent` (the extended `TranslateLLMError` path, used by the error, retry and fallback emitters alike, and by the separate stalled path in `TranslateTurnError`) picks the sentence variant by the facts it actually has: *no facts* · *provider/model known, no provider message* · *provider/model known and `provider_says` present* · for `network`/`provider_error`/`provider_stalled` additionally *retrying* vs *final* (§13.2).
 2. It fills every slot from the facts at that site (§13.7) and never renders an empty slot or empty quotes.
-3. It puts the finished text in `LLMError.message` (or the retry/fallback frame's text) and sets `provider_message` (the existing trust flag, `src/lib/llm-error.ts::getLLMErrorDisplay`) exactly as today, so a curated server sentence is trusted and an untranslated one is not.
-4. It persists `message`, `provider_says`, `failure_class` and `facts.provider` / `facts.model` / `facts.host`; `detail`, `facts.http_status` and `facts.request_id` stay live-only (C14 corrected, §3). Replay therefore renders the same main line without re-composing.
+3. Where the finished text goes: the error's `LLMError.message`; the retry frame's `text` — the cause sentence only; the browser appends the one fixed retry clause filled from `retry_at` / `sent_at` / `attempt` / `max_attempts` (§7.4); the fallback frame's `text`, byte-identical to the note persisted for that turn and replayed as `ProviderFallbackNote.message`.
+4. **Trust (R2-MAJ-007).** The assembly function — and only it — sets `message_assembled: true`, whenever it rendered a catalogue variant with every slot filled from emit-site facts, for **any** code, provider-related or not (for example `judge_conclusion_failed` with its reason, `workspace_unavailable` with its path). `src/lib/llm-error.ts::getLLMErrorDisplay` shows `message` when `message_assembled` is true and the text is non-empty, and the code's catalogue copy otherwise; its `judge_conclusion_failed` exclusion is removed, and its `delegated_task_limit` exception (controller-authored text) stays as it is. Text that did not pass through the assembly — the own-limiter's internal `rate_limited` row, raw provider text, an untranslated error — never carries the flag and is never shown as the main line. This replaces today's server condition, under which `WireLLMError` sets the flag only when `providerMessageFor` finds a provider-message template, which needs a provider identity (`pkg/agent/translate_error_provider_messages.go`).
+5. **Persistence.** `message`, `message_assembled`, `provider_says`, `failure_class` and `facts.provider` / `facts.model` / `facts.host` are persisted; `detail`, `facts.http_status` and `facts.request_id` stay live-only (C14 corrected, §3). The fallback note is saved once per **(turn, unavailable model, answering model)** (R2-MAJ-011): the check inside one reply stays, but `sessionTranscriptHasFallbackNote` (`pkg/agent/fallback_note.go`), which today matches the model pair anywhere in the session, also matches the turn id (`queueProviderFallbackNote` already records `TurnID` on the entry) — so a later reply with the same pair and a different cause saves its own note and quotes its own cause. Replay therefore renders the same main line without re-composing.
 
 ---
 
@@ -943,7 +992,7 @@ The server assembles the finished sentence; the browser never composes wording f
 | L8 | Automatic retries, backup-model switch, connection problems | While happening only — the fallback note too hides at Normal once the reply ends (D75 b) | Shown, record line stays | Shown, record line stays | §11.3; fallback note |
 | L9 | Technical details on a system line (status code, request ID) | — | Collapsed link | Open by default | `SystemLine` details disclosure |
 | L10 | Timings, token counts, cost per reply | — | Shown | Shown | `DoneStats` (`tokens`, `cost`, `duration_ms`) |
-| L11 | Internal IDs and full failure details | — | — | Shown | what exists today (D66): session, turn, tool-call, approval and request ids already on the wire, and the full masked failure detail. **Raw request/response of successful provider calls is not captured in Part 1** — tracked issue (§30, N4) |
+| L11 | Internal IDs and full failure details | — | — | Shown | what exists today (D66): session, turn, tool-call, approval and request ids already on the wire, and the full masked failure detail. **Raw request/response of successful provider calls is not captured in Part 1** — tracked issue #1546 (proposed target 2026-12-15; §30, N4) |
 
 Rules: technical details only at Verbose and Debug (R-DL-2, D25); the masked failure payload is the only raw payload shown (D43, D66); secrets masked at every level (R-SEC-1, D16); the connection-problem line shows at every level while it lasts (R-SL-5).
 
@@ -960,36 +1009,53 @@ Every new or surviving system message in this feature is written with the **`omn
 | In a chat the agent speaks as "I"; "Omnipus", "we", "our", "us" never act; the only product-name use is the D48 bug-report sentence | skill hard rule 1; R-WD-5, R-WD-7 |
 | Outside a chat (centre, pop-ups, banners, settings) neutral, no first person; a message used in both places has two forms | skill hard rule 1; R-WD-6, R-WD-8 |
 | The provider's own message is quoted on the main line when received; never an empty slot or empty quotes | skill hard rules 3, 12; R-WD-2, D28 |
-| Transient and connection failures follow **the N2 pattern** (skill section "The N2 pattern — transient and connection failures"): cause named as soon as observed, countdown, attempt counter on every retry line; final line names host, observed cause and one Fix; never claim the internet is down | D64 |
-| No `!`, no emoji, no "sorry", no "oops" in any system message | skill hard rules 9, 11 |
+| Transient and connection failures follow **the N2 pattern** (skill section "The N2 pattern — transient and connection failures"): cause named as soon as observed, countdown, attempt counter on every retry line; final line names host, observed cause and one Fix — `network`, `provider_error` and `provider_stalled` alike; never claim the internet is down | D64 |
+| No status codes, request ids or paths on the Normal main line; they belong in technical details | skill hard rule 6 (VS-2) |
+| No `!`, no emoji, no "sorry", no "oops", and no "please" except inside the D48 sentence, in any system message | skill hard rules 9, 11 (VS-1) |
 
-Differences between the skill and the agreed baseline are listed in §13.4 and in the round-1 report; none is resolved silently.
+Differences between the skill, its examples and the agreed baseline are resolved in the table below (round-2 R2-MIN-002); none is resolved silently. The rule: **the skill's hard rule wins, and the conflicting example or baseline entry changes** — no exception is invented and no self-check receipt may certify a message that fails the current skill text.
+
+| VS | Conflict | Resolution | Who changes what |
+|---|---|---|---|
+| VS-1 | "please": WORDING BE-008 "…Please restate it." and `schema` "…please report it." vs hard rule 9 (only the D48 sentence may say "please") | BE-008 becomes "The goal could not be compiled. Restate it."; `schema` ends with the D48 sentence "Retry; if it repeats, please report it to the Omnipus.ai team." The guard checks "please" (§13.4) | implementing leads, through the manifest (§13.5) |
+| VS-2 | status codes on the Normal main line: hard rule 4's example `(503)` and SAMPLES §3 vs hard rule 6 | hard rule 6 wins: API lines carry no status code at Normal (§13.2); the status stays in technical details at Verbose/Debug (`facts.http_status`) | voice owner updates rule 4's example and SAMPLES §3 |
+| VS-3 | the skill's slot list lacks `{host}` and `{fix}` | both added to "Naming things", `{fix}` with its closed values (§13.2) | voice owner |
+| VS-4 | SAMPLES §2 and §14 show pre-N2 final lines (no host, no `Fix:`) | updated to the N2 final lines of §13.2 (network final; stalled final) | voice owner |
+| VS-5 | SAMPLES §17 and the skill's banner row keep "Your agents keep working" | dropped from the banner and the chat line (§11.3): the browser cannot know whether the server is running | voice owner |
+| VS-6 | sentence length, sentence case and units are self-check items, not guard checks | unchanged (round-2 review §8, point 6); each manifest receipt names the manual check | — |
+
+The voice owner (`prometheus-prompt-engineer`, dispatched by team-lead) lands VS-2…VS-5 in `.claude/skills/omnipus-voice/` before WP-6 starts collecting self-check receipts. This spec does not edit the skill.
 
 ### 13.2 Catalogue (ADR-051 codes) and the N2 lines
 
 - `contracts/components/schemas/LLMError.yaml` `x-user-messages` takes the WORDING §1 final sentences for all 29 codes, plus `provider_error` (new, from the `network` split), with the N2 refinements below. Each entry carries explicit variants — no clause logic in code: `message` (no facts), `provider_message` (provider/model known, no provider message), `provider_message_quoted` (`provider_says` present), and for `network` / `provider_error` the `retrying` and `final` forms.
-- The generators (`scripts/gen-asyncapi-go`, `scripts/_gen-asyncapi-types.mjs`) validate slots against the closed vocabulary of the skill ("Naming things": `{provider}` `{model}` `{provider_says}` `{reason}` `{status}` `{n}` `{seconds}` `{minutes}` `{tool}` `{agent}` `{path}` `{model_requested}` `{model_used}` `{limit_name}` `{value}` `{task}` `{attempt}` `{max}` `{countdown}` `{answered_model}` `{unavailable_model}`) **plus `{host}`** (new, required by N2's final line; the skill's list is to be extended — difference 4).
+- The generators (`scripts/gen-asyncapi-go`, `scripts/_gen-asyncapi-types.mjs`) validate slots against the closed vocabulary of the skill ("Naming things": `{provider}` `{model}` `{provider_says}` `{reason}` `{status}` `{n}` `{seconds}` `{minutes}` `{tool}` `{agent}` `{path}` `{model_requested}` `{model_used}` `{limit_name}` `{value}` `{task}` `{attempt}` `{max}` `{countdown}` `{answered_model}` `{unavailable_model}`) **plus `{host}` and `{fix}`** (both new, required by N2's final lines; the skill's list is synchronised, VS-3). `{fix}` is a **closed slot**: its only values are the Fix sentences listed below this table. A template naming a slot outside the vocabulary, or a `{fix}` value outside that list, fails generation — a negative fixture in T-14 proves it (round-2 R2-MIN-001).
 - `x-user-message-attributions` stays.
 - The copy-rule tests (`pkg/agent/translate_error_test.go`, `src/lib/llm-error.test.ts`) change narrowly (MIN-004): the rule "no `product` or `config` message tells the user to switch models" is kept as a ban on **unqualified** model-shopping — a qualified remedy ("switch to a model with a larger limit", "switch to a model that reads it") stays allowed, as in the baseline; "no message tells the user to contact support" is relaxed by exactly the D48 sentence.
 
-N2 lines (D64; replaces the round-0 network split table):
+N2 lines (D64; replaces the round-0 network split table). Retry rows show the server's `text` followed by the one fixed retry clause `Retrying in {countdown} (attempt {attempt} of {max})…` (§7.4); no server text contains a countdown (round-2 R2-MAJ-006). No line carries a status code at Normal (VS-2).
 
-| Situation | In chat | Outside chat (centre / pop-up title) |
+| Situation | In chat (server `text`; + retry clause on retry rows) | Outside chat (centre / pop-up title) |
 |---|---|---|
-| network, retrying, cause observed | `I can't reach {provider}: {reason}. Retrying in {n} s (attempt {attempt} of {max})…` | `{provider} can't be reached: {reason}` |
-| network or API, retrying, no cause known yet | `I can't get a reply from {provider} yet. Retrying in {n} s (attempt {attempt} of {max})…` | `{provider} isn't answering` |
+| network, retrying, cause observed | `I can't reach {provider}: {reason}.` + retry clause | `{provider} can't be reached: {reason}` |
+| network or API, retrying, no cause known yet | `I can't get a reply from {provider} yet.` + retry clause | `{provider} isn't answering` |
 | network, final | `I couldn't reach {provider} ({host}): {reason}. Fix: {fix}` | `{provider} can't be reached: {reason}` |
-| API, retrying | `{provider} answered with an error ({status}): "{provider_says}". Retrying in {n} s (attempt {attempt} of {max})…` (no-quote form: `{provider} answered with an error ({status}). Retrying in …`) | `{provider} returned an error ({status})` |
-| API, final | `{provider} ({host}) answered with an error ({status}): "{provider_says}". Fix: retry in a moment; if it repeats, switch model.` (no-quote form drops the quote) | `{provider} returned an error ({status})` |
-| several providers failing (centre only) | — (each affected chat shows its own provider line) | title `Connections to AI providers are failing`; body lists each `{provider}: {reason}` from `causes` |
+| API, retrying | `{provider} answered with an error: "{provider_says}".` + retry clause (no-quote form: `{provider} answered with an error.`) | `{provider} returned an error` |
+| API, final | `{provider} ({host}) answered with an error: "{provider_says}". Fix: {fix}` (no-quote form drops the quote) | `{provider} returned an error` |
+| stalled (`provider_stalled`), final | `{provider} ({host}) stopped sending data for {minutes} min, so I ended the call. Fix: {fix}` (no-host form drops `({host})`) | `{provider} can't be reached: it did not answer in time` (network class, §14.1) |
+| several providers failing (centre only) | — (each affected chat shows its own provider line) | title `Connections to AI providers are failing`; body lists each `{provider}: {reason}` from `causes`, then `and {n} more` when `causes_omitted` is above 0 |
 
 - `{reason}` words (fixed; aligned with the skill's examples): `dns_failure` → "its address could not be found"; `connection_refused` → "connection refused"; `network_unreachable` → "the network is unreachable"; `tls_failure` → "the secure connection failed"; `timed_out` → "it did not answer in time"; `connection_dropped` → "the connection dropped". `http_status`, `invalid_response` and `unknown` never fill `{reason}` (they use the API or no-cause forms).
-- `{fix}` by reason: `dns_failure` → "check your network or the provider's address in Settings → Providers."; `tls_failure` → "check your proxy or certificate settings."; every other network reason → "check your network or proxy."
-- `{n}` is whole seconds ("8 s"); the indicator may still show its live countdown, but the line text uses the "8 s" form.
+- `{fix}` values (closed list): network `dns_failure` → "check your network or the provider's address in Settings → Providers."; network `tls_failure` → "check your proxy or certificate settings."; every other network reason → "check your network or proxy."; API final → "retry in a moment; if it repeats, switch model."; stalled final → "retry; if it happens again, switch model."
+- The countdown is rendered only by the retry clause, from `retry_at` and `sent_at` (whole seconds, "8 s"); the clause ticks with the existing indicator, and the server sentence never goes stale.
 
 ### 13.3 Provider message extraction (`provider_says`)
 
-From the failing attempt's response, in order: JSON body → first non-empty string at `error.message`, `error.error.message`, `message`, `error` (when a string), `detail`, `error_description`; otherwise a non-JSON body's first line; otherwise a stream error event's message. Then, in this order: **mask first** (§15.1, on the raw text), strip control characters, collapse whitespace, **mask again** (catches values joined by the normalisation), cap 2,000 bytes on a UTF-8 boundary (never splitting a code point). The main line shows ≤ 300 code points + "…". Never the whole raw body. Valid JSON with no eligible field and an empty body both → absent (the no-quote sentence is used).
+From the failing attempt's response: JSON body → first non-empty string at `error.message`, `error.error.message`, `message`, `error` (when a string), `detail`, `error_description`; otherwise a non-JSON body's first line; otherwise a stream error event's message.
+
+**Order of masking and selection — pending founder: NS1** (round-2 R2-MAJ-001, a security item put to the founder through team-lead). The defect: selecting a non-JSON body's first line before masking can split a registered credential value across lines, so the second half is gone before M2 (§15.1) can match the whole value and the first half stays visible. Recommendation A: mask the whole response first, then select. This spec records no provisional answer; the founder's answer is applied here, in §15.1, in S-92, in DS-EXTRACT row 17 and in DS-SEC row 8.
+
+After selection (unchanged): mask (§15.1), strip control characters, collapse whitespace, **mask again** (catches values joined by the normalisation), cap 2,000 bytes on a UTF-8 boundary (never splitting a code point). The main line shows ≤ 300 code points + "…". Never the whole raw body. Valid JSON with no eligible field and an empty body both → absent (the no-quote sentence is used).
 
 ### 13.4 Voice guard (round-1 MAJ-018)
 
@@ -1001,8 +1067,9 @@ New CI guard `scripts/check-system-message-voice.sh` (picked up by `scripts/guar
 | First person plural | in-chat | `\b(we|our|us)\b` (case-insensitive) fails |
 | First person outside a chat | outside | `\b(I|my|me|we|our|us)\b` fails |
 | Tone | all | `!`, any emoji code point, `\bsorry\b`, `\boops\b` fail |
+| "please" | all | `\bplease\b` (case-insensitive) fails except inside the exact D48 sentence (VS-1) |
 
-"please" is **not** checked: the baseline keeps "Please restate it." (BE-008) and `schema`'s "please report it." (difference 1). Sentence length, sentence case and the unit format are self-check items of the skill, not guard checks (difference 6). Self-check of the guard: one planted fixture per check and per surface (in-chat "we", outside "I", a "!", an emoji, "sorry"); each must make the script fail, and a clean fixture must pass.
+Sentence length, sentence case and the unit format are self-check items of the skill, not guard checks (VS-6). Self-check of the guard: one planted fixture per check and per surface (in-chat "we", outside "I", a "!", an emoji, "sorry", a "please" outside the D48 sentence); each must make the script fail, and a clean fixture must pass. The guard scans the manifest's sources; that list is itself checked by the independent inventory of §13.5.
 
 ### 13.5 Wording manifest (R-WD-4, R-WD-9; D65; round-1 MAJ-018)
 
@@ -1017,7 +1084,9 @@ A manifest file `docs/internal/specs/notifications-wording-manifest.json` (creat
 | No proposal yet | 163 | **rewritten by the implementing leads with the skill** once the WP-5 clean-up list is fixed; no founder rating page (D65) |
 | Surface removed by this feature (pop-ups removed by WP-5, the deleted `ToolApprovalModal`) | subset of the above, recorded per id | dropped, not rewritten |
 
-A unit test fails if any manifest id has no disposition, if a surviving id has no final text or no self-check receipt, or if a scanned source contains a system-message string whose id is not in the manifest.
+A unit test fails if any manifest id has no disposition, if a surviving id has no final text or no self-check receipt, or if a scanned source contains a system-message string whose id is not in the manifest. The two VS-1 baseline changes are recorded as dispositions "changed by the voice rule (round-2 sync)".
+
+**Independent inventory (round-2 R2-MIN-004).** The manifest's own source list is not trusted on its own. T-47 builds an inventory of every call site of the message-emitting interfaces — the router's `Notify` title and body, the `SystemLine` constructors and the carrier adapter table, the `LLMError` catalogue, the pop-up host, and the banner and page-indicator components — across `pkg/`, `cmd/`, `internal/` and `src/`, with the same whole-tree call-site method as the own-action audit of §16, and fails when a call site's file is missing from the manifest's source list. Its instrument check plants one bad string in a source that is **not** listed in the manifest and must fail; ordinary prose in unrelated files is not scanned.
 
 ### 13.6 Neutral centre titles (new texts, written with the skill)
 
@@ -1030,10 +1099,10 @@ A unit test fails if any manifest id has no disposition, if a surviving id has n
 | `schedule_finished` / `schedule_failed` | Scheduled task "{name}" finished / failed | failed: {cause sentence, neutral, masked}; never the raw run error |
 | `goal_reached` / `goal_given_up` | Goal reached / Goal given up in {chat} | {goal text, ≤ 160 chars} |
 | `provider_unreachable` | {provider} can't be reached: {reason} | {affected_chat_count} chats waiting |
-| `provider_error` | {provider} returned an error ({status}) | "{provider_says}" |
+| `provider_error` | {provider} returned an error | "{provider_says}" |
 | `provider_quota_exhausted` | {provider}: account out of credit | "{provider_says}" |
 | `provider_rate_limited` | {provider} is limiting requests | {affected_chat_count} chats waiting |
-| `provider_connections_failing` | Connections to AI providers are failing | one line per cause: {provider}: {reason} |
+| `provider_connections_failing` | Connections to AI providers are failing | one line per listed cause: {provider}: {reason}; then "and {n} more" when `causes_omitted` is above 0 |
 | `connection_restored` | {provider} reachable again / Connections to AI providers restored | after {duration} |
 | `resources_low` | Memory is running low / Disk space is running low | memory: Fewer agents run at once until it recovers · disk: Saving files fails until space is freed |
 | `concurrency_reduced` | Fewer agents run at once | Limited to {n} because memory is low |
@@ -1044,9 +1113,9 @@ Slot values are taken at the emit site and baked into the finished sentence; onl
 
 | Code(s) | Slots beyond provider/model/provider_says | Fact source at the emit site | Wire / persisted |
 |---|---|---|---|
-| `network` | `{reason}`, `{host}`, `{n}`, `{attempt}`, `{max}` | per-attempt observation (§14.2): reason, host of the failing candidate's endpoint; retry policy for n/attempt/max | `failure_class`, `facts.host`, retry frame `reason`, `attempt`, `max_attempts` — persisted on the error entry |
-| `provider_error` | `{status}`, `{host}`, `{n}`, `{attempt}`, `{max}` | observation: HTTP status | `failure_class`, `facts.host` persisted; `facts.http_status` live-only |
-| `provider_stalled` | `{minutes}` | the provider's silence limit in effect | in `message` only |
+| `network` | `{reason}`, `{host}`, `{fix}`; retry clause `{attempt}`, `{max}` | per-attempt observation (§14.2): reason, host of the failing candidate's endpoint; retry policy for attempt/max; the countdown from the retry frame's `retry_at` | `failure_class`, `facts.host`, retry frame `reason`, `attempt`, `max_attempts` — persisted on the error entry |
+| `provider_error` | `{host}`, `{fix}`; retry clause `{attempt}`, `{max}` | observation: host; the HTTP status goes to technical details only (VS-2) | `failure_class`, `facts.host` persisted; `facts.http_status` live-only |
+| `provider_stalled` | `{minutes}`, `{host}`, `{fix}` (N2 final pattern, round-2 R2-MAJ-013) | the provider's silence limit in effect; host of the stalled candidate's endpoint. The separate stalled path in `pkg/agent/translate_error.go::TranslateTurnError` uses the same catalogue variants, with the no-host form when the host is unknown | `failure_class`, `facts.host` persisted |
 | `turn_timed_out`, `judge_time_limit` | `{seconds}` | the turn deadline / the Judge time limit in effect | in `message` only |
 | `tool_args`, `tool_call_truncated` | `{tool}`, `{reason}` | the failing tool call's name and validation reason | in `message` only |
 | `workspace_unavailable` | `{path}`, `{reason}`; outside form `{agent}` | the agent's working folder and the OS error text (masked) | in `message` only |
@@ -1081,13 +1150,17 @@ One pure function in `pkg/providers` maps a failed, **dispatched** provider atte
 | 200 whose body cannot be parsed as the expected response | api | `invalid_response` (new) |
 | any other failure of a dispatched request | unknown | `unknown` |
 
-Not observed (no class, no log line, no incident): context cancellation (Stop, shutdown), a candidate skipped by cooldown, a route error before dispatch (`routeErr`), Omnipus's own rate limiter, and an image-attach or request-build failure before dispatch.
+Not observed (no class, no log line, no incident): every failure returned before the provider call starts (§14.2) — a candidate skipped by cooldown, a route error before dispatch (`routeErr`), Omnipus's own rate limiter, an inspection-image attachment failure (`attachTurnInspectionImagesWithBudget` in `runProviderAttempt`), and the request-build refusals `callProviderOnce` returns before calling the provider (the call-accounting error, the context-window checks) — and context cancellation (Stop, shutdown).
 
 **Kind per class** (D71 — FQ-6 in review-revised form): network → `provider_unreachable`; api with code `quota_billing` → `provider_quota_exhausted`; api with a provider 429 → `provider_rate_limited`; api with 401/403 at account level, 408, 5xx or 529 → `provider_error`; model-specific API conditions (`model_retired`, `bad_model`, `context_too_long`, `content_policy`, `request_too_large`, `media_unsupported`, a 400 `context_length_exceeded`) stay chat-only and raise no incident. `unknown` raises no incident.
 
-### 14.2 Per-attempt observation (round-1 MAJ-009)
+**Kind and code are separate (round-2 R2-MAJ-013).** The chat error **code** decides the chat line and its action; the incident **kind** decides the centre entry. An authentication rejection (401, or 403 for a bad key) keeps chat code `provider_auth_failed` with its own remedy (Update the key; **Open settings**) and, being account-level, raises the `provider_error` incident (D71). 408, 5xx and 529 are chat code `provider_error` and raise the same kind.
 
-The single owner is the existing seam **`agentLoopRunTurn.accountProviderAttempt`** (`pkg/agent/prompt_cache_accounting.go`: it "owns accounting at the real call boundary, before a retry/fallback can replace the failed candidate's identity"). It is reached from `runProviderAttempt` (`pkg/agent/loop_run_turn_attempt.go`, deferred) and from the candidate closure in `pkg/agent/loop_run_turn.go`. The observation is added there, so every dispatched request of a turn is seen exactly once, whatever retry layer issued it.
+### 14.2 Per-attempt observation (round-1 MAJ-009; round-2 R2-MAJ-008)
+
+The single owner is the existing seam **`agentLoopRunTurn.accountProviderAttempt`** (`pkg/agent/prompt_cache_accounting.go`: it "owns accounting at the real call boundary, before a retry/fallback can replace the failed candidate's identity"). It is reached from two callers that differ: `runProviderAttempt` (`pkg/agent/loop_run_turn_attempt.go`) installs its deferred accounting **before** attaching inspection images and returns an attachment error before `Chat`/`ChatStream`; `callProviderOnce` (`pkg/agent/loop_run_turn.go`) returns its pre-call refusals before its accounting defer and accounts after `p.Chat`.
+
+So the observation is guarded by an explicit **call-started fact**: each caller sets a per-attempt `callStarted` flag immediately before it calls the provider (`Chat` / `ChatStream` in `runProviderAttempt`, `p.Chat` in `callProviderOnce`) and passes it to `accountProviderAttempt`; the observation runs only when the flag is set. Existing prompt-cache accounting is unchanged, and `providers.ClassifyError` is not touched. Every dispatched request of a turn is therefore seen exactly once, whatever retry layer issued it, and nothing that failed before the call is seen at all. Stated limit: a failure inside a provider adapter before any byte is sent (for example a request the adapter cannot encode) still counts as started; the classifier gives it `unknown` (no HTTP status, no network error), so it writes the WARN line and raises no incident (T-38 fixture).
 
 For every failed observed attempt it writes **one WARN line** "provider attempt failed" with: `failure_class`, `reason`, `provider`, `model`, `host`, `http_status` (api), `provider_says` (masked, ≤ 500 bytes), `attempt_seq` (1, 2, 3 … per turn across all layers), `candidate` (index in the fallback chain), `retry_round`, `session_id`, `turn_id`, `request_id`. There is **no** `next` field: what happened next is the next line (another attempt, a fallback) or the existing ERROR "LLM call failed", which gains `failure_class`. WARN because the shipped default level is `warn` (§3.1 C13). Successful attempts write nothing to the log but feed the incident tracker (resolution).
 
@@ -1101,29 +1174,29 @@ In memory, one per gateway process, keyed by **(kind, provider)** for provider k
 |---|---|---|---|
 | closed | first failure of kind K at provider P (§14.1) | open | router creates the K entry (pop-up per preferences); WARN "provider incident started" (kind, provider, reason) |
 | open | another failure at P (any session) | open | entry updated (`affected_chat_count`, last reason); no pop-up |
-| open | any successful attempt at P (any model) | resolved | entry resolved; `connection_restored` entry created (info, auto-handled; pop-up per preferences); chats that waited get their Verbose record line; WARN "provider incident ended" (duration, attempts, affected chat count) |
+| open | any successful attempt at P (any model) | resolved | entry resolved; `connection_restored` entry created (info, auto-handled; pop-up per preferences); WARN "provider incident ended" (duration, attempts, affected chat count). Chat lines are **not** touched here: each turn resolves its own line and writes its own record (§11.3, round-2 R2-MAJ-010) |
 | resolved | failure of kind K at P within 10 min of resolving | open (re-opened) | the **same** entry re-opened (`updated`, unread, no pop-up); the restored entry stays — nothing is retracted |
 | resolved | failure of kind K at P after 10 min | open (new episode) | a new entry, pop-up per preferences |
 | any | gateway restart | — | at start-up, every unresolved provider/resource entry in the store seeds the tracker as `open` (no pop-up, no new entry); it resolves on the next success. Resolution is emitted even if the recipient has since switched Notify off for that kind (the entry exists, so it must not stay open) |
 
-`provider_connections_failing` is derived: open while ≥ 2 distinct providers have an open `provider_unreachable` incident (one entry; `causes` lists each provider and reason); resolved — with a `connection_restored` entry "Connections to AI providers restored" — when fewer than 2 remain. No probe traffic is ever sent (D64).
+`provider_connections_failing` is derived: open while ≥ 2 distinct providers have an open `provider_unreachable` incident (one entry; `causes` lists up to 10 providers with their reasons, earliest incident first, and `causes_omitted` counts the rest — round-2 R2-MAJ-004); resolved — with a `connection_restored` entry "Connections to AI providers restored" — when fewer than 2 remain. No probe traffic is ever sent (D64).
 
-Resources (measured hosts only): memory opens on `config.MemoryPressureHigh` false→true and resolves on true→false; `concurrency_reduced` opens when `applyMemoryCap` becomes the binding limit and resolves when it stops binding (D74). Disk (D73): a no-space failure in `fileutil.WriteFileAtomic` opens `resources:disk`; the next successful `WriteFileAtomic` resolves it. Hosts without a memory measurement (some Windows and container hosts) never raise the memory kinds; instead **Settings → Performance** shows one permanent line "Memory can't be measured on this host, so at most 2 agents run at once." (the floor `unmeasurableHostAgentFloor` = 2 in `pkg/agent/admission.go`), and no notification (D74).
+Resources (measured hosts only): memory opens on `config.MemoryPressureHigh` false→true and resolves on true→false; `concurrency_reduced` opens when `applyMemoryCap` becomes the binding limit and resolves when it stops binding (D74). Disk (D73; round-2 R2-MAJ-005): `fileutil.WriteFileAtomic` reports each write's outcome to a **non-blocking observer** — it hands `{path, no_space, ok}` to a bounded in-memory queue (256 events; a full queue drops the event and counts the drop) and returns. No callback runs on the writer's goroutine, so no caller's lock is re-entered and nothing routes recursively; for example `Store.Create` holds `s.mu` through `saveLocked` → `WriteFileAtomic` (`pkg/notifications/store.go`). One gateway goroutine drains the queue outside every lock and feeds the tracker. Only writes under the data folder count, and writes to the notification and preference stores (`<data>/notifications/`) are **excluded in both directions**: they neither open nor resolve the disk incident, so the incident's own bookkeeping can never trigger or clear it. A no-space failure opens `resources:disk` (repeats update the same entry); the next successful observed write resolves it. A dropped event can delay a transition until the next observed write; it cannot invert one. No polling (D73). Hosts without a memory measurement (some Windows and container hosts) never raise the memory kinds; instead **Settings → Performance** shows one permanent line "Memory can't be measured on this host, so at most 2 agents run at once." (the floor `unmeasurableHostAgentFloor` = 2 in `pkg/agent/admission.go`), and no notification (D74).
 
 ### 14.4 Browser↔server outage report (R-LOG-3; round-1 MAJ-011)
 
 Client (`src/lib/ws.ts` area, one state machine):
 1. On the first unexpected close (not a page unload), record `{report_id: new UUID, kind, started_at: now, last_confirmed_at: time of the last frame or pong received, reconnect_attempts: 0, page_reloaded: false}` in that tab's session storage. `kind` = `offline` when `navigator.onLine` is false at that moment, else `server_unreachable`.
 2. Each reconnect attempt increments `reconnect_attempts`; a reload during the outage sets `page_reloaded: true` and keeps the record.
-3. On the next successful authentication: set `ended_at: now`, move the record to a pending queue (≤ 5 records; the oldest is dropped beyond 5), and POST it.
+3. On the next successful authentication: set `ended_at: now`, move the record to a pending queue (≤ 5 records; beyond 5 the oldest is dropped and a console line names it), and POST it. The pending queue lives in the tab's session storage, like the active record, so a reload after reconnecting but before the 204 re-sends the same `report_id` (round-2 R2-MIN-003).
 4. Retry while connected: 5 s, 30 s, 2 min, then every 10 min. Drop on 204, on 400 (logged to the browser console), or when older than 24 h. On 429, wait `Retry-After` before the next try.
 
 Server:
-- Idempotent on (user, `report_id`): a repeated id returns 204 and writes nothing new (an LRU of the last 1,000 ids per process, kept 24 h; after a restart a repeat may be logged twice — stated loss boundary).
+- Idempotent on (user, `report_id`) **within its bounds**: a repeated id returns 204 and writes nothing new while it is in the LRU (the last 1,000 ids per process, each kept 24 h). Duplicate boundaries (stated): a repeat may be logged a second time after a gateway restart, or after more than 1,000 newer ids evicted it within 24 h.
 - Logs WARN "client connection outage" with `user`, `client_outage_kind`, `started_at`, `ended_at`, `observed_duration_ms` (= ended − started), `max_possible_duration_ms` (= ended − last_confirmed), `reconnect_attempts`, `page_reloaded`. No free-text field exists, so nothing user-typed reaches the log.
 - Two tabs produce two reports (one per tab); that is expected and documented.
 - The existing `ws: connection closed unexpectedly` line moves from Debug to WARN with user and connection age (O4).
-- Loss boundary (stated, not hidden): an outage is not reported if the tab is closed before it reconnects, or if every retry fails for 24 h.
+- Loss boundary (stated, not hidden): an outage is not reported if the tab is closed before it reconnects or before its report is accepted, if every retry fails for 24 h, or if more than 5 reports are pending (the oldest is dropped). This is a bounded best-effort record, not exactly-once delivery.
 
 **R-LOG-4**: every line that leaves the chat (R-SL-5 at Normal, R-SL-6) has its episode in the log (§14.2, §14.3, this subsection).
 
@@ -1137,14 +1210,14 @@ One masking function (today's `scrubDetailText` in `pkg/agent/translate_error_pr
 
 | Rule | Masks | Replacement |
 |---|---|---|
-| M1 | every registered credential value (today's `logger.ScrubSensitiveValues`) — on the raw text **and** on the normalised text (§13.3) | `[redacted]` |
-| M2 | a registered value split by whitespace or a line break (the value is matched with any whitespace run between its characters) | `[redacted]` |
+| M1 | every registered credential value (today's `logger.ScrubSensitiveValues`) — on the selected text **and** on the normalised text (§13.3); whether it also runs on the whole response before line selection is **pending founder: NS1** (§13.3) | `[redacted]` |
+| M2 | a registered value split by whitespace or a line break (the value is matched with any whitespace run between its characters) — it can only match when both halves reach the masker together; for a non-JSON body see NS1 (§13.3) | `[redacted]` |
 | M3 | authentication carriers: `Authorization:` / `Proxy-Authorization:` header values, `Bearer <token>`, `Basic <token>`, and the values of JSON or query keys named `api_key`, `apikey`, `key`, `token`, `access_token`, `refresh_token`, `secret`, `password`, `x-api-key` | the value → `[redacted]` |
 | M4 | key-shaped tokens: the existing `sk-[A-Za-z0-9][A-Za-z0-9_-]{4,}` (`keyShapedToken`) plus JWT shape (`eyJ` + base64url `.` base64url `.` base64url) | `[redacted]` |
 | M5 | **partial echoes anchored on a known key prefix**: one of `sk-`, `sk-ant-`, `sk-or-`, `sk-proj-`, `xai-`, `gsk_`, `AIza`, `ghp_`, `github_pat_`, `hf_` followed by **≥ 1** further character from `[A-Za-z0-9_*.…-]` (catches `sk-…xyz`, `sk-****abcd`, `sk-ab`) | the whole token → `[redacted]` |
 | M6 | long opaque runs: ≥ 24 consecutive characters from `[A-Za-z0-9_-]` mixing letters and digits | `[redacted]` |
 
-Residual (stated, not hidden): a short fragment with no known prefix and fewer than 24 characters (e.g. `…a1b2c3`) cannot be told apart from ordinary text and is not masked. This is the one exception to R-SEC-1's "partial key echoes" and is put to the founder as **OQ-1** (§30.2; recommended: accept). It replaces the prior provider-messages spec's D5 (which accepted residual fragments in the raw Verbose view): from this feature on, the same contract applies to every surface and level, and the residual is only the class above (§28).
+Residual (stated, not hidden): a short fragment with no known prefix and fewer than 24 characters (e.g. `…a1b2c3`) cannot be told apart from ordinary text and is not masked. This is the one exception to R-SEC-1's "partial key echoes": **pending founder: OQ-1** (§30.2; recommendation A: accept and document; B: hide the provider message whenever it contains a 6+ character letter-and-digit run). No provisional answer is recorded. It replaces the prior provider-messages spec's D5 (which accepted residual fragments in the raw Verbose view): from this feature on, the same contract applies to every surface and level, and the residual is only the class above (§28).
 
 Side effect accepted: M6 may mask a long opaque id inside provider text (e.g. a request id quoted in a message); request ids remain visible in their own `request_id` field at Verbose/Debug.
 
@@ -1180,9 +1253,12 @@ security-lead reviews `pkg/notifications` (storage, deletion, file names, locks)
 |---|---|---|---|
 | Recipient resolution | S/E — an agent's name in task attribution routes a notification to a person, or a person receives another's | recipients never come from attribution text (§8.1 R1–R3); session owner is authentication-stamped | T-22, T-24, T-39 |
 | Per-user files | T/I — two usernames share a file | SHA-256 names + stored-username check (§15.2) | T-08 |
-| Provider text | I — partial key echo reaches screen, store or log | M1–M6 before persistence and wire (§15.1) | T-13, T-30 |
+| Provider text | I — partial key echo reaches screen, store or log | M1–M6 before persistence and wire (§15.1); the masking order for a non-JSON body whose first line splits a value is **pending founder: NS1** (§13.3) | T-12, T-13, T-30 |
 | Provider text | T — HTML/Markdown injection via provider message | plain text rendering, control characters stripped (§13.3) | T-12, T-18 |
-| Lifecycle | T — a stale snapshot rolls back a deletion | revisions + tombstones (§8.4) | T-20, T-40 |
+| Lifecycle | T — a stale snapshot, a late upsert or a late delete shows the wrong state | one ordering rule over two counters, tombstones and snapshot floors (§8.4.3) | T-20, T-40 |
+| Lifecycle | D — more than 1,000 removals in one operation | one store change in independent batches of ≤ 1,000 ids (§7.2) | T-06, T-48 |
+| Disk observation | D — the observer re-enters the store lock or feeds on its own writes | non-blocking queue drained outside every lock; notification and preference store writes excluded (§14.3) | T-24, T-46 |
+| Error display | T/I — unassembled or internal text shown as the main line | only the server's assembly sets `message_assembled` (§11.4) | T-45 |
 | Lifecycle | D — more than 50 waiting items | protected items never evicted; age rule bounds the file (§8.5) | T-05 |
 | Outage endpoint | D/R — flood, duplicates, forged durations | auth, 10/min, 4 KiB, idempotent id, server logs both durations and treats client times as a report, not proof (§14.4) | T-27, T-41 |
 | Preferences | T/E — stale write overwrites another tab, writes into an unknown workspace | `base_revision`, 409, workspace check (§9.2) | T-22, T-42 |
@@ -1205,9 +1281,9 @@ security-lead reviews `pkg/notifications` (storage, deletion, file names, locks)
 | Audit row (`file::symbol`) | Function today | Home |
 |---|---|---|
 | w2-055 `src/components/screens/CalendarScreen.tsx::CalendarScreen::handleEventDrop` | "Rescheduled to …" with Undo | a stable **result area** at the top of the Calendar page: "Rescheduled "{event}" to {time}." with **Undo** for 10 s, independent of whether the event is still in view |
-| w2-048 `src/components/workspaces/team/useTeamMembership.ts::useTeamMembership::write` | "Added {agent} to {team}" with Undo | the same result-area pattern at the top of the team page, with **Undo** for 10 s |
+| w2-048 `src/components/workspaces/team/useTeamMembership.ts::useTeamMembership::write` | "Added {agent} to {team}" with Undo | the same result-area pattern at the top of the team page: "Added {agent} to {team}." with **Undo** for 10 s, also when the added row is out of view |
 | w3-010 `src/components/chat/IframePreview.tsx::IframePreview::handleCopy` | "Link copied. Anyone with this link can view the preview until it expires." | permanent helper text under the **Copy link** button stating who can open the link and until when; the button's own label changes to "Copied" for 2 s |
-| w4-001, w4-002, w4-003 `src/components/panel-shell/panelTabSwitch.ts` | "{panel} is already open in another tab — switch" | a banner in the panel area: "{panel} is open in another tab." with **Switch** (and the manual-switch sentence when focusing failed) |
+| w4-001, w4-002, w4-003 `src/components/panel-shell/panelTabSwitch.ts` | "{panel} is already open in another tab — switch" | a banner in the panel area of the tab that tried to open the panel: "{panel} is open in another tab." with **Switch**. It stays until **Switch** succeeds or the user closes the panel in this tab; when focusing the other tab fails, it stays and adds the manual-switch sentence |
 | w2-041 `src/components/workspaces/CreateTaskSlideOver.tsx::CreateTaskSlideOver::warnIfAssigneeCannotFinish` | assignee warning after save | a persistent warning on the task card and in the task detail until the assignment changes |
 | w4-088 `src/store/chat/slices/replay-and-status-frames.ts::handleReplayAndStatusFrame` | a status frame's message | a Verbose `SystemLine` (info) in that chat |
 
@@ -1259,7 +1335,7 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 
 ## 18. BDD scenarios
 
-> Ids `S-xx` are used by the TDD plan and the traceability matrix. One action per When. Round 1 keeps every round-0 id whose meaning holds and adds new ids (S-09, S-15…S-19, S-26…S-29, S-37…S-39, S-47…S-49, S-57…S-59, S-63…S-66, S-73…S-78, S-86…S-89, S-91…S-94, S-98…S-104, S-106…S-121, S-123; S-105 and S-122 are unused); S-23 and S-24 changed meaning with D80.
+> Ids `S-xx` are used by the TDD plan and the traceability matrix. One action per When. Round 1 keeps every round-0 id whose meaning holds and adds new ids (S-09, S-15…S-19, S-26…S-29, S-37…S-39, S-47…S-49, S-57…S-59, S-63…S-66, S-73…S-78, S-86…S-89, S-91…S-94, S-98…S-104, S-106…S-121, S-123; S-105 and S-122 are unused); S-23 and S-24 changed meaning with D80. Round 2 adds S-124…S-132 and extends S-07, S-14, S-29, S-50, S-51, S-53, S-55, S-86, S-90, S-92, S-100…S-103, S-107, S-109, S-112 and S-114 (§34).
 
 ### Feature: notification centre and routing
 
@@ -1307,8 +1383,9 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 **Traces to**: US-1 AC-1 · **Category**: Error Path
 - **Given** the notifications folder is not writable
 - **When** a `task_failed` event occurs
-- **Then** the open tab receives the entry with a non-empty id and a pop-up
+- **Then** the open tab receives the entry with a non-empty id, `persisted: false` and a pop-up
 - **And** the log has one ERROR line naming the recipient and kind
+- **And** the entry shows "Not saved — lost if the server restarts" and is still listed after a page reload while the server keeps running
 
 #### S-08: Unreadable owner never broadcasts
 **Traces to**: US-1 AC-1 · **Category**: Error Path
@@ -1355,21 +1432,22 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 | resources_low (disk) | the next data-folder write succeeds |
 | goal_paused | the goal resumes |
 
-#### S-14: Refetch keeps live-only entries
+#### S-14: Refetch keeps volatile entries
 **Traces to**: US-2 AC-2 · **Category**: Edge Case
-- **Given** a live-only entry (`persisted: false`, revision 0) shown in the centre
-- **When** the browser refetches the list on window focus
-- **Then** the entry is still shown, marked "Not saved — shown on this screen only", and the badge count is unchanged
+- **Given** a volatile entry (`persisted: false`, revision 0, `live_seq` 10) shown in the centre
+- **When** the browser refetches the list on window focus while the server keeps running
+- **Then** the snapshot contains the entry, it is still shown, marked "Not saved — lost if the server restarts", and the badge count is unchanged
+- **And** after a server restart the next snapshot no longer contains it and the entry is removed (DS-RECON rows 5, 16)
 
 #### S-15: Attribution text never chooses a recipient
-**Traces to**: US-1 AC-1 · **Category**: Error Path
+**Traces to**: US-1 AC-1 · **Category**: Error Path · written for OQ-2 recommendation A — **pending founder: OQ-2**
 - **Given** accounts `dana` and `lee`, and an agent also named `dana` that created task "Sync" (the task's creator field reads `dana`)
 - **When** the task's automatic run fails
 - **Then** both `dana` and `lee` receive one `task_failed` entry (workspace object, every configured account)
 - **And** the recipient list was not derived from the creator field (the same result with the creator field empty)
 
 #### S-16: Session without an owner reaches every account
-**Traces to**: US-1 AC-1 · **Category**: Alternate Path
+**Traces to**: US-1 AC-1 · **Category**: Alternate Path · written for OQ-2 recommendation A — **pending founder: OQ-2**
 - **Given** a session created by a gateway schedule whose metadata is readable and has no owner, and accounts `dana` and `lee`
 - **When** an approval is requested in it
 - **Then** both accounts receive one `approval_requested` entry
@@ -1403,24 +1481,55 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 - **Given** tab B offline while tab A deletes entry E
 - **When** tab B reconnects and re-authenticates
 - **Then** tab B no longer shows E and its badge is recomputed
+- **And** a snapshot read before the delete that arrives after it does not bring E back (DS-RECON row 8)
 
 #### S-101: A slow snapshot never rolls back a newer push
 **Traces to**: US-2 AC-4 · **Category**: Edge Case
 - **Given** a list request answered with revision 10 and, before it arrives, a pushed update of entry F with revision 11
 - **When** the snapshot is applied
-- **Then** F keeps its revision-11 content (DS-RECON)
+- **Then** F keeps its revision-11 content (DS-RECON row 2)
+- **And** an older upsert that arrives after a newer snapshot retired its tombstone is ignored, while a genuinely newer update is applied (DS-RECON rows 9, 11, 12)
 
 #### S-102: A repeated clear frame changes nothing
 **Traces to**: US-2 AC-2 · **Category**: Edge Case
 - **Given** a `notification_cleared` frame already applied
 - **When** the same frame arrives again
 - **Then** the list and badge are unchanged
+- **And** a late deletion older than a re-created entry leaves the re-created entry in place (DS-RECON row 10)
 
 #### S-103: Frame variants are strict
 **Traces to**: US-2 AC-1 · **Category**: Error Path
 - **Given** contract fixtures for every frame variant
-- **When** a `notification` frame with `change: read` and `popup: true`, or a `notification_deleted` frame carrying a `notification` object, is validated
-- **Then** validation fails; every positive fixture passes (DS-FRAME)
+- **When** a `notification_changed` frame carrying a `popup` field, a `notification_changed` frame with `change: created`, a `notification_deleted` frame carrying a `notification` object, or a `notification_cleared` frame with 1,001 ids is validated by the generated Go types and the generated Zod schemas
+- **Then** validation fails in both; every positive fixture passes, including a 1,000-id batch (DS-FRAME)
+
+
+#### S-125: A not-saved entry has a full lifecycle
+**Traces to**: US-2 AC-1, US-3 AC-3 · **Category**: Error Path
+- **Given** the notifications folder is not writable, tabs T1 and T2 open, and an approval requested in chat A
+- **When** the approval is handled in the chat, and later the user deletes the entry in T1
+- **Then** the entry appears in both tabs marked "Not saved — lost if the server restarts", turns "Handled" in both (each change with a higher `live_seq`), and the delete answers 204 and removes it from both tabs — no 404, no restore
+- **And** a second not-saved entry that is still listed when the folder becomes writable again is saved at the next write for that user: both tabs receive it with `persisted: true`, a revision and `live_seq` 0, and the "Not saved" mark disappears (DS-RECON rows 13–15)
+
+#### S-128: Outline — knowledge drift opens the right folder
+**Traces to**: US-1 AC-5 · **Category**: Edge Case
+- **Given** a knowledge-base folder whose index has drifted, mounted as `<mounts>`
+- **When** the drift check reports it and the user opens the entry
+- **Then** `<result>`
+
+| mounts | result |
+|---|---|
+| once, in workspace `ws_a` | the Library opens that knowledge base in `ws_a` |
+| in `ws_b` and in `ws_a` | one entry; it opens the mount in `ws_a` (first by workspace id, then mount name); the body names the folder |
+| in `ws_a`, removed after the entry was created | "This knowledge base is no longer available here." |
+| nowhere at the moment of the report | no entry; one WARN "knowledge drift without a mount" |
+
+#### S-129: A task result arrives although run history failed
+**Traces to**: US-1 AC-1, AC-5 · **Category**: Error Path
+- **Given** a Calendar task with a recurring trigger whose run record cannot be opened (and, separately, one whose run record cannot be closed)
+- **When** the scheduled occurrence runs and fails
+- **Then** exactly one `schedule_failed` entry exists — target `task`, with `run_id` only when a run record exists — and the run-history ERROR line is still logged
+- **And** when the task's trigger is changed to manual while that occurrence runs, the entry is still `schedule_failed` (the dispatch origin decides), and a second close of the same run raises no second entry
 
 ### Feature: retention and deletion
 
@@ -1482,8 +1591,17 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 #### S-29: Concurrent create and clear lose nothing
 **Traces to**: US-3 AC-4 · **Category**: Edge Case
 - **Given** a Clear all and a new `task_failed` entry for the same user at the same moment
-- **When** both complete
-- **Then** the file holds either the new entry alone or nothing with the new entry delivered after it, never a half-written file; the revision increased once per change
+- **When** both complete under the recipient's lock, in either order
+- **Then** create-then-clear leaves an empty file, the tabs receive `notification_created` (revision r) then `notification_cleared` (r + 1) and show no entry; clear-then-create leaves the new entry alone, the tabs receive `notification_cleared` (r) then `notification_created` (r + 1) and show only the new entry
+- **And** in both orders every tab converges to exactly what a following `GET /notifications` returns, the file is never half-written, and the revision increased once per change
+
+
+#### S-126: Clearing more than 1,000 entries
+**Traces to**: US-3 AC-4, AC-5 · **Category**: Edge Case
+- **Given** a user with 1,001 waiting Needs-you entries open in two tabs
+- **When** the user chooses Clear all and confirms
+- **Then** the server makes one store change and sends two `notification_cleared` batches (1,000 ids and 1 id) with the same revision; both tabs end with 0 entries and badge 0, whichever batch arrives first
+- **And** every underlying request is still pending in its chat
 
 ### Feature: preferences
 
@@ -1642,13 +1760,14 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 **Traces to**: US-6 AC-1, US-8 AC-1 · **Category**: Happy Path
 - **Given** provider OpenRouter answers 401 `{"error":{"message":"Incorrect API key provided: sk-or-v1-0123456789abcdef"}}`
 - **When** the reply fails
-- **Then** one Error line reads `OpenRouter rejected the API key: "Incorrect API key provided: [redacted]". Update the key in Settings → Providers.` with an **Open settings** action
+- **Then** one Error line reads `OpenRouter rejected the API key: "Incorrect API key provided: [redacted]". Update the key in Settings → Providers.` with an **Open settings** action (chat code `provider_auth_failed`)
+- **And** one `provider_error` centre entry for OpenRouter exists — the account-level incident kind (§14.1), separate from the chat code
 
 #### S-51: Network retry line names the cause, countdown and attempt
 **Traces to**: US-6 AC-2 · **Category**: Happy Path
 - **Given** provider P refuses connections and the retry policy allows 5 attempts
 - **When** the agent retries after the first failed attempt
-- **Then** an animated Warning line reads `I can't reach P: connection refused. Retrying in <n> s (attempt 2 of 5)…` at every detail level
+- **Then** an animated Warning line reads `I can't reach P: connection refused. Retrying in <n> s (attempt 2 of 5)…` at every detail level — the first sentence from the frame's `text`, the retry clause filled from its `retry_at`, `attempt` and `max_attempts`
 
 #### S-52: Outline — after recovery, by level
 **Traces to**: US-6 AC-3 · **Category**: Happy Path
@@ -1662,12 +1781,12 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 | Verbose | one resolved line "Connection to P restored after 2 retries (<s> s)." |
 | Debug | the same resolved line, technical details open |
 
-#### S-53: Browser loses the server
+#### S-53: Browser loses the server while the gateway keeps running
 **Traces to**: US-6 AC-4 · **Category**: Happy Path
-- **Given** the gateway stops for 20 s
+- **Given** a reply in progress and only the browser's connection to the running gateway cut for 20 s
 - **When** the browser notices the loss
-- **Then** an app-wide indicator and one chat line show "Can't reach the server right now. Your agents keep working."
-- **And** after the gateway is back both disappear and the reloaded chat history contains neither
+- **Then** an app-wide indicator and one chat line show "Can't reach the server right now. This page reconnects on its own when it's back." and no text claims what the agents are doing
+- **And** after reconnecting both disappear, the chat shows the reply the agent finished meanwhile, and the reloaded chat history contains neither line
 
 #### S-54: Line action
 **Traces to**: US-6 AC-5 · **Category**: Happy Path
@@ -1679,7 +1798,8 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 **Traces to**: US-6 AC-6 · **Category**: Edge Case
 - **Given** a chat with an Error line carrying a provider message and a Verbose record line
 - **When** the page is reloaded and the history is paged back
-- **Then** both lines render with the same text, type, action and details as live, including the quoted provider message
+- **Then** both lines render with the same main text, quoted provider message, line type and action as live
+- **And** the live-only fields (`LLMError.detail`, `facts.http_status`, `facts.request_id`) are absent from the reloaded and the paged copies, so their technical details show only what was persisted
 - **And** a line received live and again in history is shown once (same `line_id`)
 
 #### S-56: Provider message absent
@@ -1717,12 +1837,40 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 - **Given** model M1 fails with 503 `{"error":{"message":"overloaded"}}` and backup model M2 answers
 - **When** the reply is shown live and after reload
 - **Then** the fallback note names M1, M2 and quotes "overloaded" in both renders
+- **And** when a later reply in the same chat falls back from M1 to M2 again because of a 429 "rate limit exceeded", that reply saves its own note quoting "rate limit exceeded" — live, after reload and when paged back — and the first reply's note still quotes "overloaded"
 
 #### S-117: Stop outcome is a chat line, not a notification
 **Traces to**: US-6 AC-1, US-1 AC-6 · **Category**: Happy Path
 - **Given** a Stop that could not finish every request
 - **When** the outcome is known
 - **Then** one Warning line appears in that chat and no centre entry or pop-up exists
+
+
+#### S-124: The gateway stops during a reply
+**Traces to**: US-6 AC-4 · **Category**: Error Path
+- **Given** a reply in progress and the gateway stopped for 20 s, then started again
+- **When** the browser notices the loss and later reconnects
+- **Then** during the outage the indicator and chat line read as in S-53 and no text says the agents keep working
+- **And** after reconnecting the chat shows the existing **Interrupted** notice for the cut-off reply, and the reloaded history contains neither connection line
+
+#### S-130: Another chat's recovery does not resolve mine
+**Traces to**: US-6 AC-3, US-1 AC-4 · **Category**: Edge Case
+- **Given** chats A and B both retrying replies through provider P, and A at attempt 3 of 5
+- **When** B's next attempt succeeds
+- **Then** the centre's incident for P resolves and B's line follows S-52
+- **And** A keeps its own warning line; if A then runs out of attempts it shows its final Error line and gets no "restored" record line
+
+#### S-131: The retry countdown stays live
+**Traces to**: US-6 AC-2 · **Category**: Edge Case
+- **Given** a retry frame with `text` "I can't reach P: connection refused.", `retry_at` 8 s after `sent_at`, attempt 2 of 5
+- **When** 3 s pass
+- **Then** the line reads `I can't reach P: connection refused. Retrying in 5 s (attempt 2 of 5)…`; the server sentence is unchanged and only the clause's number moved
+
+#### S-132: An assembled sentence is shown, unassembled text is not
+**Traces to**: US-8 AC-1, US-6 AC-6 · **Category**: Error Path
+- **Given** a `judge_conclusion_failed` error whose sentence was assembled with its reason (`message_assembled: true`), and an own-limiter `rate_limited` error carrying its internal text without the flag
+- **When** both are shown live and after a reload
+- **Then** the first shows the assembled sentence with its reason; the second shows the catalogue copy for `rate_limited` and never its internal text
 
 ### Feature: detail levels
 
@@ -1835,6 +1983,13 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 - **When** it is shown in the task chat and as the centre entry title
 - **Then** the chat says `I can't reach P: …` and the centre says `P can't be reached: …`
 
+
+#### S-127: More than ten failing providers
+**Traces to**: US-8 AC-5 · **Category**: Edge Case
+- **Given** eleven providers with open `provider_unreachable` incidents
+- **When** the user opens the centre
+- **Then** one "Connections to AI providers are failing" entry lists ten causes, earliest incident first, and ends with "and 1 more"; its `causes_omitted` is 1
+
 ### Feature: connection logging
 
 #### S-80: Outline — failure class in the log
@@ -1887,6 +2042,8 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 | a candidate is skipped by cooldown |
 | the route cannot be built before dispatch |
 | Omnipus's own rate limiter refuses the call |
+| attaching an inspection image fails before the call |
+| a context-window check refuses the request before the call |
 
 #### S-87: Exactly one line per dispatched attempt across nested retries
 **Traces to**: US-9 AC-1 · **Category**: Edge Case
@@ -1915,8 +2072,9 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 #### S-109: Disk full opens and the next write resolves
 **Traces to**: US-1 AC-4 · **Category**: Happy Path
 - **Given** the data folder's disk is full
-- **When** a write fails for lack of space, and later a write succeeds
-- **Then** one `resources_low` (disk) entry opens and is then resolved
+- **When** a session write fails for lack of space, then a notification-store write fails for lack of space, and later a session write succeeds
+- **Then** one `resources_low` (disk) entry opens — delivered as not saved, because the store cannot write either — and is resolved by the later session write
+- **And** the notification-store failure neither opens a second entry nor resolves the first, a repeated no-space failure only updates the entry, and no write blocks or waits on the notification lock
 
 #### S-110: Unmeasurable memory shows a permanent line, no notification
 **Traces to**: US-4 AC-1 · **Category**: Alternate Path
@@ -1941,6 +2099,7 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 - **Given** an outage report the server accepted whose 204 never reached the browser
 - **When** the browser retries the same `report_id`
 - **Then** the server answers 204 and the log still has exactly one outage line
+- **And** after more than 1,000 newer report ids within 24 h, a repeat of the old id is logged again — the stated duplicate bound (DS-OUT)
 
 #### S-113: Laptop slept during the outage
 **Traces to**: US-9 AC-3 · **Category**: Edge Case
@@ -1953,6 +2112,8 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 - **Given** an outage in progress
 - **When** the user reloads the page and the server comes back
 - **Then** one report with `page_reloaded: true` is logged
+- **And** a reload after reconnecting but before the 204 re-sends the same `report_id` and the log still has one line
+- **And** with five reports already pending, a sixth drops the oldest with a console line (DS-OUT-CLIENT rows 6, 10)
 
 #### S-115: Rate-limited report waits for Retry-After
 **Traces to**: US-9 AC-3 · **Category**: Error Path
@@ -1966,9 +2127,9 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 **Traces to**: US-10 AC-1 · **Category**: Error Path
 - **Given** a provider message `<echo>`
 - **When** it is shown on `<surface>`
-- **Then** `<secret>` never appears and `[redacted]` does
+- **Then** the row's own expected outcome holds on that surface
 
-(Examples: dataset DS-SEC — every row × surfaces main line, details, centre body, log line, fallback note, replayed history.)
+(Examples: dataset DS-SEC — every row × surfaces main line, details, centre body, log line, fallback note, replayed history. Outcomes are row-specific: rows 1–12 masked (`<secret>` never appears and `[redacted]` does); row 8's non-JSON variant **pending founder: NS1**; row 13 **pending founder: OQ-1** — A: shown unchanged and documented, B: provider message hidden; row 14 dropped — the no-quote sentence, no provider text.)
 
 #### S-91: Prefix-anchored partial echo is masked
 **Traces to**: US-10 AC-1 · **Category**: Edge Case
@@ -1978,9 +2139,10 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 
 #### S-92: A registered value split by a line break is masked
 **Traces to**: US-10 AC-1 · **Category**: Edge Case
-- **Given** a registered credential value echoed with a line break in its middle
+- **Given** a registered credential value echoed with a line break in its middle, inside a JSON message field
 - **When** it is extracted and normalised
 - **Then** neither half appears on any surface
+- **And** for a non-JSON body whose first line ends with the first half: **pending founder: NS1** (recommendation A expects neither half on any surface; DS-EXTRACT row 17)
 
 #### S-93: Usernames differing only in case get different files
 **Traces to**: US-1 AC-1 · **Category**: Edge Case
@@ -2068,57 +2230,57 @@ Tests are written **before** code by the one qa-lead RED author; CHECK by a diff
 
 | # | Test name | Level | Traces to | What it proves |
 |---|---|---|---|---|
-| T-48 | contract fixtures: one positive and one negative fixture per frame variant and per new schema, validated by the generated Go types and the generated Zod schemas (`make verify-contracts` plus a fixture test in `pkg/api/generated` and `src/lib/api/generated`) | Unit | S-103 | strict frames, DS-FRAME (WP-0, first) |
+| T-48 | contract fixtures: one positive and one negative fixture per frame variant and per new schema, validated by the generated Go types and the generated Zod schemas, incl. 1,000 vs 1,001 ids, 10 causes + `causes_omitted` vs 11 causes, `notification_changed` with `popup` or `change: created`, retry and fallback frames without `text`, `LLMError` with the removed `provider_message` (`make verify-contracts` plus a fixture test in `pkg/api/generated` and `src/lib/api/generated`) | Unit | S-103, S-126, S-127 | strict frames, DS-FRAME (WP-0, first) |
 | T-01 | `pkg/notifications::TestRouterRejectsUnknownKind` | Unit | S-06 | closed enum |
-| T-02 | `pkg/notifications::TestRouterMintsIDWhenStoreFails` | Unit | S-07 | #645 Defect 1 closed; `persisted: false`, revision 0 |
+| T-02 | `pkg/notifications::TestRouterMintsIDWhenStoreFails` + `TestVolatileLifecycle` (create → update → resolve keep one id with rising `live_seq`; mark read, delete and Clear all of a volatile item answer 204; a failed update of a saved item keeps its saved revision as base; volatile items are listed by `GET /notifications`; folding into the file at the next successful write; a failed delete returns 500 and pushes nothing) | Unit | S-07, S-125 | #645 Defect 1 closed; `persisted: false`, revision 0, R2-MAJ-003 |
 | T-39 | `pkg/notifications::TestRecipientRules` (R1 set / empty / unreadable, R2 every account, R3, attribution fields ignored, no accounts) | Unit | S-08, S-15, S-16 | MAJ-005 |
 | T-03 | `pkg/notifications::TestRouterAppliesPreferences` (table: global, workspace per field, inherit, system-wide global only, three locked kinds, notify-off) | Unit | S-02, S-31, S-32, S-36, S-37 | resolution order |
-| T-04 | `pkg/notifications::TestRetentionSweepAgeBoundary` (incl. waiting entries and quarantine files) | Unit | S-20, S-25, S-26 | 30 days, D80 |
+| T-04 | `pkg/notifications::TestRetentionSweepAgeBoundary` (incl. waiting entries and quarantine files; a sweep of more than 1,000 entries is one store change in batches) | Unit | S-20, S-25, S-26, S-126 | 30 days, D80 |
 | T-05 | `pkg/notifications::TestCapNeverEvictsUnresolvedNeedsYou` (incl. > 50 protected) | Unit | S-21, S-27 | eviction rule |
-| T-06 | `pkg/notifications::TestDeleteAndClear` (waiting entries deletable; request untouched; idempotent clear; revision per change) | Unit | S-22, S-23, S-24, S-28, S-102 | D80, real deletion |
+| T-06 | `pkg/notifications::TestDeleteAndClear` (waiting entries deletable; request untouched; idempotent clear; revision per change; Clear all of 1,001 entries → batches of 1,000 + 1 with one revision; failed delete → 500, nothing pushed) | Unit | S-22, S-23, S-24, S-28, S-102, S-126 | D80, real deletion |
 | T-07 | `pkg/notifications::TestResolveLifecycle` (created/updated/read/resolved, coalesce on unresolved key) | Unit | S-13, S-04 | lifecycle |
 | T-08 | `pkg/notifications::TestRecipientFileNames` (DS-NAME) | Unit | S-93 | SHA-256 names, stored-username check |
 | T-09 | `pkg/notifications::TestPreferencesLoadStates` (missing → defaults, corrupt → unreadable, never overwritten without replace flag) | Unit | S-35, S-38 | degraded mode |
-| T-29a | `pkg/notifications::TestSidecarLockAroundEveryMutation` (concurrent create/clear/sweep; Windows build vetted with `GOOS=windows go vet`) | Unit | S-29 | MIN-005 |
+| T-29a | `pkg/notifications::TestSidecarLockAroundEveryMutation` (concurrent create/clear/sweep in both lock orders, client state equal to the following GET; Windows build vetted with `GOOS=windows go vet`) | Unit | S-29 | MIN-005 |
 | T-10 | `pkg/providers::TestFailureClassDataset` (DS-NET) | Unit | S-80, S-86 | classification table |
 | T-11 | `pkg/providers::TestRetryDecisionsUnchangedByClass` (existing fallback datasets re-run, outcome equality incl. cancellation and partial output) | Unit | S-85 | FR-063 |
-| T-12 | `pkg/agent::TestProviderSaysExtraction` (DS-EXTRACT) | Unit | S-50, S-56 | extraction and order mask → normalise → mask → cap |
-| T-13 | `pkg/agent::TestMaskingContract` (DS-SEC, M1–M6, residual row) | Unit | S-90, S-91, S-92, S-94 | masking |
-| T-45 | `pkg/agent::TestPerCodeFactsAndVariants` (DS-FACT: every code × no-facts / provider / quoted / retrying / final; trust flag unchanged) | Unit | S-56, S-57, S-58, S-72, S-107 | MAJ-008 |
-| T-14 | `pkg/agent::TestCatalogueMatchesWordingBaseline` (in-chat and outside-chat forms; N2 lines; copy-rule tests in `pkg/agent/translate_error_test.go` and `src/lib/llm-error.test.ts`) | Unit | S-72, S-70, S-77, S-78 | baseline, both voices |
+| T-12 | `pkg/agent::TestProviderSaysExtraction` (DS-EXTRACT; row 17 pending founder: NS1) | Unit | S-50, S-56, S-92 | extraction and order mask → normalise → mask → cap |
+| T-13 | `pkg/agent::TestMaskingContract` (DS-SEC, M1–M6, row-specific outcomes: masked / pending founder NS1 and OQ-1 / dropped) | Unit | S-90, S-91, S-92, S-94 | masking |
+| T-45 | `pkg/agent::TestPerCodeFactsAndVariants` (DS-FACT: every code × no-facts / provider / quoted / retrying / final; `message_assembled` set only by the assembly, for every code; an actual assembled payload driven through `getLLMErrorDisplay` and the replay accessor live and after reload, incl. `judge_conclusion_failed` with its reason and rejection of unflagged raw text; `provider_stalled` N2 final with and without host; no status code at Normal; fallback note saved per turn and model pair) | Unit | S-56, S-57, S-58, S-72, S-107, S-132 | MAJ-008 |
+| T-14 | `pkg/agent::TestCatalogueMatchesWordingBaseline` (in-chat and outside-chat forms; N2 lines; negative fixtures: a template with an unknown slot and a `{fix}` value outside its list both fail generation; copy-rule tests in `pkg/agent/translate_error_test.go` and `src/lib/llm-error.test.ts`) | Unit | S-72, S-70, S-77, S-78 | baseline, both voices |
 | T-15 | `pkg/agent::TestNetworkSplitCodes` (`network` vs `provider_error`) | Unit | S-51, S-80 | R-EV-2 |
-| T-16 | `scripts/check-system-message-voice.sh` self-check: one planted fixture per check and surface fails; the clean fixture passes | Unit | S-71, S-73, S-74 | the guard can fail |
-| T-47 | `pkg/notifications::TestWordingManifestComplete` (every id has a disposition; survivors have text and a self-check receipt; no unlisted string in a scanned source) | Unit | S-75 | MAJ-018 |
-| T-37 | `pkg/agent::TestTaskRunClassification` (Calendar scheduled, automatic, manual, user-stopped, dispatch failure, plan origin) | Unit | S-01, S-09, S-17, S-18 | MAJ-004 |
-| T-38 | `pkg/agent::TestProviderAttemptObservedOncePerDispatch` (nested retries, fallback, exclusions; lists every caller of the provider chat interface) | Unit | S-86, S-87 | MAJ-009 |
-| T-46 | `pkg/gateway::TestIncidentStateMachine` (DS-INC: open, update, resolve by any model, 10-min re-open, restart seed, connections-failing threshold, disk, memory, model-specific excluded) | Unit | S-88, S-89, S-108, S-109, S-110, S-111, S-123 | MAJ-010 |
+| T-16 | `scripts/check-system-message-voice.sh` self-check: one planted fixture per check and surface fails (incl. "please" outside the D48 sentence); the clean fixture passes | Unit | S-71, S-73, S-74 | the guard can fail |
+| T-47 | `pkg/notifications::TestWordingManifestComplete` (every id has a disposition; survivors have text and a self-check receipt; no unlisted string in a scanned source; independent whole-tree inventory of emitter call sites reconciled to the manifest's source list; a planted bad string in an unlisted source fails) | Unit | S-75 | MAJ-018 |
+| T-37 | `pkg/agent::TestTaskRunClassification` + `TestTaskOutcomeIndependentOfRunHistory` (Calendar scheduled, automatic, manual, user-stopped, dispatch failure, plan origin; origin captured at `runTask`; outcome only from an applied `completeTaskWithResult`; run open failure and run close failure still notify once; trigger edited mid-run keeps the dispatch class; duplicate close raises nothing; every terminal path enumerated) | Unit | S-01, S-09, S-17, S-18, S-129 | MAJ-004, R2-MAJ-009 |
+| T-38 | `pkg/agent::TestProviderAttemptObservedOncePerDispatch` (nested retries, fallback, exclusions; the call-started flag: an inspection-image attachment failure and a context-window refusal are not observed, a dispatched unclassified failure writes one WARN with `unknown` and raises no incident, an adapter pre-send failure counts as `unknown`; lists every caller of the provider chat interface) | Unit | S-86, S-87, S-57 | MAJ-009, R2-MAJ-008 |
+| T-46 | `pkg/gateway::TestIncidentStateMachine` (DS-INC: open, update, resolve by any model, 10-min re-open, restart seed, connections-failing threshold and its wording, 11 providers → 10 causes + 1 omitted, another chat's success leaves a still-retrying turn's line alone, disk through the non-blocking observer — notification-store writes excluded both ways, repeated no-space, recovery, queue overflow, no deadlock under the store lock — memory, model-specific excluded) | Unit | S-76, S-88, S-89, S-108, S-109, S-110, S-111, S-123, S-127, S-130 | MAJ-010, R2-MAJ-004/005/010 |
 | T-17 | `src/lib/detailLevel.test.ts` (every L1–L11 × level, DS-DL, literal L6/L8) | Unit | S-60, S-65, S-66 | one rule |
-| T-18 | `src/components/chat/SystemLine.test.tsx` (5 types with accessible prefix, in-progress, reduced motion, action, details by level and kept across level changes, no empty quotes, plain-text provider message) | Unit | S-50, S-54, S-56, S-62, S-63 | renderer |
+| T-18 | `src/components/chat/SystemLine.test.tsx` (5 types with accessible prefix, in-progress, reduced motion, action, details by level and kept across level changes, no empty quotes, plain-text provider message, retry clause filled from typed facts while the server text stays unchanged) | Unit | S-50, S-54, S-56, S-62, S-63, S-131 | renderer |
 | T-19 | `src/lib/systemLineAdapters.test.ts` (one row per §11.2 carrier) | Unit | S-50…S-55, S-107, S-117 | mapping |
-| T-20 | `src/store/notifications.test.ts` (change kinds, badge counts, live-only kept) | Unit | S-11, S-14, S-22 | store |
-| T-40 | `src/store/notifications.reconcile.test.ts` (DS-RECON: tombstones, snapshot revision rules, refetch on re-auth) | Unit | S-100, S-101, S-102 | MAJ-003 |
-| T-41 | `src/lib/outageReport.test.ts` (DS-OUT-CLIENT: record, reload, queue ≤ 5, backoff, 204/400/429, 24 h drop) | Unit | S-112, S-113, S-114, S-115 | MAJ-011 client |
-| T-43 | `src/lib/notificationTargets.test.ts` (DS-TARGET: every screen and action with its required ids; missing target text) | Unit | S-05, S-59 | MAJ-013 |
+| T-20 | `src/store/notifications.test.ts` (frame types, badge counts, volatile items: "Not saved" text, kept across refetch while the server runs, mark read / delete / clear) | Unit | S-11, S-14, S-22, S-125 | store |
+| T-40 | `src/store/notifications.reconcile.test.ts` (DS-RECON rows 1–16: the one ordering rule — tombstones, snapshot floors, stale snapshots, late upserts and late deletes, volatile order, volatile → saved, refetch on re-auth) | Unit | S-14, S-100, S-101, S-102, S-125 | MAJ-003, R2-MAJ-002/003 |
+| T-41 | `src/lib/outageReport.test.ts` (DS-OUT-CLIENT: record, reload, pending queue kept in session storage and re-sent after a reload before the 204, queue ≤ 5 with the sixth dropping the oldest, backoff, 204/400/429, 24 h drop) | Unit | S-112, S-113, S-114, S-115 | MAJ-011 client |
+| T-43 | `src/lib/notificationTargets.test.ts` (DS-TARGET: every screen and action with its required ids; missing target text; knowledge drift through the real `KnowledgeLifecycle` holders: one mount, several mounts, mount removed, no mount) | Unit | S-05, S-59, S-128 | MAJ-013 |
 | T-21 | `src/components/ui/popupHost.test.tsx` (DS-PU: durations, hover and focus pause with remaining time, cap, "+N more" opens the centre, queued full duration, resolve removes, once-only announcement) | Unit | S-40, S-41, S-42, S-47, S-48 | pop-up rules |
 | T-22 | `pkg/gateway::TestNotificationRESTDeleteClearPrefs` (204/404, no 409 on delete, preference codes 400/409) | Integration | S-22…S-24, S-33, S-34, S-38, S-39, S-104 | REST contract codes |
 | T-42 | `pkg/gateway::TestPreferencesRevisionAndInheritance` (DS-PREF) | Integration | S-37, S-38, S-39 | MAJ-012 |
-| T-23 | `pkg/gateway::TestNotificationChangePushedToAllRecipientConnections` (all three frame types, recipient-only) | Integration | S-10, S-11, S-22 | cross-tab push |
-| T-24 | `pkg/gateway::TestEveryKindHasLiveProducer` (one subtest per Part-1 kind driving the **real** producer of §8.1 — Calendar trigger, gateway runner, run lifecycle, plan engine, approval and card paths, attempt observation, memory and disk hooks — reading `GET /notifications`) | Integration | S-01, S-05, S-18, S-19 | reachability (19 kinds) |
+| T-23 | `pkg/gateway::TestNotificationChangePushedToAllRecipientConnections` (all four frame types, batches, recipient-only) | Integration | S-10, S-11, S-22 | cross-tab push |
+| T-24 | `pkg/gateway::TestEveryKindHasLiveProducer` (one subtest per Part-1 kind driving the **real** producer of §8.1 — Calendar trigger, gateway runner, run lifecycle, plan engine, approval and card paths, attempt observation, memory hook, the disk hook driven by real writes failing with no space (a fault injected below `WriteFileAtomic`, through a session write and through the notification store's own write), the knowledge-drift producer through the real mount registry — reading `GET /notifications`) | Integration | S-01, S-05, S-18, S-19, S-109, S-128, S-129 | reachability (19 kinds) |
 | T-25 | `pkg/gateway::TestApprovalResolvedResolvesNotification` / `TestAskTerminalResolvesNotification` | Integration | S-10, S-12, S-13 | D19 |
-| T-26 | `pkg/gateway::TestProviderIncidentOneEntryAffectedChats` | Integration | S-04 | R-EV-3/4 |
-| T-27 | `pkg/gateway::TestOutageReportValidationIdempotencyRateLimit` (DS-OUT) | Integration | S-81, S-82, S-83, S-112 | R-LOG-3 server |
-| T-28 | `pkg/gateway::TestSystemLineHistoryContract` (persist, replay with `history_origin`, prepared page byte weight, REST `Message.system_line`, live/history semantic parity, dedupe by `line_id`) | Integration | S-55, S-106 | MAJ-002 |
+| T-26 | `pkg/gateway::TestProviderIncidentOneEntryAffectedChats` (incl. two chats: B recovers while A still retries or then fails — only the incident and B's line resolve) | Integration | S-04, S-130 | R-EV-3/4 |
+| T-27 | `pkg/gateway::TestOutageReportValidationIdempotencyRateLimit` (DS-OUT incl. the LRU eviction bound) | Integration | S-81, S-82, S-83, S-112 | R-LOG-3 server |
+| T-28 | `pkg/gateway::TestSystemLineHistoryContract` (persist, replay with `history_origin`, prepared page byte weight, REST `Message.system_line`, live/history semantic parity on persisted fields, live-only fields absent from replayed and paged copies, dedupe by `line_id`) | Integration | S-55, S-106 | MAJ-002 |
 | T-29 | `pkg/agent::TestPerAttemptWarnLine` + `TestIncidentStartEndLogged` (log capture at level `warn`) | Integration | S-80, S-84, S-87 | R-LOG-1/2/4 |
 | T-30 | `pkg/gateway::TestScheduleFailedBodyHasNoRawError` | Integration | S-01, S-90 | masking + translation |
 | T-44 | `pkg/gateway::TestPart1NoNewOutboundSend` (the router never publishes outbound) + `TestPublishChannelAlertUnchanged` (characterisation of today's alert through the real `scheduledRunner` failure path) | Integration | FR-090 | D62 boundary |
 | T-31 | `tests/e2e/notifications-centre.spec.ts` (filters, navigate, states, delete, clear all, two tabs, offline delete reconcile) | E2E | S-03, S-05, S-11, S-22, S-24, S-43, S-100 | user path |
 | T-32 | `tests/e2e/notifications-needs-you.spec.ts` (approval in another tab, resolve everywhere, D70 rule, no modal, delete keeps request) | E2E | S-10, S-23, S-45, S-46, S-97 | D19, D30, D80 |
 | T-33 | `tests/e2e/notifications-preferences.spec.ts` (switches, locks, workspace tri-state, unreadable, conflict) | E2E | S-30, S-31, S-32, S-34, S-37, S-39 | preferences UI |
-| T-34 | `tests/e2e/chat-system-lines.spec.ts` (fake provider: refused → recover; final failure with host; 401 echo; fallback quote; levels) | E2E | S-50, S-51, S-52, S-53, S-55, S-58, S-107 | system lines |
+| T-34 | `tests/e2e/chat-system-lines.spec.ts` (fake provider: refused → recover; final failure with host; 401 echo with auth remedy and `provider_error` entry; fallback quote incl. a later reply with the same pair and another cause; two chats, one recovering; browser-only connection loss vs gateway stop; levels) | E2E | S-50, S-51, S-52, S-53, S-55, S-58, S-76, S-107, S-124, S-130 | system lines |
 | T-35 | `tests/e2e/chat-detail-levels.spec.ts` | E2E | S-60, S-61, S-62, S-63, S-64 | detail levels |
-| T-36 | `tests/e2e/own-action-results.spec.ts` (sampled sites per WP-5 category, journeys of §16) | E2E | S-44, S-95, S-96, S-116 | removals |
+| T-36 | `tests/e2e/own-action-results.spec.ts` (sampled sites per WP-5 category, journeys of §16 incl. Team Undo with the added row out of view) | E2E | S-44, S-95, S-96, S-116 | removals |
 | T-49 | `tests/e2e/notifications-a11y.spec.ts` (keyboard-only journey, focus repair, announcements, 320 px and 400 % zoom) | E2E | S-118, S-119, S-120, S-121, S-47 | MAJ-017 |
-| T-50 | `tests/e2e/page-indicators-and-homes.spec.ts` (new-version banner, panel Switch banner, preview helper text, unmeasurable-memory line) | E2E | S-49, S-98, S-99, S-110 | D77, D78 |
+| T-50 | `tests/e2e/page-indicators-and-homes.spec.ts` (new-version banner, panel Switch banner and its lifetime, preview helper text, unmeasurable-memory line) | E2E | S-49, S-98, S-99, S-110 | D77, D78 |
 
 ### 19.2 RED evidence and gates (round-1 MAJ-020)
 
@@ -2159,6 +2321,9 @@ Tests are written **before** code by the one qa-lead RED author; CHECK by a diff
 | 20 | context cancelled by Stop during the attempt | not a failure | not observed | S-86 |
 | 21 | candidate skipped by cooldown | not dispatched | not observed | S-86 |
 | 22 | route build error before dispatch | not dispatched | not observed | S-86 |
+| 23 | inspection-image attachment fails in `runProviderAttempt` before `Chat` | call not started (R2-MAJ-008) | not observed | S-86 |
+| 24 | context-window check in `callProviderOnce` refuses the request before `p.Chat` | call not started | not observed | S-86 |
+| 25 | the provider adapter fails to encode the request after the call started, before any byte is sent | started, nothing on the wire | unknown / unknown; WARN, no incident (stated limit, §14.2) | S-57 |
 
 #### DS-EXTRACT — provider message extraction (T-12)
 
@@ -2178,8 +2343,9 @@ Tests are written **before** code by the one qa-lead RED author; CHECK by a diff
 | 12 | `残高が不足しています` repeated past 2,000 bytes (3-byte code points) | cut at 1,998 bytes (the last whole code point), no broken character | S-50 |
 | 13 | `{"error":{"message":"x"},"message":"y"}` | `x` (precedence) | S-50 |
 | 14 | `{"status":"failed","code":17}` (valid JSON, no eligible field) | absent | S-56 |
-| 15 | a registered key split as `sk-or-v1-0123` + newline + `456789abcdef` | `[redacted]` — the second mask after normalisation catches it | S-92 |
+| 15 | a registered key split as `sk-or-v1-0123` + newline + `456789abcdef` inside a JSON message field | `[redacted]` — the second mask after normalisation catches it | S-92 |
 | 16 | `"Bad key"` with surrounding quotes | `"Bad key"` kept as text; the sentence's own quotes are not doubled | S-50 |
+| 17 | `text/plain` body: first line ends with the first half of a registered value, second line starts with the second half (R2-MAJ-001) | **pending founder: NS1** — recommendation A expects neither half in `provider_says` | S-92 |
 
 #### DS-SEC — masking (T-13, S-90…S-94)
 
@@ -2192,15 +2358,15 @@ Tests are written **before** code by the one qa-lead RED author; CHECK by a diff
 | 5 | `key sk-ab rejected` (short, prefix-anchored) | M5 | `sk-ab` | S-91 |
 | 6 | `Incorrect API key provided: sk-…wxyz` | M5 | `sk-…wxyz` | S-91 |
 | 7 | `key sk-****abcd invalid` | M5 | `sk-****abcd` | S-91 |
-| 8 | registered value split by a line break | M2 | either half | S-92 |
+| 8 | registered value split by a line break inside a JSON field (non-JSON first-line variant: **pending founder: NS1**, DS-EXTRACT row 17) | M2 | either half | S-92 |
 | 9 | `{"api_key":"AbC123xyz","model":"m"}` | M3 | `AbC123xyz` | S-90 |
 | 10 | `token=Zx81Lk2Pq9` in a URL query | M3 | `Zx81Lk2Pq9` | S-90 |
 | 11 | `ref 9f8e7d6c5b4a39281706f5e4d3c2b1a0` (32 hex, letters and digits) | M6 | the run | S-90 |
 | 12 | `ghp_` + 36 chars | M5 | the token | S-90 |
-| 13 | `…a1b2c3` (short, no known prefix) | residual (OQ-1) | — expected output equals input; the row exists so any change to the residual is visible | S-90 |
-| 14 | text the masker cannot process | failure path | the text, on every surface | S-94 |
+| 13 | `…a1b2c3` (short, no known prefix) | residual — **pending founder: OQ-1** | A: output equals input (documented residual); B: the provider message is hidden. The row exists so any change to the residual is visible | S-90 |
+| 14 | text the masker cannot process | failure path | the text, on every surface — dropped; the no-quote sentence is used | S-94 |
 
-Surfaces per row: main line, technical details, centre body, log line, fallback note, replayed history (6 surfaces).
+Surfaces per row: main line, technical details, centre body, log line, fallback note, replayed history (6 surfaces). Expected outcomes are row-specific (round-2 R2-MAJ-013): masked for rows 1–12, pending founder for row 8's non-JSON variant (NS1) and row 13 (OQ-1), dropped for row 14.
 
 #### DS-PU — pop-up timing and cap (T-21)
 
@@ -2239,6 +2405,7 @@ All 33 cells of §12.2 (11 rows × 3 levels), one test case each; expected value
 | 10 | unknown field `note` | 400 (additionalProperties false) | S-82 |
 | 11 | missing `report_id` | 400 | S-82 |
 | 12 | same `report_id` twice | 204 both; one WARN line | S-112 |
+| 13 | `report_id` X accepted, then 1,000 newer ids within 24 h, then X again | 204; X logged a second time — the stated duplicate bound (§14.4) | S-112 |
 
 #### DS-OUT-CLIENT — browser report state machine (T-41)
 
@@ -2249,10 +2416,11 @@ All 33 cells of §12.2 (11 rows × 3 levels), one test case each; expected value
 | 3 | POST times out after server accepted | retried with the same `report_id` after 5 s | S-112 |
 | 4 | POST 429 `Retry-After: 30` | next try ≥ 30 s later | S-115 |
 | 5 | POST 400 | dropped, console line, no retry | S-82 |
-| 6 | 6 outages queued while POSTs fail | queue keeps the newest 5 | S-114 |
+| 6 | 6 outages queued while POSTs fail | queue keeps the newest 5; a console line names the dropped one | S-114 |
 | 7 | record older than 24 h | dropped | S-114 |
 | 8 | page unload (user closes the tab) | no record created | S-81 |
 | 9 | `navigator.onLine` false at close | `kind: offline` | S-81 |
+| 10 | reconnect → POST sent → page reloaded before the 204 | the pending queue survives in session storage; the same `report_id` is re-sent; one server log line | S-114 |
 
 #### DS-NAME — recipient file names (T-08)
 
@@ -2268,25 +2436,38 @@ All 33 cells of §12.2 (11 rows × 3 levels), one test case each; expected value
 
 #### DS-RECON — browser reconciliation (T-40)
 
+Notation: rev = `revision`, seq = `live_seq`; a snapshot is (R, L). Rows 8–16 are round-2 additions (R2-MAJ-002, R2-MAJ-003).
+
 | # | Local state | Arrives | Expected | Traces to |
 |---|---|---|---|---|
 | 1 | E rev 5 | snapshot R = 9 without E | E removed | S-100 |
 | 2 | F rev 11 (pushed) | snapshot R = 10 with F rev 8 | F stays at rev 11 | S-101 |
-| 3 | tombstone G @ 7 | `notification` G rev 6 | ignored | S-101 |
-| 4 | tombstone G @ 7 | `notification` G rev 8 (re-created) | G shown | S-101 |
-| 5 | live-only H (rev 0) | snapshot without H | H kept | S-14 |
+| 3 | tombstone G @ rev 7 | `notification_changed` G rev 6 | ignored | S-101 |
+| 4 | tombstone G @ rev 7 | `notification_created` G rev 8 (re-created) | G shown | S-101 |
+| 5 | volatile H (rev 0, seq 10) | snapshot (R = 9, L = 9) without H — read before H existed | H kept, "Not saved" | S-14 |
 | 6 | cleared {A, B} applied | the same `notification_cleared` again | no change | S-102 |
 | 7 | — | WebSocket re-auth | one refetch | S-100 |
+| 8 | tombstone E @ rev 7 | delayed snapshot R = 6 containing E rev 5 | E stays removed | S-100 |
+| 9 | snapshot R = 8 without E applied, so tombstone E @ 7 retired | late `notification_changed` E rev 6 | ignored (rev ≤ F_r) | S-101 |
+| 10 | E rev 8 (re-created) | late `notification_deleted` E rev 7 | E stays at rev 8 | S-102 |
+| 11 | E rev 5 | `notification_changed` E rev 9 | applied (known-positive control) | S-101 |
+| 12 | snapshot R = 10 applied | snapshot R = 9 arrives late | ignored entirely | S-101 |
+| 13 | volatile H (rev 0, seq 10) | `notification_changed` H resolved (rev 0, seq 11), then read (rev 0, seq 12) | both applied, in order | S-125 |
+| 14 | saved E rev 5 | volatile E (rev 5, seq 13) from a failed update, then saved E rev 6 | the overlay shows "Not saved"; then rev 6 replaces it | S-07, S-125 |
+| 15 | volatile H (rev 0, seq 10) | `notification_deleted` H (rev R, seq 14) after the user's delete | H removed in every tab; no 404 | S-125 |
+| 16 | volatile H (rev 0, seq 10) | snapshot (R = 9, L = 12) without H — the server restarted | H removed | S-14 |
 
 #### DS-FRAME — contract fixtures (T-48)
 
+Each fixture is validated by the generated Go types **and** the generated Zod schemas; both must give the expected result.
+
 | # | Fixture | Expected | Traces to |
 |---|---|---|---|
-| 1 | `notification` created, popup true | valid | S-103 |
-| 2 | `notification` read, popup true | invalid | S-103 |
-| 3 | `notification` resolved, popup false | valid | S-103 |
-| 4 | `notification` without `notification` object | invalid | S-103 |
-| 5 | `notification_deleted` with id and revision | valid | S-103 |
+| 1 | `notification_created` with `popup: true` | valid | S-103 |
+| 2 | `notification_changed` `read` carrying a `popup` field | invalid (no such field) | S-103 |
+| 3 | `notification_changed` `resolved` | valid | S-103 |
+| 4 | `notification_created` without the `notification` object | invalid | S-103 |
+| 5 | `notification_deleted` with id, `revision` and `live_seq` | valid | S-103 |
 | 6 | `notification_deleted` with a `notification` object | invalid | S-103 |
 | 7 | `notification_cleared` with 0 ids | invalid | S-103 |
 | 8 | `notification_cleared` with 1,001 ids | invalid | S-103 |
@@ -2294,6 +2475,13 @@ All 33 cells of §12.2 (11 rows × 3 levels), one test case each; expected value
 | 10 | `Notification` target screen `none` | invalid | S-05 |
 | 11 | `SystemLineFrame` historical copy without `history_origin` | invalid | S-106 |
 | 12 | `NotificationPreferencesUpdate` without `base_revision` | invalid | S-39 |
+| 13 | `notification_cleared` with 1,000 ids | valid | S-126 |
+| 14 | `notification_changed` with `change: created` | invalid | S-103 |
+| 15 | `Notification` with 11 `causes` | invalid | S-127 |
+| 16 | `Notification` with 10 `causes` and `causes_omitted: 1` | valid | S-127 |
+| 17 | `ProviderRetryFrame` without `text` | invalid | S-131 |
+| 18 | `ProviderFallbackFrame` without `text` | invalid | S-107 |
+| 19 | `LLMError` carrying the removed `provider_message` field | invalid | S-132 |
 
 #### DS-INC — incident tracker (T-46)
 
@@ -2311,9 +2499,14 @@ All 33 cells of §12.2 (11 rows × 3 levels), one test case each; expected value
 | 10 | P answers 503 | `provider_error` opens | S-80 |
 | 11 | P answers 402 | `provider_quota_exhausted` opens | S-80 |
 | 12 | Omnipus limiter refuses | no incident | S-86 |
-| 13 | write fails with no space; next write succeeds | disk opens; resolves | S-109 |
+| 13 | a session write fails with no space; a later session write succeeds | disk opens; resolves | S-109 |
 | 14 | memory measurement unavailable | no memory kinds ever | S-110 |
 | 15 | recipient turned Notify off while open; P succeeds | entry still resolved | S-89 |
+| 16 | P1…P11 unreachable | one connections-failing entry: 10 causes, earliest first, `causes_omitted` 1 | S-127 |
+| 17 | chats A and B waiting on P; B succeeds while A is at attempt 3 | incident resolved; A's line unchanged; A's later final failure → its Error line, no record | S-130 |
+| 18 | a notification-store write fails with no space (incident closed, then open) | no change to the disk incident either way | S-109 |
+| 19 | two no-space session writes | one entry, updated once | S-109 |
+| 20 | observer queue full | the event is dropped and counted; the next observed write sets the state | S-109 |
 
 #### DS-PREF — preferences protocol (T-42)
 
@@ -2332,11 +2525,11 @@ All 33 cells of §12.2 (11 rows × 3 levels), one test case each; expected value
 
 #### DS-FACT — per-code variants (T-45)
 
-Every code of §13.7 × variants {no facts, provider/model known, `provider_says` present}, plus `network` and `provider_error` × {retrying with cause, retrying without cause, final}; expected value = the §13.2 / WORDING §1 sentence with slots filled; assertion: no empty slot, no empty quotes, `provider_message` trust flag equal to today's for the same code.
+Every code of §13.7 × variants {no facts, provider/model known, `provider_says` present}, plus `network` and `provider_error` × {retrying with cause, retrying without cause, final}; expected value = the §13.2 / WORDING §1 sentence with slots filled; plus `provider_stalled` × {host known, host unknown}; assertion: no empty slot, no empty quotes, no status code on the main line, `message_assembled` true for every assembled variant (any code) and absent for unassembled text (the own-limiter row, raw provider text).
 
 #### DS-TARGET — targets and actions (T-43)
 
-One row per `screen` and per action `kind` of §7.6: required ids present → navigates to that object; one required id missing → contract invalid (DS-FRAME); object deleted → the "no longer exists" text; `retry_reply` for a turn that is no longer the latest → "This reply can no longer be retried."
+One row per `screen` and per action `kind` of §7.6: required ids present → navigates to that object; one required id missing → contract invalid (DS-FRAME); object deleted → the "no longer exists" text; `retry_reply` for a turn that is no longer the latest → "This reply can no longer be retried." Knowledge drift (round-2 R2-MAJ-012), driven from a real `DriftReport.Root`: one mount → that mount; two mounts in `ws_b` and `ws_a` → `ws_a`'s; mount removed after the entry → "This knowledge base is no longer available here."; no mount at report time → no entry, WARN (S-128).
 
 ### 20.2 Regression requirements
 
@@ -2347,7 +2540,7 @@ One row per `screen` and per action `kind` of §7.6: required ids present → na
 | Knowledge-drift notification content and recipients | drift notifier tests in `pkg/gateway` | none new; must stay green unchanged except kind/category fields |
 | Retry / fallback / cooldown outcomes | `pkg/providers/fallback_*_test.go`, `error_classifier_test.go` | T-11 asserts outcome equality |
 | `TranslateLLMError` classification of codes | `pkg/agent/translate_error_test.go`, `translate_error_billing_test.go` | updated for `provider_error`; every other code unchanged; T-45 |
-| `WireLLMError` explicit-code override and the `provider_message` trust flag | `pkg/agent` wire tests, `src/lib/llm-error.test.ts` | T-45 |
+| `WireLLMError` explicit-code override and the trust flag (renamed `message_assembled`, §11.4; the own-limiter row stays untrusted) | `pkg/agent` wire tests, `src/lib/llm-error.test.ts` | T-45 |
 | Prompt-cache accounting at `accountProviderAttempt` | `pkg/agent/prompt_cache_accounting_test.go` (existing) | unchanged; T-38 adds the observation beside it |
 | Provider retry countdown, once-per-attempt announcement, fallback note live behaviour | provider-messages tests | T-19, T-21 |
 | Inline approval card and its resolution | `ToolApprovalPanel` tests, `tool_approval_resolved` gateway tests | T-32 |
@@ -2365,14 +2558,14 @@ One row per `screen` and per action `kind` of §7.6: required ids present → na
 | FR-002 | Every Part-1 kind (19) MUST have its real producer of §8.1 wired at boot, proven by one integration subtest per kind that drives that producer and reads the entry through the REST list. | R-EV-1, DoD |
 | FR-003 | The system MUST create a centre entry only when the recipient's effective **Notify me** for the kind is on. | R-NC-1, R-PREF-1 |
 | FR-004 | Every entry MUST carry a category; the centre MUST filter by All / Needs you / Tasks & plans / System-wide, with counts. | R-NC-2 |
-| FR-005 | All producers MUST go through one router that rejects unknown kinds, resolves recipients by §8.1 R1–R3, mints a non-empty id before any branch, never broadcasts when a session owner is unreadable, and delivers live (`persisted: false`) when storage fails. | R-NC-5, #645 |
+| FR-005 | All producers MUST go through one router that rejects unknown kinds, resolves recipients by §8.1 R1–R3, mints a non-empty id before any branch, never broadcasts when a session owner is unreadable, and, when storage fails, keeps the change as a volatile item with a full lifecycle per §8.4.2 (listed, updated, resolved, marked read, deleted and cleared without a 404, saved at the next successful write). | R-NC-5, #645, R2-MAJ-003 |
 | FR-005a | Recipients MUST NOT be derived from task, plan or schedule attribution fields that may hold an agent's name. | R-NC-5, MAJ-005 |
 | FR-006 | Every entry MUST carry a `target` with the ids its screen requires (§7.6); activating the entry or its pop-up action MUST navigate there, and a missing object MUST be stated, not acted on. | R-NC-6, R-PU-4 |
-| FR-007 | Every lifecycle change (created, updated, read, resolved, deleted, cleared) MUST reach every connection of the recipient within 2 s through the three strict frame types of §7.2; every §6 resolve trigger MUST resolve the entry. | R-NC-3 |
+| FR-007 | Every lifecycle change (created, updated, read, resolved, deleted, cleared) MUST reach every connection of the recipient within 2 s through the four strict frame types of §7.2, removals of more than 1,000 ids in batches; every §6 resolve trigger MUST resolve the entry. | R-NC-3 |
 | FR-008 | Entries whose age is ≥ 30 days MUST be deleted from storage at start-up, every 6 h and on writes — waiting Needs-you entries included — and quarantined corrupt files older than 30 days MUST be deleted. | R-NC-4, R-SEC-2, D80 |
 | FR-009 | The count cap MUST never evict an unresolved Needs-you entry; delete and Clear all MUST work for every entry, waiting ones included, and MUST NOT approve, deny or cancel the underlying request. | R-NC-4, D80 |
-| FR-010 | The browser MUST reconcile pushes and snapshots by store revision and tombstones per §8.4, refetching on every WebSocket re-authentication and keeping live-only entries. | R-NC-3, #645 |
-| FR-011 | Provider failures MUST raise `provider_unreachable` for network-class failures and `provider_error` only for the provider- or account-level API conditions of D71, as distinct kinds; model-specific conditions MUST stay chat-only. | R-EV-2, D71 |
+| FR-010 | The browser MUST reconcile pushes, removals and snapshots with the one ordering rule of §8.4.3 (two counters, tombstones, snapshot floors), so no delayed snapshot, late upsert or late delete can resurrect, roll back or remove the wrong state, and MUST refetch on every WebSocket re-authentication. | R-NC-3, #645 |
+| FR-011 | Provider failures MUST raise `provider_unreachable` for network-class failures and `provider_error` only for the provider- or account-level API conditions of D71, as distinct kinds; model-specific conditions MUST stay chat-only; the incident kind MUST be decided separately from the chat error code, so an authentication rejection keeps `provider_auth_failed` and its remedy in the chat. | R-EV-2, D71 |
 | FR-012 | A chat MUST get a provider/connection line only if one of its turns was hit by the event. | R-EV-3 |
 | FR-013 | A system-wide condition MUST produce one coalesced entry and at most one pop-up per episode, following the §14.3 state machine (10-min re-open without pop-up; restart keeps open entries open). | R-EV-4 |
 | FR-014 | Preferences MUST be stored per user with global values and per-workspace, per-field overrides; resolution is workspace field → global → default; System-wide kinds MUST be global only (400 otherwise). | R-PREF-1, R-PREF-2 |
@@ -2389,27 +2582,30 @@ One row per `screen` and per action `kind` of §7.6: required ids present → na
 | FR-030 | One `SystemLine` renderer MUST render every in-chat system message, through one carrier → line adapter module. | R-SL-1 |
 | FR-031 | Lines MUST be compact message units with the five types' icon, colour token, weight and accessible prefix per §11.1, wrapping without horizontal scroll. | R-SL-2, R-SL-3 |
 | FR-032 | Any line type MUST support an animated in-progress state that honours reduced motion and is announced once per attempt, never per countdown tick. | R-SL-4 |
-| FR-033 | A connection-problem line MUST show at every level while it lasts, naming the cause as soon as observed, the countdown and the attempt counter; on recovery it MUST disappear at Normal and leave one record line at Verbose/Debug. | R-SL-5, D64 |
-| FR-034 | Browser↔server loss MUST show one app-wide indicator and one line in the open chat, neither persisted. | R-SL-6 |
+| FR-033 | A connection-problem line MUST show at every level while it lasts, naming the cause as soon as observed, the countdown and the attempt counter; on the turn's own recovery it MUST disappear at Normal and leave one record line at Verbose/Debug with that turn's retry count; a provider-wide recovery MUST NOT resolve or record another turn's line. | R-SL-5, D64 |
+| FR-034 | Browser↔server loss MUST show one app-wide indicator and one line in the open chat, neither persisted, and neither MUST claim what the server or the agents are doing. | R-SL-6 |
 | FR-035 | A line MUST carry at most one action with its required ids; a stale action MUST say so instead of acting. | R-SL-7 |
 | FR-036 | New server-authored lines MUST persist as `Message.system_line` entries and pass every history stage of §7.5 (replay with `history_origin`, prepared page, REST history), rendering with semantic parity and de-duplicated by `line_id`. | R-SL-1, R-SL-5 |
 | FR-040 | A Normal/Verbose/Debug detail level MUST replace the Verbose switch; one rule function MUST decide every row × level per §12.2 with L6 and L8 literal; changing the level MUST NOT discard details already received. | R-DL-1, D75 |
 | FR-041 | Technical details MUST render only at Verbose (collapsed) and Debug (open); the masked failure payload is the only raw payload shown. | R-DL-2 |
 | FR-042 | Every user MUST be able to select Debug; Debug MUST show the internal ids, request ids and full masked failure details that exist, and MUST NOT require a capture of successful provider traffic. | R-DL-3, D66 |
 | FR-050 | The generated catalogues MUST equal the WORDING §1 sentences, with the `network` / `provider_error` lines of §13.2. | R-WD-1, R-WD-3, R-WD-9 |
-| FR-051 | The provider's own message MUST be extracted per §13.3, masked, persisted, and quoted on the main line and in the fallback note; a sentence MUST never render an empty slot or empty quotes. | R-WD-2, R-WD-3 |
-| FR-052 | A CI guard MUST fail on "Omnipus" as actor (except D48), on "we/our/us" in chat, on first person outside a chat, and on "!", emoji, "sorry", "oops", for every source in the wording manifest, and MUST be shown able to fail per check. | R-WD-5, R-WD-6, R-WD-7 |
+| FR-051 | The provider's own message MUST be extracted per §13.3 (masking order relative to line selection: pending founder: NS1), masked, persisted, and quoted on the main line and in the fallback note; a sentence MUST never render an empty slot or empty quotes. | R-WD-2, R-WD-3 |
+| FR-052 | A CI guard MUST fail on "Omnipus" as actor (except D48), on "we/our/us" in chat, on first person outside a chat, and on "!", emoji, "sorry", "oops", and "please" outside the D48 sentence, for every source in the wording manifest, and MUST be shown able to fail per check. | R-WD-5, R-WD-6, R-WD-7 |
 | FR-053 | Messages outside a chat MUST be neutral; a message used both inside and outside MUST have both forms. | R-WD-6, R-WD-8 |
-| FR-054 | Every new or surviving system message MUST be written with the `omnipus-voice` skill and carry a self-check receipt in the wording manifest; every one of the 392 review ids MUST have a disposition. | R-WD-4, R-WD-9, D65 |
+| FR-054 | Every new or surviving system message MUST be written with the `omnipus-voice` skill and carry a self-check receipt in the wording manifest; every one of the 392 review ids MUST have a disposition, and an independent inventory of emitter call sites MUST reconcile to the manifest's source list. | R-WD-4, R-WD-9, D65 |
 | FR-055 | Final network-failure lines MUST name host, observed cause and one Fix; no message MUST claim the internet is down; several failing providers MUST be reported as "Connections to AI providers are failing" with the observed causes. | R-WD-1, D64 |
-| FR-056 | Slot values MUST be taken from the facts at the emit site per §13.7; the server MUST assemble the finished sentence and keep today's `provider_message` trust flag behaviour. | R-WD-2, MAJ-008 |
-| FR-060 | Every failed dispatched provider attempt MUST log exactly one WARN line at the `accountProviderAttempt` seam with `failure_class`, `reason`, provider, model, host, status (API), masked provider message, `attempt_seq`, `candidate`, `retry_round`, session, turn and request ids; non-dispatched or cancelled attempts MUST NOT be logged as failures. | R-LOG-1, R-LOG-2 |
+| FR-056 | Slot values MUST be taken from the facts at the emit site per §13.7; the server MUST assemble the finished sentence (retry frames: cause sentence in `text`, the one fixed retry clause filled by the browser from typed facts only), and only the assembly MUST set `message_assembled`, which the browser trusts for every code (§11.4). | R-WD-2, MAJ-008, R2-MAJ-006/007 |
+| FR-060 | Every failed dispatched provider attempt MUST log exactly one WARN line at the `accountProviderAttempt` seam with `failure_class`, `reason`, provider, model, host, status (API), masked provider message, `attempt_seq`, `candidate`, `retry_round`, session, turn and request ids; attempts whose provider call never started (the call-started fact of §14.2) or that were cancelled MUST NOT be logged as failures. | R-LOG-1, R-LOG-2 |
 | FR-061 | Failure class MUST follow the §14.1 table, computed independently of the retry classifier. | R-LOG-2, R-EV-2, D72 |
-| FR-062 | The browser MUST report each server outage per §14.4 (report id, retries until accepted, 24 h limit); the server MUST validate, rate-limit, de-duplicate by report id and log both observed and longest possible duration at WARN; the server's unexpected-close line MUST be WARN. | R-LOG-3 |
+| FR-062 | The browser MUST report each server outage per §14.4 (report id, retries until accepted, 24 h limit, pending queue ≤ 5 kept in session storage); the server MUST validate, rate-limit, de-duplicate by report id within the stated LRU and restart bounds and log both observed and longest possible duration at WARN; the server's unexpected-close line MUST be WARN. | R-LOG-3 |
 | FR-063 | Retry, cooldown and failover decisions MUST be identical before and after this change. | safety |
 | FR-064 | Incidents MUST log start and end (duration, attempts, affected chats) at WARN. | R-LOG-1, R-LOG-4 |
-| FR-065 | `provider_connections_failing`, `resources_low` and `concurrency_reduced` MUST be produced per §14.3 (no probe traffic; disk on no-space write failure; memory only on measured hosts), and an unmeasurable host MUST show the permanent Settings → Performance line instead. | R-EV-1, D64, D73, D74 |
+| FR-065 | `provider_connections_failing`, `resources_low` and `concurrency_reduced` MUST be produced per §14.3 (no probe traffic; disk on no-space write failure through a non-blocking observer that never re-enters a caller's lock and ignores the notification and preference stores' own writes; memory only on measured hosts; more than 10 failing providers counted in `causes_omitted`), and an unmeasurable host MUST show the permanent Settings → Performance line instead. | R-EV-1, D64, D73, D74 |
 | FR-066 | Removing a notification MUST NOT change any request; resolving MUST still work for an entry seeded from storage after a restart, whatever the recipient's current Notify switch. | R-NC-3, D80 |
+| FR-067 | Task and schedule notifications MUST be published from the dispatch origin captured at execution entry and the applied completion write, independent of best-effort run-history writes, exactly once per execution, without inventing a `run_id` (§8.1). | R-NC-1, R-EV-1, R2-MAJ-009 |
+| FR-068 | The fallback note MUST be saved once per (turn, unavailable model, answering model), so every reply changed by a fallback replays its own cause (§11.4). | R-WD-2, R-SL-1, R2-MAJ-011 |
+| FR-069 | A `knowledge_drift` entry MUST target a real mount resolved from the drift report's root through the mount registry, chosen deterministically among several mounts, and MUST NOT be created when no mount holds the root (§7.6). | R-NC-6, R2-MAJ-012 |
 | FR-070 | One masking function implementing M1–M6 MUST be applied before persistence and before the wire to every provider-derived text, on every surface and level; when masking fails the text MUST be dropped. | R-SEC-1 |
 | FR-071 | Deletion MUST remove data from storage. | R-SEC-2 |
 | FR-072 | Every per-user file MUST be named by the SHA-256 of the exact username and MUST verify the stored username on read. | R-NC-5 |
@@ -2430,17 +2626,17 @@ One row per `screen` and per action `kind` of §7.6: required ids present → na
 |---|---|
 | SC-001 | T-24 passes with one subtest per Part-1 kind (19 kinds), each through its §8.1 producer; 0 kinds without a producer. |
 | SC-002 | In the two-tab E2E (T-32), a handled approval disappears from the second tab in ≤ 2 s in 20/20 runs. |
-| SC-003 | Repo grep: 0 imports of `ToolApprovalModal`; 0 references to `INLINE_TOOL_APPROVALS_ENABLED`; 0 occurrences of `verboseChatEnabled`; 0 `internet_lost`. |
+| SC-003 | Grep over runtime code only — `src/`, `pkg/`, `cmd/`, `internal/` (production and test files), with `docs/` and specs out of scope because they name these symbols on purpose: 0 definitions, imports or references of `ToolApprovalModal`, `INLINE_TOOL_APPROVALS_ENABLED`, `verboseChatEnabled` and `internet_lost`; the grep first finds a known-present symbol in the same scope (instrument check). |
 | SC-004 | Own-action pop-up call sites after WP-5: only the 2 dev-only sites; every removed site has a matching page-indicator test or a "page already shows it" citation; the 10 local conditions each have an indicator test (T-50). |
-| SC-005 | The voice guard passes on the real sources and fails on each planted fixture (exit code non-zero, 5 fixtures). |
-| SC-006 | DS-SEC: 0 occurrences of any secret across rows 1–12 and 14 × 6 surfaces (78 checks); row 13 output equals input (documented residual). |
+| SC-005 | The voice guard passes on the real sources and fails on each planted fixture (exit code non-zero, 6 fixtures incl. "please"); T-47's inventory fails on the bad string planted in an unlisted source. |
+| SC-006 | DS-SEC: 0 occurrences of any secret across rows 1–12 and 14 × 6 surfaces (78 checks); row 8's non-JSON variant per the founder's NS1 answer and row 13 per the founder's OQ-1 answer — **pending founder: NS1, OQ-1**. |
 | SC-007 | DS-NET: 22/22 rows as the table says; T-11 retry/fallback outcomes 100 % equal to pre-change. |
-| SC-008 | With the default log level `warn`, a forced unreachable provider with 5 attempts produces exactly 5 "provider attempt failed" lines with `failure_class=network` and one incident start and end line. |
+| SC-008 | With the default log level `warn`, a forced unreachable provider with 5 attempts produces exactly 5 "provider attempt failed" lines with `failure_class=network`, one incident start line and no end line while it keeps failing; a subsequent forced successful attempt then produces exactly one end line. |
 | SC-009 | After a 30-day sweep, `notifications/` holds no entry and no quarantine file whose age is ≥ 30 days. |
 | SC-010 | Every hands-on UAT row in §24 is PASS by the tester and upheld by the independent validator on the exact candidate commit. |
 | SC-011 | The wording manifest lists 392/392 ids with a disposition; every surviving id has final text and a self-check receipt (T-47). |
-| SC-012 | DS-RECON 7/7 and DS-OUT-CLIENT 9/9 rows pass; an offline-deleted entry is gone within 2 s of reconnect in T-31. |
-| SC-013 | docs-verifier marks every claim on every §25 page TRUE, with 0 missing pages. |
+| SC-012 | DS-RECON 16/16 and DS-OUT-CLIENT 10/10 rows pass; an offline-deleted entry is gone within 2 s of reconnect in T-31. |
+| SC-013 | docs-verifier marks every claim on every §25 page (DOC-01…DOC-16) TRUE, with 0 missing pages and 0 missing TODOs. |
 
 ---
 
@@ -2448,16 +2644,16 @@ One row per `screen` and per action `kind` of §7.6: required ids present → na
 
 | R-… / decision | FR | Scenario(s) | Test(s) | Docs (§25) |
 |---|---|---|---|---|
-| R-NC-1 | FR-003 | S-01, S-02, S-09, S-17 | T-03, T-24, T-37 | DOC-01, DOC-05, DOC-06 |
+| R-NC-1 | FR-003, FR-067 | S-01, S-02, S-09, S-17, S-129 | T-03, T-24, T-37 | DOC-01, DOC-05, DOC-06 |
 | R-NC-2 | FR-004, FR-083 | S-03, S-118 | T-31, T-49 | DOC-01 |
-| R-NC-3 | FR-007, FR-010, FR-066 | S-10, S-11, S-12, S-13, S-14, S-100, S-101, S-102, S-103 | T-07, T-20, T-23, T-25, T-32, T-40, T-48 | DOC-01, DOC-14 |
-| R-NC-4 | FR-008, FR-009 | S-20, S-21, S-22, S-23, S-24, S-25, S-26, S-27, S-28, S-29 | T-04, T-05, T-06, T-22, T-29a, T-31 | DOC-01 |
-| R-NC-5 | FR-005, FR-005a, FR-072 | S-07, S-08, S-15, S-16, S-93 | T-02, T-08, T-24, T-39 | DOC-01 (who receives what) |
-| R-NC-6 | FR-006 | S-05, S-18, S-19, S-43 | T-24, T-31, T-43 | DOC-01 |
-| R-EV-1 | FR-001, FR-002, FR-065 | S-06, S-05, S-01, S-109, S-110, S-111 | T-01, T-24, T-46 | DOC-01, DOC-03 |
-| R-EV-2 | FR-011, FR-061 | S-51, S-80, S-123 | T-10, T-15, T-46 | DOC-08, DOC-09 |
+| R-NC-3 | FR-007, FR-010, FR-066 | S-10, S-11, S-12, S-13, S-14, S-100, S-101, S-102, S-103, S-125 | T-07, T-20, T-23, T-25, T-32, T-40, T-48 | DOC-01, DOC-14 |
+| R-NC-4 | FR-008, FR-009 | S-20, S-21, S-22, S-23, S-24, S-25, S-26, S-27, S-28, S-29, S-126 | T-04, T-05, T-06, T-22, T-29a, T-31 | DOC-01 |
+| R-NC-5 | FR-005, FR-005a, FR-072 | S-07, S-08, S-15, S-16, S-93, S-125 | T-02, T-08, T-24, T-39, T-40 | DOC-01 (who receives what) |
+| R-NC-6 | FR-006, FR-069 | S-05, S-18, S-19, S-43, S-128 | T-24, T-31, T-43 | DOC-01 |
+| R-EV-1 | FR-001, FR-002, FR-065, FR-067 | S-06, S-05, S-01, S-109, S-110, S-111, S-129 | T-01, T-24, T-37, T-46 | DOC-01, DOC-03 |
+| R-EV-2 | FR-011, FR-061 | S-50, S-51, S-80, S-123 | T-10, T-15, T-46 | DOC-08, DOC-09 |
 | R-EV-3 | FR-012 | S-04 | T-26 | DOC-08 |
-| R-EV-4 | FR-013 | S-04, S-13, S-88, S-89, S-108 | T-07, T-26, T-46 | DOC-01, DOC-08 |
+| R-EV-4 | FR-013 | S-04, S-13, S-88, S-89, S-108, S-127, S-130 | T-07, T-26, T-46 | DOC-01, DOC-08 |
 | R-PREF-1 | FR-003, FR-014, FR-017 | S-30, S-31, S-36, S-110 | T-03, T-33, T-50 | DOC-01, DOC-03 |
 | R-PREF-2 | FR-014, FR-017 | S-32, S-33, S-37, S-104 | T-03, T-22, T-33, T-42 | DOC-01, DOC-04 |
 | R-PREF-3 | FR-015 | S-34 | T-03, T-22, T-33 | DOC-01, DOC-03 |
@@ -2468,18 +2664,18 @@ One row per `screen` and per action `kind` of §7.6: required ids present → na
 | R-PU-4 | FR-006, FR-021 | S-43 | T-21, T-31 | DOC-01 |
 | R-PU-5 | FR-022, FR-024 | S-44, S-49, S-116 | T-36, T-50 | DOC-01, DOC-02 |
 | R-PU-6 | FR-023 | S-45, S-97 | T-32, T-36 | DOC-02 |
-| R-SL-1 | FR-030, FR-036 | S-50, S-55, S-106, S-117 | T-18, T-19, T-28 | DOC-02, DOC-14 |
+| R-SL-1 | FR-030, FR-036, FR-068 | S-50, S-55, S-106, S-107, S-117, S-132 | T-18, T-19, T-28, T-45 | DOC-02, DOC-14 |
 | R-SL-2 | FR-031 | S-50, S-121 | T-18, T-49 | DOC-02 |
 | R-SL-3 | FR-031 | S-50, S-51, S-52 | T-18 | DOC-02 |
 | R-SL-4 | FR-032 | S-51, S-120 | T-18, T-49 | DOC-02 |
-| R-SL-5 | FR-033, FR-036 | S-51, S-52, S-57 | T-28, T-34 | DOC-02, DOC-08 |
-| R-SL-6 | FR-034 | S-53 | T-34 | DOC-02, DOC-09 |
+| R-SL-5 | FR-033, FR-036 | S-51, S-52, S-57, S-130, S-131 | T-18, T-26, T-28, T-34 | DOC-02, DOC-08 |
+| R-SL-6 | FR-034 | S-53, S-124 | T-34 | DOC-02, DOC-09 |
 | R-SL-7 | FR-035 | S-54, S-59 | T-18, T-34, T-43 | DOC-02 |
 | R-DL-1 | FR-040 | S-60, S-61, S-63, S-65, S-66 | T-17, T-35 | DOC-02, DOC-03, DOC-09, DOC-10, DOC-13 |
 | R-DL-2 | FR-041 | S-60, S-62 | T-17, T-18 | DOC-02 |
 | R-DL-3 | FR-042 | S-62, S-64 | T-35 | DOC-02, DOC-11 |
-| R-WD-1 | FR-050, FR-055 | S-58, S-72, S-76 | T-14, T-45 | DOC-08, DOC-09 |
-| R-WD-2 | FR-051, FR-056 | S-50, S-56, S-107 | T-12, T-18, T-45 | DOC-02, DOC-08 |
+| R-WD-1 | FR-050, FR-055 | S-58, S-72, S-76, S-127 | T-14, T-45, T-46 | DOC-08, DOC-09 |
+| R-WD-2 | FR-051, FR-056 | S-50, S-56, S-107, S-132 | T-12, T-18, T-45 | DOC-02, DOC-08 |
 | R-WD-3 | FR-050, FR-051 | S-50, S-72, S-77 | T-12, T-14 | DOC-08 |
 | R-WD-4 | FR-054 | S-75 | T-47 (manifest receipts) | — (no user-visible effect; process) |
 | R-WD-5 | FR-052 | S-70, S-71 | T-14, T-16 | — (wording rule; covered by every page's examples) |
@@ -2508,7 +2704,7 @@ One row per `screen` and per action `kind` of §7.6: required ids present → na
 | R-EXT-11 | Part 2 (§29) | P2-S-06 | Part 2 | Part 2 |
 | R-EXT-12 | Part 2 (§29); Part 1 FR-090 | P2-S-09 | T-44 (Part-1 boundary) | — (no Part-1 user-visible change) |
 | R-RM-1 | FR-080 | S-44, S-95, S-116 | T-36 | DOC-01, DOC-02 |
-| R-RM-1a | FR-081 | S-96, S-98, S-99 | T-36, T-50 | DOC-02, DOC-05, DOC-06 |
+| R-RM-1a | FR-081 | S-96, S-98, S-99 | T-36, T-50 | DOC-02, DOC-04, DOC-05, DOC-06, DOC-16 |
 | R-RM-2 | FR-023 | S-45, S-97 | T-36 | DOC-02 |
 | R-RM-3 | FR-082 | (UAT U14) | U14 | — (no change: no badge exists) |
 | (safety) | FR-063 | S-85 | T-11 | — |
@@ -2520,13 +2716,13 @@ One row per `screen` and per action `kind` of §7.6: required ids present → na
 | D67, D69 | FR-015 | S-34, S-13 | T-03, T-22 | DOC-01, DOC-03, DOC-07 |
 | D68 | FR-030 | S-117 | T-19 | DOC-02 |
 | D70 | FR-019 | S-46 | T-32 | DOC-01 |
-| D71 | FR-011 | S-123 | T-46 | DOC-08 |
+| D71 | FR-011 | S-50, S-123 | T-46 | DOC-08 |
 | D72 | FR-061 | S-80 (DS-NET rows 7, 8) | T-10 | DOC-09 |
-| D73, D74 | FR-065 | S-109, S-110 | T-46, T-50 | DOC-01, DOC-03 |
+| D73, D74 | FR-065 | S-109, S-110 | T-24, T-46, T-50 | DOC-01, DOC-03 |
 | D75 | FR-040 | S-60, S-65, S-66 | T-17 | DOC-02 |
 | D76 | FR-009 | S-21, S-27 | T-05 | DOC-01 |
 | D77 | FR-024 | S-49 | T-50 | DOC-01, DOC-02 |
-| D78 | FR-081 | S-96, S-98, S-99 | T-36, T-50 | DOC-02, DOC-05, DOC-06 |
+| D78 | FR-081 | S-96, S-98, S-99 | T-36, T-50 | DOC-02, DOC-04, DOC-05, DOC-06, DOC-16 |
 | D79 | FR-030 | S-50…S-55 | T-19 | — |
 | D80 | FR-009, FR-066 | S-23, S-24, S-26, S-28 | T-06, T-32 | DOC-01 |
 | (accessibility) | FR-083 | S-118, S-119, S-120, S-121 | T-49 | DOC-01 |
@@ -2548,15 +2744,15 @@ Setup for every row: the exact candidate commit built and installed per the stan
 | U4 | Calendar task due in the next minute that succeeds; then a Calendar task whose agent has an invalid model; then **Run now** on the failing one | `schedule_finished` pop-up (5 s) and entry; `schedule_failed` sticky pop-up and entry; **Open** opens the task on its run; body has no raw error text; Run now gives a `task_failed` entry, not a schedule entry | screenshots + centre |
 | U5 | Add a custom OpenAI-compatible provider with base URL `http://127.0.0.1:9/v1`; send a message with it | Animated amber line "I can't reach …: connection refused. Retrying in … s (attempt 2 of …)…"; one `provider_unreachable` entry + pop-up; after retries an Error line naming the host `127.0.0.1` and "Fix: check your network or proxy." with **Switch model** | screenshots; gateway log lines with `failure_class=network`, one per attempt |
 | U6 | Edit that same custom provider's base URL to OpenRouter's API address with a valid key; send again in the same chat | "reachable again" entry for that provider (pop-up 5 s); the unreachable entry shows Handled; at Normal the old retry line is gone; at Verbose one resolved record line | screenshots at Normal and Verbose |
-| U7 | Copy the OpenRouter provider with an invalid key `sk-or-v1-0000000000000000invalid`; send | Error line `OpenRouter rejected the API key: "…"` with the key masked; **Open settings**; Debug shows ids and details with the key masked | screenshots at Normal/Verbose/Debug; log line `failure_class=api` with masked text |
+| U7 | Copy the OpenRouter provider with an invalid key `sk-or-v1-0000000000000000invalid`; send | Error line `OpenRouter rejected the API key: "…"` with the key masked; **Open settings** (chat code `provider_auth_failed`); one `provider_error` centre entry for OpenRouter (the account-level incident kind, §14.1); Debug shows ids and details with the key masked | screenshots at Normal/Verbose/Debug; log line `failure_class=api` with masked text |
 | U8 | Settings → Notifications: turn **Task or plan failed** Notify off; make a task fail | No entry, no pop-up; the task chat still shows the failure | screenshots |
 | U9 | Workspace Settings → set **Task or plan started** Notify to On; start a task there and in another workspace; then set it back to **Use global** | Entry only for the overridden workspace; System-wide kinds not offered; after Use global, no entry | screenshots |
 | U10 | Try to switch off either switch of **Agent needs your approval** and of **Goal paused** | Switches locked with explanation | screenshots |
 | U11 | Trigger 5 info events quickly (e.g. 5 short Calendar tasks finishing) | 3 visible + "+2 more — open notifications"; it opens the centre listing all 5; hover pauses; non-hovered vanish after 5 s | screen recording or timed screenshots |
-| U12 | Stop the gateway for 20 s, then start it | App-wide indicator + chat line during the outage; both gone after; reload: not in history; gateway log has one "client connection outage" with `observed_duration_ms` about 20,000 | screenshots + log excerpt |
+| U12 | Stop the gateway for 20 s, then start it | App-wide indicator + chat line during the outage, reading "Can't reach the server right now. This page reconnects on its own when it's back." — no claim that agents keep working; a reply that was in progress shows **Interrupted** after the restart; both gone after; reload: not in history; gateway log has one "client connection outage" with `observed_duration_ms` about 20,000 | screenshots + log excerpt |
 | U13 | Turn macOS Wi-Fi off for 15 s, then on | Offline line + indicator; outage logged with `client_outage_kind=offline` | screenshots + log |
 | U14 | Visual sweep of every main screen (chat, workspace tabs, settings, library, mail), at full width and at 320 px | No badge in the top-right corner; unread count only in the sidebar account menu | screenshots |
-| U15 | Save settings on 5 screens (Performance, Chat, Profile, Providers, workspace Settings), once succeeding, once failing (stop the server mid-save), then Retry | No pop-up; on-page "Saved" / "Not saved — Retry" / "Saved" | screenshots |
+| U15 | Save settings on 4 server-backed screens (Performance, Profile, Providers, workspace Settings), once succeeding, once failing (stop the server mid-save), then Retry. Chat → Detail level is saved per device in this browser with no server call, so it is not part of this row | No pop-up; on-page "Saved" / "Not saved — Retry" / "Saved" | screenshots |
 | U16 | Delete one centre entry, then Clear all, in two tabs | Entries gone in both tabs and after reload | screenshots |
 | U17 | Detail level Normal/Verbose/Debug on one chat with tool calls, a delegation, a backup-model reply and a failed reply | Rows per §12.2 (validator checks cell by cell for the rows present), including the fallback note hidden at Normal after the reply | 3 screenshots |
 | U18 | Read the chat lines of U5/U7 and the centre entries | Chat lines say "I …"; centre/pop-ups neutral; no "we/our/us"; no "Omnipus" as actor; no "internet" claim | screenshots |
@@ -2566,32 +2762,35 @@ Setup for every row: the exact candidate commit built and installed per the stan
 | U22 | With an approval waiting, delete its centre entry, then approve in the chat | Entry deleted; card still pending until approved; approval proceeds; no entry reappears | screenshots |
 | U23 | Stop the gateway, close the laptop lid for 2 min, start the gateway, open the lid | One outage line with `observed_duration_ms` and a larger `max_possible_duration_ms` | log excerpt |
 | U24 | Two custom providers pointing at closed local ports, each used by one chat | One "Connections to AI providers are failing" entry listing both causes; no internet claim | centre screenshot |
+| U25 | Open the Library panel in tab A, then in tab B; press **Switch** in tab B | Banner "Library is open in another tab." in tab B's panel area, staying until Switch succeeds; Switch focuses tab A (or the manual sentence shows); no pop-up | screenshots |
+| U26 | Workspace team page: add an existing agent, scroll the added row out of view, press **Undo** in the result area | Result area "Added … to …." with Undo for 10 s; Undo removes the agent; no pop-up | screenshots |
 
-Rows U1–U3, U5–U7, U12, U22 touch `pkg/agent` / gateway WebSocket handling and are mandatory before landing (root `CLAUDE.md`). Stable rows become E2E tests over time (T-31…T-36, T-49, T-50 cover U1–U3, U8–U11, U15–U17, U19–U22 in automated form).
+Rows U1–U3, U5–U7, U12, U22 touch `pkg/agent` / gateway WebSocket handling and are mandatory before landing (root `CLAUDE.md`). Stable rows become E2E tests over time (T-31…T-36, T-49, T-50 cover U1–U3, U8–U11, U15–U17, U19–U22, U25, U26 in automated form).
 
 ---
 
 ## 25. User-facing documentation (first-class deliverable)
 
-The implementing leads draft every page below in the same cut (FR-091); `docs-verifier` audits each against the built behaviour before the gate; **a missing page or a missing TODO is a gate finding** (Important). The backend implementer drafts DOC-08…DOC-12; the frontend implementer drafts the rest; both review DOC-01.
+The implementing leads draft every page below in the same cut (FR-091); `docs-verifier` audits each against the built behaviour before the gate; **a missing page or a missing TODO is a gate finding** (Important). The backend implementer drafts DOC-08…DOC-12; the frontend implementer drafts the rest (DOC-16 included); both review DOC-01 and DOC-14. Items marked **pending founder** are written only after the founder's answer.
 
 | Id | Page | New / changed | TODOs |
 |---|---|---|---|
-| DOC-01 | `docs/notifications.md` | **new** | (1) The centre: where it is, the three categories and counts, "Handled", delete, Clear all, 30-day retention, what deleting does **not** do (a waiting approval keeps waiting). (2) Every kind with its default Notify / pop-up switches, the three always-on Needs-you kinds and why. (3) When pop-ups appear (durations, three at a time, "+N more", one action) and when they **never** do: results of your own actions, browser-only conditions (shown as banners or page notices instead), Needs-you in the chat you are looking at. (4) Who receives what with several accounts (every account for workspace objects and system-wide events, per OQ-2's answer). (5) Provider incidents: one entry per provider, re-opening within 10 minutes, "Connections to AI providers are failing", and that Omnipus never claims the internet is down. (6) Resources: memory and disk entries; the Performance line on hosts where memory can't be measured. (7) Keyboard use of the centre and pop-ups |
-| DOC-02 | `docs/using-omnipus-ui.md` | changed | Link to DOC-01. System lines in a chat: the five types, in-progress lines, actions, technical details. Detail levels Normal / Verbose / Debug in plain words, replacing every "Verbose chat" mention. Correct the approval paragraph ("Where an approval came from") that says pending requests appear "one at a time over the app" — approvals are inline only. Provider failures: the provider's own message is shown (masked); remove the "provider response details are live-only" caveat where `provider_says` now persists. The Stop outcome is a chat line. Browser-only notices (new version, out-of-sync chat, live-browser input) as page notices |
-| DOC-03 | `docs/settings.md` | changed | New **Notifications** tab (switches, locks, defaults table, "settings could not be read" state, "changed in another tab"); Chat → **Detail level** replacing Verbose chat (line ~119); Performance: the unmeasurable-memory line |
-| DOC-04 | `docs/workspaces.md` | changed | Workspace Settings → "Notifications for this workspace": Use global / On / Off per switch; System-wide kinds are global only |
-| DOC-05 | `docs/calendar.md` | changed | Which Calendar events notify by default; Run now counts as a task result; the Undo result area after moving an event |
-| DOC-06 | `docs/tasks.md` | changed | Which task and plan events notify; your own Board changes never notify; the assignee warning on the task card |
+| DOC-01 | `docs/notifications.md` | **new** | (1) The centre: where it is, the three categories and counts, "Handled", delete, Clear all, 30-day retention, what deleting does **not** do (a waiting approval keeps waiting). (2) Every kind with its default Notify / pop-up switches, the three always-on Needs-you kinds and why. (3) When pop-ups appear (durations, three at a time, "+N more", one action) and when they **never** do: results of your own actions, browser-only conditions (shown as banners or page notices instead), Needs-you in the chat you are looking at. (4) Who receives what with several accounts (every account for workspace objects and system-wide events, per OQ-2's answer). (5) Provider incidents: one entry per provider, re-opening within 10 minutes, "Connections to AI providers are failing", and that Omnipus never claims the internet is down. (6) Resources: memory and disk entries; the Performance line on hosts where memory can't be measured. (7) Keyboard use of the centre and pop-ups **Round-2 additions (R2-MAJ-014):** (a) "Not saved — lost if the server restarts": what it means, that the entry still works in every tab and survives a page reload while the server runs, and that a later successful save removes the mark (§8.4.2); (b) "Could not refresh — showing the last loaded list.": the list may be stale until Retry succeeds; (c) a failed delete or Clear all: the entry comes back with "Could not delete — Retry", and Retry repeats the action; a read state that could not be saved is shown as not saved, not as an error; (d) who receives task, plan and owner-less-session notifications — **pending founder: OQ-2**, written from the answer |
+| DOC-02 | `docs/using-omnipus-ui.md` | changed | Link to DOC-01. System lines in a chat: the five types, in-progress lines, actions, technical details. Detail levels Normal / Verbose / Debug in plain words, replacing every "Verbose chat" mention. Correct the approval paragraph ("Where an approval came from") that says pending requests appear "one at a time over the app" — approvals are inline only. Provider failures: the provider's own message is shown (masked); remove the "provider response details are live-only" caveat where `provider_says` now persists. The Stop outcome is a chat line. Browser-only notices (new version, out-of-sync chat, live-browser input) as page notices **Round-2 additions:** (a) in the existing "Panels beside chat" section: the banner "{panel} is open in another tab." — where it appears (the panel area of the tab you opened it in), that it stays until **Switch** succeeds or you close the panel in that tab, and the manual-switch sentence when the other tab cannot be focused (§16); keep the approval-origin correction above; (b) browser↔server loss: the exact line and banner text of §11.3, that they do not say whether your agents are still working, and how to tell afterwards (refreshed history shows finished work; a restart shows **Interrupted**, linking the existing "If the gateway restarts during a reply" section) |
+| DOC-03 | `docs/settings.md` | changed | New **Notifications** tab (switches, locks, defaults table, "settings could not be read" state, "changed in another tab"); Chat → **Detail level** replacing Verbose chat (line ~119); Performance: the unmeasurable-memory line **Round-2 addition:** for an unreadable notification settings file, state that **Retry** reads the file again, and that the first save asks "Replace the saved settings?" and replaces the file only after you confirm (§9.3); never claim the unreadable file was recovered |
+| DOC-04 | `docs/workspaces.md` | changed | Workspace Settings → "Notifications for this workspace": Use global / On / Off per switch; System-wide kinds are global only **Round-2 additions:** (a) the same Retry-versus-confirmed-replacement wording as DOC-03 for the workspace overrides, without claiming recovery; (b) in the existing "Adding agents" text (today "Added … · Undo"): the result area at the top of the team page, "Added {agent} to {team}." with **Undo** for 10 s, also when the added row is no longer in view (§16) |
+| DOC-05 | `docs/calendar.md` | changed | Which Calendar events notify by default; Run now counts as a task result; the Undo result area after moving an event **Round-2 addition:** the result area at the top of the Calendar page keeps **Undo** for 10 s after a move, also when the moved event is out of view or you went to another week |
+| DOC-06 | `docs/tasks.md` | changed | Which task and plan events notify; your own Board changes never notify; the assignee warning on the task card **Round-2 addition:** the assignee warning also shows in the task detail, and stays until the assignment changes |
 | DOC-07 | `docs/goals.md` | changed | Goal paused is a Needs-you notification, always on (lines ~123/129 mention the bell); goal reached / given up are off by default |
-| DOC-08 | `docs/providers-and-models.md` | changed | How provider failures read: network ("can't reach", with the cause, countdown and attempt counter; final line with host and one fix) vs API ("answered with an error"); quota and rate limit; which conditions raise a centre entry and which stay in the chat (model-specific); the backup-model note quoting the first model's error |
-| DOC-09 | `docs/troubleshooting.md` | changed | "Provider unreachable vs provider error" decision help, with the cause words (connection refused, address could not be found …) and the matching fix; "Connections to AI providers are failing" (check network, proxy, DNS — the internet may still work); browser↔server loss lines; replace "Verbose chat" mentions (~84, 98, 192) |
-| DOC-10 | `docs/operations/observability.md` | changed | Log lines "provider attempt failed" (fields, one per dispatched attempt), "provider incident started/ended", "client connection outage" (observed vs longest possible duration), raised "connection closed unexpectedly" — level `warn`; how to grep network vs API; replace the "Verbose chat" mention (~26) |
-| DOC-11 | `docs/operations/debug.md` | changed | The chat's **Debug** detail level (ids, request ids, full masked failure details; **not** raw successful provider traffic — tracked issue) vs the gateway's `--debug` start mode; neither shows unmasked secrets |
-| DOC-12 | `docs/security.md` | changed | What is masked in messages, details, the centre and logs (keys, partial echoes with a known prefix, bearer tokens, long opaque values) and the stated limit (short fragments without a known prefix, per OQ-1's answer); notifications deleted for real after 30 days or on delete |
+| DOC-08 | `docs/providers-and-models.md` | changed | How provider failures read: network ("can't reach", with the cause, countdown and attempt counter; final line with host and one fix) vs API ("answered with an error"); quota and rate limit; which conditions raise a centre entry and which stay in the chat (model-specific); the backup-model note quoting the first model's error **Round-2 additions:** align the examples with the corrected remedies — a rejected key reads "rejected the API key" with **Open settings** (it also opens a provider-wide entry), 408/5xx/529 read "answered with an error" with **Fix: retry in a moment; if it repeats, switch model.**; no status codes in the Normal line (they are in Technical details); the stalled final line with host and Fix |
+| DOC-09 | `docs/troubleshooting.md` | changed | "Provider unreachable vs provider error" decision help, with the cause words (connection refused, address could not be found …) and the matching fix; "Connections to AI providers are failing" (check network, proxy, DNS — the internet may still work); browser↔server loss lines; replace "Verbose chat" mentions (~84, 98, 192) **Round-2 additions:** the same auth-specific remedy and stalled examples as DOC-08; the truthful server-loss wording of §11.3 — the page cannot tell a dropped connection from a stopped server |
+| DOC-10 | `docs/operations/observability.md` | changed | Log lines "provider attempt failed" (fields, one per dispatched attempt), "provider incident started/ended", "client connection outage" (observed vs longest possible duration), raised "connection closed unexpectedly" — level `warn`; how to grep network vs API; replace the "Verbose chat" mention (~26) **Round-2 additions (R2-MIN-003, R2-MAJ-011):** outage reporting is bounded, best-effort: at most 5 reports wait in a tab, the oldest dropped beyond that; a waiting report is kept across a reload and dropped after 24 h or when the tab closes; the server's duplicate check remembers the last 1,000 report ids for 24 h, so a repeat can be logged twice after a restart or after 1,000 newer reports; two tabs produce two reports; replace today's sentence "written once per session and model pair" (rows `provider_fallback` and the paragraph on the saved note) with "once per reply and model pair"; the disk-full entry ignores the notification store's own writes |
+| DOC-11 | `docs/operations/debug.md` | changed | The chat's **Debug** detail level (ids, request ids, full masked failure details; **not** raw successful provider traffic — tracked issue) vs the gateway's `--debug` start mode; neither shows unmasked secrets — link the tracked issue #1546 (proposed target 2026-12-15) where the page says raw successful traffic is not captured |
+| DOC-12 | `docs/security.md` | changed | What is masked in messages, details, the centre and logs (keys, partial echoes with a known prefix, bearer tokens, long opaque values) and the stated limit (short fragments without a known prefix, per OQ-1's answer); notifications deleted for real after 30 days or on delete **Round-2 note:** publication of the short-fragment limit waits for the founder's OQ-1 answer — **pending founder: OQ-1**; the masking order for provider text that spans several lines is **pending founder: NS1** and must not be described as an accepted residual |
 | DOC-13 | `docs/agents.md` | changed | Replace the "Verbose chat" mention (~229) with Detail level; agents report in their own chats, notifications are a user surface |
-| DOC-14 | `docs/protocol/websocket-protocol.md` | changed | The three notification frames and their fields (`change`, `popup`, `revision`, `persisted`, `target`, `category`, `causes`), `system_line` frame with `history_origin`, `provider_retry` new fields, `LLMError.provider_says` / `failure_class` / `facts.host`, `provider_error` code |
-| DOC-15 | `docs/README.md` and `docs/operations/README.md` | changed | Index entries for DOC-01 and the updated DOC-11 |
+| DOC-14 | `docs/protocol/websocket-protocol.md` | changed | The four notification frames and their fields (`change`, `popup`, `revision`, `live_seq`, `persisted`, `target`, `category`, `causes`), `system_line` frame with `history_origin`, `provider_retry` new fields, `LLMError.provider_says` / `failure_class` / `facts.host`, `provider_error` code **Round-2 additions (R2-MAJ-006, R2-MAJ-004, R2-MAJ-003):** the four notification frame types with `live_seq` and the batching of more than 1,000 removed ids; the ordering rule in one paragraph; `provider_retry.text` and the client-filled retry clause (countdown from `retry_at`/`sent_at`); `provider_fallback.text` and `replay_provider_fallback` with `provider_says` / `failure_class`; `message_assembled` replacing `provider_message`; which fields are persisted (`message`, `message_assembled`, `provider_says`, `failure_class`, `facts.provider`/`model`/`host`) and which are live-only (`detail`, `facts.http_status`, `facts.request_id`); `causes_omitted` |
+| DOC-15 | `docs/README.md` and `docs/operations/README.md` | changed | Index entries for DOC-01 and the updated DOC-11; check that the existing index entry for `docs/previews.md` (DOC-16) still describes its section, and add entries for any page this cut creates |
+| DOC-16 | `docs/previews.md` | changed | (round-2 R2-MAJ-014) The copy-link steps (today step 4, "Use the copy button on the card…"): the permanent helper text under **Copy link** saying who can open the link and until when (the link is the credential), and that the button's label reads "Copied" for 2 s instead of a pop-up (§16, S-99) |
 
 No user-visible effect, so no page: the router refactor, file locking, the recipient file-name hash, the wording manifest, the voice guard.
 
@@ -2645,11 +2844,11 @@ Target file: `docs/internal/architecture/ADR-051-media-handling-and-provider-err
 > **Context.** The founder's message review (2026-10-22) found that hiding what the provider said makes failures harder to act on: a provider's own words ("Insufficient balance", "Incorrect API key provided") are often the most useful part of the message (D26). ADR-051's fixed sentences were written to keep raw provider text off the wire after an incident where a full raw JSON body reached the chat. The incident's harm was the *raw body*, not the provider's *message*. (Correction of an earlier summary: the live `detail` field already carries a bounded, masked preview of the provider's text to the browser; it is not persisted.)
 >
 > **Decision.**
-> 1. **`provider_says`.** The error shape, the replayed error and the fallback note gain one optional field: the provider's own error message, *extracted* from the response (a fixed list of JSON message locations, else a text body's first line, else a stream error event's message) — never the raw body. It is masked, normalised, masked again and capped at 2,000 bytes on a character boundary, **persisted** in the transcript at the write choke point (`appendErrorTranscript`) and **replayed**, so a reloaded chat reads the same as the live one.
-> 2. **Masking contract.** One masker applies before persistence and the wire, to every surface: registered credential values (also when split by whitespace), authentication headers and key-named fields, key-shaped tokens and JWTs, partial echoes anchored on a known key prefix, and long opaque letter-and-digit runs. Text the masker cannot process is dropped. The one stated residual is a short fragment with no known prefix (founder question OQ-1 of the notifications spec).
-> 3. **Main line.** The user-facing sentence quotes `provider_says` on the main line at every detail level, next to a short sentence of ours (what happened · why · what to do). When no provider message exists, the sentence omits the quote; it never shows empty quotes and never invents provider text. The server assembles the finished sentence from the facts at the emit site; the browser never composes wording.
+> 1. **`provider_says`.** The error shape, the replayed error and the fallback note gain one optional field: the provider's own error message, *extracted* from the response (a fixed list of JSON message locations, else a text body's first line, else a stream error event's message) — never the raw body. It is masked, normalised, masked again and capped at 2,000 bytes on a character boundary (whether the whole response is masked before a text body's first line is selected is **pending founder: NS1**), **persisted** in the transcript at the write choke point (`appendErrorTranscript`) and **replayed**, so a reloaded chat reads the same as the live one.
+> 2. **Masking contract.** One masker applies before persistence and the wire, to every surface: registered credential values (also when split by whitespace), authentication headers and key-named fields, key-shaped tokens and JWTs, partial echoes anchored on a known key prefix, and long opaque letter-and-digit runs. Text the masker cannot process is dropped. The one stated residual is a short fragment with no known prefix — **pending founder: OQ-1** (notifications spec §30.2).
+> 3. **Main line.** The user-facing sentence quotes `provider_says` on the main line at every detail level, next to a short sentence of ours (what happened · why · what to do). When no provider message exists, the sentence omits the quote; it never shows empty quotes and never invents provider text. The server assembles the finished sentence from the facts at the emit site; the browser never composes wording, except the one fixed retry clause whose numbers (countdown, attempt, maximum) it fills from typed frame facts. Only the server's assembly marks a sentence as user-facing (`message_assembled`, replacing the provider-message flag), for any code; unassembled text is never shown as the main line.
 > 4. **Catalogue.** ADR-051's fixed sentences are replaced by the founder-agreed wording baseline (`docs/internal/specs/notifications-and-chat-system-messages-wording-2026-10-22.md` §1), written and checked with the `omnipus-voice` skill. A qualified remedy ("switch to a model with a larger limit") stays allowed; unqualified model-shopping in a product or configuration message does not. Each catalogue entry carries explicit variants: no facts; provider and model known; provider message known; and for connection failures retrying and final. The single-source catalogue and both generators remain the only place copy lives.
-> 5. **Network vs API.** The `network` code is split: `network` now means the provider could not be reached at all (DNS, refused, unreachable, TLS, timeout, a connection dropped before or during the answer); the new code `provider_error` means the provider answered with a provider- or account-level error (401/403 at account level, 408, 5xx, 529). Model-specific conditions keep their own codes. The error shape gains `failure_class` (`network` · `api`) and the fact `host`. Retry and fallback decisions do not read either. Connection lines follow the N2 pattern: cause named as soon as observed, countdown and attempt counter on every retry line, final line naming host, cause and one fix; no message claims the internet is down.
+> 5. **Network vs API.** The `network` code is split: `network` now means the provider could not be reached at all (DNS, refused, unreachable, TLS, timeout, a connection dropped before or during the answer); the new code `provider_error` means the provider answered with a provider-side error that has no more specific code (408, 5xx, 529). An authentication rejection keeps `provider_auth_failed` and its remedy; as an account-level condition it raises the provider-wide `provider_error` incident in the notifications centre — the chat code and the incident kind are decided separately. Model-specific conditions keep their own codes. The error shape gains `failure_class` (`network` · `api`) and the fact `host`. Retry and fallback decisions do not read either. Connection lines follow the N2 pattern: cause named as soon as observed, countdown and attempt counter on every retry line, final line naming host, cause and one fix; no message claims the internet is down.
 > 6. **`detail` unchanged in kind.** The raw `detail` (status and bounded, masked body preview) stays live-only and is still never persisted. It renders only at the Verbose (collapsed) and Debug (open) detail levels, which replace the Verbose-chat switch.
 > 7. **Voice.** In a chat, the product never speaks of itself as the actor: "I could not …" (the agent's perspective); outside a chat, neutral wording (D47, D50). The copy rule "no message tells the user to contact support" is relaxed by exactly one sentence: "please report it to the Omnipus.ai team" (D48).
 >
@@ -2734,12 +2933,15 @@ Described to the depth Part 1 needs; Part 2 gets its own grill round before its 
 | FQ-14 / Q6 — browser-local conditions | A (review-revised = FQ-14 C): persistent page/app indicators | D77 | §10.2, S-49 |
 | FQ-15 / Q7 — homes for pop-up-only functions | A (review-revised): stable page-level result area for Undo; the other homes as proposed | D78 | §16, S-96, S-98, S-99 |
 | FQ-16 — one carrier or migrate | A: keep existing frames, new carrier only where none exists | D79 | §11.2 |
-| FQ-17 — Debug L11 | N4 = A: Debug shows what exists; raw successful exchange deferred to a tracked issue with a target date (issue text with team-lead to file) | D66 | §12.2, S-64 |
+| FQ-17 — Debug L11 | N4 = A: Debug shows what exists; raw successful exchange deferred to a tracked issue with a target date — #1546 (proposed target 2026-12-15) | D66 | §12.2, S-64 |
 | Q2 — delete while waiting | A: deleting or clearing never changes the waiting request; 30-day rule applies | D80 | §8.3, §8.5, S-23, S-24, S-26, S-28 |
 
-### 30.2 Still open — new at round 1
+### 30.2 Pending the founder — OQ-1, OQ-2 (round 1) and NS1 (round 2)
 
-**OQ-1 — Short key fragments without a known prefix** (answer "OQ-1 A" or "OQ-1 B")
+**NS1 — masking before first-line extraction (R2-MAJ-001)** — a security item, put to the founder by team-lead and not repeated here. Recommendation A: mask the whole response first, then select. **pending founder: NS1**; the answer is applied in §13.3, §15.1, §28, S-92, DS-EXTRACT row 17, DS-SEC row 8, SC-006 and DOC-12.
+
+
+**OQ-1 — Short key fragments without a known prefix** (answer "OQ-1 A" or "OQ-1 B") — **pending founder: OQ-1**; applied in §15.1, §28, S-90, DS-SEC row 13, SC-006, DOC-12
 
 Context and impact: the new masking contract (§15.1) catches full keys, partial echoes that start with a known key prefix (`sk-…xyz`), bearer tokens and long opaque values. It cannot recognise a short fragment that has no prefix, such as `…a1b2c3`, without also masking ordinary words and numbers. R-SEC-1 asks for partial key echoes to be masked; this is the one case the design cannot promise.
 
@@ -2748,7 +2950,7 @@ Context and impact: the new masking contract (§15.1) catches full keys, partial
 | **A — Recommended** | Accept this residual and document it (security page DOC-12); the dataset keeps a row that makes any change visible |
 | B | Hide every provider message that contains any 6+ character letter-and-digit run, showing only our sentence — safer, but many useful provider messages (model names, ids) disappear from the main line |
 
-**OQ-2 — Who receives notifications for workspace objects and owner-less sessions** (answer "OQ-2 A" or "OQ-2 B")
+**OQ-2 — Who receives notifications for workspace objects and owner-less sessions** (answer "OQ-2 A" or "OQ-2 B") — **pending founder: OQ-2**; applied in §8.1 (R1, R2), S-15, S-16, DOC-01
 
 Context and impact: a task's or plan's "owner" field can hold an agent's name as well as a person's, so it cannot safely pick a recipient (§8.1). Omnipus also has no per-account access control for workspaces today (#1421: every account can see every workspace). With several accounts, someone has to receive task, plan and Calendar notifications, and approvals in sessions that no signed-in person started (for example a heartbeat).
 
@@ -2757,7 +2959,7 @@ Context and impact: a task's or plan's "owner" field can hold an agent's name as
 | **A — Recommended** | Every configured account receives them, until a per-account access model exists (#1421); sessions started by a signed-in person still go only to that person |
 | B | Add a new person-only "notify" field to tasks, plans and schedules, filled from the signed-in user who created them, and notify only that person (needs a contract change and a rule for objects created by agents) |
 
-Not founder questions (for team-lead and the chief): the missing notifications Epic (§1.5), confirmation of the riders (#645 items, #1513, the Windows lock residual, AF-4), and filing the N4 issue.
+Process receipts (team-lead, 2026-11-01): N4's tracked issue is #1546 (proposed target 2026-12-15). The notifications Epic waits on the founder (E1). Still for team-lead and the chief, not founder questions: confirmation of the riders (#645 items, #1513, the Windows lock residual, AF-4).
 
 ---
 
@@ -2792,6 +2994,7 @@ Not founder questions (for team-lead and the chief): the missing notifications E
 - Preferences and notifications stay file-based per user (no new storage technology; Hard Constraint #1).
 - Detail level is per device; Debug is not persisted per user.
 - Kind ids are English snake_case and never shown to users.
+- Round 2: volatile table ≤ 200 items per recipient, lost on server restart; `live_seq` = max(previous + 1, Unix microseconds); removal batches ≤ 1,000 ids; `causes` ≤ 10 plus `causes_omitted`; disk observer queue 256 events with counted drops; several drift mounts → first by (`workspace_id`, mount name); the Switch banner stays until Switch succeeds or the panel is closed in that tab.
 
 ### 31.3 Accidental findings (notes to team-lead — not fixed here)
 
@@ -2811,6 +3014,7 @@ Not founder questions (for team-lead and the chief): the missing notifications E
 - 2026-10-31 — Founder interview: N1–N4 and the 14 recommendations accepted (§30.1, §32).
 - 2026-10-31 — Correction during the fix round: the brief said the cause stays generic on the first attempts; the founder-approved voice skill (landed at `e77af6cc9`) names the cause as soon as it is observed and puts the attempt counter on every retry line. This spec follows the skill; generic wording is used only when no cause is known (§13.2).
 
+- 2026-11-01 — Round-2 correction (the one final fix round, no third grill): R2-MAJ-002…014 and R2-MIN-001…004 corrected (§34); R2-MAJ-001 held as NS1 and OQ-1/OQ-2 held with the founder, marked "pending founder" with no provisional answer.
 ---
 
 ## 32. Decisions Log (continues REQ D1–D62)
@@ -2842,7 +3046,7 @@ Not founder questions (for team-lead and the chief): the missing notifications E
 
 | Finding | Disposition | Where |
 |---|---|---|
-| MAJ-001 Lifecycle frames incompatible | Fixed: three strict frame types, no union; `popup` only on `created`; idempotent clear | §7.2, DS-FRAME, S-103, T-48 |
+| MAJ-001 Lifecycle frames incompatible | Fixed: three strict frame types, no union; `popup` only on `created`; idempotent clear (round 2: four types, every invariant in the schema — §34) | §7.2, DS-FRAME, S-103, T-48 |
 | MAJ-002 System-line history contract | Fixed: content vs transport split; all four history stages named | §7.5, S-55, S-106, T-28 |
 | MAJ-003 Merge-on-refresh | Fixed: store revision, tombstones, snapshot rules, refetch on re-auth | §8.4, DS-RECON, S-100…S-102, T-40 |
 | MAJ-004 Calendar producer | Fixed: source map with the Calendar trigger path and run-close classification | §8.1, S-01, S-09, S-18, T-37, T-24 |
@@ -2874,3 +3078,51 @@ Not founder questions (for team-lead and the chief): the missing notifications E
 | STRIDE summary | Addressed: per-threat design answer and test | §15.5 |
 | Reachability check | Addressed: real producers per kind, action destinations, docs reachable | §8.1, §7.6, §17, §25 |
 | Unasked questions A1–A8 | A1 §7.2/§8.4; A2 §8.1; A3 §11.4/§13.7; A4 §14.3; A5 §8.6/§9.3/§16A; A6 §13.5; A7 §1.5 (team-lead); A8 FR-090, §29.3 | as listed |
+
+---
+
+## 34. Round-2 finding dispositions, author clarifications, process receipts
+
+Round 2 was the fixed, final grill (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/notifications-spec-20261030/notifications-spec-review-round2.md`: REVISE, 14 MAJOR, 4 MINOR, no new founder questions). This is the one correction round; there is no third grill. Any blocking finding still open after it goes to the founder through team-lead. N1–N4 and D63–D80 are not reopened and the scope is not redesigned.
+
+### 34.1 Dispositions
+
+| Finding | Disposition | Where |
+|---|---|---|
+| R2-MAJ-001 Masking after a lossy extraction step | **Held — pending founder: NS1** (security item; recommendation A: mask the whole response first, then select). No provisional answer; markers placed | §13.3, §15.1, §28, §30.2, S-92, DS-EXTRACT row 17, DS-SEC row 8, SC-006, DOC-12 |
+| R2-MAJ-002 Snapshot and tombstone resurrection | Corrected: one ordering rule for upserts, removals and snapshots; snapshot floors retire tombstones safely; tombstone checked on snapshot items; stale removals ignored; stale snapshots ignored; three interleavings plus a known-positive update added | §8.4.3, DS-RECON rows 8–12, S-100…S-102, T-40, FR-010 |
+| R2-MAJ-003 Revision-zero lifecycle | Corrected: volatile table with its own counter `live_seq`; volatile items listed, updated, resolved, marked read, deleted and cleared without a 404; failed update of a saved item keeps its base; folded into the file at the next successful write; failed delete/clear stays a visible failure | §7.1, §7.3, §8.4.1–8.4.2, §8.6, S-07, S-14, S-125, DS-RECON rows 13–16, T-02, T-20, T-40, FR-005 |
+| R2-MAJ-004 Bounded payloads vs legal states | Corrected: removals of more than 1,000 ids are one store change sent as independent batches; `causes` ≤ 10 plus `causes_omitted`, ordered | §7.1, §7.2, §8.5, §13.2, §13.6, §14.3, S-126, S-127, DS-FRAME rows 8, 13, 15, 16, DS-INC row 16, T-04, T-06, T-46, T-48 |
+| R2-MAJ-005 Disk observer re-enters the store lock | Corrected: non-blocking bounded queue drained outside every lock; data-folder writes only; notification and preference store writes excluded both ways; no polling | §14.3, S-109, DS-INC rows 13, 18–20, T-24, T-46, FR-065 |
+| R2-MAJ-006 Retry/fallback text missing from the wire | Corrected: `ProviderRetryFrame.text` (cause sentence) plus one fixed retry clause filled from typed facts — one countdown composer; `ProviderFallbackFrame.text` = persisted note bytes; replay fields threaded through `ProviderFallbackNote.yaml`, the hand-synced inline copies in `contracts/asyncapi.yaml` and `Message.yaml` | §7.4, §11.2, §11.4, §13.2, S-51, S-131, DS-FRAME rows 17–18, T-18, FR-056 |
+| R2-MAJ-007 Trust gate drops assembled facts | Corrected: `provider_message` flag replaced by `message_assembled`, set only by the one assembly for any code; `judge_conclusion_failed` exclusion removed; own-limiter and raw text stay untrusted; tested through the display and replay accessors | §7.4, §11.4, §28, S-132, DS-FACT, DS-FRAME row 19, T-45, FR-056 |
+| R2-MAJ-008 Accounting hook does not prove dispatch | Corrected: explicit call-started fact set by both callers immediately before the provider call; image-attach and request-build refusals not observed; adapter pre-send failure stated as `unknown`; `ClassifyError` untouched | §3 N18, §14.1, §14.2, S-86, DS-NET rows 23–25, T-38, FR-060 |
+| R2-MAJ-009 Calendar results depend on run history | Corrected: immutable dispatch origin captured in `runTask`; outcome from the applied `completeTaskWithResult`; no invented `run_id`; trigger edits cannot reclassify a launched execution | §2.1, §2.2, §8.1 "Task outcome source", S-129, T-37, T-24, FR-067 |
+| R2-MAJ-010 Provider-wide success vs per-chat record | Corrected: each turn resolves only its own line and writes its own record; the incident still resolves on any success, as decided | §11.3, §14.3, S-130, DS-INC row 17, T-26, T-46, FR-033 |
+| R2-MAJ-011 Session-wide fallback dedupe | Corrected: one saved note per (turn, unavailable model, answering model); within-reply dedupe kept; DOC-10 sentence to change | §11.4 item 5, S-107, T-45, FR-068, DOC-10 |
+| R2-MAJ-012 Knowledge-drift target without a mapping | Corrected: target `workspace_id` + `root_path` + `collection_id` resolved from `DriftReport.Root` through `KnowledgeLifecycle` holders; deterministic choice; no entry without a mount; honest "no longer available" destination | §7.6, §8.1, S-128, DS-TARGET, T-43, T-24, FR-069 |
+| R2-MAJ-013 Contradictory oracles | Corrected one by one: S-55 (persisted fields vs live-only fields); S-90 / DS-SEC (row-specific outcomes, NS1 and OQ-1 pending); SC-008 (explicit later success); SC-003 (runtime scope, instrument check); S-103 / T-48 (four frame types — every invariant encodable; no server-only assertion); U15 (Chat detail level removed from the server-save row); S-50 / U7 (chat code vs incident kind); S-53 / §11.3 (truthful text; browser-only loss S-53 vs gateway stop S-124); `provider_stalled` on the N2 final pattern; S-29 (both lock orders, convergence to the following GET); S-76 assigned to T-46 and T-34 | §7.2, §11.3, §13.2, §13.7, §14.1, §18, §19, §22, §24 |
+| R2-MAJ-014 Documentation TODOs | Corrected: concrete TODOs added to DOC-01, 02, 03, 04, 05, 06, 08, 09, 10, 11 (#1546 link), 12 (pending founder), 14, 15; new DOC-16 `docs/previews.md` | §25, §23 |
+| R2-MIN-001 Unregistered `{fix}` slot | Corrected: `{fix}` added as a closed slot with its value list; unknown-slot and out-of-list negative fixtures | §13.2, T-14 |
+| R2-MIN-002 Voice authority vs examples | Corrected by the rule "the hard rule wins, the conflicting example or baseline entry changes": VS-1…VS-6; skill edits (VS-2…VS-5) are the voice owner's, before WP-6 receipts; no failing self-check is certified | §13.1, §13.4, §13.5 |
+| R2-MIN-003 Outage delivery bounds | Corrected: all bounds stated (LRU eviction, queue overflow, tab closure, restart); pending queue kept in session storage across reloads; tests for eviction, sixth report, reload before the 204 | §14.4, S-112, S-114, DS-OUT row 13, DS-OUT-CLIENT rows 6, 10, T-27, T-41, FR-062, DOC-10 |
+| R2-MIN-004 Manifest scan cannot find an unlisted source | Corrected: independent whole-tree inventory of emitter call sites reconciled to the manifest; planted bad string in an unlisted source | §13.5, T-47, SC-005, FR-054 |
+| Round-2 review §8, voice points 1, 2, 4 and SAMPLES §2/§14 | Points 1 → VS-1, 2 → VS-2, 4 → VS-3; SAMPLES §2/§14 → VS-4; point 5 truthfulness → VS-5 and S-53/S-124; points 3, 6–10 judged not defects by the review and left as they are | §13.1 |
+
+### 34.2 Author clarifications (round-2 review §10)
+
+| Topic | Answer | Where |
+|---|---|---|
+| Ordering | One rule: an input applies to an id only if it is newer on the counter that governs it (`revision` for saved state, `live_seq` for volatile state) than both the id's known value (item or tombstone) and that counter's snapshot floor. Stale snapshots are ignored whole; tombstones retire when a floor covers them; removals older than a re-created item do nothing; volatile updates order by `live_seq` | §8.4.3 |
+| Wire content | Retry: `ProviderRetryFrame.text` holds the server's cause sentence; the browser appends one fixed manifest clause and fills only its numbers from `retry_at` / `sent_at` / `attempt` / `max_attempts` — the countdown is owned by the existing indicator. Fallback: `ProviderFallbackFrame.text` live = persisted note bytes = `ProviderFallbackNote.message` on replay. Replay facts live in `ProviderFallbackNote.yaml`, the inline copies in `contracts/asyncapi.yaml`, and `Message.yaml` | §7.4, §11.4 |
+| Observation | Dispatch is proven by a call-started flag each caller sets immediately before the provider call; disk events go through a non-blocking queue drained outside every lock and ignore the notification and preference stores' own writes | §14.2, §14.3 |
+| Outcome identity | A turn's execution owns its retry line and recovery record; a fallback cause is saved per (turn, model pair); a task run is classified by the immutable dispatch origin captured in `runTask`, and its outcome comes from the applied `completeTaskWithResult` | §11.3, §11.4, §8.1 |
+| Navigation | `DriftReport.Root` → `KnowledgeLifecycle` holders → `(workspace_id, root_path)` plus `collection_id`; first by (`workspace_id`, mount name) when several; no entry when none; the destination re-checks through `getKnowledgeBaseInfo` | §7.6 |
+| Acceptance and docs | Contradictory oracles corrected individually (§34.1, R2-MAJ-013); every concrete documentation TODO of the review's §7 added | §18–§25 |
+
+### 34.3 Process receipts (recorded as received from team-lead, 2026-11-01)
+
+| Receipt | Record |
+|---|---|
+| N4 deferral | N4's tracked issue is #1546 (proposed target 2026-12-15). |
+| Notifications Epic | The notifications Epic waits on the founder (E1). |
