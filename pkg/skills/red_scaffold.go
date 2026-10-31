@@ -27,6 +27,8 @@ package skills
 import (
 	"errors"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
 // redNotImplemented is the sentinel error every scaffold body returns.
@@ -236,7 +238,26 @@ var (
 	FaultAuditWrite func(event string) error
 	// FaultStagingRemove fails the capture-attempt scratch disposal (§9.5).
 	FaultStagingRemove func(path string) error
+	// FaultForwardRename fails the step-5 live→.swap rename itself
+	// (S-11.9 / S-11.15's "step 5 swap failed").
+	FaultForwardRename func(oldpath, newpath string) error
+	// FaultLiveWrite fails the step-5 single-file WriteFileAtomic after the
+	// parent directory was created and before the file published
+	// (S-11.16).
+	FaultLiveWrite func(path string) error
+	// FaultEmptyDirCleanup fails step 5's empty-directory cleanup os.Remove
+	// after a failed first create (S-11.16 variant).
+	FaultEmptyDirCleanup func(path string) error
 )
+
+// SecretValuesProvider is §7.4's secret-check input: the save check calls it
+// for the current names-and-values enumeration (wired to
+// credentials.Store.SensitiveNamedValues; nil = no store file, an empty
+// store). RED scaffolding seam — the implementation may replace it with its
+// own injection point, but the save check MUST consult the current store
+// through an equivalent seam so tests can drive locked/unreadable/damaged
+// stores.
+var SecretValuesProvider func() ([]credentials.NamedValue, error)
 
 // Capture probes (§9.5 canary + bounded-capture oracles). The implementation
 // calls CaptureOpenProbe for EVERY open attempt on the capture/instruction
