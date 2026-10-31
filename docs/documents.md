@@ -105,6 +105,19 @@ agent may not read is refused with the same answer `read_file` gives.
   agent can write, and Omnipus checks the fingerprints of both components
   before every use: a changed file disables the component until it is
   reinstalled or registered again.
+- Registering LibreOffice never runs it: Omnipus reads the version from the
+  installation's own files. A copy whose version files are missing is refused
+  with `LibreOffice version unreadable`.
+- "A folder an agent can write" covers every way an agent can get write access:
+  agent and workspace folders, workspace mounts, the sandbox's allowed paths,
+  the write allowances in `tools.allow_write_paths`, and write access you
+  approved in a chat. Omnipus checks this again before every preview, so
+  access added later (a settings change or a new approval) turns the
+  component off until that access is removed; the preview then says which
+  access is in the way. A write allowance pattern Omnipus cannot reduce to a
+  folder (for example one without a leading `^/…` folder, or one that ignores
+  letter case) counts as covering every folder, so previews stay off while it
+  is set. If the settings file cannot be read, registration is refused.
 
 ### Limits and isolation
 
