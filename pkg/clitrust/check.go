@@ -50,15 +50,29 @@ func CheckProgramPath(path string, forbidden []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	var root string
+	var inside bool
 	for _, link := range links {
-		if root, inside := insideAny(link, roots); inside {
+		root, inside, err = insideAny(link, roots)
+		if err != nil {
+			return "", err
+		}
+		if inside {
 			return "", fmt.Errorf("the link %q lies inside %q, %s", link, root, agentWritableKinds)
 		}
-		if root, inside := insideAny(filepath.Dir(link), roots); inside {
+		root, inside, err = insideAny(filepath.Dir(link), roots)
+		if err != nil {
+			return "", err
+		}
+		if inside {
 			return "", fmt.Errorf("the folder of the link %q lies inside %q, %s", link, root, agentWritableKinds)
 		}
 	}
-	if root, inside := insideAny(final, roots); inside {
+	root, inside, err = insideAny(final, roots)
+	if err != nil {
+		return "", err
+	}
+	if inside {
 		if len(links) > 0 {
 			return "", fmt.Errorf("%q is a link chain ending at %q, which lies inside %q, %s", path, final, root, agentWritableKinds)
 		}
@@ -70,12 +84,59 @@ func CheckProgramPath(path string, forbidden []string) (string, error) {
 	return final, nil
 }
 
+// forbiddenRoot is one spelling of a forbidden root plus, when the folder
+// exists, the filesystem identities it names (the folder itself and, when
+// the spelling is a link, the link).
+type forbiddenRoot struct {
+	path string
+	ids  []os.FileInfo
+}
+
 // expandRoots returns each forbidden root in its cleaned form and, when it
 // exists, its symlink-resolved form, so both spellings of a root (macOS
 // /var and /private/var) are matched. A root that does not exist has no
 // other spelling; any other resolution failure is an error, because the
-// unresolved spelling alone may not match the real location.
-func expandRoots(forbidden []string) ([]string, error) {
+// unresolved spelling alone may not match the real location. Each existing
+// root also carries its filesystem identity (see insideAny).
+func expandRoots(forbidden []string) ([]forbiddenRoot, error) {
+	paths, err := expandRootPaths(forbidden)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]forbiddenRoot, 0, len(paths))
+	for _, p := range paths {
+		ids, idErr := rootIdentities(p)
+		if idErr != nil {
+			return nil, idErr
+		}
+		out = append(out, forbiddenRoot{path: p, ids: ids})
+	}
+	return out, nil
+}
+
+// rootIdentities stats a root spelling: the folder it reaches and, when the
+// spelling itself is a link, the link. A root that does not exist has no
+// identity; any other failure is an error, because without the identity a
+// differently spelt path to the same folder could not be recognised.
+func rootIdentities(p string) ([]os.FileInfo, error) {
+	var ids []os.FileInfo
+	if fi, err := os.Stat(p); err == nil {
+		ids = append(ids, fi)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("the agent-writable folder %q could not be read, so the program location cannot be checked: %w", p, err)
+	}
+	if fi, err := os.Lstat(p); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			ids = append(ids, fi)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("the agent-writable folder %q could not be read, so the program location cannot be checked: %w", p, err)
+	}
+	return ids, nil
+}
+
+// expandRootPaths is expandRoots' spelling half.
+func expandRootPaths(forbidden []string) ([]string, error) {
 	out := make([]string, 0, len(forbidden)*2)
 	for _, r := range forbidden {
 		if strings.TrimSpace(r) == "" {
@@ -103,14 +164,39 @@ func expandRoots(forbidden []string) ([]string, error) {
 	return out, nil
 }
 
-// insideAny reports whether p equals or lies below one of roots.
-func insideAny(p string, roots []string) (string, bool) {
+// insideAny reports whether p equals or lies below one of roots, by text
+// (pathWithin) or by filesystem identity: p, or any folder above it, is the
+// same file as an existing root. Identity is what the kernel itself uses, so
+// every spelling the volume accepts for a root — letter case, composed or
+// decomposed Unicode (macOS treats "Café" written either way as one folder),
+// or any other equivalence — is caught (T11 round 5, S8). The text check
+// stays for roots that do not exist yet. A path component that cannot be
+// read is an error, never "outside": the missing component could be exactly
+// the one that matches a root.
+func insideAny(p string, roots []forbiddenRoot) (string, bool, error) {
 	for _, r := range roots {
-		if pathWithin(r, p) {
-			return r, true
+		if pathWithin(r.path, p) {
+			return r.path, true, nil
 		}
 	}
-	return "", false
+	for cur := filepath.Clean(p); ; {
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return "", false, fmt.Errorf("%q could not be read, so the program location cannot be checked: %w", cur, err)
+		}
+		for _, r := range roots {
+			for _, id := range r.ids {
+				if os.SameFile(fi, id) {
+					return r.path, true, nil
+				}
+			}
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", false, nil
+		}
+		cur = parent
+	}
 }
 
 // pathWithin reports whether p equals or lies below root. Both are folded by
