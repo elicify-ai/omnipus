@@ -130,6 +130,16 @@ func TestOfficePreview_PackagingFilterPreservesUnrelatedRegistry(t *testing.T) {
 	if _, err := FilterConverterRegistry([]byte(duplicate)); err == nil || !strings.Contains(err.Error(), "registrations") {
 		t.Fatalf("ambiguous spell-checker registrations must be rejected: %v", err)
 	}
+	t.Run("filtering_cannot_leave_empty_registry", func(t *testing.T) {
+		// AD-3's packaged result must remain usable: deleting its only
+		// implementation cannot produce a successful packaging artifact.
+		// The spec requires refusal, not a particular error string/type.
+		onlyRetired := registryXML(componentXML("libmacspelllo", macSpellFixture))
+		got, err := FilterConverterRegistry([]byte(onlyRetired))
+		if err == nil || got != nil {
+			t.Fatalf("packaging accepted an implementation-free registry: result=%q err=%v", got, err)
+		}
+	})
 }
 
 func TestConverterRegistryNamespaceIdentity(t *testing.T) {
