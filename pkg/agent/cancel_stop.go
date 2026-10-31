@@ -72,6 +72,18 @@ func (ts *turnState) claimCancel(stopOnly bool) bool {
 	// tail. Administrative cancellation continues to end session-owned goals.
 	if stopOnly {
 		ts.stopRequested.Store(true)
+		// #1534: the saved stopped answer ends where the screen stopped.
+		// Cut the turn's streamer off before providerCancel runs; deltas
+		// still in flight are published (the browser discards them) but not
+		// saved. Only a user Stop cuts; administrative cancel and hard abort
+		// keep today's behaviour. Inline optional interface, like the other
+		// streamer capabilities in turn_stream.go.
+		ts.mu.RLock()
+		s := ts.lastStreamer
+		ts.mu.RUnlock()
+		if cut, ok := s.(interface{ CutoffAtStop() }); ok {
+			cut.CutoffAtStop()
+		}
 	}
 	ts.cancelFired.Store(true)
 	return true

@@ -97,6 +97,12 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 			// visible to anyone.
 			rt.ts.nextRoundMessageID()
 			rt.ts.stampStreamerMessageID(streamer)
+			// #1534: register this round's streamer as the turn's last one
+			// BEFORE any token flows, so a Stop claimed mid-stream
+			// (claimCancel → CutoffAtStop) cuts the streamer that is
+			// actually receiving the deltas, and the tail flush below runs
+			// after that cut.
+			rt.ts.setLastStreamer(streamer)
 			var lastChunk string
 			// Residual native tool-call markup must never reach the
 			// live view. This is not only a rendering concern: the
@@ -168,7 +174,7 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 			// Store the streamer so the turn-level code can finalize once,
 			// after the last LLM call, preventing premature "done" frames
 			// that tell the frontend the response is complete mid-turn.
-			rt.ts.setLastStreamer(streamer)
+			// (Registered as the turn's last streamer before streaming.)
 			rt.ts.setLastProducedModel(model)
 			rt.ts.setLastProducedProvider(providerName)
 			// FR-013: also push to the streamer so Finalize stamps the

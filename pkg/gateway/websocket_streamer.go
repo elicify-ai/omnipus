@@ -407,7 +407,19 @@ func (s *wsStreamer) SuppressTranscriptWrite() {
 func (s *wsStreamer) StreamedContentLen() int {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
-	return s.accumulated.Len()
+	return s.accumulated.Len() + s.publishedAfterCut
+}
+
+// CutoffAtStop freezes the text this streamer will save at the length it
+// holds now (#1534, founder decision 2026-10-31: the saved stopped answer
+// ends where the screen stopped). Called once by the agent loop's Stop claim
+// (pkg/agent/cancel_stop.go::claimCancel) through an inline optional
+// interface. Later Update calls still publish their frames — the browser has
+// already frozen the bubble and discards them — but are no longer saved.
+func (s *wsStreamer) CutoffAtStop() {
+	s.statsMu.Lock()
+	s.stopCut = true
+	s.statsMu.Unlock()
 }
 
 // SetTurnStats is called by the agent loop's finalizeStreamer just before
@@ -591,9 +603,14 @@ func (s *wsStreamer) Update(ctx context.Context, content string) error {
 
 	// Accumulate this delta for Finalize's transcript write — a shadow
 	// (non-owning) stream's content must still be fully captured even though
-	// it withholds live frames (see the shadow gate above).
+	// it withholds live frames (see the shadow gate above). Past a claimed
+	// Stop (CutoffAtStop) the delta is still published below but not saved.
 	s.statsMu.Lock()
-	s.accumulated.WriteString(content)
+	if s.stopCut {
+		s.publishedAfterCut += len(content)
+	} else {
+		s.accumulated.WriteString(content)
+	}
 	s.statsMu.Unlock()
 
 	if shadow {
@@ -693,6 +710,10 @@ type wsStreamerFinalize struct {
 	shadow              bool
 	// accumulated is the streamer's own text, read once under statsMu.
 	accumulated string
+	// stopCut/publishedAfterCut snapshot CutoffAtStop's state (#1534): the
+	// saved text ends at the claimed Stop, but frames past it were published.
+	stopCut           bool
+	publishedAfterCut int
 	// pendingFinalContent is a new terminal outcome, not the already-saved narration.
 	pendingFinalContent string
 	systemNotice        *generated.ReplayMessageFrame
@@ -842,7 +863,9 @@ func (wsf *wsStreamerFinalize) publishDone() {
 	// Suppress Send only when streaming already covered the final outcome.
 	// Earlier narration must not suppress a separate terminal notice; nor
 	// should an empty stream suppress the outbound fallback.
-	if wsf.s.channel != nil && (wsf.systemNotice != nil || (wsf.accumulated != "" && wsf.pendingFinalContent == "")) {
+	// Text published past a claimed Stop (#1534) still counts as streamed.
+	streamedAny := wsf.accumulated != "" || wsf.publishedAfterCut > 0
+	if wsf.s.channel != nil && (wsf.systemNotice != nil || (streamedAny && wsf.pendingFinalContent == "")) {
 		wsf.s.channel.markStreamed(wsf.s.chatID)
 	}
 }
@@ -941,6 +964,8 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	}
 	wsf.shadow = wsf.s.isShadowStream
 	wsf.accumulated = wsf.s.accumulated.String()
+	wsf.stopCut = wsf.s.stopCut
+	wsf.publishedAfterCut = wsf.s.publishedAfterCut
 	wsf.s.statsMu.Unlock()
 
 	// The harness already persisted this system entry. Neither its prose
@@ -977,12 +1002,15 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			// carries the full prefix+suffix answer the live bubble showed;
 			// persist THAT, not the buffer.
 			content = wsf.continuationContent
-		} else if content == "" && wsf.finalContent != "" {
+		} else if content == "" && wsf.finalContent != "" && !wsf.stopCut {
 			// Fallback: when accumulated is empty (every Update() call silently
 			// failed because the client WS was already closed), use the
 			// finalContent the agent loop passed in. Without this fallback,
 			// disconnected mid-stream turns would leave no assistant entry in
 			// transcript.jsonl and the user sees nothing on reconnect/replay.
+			// Not after a claimed Stop (#1534): an empty buffer then means
+			// the screen showed nothing, and finalContent would save text
+			// the user never saw.
 			content = wsf.finalContent
 		}
 		// ADR-087 D2/D4a/D4b: a truncated turn must still get an entry even

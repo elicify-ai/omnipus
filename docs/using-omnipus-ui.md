@@ -298,6 +298,8 @@ After a first **Stop**, **Escape**, or `/stop`, the same Stop button stays avail
 
 `/stop-redirect` without an instruction (or with only spaces) replies with usage and changes nothing. The instruction is required and sent as typed after the command, with surrounding spaces removed. If no active session is attached to the current chat, a visible message asks you to reopen it; no redirect is sent. If the connection is down, the redirect cannot be sent: a visible error says so, this chat's turn keeps running, and you can run the command again once you are reconnected.
 
+A reply you stop with Stop, Escape, `/stop` or `/cancel` keeps the text that was on screen when you pressed Stop, also after you reload the page, with the same (interrupted) label; text the agent was still sending after the Stop is not saved, except that a few words already on their way at the moment you pressed it can still appear after a reload.
+
 A turn stopped by `/stop-redirect` keeps its partial reply but is not labelled (interrupted), because it was redirected, not abandoned; a turn stopped with Stop, Escape, `/stop` or `/cancel` still shows (interrupted). After you reload the page this holds for a redirected main chat and a redirected helper chat. A tab that did not send the redirect may show (interrupted) until it is reloaded. One case cannot be told apart from the saved history, so after a reload it can differ from what you saw live: a turn you stopped with Stop and then redirected later, with no message of yours in between, loses its (interrupted) label.
 
 ### Clear a chat's context

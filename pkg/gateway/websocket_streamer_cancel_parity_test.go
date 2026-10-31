@@ -239,11 +239,5 @@ func TestWsStreamer_CutoffAtStop_ConcurrentUpdate_SavesOnlyPreCutBody(t *testing
 			"the saved body must be a prefix of the delivered stream (the cut freezes, never reorders): saved=%q full=%q", saved, full)
 		assert.NotContains(t, saved, "TAIL",
 			"nothing delivered after the server claimed the Stop may be saved (#1534)")
-	} else {
-		// Characterization (no cutoff seam exists yet): today the full stream
-		// is saved — exactly the #1534 defect. This branch disappears once the
-		// capability exists; the Errorf above is this test's RED.
-		assert.Equal(t, full, saved,
-			"characterization test — with no CutoffAtStop seam the whole stream is saved; this equality is the defect, not the expectation")
 	}
 }
