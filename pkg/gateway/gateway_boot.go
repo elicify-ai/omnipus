@@ -353,14 +353,8 @@ func setupAndStartServices(
 	//      starts its engine later, with the decisions made here.
 	tools.HoldTaskGoalEndedUntilReplay()
 	agent.ReconcileInterruptedTasks(agent.GetTaskStore(stg.agentLoop))
-	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
-		stg.taskTrigger = agent.NewTaskTriggerScheduler(
-			filepath.Join(stg.homePath, "tasks_triggers", "jobs.json"),
-			tStore, agent.GetTaskExecutor(stg.agentLoop),
-		)
-		if err := stg.taskTrigger.PrepareAfterPhysicalBoot(); err != nil {
-			return nil, fmt.Errorf("error preparing task trigger scheduler: %w", err)
-		}
+	if err := stg.prepareTaskTrigger(); err != nil {
+		return nil, err
 	}
 
 	if runningServices, stop, err := stg.startSchedulers(); stop {
@@ -396,7 +390,28 @@ func setupAndStartServices(
 	return stg.startBackgroundServices()
 }
 
+// prepareTaskTrigger creates the task trigger scheduler and classifies the
+// dead process's interrupted fires (PrepareAfterPhysicalBoot). It MUST run
+// before startSchedulers, which starts the first task producers (cron engine,
+// queued-task drain) and only then starts this scheduler with the decisions
+// made here (re-review N1). No-op when the agent loop has no task store.
+func (stg *setupAndStartServicesState) prepareTaskTrigger() error {
+	tStore := agent.GetTaskStore(stg.agentLoop)
+	if tStore == nil {
+		return nil
+	}
+	stg.taskTrigger = agent.NewTaskTriggerScheduler(
+		filepath.Join(stg.homePath, "tasks_triggers", "jobs.json"),
+		tStore, agent.GetTaskExecutor(stg.agentLoop),
+	)
+	if err := stg.taskTrigger.PrepareAfterPhysicalBoot(); err != nil {
+		return fmt.Errorf("error preparing task trigger scheduler: %w", err)
+	}
+	return nil
+}
+
 // startSchedulers constructs and starts the gateway's cron-backed scheduling and drain services in boot order.
+// The task trigger scheduler is not created here: prepareTaskTrigger must have run first.
 func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error) {
 	stg.runningServices = &services{credStore: stg.credStore, bundle: stg.bundle, sandboxResult: stg.sandboxResult, homePath: stg.homePath}
 

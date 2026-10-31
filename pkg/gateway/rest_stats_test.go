@@ -337,7 +337,13 @@ func TestHandleTokenStats_ExcludesOutOfPeriodSessions(t *testing.T) {
 	// simulating a genuinely out-of-period session requires writing its
 	// on-disk files directly, BEFORE the store ever caches it, exactly as a
 	// session created a month ago would look on disk.
-	outOfPeriod := time.Now().AddDate(0, -1, 0).UTC()
+	//
+	// Backdate to the middle of the PREVIOUS month, anchored on the first of
+	// the current month: time.Now().AddDate(0, -1, 0) normalizes on a 31st
+	// (Oct 31 -> "Sep 31" -> Oct 1), landing inside the current month and
+	// failing this test every month-end (6b CI triage item 5).
+	now := time.Now().UTC()
+	outOfPeriod := time.Date(now.Year(), now.Month(), 1, 12, 0, 0, 0, time.UTC).AddDate(0, 0, -15)
 	writeTestSessionFilesDirect(t, api, "agent-2", 999, 999, outOfPeriod)
 
 	// Step 3: Call GET /api/v1/stats/tokens?period=month.

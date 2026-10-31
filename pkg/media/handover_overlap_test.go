@@ -1,6 +1,7 @@
 package media
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"sync"
@@ -42,7 +43,7 @@ func TestReview6b_HandoverStoreDoesNotDoubleCount(t *testing.T) {
 	if err := live.ReleaseAll(scope); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("last ref released but managed file was retained: stat error=%v", err)
 	}
 }

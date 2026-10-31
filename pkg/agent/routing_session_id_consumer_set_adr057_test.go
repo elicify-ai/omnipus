@@ -311,6 +311,20 @@ var u19RoutingSessionIDScanFiles = []string{
 	// session-archive write (#1178, 6b0d136e5, amendment §4.2) is a payload
 	// stamp exactly like its siblings. The directory re-derivation caught it.
 	"turn_exit.go",
+	// provider_retry_plan.go joined the list in the 6b CI triage repair
+	// (2026-10-31): the #1280 retry plan (d16e85644) moved callProviderOnce's
+	// RetryObserver closure into providerRetryObserver, carrying its
+	// LLMRetryPayload.SessionID stamp with it - a relocation of the existing
+	// provider_retry payload stamp, not a new consumer. The directory
+	// re-derivation caught the omission.
+	"provider_retry_plan.go",
+	// provider_status.go joined the list in the same repair: d1e265543
+	// (#1478, #1280) added emitProviderStatus, whose ProviderStatusPayload.
+	// SessionID stamp addresses the provider_status frame (silence notice /
+	// recovered note) exactly as the provider_retry stamp above does - the
+	// gateway hub (websocket_forward_provider_status.go) resolves it the same
+	// way. A genuine new WS-stamping read: 22 -> 23, total 32 -> 33.
+	"provider_status.go",
 	// The remaining four mention routingSessionID in prose only (verified
 	// 2026-09-24: zero AST reads). Scanning them and finding nothing is
 	// itself the closure proof this list exists to make — a read that ever
@@ -444,7 +458,8 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 		// prepare/finalize/iteration/response/tools stages) — each verified
 		// directly (assembleInitialContext x3, resolveWorkspaceAndModel x2,
 		// beginIteration x1, finalizeTurn x1, prepareToolSurface x1,
-		// callProviderOnce x1 in loop_run_turn.go;
+		// callProviderOnce x1 in loop_run_turn.go - since #1280 that closure
+		// lives in provider_retry_plan.go::providerRetryObserver;
 		// handleInitialResponse x1, surfaceEmptyRetryOutcome x1 in
 		// loop_run_turn_iterations.go; handleProviderResponse x1 in
 		// loop_run_turn_response.go; prepareDispatch x1 in
@@ -483,6 +498,25 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 		// loop-family sibling. A second funcName reading the field here falls
 		// through and fails closed below.
 		if r.funcName == "reportSessionSaveFailure" {
+			return u19BucketWSStamping
+		}
+	case "provider_retry_plan.go":
+		// Added 2026-10-31 (6b CI triage): providerRetryObserver's ONLY
+		// routingSessionID read is the LLMRetryPayload.SessionID stamp on the
+		// provider_retry event - the same stamp callProviderOnce's §7.4
+		// RetryObserver closure made before #1280 (d16e85644) moved the
+		// closure here, so the WS-stamping count is unchanged. A second
+		// funcName reading the field here falls through and fails closed.
+		if r.funcName == "providerRetryObserver" {
+			return u19BucketWSStamping
+		}
+	case "provider_status.go":
+		// Added 2026-10-31 (6b CI triage): emitProviderStatus's ONLY
+		// routingSessionID read is the ProviderStatusPayload.SessionID stamp
+		// on the provider_status event (#1478 silence notice, #1280 recovered
+		// note, d1e265543) - a WS frame payload stamp like its provider_retry
+		// sibling. A second funcName reading the field here fails closed.
+		if r.funcName == "emitProviderStatus" {
 			return u19BucketWSStamping
 		}
 	case "browser_deferral.go":
@@ -544,9 +578,10 @@ func u19CountClassAInWS5Artefact(t *testing.T) int {
 // (binding Rule 4 — proving the search is live) BEFORE asserting closure,
 // then asserts every read classifies into one of the five named buckets
 // with the exact expected per-bucket count, and finally asserts the grand
-// total is exactly 32 (7 role-B + 2 pre-arm + 22 WS-stamping + 0
+// total is exactly 33 (7 role-B + 2 pre-arm + 23 WS-stamping + 0
 // inheritance-copy + 1 browser control-gate — including the 2026-10-22
-// removal of the fallback notice's routing read; see each
+// removal of the fallback notice's routing read and the 2026-10-31
+// provider_status stamp; see each
 // assertion's own comment, for how this moved from the pre-ADR-091 total of
 // 34) — none outside the set, none silently missing.
 func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
@@ -610,12 +645,13 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"steered-child reconstruction path (steer_reconstruct.go) does not build or read a pre-arm "+
 			"key from a live turnState at all)", got)
 	}
-	if got := counts[u19BucketWSStamping]; got != 22 {
-		t.Errorf("WS-payload-stamping reads = %d, want 22 (previously 23; fallback_note.go::queueProviderFallbackNote now addresses the producing transcriptSessionID, not routingSessionID). The historical derivation includes loop_empty_tool_envelope.go::handleEmptyToolEnvelope, #1278, 2026-10-12, and turn_exit.go::reportSessionSaveFailure, #1178, 2026-10-14. The eighteen pre-2026-09-24 sites were "+
+	if got := counts[u19BucketWSStamping]; got != 23 {
+		t.Errorf("WS-payload-stamping reads = %d, want 23 (22 + provider_status.go::emitProviderStatus's ProviderStatusPayload.SessionID stamp, d1e265543, 2026-10-31 amendment; provider_retry_plan.go::providerRetryObserver is the relocated callProviderOnce provider_retry stamp, not an addition. Before that 22: previously 23; fallback_note.go::queueProviderFallbackNote now addresses the producing transcriptSessionID, not routingSessionID). The historical derivation includes loop_empty_tool_envelope.go::handleEmptyToolEnvelope, #1278, 2026-10-12, and turn_exit.go::reportSessionSaveFailure, #1178, 2026-10-14. The eighteen pre-2026-09-24 sites were "+
 			"loop.go x5, its four loop_run_turn*.go siblings x11, and external_dispatch.go x2 "+
 			"(the classifier's own comment on this bucket has the per-site breakdown). Three verified "+
 			"additions since, each re-read site-by-site in the 2026-10-02 QA repair: the nineteenth is "+
-			"loop_run_turn.go::callProviderOnce's §7.4 RetryObserver closure stamping "+
+			"loop_run_turn.go::callProviderOnce's §7.4 RetryObserver closure (since #1280 "+
+			"provider_retry_plan.go::providerRetryObserver) stamping "+
 			"LLMRetryPayload.SessionID for the provider_retry frame (MAJ-102); the TWENTIETH is "+
 			"loop_run_turn.go::prepareToolSurface's tool_assembly ErrorPayload stamp (d2783b1be, "+
 			"2026-09-30, 'preserve terminal notices after tool narration') — present in the tree since "+
@@ -714,7 +750,12 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	// 2026-10-22 fallback-live amendment (18d2619bc): the fallback event now
 	// addresses its producing transcriptSessionID. Remove exactly that read:
 	// WS-stamping 23 -> 22 and total 33 -> 32; all other consumers are unchanged.
-	const wantTotal = 32 // 7 role-B + 2 pre-arm + 22 WS-stamping + 0 inheritance + 1 browser gate
+	// 2026-10-31 6b CI triage amendment: #1280 (d16e85644) moved
+	// callProviderOnce's provider_retry stamp into provider_retry_plan.go::
+	// providerRetryObserver (relocation, count unchanged), and #1478
+	// (d1e265543) added provider_status.go::emitProviderStatus's
+	// ProviderStatusPayload stamp: WS-stamping 22 -> 23, total 32 -> 33.
+	const wantTotal = 33 // 7 role-B + 2 pre-arm + 23 WS-stamping + 0 inheritance + 1 browser gate
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the named buckets, or one of the buckets "+

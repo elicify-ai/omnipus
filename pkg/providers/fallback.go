@@ -480,17 +480,6 @@ func (fc *FallbackChain) Execute(
 		// attempt), and a candidate skipped by the C-9 ceiling or the D14
 		// cap is never marked (A-4).
 		candStart := fc.now()
-		var lastErr error
-		skipWithoutMark := false
-		// Recorded with the A-4/D14 skip so the observability record can say
-		// whether the #1280 plan governed the failure that was skipped, and
-		// what its real failure class was — since the plan took over, a skip
-		// is no longer rate-limit-only (an over-ceiling Retry-After on a 503
-		// or an exhausted wait budget reach it too), so the record must not
-		// hardcode a rate-limit label.
-		skipRetryPlan := false
-		var skipFailErr *FailoverError
-		var calls int
 
 		for attemptNo := 1; ; attemptNo++ {
 			// Fresh per-candidate budget per CALL — a retry is a new call
@@ -502,7 +491,6 @@ func (fc *FallbackChain) Execute(
 			attemptCtx, attemptCancel := fc.candidateBudget(ctx, left, candidate)
 			resp, err := run(attemptCtx, candidate.Provider, candidate.Model)
 			attemptCancel() // release resources immediately; do not defer inside the loop
-			calls = attemptNo
 
 			if err == nil {
 				// Success.
@@ -566,7 +554,6 @@ func (fc *FallbackChain) Execute(
 			}
 
 			// Retriable error.
-			lastErr = err
 
 			// §7.4 C-10: bytes of THIS attempt already streamed to the user
 			// (the caller's ctx-carried check; pkg/agent wires the single-
@@ -584,9 +571,8 @@ func (fc *FallbackChain) Execute(
 			// decide whether THIS candidate is called again in place.
 			plan := fc.inPlaceRetry(ctx, candidates, i, attemptNo, err, failErr, c10Streamed)
 			if plan.skip {
-				skipWithoutMark = true
-				skipRetryPlan = plan.planCandidate
-				skipFailErr = failErr
+				result.Attempts = append(result.Attempts,
+					fc.skippedAttempt(candidate, err, failErr, candStart, attemptNo, plan.planCandidate))
 				break
 			}
 			if plan.retry {
@@ -641,24 +627,6 @@ func (fc *FallbackChain) Execute(
 			break
 		}
 
-		if skipWithoutMark {
-			// A-4/D14 skip: recorded for observability, never marked. RetryPlan
-			// says whether the plan governed the skipped failure; Reason is the
-			// real class of the last failed call — non-nil whenever the skip
-			// was decided (inPlaceRetry dereferences it), never a hardcoded
-			// rate-limit label.
-			result.Attempts = append(result.Attempts, FallbackAttempt{
-				Provider:  candidate.Provider,
-				Model:     candidate.Model,
-				Error:     lastErr,
-				Reason:    skipFailErr.Reason,
-				Skipped:   true,
-				Duration:  fc.since(candStart),
-				Calls:     calls,
-				RetryPlan: skipRetryPlan,
-			})
-		}
-
 		// Every candidate that reached the attempt loop consumes one slot
 		// of the fair budget split — marked, skipped-without-mark or not
 		// (cooldown skips decrement earlier, before the loop).
@@ -672,6 +640,30 @@ func (fc *FallbackChain) Execute(
 
 	// All candidates were skipped (all in cooldown).
 	return nil, &FallbackExhaustedError{Attempts: result.Attempts}
+}
+
+// skippedAttempt builds the A-4/D14 skip record: recorded for observability,
+// never marked. retryPlan says whether the #1280 plan governed the skipped
+// failure; Reason is the real class of the last failed call (failErr is
+// non-nil whenever the skip was decided — inPlaceRetry dereferences it), never
+// a hardcoded rate-limit label: since the plan took over, a skip is no longer
+// rate-limit-only (an over-ceiling Retry-After on a 503 or an exhausted wait
+// budget reach it too). lastErr is the raw error of that call; calls is how
+// many calls the candidate made.
+func (fc *FallbackChain) skippedAttempt(
+	candidate FallbackCandidate, lastErr error, failErr *FailoverError,
+	candStart time.Time, calls int, retryPlan bool,
+) FallbackAttempt {
+	return FallbackAttempt{
+		Provider:  candidate.Provider,
+		Model:     candidate.Model,
+		Error:     lastErr,
+		Reason:    failErr.Reason,
+		Skipped:   true,
+		Duration:  fc.since(candStart),
+		Calls:     calls,
+		RetryPlan: retryPlan,
+	}
 }
 
 // ExecuteImage runs the fallback chain for image/vision requests.
