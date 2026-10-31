@@ -24,6 +24,7 @@ import { useSessionStore } from './session'
 import { useConnectionStore } from './connection'
 import { useToolApprovalStore } from './toolApproval'
 import { pendingCancelAckSids } from './chat/runtime-state'
+import { emptySessionState } from './chat/session'
 import type { ServerFrame } from '@/lib/ws'
 
 const SID = 'session-office-preview'
@@ -106,6 +107,7 @@ beforeEach(() => {
   useChatStore.setState({
     sessionsById: {
       [SID]: {
+        ...emptySessionState(),
         messageOrder: ['m1'],
         messagesById: { m1: { id: 'm1', role: 'assistant', content: 'done', timestamp: new Date().toISOString() } },
       },
@@ -132,7 +134,7 @@ beforeEach(() => {
 describe('office preview thumbnail groups in the chat store (§5.2)', () => {
   it('carries page_number and the preview record so the group and viewer can render', () => {
     act(() => {
-      useChatStore.getState().handleFrame({ frame: PAGE_FRAME } as never)
+      useChatStore.getState().handleFrame(PAGE_FRAME)
     })
     const media = sessionMedia()
     expect(media.length).toBe(2)
@@ -144,8 +146,8 @@ describe('office preview thumbnail groups in the chat store (§5.2)', () => {
 
   it('keeps two identical previews as separate groups (dedup key = tool_call_id + URL)', () => {
     act(() => {
-      useChatStore.getState().handleFrame({ frame: PAGE_FRAME } as never)
-      useChatStore.getState().handleFrame({ frame: SECOND_GROUP_FRAME } as never)
+      useChatStore.getState().handleFrame(PAGE_FRAME)
+      useChatStore.getState().handleFrame(SECOND_GROUP_FRAME)
     })
     // B-40: the same page URL in a second preview group must survive —
     // today's URL-only dedupe collapses it into the first group.
@@ -154,7 +156,7 @@ describe('office preview thumbnail groups in the chat store (§5.2)', () => {
 
   it('records the unavailable state instead of the generic not-displayed notice', () => {
     act(() => {
-      useChatStore.getState().handleFrame({ frame: UNAVAILABLE_FRAME } as never)
+      useChatStore.getState().handleFrame(UNAVAILABLE_FRAME)
     })
     // §5.3: the person sees the persistent "Page previews unavailable —
     // <reason>" card (renderer_missing shows install guidance, no Retry).
