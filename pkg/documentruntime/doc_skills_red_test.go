@@ -14,6 +14,7 @@ package documentruntime
 // fail on the baseline.
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,15 +34,24 @@ func TestChildEnvironment_NoDocumentSkillsEnv(t *testing.T) {
 		Prefix:   t.TempDir(),
 		Bin:      filepath.Join(t.TempDir(), "bin"),
 		Lib:      filepath.Join(t.TempDir(), "lib"),
-		Skills:   filepath.Join(t.TempDir(), "skills"),
 		Manifest: filepath.Join(t.TempDir(), "manifest.json"),
 		Cache:    t.TempDir(),
 	}
 	env := ChildEnvironment([]string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}, layout)
+	require.NotEmpty(t, env, "positive control: child environment must exist")
+	values := map[string]string{}
 	for _, kv := range env {
+		key, value, ok := strings.Cut(kv, "=")
+		require.True(t, ok)
+		values[key] = value
 		assert.False(t, strings.HasPrefix(strings.ToUpper(kv), "OMNIPUS_DOCUMENT_SKILLS="),
 			"RED: the child env still carries OMNIPUS_DOCUMENT_SKILLS (%q) — the second copy is served through it", kv)
 	}
+	assert.Equal(t, layout.Bin+string(os.PathListSeparator)+"/usr/bin:/bin", values["PATH"])
+	assert.Equal(t, filepath.Join(layout.Lib, "python"), values["PYTHONPATH"])
+	// No LANG-preservation oracle: r15 S-1.5 does not require one. The
+	// exact PATH/PYTHONPATH controls above already reject an empty environment.
+	assert.Equal(t, layout.Cache, values["XDG_CACHE_HOME"])
 }
 
 // TestProvision_NoEmbeddedSkillsCopy (S-1.5 app part; §15 item 3).
@@ -56,9 +66,19 @@ func TestProvision_NoEmbeddedSkillsCopy(t *testing.T) {
 	_, err = ProvisionFirstParty(layout)
 	require.NoError(t, err, "RED: provision with the skills copy removed is not implemented")
 
-	_, statErr := os.Stat(layout.Skills)
-	assert.True(t, os.IsNotExist(statErr),
-		"RED: provision still materializes a skills copy at %s — the registry must stay the one copy", layout.Skills)
+	files := 0
+	require.NoError(t, filepath.WalkDir(layout.Prefix, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		files++
+		assert.NotEqual(t, "SKILL.md", d.Name(), "no skill instructions copied anywhere under document runtime: %s", p)
+		return nil
+	}))
+	require.Greater(t, files, 0, "positive control: provision actually wrote runtime assets")
 }
 
 // manifestRevisionForTest returns a valid lowercase-hex revision for

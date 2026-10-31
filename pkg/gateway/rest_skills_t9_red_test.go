@@ -105,7 +105,7 @@ func TestRestCopy_Route(t *testing.T) {
 	t9SkillFixture(t, api, "src")
 
 	copyHandler := func(method, path, body string) *httptest.ResponseRecorder {
-		return t9Do(api.HandleSkillCopy, method, path, "", body)
+		return t9Do(api.HandleSkills, method, path, "", body)
 	}
 
 	t.Run("valid copy is 201 with the new skill", func(t *testing.T) {
@@ -113,7 +113,8 @@ func TestRestCopy_Route(t *testing.T) {
 		assert.Equal(t, http.StatusCreated, w.Code,
 			"RED: the copy route is a scaffold, got %d: %s", w.Code, w.Body.String())
 		m := t9Body(t, w)
-		assert.Contains(t, m, "name", "the 201 body is the Skill envelope")
+		require.Equal(t, "dst", m["id"], "the 201 body names the actual copy")
+		t9ValidateSchema(t, "Skill", w)
 		_, statErr := os.Stat(filepath.Join(api.homePath, "skills", "dst", "SKILL.md"))
 		assert.NoError(t, statErr, "the destination exists")
 	})
@@ -141,7 +142,7 @@ func TestRestCopy_Route(t *testing.T) {
 func TestRestList_HasLocalChanges(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
-	skillsDir, _ := t9SkillFixture(t, api, "x")
+	skillsDir, _ := t9InstalledFixture(t, api, "x")
 
 	w := t9Do(api.HandleSkills, http.MethodGet, "/api/v1/skills", "", "")
 	require.Equal(t, http.StatusOK, w.Code)
@@ -166,6 +167,7 @@ func TestRestList_HasLocalChanges(t *testing.T) {
 	manifestCount := func() int {
 		entries, err := os.ReadDir(filepath.Join(historyRoot, "x", "versions"))
 		if err != nil {
+			require.NoError(t, err, "installed fixture must have readable history")
 			return 0
 		}
 		return len(entries)
@@ -193,6 +195,7 @@ func TestRestS1119_FailureEnvelopes(t *testing.T) {
 		t.Helper()
 		require.Equal(t, wantStatus, w.Code, "body: %s", w.Body.String())
 		m := t9Body(t, w)
+		t9ValidateSchema(t, "ConfigurationMutationFailureState", w)
 		stage, _ := m["error_stage"].(string)
 		assert.NotEmpty(t, stage, "error_stage names the failed pipeline stage")
 		persist, _ := m["persistence_status"].(string)
@@ -208,7 +211,7 @@ func TestRestS1119_FailureEnvelopes(t *testing.T) {
 	t.Run("leg d: delete manifest failure is 500 with the failure envelope", func(t *testing.T) {
 		api, cleanup := newTestRestAPI(t)
 		defer cleanup()
-		_, rev := t9SkillFixture(t, api, "x")
+		_, rev := t9InstalledFixture(t, api, "x")
 		prev := skills.FaultManifestWrite
 		skills.FaultManifestWrite = t9FaultAlways
 		defer func() { skills.FaultManifestWrite = prev }()
@@ -220,20 +223,20 @@ func TestRestS1119_FailureEnvelopes(t *testing.T) {
 	t.Run("leg b: copy storage failure is 500 with the failure envelope", func(t *testing.T) {
 		api, cleanup := newTestRestAPI(t)
 		defer cleanup()
-		_, rev := t9SkillFixture(t, api, "src")
+		_, rev := t9InstalledFixture(t, api, "src")
 		_ = rev
 		prev := skills.FaultManifestWrite
 		skills.FaultManifestWrite = t9FaultAlways
 		defer func() { skills.FaultManifestWrite = prev }()
 
-		w := t9Do(api.HandleSkillCopy, http.MethodPost, "/api/v1/skills/src/copy", "", `{"new_id":"dst"}`)
+		w := t9Do(api.HandleSkills, http.MethodPost, "/api/v1/skills/src/copy", "", `{"new_id":"dst"}`)
 		assertFailureEnvelope(t, w, http.StatusInternalServerError)
 	})
 
 	t.Run("leg a: class-3 success maps the warning into message, never a warning field", func(t *testing.T) {
 		api, cleanup := newTestRestAPI(t)
 		defer cleanup()
-		_, rev := t9SkillFixture(t, api, "x")
+		_, rev := t9InstalledFixture(t, api, "x")
 		prevSwap := skills.FaultSwapRemove
 		skills.FaultSwapRemove = t9FaultAlways
 		defer func() { skills.FaultSwapRemove = prevSwap }()
@@ -258,3 +261,40 @@ func t9FaultAlways(path string) error {
 type t9FaultError struct{ path string }
 
 func (e *t9FaultError) Error() string { return "t9 injected storage failure: " + e.path }
+
+func t9ValidateSchema(t *testing.T, name string, w *httptest.ResponseRecorder) {
+	t.Helper()
+	msg, serverErr := validateBodyAgainstSchema(name, w.Body.Bytes())
+	require.False(t, serverErr, "declared schema is loadable: %s", msg)
+	require.Empty(t, msg, "real response validates against declared %s: %s", name, w.Body.String())
+}
+
+// A true marketplace-style installation, not an externally written folder.
+// Stage bytes are fixture input; publication, history and read-time flags real.
+func t9InstalledFixture(t *testing.T, api *restAPI, slug string) (string, string) {
+	t.Helper()
+	root := filepath.Join(api.homePath, "skills")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	staged := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(staged, "SKILL.md"), []byte("---\nname: "+slug+"\ndescription: t9 installed fixture\n---\ninstalled body\n"), 0o644))
+	out, err := skills.ApplyChange(root, skills.ChangeRequest{Kind: skills.KindInstall, Slug: slug, StagedDir: staged, Expect: skills.Expectation{Absent: true}, Actor: skills.ChangeActor{Kind: "person", Tool: "rest-install"}})
+	require.NoError(t, err, "RED: real installation pipeline required for installed-state fixture")
+	return root, out.Revision
+}
+
+func TestRestList_ExternalNoHistoryIsLocallyChanged(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+	t9SkillFixture(t, api, "external")
+	w := t9Do(api.HandleSkills, http.MethodGet, "/api/v1/skills", "", "")
+	require.Equal(t, 200, w.Code)
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	for _, row := range rows {
+		if row["id"] == "external" {
+			assert.Equal(t, true, row["has_local_changes"], "r15 §9.2 rule 3: no-history is conservatively local")
+			return
+		}
+	}
+	t.Fatal("external fixture was not listed")
+}

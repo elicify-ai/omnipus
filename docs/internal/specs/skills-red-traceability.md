@@ -1,255 +1,259 @@
-# skills-spec-r13 — RED traceability (landing/skills)
+# Skills-as-folders r15 — RED repair round 1
 
-Test author: qa-lead (RED phase). Branch `landing/skills` off `origin/release/v0.1.1`
-(`1d3989df`). Spec: `skills-spec-r13.md` (grill r11 PASS; r12 minor fix; r13 = SD-28
-addition, pending grill — its rows are flagged below).
+**Correction: said the original pack demonstrated complete paging/cap/menu/audit coverage and no regressions, wrong because the cited tests or receipts did not establish those claims; correct is the bounded evidence and explicit missing/partial coverage below.** The original frontend receipt was one file with 2 failures and 3 passes, including a CSRF fixture failure—not six failures/six passes across two files. A test filter excluding old tests cannot establish no regression. Generic approval-request behavior is required; approval-card rendering is not a requirement of this pack.
 
-**Evidence classification (SC-001).** Each row declares its class:
-- **RED** — asserts new or corrected behaviour; fails on the baseline with a
-  meaningful behavioural failure (log + exit code under `/workspace/logs/skills-red/`).
-- **REGRESSION** — asserts unchanged behaviour; must pass on baseline and candidate.
-  Named pairs from the spec: row 8 (S-2.9), row 9's S-1.4, row 24's S-3.13; further
-  pairs are declared below and marked "declared pair (test author)".
-- **PLATFORM-GATED** — Windows CI only (S-12.1); compile-verified via
-  `GOOS=windows go vet` (exit 0), runtime claim deferred to CI.
-- **NOT RUN (written only)** — the S-6.4 Playwright spec (needs a live gateway +
-  built SPA; row 21's REST half is covered in pkg/gateway).
+Date: 2026-10-31. One RED author, same feature and repair round. This is **not independent CHECK**, not GREEN, and not complete feature coverage. Independent CHECK must re-audit the candidate. No CHECK finding is disputed; source repairs and remaining limits are distinguished below.
 
-## RED-run receipts
+| Input | Exact reference |
+|---|---|
+| Worktree / branch | `/workspace/wt-skills` / `landing/skills` |
+| Unchanged production baseline | `25bb439e847458bfc34627502e07c00b67701c3e` |
+| Normative spec | `/workspace/omnipus-coordination/designs-20261029/skills-spec-r15.md` |
+| Independent findings | `/workspace/omnipus-coordination/designs-20261029/skills-red-check-report-1.md` |
+| Evidence directory | `/workspace/logs/skills-red/` |
+| Final run filters / source hashes | `/workspace/logs/skills-red/fixround1-run-plan.json`; `/workspace/logs/skills-red/fixround1-test-tree.json` |
+| Per-test and per-subtest receipt | `/workspace/logs/skills-red/76-final-test-evidence.md`; `/workspace/logs/skills-red/76-final-test-evidence.json` |
+| Artifact/static integrity receipt | `/workspace/logs/skills-red/77-final-integrity.log` |
+| Commit identification | All repair rows below are in this document's containing fix-round commit. Its exact SHA is reported in the final handoff; it cannot be embedded self-referentially in its own contents. No push authorized. |
 
-Counts are the failing top-level test (or subtest) lines in each log as it
-exists on disk; some logs are narrower re-runs of an area after a filter or
-seam change, so an area's full test count is larger than its last log's
-failing-line count (the §17.1 map above names every test).
+## Finding → change → commit
 
-| Log | Package(s) | Failing on baseline | Result |
-|---|---|---|---|
-| `01-identity-sd28.log` | pkg/skills (identity, SD-28) | 10 | EXIT=1 |
-| `02-builtin-sync.log` | pkg/skills (built-ins, retirement) | 9 | EXIT=1 |
-| `03-pipeline-savecheck.log` | pkg/skills (pipeline, save check) | 5 | EXIT=1 |
-| `04-undo-faults.log` | pkg/skills (undo anchors, persistence faults) | 16 | EXIT=1 |
-| `05-retention-versions-recovery.log` | pkg/skills (retention, versions, recovery) | 15 | EXIT=1 |
-| `06-snapshot-restore.log` | pkg/skills (snapshot domain, bounded capture, D-9) | 6 | EXIT=1 |
-| `07-copy-lifecycle.log` | pkg/skills (S-5.21 legs, provenance, interference) | 8 | EXIT=1 |
-| `08-sysagent-skill-read.log` + `08b` | pkg/sysagent/tools (get_skill, list_skills) | 7 FAIL + 1 baseline-green pair | EXIT=1 / EXIT=0 |
-| `09-tools-gate.log`, `09-coreagent-gate.log`, `09-config-sysagent-gate.log`, `09b-tools-textgate.log`, `09-sysagent-gate.log` | pkg/tools, pkg/coreagent, pkg/config, pkg/sysagent/tools (T-E9b) | 14 FAIL + feasibility suite baseline-green | EXIT=1 |
-| `10-fspolicy-boundary.log` + `10b` | pkg/fspolicy (§6.1 boundary) | 5 FAIL + 3 baseline-green | EXIT=1 / EXIT=0 |
-| `11-skills-historyseam-recheck.log` | pkg/skills (re-run after SkillHistoryRoot seam) | 12 | EXIT=1 |
-| `12-load-header.log` + `12b` | pkg/skills (§5.7 activation header) | 5 FAIL + S-1.4 pair baseline-green | EXIT=1 / EXIT=0 |
-| `13-gateway-rest.log` | pkg/gateway (REST surface) | 4 FAIL (8 subtests) | EXIT=1 |
-| `14-gateway-boot.log` | pkg/gateway (boot step) | 3 FAIL | EXIT=1 |
-| `15-credentials.log` | pkg/credentials (SensitiveNamedValues) | 5 FAIL | EXIT=1 |
-| `16-secret-check.log` | pkg/skills (§7.4 secret scan) | 6 FAIL | EXIT=1 |
-| `17-documentruntime.log` | pkg/documentruntime (S-1.5 app part) | 2 FAIL | EXIT=1 |
-| `18-spa-tests.log` | ui: envelope parser + SkillsScreen | 6 FAIL / 6 baseline-green across both files | EXIT=1 (vitest) |
+“Source repaired” is the author's statement about the edits, **not closure by the independent auditor**. Prerequisite-blocked tests do not establish the correctness of their later assertions. CHECK-06 and CHECK-12 in particular retain the incomplete integration/coverage limits explicitly listed here.
 
-All runs: `CGO_ENABLED=0 heavy go test -p 1 -tags goolm,stdjson -count=1 -run '<targets>'
-<packages>` (build runners), full output in the named log, real exit codes captured.
+| Finding | Source repair | Commit / remaining limitation |
+|---|---|---|
+| CHECK-01 Critical | Coherence uses a one-close guard, real capture progress, real ApplyChange writer, observed mutex wait, joined cleanup, actual sessions, returned-content/full-revision/seen comparison. | Containing fix-round commit; baseline stops at missing ContentRevision before the lock assertions. Runtime safety/mutation verification deferred to CHECK. |
+| CHECK-02 Major | Allowed reads assert fixture-derived successful content; authorized NOT_FOUND configured independently; authorization-before-absence remains a negative case. | Containing fix-round commit; baseline get_skill is still a scaffold. |
+| CHECK-03 Major | Explicit absence/create or actual ContentRevision expectations; no invented r1/revA; valid fixture directories. Shared revision helper no longer uses revisionForDir. Folder-total fixture counts SKILL.md and starts below the limit. | Containing fix-round commit; correct future preconditions remain prerequisite-blocked on baseline. Windows runtime not exercised. |
+| CHECK-04 Major | Real file references and SHA256 blobs; fixture self-check; prune and orphan controls defeat no-op retention; actual retained-state restore; get_skill paths projection after real parent pruning. | Containing fix-round commit; history-producing pipeline and ContentRevision are missing. |
+| CHECK-05 Major | Correct commit/version association; full Markdown/package expectations; deliberately invalid SKILL.md refusal legs; caller-owned anchor parser guarded before indexing. | Containing fix-round commit; restore/undo assertions await implementation. |
+| CHECK-06 Major | Committed prerequisites; exact publication-state gates and hook-fired assertions; whole-folder replacement for .swap tests; post-parent create failure; exact live/history/counter/recovery checks; partial-restore expectation re-read from live, not an optional partial outcome. | Containing fix-round commit; **partial**: complete crash/restart/menu/seen/audit chain for every fault is still absent. |
+| CHECK-07 Major | After-capture mutation at source manifest boundary, real source-read positive control, exact transformed destination/provenance. Deliberately wrong second source capture enters the production pipeline twice; no test-owned callback invocation/read wrapper remains. | Containing fix-round commit; pipeline prerequisite blocks this negative control. Independent mutant sensitivity is deferred to CHECK, not claimed. |
+| CHECK-08 Major | Configured predicate authorities plus real durable-agent/ResolveTurnFSPolicy/read/list/grep/write paths; ordinary ungranted skill under enclosing authorities; explicit PathHandle context backstop. | Containing fix-round commit; **partial**: all enclosing authority constructors and kernel/child modes are not driven end-to-end. |
+| CHECK-09 Major | Actual gateway startup entry point, durable roster, first actual loop instance, real Skill registration, automatically replayed real audit events; copy test enters registered router. | Containing fix-round commit; baseline fails durable retirement before downstream first-instance/replay assertions. Helper-level replay/counter tests are separately labeled. |
+| CHECK-10 Major | Exact complete badge, dialog label/default/note; clear before typing; exact copy request/return/refreshed removable row. CSRF established before adapter calls; generated Skill fixtures carry revision. | Containing fix-round commit; frontend behavior intentionally RED; Playwright written, not executed. |
+| CHECK-11 Major | Nonempty exact environment/control assets; no deleted Layout.Skills dependency; exact network requests/data/counter increments; fixture identity/files; complete shipped package comparisons; real nonempty audit output/counts. | Containing fix-round commit; no-op mutants have not been run by RED author; deferred to independent CHECK. |
+| CHECK-12 Major | Replaced false coverage/receipt claims; added actual menu freshness, D-7 paging, post-prune paths, real-loop policy/seen, cap/loading fixtures, public actions, normal audit, real-response producer/consumer, REST/tool expectation/local-change matrices. Each scenario below states its exact limitation. | Containing fix-round commit; **partial, not complete coverage**: missing authored legs and execution deferrals below remain open. |
 
-**No existing test regressed:** every targeted run matched only the new test names
-(verified by grep over each log: zero pre-existing test names appear); the baseline-green
-pairs listed above were run individually (`-v`) and passed (EXIT=0).
+## SD-30 replaces SD-28 and G-1–G-6
+
+The authorized replacement removes `/workspace/wt-skills/pkg/skills/skill_grants_sd28_red_test.go` and supplies `/workspace/wt-skills/pkg/skills/skill_grants_sd30_red_test.go`, `/workspace/wt-skills/pkg/skills/skill_generation_metadata_red_test.go`, `/workspace/wt-skills/pkg/agentstore/skills_binding_sd30_red_test.go`, and the actual-use/menu tests under `/workspace/wt-skills/pkg/agent/`.
+
+| r15 §5.13a rule | Test boundary / limit |
+|---|---|
+| Fresh UUID-format generation, never reused | Real create/copy/install/restore-into-absence; compare against all earlier generations; live edit/install-replace/restore and built-in content update preserve it. |
+| `.omnipus-identity` is control metadata | Content revision, manifest exclusion, restore preservation, secret-scan exclusion, writable-path refusal and excluded instruction-target probe. |
+| No ordinary-deletion cleanup, sweep, holder rebuild or creation gate | Deletion/copy keep recorder rows untouched; durable actual-use test keeps initial row byte-identical across replacement/load. Product retirement's RemoveGrant remains required and tested separately. No live SKILL_NAME_GRANTED expectation remains. |
+| Persist binds contemporaneous generation wholesale | Actual Create/CreateState/Update/MutateState and independent disk reads; live G1/absent/unstamped/recreated G2; normalized keys; removed old bindings. Fixture-supplied maps in loader tests are NOT persistence evidence. |
+| Construction-time name AND generation equality | Actual registered Skill, matching-generation control, old live instance at G2, disk reconstruction/restart, real store regrant; unbound/unstamped denial and read-only loading. Pending/in-flight publisher schedules remain untested. |
+| Q-S3 | **Open. Tests proceed on recommended A.** Exact SKILL_GRANT_STALE text and stale-menu expectations depend on that ruling. Agents-screen stale-row UI is not authored. No founder decision is invented. |
+
+The reflection-based `LoadActivationOptions.Bindings` input is a **proposed testability seam**, not a Go field mandated by the spec. Its absence fails loudly. The actual registered Skill tests independently test production authority without that proposed seam. The baseline production scaffold still contains withdrawn SD-28 sweep/error/comments; QA did not modify it. Implementation reconciliation belongs to the implementing lead.
+
+The normal audit test pins semantic payload coverage using proposed keys `revision_before`, `revision_after`, `version_id`. The spec names these meanings but does not standardize all JSON key spellings. Those spellings require implementation/contract reconciliation; they are **not an independently specified byte-exact wire contract**. Do not count that unresolved naming choice as a verified production defect.
+
+## Execution evidence — final source, pre-implementation
+
+All test commands ran **serially, in the foreground**, through plain `/usr/local/bin/heavy`, with no full suite. Go used `CGO_ENABLED=0`, `-tags goolm,stdjson -p 1 -count=1 -v -run '<exact named tests>'` and one package per command. Each receipt begins with the full exact command and ends with the direct `EXIT=`. The plan records the long filters without abbreviating them. No new production change was needed for compilation.
+
+| Final receipt | Top-level outcome | Direct exit / interpretation |
+|---|---|---|
+| `/workspace/logs/skills-red/35-final-pkg-skills.log` | 84 FAIL / 1 PASS | 1; includes affected otherwise-unchanged revision-helper callers. |
+| `/workspace/logs/skills-red/36-final-pkg-agentstore.log` | 2 FAIL / 1 PASS | 1; durable generation binding missing. |
+| `/workspace/logs/skills-red/37-final-pkg-sysagent-tools.log` | 23 FAIL / 2 PASS | 1; missing reader/contract/pipeline plus legacy surface mismatches. |
+| `/workspace/logs/skills-red/38-final-pkg-fspolicy.log` | 6 FAIL / 2 PASS | 1; missing authority fields and boundary behavior. |
+| `/workspace/logs/skills-red/39-final-pkg-tools.log` | 5 FAIL / 1 PASS | 1; boundary integration/request pipeline absent or mismatched. |
+| `/workspace/logs/skills-red/40-final-pkg-gateway.log` | 11 FAIL / 1 PASS | 1; actual route/boot/REST behavior and pipeline prerequisites. |
+| `/workspace/logs/skills-red/41-final-pkg-documentruntime.log` | 2 FAIL / 1 PASS | 1; old document skill copy/env still present. |
+| `/workspace/logs/skills-red/42-final-pkg-agent.log` | 5 FAIL / 1 PASS | 1; actual stale-generation activation accepted; policy/menu paths incomplete. |
+| **Go total** | **138 FAIL / 10 PASS / 0 SKIP, 148 top-level tests** | No panic, build failure or package setup failure in these final receipts. Subtest counts are separate in the per-test ledger. |
+| `/workspace/logs/skills-red/61-spa-copy-final.log` | 3 FAIL / 1 PASS | 1; missing full read-only badge/copy action; no-delete control passes. |
+| `/workspace/logs/skills-red/62-spa-envelopes-final.log` | 3 FAIL / 5 PASS | 1; missing copySkill (2 cases), dropped replace_local_changes (1); CSRF fixture no longer fails. |
+| `/workspace/logs/skills-red/63-spa-real-responses-final.log` | 5 FAIL | 1; incomplete real corpus, not schema/adapter success. |
+| `/workspace/logs/skills-red/64-typecheck-final.log` | TypeScript static check | 0; real `npm run typecheck`, Node heap 4096 MB. Earlier OOM and missing fixture revisions are superseded, not erased. |
+| `/workspace/logs/skills-red/65-design-scanners-final.log` | Design lock scanners | 0; PASS (0 errors), not a browser/design-system full gate. |
+| `/workspace/logs/skills-red/66-eslint-final.log` | Four owned TS/TSX/e2e files | 0; targeted ESLint. |
+| `/workspace/logs/skills-red/67-function-budget-final.log` | Owned test mirror | 0; TestSaveCheck_Dataset now 220 lines, below 240; 120-line warning remains. No budget/grandfather list changed. |
+| `/workspace/logs/skills-red/68-file-budget-final.log` | Owned test mirror | 0; scoped file budget, not the whole repository. |
+| `/workspace/logs/skills-red/69-windows-vet-final.log` | Windows pkg/skills vet/compile | 0; runtime behavior and Windows warning/child matrix NOT exercised. |
+| `/workspace/logs/skills-red/70-linter-availability-final.log` | golangci-lint availability | 127; unavailable on runner and pod. **UNVERIFIED Go lint**, not a passing lint gate. |
+
+Named passing Go controls: `TestLoadHeader_AllowedToolsSpellings_Regression`, `TestCreate_WriteThenVerify_RoundTrip`, `TestAgentDelete_RequiresConfirm`, `TestListSkills_UsableRowsGrantFiltered_Regression`, `TestSkillsBoundary_SystemSubtreeProtected_Regression`, `TestSkillsBoundary_InventoryRulesCarveOuts`, `TestResolvePath_RelativeRootsAtWorkingDir`, `TestListSkillsMethodNotAllowed`, `TestFilterMacSpellCheckerMatchesParsedIdentityDespiteFormattingDrift`, `TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens`. The real-loop `ordinary-workspace-write-regression` and deny subtests also pass. **Only these controls are regression evidence; no full no-regression claim is made.**
+
+### RED versus prerequisite BLOCKED
+
+A meaningful RED may expose wrong production behavior directly (for example stale Skill activation succeeds, local-change flag false for no-history, old document env/copy, missing route, missing public action set, dropped request flag). Many other tests instead fail at a required unimplemented prerequisite (`ApplyChange`, `ContentRevision`, `LoadForActivation`, `get_skill`, `SkillDetail` contract or authority fields). That is loud **prerequisite BLOCKED RED**, not evidence that the later lock/restore/fault/cap/schema assertions executed. No assertion was changed to accept the baseline's output.
+
+The real-response producer overwrites its receipt before running; the final artifact is `/workspace/logs/skills-red/75-real-response-corpus-final.json`. It contains **one** real `copy-partial` response, HTTP 405, not all five expected legs. Other legs stop at real installation prerequisites. The consumer correctly rejects the incomplete set before downstream schema/adapter checks; those checks are **UNVERIFIED**. No fabricated response was added to make it green. The generated worktree receipt is not committed. Producer-to-consumer CI ordering still needs implementing-lead wiring.
+
+Frontend tests run one file per process. `/workspace/wt-skills/tests/e2e/skills-builtin-copy.spec.ts` remains **written, NOT RUN**. No browser UAT, real model call, hosted CI, full regression suite or new Fly window ran. GREEN and mutation proof (skill step 4 items 2–3 and proof-of-failability checklist) are **deferred to independent CHECK**. No mutation pass is claimed by this RED author.
+
+## Remaining gaps — authorship is not an execution deferral
+
+| Gap | What is absent / disposition |
+|---|---|
+| Kernel/child/platform/mode coverage | Linux rules + child commands, macOS Seatbelt, Windows warnings/fallback and permissive-mode chains are not authored here. Windows compile-only is not a substitute. |
+| Document execution | App environment/assets are checked; real registry script + child cat refusal still need a child execution test. |
+| Complete integration matrices | Registered Skill/menu/get_skill bound/link surfaces, aggregate grep, original edit_file/other policy combinations, symlinked project-root write and every persisted authority constructor remain incomplete. |
+| Bounded capture | Real cap/growth fixtures exist; full helper/file-count/folder/growing-input Cartesian coverage remains incomplete. |
+| Fault recovery | Hook-stage, content/history/recovery and one partial-seen chain exist; every crash/menu/seen/audit sequence and r15 REST/agent regrant closing legs do not. |
+| SD-30 concurrency / Q-S3 | Live stale/restart/regrant and persist table exist; pending older publisher/in-flight persist schedule and Agents-screen stale row remain absent. Q-S3 A is a dependency, not approval. |
+| Contracts / testability seams | Missing SkillDetail contract, proposed activation Bindings seam, proposed audit key spellings and missing producer-consumer CI order require reconciliation. QA changed no contract/production file. |
+| Verification | Go lint unavailable; full suites/hosted CI/exact-cut UAT/platform execution not run; independent CHECK/GREEN/mutations pending. |
+
+These are open coverage/integration items, not silently accepted deferrals and not reasons to call the feature complete. The same feature test author retains any further test-side reconciliation.
 
 ## Scenario → test map
 
-### US-1 Load (§5.7)
+**WRITTEN** means an oracle exists at the stated boundary, not that the scenario passed or that all integration legs are covered. **PARTIAL/MISSING** explicitly deny full coverage. **UNCHANGED TESTS** were not silently removed; no new execution claim is attached where final filters did not run them. **REGRESSION** stays green, never manufactured RED. Full absolute `file::symbol` citations for every named Go test and exact outcomes appear in the final per-test evidence ledger; the frontend paths are `/workspace/wt-skills/src/components/screens/SkillsScreen.copy-dialog.test.tsx`, `/workspace/wt-skills/src/lib/api/skills-mutation-envelope.test.ts`, `/workspace/wt-skills/src/lib/api/skills-real-responses.test.ts`, and `/workspace/wt-skills/tests/e2e/skills-builtin-copy.spec.ts`.
 
-| Scenario | Test | File | Class | Failing reason (baseline) |
-|---|---|---|---|---|
-| S-1.1 | TestLoadHeader_RegistrySkillFullFormat, TestLoadHeader_EditDeniedClause | pkg/skills/load_header_red_test.go | RED | LoadForActivation scaffold refuses |
-| S-1.2 | TestLoadHeader_BuiltinShelf | same | RED | same |
-| S-1.3 | TestLoadHeader_FileListCap | same | RED | same |
-| S-1.4 | TestLoadHeader_AllowedToolsSpellings_Regression | same | REGRESSION (named pair) | passes baseline (EXIT=0, log 12b) |
-| S-1.5 (app part) | TestChildEnvironment_NoDocumentSkillsEnv, TestProvision_NoEmbeddedSkillsCopy | pkg/documentruntime/doc_skills_red_test.go | RED | env still carries OMNIPUS_DOCUMENT_SKILLS; provision still copies |
-| S-1.5 (child/kernel) | rows 7/10 kernel scope | — | NOT COVERED HERE | kernel/child legs need Linux+macOS sandbox CI; declared gap for the implementing worker |
-| S-1.6 | TestLoadHeader_OutsideChange | pkg/skills/load_header_red_test.go | RED | scaffold refuses |
+| Scenario | Actual test boundary | Coverage / execution limitation |
+|---|---|---|
+| S-1.1 | `/workspace/wt-skills/pkg/skills/load_header_red_test.go::TestLoadHeader_RegistrySkillFullFormat`; `/workspace/wt-skills/pkg/skills/load_header_red_test.go::TestLoadHeader_EditDeniedClause` | PARTIAL: activation-helper header checks; complete registered Skill/dependency/menu chain not proven. |
+| S-1.2 | `/workspace/wt-skills/pkg/skills/load_header_red_test.go::TestLoadHeader_BuiltinShelf` | WRITTEN: built-in shelf/header; baseline LoadForActivation prerequisite fails. |
+| S-1.3 | `/workspace/wt-skills/pkg/skills/load_header_red_test.go::TestLoadHeader_FileListCap` | WRITTEN: real 250-file fixture and 200-entry header cap; baseline activation prerequisite fails. |
+| S-1.4 | `/workspace/wt-skills/pkg/skills/load_header_red_test.go::TestLoadHeader_AllowedToolsSpellings_Regression` | REGRESSION: named parser pair passes; never RED evidence. |
+| S-1.5 | `/workspace/wt-skills/pkg/documentruntime/doc_skills_red_test.go::TestChildEnvironment_NoDocumentSkillsEnv`; `/workspace/wt-skills/pkg/documentruntime/doc_skills_red_test.go::TestProvision_NoEmbeddedSkillsCopy` | PARTIAL: exact child environment and runtime assets/instructions checked; registry-script execution and child refusal absent. |
+| S-1.6 | `/workspace/wt-skills/pkg/skills/load_header_red_test.go::TestLoadHeader_OutsideChange` | PARTIAL: activation-helper outside-change header; full registered Skill integration not established. |
+| S-2.1 | `/workspace/wt-skills/pkg/tools/skills_boundary_turn_red_test.go::TestSkillsBoundary_RealTurnReadListGrep`; `/workspace/wt-skills/pkg/fspolicy/skills_boundary_red_test.go::TestSkillsBoundary_LoadableSetGrantFiltered` | WRITTEN: real durable agent, turn constructor and read/list/grep; predicate coverage supplementary. |
+| S-2.2 | `/workspace/wt-skills/pkg/tools/skills_boundary_turn_red_test.go::TestSkillsBoundary_RealTurnReadListGrep`; `/workspace/wt-skills/pkg/tools/skills_boundary_turn_red_test.go::TestSkillsBoundary_RealToolsCannotBypassWithOperatorPattern` | PARTIAL: direct ungranted-file tools and leak checks; aggregate grep over the whole skills root not fully covered. |
+| S-2.3 | `/workspace/wt-skills/pkg/tools/skills_boundary_turn_red_test.go::TestSkillsBoundary_RealTurnReadListGrep`; `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestGetSkill_AuthorizationMatrix` | PARTIAL: editor read/list and management reader; editor-specific actual Skill/menu/child matrix incomplete. |
+| S-2.4 | `/workspace/wt-skills/pkg/fspolicy/skills_boundary_red_test.go::TestSkillsBoundary_RegistryControlEntriesRefused` | WRITTEN: registry control-entry refusals; boundary fields absent on baseline. |
+| S-2.5 | — | MISSING: Linux child/rule-list matrix, including enclosing mount authority. |
+| S-2.6 | — | MISSING: macOS child/Seatbelt matrix. |
+| S-2.7 | — | MISSING: no-grant child-execution matrix. |
+| S-2.8 | `/workspace/wt-skills/pkg/tools/skills_boundary_turn_red_test.go::TestSkillsBoundary_InventoryWinsEveryEnclosingAuthority`; `/workspace/wt-skills/pkg/tools/skills_boundary_turn_red_test.go::TestSkillsBoundary_RealToolsCannotBypassWithOperatorPattern` | PARTIAL: real resolver with broad policy authorities and real file tools; every authority is not persisted through its own production constructor. |
+| S-2.9 | `/workspace/wt-skills/pkg/fspolicy/skills_boundary_red_test.go::TestSkillsBoundary_SystemSubtreeProtected_Regression`; `/workspace/wt-skills/pkg/fspolicy/skills_boundary_red_test.go::TestSkillsBoundary_InventoryRulesCarveOuts` | REGRESSION: protected-system and carve-out controls pass; not a full child-mode matrix. |
+| S-2.10 | `/workspace/wt-skills/pkg/fspolicy/skills_boundary_red_test.go::TestSkillsBoundary_DotFilesInsideSkillArePartOfIt`; `/workspace/wt-skills/pkg/skills/apply_change_red_test.go::TestSaveCheck_Dataset`; `/workspace/wt-skills/pkg/skills/snapshot_restore_red_test.go::TestRestore_ReproducesNestedDotContent` | PARTIAL: dot-content read/write/restore pieces; complete header/child integration not claimed. |
+| S-2.11 | — | MISSING: permissive-mode boot warning, child write and next-load detection chain. |
+| S-3.1 | `/workspace/wt-skills/pkg/agent/skills_policy_turn_red_test.go::TestSkillPolicy_RealLoopComposesBeforeGenericApproval`; `/workspace/wt-skills/pkg/sysagent/tools/skills_write_audit_red_test.go::TestSkillWriteAudit_NormalMutationCompletePayload`; `/workspace/wt-skills/pkg/sysagent/tools/skills_seen_surface_red_test.go::TestSkillSeen_ReadThenMutation_RevisionAndSessionBound` | PARTIAL: real write_file loop, real delete_file adapter and audit payload; complete edit_file dispatch/audit matrix not proven. |
+| S-3.2 | `/workspace/wt-skills/pkg/agent/skills_policy_turn_red_test.go::TestSkillPolicy_RealLoopComposesBeforeGenericApproval`; `/workspace/wt-skills/pkg/tools/skills_boundary_turn_red_test.go::TestSkillsBoundary_RealToolsCannotBypassWithOperatorPattern` | WRITTEN: composed deny and unchanged exact file bytes. |
+| S-3.3 | `/workspace/wt-skills/pkg/sysagent/tools/skills_seen_surface_red_test.go::TestSkillSeen_ReadThenMutation_RevisionAndSessionBound` | WRITTEN: real session, unread/other-session SKILL_NOT_READ, matching/stale/partial-clear cases. |
+| S-3.4 | `/workspace/wt-skills/pkg/skills/apply_change_red_test.go::TestEdit_StaleExpectation_SKILL_CHANGED_NamesNewRevisionAndActor`; `/workspace/wt-skills/pkg/sysagent/tools/skills_seen_surface_red_test.go::TestSkillSeen_ReadThenMutation_RevisionAndSessionBound` | WRITTEN: actual precondition, specified revision8/actor text, adapter stale record. |
+| S-3.5 | `/workspace/wt-skills/pkg/skills/apply_change_red_test.go::TestCreate_Commits_NoGrant_MenuFreshness`; `/workspace/wt-skills/pkg/agent/skills_identity_menu_red_test.go::TestSkillMenu_ManagedEditVisibleOnNextTurnSameInstance` | PARTIAL: pipeline creation and separate actual next-turn edit menu; creation/grant/menu chain not fully integrated. |
+| S-3.6 | `/workspace/wt-skills/pkg/skills/apply_change_red_test.go::TestCreate_ConcurrentSameSlug_OneCommitsOtherSKILL_EXISTS` | WRITTEN: concurrent absent expectations, exactly one winner and its bytes. |
+| S-3.7 | `/workspace/wt-skills/pkg/agent/skills_policy_turn_red_test.go::TestSkillPolicy_RealLoopComposesBeforeGenericApproval` | PARTIAL: real write_file/Auto-on generic approval ordering; edit_file and remaining original-tool policy combinations absent. No approval-card rendering requirement invented. |
+| S-3.8 | `/workspace/wt-skills/pkg/skills/undo_anchor_red_test.go::TestMultiFileSequence_RecoveryFromOwnWrite1Anchor`; `/workspace/wt-skills/pkg/skills/undo_anchor_red_test.go::TestMultiFileSequence_TwoSequences_RecoverBOnly` | WRITTEN: genuinely invalid second SKILL.md mutation, sequence-free refusal, own first-write anchor and actual restore. |
+| S-3.9 | `/workspace/wt-skills/pkg/agent/skills_policy_turn_red_test.go::TestSkillPolicy_RealLoopComposesBeforeGenericApproval` | PARTIAL: ordinary workspace write control; not every ordinary file-tool variant. |
+| S-3.10 | `/workspace/wt-skills/pkg/sysagent/tools/retired_tools_gate_red_test.go::TestRetiredTools_GoneFromRegisteredSet`; `/workspace/wt-skills/pkg/tools/retired_tools_gate_red_test.go::TestRetiredTools_RefusalAnswersPresent`; `/workspace/wt-skills/pkg/tools/retired_tools_gate_red_test.go::TestRetiredTools_TextGate` | UNCHANGED TESTS: original retirement gate; not rerun by this fix-round final filters, so no new passing claim. |
+| S-3.11 | `/workspace/wt-skills/pkg/agent/skills_policy_turn_red_test.go::TestSkillPolicy_RealLoopComposesBeforeGenericApproval`; `/workspace/wt-skills/pkg/tools/skills_boundary_turn_red_test.go::TestSkillPolicy_PathHandleWithoutCompositionMarkerRefused` | WRITTEN: persisted enclosing mount, real loop write_file, approval before publication and direct-handle context backstop; baseline reachability blocks write. |
+| S-3.12 | `/workspace/wt-skills/pkg/agent/skills_policy_turn_red_test.go::TestSkillPolicy_RealLoopComposesBeforeGenericApproval` | WRITTEN: both-allow commit without approval; baseline registry-write path refuses, intentionally RED. |
+| S-3.13 | `/workspace/wt-skills/pkg/agent/skills_policy_turn_red_test.go::TestSkillPolicy_RealLoopComposesBeforeGenericApproval` | REGRESSION: ordinary-workspace-write-regression subtest passes; never forced RED. Full write/edit variant pair remains partial. |
+| S-3.14 | `/workspace/wt-skills/pkg/skills/undo_anchor_red_test.go::TestRecreate_AfterDelete_UndoVariantNamesDeletion` | WRITTEN: committed recreation's deletion undo, sequence-free later refusal. |
+| S-3.15 | `/workspace/wt-skills/pkg/skills/undo_anchor_red_test.go::TestRecreate_AfterBrokenPredecessor_UndoNamesRepair` | WRITTEN: broken present folder uses ContentRevision, full repair text and partial-result variants. |
+| S-3.16 | `/workspace/wt-skills/pkg/skills/undo_anchor_red_test.go::TestUndoVariant_KeyedToCompleteRestoreGate` | WRITTEN: structurally eligible predecessor failing secret/size gate; advice follows complete gate. |
+| S-3.17 | `/workspace/wt-skills/pkg/skills/undo_anchor_red_test.go::TestRecreate_AfterOutsideRemoval_ContentHeadVariant` | WRITTEN: absent live/content history variant, caller-owned deletion undo. |
+| S-4.1 | `/workspace/wt-skills/pkg/skills/apply_change_red_test.go::TestSaveCheck_Dataset`; `/workspace/wt-skills/pkg/skills/apply_change_red_test.go::TestSaveCheck_FolderTotalBoundary` | PARTIAL: valid current expectations, D-2 refusal cases and numeric boundaries; exact folder totals limit-1/limit/limit+1 now include SKILL.md. Not every numeric min/max neighbor or refusal side effect is covered. |
+| S-4.2 | `/workspace/wt-skills/pkg/skills/secret_check_red_test.go::TestSecretCheck_ValueInContent_RefusedNamedNotEchoed` | PARTIAL: real credential provider/content refusal; complete real audit/log secrecy chain not established. |
+| S-4.3 | `/workspace/wt-skills/pkg/skills/secret_check_red_test.go::TestSecretCheck_ThreeByteValue_Exempt_Committed` | WRITTEN: three-byte exemption; final run blocks at content-revision prerequisite. |
+| S-4.4 | `/workspace/wt-skills/pkg/skills/secret_check_red_test.go::TestSecretCheck_OAuthSubValue_RefusedNamed` | WRITTEN: OAuth sub-value named; final run blocks at content-revision prerequisite. |
+| S-4.5 | `/workspace/wt-skills/pkg/skills/secret_check_red_test.go::TestSecretCheck_StoreUnavailable_FailsClosed` | PARTIAL: pipeline unavailable-provider cases; credential-store tests unchanged and not rerun in this round. |
+| S-4.6 | `/workspace/wt-skills/pkg/skills/secret_check_red_test.go::TestSecretCheck_NoStore_Committed` | WRITTEN: empty-store pipeline case; final run blocks at content-revision prerequisite. |
+| S-4.7 | `/workspace/wt-skills/pkg/skills/secret_check_red_test.go::TestSecretCheck_RestoreRefused_WhenVersionGainsAStoredValue` | WRITTEN: valid creation/current revisions and restore refusal after stored value appears. |
+| S-5.1 | `/workspace/wt-skills/pkg/skills/versions_restore_red_test.go::TestRestore_PutsEveryFileBack_AndRoundTrips` | WRITTEN: correct committed version IDs, complete Markdown and whole-package round trip. |
+| S-5.2 | `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestGetSkill_DeletedSkillShape`; `/workspace/wt-skills/pkg/sysagent/tools/skills_versions_projection_red_test.go::TestGetSkill_DeletedVersionPaging120`; `/workspace/wt-skills/pkg/skills/versions_restore_red_test.go::TestRestore_DeletedSkill_ThenRecreateByOtherSession_Refused` | PARTIAL: deleted shape, paging, restore/precondition pieces; one real read-delete-agent-restore chain incomplete. |
+| S-5.3 | `/workspace/wt-skills/pkg/gateway/rest_skills_t9_red_test.go::TestRestDelete_RevisionEnvelope`; `/workspace/wt-skills/pkg/sysagent/tools/skills_write_audit_red_test.go::TestSkillWriteAudit_NormalMutationCompletePayload` | PARTIAL: real REST delete and separate agent mutation audit; REST-delete-to-agent-restore chain not authored. |
+| S-5.4 | `/workspace/wt-skills/pkg/skills/versions_restore_red_test.go::TestRestore_DeletedSkill_ThenRecreateByOtherSession_Refused` | WRITTEN: competing recreation refuses expected absence. |
+| S-5.5 | `/workspace/wt-skills/pkg/skills/apply_change_red_test.go::TestDeleteFile_SKILLMD_Refused` | WRITTEN: actual current revision, exact SKILL_MD_REQUIRED text and preserved instructions. |
+| S-5.6 | `/workspace/wt-skills/pkg/skills/retention_red_test.go::TestRetention_SupersessionClock` | WRITTEN: SHA256 blobs with actual Files references and self-check; remove/keep distinction defeats no-op sweep. |
+| S-5.7 | `/workspace/wt-skills/pkg/skills/retention_red_test.go::TestRetention_DeleteHeadKeepsPreDeletionState_FullWindow` | WRITTEN: expired deletion head removes history; this is NOT paging coverage. |
+| S-5.8 | `/workspace/wt-skills/pkg/skills/retention_red_test.go::TestRetention_Disabled_KeepsCommittedHistory_NeverTouchesCaptureTemporaries` | WRITTEN: retention-disabled keep case; cleanup belongs to capture lifecycle, not this sweep. |
+| S-5.9 | `/workspace/wt-skills/pkg/skills/versions_restore_red_test.go::TestOutsideChange_DetectionAndRestore` | WRITTEN: full actual source packages and exact restore; baseline pipeline blocks prerequisite. |
+| S-5.10 | `/workspace/wt-skills/pkg/sysagent/tools/skills_versions_projection_red_test.go::TestGetSkill_VersionPaging_D7` | WRITTEN: actual 0/1/50/51/250 histories, default/1/100/0/101 limits, first/last/unknown cursors, five pages and oldest-version actual restore. Baseline blocks history creation. |
+| S-5.11 | `/workspace/wt-skills/pkg/sysagent/tools/skills_versions_projection_red_test.go::TestGetSkill_DeletedVersionPaging120` | WRITTEN: actual 120-version deleted history, 100+20 pages, null revision and all IDs exactly once. |
+| S-5.12 | `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestGetSkill_UnknownVersion`; `/workspace/wt-skills/pkg/sysagent/tools/skills_versions_projection_red_test.go::TestGetSkill_VersionPaging_D7`; `/workspace/wt-skills/pkg/sysagent/tools/skills_versions_projection_red_test.go::TestGetSkill_VersionsLimitRejectsWrongTypeAndNegative` | WRITTEN: unknown cursor and wrong-type/range refusals with named parameter/code. |
+| S-5.13 | `/workspace/wt-skills/pkg/skills/retention_red_test.go::TestRetention_DeleteHeadKeepsPreDeletionState_FullWindow`; `/workspace/wt-skills/pkg/skills/retention_red_test.go::TestRetention_RestoreRetainedState_ByteExact` | WRITTEN: valid retained references, deletion successor-age boundaries and actual retained-state restore. |
+| S-5.14 | `/workspace/wt-skills/pkg/skills/retention_red_test.go::TestRetention_NewestSupersededToday_Kept`; `/workspace/wt-skills/pkg/skills/retention_red_test.go::TestRetention_RestoreRetainedState_ByteExact` | WRITTEN: successor-age keep case plus actual retained pre-edit restore. |
+| S-5.15 | `/workspace/wt-skills/pkg/sysagent/tools/skills_versions_projection_red_test.go::TestGetSkill_LastChangePathsSurviveParentPruning`; `/workspace/wt-skills/pkg/skills/retention_red_test.go::TestRetention_RetainedManifestsUntouched_AfterPrune` | WRITTEN: real parent pruning, byte-preserved child manifest, exact last_change.paths and version-row paths/paths_total. |
+| S-5.16 | `/workspace/wt-skills/pkg/skills/snapshot_restore_red_test.go::TestRestore_ReproducesNestedDotContent` | WRITTEN: nested dot-content restore both directions; complete package expectations retained. |
+| S-5.17 | `/workspace/wt-skills/pkg/skills/snapshot_restore_red_test.go::TestSnapshot_SymlinkCanary` | WRITTEN: fixture dirs exist, symlink target/canary expectations retained; full platform execution not done. |
+| S-5.18 | `/workspace/wt-skills/pkg/skills/snapshot_restore_red_test.go::TestSnapshot_RetainedNotRestorable` | WRITTEN: retained broken/deleted states and real selection/refusal transitions. |
+| S-5.19 | `/workspace/wt-skills/pkg/skills/snapshot_restore_red_test.go::TestDeleteFile_ResultingInstructionValidity` | WRITTEN: indirect instruction-target deletion refusal and ordinary helper deletion control. |
+| S-5.20 | `/workspace/wt-skills/pkg/skills/snapshot_restore_red_test.go::TestBoundedCapture_MutationRefusedBeforeAnythingChanges`; `/workspace/wt-skills/pkg/skills/loading_bounds_red_test.go::TestActivation_OversizedHelperStillLoadsBoundedInstructions`; `/workspace/wt-skills/pkg/sysagent/tools/skills_loading_limits_red_test.go::TestGetSkill_GrowingInstructionsBoundedAndSeenCleared` | PARTIAL: real oversized helpers, mutation refusal, bounded instructions, cleared seen/read recovery pieces; full count/folder/per-file/growth Cartesian matrix absent. |
+| S-5.21 | `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestS521_LegsABCD_AbortedCaptureCleanup`; `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestS521_LegsEF_ManifestFaultAndPartialPromotion`; `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestS521_LegG_SuccessByReuse_ThreeDistinctDestinations`; `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestS521_LegH_BuiltinSource_NoHistoryEver`; `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestS521_LegI_RepeatedCommits_NoTemporariesAccumulate` | WRITTEN: real creation prereqs, lifecycle fault/cleanup/reuse/built-in/disposal assertions; downstream behavior still blocked by pipeline. |
+| S-5.22 | `/workspace/wt-skills/pkg/skills/loading_bounds_red_test.go::TestInstructionGrowth_MenuAndActivationBounded`; `/workspace/wt-skills/pkg/sysagent/tools/skills_loading_limits_red_test.go::TestSkillInstructionBound_MetadataAndGetSkill`; `/workspace/wt-skills/pkg/sysagent/tools/skills_loading_limits_red_test.go::TestGetSkill_GrowingInstructionsBoundedAndSeenCleared` | PARTIAL: real discovery/activation-helper/get_skill instruction cap and maximum running consumed-byte counter; full registered Skill/captured-link matrix still incomplete. |
+| S-5.23 | `/workspace/wt-skills/pkg/skills/loading_bounds_red_test.go::TestInstructionResolution_ActivationUsesCapturedDomain`; `/workspace/wt-skills/pkg/sysagent/tools/skills_loading_limits_red_test.go::TestInstructionResolution_GetSkillCapturedDomain` | PARTIAL: included/excluded/outside/dangling target probes and zero-open refusals; complete actual Skill/menu/read-time interleaving matrix absent. |
+| S-6.1 | `/workspace/wt-skills/pkg/skills/skill_identity_red_test.go::TestBuiltinNameReserved_CaseInsensitive_AllEntryPoints`; `/workspace/wt-skills/pkg/skills/skill_identity_red_test.go::TestWrite_IntoBuiltinFolder_BUILTIN_READ_ONLY` | UNCHANGED TESTS: refusal cases exist; full exact audit/history unchanged assertions not established by this round. |
+| S-6.2 | `/workspace/wt-skills/pkg/skills/skill_grants_sd30_red_test.go::TestRecreation_NewGeneration_StaleGrantInertAtUse`; `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestCopyProvenance` | WRITTEN: actual copy package/name/version/provenance; SD-30 fresh generation/no grant side effects. Pipeline absent on baseline. |
+| S-6.3 | `/workspace/wt-skills/pkg/skills/skill_identity_red_test.go::TestCreate_CaseTwin_OfUserSkill_Refused_SKILL_EXISTS`; `/workspace/wt-skills/pkg/gateway/rest_skills_t9_red_test.go::TestRestCopy_Route` | WRITTEN: destination collision/refusal pieces; identity tests unchanged and not rerun by final filters. |
+| S-6.4 | `/workspace/wt-skills/src/components/screens/SkillsScreen.copy-dialog.test.tsx`; `/workspace/wt-skills/tests/e2e/skills-builtin-copy.spec.ts`; `/workspace/wt-skills/pkg/gateway/rest_skills_t9_red_test.go::TestRestCopy_Route` | PARTIAL: exact badge/default/note/input replacement/request/refreshed own row; Vitest 3 FAIL/1 PASS, Playwright written NOT RUN. |
+| S-6.5 | `/workspace/wt-skills/pkg/gateway/rest_skills_t9_red_test.go::TestRestCopy_Route` | WRITTEN: actual registered router and 201/400/404/409 cases; baseline route absent. |
+| S-6.6 | `/workspace/wt-skills/pkg/skills/skill_identity_red_test.go::TestBuiltinNameReserved_CaseInsensitive_AllEntryPoints` | UNCHANGED TEST: built-in destination names, not newly rerun here. |
+| S-6.7 | `/workspace/wt-skills/pkg/skills/skill_identity_red_test.go::TestBuiltinNameReserved_CaseInsensitive_AllEntryPoints`; `/workspace/wt-skills/pkg/skills/skill_identity_red_test.go::TestSkillKey_IsTheLowercasedSlug` | PARTIAL: normalized identity/reservation; exact actual Skill(Plan) resolution not proven by those helpers. |
+| S-6.8 | `/workspace/wt-skills/pkg/skills/skill_identity_red_test.go::TestWrite_IntoBuiltinFolder_BUILTIN_READ_ONLY` | UNCHANGED TEST: built-in path write; no new runtime result claimed. |
+| S-6.9 | `/workspace/wt-skills/pkg/skills/skill_identity_red_test.go::TestCreate_CaseTwin_OfUserSkill_Refused_SKILL_EXISTS` | UNCHANGED TEST: case-twin target rejection, NOT deletion/grant cleanup. |
+| S-6.10 | `/workspace/wt-skills/pkg/gateway/rest_skills_t9_red_test.go::TestRestDelete_RevisionEnvelope` | WRITTEN: request revision and actual HTTP delete envelope, stale/missing revision legs. |
+| S-6.11 | `/workspace/wt-skills/pkg/gateway/skills_install_matrix_red_test.go::TestRestInstall_ExpectationAndLocalConfirmationMatrix`; `/workspace/wt-skills/pkg/tools/skills_install_contract_red_test.go::TestInstallSkill_RequestExpectationAndLocalConfirmation` | WRITTEN: absent/current/stale/missing revision; request-owned replacement without seen; REST case-twin and local-edit/outside/restore confirmation legs. |
+| S-6.12 | `/workspace/wt-skills/pkg/skills/skill_grants_sd30_red_test.go::TestDelete_TouchesNoGrantRecord_RowSurvivesInert`; `/workspace/wt-skills/pkg/skills/skill_grants_sd30_red_test.go::TestRecreation_NewGeneration_StaleGrantInertAtUse`; `/workspace/wt-skills/pkg/agent/skills_generation_activation_red_test.go::TestSD30_ActualSkillStaleInstanceRestartAndRealRegrant` | PARTIAL: SD-30 replacement lifecycle, actual registered stale Skill/restart/store regrant. Q-S3 A wording/menu depends on open ruling; actual delete+copy+loop sequence is split across tests. |
+| S-6.13 | `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestCopyProvenance` | WRITTEN: unversioned source baseline, exact pre-rewrite provenance and declared destination transform. |
+| S-6.14 | `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestCopyProvenance` | WRITTEN: external-change source provenance plus transformed complete destination. |
+| S-6.15 | `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestCopyProvenance` | WRITTEN: mismatched built-in refuses; shipped replacement and copy recovery. |
+| S-6.16 | `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestCopyInterference_CaptureThenStage` | PARTIAL: before/after complete-capture interference and production-I/O rereading negative control. Remaining full interference/revision/provenance matrix not claimed; implementation/mutation proof deferred. |
+| S-6.17 | `/workspace/wt-skills/pkg/skills/copy_lifecycle_red_test.go::TestS617_OversizedCopySource` | PARTIAL: oversized helper and content-twin cleanup; growing-source leg remains absent. |
+| S-6.18 | `/workspace/wt-skills/pkg/agentstore/skills_binding_sd30_red_test.go::TestSD30_BindAtPersist_CreatePaths`; `/workspace/wt-skills/pkg/agentstore/skills_binding_sd30_red_test.go::TestSD30_BindAtPersist_UpdatePathsReplaceWholeMap`; `/workspace/wt-skills/pkg/skills/skill_grants_sd30_red_test.go::TestGenerationAuthorization_Table`; `/workspace/wt-skills/pkg/agent/skills_generation_activation_red_test.go::TestSD30_ActualSkillStaleInstanceRestartAndRealRegrant` | PARTIAL: real four store persist paths, live/absent/unstamped/recreated observations, whole-map rewrite and actual-use identity. Pending-publisher/in-flight persist schedule not driven. |
+| S-7.1 | `/workspace/wt-skills/pkg/skills/builtin_sync_red_test.go::TestSyncBuiltins_StartupMatrix` | WRITTEN: shipped bytes/assets vs installed bytes, missing/equal/stamped/unstamped cases and identity preservation. |
+| S-7.2 | `/workspace/wt-skills/pkg/skills/builtin_sync_red_test.go::TestSyncBuiltins_EditedUnstampedOverwritten_NoCustomCopy` | WRITTEN: exact shipped package restored, no custom copy; no empty report/stamp-only substitute. |
+| S-7.3 | — | REMOVED by spec r2.1/F-28; no active acceptance criterion. |
+| S-7.4 | `/workspace/wt-skills/pkg/skills/builtin_sync_red_test.go::TestSyncBuiltins_SecondStartIsIdempotent` | WRITTEN: second-start mtime and complete content equivalence. |
+| S-7.5 | `/workspace/wt-skills/pkg/skills/builtin_sync_red_test.go::TestSyncBuiltins_UnstampedEqual_GetsStampOnly` | WRITTEN: stamp-only content/mtime equality. |
+| S-7.6 | `/workspace/wt-skills/pkg/skills/builtin_sync_red_test.go::TestRetireBuiltins_StampedFolderDeleted_GrantRemoved` | WRITTEN: product retirement still uses RemoveGrant; ordinary deletion never does. |
+| S-7.7 | `/workspace/wt-skills/pkg/skills/builtin_sync_red_test.go::TestRetireBuiltins_DanglingNameRemoved` | WRITTEN: product-retired dangling-name cleanup, NOT SD-28 ordinary dangling-grant sweep. |
+| S-7.8 | `/workspace/wt-skills/pkg/skills/builtin_sync_red_test.go::TestRetireBuiltins_UnstampedFolderKept` | WRITTEN: local folder/grant preserved; corresponding event via boot tests remains prerequisite-blocked. |
+| S-7.9 | `/workspace/wt-skills/pkg/skills/builtin_sync_red_test.go::TestRetireBuiltins_SkippedWhenABuiltinInstallFailed` | WRITTEN: skip after failed built-in install; log/message assertions not comprehensive. |
+| S-7.10 | `/workspace/wt-skills/pkg/skills/builtin_sync_red_test.go::TestSyncBuiltins_RemovesStaleSeedStaging` | WRITTEN: stale seed staging removed. |
+| S-7.13 | `/workspace/wt-skills/pkg/gateway/skills_boot_red_test.go::TestBootSkills_ActualStartupBeforeFirstLiveAgent`; `/workspace/wt-skills/pkg/gateway/skills_boot_red_test.go::TestBootSkills_RetiresStampedRetiredBuiltin` | WRITTEN: actual startup entry point, durable agent row, first actual loop instance and Skill registration. Baseline fails at durable retirement before later assertions. |
+| S-7.14 | `/workspace/wt-skills/pkg/gateway/skills_boot_red_test.go::TestBootSkills_ActualStartupBeforeFirstLiveAgent`; `/workspace/wt-skills/pkg/gateway/skills_boot_red_test.go::TestBootSkills_AuditReplayRealLogger`; `/workspace/wt-skills/pkg/gateway/skills_boot_red_test.go::TestBootReport_EventNamesMatchSpec` | WRITTEN: automatic wiring plus real logger events/payloads, exact event count and degraded replay counter; later replay assertions blocked by boot helper. |
+| S-8.1 | `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestGetSkill_FieldsShape` | WRITTEN: requested/absent key set, exact fixture identity/description/file and complete ContentRevision comparison. |
+| S-8.2 | `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestGetSkill_FieldsValidation_D5`; `/workspace/wt-skills/pkg/sysagent/tools/skills_contract_parity_red_test.go::TestGetSkill_FieldsEnumMatchesSkillDetailContract` | WRITTEN: all fourteen names succeed, exact invalid input cases, explicit BLOCKED SkillDetail contract parity test. |
+| S-8.3 | `/workspace/wt-skills/pkg/sysagent/tools/skills_loading_limits_red_test.go::TestGetSkill_AllFields200000CharacterInstructions`; `/workspace/wt-skills/pkg/sysagent/tools/skills_loading_limits_red_test.go::TestGetSkill_FileCap201AndInstructionTruncation` | WRITTEN: real 200,000-character all-fields body, exact 8,000 cut/marker, 48,000-character budget and uncut arrays. |
+| S-8.4 | `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestGetSkill_AuthorizationMatrix` | WRITTEN: ungranted non-editor permission denial. |
+| S-8.5 | `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestGetSkill_AuthorizationMatrix` | WRITTEN: actually authorized management holder, exact successful identity/description. |
+| S-8.6 | `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestGetSkill_AuthorizationMatrix` | WRITTEN: authorization before absence/deletion, authorized NOT_FOUND independently configured. |
+| S-8.7 | `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestListSkills_NameRemoved` | WRITTEN: removed name parameter refusal and nonempty content-free management rows. |
+| S-8.8 | `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestGetSkill_DeletedSkillShape` | PARTIAL: exact deleted shape; generated SkillDetail validation blocked by missing contract. |
+| S-8.9 | `/workspace/wt-skills/pkg/sysagent/tools/skills_loading_limits_red_test.go::TestGetSkill_FileCap201AndInstructionTruncation` | WRITTEN: 199/200/201/250 displayable files, dot exclusion, ordered exact min(N,200) items and true total. |
+| S-8.10 | `/workspace/wt-skills/pkg/sysagent/tools/skill_read_red_test.go::TestGetSkill_LockedReadCoherence` | WRITTEN: real captured-read progress, actual managed writer waiting, one-close cleanup/join, real session seen check and outside-writer three-way oracle. Final baseline stops at ContentRevision; no runtime lock or mutation claim. |
+| S-9.1 | `/workspace/wt-skills/pkg/gateway/rest_skills_t9_red_test.go::TestRestList_HasLocalChanges`; `/workspace/wt-skills/pkg/sysagent/tools/skills_local_changes_red_test.go::TestGetSkill_HasLocalChangesReadTimeMatrix` | WRITTEN: real installed history => false; no-history fixture is never called fresh-installed. |
+| S-9.2 | `/workspace/wt-skills/pkg/sysagent/tools/skills_local_changes_red_test.go::TestGetSkill_HasLocalChangesReadTimeMatrix`; `/workspace/wt-skills/pkg/gateway/rest_skills_t9_red_test.go::TestRestList_ExternalNoHistoryIsLocallyChanged` | WRITTEN: edit/restore/outside/no-history => true; actual get_skill and REST list. |
+| S-9.3 | `/workspace/wt-skills/pkg/gateway/skills_install_matrix_red_test.go::TestRestInstall_ExpectationAndLocalConfirmationMatrix`; `/workspace/wt-skills/pkg/tools/skills_install_contract_red_test.go::TestInstallSkill_RequestExpectationAndLocalConfirmation`; `/workspace/wt-skills/src/lib/api/skills-mutation-envelope.test.ts` | WRITTEN: real local-change gates plus flag forwarding; final SPA adapter drops replace_local_changes, intentional RED. |
+| S-9.4 | `/workspace/wt-skills/pkg/sysagent/tools/skills_local_changes_red_test.go::TestGetSkill_HasLocalChangesReadTimeMatrix`; `/workspace/wt-skills/pkg/gateway/rest_skills_t9_red_test.go::TestRestList_HasLocalChanges` | WRITTEN: read-time local flag and unchanged history across reads, not read-triggered detection. |
+| S-10.1 | `/workspace/wt-skills/pkg/agent/skills_identity_menu_red_test.go::TestSkillMenu_ManagedEditVisibleOnNextTurnSameInstance` | WRITTEN: real instance/context builder, managed ApplyChange edit then same-instance next-turn menu. Baseline ContentRevision blocks edit prerequisite. |
+| S-11.1 | `/workspace/wt-skills/pkg/skills/recovery_red_test.go::TestRecovery_SwapLiveAbsent_NonDeleteHead_PutBack` | WRITTEN: complete manifest/blob fixture, actual recovery and repeat recovery. |
+| S-11.2 | `/workspace/wt-skills/pkg/skills/recovery_red_test.go::TestRecovery_SwapLivePresent_Removed`; `/workspace/wt-skills/pkg/skills/versions_restore_red_test.go::TestOutsideChange_DetectionAndRestore` | PARTIAL: recovery/detection pieces; full crash-to-next-load chain not driven together. |
+| S-11.3 | `/workspace/wt-skills/pkg/skills/recovery_red_test.go::TestRecovery_SwapLivePresent_Removed` | PARTIAL: generic live-present recovery does not fully establish committed-delete crash case. |
+| S-11.4 | `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestClass3_SwapRemoveOrAuditFault_SuccessWithWarning` | PARTIAL: committed bytes/history and exact audit-degraded counter; missing audit-line/restart sequence not fully driven. |
+| S-11.5 | `/workspace/wt-skills/pkg/skills/recovery_red_test.go::TestRecovery_SwapOfBuiltin_PutBackThenSyncReplaces` | WRITTEN: actual recovery then sync with full expected shipped Markdown. |
+| S-11.6 | `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestClass2_SingleFilePublished_ManifestWriteFails`; `/workspace/wt-skills/pkg/sysagent/tools/skills_seen_surface_red_test.go::TestSkillSeen_ReadThenMutation_RevisionAndSessionBound` | PARTIAL: post-publication fault, exact live bytes and partial-clears-seen adapter case; menu/restart/degraded-read chain incomplete. |
+| S-11.7 | `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestClass2_InstallReplace_BlobWriteFails_PredecessorRestorable` | WRITTEN: committed prerequisite, exact replacement-gated hook fired, actual recovery/restore with freshly observed live expectation. |
+| S-11.8 | `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestClass3_SwapRemoveOrAuditFault_SuccessWithWarning` | WRITTEN: whole-folder swap disposal hook, exact live/history state, recovery cleanup and exact skipped-audit increment. |
+| S-11.9 | `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestClass1_Step5FailsWithPutBack` | PARTIAL: exact live-to-.swap stage/fired check and old state; full complete history delta not asserted. |
+| S-11.10 | `/workspace/wt-skills/pkg/skills/recovery_red_test.go::TestRecovery_LegacyBackup_LivePresent_Deleted` | PARTIAL: backup removal/content/history checks; complete INFO-log assertion not established. |
+| S-11.12 | `/workspace/wt-skills/pkg/skills/recovery_red_test.go::TestRecovery_LegacyBackup_LiveAbsent_PutBack` | WRITTEN: full valid expected Markdown after actual rename-back recovery. |
+| S-11.13 | `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestClass2CreateI_TrueFirstCreate_ManifestFails` | PARTIAL: exact post-publication fault, full retained bytes/no committed manifest/text; r15 explicit grant plus restarted agent/read/seen chain absent. |
+| S-11.14 | `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestDelete_ManifestFails_PutBackSucceeds_Class1`; `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestDelete_ManifestFails_PutBackAlsoFails_Class1bDel2` | PARTIAL: gated post-swap hook/put-back hooks, exact recovery bytes; every menu/seen/history delta not covered. |
+| S-11.15 | `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestClass1b_ReplaceSwapAndPutBackFail` | PARTIAL: staged-to-live and put-back faults separately fired, absent live and actual recovery; next-menu omission not asserted. |
+| S-11.16 | `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestCreateFails_AfterParentDirCreated_CleanupSucceeds`; `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestCreateFails_CleanupAlsoFails_Class1c_LeftoverFolder` | WRITTEN: real parent-exists hook gates, both cleanup outcomes and actual retry/repair using present-folder ContentRevision. |
+| S-11.17 | `/workspace/wt-skills/pkg/skills/persistence_faults_red_test.go::TestRestoreIntoAbsence_ManifestFails_Class2CreateIi` | PARTIAL: post-publication hook, exact restored bytes and unchanged chain/text; r15 explicit regrant/real read/seen recovery absent. |
+| S-11.18 | `/workspace/wt-skills/pkg/skills/retention_red_test.go::TestRetention_S11_18HeadRules` | PARTIAL: valid manifest-reference retention head rules; whole partial-publication/restart/regrant/seen sequence not driven. |
+| S-11.19 | `/workspace/wt-skills/pkg/gateway/skills_response_corpus_red_test.go::TestRestS1119_ResponseCorpus`; `/workspace/wt-skills/src/lib/api/skills-real-responses.test.ts`; `/workspace/wt-skills/src/lib/api/skills-mutation-envelope.test.ts` | PARTIAL: all five operation-specific producer/consumer legs authored, exact real response receipt and schemas/adapters; current producer emits only copy-partial/405, so consumer stops at completeness. CI producer-consumer sequencing absent. |
+| S-12.1 | — | MISSING: Windows warning/file-tool/child-protection matrix. TestWindowsPipeline_SwapSemantics is only supplemental compile-vetted swap coverage, not this scenario. |
 
-### US-2 Read and run (§6.1 boundary)
+## Impact, scope and evidence integrity
 
-| Scenario | Test | File | Class | Failing reason |
-|---|---|---|---|---|
-| S-2.1 | TestSkillsBoundary_LoadableSetGrantFiltered/granted | pkg/fspolicy/skills_boundary_red_test.go | RED | A7 leaf rule denies SKILL.md |
-| S-2.2 | …/S-2.2 ungranted legs; TestListSkills_UsableRowsGrantFiltered_Regression (grant predicate) | fspolicy + pkg/sysagent/tools/skill_read_red_test.go | RED / REGRESSION | no grant filter yet |
-| S-2.3 | …/S-2.3 editor legs (SkillsReadAll) | fspolicy boundary | RED | SkillsReadAll missing |
-| S-2.4 | TestSkillsBoundary_RegistryControlEntriesRefused | fspolicy boundary | RED | control entries escape the inventory |
-| S-2.5–S-2.7 | rows 7 (kernel, Linux+macOS) | — | NOT COVERED HERE | kernel-sandbox CI scope |
-| S-2.8 | covered indirectly via §6.1 item 2's inventory-first order (TestSkillsBoundary_InventoryFirstOrder — mount/allow/setup-root re-admission refused); the operator-path-grant scenario itself rides the same rule | fspolicy | RED (order leg) | allowance wins today |
-| S-2.9 | TestSkillsBoundary_SystemSubtreeProtected_Regression, TestSkillsBoundary_InventoryRulesCarveOuts | fspolicy | REGRESSION (named pair) | passes baseline (log 10b) |
-| S-2.10 (read half) | TestSkillsBoundary_DotFilesInsideSkillArePartOfIt; write half → S-4.1 D-2 rows | fspolicy | REGRESSION pair declared by test author (baseline-consistent: dot-files readable today, must stay readable under the grant rule) | passes baseline (log 10b) |
-| S-2.11 | row 37 T-W2 (protection levels) | — | NOT COVERED HERE | sandbox-mode matrix, kernel CI |
+GitNexus `impact`/`detect_changes` tools were unavailable (tool search returned no matching tools); no graph result is claimed. Reference sweeps saved under `/workspace/logs/skills-red/` include `57-impact-final-loading.log`, `59-impact-ts-fixture.log`, `60-impact-coherence-session.log`, `71-impact-revision-and-size.log`, `72-impact-copy-instrument.log`, `73-impact-fault-stage-final.log`, `74-impact-file-cap-final.log` and earlier receipts. Those are **Inferred blast-radius analysis**, supported by references and final diff inspection, not a verified graph analysis. The shared revision helper's otherwise-unchanged caller tests were included in the final package filter.
 
-### US-3 Edit (§5.5, §7.5)
+Changes are confined to test files plus this explicitly authorized internal traceability document. The SD-28 file replacement is required by the commission and r15's withdrawal of that machinery, not suppression of a failing requirement. No skip/xfail/only marker, assertion-disable, budget edit, production fix, generated contract change or fabricated success receipt was added. The exact final source hashes and raw logs remain outside the commit under the evidence directory. Local tests-only commit is permitted; failing tests must stay local until paired with implementation, and **no push** is authorized.
 
-| Scenario | Test | File | Class |
-|---|---|---|---|
-| S-3.1–S-3.6 | covered inside pkg/skills pipeline tests (TestCreate_Commits…, TestEdit_StaleExpectation…, multi-file sequences, delete/restore commits) | pkg/skills/{apply_change,undo_anchor}_red_test.go | RED |
-| S-3.7 | row 24 T-P1/T-P2 "through the real agent loop" | — | NOT COVERED HERE (agent-loop integration; approval-card rendering) |
-| S-3.8 | TestMultiFileSequence_RecoveryFromOwnWrite1Anchor (+leg 2) | pkg/skills/undo_anchor_red_test.go | RED |
-| S-3.9 | refusal-shape legs inside apply_change tests | pkg/skills | RED |
-| S-3.10 | T-E9b gate (registration/policy/text) | pkg/{tools,coreagent,config,sysagent/tools}/retired_tools_gate_red_test.go | RED |
-| S-3.11–S-3.12 | Auto-card write paths — row 24 scope (real agent loop) | — | NOT COVERED HERE (loop integration) |
-| S-3.13 | row 24 named regression pair (V-46: approval skip exists at pin) | — | NOT WRITTEN as a separate test; pinned by spec row 24 for the loop-integration worker (declared, not silently dropped) |
-| S-3.14–S-3.17 | TestRecreate_AfterDelete_UndoVariantNamesDeletion, TestRecreate_AfterBrokenPredecessor_UndoNamesRepair, TestUndoVariant_KeyedToCompleteRestoreGate, TestRecreate_AfterOutsideRemoval_ContentHeadVariant | pkg/skills/undo_anchor_red_test.go | RED |
+Code correct and tested: **not established for the feature; this is a compiled, intentionally RED test-repair pack with explicit limits.**
 
-### US-4 Save check (§7.2, §7.4)
+Reachable by a user/agent: **not established for the feature; actual startup/router/registered-tool tests expose missing behavior.**
 
-| Scenario | Test | File | Class |
-|---|---|---|---|
-| S-4.1 (D-2) | TestSaveCheck_Dataset (full D-2: boundaries, symlink/hardlink/CON.txt/folder-total) | pkg/skills/apply_change_red_test.go | RED |
-| S-4.2 | TestSecretCheck_ValueInContent_RefusedNamedNotEchoed | pkg/skills/secret_check_red_test.go | RED |
-| S-4.3 | TestSecretCheck_ThreeByteValue_Exempt_Committed | same | RED |
-| S-4.4 | TestSecretCheck_OAuthSubValue_RefusedNamed | same | RED |
-| S-4.5 | TestSecretCheck_StoreUnavailable_FailsClosed (+ TestSensitiveNamedValues_LockedStore, …DamagedEntryScopes — store side) | pkg/skills + pkg/credentials | RED |
-| S-4.6 | TestSecretCheck_NoStore_Committed (+ …MissingStoreFile) | same | RED |
-| S-4.7 | TestSecretCheck_RestoreRefused_WhenVersionGainsAStoredValue | pkg/skills | RED |
+Skills: omnipus-shared-rules, elicify-test-writing, omnipus-design-system (loaded earlier; no setup repeated).
 
-### US-5 Versions, retention, snapshot (§9)
-
-| Scenario | Test | File | Class |
-|---|---|---|---|
-| S-5.1 | TestRestore_PutsEveryFileBack_AndRoundTrips | pkg/skills/versions_restore_red_test.go | RED |
-| S-5.2 | versions-page legs inside apply_change/undo tests (version ids from §5.5 result texts) | pkg/skills | RED |
-| S-5.3 | E-3 broken-folder legs (T-E14/T-E15) | pkg/skills/versions_restore_red_test.go (TestE3_BrokenFolder_PresentAndRepairable) | RED |
-| S-5.4 | TestRestore_DeletedSkill_ThenRecreateByOtherSession_Refused | pkg/skills/versions_restore_red_test.go | RED |
-| S-5.5 | T-E13 row 11 (restore refusals after delete) | covered inside restore/deleted legs | RED |
-| S-5.6 | TestRetention_SupersessionClock | pkg/skills/retention_red_test.go | RED |
-| S-5.7 | E-13 paging matrix (T-V13) — tool-side validation in TestGetSkill_UnknownVersion; full 250-version matrix with the history fixtures | pkg/sysagent/tools + pkg/skills | RED (tool side) |
-| S-5.8 | TestRetention_Disabled_KeepsCommittedHistory_NeverTouchesCaptureTemporaries | pkg/skills/retention_red_test.go | RED |
-| S-5.9 | TestOutsideChange_DetectionAndRestore | pkg/skills/versions_restore_red_test.go | RED |
-| S-5.10–S-5.12 | TestGetSkill_UnknownVersion + S-5.11/S-5.12 refusal legs (§5.10 texts) | pkg/sysagent/tools/skill_read_red_test.go + pkg/skills | RED |
-| S-5.13 | TestRetention_DeleteHeadKeepsPreDeletionState_FullWindow (+ 91/89-day boundaries) | pkg/skills/retention_red_test.go | RED |
-| S-5.14 | TestRetention_NewestSupersededToday_Kept | same | RED |
-| S-5.15 | durable changed-path provenance: last_change.paths assertions inside retention tests | same | RED |
-| S-5.16 | TestRestore_ReproducesNestedDotContent | pkg/skills/snapshot_restore_red_test.go | RED |
-| S-5.17 | TestSnapshot_SymlinkCanary | same | RED |
-| S-5.18 | TestSnapshot_RetainedNotRestorable | same | RED |
-| S-5.19 | TestDeleteFile_ResultingInstructionValidity (legs 1–2) | same | RED |
-| S-5.20 | TestBoundedCapture_MutationRefusedBeforeAnythingChanges (mutation+delete legs) + load legs → S-1.1 header load degradation | pkg/skills/snapshot_restore_red_test.go | RED (mutation legs); load-degradation legs declared for the loading-path worker |
-| S-5.21 | TestS521_LegsABCD…, LegsEF, LegG, LegH, LegI | pkg/skills/copy_lifecycle_red_test.go | RED |
-| S-5.22 | instruction-read bound: SKILL_INSTRUCTION_LIMIT — declared for the loading-path worker (menu scan + Skill load + get_skill drive it) | — | DECLARED GAP (see below) |
-| S-5.23 | captured-domain instruction resolution: SKILL_INSTRUCTION_UNRESOLVED — refusal scaffolds exist (ErrSkillInstructionUnresolved); full probe-driven legs declared for the loading-path worker | — | DECLARED GAP (see below) |
-
-### US-6 Copy, identity, grants (§5.4, §5.13, §5.13a)
-
-| Scenario | Test | File | Class |
-|---|---|---|---|
-| S-6.1 | TestBuiltinNameReserved_CaseInsensitive_AllEntryPoints, TestWrite_IntoBuiltinFolder_BUILTIN_READ_ONLY | pkg/skills/skill_identity_red_test.go | RED |
-| S-6.2 | install replace legs (KindInstallReplace) in pkg/skills tests | pkg/skills | RED |
-| S-6.3 | uninstall legs (delete by person/agent) | pkg/gateway (S-6.10) + pkg/skills | RED |
-| S-6.4 | SkillsScreen.copy-dialog.test.tsx (4 legs) + tests/e2e/skills-builtin-copy.spec.ts | ui/src + tests/e2e | 2 RED + 2 baseline-green; e2e NOT RUN (written) |
-| S-6.5 | TestRestCopy_Route (201/400/404/409) + copy pipeline legs | pkg/gateway + pkg/skills | RED |
-| S-6.6 | install refusal legs (D-1 names) | pkg/skills (identity + save-check datasets) | RED |
-| S-6.7 | TestSkillKey_IsTheLowercasedSlug | pkg/skills/skill_identity_red_test.go | RED |
-| S-6.8 | TestCreate_CaseTwin_OfUserSkill_Refused_SKILL_EXISTS | same | RED |
-| S-6.9 | recreation-inherits-nothing legs (grant lists empty after delete/recreate) | pkg/skills/skill_grants_sd28_red_test.go | RED (pending grill) |
-| S-6.10 | TestRestDelete_RevisionEnvelope | pkg/gateway/rest_skills_t9_red_test.go | RED |
-| S-6.11 | install-replace REST legs — row 36 T-R2; the REST refusals ride the delete/copy envelopes + ApplyChange replace tests | partially RED (envelopes); full T-R2 matrix declared for the implementing worker |
-| S-6.12 | TestDelete_RemovesGrants_AtDeletionTime, TestCopy_AfterDelete_CommitsUngranted_TextOffersGrant, TestCreateCopyInstall_OntoStillGrantedName_Refused_SKILL_NAME_GRANTED, TestDelete_GrantRemovalFails…, TestInstallReplace_KeepsGrants | pkg/skills/skill_grants_sd28_red_test.go | RED (**pending grill** — SD-28) |
-| S-6.13 | TestCopyProvenance (baseline source) | pkg/skills/copy_lifecycle_red_test.go | RED |
-| S-6.14 | TestCopyProvenance (external_change source + transform) | same | RED |
-| S-6.15 | TestCopyProvenance (built-in mismatch byte-exact) | same | RED |
-| S-6.16 | TestCopyInterference_CaptureThenStage (legs 1/3/4 + negative control) | same | RED |
-| S-6.17 | TestS617_OversizedCopySource (+leg c twin) | same | RED |
-
-### US-7 Start-up sync (§8)
-
-| Scenario | Test | File | Class |
-|---|---|---|---|
-| S-7.1–S-7.5, S-7.10 | TestSyncBuiltins_StartupMatrix, …_EditedUnstampedOverwritten_NoCustomCopy, …_SecondStartIsIdempotent, …_UnstampedEqual_GetsStampOnly, …_RemovesStaleSeedStaging | pkg/skills/builtin_sync_red_test.go | RED |
-| S-7.6–S-7.9 | TestRetireBuiltins_StampedFolderDeleted_GrantRemoved, …_DanglingNameRemoved, …_UnstampedFolderKept, …_SkippedWhenABuiltinInstallFailed | same | RED |
-| S-7.13 | TestBootSkills_RetiresStampedRetiredBuiltin | pkg/gateway/skills_boot_red_test.go | RED |
-| S-7.14 | TestBootSkills_AuditReplayRealLogger (+ TestBootReport_EventNamesMatchSpec) | same | RED |
-
-### US-8 get_skill (§5.2–§5.3)
-
-| Scenario | Test | File | Class |
-|---|---|---|---|
-| S-8.1 | TestGetSkill_FieldsShape | pkg/sysagent/tools/skill_read_red_test.go | RED |
-| S-8.2 (D-5) | TestGetSkill_FieldsValidation_D5 (8 legs incl. all-14-names) | same | RED |
-| S-8.3 | truncation legs — declared inside the D-5 projection contract (files 200-cap mirrors §5.2); full truncation matrix declared for the implementing worker with real oversized fixtures | partially covered |
-| S-8.4 | TestGetSkill_AuthorizationMatrix/S-8.4 | same | RED |
-| S-8.5 | …/S-8.5 | same | RED |
-| S-8.6 | …/S-8.6 (deleted-skill precedence) | same | RED |
-| S-8.7 | TestListSkills_NameRemoved | same | RED |
-| S-8.8 | TestGetSkill_DeletedSkillShape | same | RED |
-| S-8.9 | 200-file cap — asserted in the files contract of S-8.1 (§5.2 items rule); full 201-file fixture declared for the implementing worker | partially covered |
-| S-8.10 | TestGetSkill_LockedReadCoherence (lock hold + three-way observation) | same | RED |
-| E-9 | TestGetSkill_BuiltinVersionsEmptyPage | same | RED |
-| NOT_FOUND | TestGetSkill_AuthorizationMatrix/authorised-no-folder | same | RED |
-
-### §15 T-E9b gate
-
-| Surface | Test | File | Class |
-|---|---|---|---|
-| registered tool set | TestRetiredTools_GoneFromRegisteredSet | pkg/sysagent/tools/retired_tools_gate_red_test.go | RED |
-| allStaticToolNames | TestRetiredTools_GoneFromAllStaticToolNames | pkg/coreagent | RED |
-| managementTools | TestRetiredTools_GoneFromManagementTools | pkg/coreagent | RED |
-| role policies | TestRetiredTools_GoneFromRolePolicies | pkg/coreagent | RED |
-| custom-agent baseline | TestRetiredTools_GoneFromCustomAgentBaseline | pkg/coreagent | RED |
-| defaults ceiling | TestRetiredTools_GoneFromDefaultsCeiling | pkg/config | RED |
-| autoApproveClasses | TestRetiredTools_GoneFromAutoApprove | pkg/tools | RED |
-| refusal answers present | TestRetiredTools_RefusalAnswersPresent | pkg/tools | RED |
-| provider_defs.golden.json | TestRetiredTools_GoldenProviderDefs | pkg/tools | RED |
-| Name() implementation scan | TestRetiredTools_NoToolTypeImplementsRetiredName | pkg/tools | RED |
-| §15 item 2 writers | TestRetiredTools_NoOriginMetaWriter | pkg/tools | RED |
-| §15 item 3 text gate | TestRetiredTools_TextGate | pkg/tools | RED |
-| §15 item 3 feasibility | TestRetiredTools_TextGateFeasibility | pkg/tools | REGRESSION by design (matcher self-check; passes baseline) |
-
-### Persistence faults (§7.6) and recovery (§9.3)
-
-| Scenario | Test | File | Class |
-|---|---|---|---|
-| S-11.1–S-11.5, S-11.10, S-11.12 | TestRecovery_* | pkg/skills/recovery_red_test.go | RED |
-| S-11.6–S-11.9, S-11.13–S-11.18 | TestClass2_…, TestClass3_…, TestClass1_…, TestDelete_ManifestFails…, TestCreateFails_AfterParentDirCreated…, TestRestoreIntoAbsence… | pkg/skills/persistence_faults_red_test.go | RED |
-
-### REST (§5.8), SPA (T-R3), documents, store
-
-| Scenario | Test | File | Class |
-|---|---|---|---|
-| S-9.1–S-9.2 | TestRestList_HasLocalChanges (fresh false) | pkg/gateway/rest_skills_t9_red_test.go | RED |
-| S-9.3 | installSkillBySlug forwards replace_local_changes (SPA leg) | ui/src/lib/api/skills-mutation-envelope.test.ts | RED; backend gate legs ride S-6.11/ApplyChange replace tests |
-| S-9.4 | TestRestList_HasLocalChanges (read-time true, no version written) | pkg/gateway | RED |
-| S-11.19 | TestRestS1119_FailureEnvelopes (REST legs a–e shapes) + SPA parser legs | pkg/gateway + ui | RED |
-| S-12.1 | TestWindowsPipeline_SwapSemantics | pkg/skills/builtin_swap_windows_red_test.go | PLATFORM-GATED (GOOS=windows vet exit 0) |
-| E-10/E-11 | dangling-grant sweep + non-loadability after recreation | pkg/skills/skill_grants_sd28_red_test.go (SweepDanglingGrants legs) | RED (pending grill) |
-| E-12 | delete envelopes | TestRestDelete_RevisionEnvelope | RED |
-| E-13 | version paging | S-5.7 row above | RED (tool side) |
-| T-S5 (fields enum = SkillDetail props) | the D-5 legs pin the 14 names; the contract-side equivalence awaits the SkillDetail contract schema (Constraint #8 five-step process adds it with the feature) | pkg/sysagent/tools | DECLARED GAP (contract artifact does not exist yet) |
-
-## Declared gaps (scenarios NOT turned into tests here, and why)
-
-1. **Kernel/child legs** (S-1.5 child part, S-2.5–S-2.7, S-2.11, row 7/37): they need the
-   Linux/macOS kernel-sandbox harness (Landlock/Seatbelt ruleset inspection) — out of this
-   RED slice's Linux-CI scope; row 7 and row 37 name their own environment.
-2. **Real-agent-loop legs** (S-3.7, S-3.11–S-3.13, row 24 T-P1/T-P2): the approval card and
-   the Auto classifier verdicts are observable only through the real agent loop; row 24
-   assigns that harness. S-3.13 is the named regression pair (V-46) — it belongs to the
-   loop-integration worker's candidate run, never to RED evidence.
-3. **S-5.22 / S-5.23 loading-path legs**: the menu-scan/Skill-load/get_skill drive needs the
-   implemented loading path; the refusal scaffolds (`ErrSkillInstructionLimit`,
-   `ErrSkillInstructionUnresolved`) and the bounded-consumption probe exist for the worker.
-4. **S-8.3/S-8.9 full fixtures** (truncation matrices with real oversized payloads): the
-   projection contracts (§5.2 caps, 200-file rule) are pinned in the D-5/S-8.1 tests; the
-   full-size fixtures belong with the implemented reader.
-5. **T-S5 contract-side equivalence**: `SkillDetail`'s contract schema does not exist yet
-   (Constraint #8: the five-step wire-type process lands it with the feature).
-6. **S-6.11's full T-R2 matrix**: the REST refusal envelopes are covered (S-6.10/S-11.19);
-   the install-replace REST rows need the install route's ApplyChange migration.
-7. **S-1.5 e2e child leg** (script runs; child `cat` fails): needs a live gateway (row 10).
-
-## Spec-premise drift (pin check)
-
-Spec pin `4cad412bf`; release head `1d3989df` — 91 commits between them. The spec's r3/r4
-notes state r3 re-verified the premises on `1d3989df` (V-25–V-32) and the head has not
-moved since. All pinned symbols verified present at the head: `SeedDefaults`
-(pkg/skills/embed.go:62), 29 built-ins incl. `plan` (no `handoff`/`summarize`),
-`MaxSkillMarkdownBytes=262144` (authoring.go:22), `writeOriginMeta` (skills_install.go:390),
-`retiredToolCanonicalNames` (registry.go:506). **No new drift found; no spec premise
-silently adapted.** One worktree-only note: `pkg/gateway/spa/` is a gitignored build
-artifact absent in a fresh worktree — a placeholder was created locally (never committed)
-so the gateway package compiles, mirroring CI's build step.
-
-## SD-28 status
-
-All §5.13a tests live in `pkg/skills/skill_grants_sd28_red_test.go` — flagged **pending
-grill** in this table per the chief's instruction; the chief reports grill changes.
+| Claim | Evidence | Certainty |
+|---|---|---|
+| r15 binding replaces deletion cleanup, not Q-S2's behavior | `/workspace/omnipus-coordination/designs-20261029/skills-spec-r15.md` §5.13a; SD-30 tests and actual registered Skill test | Verified requirements/source; product implementation still RED |
+| Final narrow Go runs compiled and stayed RED | `/workspace/logs/skills-red/35-final-pkg-skills.log` through `/workspace/logs/skills-red/42-final-pkg-agent.log`; direct EXIT=1 each, named failures/controls; per-test ledger | Verified observations; later prerequisite-blocked assertions unverified |
+| Frontend static checks and scoped budgets pass | Final receipts 64–69 listed above, EXIT=0 | Verified scoped checks only |
+| Full test integrity / Go lint / product completion | Go lint receipt EXIT=127; gaps and prerequisite failures above; GREEN/mutation/CI/UAT absent | Unknown / not established |
+| Self-check | Final artifact/source-hash, complete scenario-key/test-symbol map, run-plan/outcome counts, forbidden-marker/scope and diff checks recorded in `/workspace/logs/skills-red/77-final-integrity.log`; actual assertions and final failure blocks reread against CHECK and r15 | Verified self-review only; not independent CHECK or complete coverage |

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -78,8 +79,7 @@ func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 	t.Run("leg a existing history — blob set returns to before-state", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		appDir := writeSkillFixture(t, root, "foo")
-		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
+		appDir := versionedSkillFixture(t, root, "foo")
 		before := snapshotHistory(t, historyRoot, "foo")
 		oversize(t, appDir, "data.bin")
 
@@ -118,8 +118,7 @@ func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 	t.Run("leg c valid early file, later limit violation", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		appDir := writeSkillFixture(t, root, "foo")
-		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
+		appDir := versionedSkillFixture(t, root, "foo")
 		require.NoError(t, os.WriteFile(filepath.Join(appDir, "good-early.md"), []byte("valid early file\n"), 0o644))
 		oversize(t, appDir, "late-oversize.bin")
 		before := snapshotHistory(t, historyRoot, "foo")
@@ -139,8 +138,7 @@ func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 	t.Run("leg d three repeated attempts leave the blob set identical", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		appDir := writeSkillFixture(t, root, "foo")
-		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
+		appDir := versionedSkillFixture(t, root, "foo")
 		before := snapshotHistory(t, historyRoot, "foo")
 
 		for i := 0; i < 3; i++ {
@@ -178,13 +176,12 @@ func TestS521_LegsEF_ManifestFaultAndPartialPromotion(t *testing.T) {
 	t.Run("leg e1 manifest fault after finalization — twin kept, new final removed", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		appDir := writeSkillFixture(t, root, "foo")
-		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
+		appDir := versionedSkillFixture(t, root, "foo")
 		before := snapshotHistory(t, historyRoot, "foo")
 
 		// A new file whose bytes twin an existing final would exercise the
 		// content-addressed keep; the new early file the capture consumes.
-		require.NoError(t, os.WriteFile(filepath.Join(appDir, "early-twin.md"), []byte("x\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(appDir, "early-twin.md"), []byte(readFile(t, filepath.Join(appDir, "SKILL.md"))), 0o644))
 
 		FaultManifestWrite = func(string) error { return errors.New("manifest store down") }
 		defer func() { FaultManifestWrite = nil }()
@@ -205,10 +202,9 @@ func TestS521_LegsEF_ManifestFaultAndPartialPromotion(t *testing.T) {
 	t.Run("leg e2 faulted removal — suffix observable, residual acknowledged", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		appDir := writeSkillFixture(t, root, "foo")
-		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
+		appDir := versionedSkillFixture(t, root, "foo")
 		before := snapshotHistory(t, historyRoot, "foo")
-		require.NoError(t, os.WriteFile(filepath.Join(appDir, "early-twin.md"), []byte("x\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(appDir, "early-twin.md"), []byte(readFile(t, filepath.Join(appDir, "SKILL.md"))), 0o644))
 
 		FaultManifestWrite = func(string) error { return errors.New("manifest store down") }
 		FaultStagingRemove = func(string) error { return errors.New("cleanup failed too") }
@@ -239,8 +235,7 @@ func TestS521_LegsEF_ManifestFaultAndPartialPromotion(t *testing.T) {
 	t.Run("leg f partial promotion — promoted blob removed with the temporaries", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		appDir := writeSkillFixture(t, root, "foo")
-		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
+		appDir := versionedSkillFixture(t, root, "foo")
 		before := snapshotHistory(t, historyRoot, "foo")
 
 		// Two new blobs; the second finalization faults after the first succeeded.
@@ -279,8 +274,7 @@ func TestS521_LegsEF_ManifestFaultAndPartialPromotion(t *testing.T) {
 func TestS521_LegG_SuccessByReuse_ThreeDistinctDestinations(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := SkillHistoryRoot(root)
-	srcDir := writeSkillFixture(t, root, "src")
-	seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
+	srcDir := versionedSkillFixture(t, root, "src")
 	before := snapshotHistory(t, historyRoot, "src")
 	_ = srcDir
 
@@ -353,8 +347,7 @@ func TestS521_LegH_BuiltinSource_NoHistoryEver(t *testing.T) {
 func TestS521_LegI_RepeatedCommits_NoTemporariesAccumulate(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := SkillHistoryRoot(root)
-	appDir := writeSkillFixture(t, root, "chk")
-	seedHistory(t, historyRoot, "chk", singleManifest("v1", "edit"))
+	appDir := versionedSkillFixture(t, root, "chk")
 
 	for i := 1; i <= 4; i++ {
 		before := snapshotHistory(t, historyRoot, "chk")
@@ -420,8 +413,10 @@ func TestCopyProvenance(t *testing.T) {
 	t.Run("S-6.14 source changed since its last version — external_change provenance + transform", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		writeSkillFixture(t, root, "src")
-		seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
+		versionedSkillFixture(t, root, "src")
+
+		initial := manifestIDs(t, historyRoot, "src")
+		require.Len(t, initial, 1)
 
 		// Owner edits src outside Omnipus (live ≠ V1).
 		srcDir := filepath.Join(root, "src")
@@ -433,7 +428,7 @@ func TestCopyProvenance(t *testing.T) {
 
 		// step 1 recorded external_change V2 for src.
 		srcManifests := manifestIDs(t, historyRoot, "src")
-		require.Contains(t, srcManifests, "v1", "V1 itself unchanged")
+		require.Contains(t, srcManifests, initial[0], "V1 itself unchanged")
 		require.Len(t, srcManifests, 2, "exactly the external_change was recorded")
 		v2 := newestManifest(t, historyRoot, "src", srcManifests)
 		kind := manifestField(t, historyRoot, "src", v2, "kind")
@@ -482,112 +477,101 @@ func TestCopyInterference_CaptureThenStage(t *testing.T) {
 	t.Run("leg 1 interference before the capture — B captured and provenanced", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		writeSkillFixture(t, root, "src")
-		seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
-
-		// Hold the registry mutation lock; launch the copy (it blocks);
-		// replace the source with B bypassing the lock; release.
-		lockHeld := make(chan struct{})
-		release := make(chan struct{})
-		go func() {
-			_ = WithMutationLock(root, func() error {
-				close(lockHeld)
-				<-release
-				return nil
-			})
-		}()
-		<-lockHeld
-
-		copyDone := make(chan error, 1)
-		go func() {
-			_, err := copySrcToDst(t, root, "src", "dst")
-			copyDone <- err
-		}()
-		// Give the copy a moment to block on the lock, then write B outside.
-		require.NoError(t, os.WriteFile(filepath.Join(root, "src", "SKILL.md"),
+		srcDir := versionedSkillFixture(t, root, "src")
+		before := manifestIDs(t, historyRoot, "src")
+		// B is installed synchronously before the real copy starts. There is
+		// no scheduling assumption: the subsequent capture must observe B.
+		require.NoError(t, os.WriteFile(filepath.Join(srcDir, "SKILL.md"),
 			[]byte(validSkillMD("src", "B", "B body")), 0o644))
-		close(release)
-
-		require.NoError(t, <-copyDone, "the copy completes")
-
-		// The source's recorded version V2 (external_change) describes B.
-		srcManifests := manifestIDs(t, historyRoot, "src")
-		require.Len(t, srcManifests, 2, "V1 + the external_change of B")
-		v2 := newestManifest(t, historyRoot, "src", srcManifests)
+		_, err := copySrcToDst(t, root, "src", "dst")
+		require.NoError(t, err)
+		ids := manifestIDs(t, historyRoot, "src")
+		require.Len(t, ids, len(before)+1)
+		v2 := newestManifest(t, historyRoot, "src", ids)
+		assert.Equal(t, "external_change", manifestField(t, historyRoot, "src", v2, "kind"))
 		dstHead := newestManifest(t, historyRoot, "dst", manifestIDs(t, historyRoot, "dst"))
-		restoredFrom := manifestField(t, historyRoot, "dst", dstHead, "restored_from")
-		assert.Equal(t, "src@"+v2, restoredFrom,
-			"never B staged with src@V1 provenance — the r6 defect asserted impossible")
-		dstBody := readFile(t, filepath.Join(root, "dst", "SKILL.md"))
-		assert.Contains(t, dstBody, "B body", "B's captured bytes staged")
-		assert.Contains(t, dstBody, "name: dst", "with the declared transform applied")
+		assert.Equal(t, "src@"+v2, manifestField(t, historyRoot, "dst", dstHead, "restored_from"))
+		assert.Equal(t, validSkillMD("dst", "B", "B body"), readFile(t, filepath.Join(root, "dst", "SKILL.md")))
 	})
 
-	t.Run("leg 3 interference after the capture — destination from captured A", func(t *testing.T) {
+	t.Run("leg 3 interference after capture — destination from captured A", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		srcDir := writeSkillFixture(t, root, "src")
-		seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
-		_ = srcDir
-
-		// Probe: after the capture walk first fires, write B (outside writer).
-		var captureSeen bool
-		var postCaptureSourceReads int
-		prevOpen := CaptureOpenProbe
+		srcDir := writeSkillFixture(t, root, "src") // no history: copy must commit a baseline
+		original := readFile(t, filepath.Join(srcDir, "SKILL.md"))
+		var boundaryFired bool
+		var injectionErr error
+		var armed, sourceReads, postBoundarySourceReads int32
+		oldManifest, oldOpen := FaultManifestWrite, CaptureOpenProbe
+		defer func() { FaultManifestWrite, CaptureOpenProbe = oldManifest, oldOpen }()
+		// The source baseline manifest write is an existing synchronous seam
+		// AFTER its complete capture, before destination staging. Returning nil
+		// lets the real commit proceed. No new production test API is added.
+		FaultManifestWrite = func(path string) error {
+			if filepath.Dir(path) == filepath.Join(historyRoot, "src", "versions") && !boundaryFired {
+				boundaryFired = true
+				injectionErr = os.WriteFile(filepath.Join(srcDir, "SKILL.md"),
+					[]byte(validSkillMD("src", "B", "B body")), 0o644)
+				atomic.StoreInt32(&armed, 1)
+			}
+			return injectionErr
+		}
 		CaptureOpenProbe = func(op, path string) {
-			if op == "capture" && strings.Contains(path, filepath.Join(root, "src")) {
-				if !captureSeen {
-					captureSeen = true
-					// Interference lands after the capture walk completed and
-					// before staging: any later live-source read is the defect.
-					_ = os.WriteFile(filepath.Join(root, "src", "SKILL.md"),
-						[]byte(validSkillMD("src", "B", "B body")), 0o644)
+			if op != "metadata" && (path == srcDir || strings.HasPrefix(path, srcDir+string(filepath.Separator))) {
+				atomic.AddInt32(&sourceReads, 1)
+				if atomic.LoadInt32(&armed) == 1 {
+					atomic.AddInt32(&postBoundarySourceReads, 1)
 				}
 			}
-			if op == "capture" && captureSeen && strings.Contains(path, filepath.Join(root, "src")) {
-				postCaptureSourceReads++
-			}
 		}
-		defer func() { CaptureOpenProbe = prevOpen }()
-
-		out, err := copySrcToDst(t, root, "src", "dst")
-		require.NoError(t, err)
-		_ = out
-
-		// The probe records ZERO live-source reads after the capture walk
-		// completed: the destination was staged from the captured version.
-		assert.Equal(t, 1, postCaptureSourceReads,
-			"only the capture walk's own reads — no live-source read after the capture")
-		dstBody := readFile(t, filepath.Join(root, "dst", "SKILL.md"))
-		assert.Contains(t, dstBody, "fixture skill src",
-			"dst equals captured A with the declared transform — never B staged with src@V1")
-		assert.NotContains(t, dstBody, "B body")
-		dstHead := newestManifest(t, historyRoot, "dst", manifestIDs(t, historyRoot, "dst"))
-		restoredFrom := manifestField(t, historyRoot, "dst", dstHead, "restored_from")
-		assert.True(t, strings.HasSuffix(restoredFrom, "@v1"),
-			"dst.restored_from = src@V1 (captured A), got %q", restoredFrom)
+		_, err := copySrcToDst(t, root, "src", "dst")
+		require.NoError(t, err, "the real copy commits from its captured version")
+		require.True(t, boundaryFired, "source capture must reach its baseline-manifest boundary")
+		require.NoError(t, injectionErr)
+		require.Greater(t, atomic.LoadInt32(&sourceReads), int32(0), "instrument control: real source capture opens are observable")
+		assert.Zero(t, atomic.LoadInt32(&postBoundarySourceReads), "no live-source content open after capture")
+		assert.Equal(t, validSkillMD("src", "B", "B body"), readFile(t, filepath.Join(srcDir, "SKILL.md")), "B really landed")
+		assert.Equal(t, strings.Replace(original, "name: src", "name: dst", 1),
+			readFile(t, filepath.Join(root, "dst", "SKILL.md")), "destination is captured A with only the declared name transform")
+		ids := manifestIDs(t, historyRoot, "src")
+		require.Len(t, ids, 1)
+		head := newestManifest(t, historyRoot, "dst", manifestIDs(t, historyRoot, "dst"))
+		assert.Equal(t, "src@"+ids[0], manifestField(t, historyRoot, "dst", head, "restored_from"))
 	})
 
-	t.Run("leg 4 negative control — the probe detects a rereading variant", func(t *testing.T) {
+	t.Run("leg 4 negative control — the probe detects a genuinely rereading variant", func(t *testing.T) {
 		root := t.TempDir()
 		srcDir := writeSkillFixture(t, root, "src")
 
-		var sourceReads int
+		// The identical counter predicate leg 3 relies on, in its exact
+		// post-boundary state (armed).
+		var armed, postBoundarySourceReads int32
 		prevOpen := CaptureOpenProbe
 		CaptureOpenProbe = func(op, path string) {
-			if strings.Contains(path, srcDir) {
-				sourceReads++
+			if atomic.LoadInt32(&armed) == 1 && strings.Contains(path, srcDir) {
+				atomic.AddInt32(&postBoundarySourceReads, 1)
 			}
 		}
 		defer func() { CaptureOpenProbe = prevOpen }()
 
-		// The deliberately rereading shape (V-45's detection-then-reread):
-		// after the capture, a staging-time reread of the live source.
-		CaptureOpenProbe("capture", filepath.Join(srcDir, "SKILL.md"))
-		CaptureOpenProbe("staging", filepath.Join(srcDir, "SKILL.md")) // the prohibited reread
+		// Deliberately wrong algorithm: capture A, then stage by recapturing
+		// the LIVE source after B arrives instead of using captured A. BOTH
+		// captures enter the actual production pipeline; this test never calls
+		// the observation callback itself. A disconnected production probe
+		// cannot be made green by a test-owned read wrapper.
+		capturedA := readFile(t, filepath.Join(srcDir, "SKILL.md"))
+		_, err := copySrcToDst(t, root, "src", "captured-a")
+		require.NoError(t, err, "negative control needs the real first capture")
+		require.NoError(t, os.WriteFile(filepath.Join(srcDir, "SKILL.md"),
+			[]byte(validSkillMD("src", "B", "B body")), 0o644))
+		atomic.StoreInt32(&armed, 1)
+		_, err = copySrcToDst(t, root, "src", "wrong-reread")
+		require.NoError(t, err, "deliberately rereading staging path uses real production I/O")
 
-		assert.Equal(t, 2, sourceReads,
-			"the instrument is sensitive: a nonzero post-capture count detects the prohibited algorithm")
+		assert.Greater(t, atomic.LoadInt32(&postBoundarySourceReads), int32(0),
+			"the identical production instrument catches the prohibited second live-source capture")
+		assert.Equal(t, validSkillMD("wrong-reread", "B", "B body"), readFile(t, filepath.Join(root, "wrong-reread", "SKILL.md")), "wrong reread really stages B, not captured A")
+		assert.Equal(t, strings.Replace(capturedA, "name: src", "name: captured-a", 1), readFile(t, filepath.Join(root, "captured-a", "SKILL.md")), "first captured A remains the exact control")
 	})
 }
 
@@ -604,8 +588,7 @@ func TestS617_OversizedCopySource(t *testing.T) {
 	t.Run("leg a oversized helper refuses, nothing created, lock released", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		srcDir := writeSkillFixture(t, root, "src")
-		seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
+		srcDir := versionedSkillFixture(t, root, "src")
 		require.NoError(t, os.WriteFile(filepath.Join(srcDir, "huge.bin"),
 			make([]byte, perFileLimit+1), 0o644))
 		before := snapshotHistory(t, historyRoot, "src")
@@ -632,8 +615,7 @@ func TestS617_OversizedCopySource(t *testing.T) {
 	t.Run("leg c retention disabled, content-twin early file — referenced finals intact", func(t *testing.T) {
 		root := t.TempDir()
 		historyRoot := SkillHistoryRoot(root)
-		srcDir := writeSkillFixture(t, root, "src")
-		seedHistory(t, historyRoot, "src", singleManifest("v1", "edit"))
+		srcDir := versionedSkillFixture(t, root, "src")
 		before := snapshotHistory(t, historyRoot, "src")
 
 		// A byte-twin of an existing referenced final as the early file, then
@@ -682,4 +664,12 @@ func manifestField(t *testing.T, historyRoot, slug, id, field string) string {
 	require.NoError(t, json.Unmarshal(raw, &m))
 	v, _ := m[field].(string)
 	return v
+}
+
+// versionedSkillFixture makes live bytes and the newest manifest agree. A
+// synthetic unrelated manifest would induce an unintended external_change.
+func versionedSkillFixture(t *testing.T, root, slug string) string {
+	t.Helper()
+	createSkillViaPipeline(t, root, slug, "fixture skill "+slug, "fixture skill "+slug)
+	return filepath.Join(root, slug)
 }

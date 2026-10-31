@@ -90,7 +90,9 @@ func TestMultiFileSequence_RecoveryFromOwnWrite1Anchor(t *testing.T) {
 
 	// Recovery follows write 1's own undo line: restore V1 (write 1's
 	// predecessor).
-	v1 := strings.TrimSpace(strings.SplitN(strings.SplitN(out1.Message, "the version before it is ", 2)[1], ",", 2)[0])
+	anchorParts := strings.SplitN(out1.Message, "the version before it is ", 2)
+	require.Len(t, anchorParts, 2, "write 1 must return its own undo anchor, not crash a parser")
+	v1 := strings.TrimSpace(strings.SplitN(anchorParts[1], ",", 2)[0])
 	require.NotEmpty(t, v1, "the anchor is parsed from write 1's own result")
 	_, err = ApplyChange(root, ChangeRequest{
 		Kind: KindRestore, Slug: "foo", Version: v1,
@@ -129,14 +131,17 @@ func TestMultiFileSequence_TwoSequences_RecoverBOnly(t *testing.T) {
 	outB, _ := commitWrite(t, root, "foo", "SKILL.md",
 		validSkillMD("foo", "sequence B", "B body"), outA.Revision)
 
-	// W-B2 refused.
+	// W-B2 refused — an invalid would-be state: SKILL.md metadata value not a
+	// string (D-2 #5). A b-notes.md frontmatter write would be VALID (§7.2
+	// validates metadata on SKILL.md only) and must not be used as the
+	// refusal.
 	_, err := ApplyChange(root, ChangeRequest{
-		Kind: KindEdit, Slug: "foo", Path: "b-notes.md",
+		Kind: KindEdit, Slug: "foo", Path: "SKILL.md",
 		Content: []byte("---\nname: foo\ndescription: d\nmetadata:\n  k: 2\n---\n"),
 		Expect:  Expectation{Revision: readLiveRevision(t, filepath.Join(root, "foo"))},
 		Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 	})
-	require.Error(t, err)
+	require.Error(t, err, "W-B2 is refused (invalid metadata value)")
 
 	// Recover B from W-B1's own anchor: restore VA.
 	_, err = ApplyChange(root, ChangeRequest{
@@ -161,11 +166,9 @@ func TestMultiFileSequence_TwoSequences_RecoverBOnly(t *testing.T) {
 // Traces to: skills-spec-r13.md §5.5 variant 3, §7.2 restore row, S-3.14.
 func TestRecreate_AfterDelete_UndoVariantNamesDeletion(t *testing.T) {
 	root := t.TempDir()
-	writeSkillFixture(t, root, "foo")
 
 	// History V1 via create; then delete (V2 = delete_skill head).
-	outCreate, _ := commitWrite(t, root, "foo", "SKILL.md",
-		validSkillMD("foo", "original", "original body"), "")
+	outCreate, _ := createSkillViaPipeline(t, root, "foo", "original", "original body")
 	_, err := ApplyChange(root, ChangeRequest{
 		Kind: KindDelete, Slug: "foo",
 		Expect: Expectation{Revision: outCreate.Revision},
@@ -191,14 +194,23 @@ func TestRecreate_AfterDelete_UndoVariantNamesDeletion(t *testing.T) {
 	assert.NotContains(t, out1.Message, "there is no earlier version",
 		"the true-first-creation text must not appear when history exists")
 
-	// Write 2 refused — sequence-free refusal.
+	// Write 2 COMMITS — an ordinary supported write is sequence-free (§7.5);
+	// only write 1, the first write after the recreation, carries the
+	// variant. (A plain notes-file write is valid per §7.2 and must not be
+	// used as a refusal.)
+	out2, _ := commitWrite(t, root, "foo", "second.md", "second\n", out1.Revision)
+	assert.NotContains(t, out2.Message, "follows the recorded deletion",
+		"the variant appears only on write 1 after the recreation (§5.5)")
+
+	// A refused write carries no undo variant either (§7.5) — the refusal
+	// input here is a genuinely invalid state: metadata value not a string.
 	_, err = ApplyChange(root, ChangeRequest{
-		Kind: KindEdit, Slug: "foo", Path: "second.md",
-		Content: []byte("second\n"),
-		Expect:  Expectation{Revision: out1.Revision},
+		Kind: KindEdit, Slug: "foo", Path: "SKILL.md",
+		Content: []byte("---\nname: foo\ndescription: d\nmetadata:\n  k: 1\n---\nbody\n"),
+		Expect:  Expectation{Revision: out2.Revision},
 		Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 	})
-	require.Error(t, err)
+	require.Error(t, err, "the invalid write is refused")
 	assert.NotContains(t, err.Error(), "follows the recorded deletion",
 		"the refusal carries no undo variant (§7.5)")
 
@@ -208,7 +220,7 @@ func TestRecreate_AfterDelete_UndoVariantNamesDeletion(t *testing.T) {
 	require.NotNil(t, deletedHead, "the variant names the retained head id")
 	_, err = ApplyChange(root, ChangeRequest{
 		Kind: KindRestore, Slug: "foo", Version: deletedHead[1],
-		Expect: Expectation{Absent: true},
+		Expect: Expectation{Revision: out2.Revision},
 		Actor:  ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "edit_skill"},
 	})
 	require.Error(t, err, "selecting a delete_skill manifest is refused")
@@ -218,7 +230,7 @@ func TestRecreate_AfterDelete_UndoVariantNamesDeletion(t *testing.T) {
 	// Recovery follows write 1's own result: delete returns the key to absence.
 	_, err = ApplyChange(root, ChangeRequest{
 		Kind: KindDelete, Slug: "foo",
-		Expect: Expectation{Revision: out1.Revision},
+		Expect: Expectation{Revision: out2.Revision},
 		Actor:  ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "edit_skill"},
 	})
 	require.NoError(t, err)
@@ -239,8 +251,7 @@ func TestRecreate_AfterBrokenPredecessor_UndoNamesRepair(t *testing.T) {
 	fixture := func(t *testing.T) (root string, revAfter string) {
 		t.Helper()
 		root = t.TempDir()
-		out, _ := commitWrite(t, root, "foo", "SKILL.md",
-			validSkillMD("foo", "original", "original body"), "")
+		out, _ := createSkillViaPipeline(t, root, "foo", "original", "original body")
 		appDir := filepath.Join(root, "foo")
 		require.NoError(t, os.WriteFile(filepath.Join(appDir, "helpers.md"), []byte("helper\n"), 0o644))
 		require.NoError(t, os.Remove(filepath.Join(appDir, "SKILL.md")))
@@ -253,7 +264,7 @@ func TestRecreate_AfterBrokenPredecessor_UndoNamesRepair(t *testing.T) {
 		out1, err := ApplyChange(root, ChangeRequest{
 			Kind: KindEdit, Slug: "foo", Path: "SKILL.md",
 			Content: []byte(validSkillMD("foo", "repaired", "repaired body")),
-			Expect:  Expectation{Revision: readLiveRevision(t, filepath.Join(root, "foo"))},
+			Expect:  Expectation{Revision: readContentRevision(t, filepath.Join(root, "foo"))},
 			Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 		})
 		require.NoError(t, err)
@@ -270,9 +281,14 @@ func TestRecreate_AfterBrokenPredecessor_UndoNamesRepair(t *testing.T) {
 
 	t.Run("leg 2 class-2 partial text", func(t *testing.T) {
 		root, _ := fixture(t)
-		live := readLiveRevision(t, filepath.Join(root, "foo"))
+		live := readContentRevision(t, filepath.Join(root, "foo"))
 
-		FaultManifestWrite = func(path string) error { return errors.New("disk full") }
+		FaultManifestWrite = func(path string) error {
+			if raw, readErr := os.ReadFile(filepath.Join(root, "foo", "SKILL.md")); readErr == nil && strings.Contains(string(raw), "repaired body") {
+				return errors.New("disk full")
+			}
+			return nil
+		}
 		defer func() { FaultManifestWrite = nil }()
 
 		out, err := ApplyChange(root, ChangeRequest{
@@ -310,8 +326,7 @@ func TestUndoVariant_KeyedToCompleteRestoreGate(t *testing.T) {
 
 	t.Run("leg 1 secret predecessor — committed advice + restore refusal", func(t *testing.T) {
 		root := t.TempDir()
-		out1, _ := commitWrite(t, root, "foo", "SKILL.md",
-			validSkillMD("foo", "clean v1", "clean body"), "")
+		createSkillViaPipeline(t, root, "foo", "clean v1", "clean body")
 
 		// Outside edit places the secret value in the live folder.
 		appDir := filepath.Join(root, "foo")
@@ -323,10 +338,9 @@ func TestUndoVariant_KeyedToCompleteRestoreGate(t *testing.T) {
 		defer func() { SecretValuesProvider = prev }()
 
 		out2, err := ApplyChange(root, ChangeRequest{
-			Kind: KindEdit, Slug: "foo", Path: "clean.md",
-			Content: []byte("still clean\n"),
-			Expect:  Expectation{Revision: readLiveRevision(t, appDir)},
-			Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
+			Kind: KindDeleteFile, Slug: "foo", Path: "leaked.md",
+			Expect: Expectation{Revision: readLiveRevision(t, appDir)},
+			Actor:  ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 		})
 		require.NoError(t, err, "the new clean state passes validation")
 		assert.Contains(t, out2.Message, "which cannot be restored",
@@ -346,22 +360,19 @@ func TestUndoVariant_KeyedToCompleteRestoreGate(t *testing.T) {
 		require.Error(t, err, "restoring the secret-carrying version is refused")
 		assert.True(t, errors.Is(err, ErrSecretInSkill), "want SECRET_IN_SKILL, got %v", err)
 		assert.NotContains(t, err.Error(), secretValue, "the value is never shown (§7.4)")
-		_ = out1
 	})
 
 	t.Run("leg 2 non-portable name predecessor", func(t *testing.T) {
 		root := t.TempDir()
-		out1, _ := commitWrite(t, root, "foo", "SKILL.md",
-			validSkillMD("foo", "clean v1", "clean body"), "")
+		_, cleanID := createSkillViaPipeline(t, root, "foo", "clean v1", "clean body")
 
 		appDir := filepath.Join(root, "foo")
 		require.NoError(t, os.WriteFile(filepath.Join(appDir, "a:b"), []byte("colon name\n"), 0o644))
 
 		out2, err := ApplyChange(root, ChangeRequest{
-			Kind: KindEdit, Slug: "foo", Path: "clean.md",
-			Content: []byte("clean\n"),
-			Expect:  Expectation{Revision: readLiveRevision(t, appDir)},
-			Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
+			Kind: KindRestore, Slug: "foo", Version: cleanID,
+			Expect: Expectation{Revision: readLiveRevision(t, appDir)},
+			Actor:  ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 		})
 		require.NoError(t, err)
 		assert.Contains(t, out2.Message, "which cannot be restored (")
@@ -377,15 +388,13 @@ func TestUndoVariant_KeyedToCompleteRestoreGate(t *testing.T) {
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "a:b", "the same §7.2 reason the advice named")
-		_ = out1
 	})
 
 	t.Run("both legs as class-2 partial texts", func(t *testing.T) {
 		for _, leg := range []string{"secret", "colon"} {
 			t.Run(leg, func(t *testing.T) {
 				root := t.TempDir()
-				commitWrite(t, root, "foo", "SKILL.md",
-					validSkillMD("foo", "clean v1", "clean body"), "")
+				_, cleanID := createSkillViaPipeline(t, root, "foo", "clean v1", "clean body")
 				appDir := filepath.Join(root, "foo")
 				if leg == "secret" {
 					require.NoError(t, os.WriteFile(filepath.Join(appDir, "leaked.md"),
@@ -396,17 +405,25 @@ func TestUndoVariant_KeyedToCompleteRestoreGate(t *testing.T) {
 
 				prev := SecretValuesProvider
 				SecretValuesProvider = secretStore
-				FaultManifestWrite = func(string) error { return errors.New("disk full") }
+				FaultManifestWrite = func(string) error {
+					bad := "a:b"
+					if leg == "secret" {
+						bad = "leaked.md"
+					}
+					if _, statErr := os.Stat(filepath.Join(appDir, bad)); os.IsNotExist(statErr) {
+						return errors.New("disk full")
+					}
+					return nil
+				}
 				defer func() {
 					SecretValuesProvider = prev
 					FaultManifestWrite = nil
 				}()
 
 				out, err := ApplyChange(root, ChangeRequest{
-					Kind: KindEdit, Slug: "foo", Path: "clean.md",
-					Content: []byte("clean\n"),
-					Expect:  Expectation{Revision: readLiveRevision(t, appDir)},
-					Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
+					Kind: KindRestore, Slug: "foo", Version: cleanID,
+					Expect: Expectation{Revision: readLiveRevision(t, appDir)},
+					Actor:  ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 				})
 				require.Error(t, err)
 				assert.Equal(t, PersistencePartial, out.PersistenceStatus)
@@ -430,8 +447,7 @@ func TestUndoVariant_KeyedToCompleteRestoreGate(t *testing.T) {
 // S-3.17.
 func TestRecreate_AfterOutsideRemoval_ContentHeadVariant(t *testing.T) {
 	root := t.TempDir()
-	out1, v1 := commitWrite(t, root, "foo", "SKILL.md",
-		validSkillMD("foo", "v1", "v1 body"), "")
+	_, v1 := createSkillViaPipeline(t, root, "foo", "v1", "v1 body")
 
 	// Outside removal of the live folder (no version recorded for absence).
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "foo")))
@@ -450,7 +466,6 @@ func TestRecreate_AfterOutsideRemoval_ContentHeadVariant(t *testing.T) {
 		"never claims no earlier version (R5-MIN-003)")
 	assert.NotContains(t, out2.Message, "follows the recorded deletion",
 		"never says follows the recorded deletion (R5-MIN-003)")
-	_ = out1
 
 	// Leg 2: partial save (manifest fault after publication) — class
 	// 2-create-ii with the content-head history note.

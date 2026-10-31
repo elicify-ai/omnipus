@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,11 +29,17 @@ import (
 // Traces to: skills-spec-r13.md §7.6 class 2, S-11.6.
 func TestClass2_SingleFilePublished_ManifestWriteFails(t *testing.T) {
 	root := t.TempDir()
-	out0, vPrev := commitWrite(t, root, "app", "SKILL.md",
-		validSkillMD("app", "v0", "v0 body"), "")
+	out0, vPrev := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
 	appDir := filepath.Join(root, "app")
 
-	FaultManifestWrite = func(string) error { return errors.New("disk full") }
+	var fired bool
+	FaultManifestWrite = func(string) error {
+		if _, statErr := os.Stat(filepath.Join(appDir, "notes.md")); statErr == nil {
+			fired = true
+			return errors.New("disk full")
+		}
+		return nil
+	}
 	defer func() { FaultManifestWrite = nil }()
 
 	out, err := ApplyChange(root, ChangeRequest{
@@ -41,6 +48,7 @@ func TestClass2_SingleFilePublished_ManifestWriteFails(t *testing.T) {
 		Expect:  Expectation{Revision: out0.Revision},
 		Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 	})
+	require.True(t, fired, "post-publication manifest fault fired")
 	require.Error(t, err, "the class-2 outcome is an error carrying the partial text")
 	assert.True(t, errors.Is(err, ErrSkillPartiallySaved))
 	assert.Equal(t, PersistencePartial, out.PersistenceStatus)
@@ -64,30 +72,61 @@ func TestClass2_SingleFilePublished_ManifestWriteFails(t *testing.T) {
 // Traces to: skills-spec-r13.md §7.6 class 2, S-11.7.
 func TestClass2_InstallReplace_BlobWriteFails_PredecessorRestorable(t *testing.T) {
 	root := t.TempDir()
-	writeSkillFixture(t, root, "app")
-	rev := readLiveRevision(t, filepath.Join(root, "app"))
+	// The prerequisite is committed through the pipeline, so a predecessor
+	// version genuinely exists to be named and restored (live == newest →
+	// the replace's step 1 records nothing extra).
+	out0, vPrev := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
+	appDir := filepath.Join(root, "app")
+
+	// Fault only after the exact replacement bytes are visible at live.
+	// A checkpoint or pre-publication blob write is never the injected failure.
+	var fired bool
+	FaultBlobWrite = func(string) error {
+		b, readErr := os.ReadFile(filepath.Join(appDir, "SKILL.md"))
+		if readErr == nil && string(b) == validSkillMD("app", "replaced", "replaced body") {
+			fired = true
+			return errors.New("blob store full")
+		}
+		return nil
+	}
+	defer func() { FaultBlobWrite = nil }()
 
 	staged := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(staged, "SKILL.md"),
 		[]byte(validSkillMD("app", "replaced", "replaced body")), 0o644))
 
-	FaultBlobWrite = func(string) error { return errors.New("blob store full") }
-	defer func() { FaultBlobWrite = nil }()
-
 	out, err := ApplyChange(root, ChangeRequest{
 		Kind: KindInstallReplace, Slug: "app", StagedDir: staged,
-		Expect: Expectation{Revision: rev},
+		Expect: Expectation{Revision: out0.Revision},
 		Actor:  ChangeActor{Kind: "person", Tool: "rest-install"},
 	})
+	require.True(t, fired, "the blob-write fault hook fired")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrSkillPartiallySaved))
 	assert.Equal(t, PersistencePartial, out.PersistenceStatus)
 
-	// The previous state is restorable from history: the replaced folder is
-	// live and a predecessor manifest exists for the key.
-	assert.FileExists(t, filepath.Join(root, "app", "SKILL.md"))
-	assert.Contains(t, out.Message, "The previous state is version ",
+	// Class 2 names the previous version id and offers it for restore.
+	assert.Contains(t, out.Message, "The previous state is version "+vPrev+";",
 		"class 2 names the previous version id")
+	assert.Contains(t, out.Message, "restore it to undo",
+		"the predecessor is offered for restore")
+
+	// The replacement is live — and the named predecessor genuinely
+	// restores from history (positive control for "restorable").
+	body, err := os.ReadFile(filepath.Join(appDir, "SKILL.md"))
+	require.NoError(t, err)
+	assert.Equal(t, validSkillMD("app", "replaced", "replaced body"), string(body), "the replacement is live")
+	assert.Equal(t, []string{vPrev}, manifestIDs(t, SkillHistoryRoot(root), "app"), "no failed replacement version committed")
+	FaultBlobWrite = nil // do not poison the positive recovery control
+	require.NoError(t, RecoverInterrupted(root, SkillHistoryRoot(root)))
+	_, err = ApplyChange(root, ChangeRequest{
+		Kind: KindRestore, Slug: "app", Version: vPrev,
+		Expect: Expectation{Revision: readLiveRevision(t, appDir)},
+		Actor:  ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "edit_skill"},
+	})
+	require.NoError(t, err, "the named predecessor genuinely restores from history")
+	assert.Equal(t, validSkillMD("app", "v0", "v0 body"), readFile(t, filepath.Join(appDir, "SKILL.md")),
+		"the restored bytes are the predecessor's exact full state")
 }
 
 // TestClass3_SwapRemoveOrAuditFault_SuccessWithWarning (S-11.8).
@@ -99,30 +138,48 @@ func TestClass2_InstallReplace_BlobWriteFails_PredecessorRestorable(t *testing.T
 func TestClass3_SwapRemoveOrAuditFault_SuccessWithWarning(t *testing.T) {
 	t.Run("swap removal fault", func(t *testing.T) {
 		root := t.TempDir()
-		out0, _ := commitWrite(t, root, "app", "SKILL.md",
-			validSkillMD("app", "v0", "v0 body"), "")
+		out0, _ := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
 
-		FaultSwapRemove = func(string) error { return errors.New("swap busy") }
+		// A .swap exists to remove only when publication moved a whole
+		// folder (install replace) — a single-file write never creates one,
+		// so the class-3 swap leg drives KindInstallReplace.
+		var fired bool
+		FaultSwapRemove = func(string) error {
+			fired = true
+			return errors.New("swap busy")
+		}
 		defer func() { FaultSwapRemove = nil }()
 
 		out, err := ApplyChange(root, ChangeRequest{
-			Kind: KindEdit, Slug: "app", Path: "notes.md",
-			Content: []byte("notes\n"),
-			Expect:  Expectation{Revision: out0.Revision},
-			Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
+			Kind: KindInstallReplace, Slug: "app", StagedDir: stagedWithSkillMD(t, "app", "replaced"),
+			Expect: Expectation{Revision: out0.Revision},
+			Actor:  ChangeActor{Kind: "person", Tool: "rest-install"},
 		})
+		require.True(t, fired, "the swap-removal hook fired (a folder replace leaves a .swap to remove)")
 		require.NoError(t, err, "class 3: the outcome stands")
 		assert.Equal(t, PersistenceComplete, out.PersistenceStatus)
 		assert.NotEmpty(t, out.Warning, "success carries a warning, never silent")
-		assert.Contains(t, out.Warning, "saved as skill version ", "the version id is named")
+		assert.Contains(t, out.Message+out.Warning, "saved as skill version ", "the version id is named")
+		assert.Equal(t, validSkillMD("app", "replaced", "replaced body"), readFile(t, filepath.Join(root, "app", "SKILL.md")))
+		assert.Len(t, manifestIDs(t, SkillHistoryRoot(root), "app"), 2)
+		assert.DirExists(t, filepath.Join(root, ".swap", "app"), "failed disposal leaves the acknowledged leftover")
+		FaultSwapRemove = nil
+		require.NoError(t, RecoverInterrupted(root, SkillHistoryRoot(root)))
+		_, statErr := os.Stat(filepath.Join(root, ".swap", "app"))
+		assert.True(t, os.IsNotExist(statErr))
 	})
 
 	t.Run("audit write fault", func(t *testing.T) {
 		root := t.TempDir()
-		out0, _ := commitWrite(t, root, "app", "SKILL.md",
-			validSkillMD("app", "v0", "v0 body"), "")
+		out0, _ := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
 
-		FaultAuditWrite = func(string) error { return errors.New("audit sink down") }
+		before := audit.SnapshotSkipped().Total
+		var fired int
+		FaultAuditWrite = func(event string) error {
+			assert.Equal(t, "skill.write", event)
+			fired++
+			return errors.New("audit sink down")
+		}
 		defer func() { FaultAuditWrite = nil }()
 
 		out, err := ApplyChange(root, ChangeRequest{
@@ -135,6 +192,11 @@ func TestClass3_SwapRemoveOrAuditFault_SuccessWithWarning(t *testing.T) {
 		// not reported to the agent: the caller still sees success.
 		require.NoError(t, err, "an audit write failure must not fail the change for the caller")
 		assert.Equal(t, PersistenceComplete, out.PersistenceStatus)
+		require.Equal(t, 1, fired, "the actual skill.write audit failure fired once")
+		assert.Equal(t, before+1, audit.SnapshotSkipped().Total, "exactly one skipped audit emission")
+		assert.Equal(t, "notes\n", readFile(t, filepath.Join(root, "app", "notes.md")))
+		assert.Len(t, manifestIDs(t, SkillHistoryRoot(root), "app"), 2, "successful mutation really committed history")
+		assert.Empty(t, out.Warning, "audit degradation is not an agent-facing failure")
 	})
 }
 
@@ -148,8 +210,12 @@ func TestClass1_Step5FailsWithPutBack(t *testing.T) {
 	writeSkillFixture(t, root, "app")
 	original := readLiveRevision(t, filepath.Join(root, "app"))
 
+	// Step 5's forward rename is live → skills/.swap/<slug> (§7.1 step 5);
+	// the fault targets exactly that rename for app.
+	var fired bool
 	FaultForwardRename = func(oldpath, newpath string) error {
-		if filepath.Base(newpath) == "app.swap-tmp" {
+		if filepath.Base(filepath.Dir(newpath)) == ".swap" && filepath.Base(newpath) == "app" {
+			fired = true
 			return errors.New("rename failed")
 		}
 		return nil
@@ -161,6 +227,7 @@ func TestClass1_Step5FailsWithPutBack(t *testing.T) {
 		Expect: Expectation{Revision: original},
 		Actor:  ChangeActor{Kind: "person", Tool: "rest-install"},
 	})
+	require.True(t, fired, "the forward-rename fault fired on the live→.swap rename")
 	require.Error(t, err, "class 1: not saved")
 	assert.Equal(t, PersistenceNone, out.PersistenceStatus,
 		"nothing was published; the live state returned to the pre-operation state")
@@ -180,7 +247,14 @@ func TestClass1_Step5FailsWithPutBack(t *testing.T) {
 func TestClass2CreateI_TrueFirstCreate_ManifestFails(t *testing.T) {
 	root := t.TempDir()
 
-	FaultManifestWrite = func(string) error { return errors.New("disk full") }
+	var fired bool
+	FaultManifestWrite = func(string) error {
+		if _, err := os.Stat(filepath.Join(root, "newskill", "SKILL.md")); err == nil {
+			fired = true
+			return errors.New("disk full")
+		}
+		return nil
+	}
 	defer func() { FaultManifestWrite = nil }()
 
 	out, err := ApplyChange(root, ChangeRequest{
@@ -189,6 +263,7 @@ func TestClass2CreateI_TrueFirstCreate_ManifestFails(t *testing.T) {
 		Expect:  Expectation{Absent: true},
 		Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 	})
+	require.True(t, fired, "true-first-create manifest fault occurs only after publication")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrSkillPartiallySaved))
 	assert.Equal(t, PersistencePartial, out.PersistenceStatus)
@@ -197,7 +272,10 @@ func TestClass2CreateI_TrueFirstCreate_ManifestFails(t *testing.T) {
 		"byte-exact §5.10 true-first-creation undo (the only variant allowed to say no history exists)")
 	assert.NotContains(t, out.Message, "The previous state is version",
 		"class 2-create-i names no version")
-	assert.FileExists(t, filepath.Join(root, "newskill", "SKILL.md"), "live folder present, content kept")
+	assert.Equal(t, validSkillMD("newskill", "first", "first body"), readFile(t, filepath.Join(root, "newskill", "SKILL.md")), "exact first-create content remains live")
+	manifests, globErr := filepath.Glob(filepath.Join(SkillHistoryRoot(root), "newskill", "versions", "*.json"))
+	require.NoError(t, globErr)
+	assert.Empty(t, manifests, "failed first manifest does not invent committed history")
 }
 
 // TestDelete_ManifestFails_PutBackSucceeds_Class1 (S-11.14 main leg).
@@ -207,10 +285,17 @@ func TestClass2CreateI_TrueFirstCreate_ManifestFails(t *testing.T) {
 // Traces to: skills-spec-r13.md §7.6 class 1b-del, S-11.14.
 func TestDelete_ManifestFails_PutBackSucceeds_Class1(t *testing.T) {
 	root := t.TempDir()
-	writeSkillFixture(t, root, "app")
-	rev := readLiveRevision(t, filepath.Join(root, "app"))
+	out0, _ := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
+	rev := out0.Revision
 
-	FaultManifestWrite = func(string) error { return errors.New("disk full") }
+	var fired bool
+	FaultManifestWrite = func(string) error {
+		if _, statErr := os.Stat(filepath.Join(root, ".swap", "app")); statErr == nil {
+			fired = true
+			return errors.New("disk full")
+		}
+		return nil
+	}
 	defer func() { FaultManifestWrite = nil }()
 
 	out, err := ApplyChange(root, ChangeRequest{
@@ -218,6 +303,7 @@ func TestDelete_ManifestFails_PutBackSucceeds_Class1(t *testing.T) {
 		Expect: Expectation{Revision: rev},
 		Actor:  ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "edit_skill"},
 	})
+	require.True(t, fired, "delete manifest fault occurs with live moved into .swap")
 	require.Error(t, err, "the delete either completes or leaves no trace")
 	assert.Equal(t, PersistenceNone, out.PersistenceStatus)
 	assert.DirExists(t, filepath.Join(root, "app"), "put-back restored the live folder")
@@ -232,11 +318,18 @@ func TestDelete_ManifestFails_PutBackSucceeds_Class1(t *testing.T) {
 // Traces to: skills-spec-r13.md §7.6 class 1b-del-2, S-11.14 variant.
 func TestDelete_ManifestFails_PutBackAlsoFails_Class1bDel2(t *testing.T) {
 	root := t.TempDir()
-	writeSkillFixture(t, root, "app")
-	rev := readLiveRevision(t, filepath.Join(root, "app"))
+	out0, _ := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
+	rev := out0.Revision
 
-	FaultManifestWrite = func(string) error { return errors.New("disk full") }
-	FaultPutBackRename = func(string, string) error { return errors.New("rename failed") }
+	var manifestFired, putbackFired bool
+	FaultManifestWrite = func(string) error {
+		if _, statErr := os.Stat(filepath.Join(root, ".swap", "app")); statErr == nil {
+			manifestFired = true
+			return errors.New("disk full")
+		}
+		return nil
+	}
+	FaultPutBackRename = func(old, new string) error { putbackFired = true; return errors.New("rename failed") }
 	defer func() {
 		FaultManifestWrite = nil
 		FaultPutBackRename = nil
@@ -248,11 +341,16 @@ func TestDelete_ManifestFails_PutBackAlsoFails_Class1bDel2(t *testing.T) {
 		Actor:  ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "edit_skill"},
 	})
 	require.Error(t, err)
+	require.True(t, manifestFired && putbackFired, "both post-swap manifest and put-back faults fired")
 	assert.True(t, errors.Is(err, ErrSkillPartiallySaved), "1b-del-2 is a partial outcome")
 	assert.Equal(t, PersistencePartial, out.PersistenceStatus)
 	assert.Contains(t, err.Error(),
 		"the deletion of 'app' did not complete and its folder is temporarily unavailable; it will be restored at the next start. Do not recreate 'app' until then.",
 		"byte-exact §7.6 class 1b-del-2 text")
+	assert.DirExists(t, filepath.Join(root, ".swap", "app"))
+	FaultManifestWrite, FaultPutBackRename = nil, nil
+	require.NoError(t, RecoverInterrupted(root, SkillHistoryRoot(root)))
+	assert.Equal(t, validSkillMD("app", "v0", "v0 body"), readFile(t, filepath.Join(root, "app", "SKILL.md")))
 }
 
 // TestClass1b_ReplaceSwapAndPutBackFail (S-11.15).
@@ -263,21 +361,32 @@ func TestDelete_ManifestFails_PutBackAlsoFails_Class1bDel2(t *testing.T) {
 // Traces to: skills-spec-r13.md §7.6 class 1b, S-11.15.
 func TestClass1b_ReplaceSwapAndPutBackFail(t *testing.T) {
 	root := t.TempDir()
-	writeSkillFixture(t, root, "app")
-	rev := readLiveRevision(t, filepath.Join(root, "app"))
+	out0, _ := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
+	rev := out0.Revision
 
-	FaultForwardRename = func(oldpath, newpath string) error { return errors.New("rename failed") }
-	FaultPutBackRename = func(oldpath, newpath string) error { return errors.New("rename failed") }
+	staged := stagedWithSkillMD(t, "app", "replacement")
+	var forwardFired, putbackFired bool
+	previousRename := renamePublishedSkill
+	renamePublishedSkill = func(oldpath, newpath string) error {
+		if newpath == filepath.Join(root, "app") && oldpath != filepath.Join(root, "app") {
+			// live→swap must succeed; only staged→live is the failing rename.
+			forwardFired = true
+			return errors.New("rename failed")
+		}
+		return previousRename(oldpath, newpath)
+	}
+	FaultPutBackRename = func(oldpath, newpath string) error { putbackFired = true; return errors.New("rename failed") }
 	defer func() {
-		FaultForwardRename = nil
+		renamePublishedSkill = previousRename
 		FaultPutBackRename = nil
 	}()
 
 	out, err := ApplyChange(root, ChangeRequest{
-		Kind: KindInstallReplace, Slug: "app", StagedDir: stagedWithSkillMD(t, "app", "replacement"),
+		Kind: KindInstallReplace, Slug: "app", StagedDir: staged,
 		Expect: Expectation{Revision: rev},
 		Actor:  ChangeActor{Kind: "person", Tool: "rest-install"},
 	})
+	require.True(t, forwardFired && putbackFired, "replacement publication AND put-back faults both fired")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrSkillPartiallySaved), "class 1b is partial")
 	assert.Equal(t, PersistencePartial, out.PersistenceStatus)
@@ -286,6 +395,12 @@ func TestClass1b_ReplaceSwapAndPutBackFail(t *testing.T) {
 		"byte-exact §7.6 class 1b loss text")
 	assert.Contains(t, out.Message, "The previous state is version ",
 		"the recovery version is named")
+	assert.DirExists(t, filepath.Join(root, ".swap", "app"))
+	_, statErr := os.Stat(filepath.Join(root, "app"))
+	assert.True(t, os.IsNotExist(statErr))
+	renamePublishedSkill, FaultPutBackRename = previousRename, nil
+	require.NoError(t, RecoverInterrupted(root, SkillHistoryRoot(root)))
+	assert.Equal(t, validSkillMD("app", "v0", "v0 body"), readFile(t, filepath.Join(root, "app", "SKILL.md")))
 }
 
 // TestCreateFails_AfterParentDirCreated_CleanupSucceeds (S-11.16 main leg).
@@ -297,7 +412,14 @@ func TestClass1b_ReplaceSwapAndPutBackFail(t *testing.T) {
 func TestCreateFails_AfterParentDirCreated_CleanupSucceeds(t *testing.T) {
 	root := t.TempDir()
 
-	FaultLiveWrite = func(string) error { return errors.New("write failed") }
+	var fired bool
+	FaultLiveWrite = func(string) error {
+		if st, err := os.Stat(filepath.Join(root, "fresh")); err == nil && st.IsDir() {
+			fired = true
+			return errors.New("write failed")
+		}
+		return nil
+	}
 	defer func() { FaultLiveWrite = nil }()
 
 	out, err := ApplyChange(root, ChangeRequest{
@@ -306,6 +428,7 @@ func TestCreateFails_AfterParentDirCreated_CleanupSucceeds(t *testing.T) {
 		Expect:  Expectation{Absent: true},
 		Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 	})
+	require.True(t, fired, "live-write failure happened after the parent directory was really created")
 	require.Error(t, err, "class 1: the create was not saved")
 	assert.Equal(t, PersistenceNone, out.PersistenceStatus)
 
@@ -335,8 +458,15 @@ func TestCreateFails_AfterParentDirCreated_CleanupSucceeds(t *testing.T) {
 func TestCreateFails_CleanupAlsoFails_Class1c_LeftoverFolder(t *testing.T) {
 	root := t.TempDir()
 
-	FaultLiveWrite = func(string) error { return errors.New("write failed") }
-	FaultEmptyDirCleanup = func(string) error { return errors.New("remove failed") }
+	var writeFired, cleanupFired bool
+	FaultLiveWrite = func(string) error {
+		if st, err := os.Stat(filepath.Join(root, "fresh")); err == nil && st.IsDir() {
+			writeFired = true
+			return errors.New("write failed")
+		}
+		return nil
+	}
+	FaultEmptyDirCleanup = func(string) error { cleanupFired = true; return errors.New("remove failed") }
 	defer func() {
 		FaultLiveWrite = nil
 		FaultEmptyDirCleanup = nil
@@ -349,18 +479,23 @@ func TestCreateFails_CleanupAlsoFails_Class1c_LeftoverFolder(t *testing.T) {
 		Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 	})
 	require.Error(t, err)
+	require.True(t, writeFired && cleanupFired, "both the post-parent write failure and cleanup failure were exercised")
 	assert.Contains(t, err.Error(),
 		"an empty folder 'fresh' remains; it is not a skill (no SKILL.md)",
 		"byte-exact §7.6 class-1c leftover text")
 	assert.DirExists(t, filepath.Join(root, "fresh"), "the empty leftover folder remains")
 
 	// The leftover counts as present and repairable: an existing-folder write
-	// with an expected revision commits — never SKILL_EXISTS.
+	// with an expected revision commits — never SKILL_EXISTS. The
+	// expectation is the leftover's actual content revision (§7.3: the
+	// folder is present; ContentRevision tolerates its missing SKILL.md).
+	leftoverRev, revErr := ContentRevision(filepath.Join(root, "fresh"))
+	require.NoError(t, revErr, "the leftover folder is present (its revision is computable)")
 	FaultLiveWrite = nil
 	out2, err := ApplyChange(root, ChangeRequest{
 		Kind: KindEdit, Slug: "fresh", Path: "SKILL.md",
 		Content: []byte(validSkillMD("fresh", "repaired", "repaired body")),
-		Expect:  Expectation{Revision: "any-seen-revision"},
+		Expect:  Expectation{Revision: leftoverRev},
 		Actor:   ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "write_file"},
 	})
 	require.NoError(t, err, "the existing-folder repair commits (no SKILL_EXISTS)")
@@ -378,8 +513,7 @@ func TestCreateFails_CleanupAlsoFails_Class1c_LeftoverFolder(t *testing.T) {
 // absence-with-history, S-11.17.
 func TestRestoreIntoAbsence_ManifestFails_Class2CreateIi(t *testing.T) {
 	root := t.TempDir()
-	out1, v1 := commitWrite(t, root, "foo", "SKILL.md",
-		validSkillMD("foo", "v1", "v1 body"), "")
+	out1, v1 := createSkillViaPipeline(t, root, "foo", "v1", "v1 body")
 	_, err := ApplyChange(root, ChangeRequest{
 		Kind: KindDelete, Slug: "foo",
 		Expect: Expectation{Revision: out1.Revision},
@@ -387,7 +521,15 @@ func TestRestoreIntoAbsence_ManifestFails_Class2CreateIi(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	FaultManifestWrite = func(string) error { return errors.New("disk full") }
+	before := manifestIDs(t, SkillHistoryRoot(root), "foo")
+	var fired bool
+	FaultManifestWrite = func(string) error {
+		if _, err := os.Stat(filepath.Join(root, "foo", "SKILL.md")); err == nil {
+			fired = true
+			return errors.New("disk full")
+		}
+		return nil
+	}
 	defer func() { FaultManifestWrite = nil }()
 
 	out, err := ApplyChange(root, ChangeRequest{
@@ -407,7 +549,9 @@ func TestRestoreIntoAbsence_ManifestFails_Class2CreateIi(t *testing.T) {
 		"undo is deletion, never a restore offer for the retained head")
 	assert.NotContains(t, out.Message, "No version history exists",
 		"never claims no history when a chain exists")
-	assert.FileExists(t, filepath.Join(root, "foo", "SKILL.md"), "live present, content kept")
+	require.True(t, fired, "restore manifest failure occurs after its exact live folder reappears")
+	assert.Equal(t, validSkillMD("foo", "v1", "v1 body"), readFile(t, filepath.Join(root, "foo", "SKILL.md")), "restored full content remains live")
+	assert.Equal(t, before, manifestIDs(t, SkillHistoryRoot(root), "foo"), "failed restore adds no manifest and preserves the earlier chain")
 }
 
 // stagedWithSkillMD builds a staged install folder with one SKILL.md.

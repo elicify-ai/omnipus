@@ -1,19 +1,15 @@
-// SkillsScreen.copy-dialog.test.tsx — RED tests, landing/skills (T9): the
-// S-6.4 screen legs (§17.1 row 21, T-N3). A built-in row offers "Make a
-// copy"; the copy dialog takes a name and commits via "Create copy"; the
-// built-in row itself has no delete control and shows its read-only badge
-// (the last two are the baseline-consistent legs of the scenario).
-// Traces to: skills-spec-r13.md S-6.4, §17.1 row 21.
-//
-// RED expectation: no "Make a copy" control or copy dialog exists on the
-// baseline — those assertions fail; the badge/no-delete legs pass on the
-// baseline and are never cited as RED evidence.
+// r15 S-6.4, §17.1 row 21; CHECK-10/11: exact badge, dialog labels,
+// default and note; replace the prefilled input; exact copy request and
+// refreshed own-copy row. Only the no-delete leg is baseline-consistent.
+// The component/API edge is mocked here; real adapters have separate tests.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Skill } from '@/lib/api/generated/openapi-types'
+
+const { copySkillMock } = vi.hoisted(() => ({ copySkillMock: vi.fn() }))
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -22,11 +18,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchMcpServers: vi.fn().mockResolvedValue([]),
     fetchTools: vi.fn().mockResolvedValue([]),
-    copySkill: vi.fn(),
+    copySkill: copySkillMock,
   }
 })
 
-import { fetchSkills, copySkill } from '@/lib/api'
+import { fetchSkills } from '@/lib/api'
 import { SkillsScreen } from './SkillsScreen'
 
 const planSkill: Skill = {
@@ -37,6 +33,7 @@ const planSkill: Skill = {
   status: 'active',
   verified: true,
   version: '0.0.0',
+  revision: 'a'.repeat(64), // REST Skill carrier requires revision, including built-ins.
 }
 
 let client: QueryClient
@@ -58,9 +55,9 @@ async function renderSkillsScreen() {
 }
 
 describe('SkillsScreen — S-6.4 built-in copy flow', () => {
-  it('a built-in row shows its read-only badge (baseline-consistent leg)', async () => {
+  it('a built-in row shows the complete r15 read-only badge', async () => {
     await renderSkillsScreen()
-    expect(screen.getByText('Built-in')).toBeInTheDocument()
+    expect(screen.getByText('Built-in · read-only')).toBeInTheDocument()
   })
 
   it('a built-in row has no delete control (baseline-consistent leg)', async () => {
@@ -78,10 +75,21 @@ describe('SkillsScreen — S-6.4 built-in copy flow', () => {
     await renderSkillsScreen()
     await user.click(screen.getByRole('button', { name: /make a copy/i }))
 
-    const input = await screen.findByLabelText(/copy name/i)
-    await user.type(input, 'plan-copy')
+    const input = await screen.findByLabelText('Name of your copy')
+    expect(input).toHaveValue('plan-copy')
+    expect(screen.getByText('Your copy will not update with Omnipus. Grant it to agents in their settings.')).toBeInTheDocument()
+    await user.clear(input)
+    await user.type(input, 'my-plan')
+    const ownCopy: Skill = { ...planSkill, id: 'my-plan', name: 'my-plan', source: 'global', description: 'own copy' }
+    copySkillMock.mockImplementation(async () => {
+      vi.mocked(fetchSkills).mockResolvedValue([planSkill, ownCopy])
+      return ownCopy
+    })
     await user.click(screen.getByRole('button', { name: /create copy/i }))
 
-    expect(vi.mocked(copySkill)).toHaveBeenCalledWith('plan', 'plan-copy')
+    expect(copySkillMock).toHaveBeenCalledExactlyOnceWith('plan', 'my-plan')
+    await screen.findByText('my-plan')
+    await waitFor(() => expect(vi.mocked(fetchSkills).mock.calls.length).toBeGreaterThan(1))
+    expect(screen.getByRole('button', { name: 'Remove my-plan' })).toBeInTheDocument()
   })
 })

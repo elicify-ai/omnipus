@@ -41,7 +41,7 @@ func blobNames(t *testing.T, historyRoot, slug string) []string {
 // §17.1 row 39, S-5.16.
 func TestRestore_ReproducesNestedDotContent(t *testing.T) {
 	root := t.TempDir()
-	_, v1 := commitWrite(t, root, "foo", "SKILL.md", validSkillMD("foo", "v1", "v1 body"), "")
+	_, v1 := createSkillViaPipeline(t, root, "foo", "v1", "v1 body")
 
 	appDir := filepath.Join(root, "foo")
 	require.NoError(t, os.MkdirAll(filepath.Join(appDir, ".notes"), 0o755))
@@ -82,7 +82,7 @@ func TestRestore_ReproducesNestedDotContent(t *testing.T) {
 func TestSnapshot_SymlinkCanary(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := SkillHistoryRoot(root)
-	commitWrite(t, root, "foo", "SKILL.md", validSkillMD("foo", "v1", "v1 body"), "")
+	createSkillViaPipeline(t, root, "foo", "v1", "v1 body")
 
 	// External edit 1: in-skill symlink inner.md → SKILL.md; capture V2.
 	appDir := filepath.Join(root, "foo")
@@ -154,33 +154,86 @@ func TestSnapshot_SymlinkCanary(t *testing.T) {
 func TestSnapshot_RetainedNotRestorable(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := SkillHistoryRoot(root)
-	out1, v1 := commitWrite(t, root, "foo", "SKILL.md", validSkillMD("foo", "v1", "v1 body"), "")
+	_, v1 := createSkillViaPipeline(t, root, "foo", "v1", "v1 body")
 
 	// External edit removes SKILL.md (helpers left → present-but-broken).
 	appDir := filepath.Join(root, "foo")
 	require.NoError(t, os.WriteFile(filepath.Join(appDir, "helper.md"), []byte("h\n"), 0o644))
 	require.NoError(t, os.Remove(filepath.Join(appDir, "SKILL.md")))
 
+	// The delete's expectation is the broken live state's revision (§7.3:
+	// the folder is present, so ContentRevision — not revisionForDir —
+	// supplies it).
+	brokenRev, err := ContentRevision(appDir)
+	require.NoError(t, err, "the broken folder is present")
+
 	// The owner deletes: step 1 captures V2 (broken state), then V3 delete_skill.
-	outDel, err := ApplyChange(root, ChangeRequest{
+	_, err = ApplyChange(root, ChangeRequest{
 		Kind: KindDelete, Slug: "foo",
-		Expect: Expectation{Revision: out1.Revision},
+		Expect: Expectation{Revision: brokenRev},
 		Actor:  ChangeActor{Kind: "agent", AgentID: "a", Tool: "edit_skill"},
 	})
 	require.NoError(t, err)
 
-	brokenHead := versionIDFromMessage.FindStringSubmatch(outDel.Message)
-	_ = brokenHead
-	// V2 and V3 are listed versions (queryable via get_skill — row 2's tests);
-	// here their restore behaviour is asserted through the pipeline.
-	// V2's id is the external_change recorded by the delete's step 1; the
-	// manifest chain on disk is the observable fixture.
+	// The on-disk manifest chain is the observable fixture: the kinds
+	// identify V2 (the delete's step-1 external_change of the broken state)
+	// and V3 (delete_skill).
 	manifests := manifestIDs(t, historyRoot, "foo")
 	require.Contains(t, manifests, v1, "V1 retained")
+	var v2, v3 string
+	for _, id := range manifests {
+		switch manifestField(t, historyRoot, "foo", id, "kind") {
+		case "external_change":
+			v2 = id
+		case "delete_skill":
+			v3 = id
+		}
+	}
+	require.NotEmpty(t, v2, "step 1 recorded the broken state as a version")
+	require.NotEmpty(t, v3, "the delete committed a delete_skill manifest")
 
 	_, statErr := os.Stat(appDir)
 	assert.True(t, os.IsNotExist(statErr), "the delete removed the live folder")
 
+	// restore V2 refused: the version carries no valid instruction file.
+	_, err = ApplyChange(root, ChangeRequest{
+		Kind: KindRestore, Slug: "foo", Version: v2,
+		Expect: Expectation{Absent: true},
+		Actor:  ChangeActor{Kind: "agent", AgentID: "a", Tool: "edit_skill"},
+	})
+	require.Error(t, err, "V2 (the broken state) is retained but not restorable")
+	assert.Contains(t, err.Error(), "no valid SKILL.md", "§7.2 eligibility reason")
+
+	// restore V3 refused: delete_skill selection.
+	_, err = ApplyChange(root, ChangeRequest{
+		Kind: KindRestore, Slug: "foo", Version: v3,
+		Expect: Expectation{Absent: true},
+		Actor:  ChangeActor{Kind: "agent", AgentID: "a", Tool: "edit_skill"},
+	})
+	require.Error(t, err, "selecting a delete_skill manifest is refused")
+	assert.Contains(t, err.Error(),
+		"records the deleted state; use edit_skill action=delete to remove the skill",
+		"byte-exact §7.2 delete_skill selection refusal")
+
+	// Both refusals leave the live state deleted.
+	_, statErr = os.Stat(appDir)
+	assert.True(t, os.IsNotExist(statErr), "the refusals leave the live state deleted")
+
+	// restore V1 rebuilds the pre-break state.
+	_, err = ApplyChange(root, ChangeRequest{
+		Kind: KindRestore, Slug: "foo", Version: v1,
+		Expect: Expectation{Absent: true},
+		Actor:  ChangeActor{Kind: "agent", AgentID: "a", Tool: "edit_skill"},
+	})
+	require.NoError(t, err, "V1 (the last valid state) restores into absence")
+	assert.Equal(t, validSkillMD("foo", "v1", "v1 body"), readFile(t, filepath.Join(appDir, "SKILL.md")),
+		"V1's exact bytes are back")
+
+	_, err = ApplyChange(root, ChangeRequest{
+		Kind: KindDelete, Slug: "foo", Expect: Expectation{Revision: readLiveRevision(t, appDir)},
+		Actor: ChangeActor{Kind: "agent", AgentID: "a", Tool: "edit_skill"},
+	})
+	require.NoError(t, err)
 	// Recreate then delete closes the scenario with content valid again.
 	outRec, err := ApplyChange(root, ChangeRequest{
 		Kind: KindCreate, Slug: "foo",
@@ -262,7 +315,7 @@ func TestBoundedCapture_MutationRefusedBeforeAnythingChanges(t *testing.T) {
 		historyRoot := SkillHistoryRoot(root)
 		t.Cleanup(func() { _ = historyRoot })
 		appDir := writeSkillFixture(t, root, "foo")
-		seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
+		seedHistory(t, historyRoot, "foo", singleManifest(fixtureVersionID(1), "edit"))
 		oversized(appDir)
 		return root
 	}
@@ -355,6 +408,7 @@ func TestExecBitRevisionFixture(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
 			[]byte(validSkillMD("foo", "same", "same body")), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "scripts"), 0o755), "seed the scripts dir")
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "scripts", "run.sh"), []byte("#!/bin/sh\n"), 0o644))
 		if exec {
 			require.NoError(t, os.Chmod(filepath.Join(dir, "scripts", "run.sh"), 0o755))

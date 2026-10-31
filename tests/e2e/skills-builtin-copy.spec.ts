@@ -21,9 +21,9 @@ test('S-6.4: a built-in row offers Make a copy and the dialog commits plan-copy'
 
   // The built-in row: read-only badge, no delete control, and the new
   // Make a copy control (RED until T9 lands).
-  const planRow = page.locator('div', { hasText: /^plan$/ }).locator('xpath=ancestor::*[self::div][1]');
+  const planRow = page.getByText('plan', { exact: true }).locator('xpath=ancestor::div[.//button][1]');
   await expect(planRow).toBeVisible({ timeout: 10_000 });
-  await expect(planRow.getByText('Built-in')).toBeVisible();
+  await expect(planRow.getByText('Built-in · read-only', { exact: true })).toBeVisible();
   await expect(planRow.getByRole('button', { name: /Remove plan/ })).toHaveCount(0);
 
   const makeCopy = planRow.getByRole('button', { name: /Make a copy/i });
@@ -33,7 +33,10 @@ test('S-6.4: a built-in row offers Make a copy and the dialog commits plan-copy'
   // The copy dialog: a name field and Create copy.
   const dialog = page.locator('[role="dialog"]').first();
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel(/copy name/i).fill('plan-copy');
+  const copyName = dialog.getByLabel('Name of your copy', { exact: true });
+  await expect(copyName).toHaveValue('plan-copy');
+  await expect(dialog.getByText('Your copy will not update with Omnipus. Grant it to agents in their settings.', { exact: true })).toBeVisible();
+  await copyName.fill('plan-copy');
   await dialog.getByRole('button', { name: /Create copy/i }).click();
 
   // 201 committed: the list now shows plan-copy (a user-owned row, which

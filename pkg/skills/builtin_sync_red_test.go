@@ -11,6 +11,7 @@ package skills
 // the baseline (SeedDefaults never overwrites, never retires, no report).
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,78 @@ func exportShipped(t *testing.T, slug, dest string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
 	require.NoError(t, ExportEmbeddedPackage(slug, dest), "export embedded %s", slug)
+}
+
+// requireSameTree asserts dir matches a freshly exported shipped package
+// file-for-file, byte-for-byte, with no extra files beyond Omnipus's own
+// stamps — the positive content oracle for "replaced/installed" cases (a
+// no-op that only touches stamps must fail here).
+func requireSameTree(t *testing.T, slug, dir string) {
+	t.Helper()
+	shipped := filepath.Join(t.TempDir(), "shipped-"+slug)
+	exportShipped(t, slug, shipped)
+
+	shippedFiles := 0
+	require.NoError(t, filepath.WalkDir(shipped, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(shipped, p)
+		if err != nil {
+			return err
+		}
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		got, readErr := os.ReadFile(filepath.Join(dir, rel))
+		require.NoError(t, readErr, "installed tree carries shipped file %s", rel)
+		assert.Equal(t, string(raw), string(got), "installed %s is byte-identical to shipped", rel)
+		shippedFiles++
+		return nil
+	}), "the shipped export walks")
+	require.Greater(t, shippedFiles, 0, "instrument check: the shipped package exported at least one file")
+
+	require.NoError(t, filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		if rel == ".omnipus-builtin" || rel == SkillIdentityFile {
+			return nil // Omnipus control metadata, never part of shipped
+		}
+		_, statErr := os.Stat(filepath.Join(shipped, rel))
+		assert.NoError(t, statErr, "the installed folder carries no extra file beyond shipped: %s", rel)
+		return nil
+	}), "the installed tree walks")
+}
+
+// fileMtime returns the file's mtime.
+func fileMtime(t *testing.T, path string) time.Time {
+	t.Helper()
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	return info.ModTime()
+}
+
+// seededGeneration is a fixture generation stamp value (UUID-format).
+const seededGeneration = "11111111-2222-3333-4444-555555555555"
+
+// seedGeneration writes a pre-existing generation stamp into a built-in
+// folder fixture.
+func seedGeneration(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, SkillIdentityFile),
+		[]byte(seededGeneration+"\n"), 0o644))
 }
 
 // dirMtime returns the directory's mtime (untouched-folder oracle, S-7.1).
@@ -72,10 +145,11 @@ func (g *seededGrants) holders(name string) []string {
 // Traces to: skills-spec-r13.md §8.2 case table, S-7.1, D-6.
 func TestSyncBuiltins_StartupMatrix(t *testing.T) {
 	cases := []struct {
-		name    string
-		setup   func(t *testing.T, root, planDir string)
-		want    BuiltinSyncCase
-		wantNew bool // folder must end up byte-equal to shipped
+		name       string
+		setup      func(t *testing.T, root, planDir string)
+		want       BuiltinSyncCase
+		wantNew    bool // folder must end up byte-equal to shipped
+		genKeepGen bool // a pre-existing generation stamp must survive
 	}{
 		{
 			name: "stamped built-in with old content is replaced",
@@ -91,11 +165,13 @@ func TestSyncBuiltins_StartupMatrix(t *testing.T) {
 			setup: func(t *testing.T, root, planDir string) {
 				exportShipped(t, "plan", planDir)
 				builtinMarkerFixture(t, planDir)
+				seedGeneration(t, planDir) // an existing generation stamp (§5.13a)
 				require.NoError(t, os.WriteFile(filepath.Join(planDir, "SKILL.md"),
 					[]byte("---\nname: plan\ndescription: edited outside\n---\noutside edit\n"), 0o644))
 			},
-			want:    BuiltinUpdated,
-			wantNew: true,
+			want:       BuiltinUpdated,
+			wantNew:    true,
+			genKeepGen: true, // the existing stamp is PRESERVED across the content update
 		},
 		{
 			name:  "missing built-in is installed",
@@ -107,9 +183,11 @@ func TestSyncBuiltins_StartupMatrix(t *testing.T) {
 			setup: func(t *testing.T, root, planDir string) {
 				exportShipped(t, "plan", planDir)
 				builtinMarkerFixture(t, planDir)
+				seedGeneration(t, planDir)
 				ageDir(t, planDir, time.Now().Add(-time.Hour))
 			},
-			want: BuiltinUnchanged,
+			want:       BuiltinUnchanged,
+			genKeepGen: true,
 		},
 	}
 
@@ -133,23 +211,30 @@ func TestSyncBuiltins_StartupMatrix(t *testing.T) {
 				assert.NotContains(t, report.Installed, "plan")
 			}
 
+			// §8.2 r15: every installed or replaced built-in folder is
+			// byte-equal to the shipped package (positive content oracle —
+			// stamp-only no-ops fail here), stamped, and carries a
+			// generation: fresh when there was none, preserved when the
+			// folder already had one (§5.13a via §8.2).
+			if tc.want == BuiltinUpdated || tc.want == BuiltinInstalled {
+				requireSameTree(t, "plan", planDir)
+				assert.FileExists(t, filepath.Join(planDir, ".omnipus-builtin"),
+					"the installed/replaced folder carries the built-in stamp")
+				gen := generationOf(t, planDir)
+				assert.True(t, uuidShape.MatchString(gen),
+					"the installed/replaced folder carries a UUID-format generation stamp")
+				if tc.genKeepGen {
+					assert.Equal(t, seededGeneration, gen,
+						"the existing generation stamp is preserved across the content update (§5.13a)")
+				}
+			}
+
 			if tc.want == BuiltinUnchanged {
 				assert.True(t, dirMtime(t, planDir).Before(time.Now().Add(-time.Minute)),
 					"untouched folder keeps its (back-dated) mtime — folder was not rewritten")
+				assert.Equal(t, seededGeneration, generationOf(t, planDir),
+					"the untouched folder keeps its generation")
 			}
-			if tc.wantNew {
-				shipped := filepath.Join(t.TempDir(), "shipped-plan")
-				exportShipped(t, "plan", shipped)
-				assert.DirExists(t, planDir)
-				assert.FileExists(t, filepath.Join(planDir, ".omnipus-builtin"),
-					"the replaced folder carries the stamp")
-			}
-			if tc.want == BuiltinInstalled {
-				assert.FileExists(t, filepath.Join(planDir, ".omnipus-builtin"),
-					"an installed built-in is stamped")
-			}
-			// Never history for a built-in (§5.11).
-			_ = planDir
 		})
 	}
 }
@@ -167,9 +252,10 @@ func TestSyncBuiltins_EditedUnstampedOverwritten_NoCustomCopy(t *testing.T) {
 	require.NoError(t, err, "RED: SyncBuiltins not implemented on the baseline")
 
 	assert.NotNil(t, findOutcome(report.Updated, "plan"), "the edited built-in is replaced (builtin_updated)")
-	shipped := filepath.Join(t.TempDir(), "shipped")
-	exportShipped(t, "plan", shipped)
+	requireSameTree(t, "plan", planDir)
 	assert.FileExists(t, filepath.Join(planDir, ".omnipus-builtin"), "stamp written on the replaced folder")
+	assert.True(t, uuidShape.MatchString(generationOf(t, planDir)),
+		"the replaced folder carries a fresh generation stamp (§8.2 r15)")
 	_, err = os.Stat(filepath.Join(root, "plan-custom"))
 	assert.True(t, os.IsNotExist(err), "no <slug>-custom copy is kept (F-28)")
 	assert.Len(t, grants.holders("plan"), 2, "a current built-in's grants are untouched")
@@ -202,14 +288,22 @@ func TestSyncBuiltins_UnstampedEqual_GetsStampOnly(t *testing.T) {
 	root := t.TempDir()
 	planDir := filepath.Join(root, "plan")
 	exportShipped(t, "plan", planDir) // shipped content, unstamped
+	oldTime := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(filepath.Join(planDir, "SKILL.md"), oldTime, oldTime))
 	ageDir(t, planDir, time.Now().Add(-time.Hour))
 
 	report, err := SyncBuiltins(root, nil)
 	require.NoError(t, err)
 	assert.Nil(t, findOutcome(report.Updated, "plan"), "equal content is not an update")
-	assert.FileExists(t, filepath.Join(planDir, ".omnipus-builtin"), "the stamp is written")
-	assert.True(t, dirMtime(t, planDir).Before(time.Now().Add(-time.Minute)),
-		"only the stamp changed — the folder itself was not rewritten")
+	assert.FileExists(t, filepath.Join(planDir, ".omnipus-builtin"), "the built-in stamp is written")
+	assert.True(t, uuidShape.MatchString(generationOf(t, planDir)),
+		"the unstamped equal folder is stamped with a fresh generation (§8.2 r15)")
+	// The equality-shortcut writes stamps only: SKILL.md keeps its
+	// back-dated mtime (the content was not rewritten; the FOLDER's mtime
+	// changes because a file was added, so the oracle is the file's).
+	requireSameTree(t, "plan", planDir)
+	assert.True(t, fileMtime(t, filepath.Join(planDir, "SKILL.md")).Before(time.Now().Add(-time.Minute)),
+		"only the stamps were written — SKILL.md was not rewritten")
 }
 
 // TestSyncBuiltins_RemovesStaleSeedStaging (S-7.10, F4): stale
@@ -294,6 +388,8 @@ func TestRetireBuiltins_UnstampedFolderKept(t *testing.T) {
 // Traces to: skills-spec-r13.md §8.4 (ordering guard), S-7.9.
 func TestRetireBuiltins_SkippedWhenABuiltinInstallFailed(t *testing.T) {
 	root := t.TempDir()
+	summarizeDir := writeSkillFixture(t, root, "summarize")
+	builtinMarkerFixture(t, summarizeDir)
 
 	// Fault: installing the first current built-in fails.
 	previous := ShippedExportHook
@@ -308,7 +404,6 @@ func TestRetireBuiltins_SkippedWhenABuiltinInstallFailed(t *testing.T) {
 	_, syncErr := SyncBuiltins(root, nil)
 	require.Error(t, syncErr, "the failing built-in install surfaces the error")
 
-	summarizeDir := writeSkillFixture(t, root, "summarize") // unstamped retired, would be kept anyway
 	grants := newSeededGrants("summarize", "agent-a")
 	report := &SyncReport{}
 
@@ -317,7 +412,7 @@ func TestRetireBuiltins_SkippedWhenABuiltinInstallFailed(t *testing.T) {
 	require.NoError(t, RetireBuiltins(root, grants, report),
 		"RED: RetireBuiltins not implemented on the baseline")
 	assert.FileExists(t, filepath.Join(summarizeDir, "SKILL.md"),
-		"retirement skipped: the unstamped folder is untouched")
+		"retirement skipped: the stamped retired folder is untouched")
 	assert.Empty(t, report.Retired, "no retirement outcome recorded when a current built-in failed")
 	assert.Len(t, grants.holders("summarize"), 1, "no grant removal when retirement is skipped")
 }

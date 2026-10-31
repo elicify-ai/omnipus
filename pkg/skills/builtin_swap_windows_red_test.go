@@ -53,6 +53,7 @@ func TestWindowsPipeline_SwapSemantics(t *testing.T) {
 	require.NoError(t, err, "restore works on Windows")
 
 	// The built-in refusal is identical.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "plan"), 0o755), "seed the built-in folder")
 	require.NoError(t, os.WriteFile(filepath.Join(root, "plan", "SKILL.md"),
 		[]byte(validSkillMD("plan", "win builtin", "b")), 0o644))
 	_, err = ApplyChange(root, ChangeRequest{

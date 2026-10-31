@@ -33,12 +33,12 @@ func TestRecovery_SwapLiveAbsent_NonDeleteHead_PutBack(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := t.TempDir()
 	swapDir := makeSwap(t, root, "app", "leftover body")
-	seedHistory(t, historyRoot, "app", singleManifest("v1", "edit")) // newest not delete_skill
+	seedHistory(t, historyRoot, "app", singleManifest(fixtureVersionID(1), "edit")) // newest not delete_skill
 
 	require.NoError(t, RecoverInterrupted(root, historyRoot))
 
 	assert.DirExists(t, filepath.Join(root, "app"), "renamed back to live")
-	assert.Equal(t, "leftover body", readFile(t, filepath.Join(root, "app", "SKILL.md")))
+	assert.Equal(t, validSkillMD("app", "swap leftover", "leftover body"), readFile(t, filepath.Join(root, "app", "SKILL.md")))
 	_, err := os.Stat(swapDir)
 	assert.True(t, os.IsNotExist(err), "the .swap leftover is consumed by the put-back")
 
@@ -56,7 +56,7 @@ func TestRecovery_SwapLivePresent_Removed(t *testing.T) {
 	historyRoot := t.TempDir()
 	writeSkillFixture(t, root, "app") // live present
 	makeSwap(t, root, "app", "stale")
-	seedHistory(t, historyRoot, "app", singleManifest("v2", "delete_skill"))
+	seedHistory(t, historyRoot, "app", singleManifest(fixtureVersionID(2), "delete_skill"))
 
 	require.NoError(t, RecoverInterrupted(root, historyRoot))
 	_, err := os.Stat(filepath.Join(root, ".swap", "app"))
@@ -103,14 +103,14 @@ func TestRecovery_LegacyBackup_LivePresent_Deleted(t *testing.T) {
 	require.NoError(t, os.MkdirAll(backup, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(backup, "SKILL.md"),
 		[]byte(validSkillMD("foo", "old publisher copy", "old")), 0o644))
-	seedHistory(t, historyRoot, "foo", singleManifest("v1", "edit"))
+	seedHistory(t, historyRoot, "foo", singleManifest(fixtureVersionID(1), "edit"))
 
 	require.NoError(t, RecoverInterrupted(root, historyRoot))
 
 	_, err := os.Stat(backup)
 	assert.True(t, os.IsNotExist(err), "the legacy backup is deleted")
 	assert.FileExists(t, filepath.Join(root, "foo", "SKILL.md"), "live foo unchanged")
-	assert.FileExists(t, filepath.Join(historyRoot, "foo", "versions", "v1.json"),
+	assert.FileExists(t, filepath.Join(historyRoot, "foo", "versions", fixtureVersionID(1)+".json"),
 		"history unchanged — no capture into history (F-28)")
 }
 
@@ -129,7 +129,7 @@ func TestRecovery_LegacyBackup_LiveAbsent_PutBack(t *testing.T) {
 	require.NoError(t, RecoverInterrupted(root, historyRoot))
 
 	assert.DirExists(t, filepath.Join(root, "foo"), "renamed back to live")
-	assert.Equal(t, "rescued body", readFile(t, filepath.Join(root, "foo", "SKILL.md")))
+	assert.Equal(t, validSkillMD("foo", "rescued", "rescued body"), readFile(t, filepath.Join(root, "foo", "SKILL.md")))
 }
 
 // TestRecovery_CaptureTemporaries_RemovedAtStart (§9.3, r9/r10 rules).
@@ -150,7 +150,7 @@ func TestRecovery_CaptureTemporaries_RemovedAtStart(t *testing.T) {
 	require.NoError(t, os.MkdirAll(stagingTemp, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(stagingTemp, "builtin-blob"), []byte("y"), 0o644))
 
-	seedHistory(t, historyRoot, "app", singleManifest("v1", "edit"))
+	seedHistory(t, historyRoot, "app", singleManifest(fixtureVersionID(1), "edit"))
 
 	require.NoError(t, RecoverInterrupted(root, historyRoot))
 
@@ -158,15 +158,15 @@ func TestRecovery_CaptureTemporaries_RemovedAtStart(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "capture-blob temporary removed at start")
 	_, err = os.Stat(stagingTemp)
 	assert.True(t, os.IsNotExist(err), "staging-area scratch removed at start")
-	assert.FileExists(t, filepath.Join(historyRoot, "app", "blobs", "b1"),
+	assert.FileExists(t, filepath.Join(historyRoot, "app", "blobs", mkFile("SKILL.md", 96).SHA256),
 		"the committed manifest's referenced final is untouched")
 }
 
 // singleManifest builds a one-entry chain for seedHistory.
 func singleManifest(id, kind string) []historyEntry {
-	rev := "b1"
-	if kind == "delete_skill" {
-		rev = ""
+	var files []historyFile
+	if kind != "delete_skill" {
+		files = []historyFile{mkFile("SKILL.md", 96)}
 	}
-	return []historyEntry{{ID: id, CreatedAt: "20260101T000000Z", Slug: "", Kind: kind, Actor: "agent", Revision: rev}}
+	return []historyEntry{{ID: id, CreatedAt: "20260101T000000Z", Kind: kind, Actor: "agent", Files: files}}
 }

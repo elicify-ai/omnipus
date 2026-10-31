@@ -99,13 +99,13 @@ func TestSkillsBoundary_LoadableSetGrantFiltered(t *testing.T) {
 	t.Run("granted folder readable (non-editor)", func(t *testing.T) {
 		// The realistic turn guard: base allowances (media, skills helper
 		// files) as ResolveTurnFSPolicy seeds them today.
-		pol := FSPolicy{HomeGuard: BaseHomeGuard(home)} // RED: SkillFolders missing
+		pol := FSPolicy{HomeGuard: configuredSkillGuard(t, home, false)}
 		assert.False(t, homeGuardDeny(filepath.Join(home, "skills", "granted", "SKILL.md"), pol),
 			"a read inside the granted, loadable folder is allowed (RED: today the leaf rule denies it)")
 	})
 
 	t.Run("S-2.2 ungranted folder denied for a non-editor", func(t *testing.T) {
-		pol := FSPolicy{HomeGuard: BaseHomeGuard(home)} // RED: no grant filter yet
+		pol := FSPolicy{HomeGuard: configuredSkillGuard(t, home, false)}
 		assert.True(t, homeGuardDeny(filepath.Join(home, "skills", "other", "helper.md"), pol),
 			"an ungranted skill's helper file is denied for a non-editor (edit_skill: deny)")
 		assert.True(t, homeGuardDeny(filepath.Join(home, "skills", "other", "SKILL.md"), pol),
@@ -113,7 +113,7 @@ func TestSkillsBoundary_LoadableSetGrantFiltered(t *testing.T) {
 	})
 
 	t.Run("S-2.3 editor (SkillsReadAll) reads every valid-slug folder", func(t *testing.T) {
-		pol := FSPolicy{HomeGuard: BaseHomeGuard(home)} // RED: SkillsReadAll missing
+		pol := FSPolicy{HomeGuard: configuredSkillGuard(t, home, true)}
 		assert.False(t, homeGuardDeny(filepath.Join(home, "skills", "editable", "helper.md"), pol),
 			"an editor reads any valid-slug skill folder (RED: today this passes for the wrong reason — the leaf rule never fired on helper files)")
 		// The distinguishing RED leg: with the rule in place, the editor's
@@ -140,6 +140,11 @@ func TestSkillsBoundary_InventoryFirstOrder(t *testing.T) {
 		WorkDir:    filepath.Join(home, "skills", ".staging"),
 		SetupRoots: []string{filepath.Join(home, "skills")},
 	}
+	pol.HomeGuard = configuredSkillGuard(t, home, false)
+	pol.HomeGuard.Allow = []AllowRoot{{Path: filepath.Join(home, "skills"), Writable: true}}
+	pol.AllowedRoots = []string{home}
+	pol.PathGrants = []PathGrant{{Path: home, Access: PathGrantAccessRead | PathGrantAccessWrite}}
+	assert.True(t, homeGuardDeny(filepath.Join(home, "skills", "ordinary-ungranted", "helper.md"), pol), "ordinary ungranted skill cannot be reopened by enclosing mount, operator grant, setup root or workdir")
 	assert.True(t, homeGuardDeny(filepath.Join(home, "skills", ".staging", "incoming.bin"), pol),
 		"an Allow entry, the turn's work dir and a setup root covering the path must not re-admit a refused registry control entry (RED: today the allowance wins)")
 }
@@ -164,7 +169,7 @@ func TestSkillsBoundary_SkillsLeaveBaseAllowRelative(t *testing.T) {
 // Traces to: skills-spec-r13.md §6.1 item 7, S-2.10 read half.
 func TestSkillsBoundary_DotFilesInsideSkillArePartOfIt(t *testing.T) {
 	home := realHome(t)
-	pol := FSPolicy{HomeGuard: BaseHomeGuard(home)} // RED: grant rule missing
+	pol := FSPolicy{HomeGuard: configuredSkillGuard(t, home, false)}
 	assert.False(t, homeGuardDeny(filepath.Join(home, "skills", "granted", ".notes", "x.md"), pol),
 		"a dot-file inside a granted skill is readable by whoever may read the skill (RED: today it is allowed only because skills is a base allow entry — the grant rule must keep it allowed after item 3 lands)")
 	assert.False(t, homeGuardDeny(filepath.Join(home, "skills", "granted", ".omnipus-builtin"), pol),
@@ -217,4 +222,22 @@ func realHome(t *testing.T) string {
 	require.NoError(t, os.WriteFile(filepath.Join(resolved, "skills", "granted", "SKILL.md"),
 		[]byte("---\nname: granted\ndescription: fixture\n---\n\nbody\n"), 0o644))
 	return resolved
+}
+
+// Supplementary predicate fixtures configure the authority they claim. Missing
+// implementation fails loudly, without adding production fields from QA.
+func configuredSkillGuard(t *testing.T, home string, readAll bool) HomeGuard {
+	t.Helper()
+	guard := BaseHomeGuard(home)
+	value := reflect.ValueOf(&guard).Elem()
+	folders := value.FieldByName("SkillFolders")
+	all := value.FieldByName("SkillsReadAll")
+	if !folders.IsValid() || !all.IsValid() {
+		t.Fatal("BLOCKED: HomeGuard skill authority fields not implemented — required by r15 §6.1")
+	}
+	require.Equal(t, reflect.TypeOf([]string{}), folders.Type())
+	require.Equal(t, reflect.Bool, all.Kind())
+	folders.Set(reflect.ValueOf([]string{filepath.Join(home, "skills", "granted")}))
+	all.SetBool(readAll)
+	return guard
 }

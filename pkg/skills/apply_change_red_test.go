@@ -32,29 +32,32 @@ func agentActor(id string) ChangeActor {
 func TestEdit_StaleExpectation_SKILL_CHANGED_NamesNewRevisionAndActor(t *testing.T) {
 	root := t.TempDir()
 	writeSkillFixture(t, root, "app")
+	revA := readLiveRevision(t, filepath.Join(root, "app"))
 
 	// Session B commits revision B (RED: fails here — pipeline unimplemented).
 	outB, err := ApplyChange(root, ChangeRequest{
 		Kind: KindEdit, Slug: "app", Path: "SKILL.md",
 		Content: []byte("---\nname: app\ndescription: from B\n---\nB body\n"),
-		Expect:  Expectation{Revision: "revA"},
+		Expect:  Expectation{Revision: revA},
 		Actor:   ChangeActor{Kind: "agent", AgentID: "agent-b", SessionID: "sess-b", Tool: "edit_file"},
 	})
 	require.NoError(t, err, "RED: ApplyChange not implemented")
-	require.NotEmpty(t, outB.Revision, "the commit returns the new revision")
+	require.GreaterOrEqual(t, len(outB.Revision), 8, "the commit returns a revision with the specified revision8 prefix")
 
 	// Session A's stale write is refused with B's revision and actor named.
+	// §5.10 renders the newer revision as its 8-character prefix
+	// (<revision8>), so the oracle pins the prefix.
 	_, err = ApplyChange(root, ChangeRequest{
 		Kind: KindEdit, Slug: "app", Path: "SKILL.md",
 		Content: []byte("---\nname: app\ndescription: from A\n---\nA body\n"),
-		Expect:  Expectation{Revision: "revA"},
+		Expect:  Expectation{Revision: revA},
 		Actor:   agentActor("agent-a"),
 	})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrSkillChanged), "want SKILL_CHANGED, got %v", err)
 	assert.Contains(t, err.Error(),
-		fmt.Sprintf("skill 'app' changed since you read it (now %s by agent-b); read it again with get_skill, Skill or read_file", outB.Revision),
-		"byte-exact §5.10 SKILL_CHANGED text naming the newer revision and actor")
+		fmt.Sprintf("skill 'app' changed since you read it (now %s by agent-b); read it again with get_skill, Skill or read_file", outB.Revision[:8]),
+		"byte-exact §5.10 SKILL_CHANGED text naming the newer revision (<revision8>) and actor")
 
 	body, _ := os.ReadFile(filepath.Join(root, "app", "SKILL.md"))
 	assert.NotContains(t, string(body), "from A", "the stale write wrote nothing")
@@ -146,7 +149,7 @@ func TestDeleteFile_SKILLMD_Refused(t *testing.T) {
 
 	_, err := ApplyChange(root, ChangeRequest{
 		Kind: KindDeleteFile, Slug: "app", Path: "SKILL.md",
-		Expect: Expectation{Revision: "r1"},
+		Expect: Expectation{Revision: readLiveRevision(t, filepath.Join(root, "app"))},
 		Actor:  ChangeActor{Kind: "agent", AgentID: "a", Tool: "edit_skill"},
 	})
 	require.Error(t, err)
@@ -240,7 +243,7 @@ func TestSaveCheck_Dataset(t *testing.T) {
 			_, err := ApplyChange(root, ChangeRequest{
 				Kind: KindEdit, Slug: "app", Path: tc.path,
 				Content: []byte(tc.content),
-				Expect:  Expectation{Revision: "r1"},
+				Expect:  Expectation{Revision: readLiveRevision(t, filepath.Join(root, "app"))},
 				Actor:   agentActor("a"),
 			})
 			require.Error(t, err, "the would-be state must be refused")
@@ -261,7 +264,7 @@ func TestSaveCheck_Dataset(t *testing.T) {
 		out, err := ApplyChange(root, ChangeRequest{
 			Kind: KindEdit, Slug: "app", Path: "SKILL.md",
 			Content: []byte(content),
-			Expect:  Expectation{Revision: "r1"},
+			Expect:  Expectation{Revision: readLiveRevision(t, filepath.Join(root, "app"))},
 			Actor:   agentActor("a"),
 		})
 		require.NoError(t, err, "the 500-char boundary is accepted")
@@ -276,7 +279,7 @@ func TestSaveCheck_Dataset(t *testing.T) {
 		_, err := ApplyChange(root, ChangeRequest{
 			Kind: KindEdit, Slug: "app", Path: "SKILL.md",
 			Content: []byte(content),
-			Expect:  Expectation{Revision: "r1"},
+			Expect:  Expectation{Revision: readLiveRevision(t, filepath.Join(root, "app"))},
 			Actor:   agentActor("a"),
 		})
 		require.NoError(t, err, "the 262,144-byte boundary is accepted")
@@ -289,7 +292,7 @@ func TestSaveCheck_Dataset(t *testing.T) {
 		_, err := ApplyChange(root, ChangeRequest{
 			Kind: KindEdit, Slug: "app", Path: "data.bin",
 			Content: make([]byte, maxFile),
-			Expect:  Expectation{Revision: "r1"},
+			Expect:  Expectation{Revision: readLiveRevision(t, filepath.Join(root, "app"))},
 			Actor:   agentActor("a"),
 		})
 		require.NoError(t, err, "the 10,485,760-byte file boundary is accepted")
@@ -332,29 +335,6 @@ func TestSaveCheck_Dataset(t *testing.T) {
 		})
 		require.Error(t, err, "the 1,001st file is refused")
 		assert.True(t, errors.Is(err, ErrSaveCheckFailed))
-	})
-
-	t.Run("D2-8 folder total boundary refused at 52428801", func(t *testing.T) {
-		root := t.TempDir()
-		appDir := writeSkillFixture(t, root, "app")
-
-		// Six helper files under the per-file limit whose total crosses
-		// 52,428,800 bytes when the new write is added.
-		const almostLimit = 10485759 // per-file limit − 1
-		for i := 0; i < 5; i++ {
-			require.NoError(t, os.WriteFile(filepath.Join(appDir, fmt.Sprintf("bulk%d.bin", i)),
-				make([]byte, almostLimit), 0o644))
-		}
-		// 5 × 10,485,759 = 52,428,795; +1,000,006-byte write crosses the total.
-		_, err := ApplyChange(root, ChangeRequest{
-			Kind: KindEdit, Slug: "app", Path: "over.bin",
-			Content: make([]byte, 1000006),
-			Expect:  Expectation{Revision: readLiveRevision(t, appDir)},
-			Actor:   agentActor("a"),
-		})
-		require.Error(t, err, "the 52,428,801-byte folder total is refused")
-		assert.True(t, errors.Is(err, ErrSaveCheckFailed))
-		assert.Contains(t, err.Error(), "total size limit", "D-2 row 8: the folder-total reason")
 	})
 
 	t.Run("D2-10b writing through a symlink path is refused", func(t *testing.T) {
@@ -404,11 +384,62 @@ func TestSaveCheck_Dataset(t *testing.T) {
 	})
 }
 
-// readLiveRevision reads the live content revision through the SkillWriter's
-// pinned helper (§7.3 contentRevision).
+// TestSaveCheck_FolderTotalBoundary isolates D-2 row 8 without weakening it.
+// The fixture includes SKILL.md in the total, starts BELOW the limit, and
+// varies only the proposed write: limit-1, limit, limit+1 (r15 §7.2).
+func TestSaveCheck_FolderTotalBoundary(t *testing.T) {
+	const (
+		maxFile  = 10485760
+		maxTotal = 52428800
+		baseSize = maxTotal - 2
+	)
+	for _, total := range []int{maxTotal - 1, maxTotal, maxTotal + 1} {
+		t.Run(fmt.Sprintf("D2-8 total=%d", total), func(t *testing.T) {
+			root := t.TempDir()
+			appDir := writeSkillFixture(t, root, "app")
+			md, err := os.ReadFile(filepath.Join(appDir, "SKILL.md"))
+			require.NoError(t, err)
+			existing := len(md)
+			for i := 0; existing < baseSize; i++ {
+				n := min(maxFile, baseSize-existing)
+				require.NoError(t, os.WriteFile(filepath.Join(appDir, fmt.Sprintf("bulk%d.bin", i)), make([]byte, n), 0o644))
+				existing += n
+			}
+			require.Equal(t, baseSize, existing, "fixture arithmetic includes every content byte")
+			before := readLiveRevision(t, appDir)
+			content := make([]byte, total-existing)
+			out, err := ApplyChange(root, ChangeRequest{
+				Kind: KindEdit, Slug: "app", Path: "boundary.bin", Content: content,
+				Expect: Expectation{Revision: before}, Actor: agentActor("a"),
+			})
+			if total > maxTotal {
+				require.Error(t, err, "exactly 52,428,801 bytes is refused")
+				assert.ErrorIs(t, err, ErrSaveCheckFailed)
+				assert.Contains(t, err.Error(), "total size limit", "D-2 row 8's specified reason")
+				assert.NoFileExists(t, filepath.Join(appDir, "boundary.bin"), "refused proposed bytes were not published")
+				assert.Equal(t, before, readLiveRevision(t, appDir), "refusal leaves content revision unchanged")
+				return
+			}
+			require.NoError(t, err, "folder totals at and below 52,428,800 are accepted")
+			assert.Equal(t, PersistenceComplete, out.PersistenceStatus)
+			actual, err := os.ReadFile(filepath.Join(appDir, "boundary.bin"))
+			require.NoError(t, err)
+			assert.Equal(t, content, actual, "accepted boundary bytes are really persisted")
+		})
+	}
+}
+
+// Both mutation fixture helpers use r15 §7.3's content-revision contract,
+// never the old instruction-dependent revisionForDir algorithm.
 func readLiveRevision(t *testing.T, dir string) string {
 	t.Helper()
-	rev, err := revisionForDir(dir)
-	require.NoError(t, err)
+	return readContentRevision(t, dir)
+}
+
+func readContentRevision(t *testing.T, dir string) string {
+	t.Helper()
+	rev, err := ContentRevision(dir)
+	require.NoError(t, err, "BLOCKED: content-revision prerequisite unavailable — required by r15 §7.3")
+	require.NotEmpty(t, rev)
 	return rev
 }
