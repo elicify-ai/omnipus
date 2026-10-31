@@ -234,8 +234,8 @@ func (t *PreviewDocumentTool) Execute(ctx context.Context, args map[string]any) 
 		return ErrorResult(previewPrefix + err.Error())
 	}
 	auditPath := path
-	if real, realErr := src.handle.RealPath(); realErr == nil {
-		auditPath = real
+	if resolved, realErr := src.handle.RealPath(); realErr == nil {
+		auditPath = resolved
 	}
 	emitPreviewRunAudit(ctx, t.auditLogger, t.Name(), auditPath, res)
 	return t.buildResult(ctx, filepath.Base(path), res, src.reauthorize)
