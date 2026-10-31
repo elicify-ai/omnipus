@@ -355,6 +355,26 @@ func (r *scheduledRunner) stampScheduledSessionOwner(store *session.UnifiedStore
 	}
 }
 
+// adoptScheduledMainOwner gives an ownerless main its first owner through
+// UnifiedStore.AdoptMainSessionOwner: the check and the write are one locked
+// step, unlike stampScheduledSessionOwner's read-then-SetMeta, and the main's
+// recency is not bumped. A failure is non-fatal for the run, like the
+// non-main stamp: the run proceeds and the main stays ownerless until a later
+// adoption; it is logged at warning level with the cause. A successful
+// adoption is logged at Info.
+func (r *scheduledRunner) adoptScheduledMainOwner(store *session.UnifiedStore, sessionID, mainOwner string) {
+	adopted, err := store.AdoptMainSessionOwner(sessionID, mainOwner)
+	if err != nil {
+		logger.WarnCF("gateway", "scheduled run: could not record the main session owner",
+			map[string]any{"session_id": sessionID, "owner": mainOwner, "error": err.Error()})
+		return
+	}
+	if adopted {
+		logger.InfoCF("gateway", "scheduled run: main session owner recorded",
+			map[string]any{"session_id": sessionID, "owner": mainOwner})
+	}
+}
+
 // pickSession resolves the session id for the run per session mode (W-2). The
 // session is created/looked up BEFORE the run so ProcessScheduled can register
 // the cancellable turn under it. On a pruned continue-session, it falls back to
@@ -452,11 +472,19 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 				return "", fmt.Errorf("main session mode: the owner no longer has a main in this workspace (removed from the team or no longer a chat agent); the run was not started")
 			}
 		}
-		meta, err := store.GetOrCreateMainSession(workspaceID, owner)
+		// A main this run creates is owned by the schedule's creator
+		// (job.CreatedBy), or by the operator when no person created the
+		// schedule (a heartbeat, or the machine principal "cli"). An existing
+		// ownerless main adopts only a person creator, in one compare-and-set
+		// step that leaves its recency untouched; an owned main keeps its owner.
+		mainOwner := systemMainOwner(r.getConfig(), userOwner)
+		meta, err := store.GetOrCreateMainSessionOwned(workspaceID, owner, mainOwner)
 		if err != nil {
 			return "", fmt.Errorf("main session create: %w", err)
 		}
-		r.stampScheduledSessionOwner(store, meta.ID, userOwner)
+		if meta.Owner == "" && userOwner != "" && userOwner != config.MachinePrincipalUsername {
+			r.adoptScheduledMainOwner(store, meta.ID, userOwner)
+		}
 		r.stampScheduledSessionWorkspace(store, meta.ID, workspaceID)
 		return meta.ID, nil
 

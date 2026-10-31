@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { onboardViaAPI } from './fixtures/onboard-via-api.js';
+import { requireLiveModelKeys } from './fixtures/e2e-model-keys.js';
 
 const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
   ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
@@ -12,20 +13,24 @@ const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
   );
 
 // T0.4: Preflight — fail fast if required environment variables are missing.
-// OPENROUTER_API_KEY_CI is required. Its absence is a CI configuration failure,
-// not a per-test skip condition. Tests that need a real LLM will fail anyway;
-// this preflight surfaces the root cause immediately instead of after 60s timeouts.
+// The live-model keys are required: the primary's (tests/e2e/e2e-model.json,
+// e.g. MINIMAX_API_KEY_CI) and the fallback's (OPENROUTER_API_KEY_CI), since
+// onboarding seeds the fallback on every agent. Their absence is a CI
+// configuration failure, not a per-test skip condition. Tests that need a real
+// LLM will fail anyway; this preflight surfaces the root cause immediately
+// instead of after 60s timeouts.
 function preflightCheck(): void {
-  if (!process.env.OPENROUTER_API_KEY_CI) {
+  try {
+    requireLiveModelKeys('the E2E suite');
+  } catch (err) {
     throw new Error(
-      '[E2E preflight] OPENROUTER_API_KEY_CI is not set.\n' +
-      'This environment variable is REQUIRED for the E2E suite.\n' +
-      'Tests that require a live LLM will fail without it, and soft-skipping\n' +
-      'on its absence is no longer permitted (see tests/e2e/README.md).\n\n' +
-      'To fix:\n' +
-      '  export OPENROUTER_API_KEY_CI="<your OpenRouter key>"\n' +
-      'Or in CI: add OPENROUTER_API_KEY_CI to your secrets and inject it\n' +
-      'as an env var in the Playwright workflow step (see .github/workflows/pr.yml).',
+      `[E2E preflight] ${(err as Error).message}\n` +
+      'These environment variables are REQUIRED for the E2E suite.\n' +
+      'Tests that require a live LLM will fail without them, and soft-skipping\n' +
+      'on their absence is no longer permitted (see tests/e2e/README.md).\n' +
+      'In CI they come from the MINIMAX_API_KEY_CI and OPENROUTER_API_KEY_CI*\n' +
+      'secrets (see .github/workflows/pr.yml).',
+      { cause: err },
     );
   }
 }

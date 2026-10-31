@@ -8,8 +8,9 @@ import { browseBack, dropSocket, expectedReaderOrdinals } from './fixtures/chat-
 import { ageRolledHistoryPartitions, sweepChatHistoryFixture } from './fixtures/chat-history';
 import { readerFixtureDays } from './fixtures/chat-history-paging/day-fixtures';
 import { openSessionByDeepLink } from './fixtures/session-setup';
-import { assertRestoredControl, controlProvider, floodRealJournal, pendingAction, reconnectWithPending,
-  sendControlInstruction, stopPendingControl, stopRunningControlTurn, waitForPendingControl } from './fixtures/chat-history-paging/control-actions';
+import { assertRestoredControl, assertSessionStopped, controlProvider, floodRealJournal, pendingAction, reconnectWithPending,
+  sendControlInstruction, stopHeldControlTurn, stopPendingControl, waitForPendingControl } from './fixtures/chat-history-paging/control-actions';
+import { terminalLogRows } from './fixtures/terminal-outcome-acceptance';
 import { CONTROL_RUNNING } from './fixtures/chat-history-paging/control-provider';
 import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness';
 
@@ -426,7 +427,30 @@ test.describe('T24 actual journal retention overflow', () => {
       await expectAnchor(page, saved);
       await expect.poll(() => history.traffic.pages.slice(pagesBefore).filter((r) => new URL(r.url).searchParams.has('window_start')).length).toBeGreaterThan(0);
       expect(history.traffic.pages.slice(pagesBefore).every((r) => new URL(r.url).searchParams.has('window_start')), 'refresh addresses only the old held interval, not the omitted middle').toBe(true);
-      await stopRunningControlTurn(history);
+      // B26: the held-interval refresh settles with the reader still at its
+      // anchor. Asserted BEFORE the cleanup so the Stop/turn events below do
+      // not land in the middle of the refresh (CI run 40913643836 stopped
+      // while the refresh was still committing; see the T24 B26 report).
+      await expect(page.getByText('Refreshing loaded messages…', { exact: true }), 'the held-interval refresh completes').toHaveCount(0);
+      await expect(historyScroller(page), 'refresh busy state clears').not.toHaveAttribute('aria-busy', 'true');
+      // Fail within the expect budget, not the whole test budget, if the row is gone.
+      await expect(historyRow(page, saved.id), 'the anchored row is still rendered after the refresh').toBeVisible();
+      await expectAnchor(page, saved);
+      // ACCOMMODATION — revert when #1503 is fixed (founder decision 2026-10-29,
+      // option C). Today the fifth filler does not fit the 1-MiB waiting-message
+      // cap, is queued as the NEXT turn instead of being refused, and Stop does
+      // not cancel it. So stop the control turn, prove the next turn is exactly
+      // that over-limit filler, stop it too, then require stopped. After #1503
+      // the filler is refused visibly: restore one stopRunningControlTurn(history).
+      const controlTurn = await stopHeldControlTurn(history);
+      const logMessages = () => terminalLogRows(history.logPath).map((r) => String(r.message ?? ''));
+      expect(logMessages().filter((m) => m.startsWith('Steering enqueue rejected')), '#1503: exactly one filler overflowed the waiting cap').toHaveLength(1);
+      await expect.poll(() => logMessages().some((m) => m.startsWith('Processing message') && m.includes('HISTORY_JOURNAL_FILL_4')),
+        { message: '#1503: the over-limit fifth filler runs as the next turn after Stop' }).toBe(true);
+      await stopHeldControlTurn(history, [controlTurn]);
+      await assertSessionStopped(history);
+      expect(controlProvider(history).failures()).toEqual([]);
+      await expect(historyRow(page, saved.id), 'the anchored row is still rendered after the cleanup Stops').toBeVisible();
       await expectAnchor(page, saved);
       expect(history.traffic.sends).toEqual([]);
       await history.record('same-boot-retention-exceeded-reader');

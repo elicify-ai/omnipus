@@ -5,11 +5,13 @@
 #   all-no-e2e = `all` minus go-race/e2e, with setup (npm ci + verify-contracts) done once and
 #   the remaining checks fanned out over three parallel groups — see run_all_no_e2e.
 # Requires env GIT_REMOTE (authenticated clone URL), set as a Fly secret.
-#   The `e2e` gate additionally requires OPENROUTER_API_KEY (Fly secret) — set on ci-omnipus-1 via
-#   `fly secrets set OPENROUTER_API_KEY=<value> --app ci-omnipus-1`.
+#   The `e2e` gate additionally requires MINIMAX_API_KEY (the PRIMARY model key) and
+#   OPENROUTER_API_KEY (the FALLBACK model key), both Fly secrets on ci-omnipus-1
+#   (`fly secrets set NAME=<value> --app ci-omnipus-1`). The models themselves are named only
+#   in tests/e2e/e2e-model.json, read through the checkout's scripts/e2e-model.sh.
 #   Optional for faster sharded e2e: OPENROUTER_API_KEY_B / OPENROUTER_API_KEY_C give the
-#   concurrent LLM shards their own rate-limit windows; unset ⇒ they fall back to the primary
-#   key (the run still works, just at single-key parallelism). See run_e2e below.
+#   concurrent LLM shards their own fallback rate-limit windows; unset ⇒ they fall back to
+#   OPENROUTER_API_KEY. See run_e2e below.
 set -uo pipefail
 
 REF="${1:-HEAD}"
@@ -810,9 +812,11 @@ run_contracts(){ make verify-contracts; }
 # writes — a per-gateway constraint, not a global one). This replaces the old single
 # sequential run (~3 h with real-LLM latency) with ~one-slowest-shard wall-clock.
 #
-# Per-shard OpenRouter keys (runner-agnostic — identical on this Fly worker via Fly
-# secrets or on a GitHub-hosted / external self-hosted runner via Actions secrets):
-#   OPENROUTER_API_KEY    (slot a, REQUIRED — the primary key)
+# Model keys (runner-agnostic — identical on this Fly worker via Fly secrets or on a
+# GitHub-hosted / external self-hosted runner via Actions secrets):
+#   MINIMAX_API_KEY       (REQUIRED — the primary model key; one key for every shard)
+# Per-shard OpenRouter keys — the FALLBACK model key:
+#   OPENROUTER_API_KEY    (slot a, REQUIRED)
 #   OPENROUTER_API_KEY_B  (slot b, OPTIONAL → falls back to slot a when unset)
 #   OPENROUTER_API_KEY_C  (slot c, OPTIONAL → falls back to slot a when unset)
 # Pinning each concurrent LLM shard to its own key keeps them off one shared rate-limit
@@ -1046,63 +1050,68 @@ _e2e_run_shard() {
   rm -rf "$home"; mkdir -p "$home"
 
   # Canonical e2e config with THIS shard's port. Each shard has its own credentials.json
-  # under $home, so the shared api_key_ref name ("OPENROUTER_API_KEY") resolves to this
-  # shard's key value (seeded next). See pr.yml "Seed gateway config" for the rationale
-  # behind dev_mode_bypass / audit_log.
+  # under $home, so the shared api_key_ref names resolve to this shard's key values
+  # (seeded next; the fallback row's name gets this shard's OpenRouter slot key). See
+  # pr.yml "Seed gateway config" for the rationale behind dev_mode_bypass / audit_log.
   #
-  # The model id is centralized in tests/e2e/e2e-model.json (the guard
-  # scripts/check-no-hardcoded-e2e-model.sh fails any hardcoded model id in
-  # live config), read once below into E2E_MODEL, fail-closed.
+  # The models are centralized in tests/e2e/e2e-model.json (the guard
+  # scripts/check-no-hardcoded-e2e-model.sh fails any hardcoded model or provider id in
+  # live config), read once per run by _e2e_resolve_models, fail-closed.
   #
   # C1 fix (ADR-067 FR-034): providers[] rows are keyed by the EXACT (provider, model)
-  # pair — `provider` is the catalog id ("openrouter"), `model` is the bare
+  # pair — `provider` is the catalog id, `model` is the bare
   # catalog model id exactly as stored in tests/e2e/e2e-model.json. The old
   # "<protocol>/<model>" prefix-splitting migration
   # was deleted deliberately (it silently mis-routed vendors), so a row with an empty
   # `provider` now fails ModelConfig.Validate ("provider is required") instead of being
   # guessed. agents.defaults.default_model is the (provider, model) pair — the retired
   # model_name alias is gone (ADR-068 CRIT-001).
-  # --- e2e model read (fail-closed) >>>
-  # Split diagnostics (silent-failure-hunter LOW re-review finding, 2026-09-27): a
-  # PRESENT file with an empty/whitespace-only .model is a different failure from a
-  # MISSING file, and the old single message ("predates the central e2e model file")
-  # named the wrong repair for the former — it pointed at the checkout's age instead
-  # of at tests/e2e/e2e-model.json. jq's stderr is surfaced so "No such file or
-  # directory" vs a JSON parse error is visible in the gate log.
-  #   jq fails (file missing / unreadable / invalid JSON) → checkout predates the central file
-  #   jq succeeds but the trimmed .model is empty          → present-but-empty: edit tests/e2e/e2e-model.json
-  local e2e_jq_rc=0 e2e_jq_err_file e2e_jq_msg
-  e2e_jq_err_file="$(mktemp "${TMPDIR:-/tmp}/runci-e2e-model-jq.XXXXXX")" || { echo "[$name] tests/e2e/e2e-model.json: mktemp failed — cannot read the e2e model id fail-closed" >&2; return 1; }
-  E2E_MODEL="$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json 2>"$e2e_jq_err_file")" || e2e_jq_rc=$?
-  e2e_jq_msg="$(tr '\n' ' ' <"$e2e_jq_err_file")"
-  rm -f "$e2e_jq_err_file"
-  if [ "$e2e_jq_rc" -ne 0 ]; then
-    echo "[$name] tests/e2e/e2e-model.json: missing or unreadable/invalid JSON (jq exit $e2e_jq_rc: $e2e_jq_msg) — the checkout at $(git -C . rev-parse --short HEAD 2>/dev/null || echo '?') predates the central e2e model file" >&2
-    return 1
-  fi
-  if [ -z "$E2E_MODEL" ]; then
-    echo "[$name] tests/e2e/e2e-model.json: present but .model is empty or whitespace-only — edit that file to set the e2e model id" >&2
-    return 1
-  fi
-  # <<< e2e model read (fail-closed)
-  cat > "$home/config.json" <<EOF
+  #
+  # The models were read ONCE for the run by _e2e_resolve_models (run_e2e): the primary
+  # and fallback pairs of tests/e2e/e2e-model.json, the job-start route, and whether the
+  # checkout still carries the legacy {"model": ...} file. Each shard seeds from them.
+  local onboard_id onboard_model onboard_key
+  if [ "$E2E_LEGACY" = 1 ]; then
+    # A ref cut before the MiniMax switch: one openrouter row, exactly the old seed.
+    cat > "$home/config.json" <<EOF
 {
   "version": 1,
   "gateway": { "port": $port, "dev_mode_bypass": true },
   "sandbox": { "audit_log": true, "tool_policies": { "spawn": "allow" } },
-  "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "${E2E_MODEL}" }, "auto_recap_enabled": true } },
+  "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "${E2E_P_MODEL}" }, "auto_recap_enabled": true } },
   "providers": [
     {
       "provider": "openrouter",
-      "model": "${E2E_MODEL}",
+      "model": "${E2E_P_MODEL}",
       "api_base": "https://openrouter.ai/api/v1",
       "api_key_ref": "OPENROUTER_API_KEY"
     }
   ]
 }
 EOF
-
-  OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set OPENROUTER_API_KEY "$key" >/dev/null || return 1
+    OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set OPENROUTER_API_KEY "$key" >/dev/null || return 1
+    onboard_id=openrouter onboard_model="$E2E_P_MODEL" onboard_key="$key"
+  else
+    # The two-row CI seed (primary + fallback rows, default_model = the primary, or the
+    # fallback after a failed job-start check) from the shared template.
+    bash scripts/e2e-model.sh seed-config "$port" --route "$E2E_ROUTE" > "$home/config.json" \
+      || { echo "[$name] scripts/e2e-model.sh seed-config failed" >&2; return 1; }
+    # Credentials: the primary row's api_key_ref gets the primary secret of the same name
+    # (MINIMAX_API_KEY); the fallback row's gets this shard's OpenRouter slot key.
+    local primary_key="${!E2E_P_KEYREF:-}"
+    if [ -n "$primary_key" ]; then
+      OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set "$E2E_P_KEYREF" "$primary_key" >/dev/null || return 1
+    elif [ "$E2E_ROUTE" != fallback ]; then
+      echo "[$name] the primary key $E2E_P_KEYREF is not set" >&2
+      return 1
+    fi
+    OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set "$E2E_F_KEYREF" "$key" >/dev/null || return 1
+    if [ "$E2E_ROUTE" = fallback ]; then
+      onboard_id="$E2E_F_PROVIDER" onboard_model="$E2E_F_MODEL" onboard_key="$key"
+    else
+      onboard_id="$E2E_P_PROVIDER" onboard_model="$E2E_P_MODEL" onboard_key="$primary_key"
+    fi
+  fi
 
   # ADR-082 D1 deleted the ADR-045 orphan-foreground-turn watchdog in full —
   # the old OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 override no longer
@@ -1129,13 +1138,24 @@ EOF
 
   # Onboarding must pass the REAL key — the handler appends a second provider entry the
   # agent's model lookup then picks; a placeholder would 401 every LLM call.
-  jq -n --arg key "$key" --arg model "$E2E_MODEL" \
-    '{provider:{auth_method:"api_key",id:"openrouter",api_key:$key,model:$model},admin:{username:"admin",password:"admin123"}}' \
+  jq -n --arg id "$onboard_id" --arg key "$onboard_key" --arg model "$onboard_model" \
+    '{provider:{auth_method:"api_key",id:$id,api_key:$key,model:$model},admin:{username:"admin",password:"admin123"}}' \
     | curl -sf -X POST "http://localhost:$port/api/v1/onboarding/complete" \
-        -H 'Content-Type: application/json' -d @- >/dev/null \
+        -H 'Content-Type: application/json' -d @- >"$home/onboard.json" \
     || { echo "[$name] onboarding failed" >&2; cat "$logf" >&2; return 1; }
 
+  # The product falls back per agent only (issue #1340): every agent gets the fallback
+  # pair in its fallback_models. Not on a legacy ref (no fallback) and not when the job
+  # already runs on the fallback.
+  if [ "$E2E_LEGACY" != 1 ] && [ "$E2E_ROUTE" != fallback ]; then
+    local onboard_tok
+    onboard_tok="$(jq -r '.token // empty' "$home/onboard.json" 2>/dev/null)"
+    bash scripts/e2e-model.sh seed-agent-fallbacks "http://localhost:$port" "${onboard_tok:-dev-mode-bypass}" \
+      || { echo "[$name] seeding the agent fallbacks failed" >&2; cat "$logf" >&2; return 1; }
+  fi
+
   log "e2e[$name]: run specs${specs:+ ($specs)}"
+  local primary_secret="${MINIMAX_API_KEY:-}"
   # Per-shard OMNIPUS_AUTH_FILE + OMNIPUS_SKIP_MANIFEST_PATH keep global-setup's session
   # cookie (tests/e2e/global-setup.ts) and global-teardown's manifest (global-teardown.ts)
   # off the shared default paths. The manifest is placed INSIDE the shard's own results dir
@@ -1171,12 +1191,102 @@ EOF
   OMNIPUS_SKIP_MANIFEST_PATH="$E2E_DIR/e2e-$name-results/skip-manifest.json" \
   OPENROUTER_API_KEY="$key" \
   OPENROUTER_API_KEY_CI="$key" \
+  MINIMAX_API_KEY="$primary_secret" \
+  MINIMAX_API_KEY_CI="$primary_secret" \
+  OMNIPUS_E2E_PRIMARY_PROVIDER="$E2E_OVERRIDE_PROVIDER" \
+  OMNIPUS_E2E_PRIMARY_MODEL="$E2E_OVERRIDE_MODEL" \
     npx playwright test $specs $pwargs
+  local pw_rc=$?
+  # Mid-run fallback: the job-start check only saw the primary at the start. Count the
+  # product's fallback notes in this shard's transcripts so a primary that failed DURING
+  # the tests is visible (::warning:: in the log; this shard's llm-route copy no longer
+  # says "primary").
+  if [ "$E2E_LEGACY" != 1 ] && [ -f "$E2E_DIR/llm-route.json" ]; then
+    cp "$E2E_DIR/llm-route.json" "$E2E_DIR/llm-route-$name.json" 2>/dev/null || true
+    bash scripts/e2e-model.sh note-fallbacks "$home/sessions" --route-out "$E2E_DIR/llm-route-$name.json" \
+      || echo "[$name] WARNING: could not count mid-run fallback notes" >&2
+  fi
+  return "$pw_rc"
+}
+
+# _e2e_resolve_models reads tests/e2e/e2e-model.json ONCE for the run (the checkout is the
+# same for every shard) and runs the job-start check. Sets the globals the shards read:
+#   E2E_P_PROVIDER E2E_P_MODEL E2E_P_KEYREF E2E_F_PROVIDER E2E_F_MODEL E2E_F_KEYREF
+#   E2E_LEGACY            1 = the checkout predates the MiniMax switch (legacy file)
+#   E2E_ROUTE             primary | fallback (the job-start check's verdict)
+#   E2E_OVERRIDE_PROVIDER / E2E_OVERRIDE_MODEL  the fallback pair after a failed check
+#                         (exported to Playwright as OMNIPUS_E2E_PRIMARY_*), else empty
+#
+# A checkout WITH scripts/e2e-model.sh is read through it (`env --legacy-ok`). This runner
+# is shared across refs, so a checkout cut before the switch — no script, and the legacy
+# {"model": ...} file — is read inline as an openrouter primary with NO fallback and a
+# WARN. Remove that branch once no in-flight branch predates the switch.
+_e2e_resolve_models() {
+  E2E_P_PROVIDER="" E2E_P_MODEL="" E2E_P_KEYREF="" E2E_F_PROVIDER="" E2E_F_MODEL="" E2E_F_KEYREF=""
+  E2E_LEGACY=0 E2E_ROUTE=primary E2E_OVERRIDE_PROVIDER="" E2E_OVERRIDE_MODEL=""
+  if [ -f scripts/e2e-model.sh ]; then
+    local lines k v
+    lines="$(bash scripts/e2e-model.sh env --legacy-ok)" || {
+      echo "e2e: tests/e2e/e2e-model.json failed scripts/e2e-model.sh's shape check (above)" >&2
+      return 1
+    }
+    while IFS='=' read -r k v; do
+      case "$k" in
+        E2E_PRIMARY_PROVIDER) E2E_P_PROVIDER="$v" ;;
+        E2E_PRIMARY_MODEL) E2E_P_MODEL="$v" ;;
+        E2E_PRIMARY_KEYREF) E2E_P_KEYREF="$v" ;;
+        E2E_FALLBACK_PROVIDER) E2E_F_PROVIDER="$v" ;;
+        E2E_FALLBACK_MODEL) E2E_F_MODEL="$v" ;;
+        E2E_FALLBACK_KEYREF) E2E_F_KEYREF="$v" ;;
+      esac
+    done <<<"$lines"
+  else
+    # --- legacy e2e model read (fail-closed) >>>
+    # jq fails (file missing / unreadable / invalid JSON) → the checkout predates the
+    # central file; jq succeeds but the trimmed .model is empty → present-but-empty.
+    local jq_rc=0 jq_err_file jq_msg
+    jq_err_file="$(mktemp "${TMPDIR:-/tmp}/runci-e2e-model-jq.XXXXXX")" || { echo "e2e: tests/e2e/e2e-model.json: mktemp failed — cannot read the e2e model id fail-closed" >&2; return 1; }
+    E2E_P_MODEL="$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json 2>"$jq_err_file")" || jq_rc=$?
+    jq_msg="$(tr '\n' ' ' <"$jq_err_file")"
+    rm -f "$jq_err_file"
+    if [ "$jq_rc" -ne 0 ]; then
+      echo "e2e: tests/e2e/e2e-model.json: missing or unreadable/invalid JSON (jq exit $jq_rc: $jq_msg) — the checkout at $(git -C . rev-parse --short HEAD 2>/dev/null || echo '?') predates the central e2e model file" >&2
+      return 1
+    fi
+    if [ -z "$E2E_P_MODEL" ]; then
+      echo "e2e: tests/e2e/e2e-model.json: no scripts/e2e-model.sh and no legacy .model — edit that file to set the e2e models" >&2
+      return 1
+    fi
+    echo "e2e: WARN — this checkout has no scripts/e2e-model.sh; reading the legacy tests/e2e/e2e-model.json as an openrouter primary with NO fallback" >&2
+    E2E_P_PROVIDER=openrouter E2E_P_KEYREF=OPENROUTER_API_KEY
+    # <<< legacy e2e model read (fail-closed)
+  fi
+  if [ -z "$E2E_F_PROVIDER" ]; then
+    E2E_LEGACY=1
+    log "e2e: legacy model file — primary $E2E_P_PROVIDER/$E2E_P_MODEL, no fallback, no job-start check"
+    return 0
+  fi
+
+  # The job-start check: one 1-token call to the primary. Prints LLM_ROUTE=primary|fallback;
+  # the ::warning:: on a fallback names the status and error type only, never a key.
+  local route
+  route="$(bash scripts/e2e-model.sh preflight --strict --route-out "$E2E_DIR/llm-route.json")" || {
+    echo "e2e: the job-start check of the primary failed (above) — a rejected key or an unexpected answer is not an outage, so the run does not fall back" >&2
+    return 1
+  }
+  E2E_ROUTE="${route#LLM_ROUTE=}"
+  if [ "$E2E_ROUTE" = fallback ]; then
+    E2E_OVERRIDE_PROVIDER="$E2E_F_PROVIDER" E2E_OVERRIDE_MODEL="$E2E_F_MODEL"
+    log "e2e: LLM: fallback — the whole run uses $E2E_F_PROVIDER/$E2E_F_MODEL (see $E2E_DIR/llm-route.json)"
+  else
+    log "e2e: LLM: primary $E2E_P_PROVIDER/$E2E_P_MODEL (fallback $E2E_F_PROVIDER/$E2E_F_MODEL per agent)"
+  fi
 }
 
 run_e2e() {
   local KEY_A KEY_B KEY_C
-  KEY_A="${OPENROUTER_API_KEY:?e2e gate requires OPENROUTER_API_KEY Fly secret}"
+  : "${MINIMAX_API_KEY:?e2e gate requires MINIMAX_API_KEY Fly secret (the primary model key)}"
+  KEY_A="${OPENROUTER_API_KEY:?e2e gate requires OPENROUTER_API_KEY Fly secret (the fallback model key)}"
   KEY_B="${OPENROUTER_API_KEY_B:-$KEY_A}"
   KEY_C="${OPENROUTER_API_KEY_C:-$KEY_A}"
 
@@ -1256,6 +1366,7 @@ run_e2e() {
   trap '[ -n "${_XVFB_PID:-}" ] && kill "$_XVFB_PID" 2>/dev/null || true' RETURN
 
   _e2e_build || return 1
+  _e2e_resolve_models || return 1
 
   # Targeted / opt-out path: the OLD single-gateway flow (keeps the HTML report; no
   # artifact-path isolation needed since only one gateway runs).

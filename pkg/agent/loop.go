@@ -238,7 +238,8 @@ type AgentLoop struct {
 
 	// clearHeldHook receives a /clear the server holds while it stops the running
 	// reply (clear_held.go). Set once by the gateway's WS handler.
-	clearHeldHook atomic.Pointer[ClearHeldFunc]
+	clearHeldHook  atomic.Pointer[ClearHeldFunc]
+	goalPausedHook atomic.Pointer[GoalPausedFunc]
 
 	// clearReleasedHook receives a held /clear once the stop has settled and the
 	// /clear is queued (clear_held.go). Set once by the gateway's WS handler.
@@ -1704,7 +1705,7 @@ func (al *AgentLoop) runAgentLoopBody(
 	// its turn STARTS, so the client is told the goal is active again while the
 	// turn runs (not only once it ends). Cheap no-op unless a pause is held.
 	if (opts.UserInitiated || opts.IsTaskRun) && opts.TranscriptStore != nil && opts.TranscriptSessionID != "" {
-		al.liftGoalKeeperStopPauseIfNewTurn(opts.TranscriptStore, opts.TranscriptSessionID)
+		al.prepareGoalKeeperForTurn(opts)
 	}
 
 	ts, admissionErr := al.newTurnStateForAdmission(agent, opts)
@@ -1721,12 +1722,9 @@ func (al *AgentLoop) runAgentLoopBody(
 	al.lastTurnResultMu.Lock()
 	al.lastTurnResult = result
 	al.lastTurnResultMu.Unlock()
-	// MERGE NOTE 2026-09-15: integrate's F2 fix called
-	// al.rearmGoalAfterAbnormalTurn(opts) here (a goal-bearing session whose
-	// turn died on this path never re-armed its idle quiet window and stayed
-	// `active` forever). The helper lived in integrate's goal_triggers.go;
-	// goal logic comes from release (#683) by founder ruling, so the call is
-	// dropped and the fix is recorded as a follow-up candidate.
+	// A failed automatic reminder returns before the natural goal hook below.
+	// Retain its real outcome through the existing abnormal-reminder path.
+	al.rearmAbnormalGoalReminder(ts, &result, err)
 	if err != nil {
 		return "", err
 	}
@@ -2461,65 +2459,6 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 // it catches wrapping layers such as "fallback: unclassified error: ...".
 func isTransientStreamError(err error) bool {
 	return providers.IsTransportFailure(err)
-}
-
-// formatMessagesForLog formats messages for logging
-func formatMessagesForLog(messages []providers.Message) string {
-	if len(messages) == 0 {
-		return "[]"
-	}
-
-	var sb strings.Builder
-	sb.WriteString("[\n")
-	for i, msg := range messages {
-		fmt.Fprintf(&sb, "  [%d] Role: %s\n", i, msg.Role)
-		if len(msg.ToolCalls) > 0 {
-			sb.WriteString("  ToolCalls:\n")
-			for _, tc := range msg.ToolCalls {
-				fmt.Fprintf(&sb, "    - ID: %s, Type: %s, Name: %s\n", tc.ID, tc.Type, tc.Name)
-				if tc.Function != nil {
-					fmt.Fprintf(
-						&sb,
-						"      Arguments: %s\n",
-						utils.Truncate(tc.Function.Arguments, 200),
-					)
-				}
-			}
-		}
-		if msg.Content != "" {
-			content := utils.Truncate(msg.Content, 200)
-			fmt.Fprintf(&sb, "  Content: %s\n", content)
-		}
-		if msg.ToolCallID != "" {
-			fmt.Fprintf(&sb, "  ToolCallID: %s\n", msg.ToolCallID)
-		}
-		sb.WriteString("\n")
-	}
-	sb.WriteString("]")
-	return sb.String()
-}
-
-// formatToolsForLog formats tool definitions for logging
-func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
-	if len(toolDefs) == 0 {
-		return "[]"
-	}
-
-	var sb strings.Builder
-	sb.WriteString("[\n")
-	for i, tool := range toolDefs {
-		fmt.Fprintf(&sb, "  [%d] Type: %s, Name: %s\n", i, tool.Type, tool.Function.Name)
-		fmt.Fprintf(&sb, "      Description: %s\n", tool.Function.Description)
-		if len(tool.Function.Parameters) > 0 {
-			fmt.Fprintf(
-				&sb,
-				"      Parameters: %s\n",
-				utils.Truncate(fmt.Sprintf("%v", tool.Function.Parameters), 200),
-			)
-		}
-	}
-	sb.WriteString("]")
-	return sb.String()
 }
 
 // clearSessionWindow is /clear's window move (clearConversation): it empties

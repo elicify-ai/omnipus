@@ -31,7 +31,6 @@ import { resolvedToolPartStatus } from '@/lib/assistant-tool-status'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { renderHistoricalToolCall } from './tools/HistoricalToolCallBlock'
 import { classifySetGoalCall } from './tools/SetGoalToolUI'
-import { FeedKindLabel } from './FeedKindLabel'
 import { UnavailableChatNotice } from './UnavailableChatNotice'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ProviderRetryIndicator } from './ProviderRetryIndicator'
@@ -53,6 +52,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { isClearCommandText } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
 import { AgentReplyLabel, ParticipantMessageRow, useParticipantLabelParts } from './ParticipantLabels'
+import { assistantRowCorrelationAttributes } from './assistantRowAttributes'
 import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
 import { pendingRedirectSids } from '@/store/chat/runtime-state'
@@ -81,8 +81,7 @@ import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { fetchAgents, fetchCommands, fetchSkills } from '@/lib/api'
-import { MainChatAddParticipant } from './AddParticipant'
-import { INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
+import { INLINE_TOOL_APPROVALS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
@@ -1216,6 +1215,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
       data-testid="assistant-message"
       data-message-role="assistant"
       data-message-id={message.id}
+      {...assistantRowCorrelationAttributes(message)}
       data-status="complete"
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
@@ -1561,6 +1561,7 @@ export function AssistantMessage() {
     <MessagePrimitive.Root
       data-testid="assistant-message"
       data-message-id={message.id}
+      {...assistantRowCorrelationAttributes(storeMsg)}
       data-status={message.status?.type ?? 'complete'}
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
@@ -2831,11 +2832,10 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         </div>
       )}
 
-      {/* FR-207: "Add participant" at the top-left of a member's main chat (absent for Omnipus) — hidden until WU-15 (stage 3), #1314. */}
-      {ROOMS_ENABLED && <MainChatAddParticipant />}
-
-      {/* Above-feed kind. FeedKindLabel also keeps the old Task: line when no descriptor matches. */}
-      <FeedKindLabel />
+      {/* #1449 D13 (founder 2026-10-28): the chat's own chrome — the kind
+          label / helper breadcrumb and "Add participant" — lives in the
+          workspace header line's right-end slot (ChatHeaderSlot), not in a
+          row above the feed. */}
 
         <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">
           {/* ARIA live region: announces new assistant messages to screen readers.

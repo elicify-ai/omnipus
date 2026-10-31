@@ -199,8 +199,12 @@ type CronService struct {
 	// runWindowUsed prevents a physical-boot restore on a service reused after Stop.
 	runWindowUsed bool
 	stopChan      chan struct{}
-	wakeChan      chan struct{}
-	gronx         *gronx.Gronx
+	// loopDone is closed by runLoop when it exits (#1450). Created per run
+	// window by startRunWindow; nil when no loop goroutine was started
+	// (startNoLoop) or after Stop has taken it.
+	loopDone chan struct{}
+	wakeChan chan struct{}
+	gronx    *gronx.Gronx
 
 	// clock is the injected time source (W-5). Defaults to realClock.
 	clock Clock
@@ -212,8 +216,16 @@ type CronService struct {
 	maxConcurrentRuns int
 	// laneSem is the semaphore for the lane; cap = maxConcurrentRuns.
 	laneSem chan struct{}
-	// laneWG tracks in-flight lane runs so Stop() can drain them (W-3).
+	// laneWG tracks every in-flight lane run, across run windows, for
+	// WaitForLane (tests).
 	laneWG sync.WaitGroup
+	// laneRuns tracks the lane runs of the current run window only, so Stop()
+	// drains exactly its own window (W-3). A fresh WaitGroup per window keeps a
+	// Start that races a draining Stop from adding to the WaitGroup Stop is
+	// waiting on (#1450). Add happens only under mu while the window is
+	// current; Stop sets it to nil under mu before it waits. nil outside a
+	// run window.
+	laneRuns *sync.WaitGroup
 	// dispatchPending counts, per job, dispatches handed to the lane that
 	// have not finished yet — including the wait for a lane slot, when the
 	// job has no Running flag and no turn (issue #1306, architect R2-A1).
@@ -379,9 +391,10 @@ func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err 
 		cs.wakeChan = make(chan struct{}, 1)
 	}
 	// Fresh lane context for this run window (a prior Stop canceled the old one).
-	if cs.laneCtx == nil || cs.laneCtx.Err() != nil {
+	if cs.laneCtx == nil || cs.laneCtx.Err() != nil || cs.laneCancel == nil {
 		cs.laneCtx, cs.laneCancel = context.WithCancel(context.Background())
 	}
+	cs.laneRuns = &sync.WaitGroup{}
 	cs.running = true
 	cs.runWindowUsed = true
 	return true, nil
@@ -402,12 +415,19 @@ func (cs *CronService) startRunWindow(physicalBoot bool) error {
 	cs.mu.Lock()
 	started, err := cs.initRunStateUnsafe(physicalBoot)
 	stop := cs.stopChan
+	var done chan struct{}
+	if started {
+		// Created under the same lock as the run window so a concurrent Stop
+		// always sees the channel of the loop it is stopping (#1450).
+		done = make(chan struct{})
+		cs.loopDone = done
+	}
 	cs.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	if started {
-		go cs.runLoop(stop)
+		go cs.runLoop(stop, done)
 	}
 	return nil
 }
@@ -424,9 +444,17 @@ func (cs *CronService) startNoLoop() error {
 	return err
 }
 
-// Stop cancels the parallel lane context and blocks (bounded) on in-flight runs
-// (W-3 blocking drain). The runLoop is signaled via stopChan; lane goroutines
-// observe the canceled context and are then waited on.
+// Stop signals the runLoop via stopChan and waits for it to exit (#1450), then
+// cancels the parallel lane context and blocks (bounded) on in-flight runs
+// (W-3 blocking drain). Waiting for the loop first guarantees no dispatch from
+// this run window can add to the lane after the drain has begun, and no loop
+// goroutine of this window outlives Stop.
+//
+// The loop wait has no timeout on purpose: runLoop never executes a job itself
+// (RunDueJobs hands every due job to a lane goroutine via dispatch); it only
+// takes cs.mu for short critical sections and writes the store file. Stop
+// releases cs.mu before waiting, so the loop can always finish its current
+// tick and observe the closed stop channel.
 func (cs *CronService) Stop() {
 	cs.mu.Lock()
 	if !cs.running {
@@ -438,9 +466,23 @@ func (cs *CronService) Stop() {
 		close(cs.stopChan)
 		cs.stopChan = nil
 	}
+	loopDone := cs.loopDone
+	cs.loopDone = nil
 	cancel := cs.laneCancel
+	// Detach this window's cancel so a Start that runs while Stop waits for
+	// the loop builds a fresh lane context instead of reusing the one Stop is
+	// about to cancel.
+	cs.laneCancel = nil
+	// Every Add on this window's WaitGroup happened under mu while running was
+	// true, so none can follow this point: waiting on it below is safe.
+	runs := cs.laneRuns
+	cs.laneRuns = nil
 	drainTimeout := cs.stopDrainTimeout
 	cs.mu.Unlock()
+
+	if loopDone != nil {
+		<-loopDone
+	}
 
 	// Cancel in-flight runs, then drain the lane outside the lock so running
 	// goroutines can acquire it to record their outcome.
@@ -452,13 +494,16 @@ func (cs *CronService) Stop() {
 	// stopDrainTimeout so a stuck/uncancellable run cannot hang shutdown forever.
 	// The lane ctx is already canceled above, so proceeding is safe — any
 	// still-running goroutine is tearing down.
+	if runs == nil {
+		return
+	}
 	if drainTimeout <= 0 {
-		cs.laneWG.Wait()
+		runs.Wait()
 		return
 	}
 	done := make(chan struct{})
 	go func() {
-		cs.laneWG.Wait()
+		runs.Wait()
 		close(done)
 	}()
 	timer := time.NewTimer(drainTimeout)
@@ -471,7 +516,8 @@ func (cs *CronService) Stop() {
 	}
 }
 
-func (cs *CronService) runLoop(stopChan chan struct{}) {
+func (cs *CronService) runLoop(stopChan, done chan struct{}) {
+	defer close(done)
 	timer := time.NewTimer(time.Hour)
 	if !timer.Stop() {
 		<-timer.C
@@ -562,12 +608,47 @@ func (cs *CronService) RunDueJobs(now time.Time) {
 		slog.Error("cron failed to save store", "job_ids", dueJobIDs, "error", err)
 	}
 
+	// Snapshot this run window and count its dispatches while still holding
+	// the lock that proved running==true, so a concurrent Stop always drains
+	// them and never waits on a WaitGroup that is still being added to.
+	win := laneWindow{ctx: cs.laneCtx, sem: cs.laneSem, runs: cs.laneRuns}
+	cs.laneAddUnsafe(win.runs, len(dueJobIDs))
+
 	cs.mu.Unlock()
 
 	// Dispatch each due job onto the parallel lane.
 	for _, jobID := range dueJobIDs {
-		cs.dispatch(jobID)
+		cs.dispatch(jobID, win)
 	}
+}
+
+// laneWindow is the run-window state a dispatch is bound to: the lane context
+// Stop cancels, the concurrency semaphore and the window's run WaitGroup.
+type laneWindow struct {
+	ctx  context.Context
+	sem  chan struct{}
+	runs *sync.WaitGroup
+}
+
+// laneAddUnsafe counts n lane runs on the global WaitGroup and on the given
+// window's WaitGroup (when non-nil). The caller must hold mu (read or write)
+// and runs must be the current window's laneRuns snapshot taken under it.
+func (cs *CronService) laneAddUnsafe(runs *sync.WaitGroup, n int) {
+	if n <= 0 {
+		return
+	}
+	cs.laneWG.Add(n)
+	if runs != nil {
+		runs.Add(n)
+	}
+}
+
+// laneDone releases one run counted by laneAddUnsafe.
+func (cs *CronService) laneDone(runs *sync.WaitGroup) {
+	if runs != nil {
+		runs.Done()
+	}
+	cs.laneWG.Done()
 }
 
 // WaitForLane blocks until all in-flight lane runs complete. Tests use this to
@@ -580,19 +661,17 @@ func (cs *CronService) WaitForLane() {
 // semaphore (the worker goroutine blocks on acquisition). The overlap guard
 // (FR-008) is checked inside the goroutine once a slot is held so the queue
 // position is preserved for non-overlapping jobs.
-func (cs *CronService) dispatch(jobID string) {
-	cs.mu.RLock()
-	laneCtx := cs.laneCtx
-	sem := cs.laneSem
-	cs.mu.RUnlock()
+// The caller has already counted this run with laneAddUnsafe(win.runs, ...).
+func (cs *CronService) dispatch(jobID string, win laneWindow) {
+	laneCtx := win.ctx
+	sem := win.sem
 	if laneCtx == nil {
 		laneCtx = context.Background()
 	}
 
 	cs.markDispatchPending(jobID)
-	cs.laneWG.Add(1)
 	go func() {
-		defer cs.laneWG.Done()
+		defer cs.laneDone(win.runs)
 		// Cleared on every exit: run finished, lane cancelled while queued,
 		// or a panic (deferred calls run while panicking, and the recover
 		// below stops the panic here).
@@ -1117,9 +1196,14 @@ func (cs *CronService) RunNow(jobID string) (status string, sessionID string, er
 	case <-laneCtx.Done():
 		return "skipped", "", nil
 	}
-	cs.laneWG.Add(1)
+	// Count the run under mu against the current window (if any), so a
+	// concurrent Stop either drains it or never sees it (#1450).
+	cs.mu.RLock()
+	runs := cs.laneRuns
+	cs.laneAddUnsafe(runs, 1)
+	cs.mu.RUnlock()
 	func() {
-		defer cs.laneWG.Done()
+		defer cs.laneDone(runs)
 		defer func() { <-sem }()
 		cs.executeJobByID(laneCtx, jobID)
 	}()

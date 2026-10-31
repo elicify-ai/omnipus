@@ -894,6 +894,10 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		Role:      entry.Role,
 		Content:   entry.Content,
 	}
+	if !entry.Timestamp.IsZero() {
+		timestamp := entry.Timestamp.UTC().Format(time.RFC3339Nano)
+		sr.msgFrame.Timestamp = &timestamp
+	}
 	// A2.1: a history page's shortened ordinary message carries its true size.
 	if n := entry.DisplayContentOriginalSizeBytes(); n > 0 {
 		sr.msgFrame.ContentOriginalSizeBytes = &n

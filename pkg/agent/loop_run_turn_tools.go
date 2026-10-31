@@ -1315,9 +1315,13 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 		TranscriptSessionID: ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
 		SourceKind:          toolName,
 		Content:             content,
+		finishedToolName:    toolName,
+		finishedToolCallID:  session.ToolCallID(toolCallID),
 	}); notifyErr != nil {
-		logger.ErrorCF("agent", "Failed to publish async tool result; result permanently lost",
-			map[string]any{"tool": toolName, "channel": ex.rx.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
+		// Notify owns the safe per-attempt diagnostic and final saved/live/origin
+		// warning. A second raw-cause log here would duplicate that reporting and
+		// wrongly imply the work or any direct ForUser result was erased.
+		return
 	}
 }
 
@@ -1424,6 +1428,7 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		ex.asyncCallback,
 	)
 	ex.toolDuration = time.Since(toolStart)
+	noteGoalExecutedTool(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.toolResult)
 
 	if ex.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 		ex.releaseAsyncCallback()

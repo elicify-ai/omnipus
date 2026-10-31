@@ -5,7 +5,8 @@ description: Load on failure dispatches only — when a developer (backend-lead 
 
 # Failure triage — Omnipus
 
-Last reviewed: 2026-10-23 — text contradictions and implemented tooling
+Last reviewed: 2026-10-29 — landing branch wording
+Process version: 2026-10-29.1
 
 ## Standing rules for this dispatch
 
@@ -18,7 +19,7 @@ Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 - Read the current tracked quarantine entries before classifying a known failure; only
   CI's mechanical qualified result has the meaning set by root `CLAUDE.md` ("CI
   quarantine"). An issue or an isolated pass alone never turns a red into green.
-- The outcome is a fix on your work branch, or a blocked report to team-lead with options
+- The outcome is a fix pushed to your landing branch (own-tests rule first), or a blocked report to team-lead with options
   and a recommendation. Deferring anything needs a tracked issue with a target date and
   explicit founder approval.
 
@@ -91,10 +92,11 @@ package, or leave it to the cross-platform CI leg — which does not run on ever
 
 ### 7. Know which CI workflows did NOT run
 
-A green run on the integration branch (your dispatch brief names it — it is never
-hard-coded here) is not full coverage. Check it yourself: read the `on:` block of every
+A green run on the release branch (the integration target; your dispatch brief names
+it — it is never hard-coded here) is not full coverage, and a plain push to a
+`landing/*` branch runs no full workflow at all (`docs/internal/ci-rules.md`). Check it yourself: read the `on:` block of every
 workflow in `.github/workflows/` and compare its `push:` branch filters against the
-integration branch name.
+release branch name.
 
 Verified 2026-09-25 as an illustration of the pattern: on a direct push to the then-current
 integration branch, only the PR-check workflow and the code-scanning workflow ran; the
@@ -115,8 +117,8 @@ pressure, machine ownership").
 - Go: at most ONE narrow local test process at a time, only as
   `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/` —
   never multiple Go suites in parallel, never the full local suite (it OOM-kills this
-  shared environment; CI is the authority). Push the work branch and hand targeted
-  evidence back for candidate CI; do not trigger a full workflow on the lane.
+  shared environment; CI is the authority). Push to the landing branch and hand targeted
+  evidence back for the cut's CI; do not open a PR to trigger a full workflow.
   One-at-a-time allows repeats: the red run in step 1 and the green run after the fix
   are two processes, run one after another, never in parallel.
 - SPA: `npx vitest run <one-file>`. Use the shared skill's "Build and test" procedure

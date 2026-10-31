@@ -91,7 +91,11 @@ vi.mock('@/store/sidebar', () => ({
   SIDEBAR_PIN_BREAKPOINT: 1024,
 }))
 
-vi.mock('@/store/session', () => ({
+// The real module is kept for everything else: the chat header slot (rendered
+// by the container) reaches the chat store, which registers its replay
+// callbacks with the session store at import time.
+vi.mock('@/store/session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/store/session')>()),
   useSessionStore: (selector: ((s: { enterWorkspaceChat: (id: string) => void }) => unknown) | undefined) => {
     const state = { enterWorkspaceChat: vi.fn() }
     return selector ? selector(state) : state

@@ -210,6 +210,7 @@
             "id": "id-1",
             "role": "user",
             "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:05Z",
             "type": "replay_message"
           }
         },
@@ -226,6 +227,7 @@
             "model": "controllable-test-model",
             "role": "assistant",
             "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:06Z",
             "turn_id": "turn-1",
             "type": "replay_message"
           }

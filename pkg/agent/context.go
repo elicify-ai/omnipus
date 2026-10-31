@@ -502,7 +502,7 @@ func (cb *ContextBuilder) getWorkspaceAndRules() string {
 
 	todoRule := ""
 	if cb.setTodosEnabled.Load() {
-		todoRule = "3. For every request, including one-line answers, call set_todos with your own checklist, giving every item its required active_form (a present-participle phrase) and marking the current item in_progress, before your first reply or other tool call, then update the list as work advances."
+		todoRule = "3. Use set_todos only when the request needs several steps or tool actions. Create the checklist before you start that work: give every item its required active_form (a present-participle phrase), mark the current item in_progress and the later items pending, and update the list as items finish, marking a finished item completed. A direct answer (a greeting, a question, a one-step reply) needs no checklist: answer it directly. Never call set_todos just to close a list right before your final reply; an item left in_progress at the end of the turn is fine."
 	}
 
 	memoryRule, memoryGuide := "", ""

@@ -683,6 +683,15 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	opts processOptions,
 	result *turnResult,
 ) {
+	if reminderGoal := goalReminderForTurn(opts, result); reminderGoal != "" {
+		opts.goalReminderGoalID = reminderGoal
+		opts.UserInitiated = false
+		opts.SenderID = goalLoopFollowUpSenderID
+	}
+	if opts.SteeredSessionID != "" {
+		al.resumeGoalRemindersForHuman(opts)
+	}
+	defer al.finishGoalReminderOutcome(opts, result)
 	gl := &agentLoopCheckGoalLoopAfterTurn{al: al, ctx: ctx, agentInst: agentInst, opts: opts, result: result}
 
 	if gl.checkEligibility() {
@@ -854,7 +863,9 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// settlement SUPPRESSED while the pause holds (goalIsWaitingOnUser,
 		// checked in maybeSettleGoalIdle). Explicit Non-Behavior: only this
 		// typed marker counts — never a prose classifier.
-		gl.al.goalSetWaitingOnUser(gl.rec.GoalID, true)
+		if !gl.al.goalSetWaitingOnUser(gl.rec.GoalID, true) {
+			gl.al.notifyGoalPaused(gl.sessionID, gl.rec.GoalID, "waiting_on_user", gl.toolEvidence)
+		}
 		// The claim — its status and the worker's one-line question, when it
 		// gave one — is recorded on the goal record through the one claim
 		// writer a task run uses too (GOAL-FR-013/FR-014).
@@ -880,7 +891,9 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// toolFound branch above). Distinct from waiting_on_user in what it
 		// asks of the operator: "I cannot proceed and it is not something
 		// you can answer directly" rather than "I need an answer".
-		gl.al.goalSetBlocked(gl.rec.GoalID, true)
+		if !gl.al.goalSetBlocked(gl.rec.GoalID, true) {
+			gl.al.notifyGoalPaused(gl.sessionID, gl.rec.GoalID, "blocked", gl.toolEvidence)
+		}
 		// The one-line reason the worker gave (goal_claim carries it as
 		// evidence for blocked) is kept so the operator can see why — through
 		// the one claim writer a task run uses too (GOAL-FR-013).
@@ -994,7 +1007,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// the working agent skipped its first-move door entirely. Nudge it
 		// right now rather than waiting for the idle keeper's quiet window
 		// (D6c) to notice.
-		gl.al.maybeNudgeUnregisteredGoal(gl.store, gl.sessionID, gl.rec, gl.agentInst, gl.opts)
+		gl.al.maybeNudgeUnregisteredGoal(gl.sessionID, gl.rec, gl.opts)
 	}
 }
 
@@ -1023,10 +1036,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 //     the D7 engine fallback takes over, so the guarantee holds either way;
 //     only the FIRST registration attempt is sped up by this function, not
 //     every subsequent retry.
-func (al *AgentLoop) maybeNudgeUnregisteredGoal(
-	store *session.UnifiedStore, sessionID string, rec *goal.Goal,
-	agentInst *AgentInstance, opts processOptions,
-) {
+func (al *AgentLoop) maybeNudgeUnregisteredGoal(sessionID string, rec *goal.Goal, opts processOptions) {
 	// ADR-086: "still recordless" is the goal record's own criteria list
 	// being empty (GOAL-FR-003's typed lists), not the retired session-meta
 	// GoalCriteriaJSON string. This is also what keeps the nudge ladder
@@ -1042,15 +1052,9 @@ func (al *AgentLoop) maybeNudgeUnregisteredGoal(
 	if opts.SenderID == goalLoopFollowUpSenderID {
 		return // a goal-loop follow-up that itself failed — let the idle ladder pick it up
 	}
-	meta, merr := store.GetMeta(sessionID)
-	if merr != nil || meta == nil {
-		logger.WarnCF("agent", "goal: could not read session meta for the immediate registration nudge; leaving it to the idle ladder",
-			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": errString(merr)})
-		return
-	}
 	logger.InfoCF("agent", "goal: record not registered on the turn; nudging immediately",
 		map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID})
-	al.settleRecordlessGoal(store, meta, rec, agentInst)
+	al.settleRecordlessGoal(sessionID, rec, time.Now().UTC(), 0)
 }
 
 // goalVerdictReasonText builds a human-readable summary of the judge's unmet
@@ -1324,11 +1328,11 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 		}
 	}
 
-	// ADR-053 Phase-2 §1 (FR-102/G-2/G-3): the ~60 s quiet-window idle
-	// settlement — distinct from the multi-DAY calendar brake above — fires
-	// ONE claimless adjudication per goal-id whose quiet window elapsed.
+	// The live idle quiet window and independent busy check-in threshold are
+	// distinct from the multi-DAY calendar brake above. Both use this same
+	// sweep's current planning configuration and clock.
 	// Same tick driver (DoD-11: one periodic driver for all goal sweeps).
-	al.goalQuietWindowSettle(now)
+	al.goalQuietWindowSettle(now, cfg)
 }
 
 // effectiveGoalActivity returns the best available "last real activity"
