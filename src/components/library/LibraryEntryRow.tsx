@@ -237,6 +237,15 @@ export function LibraryEntryRow({
               hidden
             </span>
           )}
+          {entry.chat_copy === true && (
+            // #1449 FR-087 (D26): this file has a copy used in chats; deleting it removes both.
+            <span
+              className="shrink-0 text-[length:var(--type-caption-size)] px-[var(--space-1)] py-[var(--space-0-5)] rounded bg-[var(--color-surface-3)] text-[var(--color-muted)]"
+              data-testid={`library-chat-copy-badge-${entry.path}`}
+            >
+              used in chats
+            </span>
+          )}
           {mount && (
             <span
               data-testid={`library-mount-badge-${entry.path}`}

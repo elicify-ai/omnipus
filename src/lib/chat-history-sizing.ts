@@ -23,7 +23,9 @@ export class HistoryRowMeasurements {
   }
   retainPositions(positions: ReadonlySet<string>): void {
     for (const [key, height] of this.samples) {
-      if (!positions.has(key.split(':', 1)[0])) { this.samples.delete(key); this.total -= height }
+      let kept = positions.has(key)
+      for (let i = key.indexOf(':'); !kept && i !== -1; i = key.indexOf(':', i + 1)) kept = positions.has(key.slice(0, i))
+      if (!kept) { this.samples.delete(key); this.total -= height }
     }
   }
   reset(): void { this.samples.clear(); this.total = 0 }

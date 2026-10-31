@@ -4,7 +4,6 @@ import { ThreadPrimitive } from '@assistant-ui/react'
 import type { ChatMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import { useChatStore } from '@/store/chat'
-import { useSessionStore } from '@/store/session'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
 import { ROOMS_ENABLED } from '@/lib/featureSwitches'
@@ -21,7 +20,8 @@ import { drawnHistoryRows, historyLayoutHeight, useHistoryViewport } from './use
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { cn } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ThreadRevealContext, useOpenReveal } from './useOpenReveal'
+import { ThreadRevealContext, useOpenReveal, useRevealCover } from './useOpenReveal'
+import { useConversationSource, type ConversationSource } from './conversationSource'
 
 function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
   // The assistant row owns both inline and trailing events using its live-call
@@ -94,12 +94,28 @@ function toolCallOwnerIds(owners: Record<string, string> | undefined): Set<strin
  * measure) and this cover shows instead; without a cover it still announces a
  * chat that has no loaded page and nothing to show yet.
  */
-function useOpenCover(openFailed: boolean) {
-  const sid = useSessionStore((s) => s.activeSessionId)
-  const hidden = useOpenReveal(sid, openFailed)
+function useOpenCover(openFailed: boolean, source: ConversationSource, room: RoomListOpening | undefined) {
+  // #1449 FE-1: a normal chat reveals by its session's state (unchanged); a
+  // group reveals once this opening's first live view arrived (room source).
+  const sid = source.kind === 'session' ? source.sessionId : null
+  const sessionHidden = useOpenReveal(sid, openFailed)
+  const roomHidden = useRevealCover(room ? (openFailed ? 'failed' : room.openState) : 'ready', room !== undefined)
   const unloaded = useChatStore((s) => !!sid && !s.history.historyLoaded && s.messages.length === 0
     && s.history.serverState?.status !== 'unavailable' && !s.history.requests.latest.error)
-  return { covered: hidden, status: hidden || (unloaded && !openFailed) }
+  const hidden = room ? roomHidden : sessionHidden
+  return { covered: hidden, status: hidden || ((room ? room.unloaded : unloaded) && !openFailed) }
+}
+
+/**
+ * #1449: what a group page adds to the shared list — its opening state for
+ * the cover, and the tail block (the "… is working" lines, ADR A3.3) that
+ * sits where a normal chat's streaming reply sits.
+ */
+export interface RoomListOpening { // not-wire-format: React props for the shared list on a group page
+  openState: 'pending' | 'ready' | 'failed'
+  /** No entry and no live view yet. */
+  unloaded: boolean
+  tail?: React.ReactNode
 }
 
 function OpenCover() {
@@ -114,15 +130,17 @@ function OpenCover() {
 }
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
-function PlainMessageList({ messages, liteMode, agentName, openFailed }: { messages: ChatMessage[]; liteMode: boolean; agentName: string; openFailed: boolean }) {
-  const { covered, status: openStatus } = useOpenCover(openFailed)
+function PlainMessageList({ messages, liteMode, agentName, openFailed, room }: { messages: ChatMessage[]; liteMode: boolean; agentName: string; openFailed: boolean; room?: RoomListOpening }) {
+  const source = useConversationSource()
+  const { covered, status: openStatus } = useOpenCover(openFailed, source, room)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const viewport = useHistoryViewport(scrollContainerRef, messages)
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default,
   // verbose-only inline) — same store read as every other verbose-gated row.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
-  const sessionId = useSessionStore((s) => s.activeSessionId)
+  // A group has no session: no delegation events and no tool-call owners (FR-005).
+  const sessionId = source.sessionId
   const delegationEvents = useChatDelegationEvents(sessionId)
   const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
   const ownerIds = useMemo(() => toolCallOwnerIds(toolCallOwners), [toolCallOwners])
@@ -185,6 +203,7 @@ function PlainMessageList({ messages, liteMode, agentName, openFailed }: { messa
           )
         })}
         </div>
+        {room?.tail}
         <HistoryBoundary action="newer" average={viewport.average} />
         {!viewport.historical && <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />}
         <FloatingReturnToLatest />
@@ -207,12 +226,15 @@ export function VirtualizedMessageList({
   liteMode,
   agentName,
   openFailed = false,
+  room,
 }: {
   messages: ChatMessage[]
   liteMode: boolean
   agentName: string
   /** The opening read failed outside the store (REST fallback): reveal, never cover forever. */
   openFailed?: boolean
+  /** #1449: set on a group page (with its ConversationSource provided). */
+  room?: RoomListOpening
 }) {
   // Feature-detect ResizeObserver at render time (not module load) so test
   // environments that stub it in beforeEach are detected correctly.
@@ -223,9 +245,9 @@ export function VirtualizedMessageList({
       _resizeObserverWarnEmitted = true
       console.warn('[chat] ResizeObserver unavailable — rendering full message list without virtualization')
     }
-    return <PlainMessageList messages={messages} liteMode={liteMode} agentName={agentName} openFailed={openFailed} />
+    return <PlainMessageList messages={messages} liteMode={liteMode} agentName={agentName} openFailed={openFailed} room={room} />
   }
-  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} agentName={agentName} openFailed={openFailed} />
+  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} agentName={agentName} openFailed={openFailed} room={room} />
 }
 
 function VirtualizedMessageListInner({
@@ -233,21 +255,25 @@ function VirtualizedMessageListInner({
   liteMode,
   agentName,
   openFailed,
+  room,
 }: {
   messages: ChatMessage[]
   liteMode: boolean
   agentName: string
   openFailed: boolean
+  room?: RoomListOpening
 }) {
-  const { covered, status: openStatus } = useOpenCover(openFailed)
-  const isStreaming = useChatStore((s) => s.isStreaming)
+  const source = useConversationSource()
+  const { covered, status: openStatus } = useOpenCover(openFailed, source, room)
+  // A group never streams: the last visited chat's stream must not split a group row out (FR-005).
+  const isStreaming = useChatStore((s) => s.isStreaming) && source.capabilities.liveToolCalls
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const viewport = useHistoryViewport(scrollContainerRef, messages, virtualAnchorOffset)
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
-  const sessionId = useSessionStore((s) => s.activeSessionId)
+  const sessionId = source.sessionId
   const delegationEvents = useChatDelegationEvents(sessionId)
   const textAtToolCallStart = useChatStore((s) => s.textAtToolCallStart)
   const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
@@ -443,6 +469,7 @@ function VirtualizedMessageListInner({
             </div>
           </StreamingDelegation>
         )}
+        {room?.tail}
         <HistoryBoundary action="newer" average={viewport.average} />
         {!viewport.historical && <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />}
         <FloatingReturnToLatest />

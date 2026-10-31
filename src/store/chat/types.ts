@@ -201,6 +201,12 @@ export type ChatMessage = Message & {
   deliveryStatus?: UserDeliveryState
   media?: MediaAttachment[]
   /**
+   * #1449 (ADR-20261028 A3.1): SPA-only marks of a group-chat entry shown in
+   * the shared rows. `afterPause`: the answer was posted after /pause and
+   * keeps its muted "after pause" mark (FR-170/FR-217). Never serialized.
+   */
+  roomMarks?: { afterPause: boolean }
+  /**
    * Review finding 17 — the `media://` refs (opts.mediaRefs) this user
    * message was originally SENT with. `media` above is display-only
    * (filename/contentType/a resolved preview `url` — see sendMessage's own

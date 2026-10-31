@@ -190,6 +190,14 @@ export interface RoomDeliveryState {
   reason?: string;
 }
 
+export interface MediaPart {
+  type: "image" | "audio" | "video" | "file";
+  url: string;
+  filename: string;
+  content_type: string;
+  caption?: string;
+}
+
 export interface RoomEntry {
   id: string;
   room_id: string;
@@ -197,6 +205,7 @@ export interface RoomEntry {
   client_message_id?: string;
   author: RoomEntryAuthor;
   text: string;
+  attachments?: Array<MediaPart>;
   addressees: Array<string>;
   after_pause: boolean;
   deliveries: Array<RoomDeliveryState>;
@@ -251,6 +260,7 @@ export interface RoomMetaFrame {
   read_only_reason?: string;
   allocated_cost_micro_usd: number;
   allocated_cost_unpriced: boolean;
+  invitation_context_status?: "generating" | "ready" | "unavailable";
 }
 
 export interface ChatParticipant {
@@ -742,14 +752,6 @@ export interface LibraryChangedFrame {
   reason?: string;
 }
 
-export interface MediaPart {
-  type: "image" | "audio" | "video" | "file";
-  url: string;
-  filename: string;
-  content_type: string;
-  caption?: string;
-}
-
 export interface MediaFrame {
   history_origin?: HistoryEntryOrigin;
   type: "media";
@@ -802,6 +804,8 @@ export interface AskUserQuestionCard {
   card_id: string;
   session_id: string;
   agent_id: string;
+  room_ref?: RoomRef;
+  origin_label?: string;
   status: "pending" | "answered" | "cancelled";
   created_at: string;
   default_safe_at?: string;

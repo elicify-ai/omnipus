@@ -142,6 +142,15 @@ export function codeText(node: ReactNode): string {
   return ''
 }
 
+// clipboardCode is the text a code block's Copy control puts on the clipboard.
+// Markdown delivers a fenced block with the fence's own line break at the end
+// ("echo hi\n"); that break belongs to the fence, not to the code, so it is
+// dropped (#1449 S-02: the clipboard holds exactly `echo hi`). Only that one
+// break goes: blank lines the author wrote inside the fence are kept.
+export function clipboardCode(code: string): string {
+  return code.endsWith('\n') ? code.slice(0, -1) : code
+}
+
 export interface FenceInfo {
   isBlock: boolean
   language: string | undefined

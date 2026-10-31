@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { PANEL_POLICIES, WORKSPACE_SCOPED_PANELS } from './types'
 import { panelWidthScope } from './panelWidthMemory'
 import { resolveWorkspaceSwitch } from './workspaceSwitch'
+import { WORKSPACE_TABS } from '@/components/workspaces/WorkspaceTabBar'
 
 describe('central panel policies', () => {
   it('derive workspace-scoped ids and width scope from one policy record', () => {
-    expect(WORKSPACE_SCOPED_PANELS).toEqual(['library', 'mail', 'tasks', 'team', 'calendar'])
+    // #1449 FR-034: participants is a workspace panel (a group's workspace),
+    // and it is not a strip entry.
+    expect([...WORKSPACE_SCOPED_PANELS]).toEqual(['library', 'mail', 'tasks', 'team', 'calendar', 'participants'])
+    expect(WORKSPACE_TABS.map((tab) => tab.label)).not.toContain('Participants')
+    expect(WORKSPACE_TABS.map((tab) => tab.segment)).not.toContain('participants')
     expect(PANEL_POLICIES.browser.scope).toBe('session')
     expect(panelWidthScope('browser', { sessionId: 's1', agentId: 'a1' })).toBe('app')
     expect(panelWidthScope('library', { workspaceId: 'ws-1' })).toBe('ws-1')
