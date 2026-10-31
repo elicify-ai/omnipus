@@ -69,7 +69,7 @@ func TestSmokeAndPreview_RejectFreePath(t *testing.T) {
 }
 
 func TestCommandPreview_WithoutFreePathUsesSavedSettingsPath(t *testing.T) {
-	api, mux, _, _ := t11bSettingsAPI(t)
+	api, mux, _ := t11bSettingsAPI(t)
 	path := t11bWriteExe(t, "codex-saved-preview")
 	body := t11bSettingsBody(t, gen.CliPreset{}, gen.CliPreset{Path: path}, gen.CliPreset{})
 	w := t11bPut(t, mux, body)
@@ -81,7 +81,7 @@ func TestCommandPreview_WithoutFreePathUsesSavedSettingsPath(t *testing.T) {
 }
 
 func TestSmokeTest_WithoutFreePathUsesSavedSettingsPath(t *testing.T) {
-	api, mux, _, _ := t11bSettingsAPI(t)
+	api, mux, _ := t11bSettingsAPI(t)
 	path := t11bWriteExe(t, "codex-saved-smoke")
 	body := t11bSettingsBody(t, gen.CliPreset{}, gen.CliPreset{Path: path}, gen.CliPreset{})
 	w := t11bPut(t, mux, body)

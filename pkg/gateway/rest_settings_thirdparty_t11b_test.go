@@ -30,7 +30,7 @@ var (
 
 const t11bSettingsURL = "/api/v1/settings/third-party-agents"
 
-func t11bSettingsAPI(t *testing.T) (*restAPI, *http.ServeMux, *config.Config, string) {
+func t11bSettingsAPI(t *testing.T) (*restAPI, *http.ServeMux, string) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	home := t.TempDir()
@@ -54,7 +54,7 @@ func t11bSettingsAPI(t *testing.T) (*restAPI, *http.ServeMux, *config.Config, st
 	require.NoError(t, os.WriteFile(filepath.Join(home, "config.json"), raw, 0o600))
 	mux := http.NewServeMux()
 	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
-	return api, mux, cfg, home
+	return api, mux, home
 }
 
 func t11bRequest(t *testing.T, mux *http.ServeMux, token, method, url, body string) *httptest.ResponseRecorder {
@@ -135,7 +135,8 @@ func t11bDecodeError(t *testing.T, w *httptest.ResponseRecorder) gen.ErrorRespon
 }
 
 func TestSettingsThirdPartyAgents_PersonRouteRegisteredAndCLITokenRefused(t *testing.T) {
-	_, mux, cfg, home := t11bSettingsAPI(t)
+	api, mux, home := t11bSettingsAPI(t)
+	cfg := api.agentLoop.GetConfig()
 	w := t11bRequest(t, mux, t11bPersonToken, http.MethodGet, t11bSettingsURL, "")
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 	before, err := os.ReadFile(filepath.Join(home, "config.json"))
@@ -164,7 +165,7 @@ func TestSettingsThirdPartyAgents_PersonRouteRegisteredAndCLITokenRefused(t *tes
 }
 
 func TestSettingsThirdPartyAgents_GetViewAlwaysCarriesThreeRows(t *testing.T) {
-	_, mux, _, home := t11bSettingsAPI(t)
+	_, mux, home := t11bSettingsAPI(t)
 	before, err := os.ReadFile(filepath.Join(home, "config.json"))
 	require.NoError(t, err)
 	w := t11bRequest(t, mux, t11bPersonToken, http.MethodGet, t11bSettingsURL, "")
@@ -196,7 +197,7 @@ func TestSettingsThirdPartyAgents_GetViewAlwaysCarriesThreeRows(t *testing.T) {
 }
 
 func TestSettingsThirdPartyAgents_DetectionNeverExecutesFoundProgram(t *testing.T) {
-	_, mux, _, _ := t11bSettingsAPI(t)
+	_, mux, _ := t11bSettingsAPI(t)
 	binDir := t.TempDir()
 	marker := filepath.Join(binDir, "started")
 	name := "codex"
@@ -231,7 +232,7 @@ func TestSettingsThirdPartyAgents_DetectionNeverExecutesFoundProgram(t *testing.
 }
 
 func TestSettingsThirdPartyAgents_PutStoresTypedValuesAndReturnsView(t *testing.T) {
-	_, mux, _, home := t11bSettingsAPI(t)
+	_, mux, home := t11bSettingsAPI(t)
 	claudePath := t11bWriteExe(t, "claude-valid")
 	codexPath := t11bWriteExe(t, "codex-valid")
 	// Preserve harmless lexical spelling: storage is as typed, not a cleaned
@@ -266,7 +267,7 @@ func TestSettingsThirdPartyAgents_PutStoresTypedValuesAndReturnsView(t *testing.
 }
 
 func TestSettingsThirdPartyAgents_PutRefusedPathNamesFieldAndSavesNothing(t *testing.T) {
-	_, mux, _, home := t11bSettingsAPI(t)
+	_, mux, home := t11bSettingsAPI(t)
 	claude := t11bWriteExe(t, "claude-valid")
 	codex := t11bWriteExe(t, "codex-valid")
 	base := t11bSettingsBody(t, gen.CliPreset{Path: claude, PresetArgs: "--max-turns 40"}, gen.CliPreset{Path: codex}, gen.CliPreset{})
@@ -300,7 +301,7 @@ func TestSettingsThirdPartyAgents_PutRefusedPathNamesFieldAndSavesNothing(t *tes
 }
 
 func TestSettingsThirdPartyAgents_OmittedRowsAreClearedByWholeSectionSave(t *testing.T) {
-	_, mux, _, _ := t11bSettingsAPI(t)
+	_, mux, _ := t11bSettingsAPI(t)
 	initial := t11bSettingsBody(t,
 		gen.CliPreset{Path: t11bWriteExe(t, "claude-original"), PresetArgs: "--max-turns 40"},
 		gen.CliPreset{Path: t11bWriteExe(t, "codex-original"), PresetArgs: "--model gpt-5-codex"},
@@ -336,7 +337,7 @@ func TestSettingsThirdPartyAgents_ReturnsFirstInvalidRowAndFieldWithoutWriting(t
 		{"opencode_after_valid_rows", "opencode", "preset_args", "cli_preset_invalid", "contains_line_break", false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, mux, _, home := t11bSettingsAPI(t)
+			_, mux, home := t11bSettingsAPI(t)
 			planted := t11bWorkspaceExe(t, home)
 			claude, codex := gen.CliPreset{}, gen.CliPreset{}
 			if tc.claudeBadPath {
@@ -383,7 +384,7 @@ func TestSettingsThirdPartyAgents_PresetArgsValidationBoundaries(t *testing.T) {
 		{"CR", "--model x\r--debug", "contains_line_break"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, mux, _, home := t11bSettingsAPI(t)
+			_, mux, home := t11bSettingsAPI(t)
 			before, err := os.ReadFile(filepath.Join(home, "config.json"))
 			require.NoError(t, err)
 			body := t11bSettingsBody(t, gen.CliPreset{}, gen.CliPreset{PresetArgs: tc.preset}, gen.CliPreset{})

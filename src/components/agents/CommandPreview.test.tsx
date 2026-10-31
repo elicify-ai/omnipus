@@ -259,7 +259,7 @@ describe('CommandPreview — smoke test button', () => {
     })
 
     expect(fetchExecutorSmokeTest).toHaveBeenCalledWith(
-      { cli: 'claude-code', model: undefined, cli_path: undefined, cli_args: undefined },
+      { cli: 'claude-code', model: undefined, cli_args: undefined },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
     const button = screen.getByTestId('cp-smoke-test-button')
@@ -326,11 +326,11 @@ describe('CommandPreview — smoke test button', () => {
     expect(fetchExecutorSmokeTest).toHaveBeenCalledTimes(2)
   })
 
-  it('sends only cli/model/cli_path/cli_args — no max_tool_iterations field on the wire', async () => {
+  it('C-B1: sends only cli/model/cli_args — no cli_path or max_tool_iterations field on the wire', async () => {
     vi.mocked(fetchExecutorSmokeTest).mockResolvedValue(okSmokeTestResult())
     render(
       <CommandPreview
-        req={{ cli: 'codex', model: 'gpt-5', cli_path: '/usr/local/bin/codex', cli_args: '--foo', max_tool_iterations: 30 }}
+        req={{ cli: 'codex', model: 'gpt-5', cli_args: '--foo', max_tool_iterations: 30 }}
         testId="cp"
       />,
     )
@@ -341,7 +341,8 @@ describe('CommandPreview — smoke test button', () => {
     })
 
     const call = vi.mocked(fetchExecutorSmokeTest).mock.calls[0][0]
-    expect(call).toEqual({ cli: 'codex', model: 'gpt-5', cli_path: '/usr/local/bin/codex', cli_args: '--foo' })
+    expect(call).toEqual({ cli: 'codex', model: 'gpt-5', cli_args: '--foo' })
+    expect(call).not.toHaveProperty('cli_path')
     expect(call).not.toHaveProperty('max_tool_iterations')
   })
 
@@ -448,7 +449,7 @@ describe('CommandPreview — agentId prop threading into the smoke-test request'
     })
 
     expect(fetchExecutorSmokeTest).toHaveBeenCalledWith(
-      { cli: 'claude-code', model: undefined, cli_path: undefined, cli_args: undefined, agent_id: 'agent-123' },
+      { cli: 'claude-code', model: undefined, cli_args: undefined, agent_id: 'agent-123' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
   })

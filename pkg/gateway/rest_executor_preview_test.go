@@ -81,22 +81,21 @@ func TestPostAgentsExecutorPreview_Claude_HappyPath(t *testing.T) {
 }
 
 // TestPostAgentsExecutorPreview_Codex_HappyPath mirrors the claude-code
-// happy-path test for codex, including the cli_path override reflected in
-// "binary" and the flag-ordering guarantee (--ask-for-approval before exec).
+// happy-path test for codex with no free path (T11 C-B1), retaining the
+// default binary and flag-ordering guarantee (--ask-for-approval before exec).
 func TestPostAgentsExecutorPreview_Codex_HappyPath(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
-	code, resp := postExecutorPreview(t, api, map[string]any{
-		"cli":      "codex",
-		"model":    "gpt-5-codex",
-		"cli_path": "/usr/local/bin/codex",
+	model := "gpt-5-codex"
+	code, resp := postExecutorPreview(t, api, gen.ExecutorCommandPreviewRequest{
+		Cli: gen.ExternalCliToolCodex, Model: &model,
 	})
 	require.Equal(t, http.StatusOK, code)
 
 	wantArgv := runner.BuildCodexArgs(runner.RunOptions{
-		Model: "gpt-5-codex", CLIPath: "/usr/local/bin/codex", Input: "<prompt>",
+		Model: "gpt-5-codex", Input: "<prompt>",
 	})
 	assert.Equal(t, wantArgv, resp.Argv)
-	assert.Equal(t, "/usr/local/bin/codex", resp.Binary)
+	assert.Equal(t, "codex", resp.Binary)
 	assert.Equal(t, gen.ExecutorCommandPreviewResponsePromptDeliveryStdin, resp.PromptDelivery)
 	assert.Empty(t, resp.DroppedArgs)
 	assert.Nil(t, resp.ModelDroppedReason)

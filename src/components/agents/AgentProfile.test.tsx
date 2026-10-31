@@ -48,6 +48,11 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
     ...actual,
     useNavigate: () => mockNavigate,
     useParams: () => ({}),
+    Link: ({ children, to, ...rest }: { children?: React.ReactNode; to?: string } & Record<string, unknown>) => (
+      <a href={typeof to === 'string' ? to : '#'} {...(rest as Record<string, unknown>)}>
+        {children}
+      </a>
+    ),
   }
 })
 
@@ -732,12 +737,9 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     expect(screen.queryByTestId('runner-test-button')).toBeNull()
   })
 
-  // Wave 6 / I12 — runner-test guard. When the user saves a worker with an
-  // external-cli executor, the save flow runs testAgentRunner BEFORE
-  // updateAgent. A failure aborts the save (no silent commit). A success
-  // caches the signature so subsequent saves for the same kind+cli do not
-  // re-fire the test (avoids hammering the runner on every keystroke).
-  it('I12: calls testAgentRunner before updateAgent when transitioning to external-cli', async () => {
+  // T11 FR-8 supersedes I12's pre-save runner gate. Keep both transition
+  // scenarios, but assert a real save and zero automatic runner checks.
+  it('FR-8: saves an external-cli transition without a pre-save runner test', async () => {
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, executor: undefined })
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
@@ -746,14 +748,14 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     }
     await screen.findByTestId('executor-kind-select')
     pickExecutorKind(/External CLI/i)
-    await waitFor(() => {
-      expect(testAgentRunner).toHaveBeenCalledWith('web-researcher')
-    }, { timeout: 6000 })
-    // And the save still commits (test returned ok).
-    await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 6000 })
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith(
+      'web-researcher',
+      expect.objectContaining({ executor: { kind: 'external-cli', cli: 'claude-code' } }),
+    ), { timeout: 6000 })
+    expect(testAgentRunner).not.toHaveBeenCalled()
   })
 
-  it('I12: blocks updateAgent when the runner test fails (missing-binary)', async () => {
+  it('FR-8: a missing-binary runner result cannot block an external-cli save', async () => {
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, executor: undefined })
     vi.mocked(testAgentRunner).mockResolvedValue({
       ok: false,
@@ -768,16 +770,11 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     }
     await screen.findByTestId('executor-kind-select')
     pickExecutorKind(/External CLI/i)
-    await waitFor(() => expect(testAgentRunner).toHaveBeenCalled(), { timeout: 6000 })
-    // Item 9a hardening: this is a real-timer NEGATIVE window — it only
-    // proves anything if it spans the full 1500ms debounce (raised from the
-    // 500ms default; see AgentProfile.tsx's main useAutoSave call). At
-    // 800ms the debounce timer hasn't even fired yet, so "not called" was
-    // trivially true regardless of whether the runner-test block actually
-    // works. Give the auto-save a chance to attempt (and be blocked from
-    // completing) the save.
-    await new Promise((r) => setTimeout(r, 1800))
-    expect(updateAgent).not.toHaveBeenCalled()
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith(
+      'web-researcher',
+      expect.objectContaining({ executor: { kind: 'external-cli', cli: 'claude-code' } }),
+    ), { timeout: 6000 })
+    expect(testAgentRunner).not.toHaveBeenCalled()
   })
 
   it('I12: skips testAgentRunner when executor is native (no need to test native runners)', async () => {
