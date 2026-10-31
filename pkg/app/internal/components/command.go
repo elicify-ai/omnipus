@@ -19,7 +19,6 @@ package components
 
 import (
 	"fmt"
-	"os"
 	"os/user"
 
 	"github.com/spf13/cobra"
@@ -108,14 +107,17 @@ func operatorName() string {
 	return "unknown"
 }
 
-// configuredWriteRoots gathers the agent write roots from configuration for
-// the writer-exclusion check. A config that cannot be read still yields the
-// home-derived roots, never an empty list.
+// configuredWriteRoots gathers the agent write authorities from the home
+// folder and configuration for the writer-exclusion check. A configuration
+// that cannot be read refuses registration (AD-4 fails closed). Approved
+// grants live in the running gateway's memory: the gateway re-checks every
+// component against them (and against configuration reloads) before every
+// use, so a component registered here is still disabled there if a grant
+// covers it.
 func configuredWriteRoots(home string) []component.WriteRoot {
 	cfg, err := config.LoadConfig(internal.GetConfigPath())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "warning: config unreadable; checking only the Omnipus home folders:", err)
-		cfg = nil
+		return []component.WriteRoot{{All: true, Grant: "agent write settings (the configuration could not be read: " + err.Error() + ")"}}
 	}
-	return preview.ConfiguredWriteRoots(home, cfg)
+	return preview.ConfiguredWriteRoots(home, cfg, nil)
 }
