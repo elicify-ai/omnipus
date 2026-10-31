@@ -249,11 +249,22 @@ type pendingEffect struct {
 // view: chat records with the tool-call effects applied and the cancel
 // truncation derived. It is the single reader behind ReadTranscript.
 func (us *UnifiedStore) readTranscriptMerged(sessionID string) ([]TranscriptEntry, error) {
+	entries, _, err := us.readTranscriptIndexed(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return deriveCancelTruncation(entries), nil
+}
+
+// readTranscriptIndexed is readTranscriptMerged before the cancel truncation:
+// the chat records with the tool-call effects applied, and each record's
+// archive address mapped to its index in entries.
+func (us *UnifiedStore) readTranscriptIndexed(sessionID string) ([]TranscriptEntry, map[ArchiveAddress]int, error) {
 	parts, err := us.transcriptPartitions(sessionID)
 	if err != nil {
 		// Reading only the current day would present a partial transcript as the
 		// whole one and silently hide retained history, so the failure surfaces.
-		return nil, fmt.Errorf("unified_store: read transcript: list partitions: %w", err)
+		return nil, nil, fmt.Errorf("unified_store: read transcript: list partitions: %w", err)
 	}
 	entries := []TranscriptEntry{}
 	index := map[ArchiveAddress]int{}
@@ -264,7 +275,7 @@ func (us *UnifiedStore) readTranscriptMerged(sessionID string) ([]TranscriptEntr
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return nil, fmt.Errorf("unified_store: read transcript: %w", err)
+			return nil, nil, fmt.Errorf("unified_store: read transcript: %w", err)
 		}
 		for pos := 0; pos < len(data); {
 			end := bytes.IndexByte(data[pos:], '\n')
@@ -282,24 +293,24 @@ func (us *UnifiedStore) readTranscriptMerged(sessionID string) ([]TranscriptEntr
 			var rec ArchiveRecord
 			if err := json.Unmarshal(line, &rec); err != nil {
 				if isContextWindowNoticeLine(line) {
-					return nil, fmt.Errorf("unified_store: read transcript: invalid context_window_notice: %w", err)
+					return nil, nil, fmt.Errorf("unified_store: read transcript: invalid context_window_notice: %w", err)
 				}
 				slog.Warn("unified_store: skipping malformed transcript line", "session_id", sessionID, "error", err)
 				continue
 			}
 			if err := validateContextWindowNotice(sessionID, rec.TranscriptEntry); err != nil {
-				return nil, fmt.Errorf("unified_store: read transcript: %w", err)
+				return nil, nil, fmt.Errorf("unified_store: read transcript: %w", err)
 			}
 			addr := ArchiveAddress{PartitionKey: part.key, ByteOffset: int64(start), EntryID: rec.ID}
 			if rec.Type == EntryTypeToolCallEffect {
 				if rec.ToolCallEffect == nil {
-					return nil, fmt.Errorf("unified_store: read transcript: effect record %s has no effect", rec.ID)
+					return nil, nil, fmt.Errorf("unified_store: read transcript: effect record %s has no effect", rec.ID)
 				}
 				effects = append(effects, pendingEffect{addr: addr, effect: rec.ToolCallEffect})
 				continue
 			}
 			if rec.ViewMembership == "" {
-				return nil, fmt.Errorf("unified_store: read transcript: record %s at %s@%d has no view_membership (an unconverted line; the archive carries no reader default)",
+				return nil, nil, fmt.Errorf("unified_store: read transcript: record %s at %s@%d has no view_membership (an unconverted line; the archive carries no reader default)",
 					rec.ID, part.key, start)
 			}
 			if rec.ViewMembership == ViewMembershipModel || rec.Type == EntryTypeModelRef {
@@ -310,9 +321,36 @@ func (us *UnifiedStore) readTranscriptMerged(sessionID string) ([]TranscriptEntr
 		}
 	}
 	if err := applyToolCallEffects(entries, index, effects, parts); err != nil {
-		return nil, fmt.Errorf("unified_store: read transcript: %w", err)
+		return nil, nil, fmt.Errorf("unified_store: read transcript: %w", err)
 	}
-	return deriveCancelTruncation(entries), nil
+	return entries, index, nil
+}
+
+// LocateChatToolCall returns the address of the chat record carrying tool
+// call id and that call as currently merged (every settle and projection
+// applied), for a later SettleToolCall against it. found is false when no
+// chat record carries the id; the physically last carrier wins.
+func (us *UnifiedStore) LocateChatToolCall(sessionID string, id ToolCallID) (addr ArchiveAddress, call ToolCall, found bool, err error) {
+	if err := validateSessionID(sessionID); err != nil {
+		return ArchiveAddress{}, ToolCall{}, false, err
+	}
+	entries, index, err := us.readTranscriptIndexed(sessionID)
+	if err != nil {
+		return ArchiveAddress{}, ToolCall{}, false, err
+	}
+	best := -1
+	for a, i := range index {
+		if i <= best {
+			continue
+		}
+		for _, tc := range entries[i].ToolCalls {
+			if tc.ID == id {
+				best, addr, call, found = i, a, tc, true
+				break
+			}
+		}
+	}
+	return addr, call, found, nil
 }
 
 // applyToolCallEffects merges the effects into entries (last writer wins per

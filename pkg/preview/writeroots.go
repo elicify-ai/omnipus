@@ -74,7 +74,13 @@ func mountRoots(home string) []component.WriteRoot {
 	var roots []component.WriteRoot
 	for _, e := range entries {
 		id, ok := strings.CutSuffix(e.Name(), ".json")
-		if !ok || e.IsDir() {
+		if !ok {
+			continue
+		}
+		if e.IsDir() {
+			// A record path that is not a file cannot be read as a record:
+			// unknown authority, so it fails closed like an unreadable one.
+			roots = append(roots, component.WriteRoot{All: true, Grant: "mounts of workspace " + id + " (the mount record is not a file)"})
 			continue
 		}
 		// A record that cannot be read now (or whose entries were partly

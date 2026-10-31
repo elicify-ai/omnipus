@@ -294,6 +294,14 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 			if err := os.Remove(out); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return nil, hooks.unconfined, programFailure("conversion failed: scratch unavailable")
 			}
+			// "The profile's macro, link and recalculation settings (AD-7)
+			// must still be in force on the second start" (D3.4): the first
+			// start may rewrite registrymodifications.xcu, so the seeded
+			// settings are written again before the retry; a failure ends
+			// here rather than starting with an unknown profile.
+			if err := reseedOfficeProfile(dirs["profile/user"]); err != nil {
+				return nil, hooks.unconfined, programFailure("conversion failed: " + err.Error())
+			}
 			if err := o.call.idle(); err != nil {
 				return nil, hooks.unconfined, programFailure("conversion failed: " + err.Error())
 			}
@@ -309,6 +317,36 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 		}
 		return nil, hooks.unconfined, programFailure(msg)
 	}
+}
+
+// reseedOfficeProfile writes the AD-7 settings into dir again before the
+// exit-81 second start. It runs after the first start's process group was
+// killed (launcher.Process.Wait), so nothing can change the folder while it
+// runs; the first start could still have replaced the folder or the file with
+// a link, so a folder that is not a plain directory is refused and the old
+// file (or link) is removed and the settings are created fresh, never written
+// through whatever the first start left there.
+func reseedOfficeProfile(dir string) error {
+	fi, err := os.Lstat(dir)
+	if err != nil || !fi.IsDir() {
+		return errors.New("the LibreOffice profile folder was replaced during the first start")
+	}
+	name := filepath.Join(dir, "registrymodifications.xcu")
+	if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.New("the LibreOffice profile settings could not be restored")
+	}
+	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return errors.New("the LibreOffice profile settings could not be restored")
+	}
+	if _, err := f.WriteString(profileSettings); err != nil {
+		_ = f.Close()
+		return errors.New("the LibreOffice profile settings could not be restored")
+	}
+	if err := f.Close(); err != nil {
+		return errors.New("the LibreOffice profile settings could not be restored")
+	}
+	return nil
 }
 
 // officeRestartExit is LibreOffice's EXITHELPER_NORMAL_RESTART
