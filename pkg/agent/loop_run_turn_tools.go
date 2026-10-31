@@ -1942,7 +1942,7 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	// originally saw. We store enough metadata (ref + filename +
 	// content_type + type) for replay to reconstruct the wire frame
 	// without re-resolving against the MediaStore at replay time.
-	if doc := ex.toolResult.DocumentPreview; doc != nil && !ex.toolResult.IsError {
+	if doc := ex.toolResult.DocumentPreview; doc != nil && !doc.ModelOnly && !ex.toolResult.IsError {
 		// office-preview spec §5.2: the display-only thumbnail group.
 		ex.tcRecord.Result = previewToolRecord(doc, ex.contentForLLM)
 	} else if len(ex.toolResult.Media) > 0 {

@@ -696,6 +696,11 @@ func (t *ReadFileTool) readOpenFile(
 	if result, handled := inspectionImageResult(ctx, file, sourceIdentity, sniff[:sniffN], paginationSupplied, t.maxInspectionImageBytes, reauthorize); handled {
 		return result
 	}
+	if !paginationSupplied && isPDFSource(sniff[:sniffN]) {
+		if result := t.pdfDocumentResult(ctx, policy, handle, path, sourceIdentity, length, reauthorize); result != nil {
+			return result
+		}
+	}
 	if offset < 0 {
 		return ErrorResult("offset must be >= 0")
 	}

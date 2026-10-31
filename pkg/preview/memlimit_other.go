@@ -6,6 +6,6 @@
 
 package preview
 
-// hostMemoryLimitUnenforced: the data-limit check is Linux only (macOS
+// HostMemoryLimitUnenforced: the data-limit check is Linux only (macOS
 // memory is best effort and disclosed in the docs; Windows uses a job).
-func hostMemoryLimitUnenforced() (reason, note string) { return "", "" }
+func HostMemoryLimitUnenforced() (reason, note string) { return "", "" }

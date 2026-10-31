@@ -43,6 +43,21 @@ type DocumentPreview struct {
 	Thumbnails []DocumentPreviewThumbnail
 	// Record is the preview record of the thumbnail group.
 	Record generated.MediaPreview
+
+	// ModelOnly marks a call with no thumbnail group for the person
+	// (read_file on a PDF, spec §4.1): nothing is published or persisted
+	// as a preview group, and its result text is already the text form.
+	ModelOnly bool
+	// NativeContent, when set, replaces the tool message text in the
+	// provider request when the PDF or page images are sent (the retained
+	// result text is the extracted text, which would otherwise go twice).
+	NativeContent string
+	// RenderPages renders the page images on first need (an image-capable
+	// model without native PDF): the pages, else why they are unavailable,
+	// and a note for the model (next batch, disclosures).
+	RenderPages func(context.Context) (pages []DocumentPreviewPage, unavailable, note string)
+	// PagesNote is appended to the page-images note.
+	PagesNote string
 }
 
 // DocumentPreviewPage is one rendered page.
@@ -78,7 +93,7 @@ func (d *DocumentPreview) FreeLiveForms() {
 	if d == nil {
 		return
 	}
-	d.PDF, d.Pages, d.Text = nil, nil, ""
+	d.PDF, d.Pages, d.Text, d.RenderPages = nil, nil, "", nil
 }
 
 // Preview outcome values (MediaFrame.preview.outcome).

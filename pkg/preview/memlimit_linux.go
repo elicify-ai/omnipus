@@ -14,8 +14,8 @@ import (
 
 const ignoreRlimitDataParam = "/sys/module/kernel/parameters/ignore_rlimit_data"
 
-// hostMemoryLimitUnenforced runs the §3.1 D1.4 check on this host.
-func hostMemoryLimitUnenforced() (reason, note string) {
+// HostMemoryLimitUnenforced runs the §3.1 D1.4 check on this host.
+func HostMemoryLimitUnenforced() (reason, note string) {
 	var uts unix.Utsname
 	var release string
 	err := unix.Uname(&uts)

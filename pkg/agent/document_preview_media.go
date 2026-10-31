@@ -191,13 +191,28 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 			return 0, nil
 		}
 		msg.Media = append(msg.Media, "data:application/pdf;base64,"+base64.StdEncoding.EncodeToString(d.PDF))
-		msg.Content += fmt.Sprintf("\n[model received: the whole PDF, %d pages]", d.Record.PageCount)
+		if d.NativeContent != "" {
+			msg.Content = d.NativeContent
+		}
+		if d.Record.PageCount > 0 {
+			msg.Content += fmt.Sprintf("\n[model received: the whole PDF, %d pages]", d.Record.PageCount)
+		} else {
+			msg.Content += "\n[model received: the whole PDF]"
+		}
 		return len(d.PDF), nil
 	}
 	sizeNote := ""
 	if forms.pdf && len(d.PDF) > forms.maxPDF {
 		sizeNote = fmt.Sprintf("; the PDF (%.1f MiB) is larger than this model's native PDF limit (%.1f MiB)",
 			float64(len(d.PDF))/(1<<20), float64(forms.maxPDF)/(1<<20))
+	}
+	if forms.images && len(d.Pages) == 0 && d.RenderPages != nil {
+		// Rendered on first need, once (read_file on a PDF, §4.1).
+		pages, unavailable, note := d.RenderPages(ctx)
+		d.Pages, d.PagesNote, d.RenderPages = pages, note, nil
+		if unavailable != "" {
+			d.ImagesUnavailable = unavailable
+		}
 	}
 	if forms.images && len(d.Pages) > 0 {
 		return attachPreviewPages(msg, d, forms.resize, budget, sizeNote)
@@ -209,6 +224,14 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 	case !forms.images:
 		reason = "; this model reads text only" + reason
 	}
+	if d.ModelOnly {
+		// The retained result text already is the text form (today's
+		// read_file path); only say why images did not go.
+		if forms.images && d.ImagesUnavailable != "" {
+			msg.Content += "\n[model received: extracted text" + reason + d.PagesNote + "]"
+		}
+		return 0, nil
+	}
 	msg.Content += "\n[model received: extracted text" + reason + "]\n" + d.Text
 	return 0, nil
 }
@@ -216,6 +239,7 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 func attachPreviewPages(msg *providers.Message, d *tools.DocumentPreview, limits catalog.ResizeLimits, budget int, sizeNote string) (int, error) {
 	used := 0
 	sent := 0
+	notResent := false
 	for _, page := range d.Pages {
 		if sent == previewMaxImages {
 			break
@@ -229,7 +253,7 @@ func attachPreviewPages(msg *providers.Message, d *tools.DocumentPreview, limits
 			return used, fmt.Errorf("preview page %d cannot fit model limits: %w", page.Number, err)
 		}
 		if used+len(normalized.Data) > budget {
-			msg.Content += previewMarkerNotResent
+			notResent = true
 			break
 		}
 		msg.Media = append(msg.Media, "data:"+normalized.Mime+";base64,"+base64.StdEncoding.EncodeToString(normalized.Data))
@@ -237,7 +261,13 @@ func attachPreviewPages(msg *providers.Message, d *tools.DocumentPreview, limits
 		sent++
 	}
 	if sent > 0 {
-		msg.Content += fmt.Sprintf("\n[model received: page images %d–%d%s]", d.Pages[0].Number, d.Pages[sent-1].Number, sizeNote)
+		if d.NativeContent != "" {
+			msg.Content = d.NativeContent
+		}
+		msg.Content += fmt.Sprintf("\n[model received: page images %d–%d%s%s]", d.Pages[0].Number, d.Pages[sent-1].Number, sizeNote, d.PagesNote)
+	}
+	if notResent {
+		msg.Content += previewMarkerNotResent
 	}
 	return used, nil
 }

@@ -93,7 +93,7 @@ func New(cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("preview: identify gateway: %w", err)
 	}
-	unenforced, note := hostMemoryLimitUnenforced()
+	unenforced, note := HostMemoryLimitUnenforced()
 	if note != "" {
 		logger.InfoCF("preview", "document preview memory limit check: "+note, nil)
 	}

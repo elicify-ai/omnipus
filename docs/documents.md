@@ -91,6 +91,14 @@ Refusals, each starting with `preview_document:`:
 The agent reads the file with exactly the access `read_file` has: a file the
 agent may not read is refused with the same answer `read_file` gives.
 
+When an agent opens a PDF with `read_file` (without asking for a line range),
+its model receives the PDF in the same three forms as the table above: the
+whole PDF, images of pages 1–10 with a note naming the next batch to request
+with `preview_document`, or the text. `read_file` shows you no page images in
+the chat; only `preview_document` does. A file that ends in `.pdf` but is not
+a PDF, or a PDF whose text cannot be extracted, is read the way `read_file`
+reads any other file.
+
 ### What previews need
 
 - **PDF files** need nothing extra to reach the model. Page images need the PDF
@@ -125,6 +133,15 @@ agent may not read is refused with the same answer `read_file` gives.
   applies when Omnipus cannot read a source of write access: an unreadable
   settings file refuses registration, and an unreadable or partly invalid
   mount record keeps previews off.
+- `omnipus doctor` reports each problem with these components as a warning:
+  `PDF renderer not installed`, `LibreOffice not installed`, `… damaged
+  (<reason>)`, or `… is in a folder an agent can write (<access>)`, each with
+  what it means for previews and how to fix it. On Linux it also warns
+  `Document preview memory limit not enforced: <reason>` when the kernel does
+  not apply the memory limit (see "Limits and isolation"). Like every doctor
+  warning, these make `omnipus doctor` finish with exit code 1, so an
+  installation without LibreOffice reports a warning until LibreOffice is
+  registered. Doctor never starts either program.
 - What the check does not cover yet: an **Allow once** approval for a single
   command that is still running in another chat, access granted while a
   preview is already running (it is seen by the next preview), and links
@@ -153,6 +170,11 @@ that sandbox cannot be set up, they still run with the limits above and the
 result says `converted without sandbox: <reason>`. On Windows there is no file
 isolation: only the time and memory limits apply.
 
+Every completed preview is written to the audit log as the event
+`preview_document.run`, with the file's path, the result (`validity`) and,
+when they apply, `converted_without_sandbox` and `memory_limit_not_enforced`
+with their reasons, so you can find runs that were not fully confined later.
+
 Previews are for agents and the chat. This adds no Office preview to the
 Library panel.
 
@@ -166,7 +188,12 @@ input gets the PDF itself; every other model gets the extracted text.
 |---|---|
 | Reads PDFs (the catalog says so) | The PDF document itself, so it can see layout, tables and images on the pages |
 | Reads PDFs, but the file is larger than the media size limit (`agents.defaults.max_media_size`, 20 MB unless set, or the provider's own PDF limit when the model catalog records a smaller one) | The extracted text of the PDF instead |
-| Does not read PDFs | The extracted text of the PDF. Where the chat has a workspace, the file is also saved there so the agent can open it with its tools |
+| Does not read PDFs, but sees images | Images of pages 1–10 and the extracted text. Where the chat has a workspace, the file is also saved there, and a note gives the agent that path and the next pages to request, for example `call preview_document with file "<path>" and pages "11-20"`. Without the PDF renderer, the note says `page images unavailable` with the reason and the agent gets the text |
+| Reads text only | The extracted text of the PDF. Where the chat has a workspace, the file is also saved there so the agent can open it with its tools |
+
+When the model catalog records how many PDF documents the provider accepts in
+one request, and a message carries more, the newest attachments are sent as
+documents and the older ones as text, with a note saying so.
 
 How the PDF travels depends on the provider, and you do not need to set anything:
 Anthropic and Amazon Bedrock receive it as a document, and OpenAI's Responses API

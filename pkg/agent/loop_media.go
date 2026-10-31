@@ -68,6 +68,7 @@ func resolveMediaRefsWithOffload(
 
 	result := make([]providers.Message, len(messages))
 	copy(result, messages)
+	var nativePDFs []nativePDFPart
 
 	for i, m := range result {
 		if len(m.Media) == 0 {
@@ -222,6 +223,10 @@ func resolveMediaRefsWithOffload(
 					dataURL := encodePDFToDataURL(localPath, info, pdfLimit)
 					if dataURL != "" {
 						resolved = append(resolved, dataURL)
+						nativePDFs = append(nativePDFs, nativePDFPart{
+							msg: i, part: len(resolved) - 1, path: localPath,
+							mime: mime, name: meta.Filename, size: info.Size(),
+						})
 					} else {
 						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
 						contentInjections = append(contentInjections, inj)
@@ -229,13 +234,21 @@ func resolveMediaRefsWithOffload(
 				} else {
 					// Step-1 gate: model without the pdf modality + PDF →
 					// offload with document-class guidance + text extraction
-					// (step 5 + 6).
+					// (step 5 + 6); a model that sees images also gets pages
+					// 1–10 as images and a note naming the workspace copy
+					// for later pages (office-preview spec §4.1, FR-044).
 					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
-						contentInjections = append(contentInjections, offInj+textInj)
-					} else {
-						contentInjections = append(contentInjections, textInj)
+					dest, offErr := sink.offloadPath(localPath, meta.Filename)
+					offInj := ""
+					if offErr == nil {
+						offInj = buildOffloadInjection(dest, detectFileClass(mime, meta.Filename), model)
 					}
+					if modelSupportsImage(cat, provider, model) {
+						pages := uploadPDFPageImages(localPath, meta.Filename, resizeBudgetForModel(cat, provider, model, maxSize))
+						resolved = append(resolved, pages.images...)
+						textInj = pages.note(dest, offErr) + textInj
+					}
+					contentInjections = append(contentInjections, offInj+textInj)
 				}
 				continue
 			}
@@ -251,6 +264,8 @@ func resolveMediaRefsWithOffload(
 		}
 	}
 
+	_, maxDocs := nativePDFLimits(cat, provider, model, maxSize)
+	capNativePDFParts(result, nativePDFs, maxDocs)
 	return result
 }
 
@@ -904,8 +919,18 @@ type offloadSink struct {
 // the caller then produces the step-7 honest marker (edge case: "step-5 offload
 // cannot copy the file → step 7 honest marker with reason offload-failed").
 func (s *offloadSink) offload(localPath, mime, filename, model string) (string, bool) {
-	if s == nil {
+	dest, err := s.offloadPath(localPath, filename)
+	if err != nil {
 		return "", false
+	}
+	return buildOffloadInjection(dest, detectFileClass(mime, filename), model), true
+}
+
+// offloadPath copies localPath into the turn's work/ dir (step-5 offload)
+// and returns the copy's path; a failure is logged and returned.
+func (s *offloadSink) offloadPath(localPath, filename string) (string, error) {
+	if s == nil {
+		return "", errNoOffloadSink
 	}
 	safeName, err := deriveSafeOffloadName(localPath, filename)
 	if err != nil {
@@ -913,7 +938,7 @@ func (s *offloadSink) offload(localPath, mime, filename, model string) (string, 
 			"path":  localPath,
 			"error": err.Error(),
 		})
-		return "", false
+		return "", err
 	}
 	dest, err := copyToWorkDir(localPath, s.workDir, safeName)
 	if err != nil {
@@ -922,9 +947,9 @@ func (s *offloadSink) offload(localPath, mime, filename, model string) (string, 
 			"work_dir": s.workDir,
 			"error":    err.Error(),
 		})
-		return "", false
+		return "", err
 	}
-	return buildOffloadInjection(dest, detectFileClass(mime, filename), model), true
+	return dest, nil
 }
 
 // sha256PrefixBytes is the number of sha256 digest bytes (16 hex chars) used

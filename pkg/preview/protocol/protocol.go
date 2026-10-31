@@ -404,6 +404,11 @@ func parsePage(payload []byte, req Request, pageCount int, lastPage uint32) (Pag
 	if uint32(cfg.Width) != p.Width || uint32(cfg.Height) != p.Height {
 		return Page{}, violation("page %d PNG is %dx%d, frame says %dx%d", p.Number, cfg.Width, cfg.Height, p.Width, p.Height)
 	}
+	// A readable header is not a readable image (AD-2 PAGE rule): decode it
+	// in full, now that the header has bounded its size.
+	if _, err := png.Decode(bytes.NewReader(p.PNG)); err != nil {
+		return Page{}, violation("page %d PNG does not decode: %v", p.Number, err)
+	}
 	return p, nil
 }
 

@@ -236,7 +236,13 @@ func recoverOne(dir string, selfPID int, selfStart string, rep *RecoveryReport) 
 	case statePreparing, stateDone:
 		// Nothing can have started (the go-byte was never sent) or it ended.
 	case stateRunning:
-		if rec.Launcher != nil && processAlive(rec.Launcher.PID) {
+		if rec.Launcher == nil {
+			// AD-8: a running record names the launcher before its go-byte;
+			// without that identity nothing proves the program ended.
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("preview folder %s kept: running record has no launcher identity", name))
+			return
+		}
+		if processAlive(rec.Launcher.PID) {
 			if !identityMatches(*rec.Launcher, rec.Executables) {
 				rep.Warnings = append(rep.Warnings, fmt.Sprintf("preview folder %s kept: process %d does not match its record (PID reused?)", name, rec.Launcher.PID))
 				return

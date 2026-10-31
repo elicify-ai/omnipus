@@ -26,7 +26,7 @@ const (
 func (ex *agentLoopRunTurnToolsExecute) deliverPreviewThumbnails() {
 	doc := ex.toolResult.DocumentPreview
 	rt := ex.rx.rr.rq.ri.rf.rt
-	if doc == nil || ex.toolResult.IsError || rt.ts.channel != previewWebChannel {
+	if doc == nil || doc.ModelOnly || ex.toolResult.IsError || rt.ts.channel != previewWebChannel {
 		return
 	}
 	parts := make([]bus.MediaPart, 0, len(doc.Thumbnails))

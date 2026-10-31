@@ -27,7 +27,7 @@ func Main(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return ExitUsage
 	}
-	if err := enterJob(limits); err != nil {
+	if err = enterJob(limits); err != nil {
 		fmt.Fprintln(os.Stderr, "run-limited:", err)
 		return ExitLimitFailed
 	}
@@ -41,7 +41,7 @@ func Main(args []string) int {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
-	if err := cmd.Start(); err != nil {
+	if err = cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "run-limited: start target:", err)
 		return ExitStartFailed
 	}
