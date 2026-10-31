@@ -67,6 +67,8 @@ Note: there is no `experimental.workspace_shell_enabled` feature flag. `bash` (A
 
 Source: `pkg/sandbox/sandbox.go:83-102`, `pkg/sandbox/sandbox_linux.go:367-407`, `pkg/gateway/sandbox_apply.go:247-263`.
 
+In every mode, including `off`, and also when the gateway falls back to application-level enforcement (older kernel, Docker on hosts without Landlock), Linux boots apply the gateway memory guard (`PR_SET_DUMPABLE=0`, `pkg/gateway/sandbox_apply.go::hardenGatewayMemory`): other programs running as the same user cannot read the gateway's memory or environment (`/proc/<gateway>/environ`, which holds the master key and login token). Side effect: a debugger can attach to the gateway only as root. If the guard cannot be applied, boot continues and `sandbox.harden_gateway_self_failed` is logged at WARN.
+
 A fresh install with no `sandbox.mode` written to disk and an empty `allowed_paths` is treated by `resolveMode` (`pkg/gateway/sandbox_apply.go:134-158`) as `enforce` on capable kernels. Once the operator saves any sandbox field, an empty `mode` is treated as the operator's explicit `off`.
 
 ## CLI override

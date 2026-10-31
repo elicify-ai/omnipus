@@ -266,6 +266,18 @@ type applySandboxState struct {
 func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err error) {
 	as := &applySandboxState{opts: opts}
 
+	// Step 0 — gateway memory guard (PR_SET_DUMPABLE=0). Closes C6 from the
+	// insider-pentest report: same-uid programs can read
+	// /proc/<gateway-pid>/environ and /proc/<gateway-pid>/mem — and therefore
+	// OMNIPUS_MASTER_KEY / OMNIPUS_BEARER_TOKEN — without it. The property is
+	// independent of the sandbox mode and of the selected backend, so it runs
+	// BEFORE every early return below: mode=off, the application-level
+	// fallback (old kernel, Docker on Fly), macOS, and the Landlock path alike
+	// (founder decision 2026-10-30, "memory-guard fix, applies also with
+	// sandbox off"). A failure does not abort boot; it is logged with its
+	// impact, as before.
+	hardenGatewayMemory()
+
 	if result, stop, err := as.resolveFilesystemModel(); stop {
 		return result, err
 	}
@@ -291,6 +303,18 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 	}
 
 	return as.applyLinuxSandbox()
+}
+
+// hardenGatewayMemory applies sandbox.HardenGatewaySelf (PR_SET_DUMPABLE=0)
+// and logs a failure with its impact. It never aborts boot: the guard is
+// defence in depth for the same-user boundary, and the previous Landlock-path
+// call had the same warn-and-continue contract.
+func hardenGatewayMemory() {
+	if err := sandbox.HardenGatewaySelf(); err != nil {
+		slog.Warn("sandbox.harden_gateway_self_failed",
+			"error", err,
+			"impact", "/proc/<gateway>/environ may be readable by same-uid children")
+	}
 }
 
 // resolveFilesystemModel normalizes output streams and validates the configured filesystem model.
@@ -726,18 +750,9 @@ func (as *applySandboxState) applyNonLinuxSandbox() (*SandboxApplyResult, bool, 
 
 // applyLinuxSandbox hardens the gateway, applies Landlock before seccomp, and records the final Linux state.
 func (as *applySandboxState) applyLinuxSandbox() (*SandboxApplyResult, error) {
-	// Step 5.5 — process-level self-hardening (PR_SET_DUMPABLE=0). Closes
-	// C6 from the insider-pentest report: same-uid children can read
-	// /proc/<gateway-pid>/environ — and therefore OMNIPUS_MASTER_KEY /
-	// OMNIPUS_BEARER_TOKEN — without this. Applied BEFORE Landlock so a
-	// failure still surfaces via slog. Applied unconditionally because
-	// the property is independent of sandbox mode — even ModeOff benefits
-	// from /proc hardening.
-	if err := sandbox.HardenGatewaySelf(); err != nil {
-		slog.Warn("sandbox.harden_gateway_self_failed",
-			"error", err,
-			"impact", "/proc/<gateway>/environ may be readable by same-uid children")
-	}
+	// Process-level self-hardening (PR_SET_DUMPABLE=0) already ran at the
+	// top of applySandbox (hardenGatewayMemory), before any mode or backend
+	// early return.
 
 	// Step 6 — Apply Landlock. Seccomp Install MUST run after this
 	// (FR-J-002) because seccomp filters all syscalls including
