@@ -470,9 +470,10 @@ export function LibraryExplorer({
     const timer = setInterval(async () => {
       const state = queryClient.getQueryState(listingKey)
       if (autoRefreshInFlight.current || !state || state.fetchStatus !== 'idle') return
-      // Never turn a failed first load into a recurring skeleton, nor clear
-      // the persistent error/Retry of a failed explicit open with a tick.
-      if (state.data === undefined || state.status !== 'success') return
+      // Never turn a failed first load into a recurring skeleton. A cached
+      // listing keeps ticking after an explicit error; only fresh data from
+      // a successful read can clear its stale-data notice.
+      if (state.data === undefined) return
       autoRefreshInFlight.current = true
       try {
         const data = workspaceId !== null
@@ -491,6 +492,8 @@ export function LibraryExplorer({
           workspaceId,
           folder: browsedDir,
           errorName: err instanceof Error ? err.name : 'unknown',
+          status: isApiError(err) ? err.status : 0,
+          message: (err instanceof Error ? err.message : String(err)).slice(0, 200),
         })
       } finally {
         autoRefreshInFlight.current = false
@@ -509,7 +512,9 @@ export function LibraryExplorer({
       event: 'libraryListingRefreshFailed',
       workspaceId,
       folder: browsedDir,
-      errorName: listingError.name,
+      errorName: listingError instanceof Error ? listingError.name : 'unknown',
+      status: isApiError(listingError) ? listingError.status : 0,
+      message: (listingError instanceof Error ? listingError.message : String(listingError)).slice(0, 200),
     })
   }, [listingError, workspaceId, browsedDir])
 
@@ -1313,10 +1318,24 @@ export function LibraryExplorer({
           // true only once a workspace is open.
           <LibrarySearchBar workspaceId={null} folderPath="" onOpenNote={() => {}}>
             {workspacesQuery.isLoading && <ListSkeleton />}
-            {/* Timer failures never enter query error state. Initial-load
-                and other query refresh failures keep their visible Retry,
-                including when earlier workspace rows remain available. */}
-            {workspacesQuery.isError && (
+            {/* Timer failures never enter query error state. A failed query
+                refresh keeps cached workspaces with an inline notice/Retry;
+                only a listing that never loaded uses the full error state. */}
+            {workspacesQuery.isError && workspacesQuery.data !== undefined && (
+              <div data-testid="library-workspaces-refresh-error" className="flex flex-col gap-[var(--space-1)]">
+                <LibraryErrorBanner message="Could not refresh workspaces. The list below may be out of date." />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => void workspacesQuery.refetch()}
+                  data-testid="library-workspaces-refresh-retry"
+                  className="h-auto w-full justify-start px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
+                >
+                  Retry refresh
+                </Button>
+              </div>
+            )}
+            {workspacesQuery.data === undefined && workspacesQuery.isError && (
               <QueryErrorState
                 layout="fill"
                 message="Could not load workspaces."
@@ -1378,9 +1397,8 @@ export function LibraryExplorer({
           >
             {entriesQuery.isLoading && <ListSkeleton />}
             {/* Only timer failures are quiet. A failed explicit refresh keeps
-                its explanation and Retry alongside the cached rows. Ticks
-                pause on this error so they cannot clear it behind the user's
-                back; a successful query refresh clears the notice. */}
+                its explanation and Retry alongside the cached rows until a
+                query refresh or an automatic tick successfully updates them. */}
             {entriesQuery.isError && entriesQuery.data !== undefined && (
               <div data-testid="library-open-refresh-error" className="flex flex-col gap-[var(--space-1)]">
                 <LibraryErrorBanner message="Could not refresh this folder — the list below may be out of date." />

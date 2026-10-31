@@ -40,7 +40,7 @@
 // contribution, so each assertion below measures one mechanism only.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import type { LibraryEntry, LibraryWorkspaceNode } from '@/lib/api'
@@ -48,6 +48,8 @@ import type { LibraryEntry, LibraryWorkspaceNode } from '@/lib/api'
 // pieces — gate-1 SF-4/CR-1 must run against the app's own error/subscriber
 // machinery, never a replica that can drift from it.
 import { ApiSchemaError } from '@/lib/api/http'
+import { ApiError } from '@/lib/api-error'
+import * as telemetry from '@/lib/telemetry'
 import { queryClient as productionQueryClient, shouldRetryQuery, shouldRetryMutation } from '@/lib/queryClient'
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -85,6 +87,7 @@ import {
   fetchLibraryContentVersioned,
   fetchLibraryEntries,
   fetchLibraryWorkspaces,
+  libraryQueryKeys,
   searchFiles,
   searchVault,
 } from '@/lib/api'
@@ -676,6 +679,162 @@ describe('LibraryExplorer — pending and failed ticks are quiet at every listin
       expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
       expect(screen.queryByTestId('library-entries-error')).not.toBeInTheDocument()
     }
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+  })
+})
+
+// Round-2 dispatch: both diagnostics must distinguish HTTP/transport failures
+// and bound messages at 200 characters. Expectations below are explicit
+// dispatch-derived oracles, not values read from the telemetry implementation.
+describe.each(['timer', 'listing'] as const)('LibraryExplorer — %s failure diagnostics (SF N1)', (origin) => {
+  it.each([
+    { kind: 'permission denied', error: new ApiError(403, 'Folder forbidden'), status: 403, errorName: 'ApiError', message: '403: Folder forbidden' },
+    { kind: 'server unavailable', error: new ApiError(500, 'Server down'), status: 500, errorName: 'ApiError', message: '500: Server down' },
+    { kind: 'network offline', error: new ApiError(0, 'Network offline'), status: 0, errorName: 'ApiError', message: 'Network offline' },
+    // Cap boundaries from the dispatch: empty/one, max-1/max/max+1.
+    { kind: 'empty message', error: new Error(''), status: 0, errorName: 'Error', message: '' },
+    { kind: 'one character', error: new Error('x'), status: 0, errorName: 'Error', message: 'x' },
+    { kind: '199 characters', error: new Error('x'.repeat(199)), status: 0, errorName: 'Error', message: 'x'.repeat(199) },
+    { kind: '200 characters', error: new Error('x'.repeat(200)), status: 0, errorName: 'Error', message: 'x'.repeat(200) },
+    { kind: '201 characters', error: new Error('x'.repeat(201)), status: 0, errorName: 'Error', message: 'x'.repeat(200) },
+    { kind: 'non-Error with 201 characters', error: 'n'.repeat(201), status: 0, errorName: 'unknown', message: 'n'.repeat(200) },
+  ])('records exact status and a bounded message for $kind', async ({ error, status, errorName, message }) => {
+    // Observe the output boundary, leaving the logger and all query/render
+    // machinery real. logError itself intentionally emits no console in tests.
+    const diagnostic = vi.spyOn(telemetry, 'logError')
+    if (origin === 'listing') mockedFetchEntries.mockRejectedValueOnce(error)
+    await renderAndSettle('ws-1')
+    if (origin === 'timer') {
+      const before = entriesCalls('')
+      mockedFetchEntries.mockRejectedValueOnce(error)
+      await tick()
+      expect(entriesCalls('')).toBe(before + 1)
+      expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument()
+      expect(screen.queryByTestId('library-open-refresh-error')).not.toBeInTheDocument()
+    } else {
+      expect(screen.getByTestId('library-entries-error')).toBeInTheDocument()
+    }
+    const event = origin === 'timer' ? 'libraryAutoRefreshFailed' : 'libraryListingRefreshFailed'
+    expect(diagnostic.mock.calls.filter(([record]) => record.event === event)).toEqual([[
+      { event, workspaceId: 'ws-1', folder: '', errorName, status, message },
+    ]])
+  })
+})
+
+describe('LibraryExplorer — virtual-root refresh errors distinguish cached data (SF N2 / TA N2)', () => {
+  it.each([
+    { cache: 'loaded workspaces', workspaces: [makeWorkspaceNode()] },
+    { cache: 'an empty workspace list', workspaces: [] },
+  ])('uses the full error only before data, then inline notice and working Retry with $cache', async ({ workspaces }) => {
+    const client = makeClient()
+    mockedFetchWorkspaces.mockResolvedValue(workspaces).mockRejectedValueOnce(new ApiError(500, 'First load failed'))
+    await renderAndSettle(undefined, client)
+    const initialError = screen.getByTestId('library-workspaces-error')
+    expect(within(initialError).getByText('Could not load workspaces.')).toBeInTheDocument()
+    expect(screen.queryByTestId('library-workspaces-refresh-error')).not.toBeInTheDocument()
+    expect(screen.queryByText('No workspaces yet.')).not.toBeInTheDocument()
+
+    fireEvent.click(within(initialError).getByRole('button', { name: /^Retry$/ }))
+    await tick(0)
+    expect(screen.queryByTestId('library-workspaces-error')).not.toBeInTheDocument()
+    if (workspaces.length === 0) {
+      expect(screen.getByText('No workspaces yet.')).toBeInTheDocument()
+    } else {
+      expect(screen.getByTestId('library-workspace-node-ws-1')).toBeInTheDocument()
+    }
+
+    const before = workspacesCalls()
+    mockedFetchWorkspaces.mockRejectedValueOnce(new ApiError(500, 'Refresh failed'))
+    await act(async () => {
+      await client.refetchQueries({ queryKey: libraryQueryKeys.workspaces(), exact: true })
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    expect(workspacesCalls()).toBe(before + 1)
+    expect(client.getQueryData(libraryQueryKeys.workspaces())).toEqual(workspaces)
+    expect(screen.queryByTestId('library-workspaces-error')).not.toBeInTheDocument()
+    const notice = screen.getByTestId('library-workspaces-refresh-error')
+    expect(within(notice).getByRole('alert').textContent).toBe('Could not refresh workspaces. The list below may be out of date.')
+    expect(screen.queryByText('Could not load workspaces.')).not.toBeInTheDocument()
+    if (workspaces.length === 0) {
+      expect(screen.getByText('No workspaces yet.')).toBeInTheDocument()
+    } else {
+      expect(screen.getByTestId('library-workspace-node-ws-1')).toBeInTheDocument()
+    }
+
+    // The inline action really refetches; changed rows prove recovery rather
+    // than merely hiding the error while leaving the old list in place.
+    mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode({ id: 'ws-2', name: 'Recovered workspace' })])
+    fireEvent.click(within(notice).getByRole('button', { name: /^Retry refresh$/ }))
+    await tick(0)
+    expect(workspacesCalls()).toBe(before + 2)
+    expect(screen.getByTestId('library-workspace-node-ws-2')).toBeInTheDocument()
+    expect(screen.queryByTestId('library-workspace-node-ws-1')).not.toBeInTheDocument()
+    expect(screen.queryByText('No workspaces yet.')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('library-workspaces-refresh-error')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('library-workspaces-error')).not.toBeInTheDocument()
+  })
+})
+
+describe('LibraryExplorer — ticks continue after explicit-refresh errors (OBS-1 / TA N1)', () => {
+  it.each([
+    { surface: 'folder', wsId: 'ws-1', row: 'library-row-report.md', notice: 'library-open-refresh-error', fullError: 'library-entries-error' },
+    { surface: 'virtual root', wsId: undefined, row: 'library-workspace-node-ws-1', notice: 'library-workspaces-refresh-error', fullError: 'library-workspaces-error' },
+  ])('keeps ticking after an explicit $surface error; only a successful tick clears its banner', async ({ wsId, row, notice, fullError }) => {
+    const client = makeClient()
+    await renderAndSettle(wsId, client)
+    expect(screen.getByTestId(row)).toBeInTheDocument()
+    const listingKey = wsId === undefined
+      ? libraryQueryKeys.workspaces()
+      : libraryQueryKeys.entries(wsId, '', false)
+    const requestCount = () => wsId === undefined ? workspacesCalls() : entriesCalls('')
+    const fetchListing = wsId === undefined ? mockedFetchWorkspaces : mockedFetchEntries
+    const beforeRefresh = requestCount()
+    fetchListing.mockRejectedValueOnce(new ApiError(500, 'Explicit refresh failed'))
+    // Drive the real query refresh operation (not setQueryState), exactly as
+    // an explicit reopen/Retry or an invalidation does, while rows are cached.
+    await act(async () => {
+      await client.refetchQueries({ queryKey: listingKey, exact: true })
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    expect(requestCount()).toBe(beforeRefresh + 1)
+    expect(screen.getByTestId(notice)).toBeInTheDocument()
+    expect(screen.getByTestId(row)).toBeInTheDocument()
+    expect(screen.queryByTestId(fullError)).not.toBeInTheDocument()
+    expect(client.getQueryState(listingKey)?.status).toBe('error')
+    const beforeTicks = requestCount()
+
+    // First following tick actually runs and fails, quietly. It must neither
+    // pause on the prior error nor clear its stale-data notice on failure.
+    fetchListing.mockRejectedValueOnce(new ApiError(0, 'Tick still offline'))
+    await tick()
+    expect(requestCount()).toBe(beforeTicks + 1)
+    if (wsId === undefined) {
+      expect(mockedFetchWorkspaces.mock.calls.at(-1)).toEqual([{ schemaErrorToast: false }])
+    } else {
+      expect(mockedFetchEntries.mock.calls.at(-1)).toEqual([wsId, '', false, { schemaErrorToast: false }])
+    }
+    expect(screen.getByTestId(notice)).toBeInTheDocument()
+    expect(screen.getByTestId(row)).toBeInTheDocument()
+    expect(screen.queryByTestId('library-loading-skeleton')).not.toBeInTheDocument()
+    expect(screen.queryByTestId(fullError)).not.toBeInTheDocument()
+    expect(client.getQueryState(listingKey)?.status).toBe('error')
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+
+    // Next eligible tick succeeds with changed data. With no click or focus
+    // event, the new data appears and the previous explicit error is cleared.
+    if (wsId === undefined) {
+      mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode(), makeWorkspaceNode({ id: 'ws-2', name: 'New workspace' })])
+    } else {
+      folderNow = [makeEntry(), makeEntry({ name: 'recovered.md', path: 'recovered.md' })]
+    }
+    await tick()
+    expect(requestCount()).toBe(beforeTicks + 2)
+    expect(screen.getByTestId(wsId === undefined ? 'library-workspace-node-ws-2' : 'library-row-recovered.md')).toBeInTheDocument()
+    expect(screen.getByTestId(row)).toBeInTheDocument()
+    expect(screen.queryByTestId(notice)).not.toBeInTheDocument()
+    expect(screen.queryByTestId(fullError)).not.toBeInTheDocument()
+    expect(client.getQueryState(listingKey)?.status).toBe('success')
+    expect(client.getQueryState(listingKey)?.error).toBeNull()
     expect(useUiStore.getState().toasts).toHaveLength(0)
   })
 })
