@@ -102,6 +102,15 @@ type ScheduledRunner interface {
 	RunScheduled(ctx context.Context, job *CronJob) (string, error)
 }
 
+// ErrRunHandedOff is the opt-in runner outcome for a one-time job whose run
+// goes on after RunScheduled returns (6b U2b: a task run dispatched
+// asynchronously). The engine then records nothing and keeps the persisted
+// Running flag: it is the fire's durable ownership until the runner settles
+// the job itself (RemoveJob) when the run ends, and the evidence
+// interruptedOneTimeFire reads at the next physical boot if the process stops
+// first. No runner but the task-trigger scheduler returns it.
+var ErrRunHandedOff = errors.New("cron: run handed off to the runner")
+
 type CronSchedule struct {
 	Kind    string `json:"kind"`
 	AtMS    *int64 `json:"atMs,omitempty"`
@@ -831,6 +840,11 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	// returned sessionID may be the stable id the runner chose (continue/main) so
 	// it can be persisted back onto the real job.
 	sessionID, err := invokeRun(runCtx, runner, callbackJob)
+	if errors.Is(err, ErrRunHandedOff) && callbackJob.Schedule.Kind == "at" {
+		// The runner owns the fire past its return (ErrRunHandedOff): keep
+		// Running persisted, record no outcome, compute no next run.
+		return
+	}
 
 	execDuration := cs.now().UnixMilli() - startTime
 

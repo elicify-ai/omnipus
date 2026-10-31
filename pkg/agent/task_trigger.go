@@ -190,6 +190,15 @@ type TaskTriggerScheduler struct {
 	// StartAfterPhysicalBoot. Guarded by mu.
 	bootPrepared bool
 	bootReplay   map[string]cron.BootReplay
+
+	// onceRuns and stopping implement option (a) of 6b U2b
+	// (task_trigger_once_settle.go): taskID → the one-time job whose fire
+	// was handed off to a still-running task run, and whether Stop has
+	// begun. Guarded by mu.
+	onceRuns map[string]string
+	stopping bool
+	// executor settles a handed-off fire when its run ends; nil = no hand-off.
+	executor *TaskExecutor
 }
 
 // NewTaskTriggerScheduler creates a scheduler that uses a dedicated CronService
@@ -201,11 +210,13 @@ func NewTaskTriggerScheduler(storePath string, store *task.Store, executor *Task
 		store:        store,
 		taskToJob:    make(map[string]trackedTrigger),
 		bootOwedFire: make(map[string]bool),
+		onceRuns:     make(map[string]string),
 		clock:        systemClock{},
 	}
 	if executor != nil {
 		s.dispatch = executor.SpawnTriggeredRun
 		s.emitRunStatus = executor.emitRunStatus
+		s.executor = executor
 	}
 	return s
 }
@@ -637,6 +648,9 @@ func (s *TaskTriggerScheduler) startSweep() {
 // still waits for the sweep before returning.
 func (s *TaskTriggerScheduler) Stop() {
 	s.mu.Lock()
+	// Before the engine's lane cancel reaches a handed-off one-time run, so
+	// that run ends as interrupted by the gateway, not stopped by a person.
+	s.stopping = true
 	stop := s.sweepStop
 	s.sweepStop = nil
 	s.mu.Unlock()
@@ -998,9 +1012,10 @@ func (s *TaskTriggerScheduler) OnTaskDeleted(taskID string) {
 // the overlap-guard skip, a dispatch error, and a SpawnReset error alike — also
 // re-arms the next occurrence (Scheduler rule 2): because the fired job is an
 // `at` job the engine deletes on completion (DeleteAfterRun), this re-arm is
-// the SOLE continuation of the series. The once trigger
-// are entirely unaffected — their exits are byte-for-byte unchanged
-// (Scheduler rule 7).
+// the SOLE continuation of the series. A once trigger's exits are unchanged
+// (Scheduler rule 7) except a successful dispatch, which returns
+// cron.ErrRunHandedOff so its job is kept until the run settles (6b U2b,
+// task_trigger_once_settle.go).
 func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (string, error) {
 	taskID := job.Payload.Message
 	if taskID == "" {
@@ -1153,7 +1168,17 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 	// executeTask preserves ctx values (context.WithCancel, not a detach), so
 	// this single stamp reaches processTaskDirect's processOptions unchanged.
 	dispatchCtx := tools.WithAutoDenyAsk(ctx, true)
+	// 6b U2b: a one-time fire keeps its job until the task run settles. It is
+	// registered before the dispatch so that a run which ends at once still
+	// finds it (task_trigger_once_settle.go).
+	handOff := t.Trigger.Type == task.TriggerOnce
+	if handOff {
+		s.handOffOnceRun(taskID, job.ID)
+	}
 	if err := s.dispatch(dispatchCtx, fresh.ID, occurrenceMs); err != nil {
+		if handOff {
+			s.forgetOnceRun(taskID, job.ID)
+		}
 		if isRrule {
 			slog.Warn("task_trigger: dispatch failed for rrule task, re-arming next occurrence (no retry backoff)",
 				"task_id", taskID, "job_id", job.ID, "error", err)
@@ -1169,6 +1194,9 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 		"task_id", taskID, "trigger_type", t.Trigger.Type)
 	if isRrule {
 		s.rearmRrule(t, fireGen)
+	}
+	if handOff && s.onceRunHandedOff(taskID, job.ID) {
+		return "", cron.ErrRunHandedOff
 	}
 	return "", nil
 }
