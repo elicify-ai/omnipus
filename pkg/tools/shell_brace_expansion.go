@@ -79,21 +79,43 @@ func mayBraceExpand(cmd string, depth int) bool {
 	// own words, so a shell's arguments never run on into the next command
 	// (`... | bash; echo done` must not read `echo done` as bash's script
 	// file — T11 round 5, S5).
+	// An unquoted redirection operator also ends a word, as in bash
+	// (`bash>out.txt` is the word bash plus a redirection), so it is written
+	// apart here: the interpreter and the redirection's target are then seen
+	// (T11 round 6, S5). Only this scan splits so; tokenizeShellWords is shared
+	// with other classifiers and keeps its behaviour.
 	var segments []string
 	var cur strings.Builder
+	wordStart := 0
 	for i := 0; i < len(cmd); i++ {
 		if inBody[i] {
 			continue
 		}
-		if (cmd[i] == '{' || cmd[i] == '}') && !mask[i] {
+		c := cmd[i]
+		if (c == '{' || c == '}') && !mask[i] {
 			return true
 		}
-		if !mask[i] && strings.IndexByte(";&|()\n", cmd[i]) >= 0 {
-			segments = append(segments, cur.String())
-			cur.Reset()
+		if !mask[i] && (c == '<' || c == '>') {
+			if !isFDNumberWord(cmd, mask, wordStart, i) {
+				cur.WriteByte(' ')
+			}
+			end := redirectionOperatorEnd(cmd, mask, i)
+			cur.WriteString(cmd[i:end])
+			cur.WriteByte(' ')
+			i = end - 1
+			wordStart = end
 			continue
 		}
-		cur.WriteByte(cmd[i])
+		if !mask[i] && strings.IndexByte(";&|()\n", c) >= 0 {
+			segments = append(segments, cur.String())
+			cur.Reset()
+			wordStart = i + 1
+			continue
+		}
+		if !mask[i] && (c == ' ' || c == '\t') {
+			wordStart = i + 1
+		}
+		cur.WriteByte(c)
 	}
 	segments = append(segments, cur.String())
 	for _, seg := range segments {
@@ -106,6 +128,41 @@ func mayBraceExpand(cmd string, depth int) bool {
 		}
 	}
 	return false
+}
+
+// isFDNumberWord reports whether cmd[start:op] is a non-empty run of unquoted
+// digits: bash then reads it as the file-descriptor number of the redirection
+// at op (`2>err`), not as a word of its own.
+func isFDNumberWord(cmd string, mask []bool, start, op int) bool {
+	if start >= op {
+		return false
+	}
+	for k := start; k < op; k++ {
+		if mask[k] || cmd[k] < '0' || cmd[k] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// redirectionOperatorEnd returns the index after the unquoted redirection
+// operator starting at op: `<`, `>`, `>>`, `<<`, `<<-`, `<<<`, `<>`, `>|`,
+// `>&`, `<&`.
+func redirectionOperatorEnd(cmd string, mask []bool, op int) int {
+	j := op + 1
+	for j < len(cmd) && !mask[j] {
+		c, prev := cmd[j], cmd[j-1]
+		switch {
+		case c == '<' || c == '>':
+		case c == '|' && prev == '>':
+		case c == '&' && (prev == '<' || prev == '>'):
+		case c == '-' && prev == '<' && j-op == 2:
+		default:
+			return j
+		}
+		j++
+	}
+	return j
 }
 
 // simpleCommandMayBraceExpand judges the words of one simple command: the
