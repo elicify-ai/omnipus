@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
@@ -176,4 +177,48 @@ func recordSkillSeen(ctx context.Context, realAbs string) {
 		return
 	}
 	skills.RecordSeen(session, onDisk, obs.Revision)
+}
+
+// SkillWriteTargeter is implemented by the file tools that write
+// (write_file, edit_file, append_file). The agent loop asks it, before
+// approval, whether a call's path resolves inside an installed skill folder
+// (skills spec r15 §10.1 item 2) — resolved exactly as the tool will resolve
+// it. ok is false for every other path and for a path that cannot be
+// resolved (the tool then refuses it itself).
+type SkillWriteTargeter interface {
+	SkillWriteTarget(ctx context.Context, args map[string]any) (skillKey string, ok bool)
+}
+
+// skillWriteTargetOf resolves raw for a write the way the file tools do.
+func skillWriteTargetOf(ctx context.Context, agentHome string, restrict bool, toolName string, args map[string]any, patterns []*regexp.Regexp) (string, bool) {
+	raw, ok := args["path"].(string)
+	if !ok || raw == "" {
+		return "", false
+	}
+	policy, err := ResolveTurnFSPolicy(ctx, agentHome, restrict)
+	if err != nil {
+		return "", false
+	}
+	handle, err := ResolvePathAllowingPatterns(ctx, policy, toolName, "", FSOpWrite, raw, patterns)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = handle.Close() }()
+	real, err := handle.RealPath()
+	if err != nil {
+		return "", false
+	}
+	return RegistrySkillKeyForPath(real)
+}
+
+func (t *WriteFileTool) SkillWriteTarget(ctx context.Context, args map[string]any) (string, bool) {
+	return skillWriteTargetOf(ctx, t.agentHome, t.restrict, t.Name(), args, t.patterns)
+}
+
+func (t *EditFileTool) SkillWriteTarget(ctx context.Context, args map[string]any) (string, bool) {
+	return skillWriteTargetOf(ctx, t.agentHome, t.restrict, t.Name(), args, t.patterns)
+}
+
+func (t *AppendFileTool) SkillWriteTarget(ctx context.Context, args map[string]any) (string, bool) {
+	return skillWriteTargetOf(ctx, t.agentHome, t.restrict, t.Name(), args, t.patterns)
 }

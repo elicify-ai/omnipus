@@ -452,6 +452,11 @@ func autoPathCovered(policy fspolicy.FSPolicy, realPath string) (bool, string) {
 	if fspolicy.IsCarveOut(realPath, policy) {
 		return false, fmt.Sprintf("%q is in the protected secret set", realPath)
 	}
+	// Skills spec r15 §10.1 item 4: a path inside <home>/skills/ always
+	// asks, so the standard card appears for a skill change under Auto.
+	if fspolicy.CoversForDeny(registrySkillsRoot(), realPath) {
+		return false, "skill folder changes always ask"
+	}
 	if policy.WorkDir != "" && fspolicy.CoversForGrant(policy.WorkDir, realPath) {
 		return true, ""
 	}
