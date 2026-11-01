@@ -26,7 +26,9 @@ func TestT10_SchedulesCapacityKeyIsIgnoredAndNotSeeded(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("OMNIPUS_HOME", home)
 			path := filepath.Join(home, "config.json")
-			require.NoError(t, os.WriteFile(path, []byte(`{"schedules":`+tc.schedules+`}`), 0600))
+			// A valid current-version config reaches the retired-key oracle instead
+			// of failing the unrelated required-version check during fixture load.
+			require.NoError(t, os.WriteFile(path, []byte(`{"version":1,"schedules":`+tc.schedules+`}`), 0600))
 			cfg, err := LoadConfig(path)
 			require.NoError(t, err)
 			data, err := json.Marshal(cfg)

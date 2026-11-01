@@ -1,6 +1,6 @@
 # T10 RED traceability — final r6, CHECK fix round 1
 
-**Correction:** the earlier pack said the memory measurement and loop-write seams were missing. Both already exist and are now bound at their real measurement/filesystem boundaries. The missing kind registry, loop recovery and deterministic process-edge hooks are distinct prerequisites. The old aggregate counts/coverage are historical and are not the result of this fix round.
+**Correction:** the first fix-round commit mislabelled invalid-config fixture failures as capacity-setting RED. The fixture now includes its required version, and the completed narrow rerun reaches the retired-key/field/default assertions; the superseded missing-version failures are not product RED proof. The earlier pack also said the memory measurement and loop-write seams were missing. Both already exist and are now bound at their real measurement/filesystem boundaries. The missing kind registry, loop recovery and deterministic process-edge hooks are distinct prerequisites. The old aggregate counts/coverage are historical and are not the result of this fix round.
 
 **Bottom line:** every F-01–F-16 finding has a test-side remediation or explicit cut action below. This is a tests-only pack for a **fresh independent CHECK**, not a self-issued acceptance or product PASS. New behavior remains ordinary RED or prerequisite-BLOCKED; preserved behavior is never forced red. Specific unproved subclauses remain in the gap register.
 
@@ -15,29 +15,30 @@
 
 ## CHECK finding resolution
 
-All rows belong to the single local fix-round commit identified in the dispatch handoff; no recursive self-SHA is embedded here. A remediation is not an independent CHECK verdict.
+The F-01–F-16 remediations are in local commit `0a1f554846ae97d4fb0dc4ad57c57c43953c8361`; its follow-up config-fixture/traceability correction is identified in the dispatch handoff. Both remain local. A remediation is not an independent CHECK verdict.
 
 | Finding | Test-side change / remaining limit | Commit |
 |---|---|---|
-| F-01 Critical | All nine enumerated grouped units have real production actions and assertions after any loud prerequisite. Actual loop filesystem faults, post-return race, child cleanup/audit, boot ordering, REST admission/marker/revocation, fourteen T8 groups and full creator lifecycle. Missing hooks are not replaced with no-ops. | Fix-round commit |
-| F-02 High | Actual directory-publication count plus final content for all four producers; positive restamp detector observes two writes. | Fix-round commit |
-| F-03 High | Removed artificial creating-Kind blocker from reload test; held callback, 11/22/33→41/42/43 boot-only backoff variants, physical reconstruction, retained scheduler identities/damaged disk and heartbeat re-derivation. Full reload entry remains explicit gap. | Fix-round commit |
-| F-04 High | Actual CalendarScreen/mapping/EventChip DOM clicks drive real panels, queries, generated client, history/day filtering/chat and POST/no-PATCH assertions; only layout/router/transport edges replaced. | Fix-round commit |
-| F-05 Medium | Inline OpenAPI map, generated trees, real gateway AST import-alias consumers and removed capacity wiring; positive real-schema/selector controls. Regeneration/drift at cut. | Fix-round commit |
-| F-06 Medium | Actual /automations route/default-workspace redirect/query/client, default/fallback variants; sidebar-link and removed-screen source controls. Three assertions pass internally; wrapper 75 twice prevents qualified green. Browser redirect at cut. | Fix-round commit |
-| F-07 Medium | Real nil/manual × next/in_progress PATCH/held-worker/drain/completion controls plus no-run three-save backend matrix. Board browser row stays cut-time. | Fix-round commit |
-| F-08 Medium | Fresh boot asserts both auxiliary paths absent before and after, plus positive shared task registration; seeded no-access observer retained. | Fix-round commit |
-| F-09 Medium | Existing memory provider, shared-kind healthy/pressure/unmeasurable/burst cases, exact one structured memory line per wait before/after settlement, healthy→pressure no preemption, actual task handler-vs-live-run control. | Fix-round commit |
-| F-10 Medium | Stage-1 nil-run callback and separate actual overlap-skipped occurrence, exact stored result/status/run/session/no-notice controls; all six baseline leaves pass. | Fix-round commit |
-| F-11 Medium | #1243 browser row body moved intact from automatic ui-2 spec to `/workspace/wt-t10/tests/uat/t10-recurring-inflight.spec.ts`, outside configured cut testDir. Still loud on missing fixture; NOT executed. | Fix-round commit |
-| F-12 Low | Parse structured job_id and compare exact per-ID counts; no `-2` substring heuristic. | Fix-round commit |
-| F-13 Low | Removed unmandated sentence. Nonempty plain explanation, raw-wrapper/diagnostic exclusion and registered-secret redaction across actual user sinks remain. | Fix-round commit |
-| F-14 Low | Explicit cut checklist below replaces/removes tracked compile scaffolds with actual built SPA before release. Compile is not browser proof. | Fix-round commit |
-| F-15 Low | Added arity/type diagnostics to loop/restart/entry constructor bindings; actual publication/store/dispatch/history oracles supplement reflection. The old private `cs` name is still a temporary binding: GREEN must rebind equivalent real ownership, never delete downstream assertions. | Fix-round commit |
-| F-16 Low | Real registered run_task callbacks use actual TaskExecutor for once/recurring/recurring-done, exact marker/occurrence/job/history and no duplicate automatic fire. Original refusing-spy ordering control retained. | Fix-round commit |
+| F-01 Critical | All nine enumerated grouped units have real production actions and assertions after any loud prerequisite. Actual loop filesystem faults, post-return race, child cleanup/audit, boot ordering, REST admission/marker/revocation, fourteen T8 groups and full creator lifecycle. Missing hooks are not replaced with no-ops. | `0a1f55484` |
+| F-02 High | Actual directory-publication count plus final content for all four producers; positive restamp detector observes two writes. | `0a1f55484` |
+| F-03 High | Removed artificial creating-Kind blocker from reload test; held callback, 11/22/33→41/42/43 boot-only backoff variants, physical reconstruction, retained scheduler identities/damaged disk and heartbeat re-derivation. Full reload entry remains explicit gap. | `0a1f55484` |
+| F-04 High | Actual CalendarScreen/mapping/EventChip DOM clicks drive real panels, queries, generated client, history/day filtering/chat and POST/no-PATCH assertions; only layout/router/transport edges replaced. | `0a1f55484` |
+| F-05 Medium | Inline OpenAPI map, generated trees, real gateway AST import-alias consumers and removed capacity wiring; positive real-schema/selector controls. Regeneration/drift at cut. | `0a1f55484` |
+| F-06 Medium | Actual /automations route/default-workspace redirect/query/client, default/fallback variants; sidebar-link and removed-screen source controls. Three assertions pass internally; wrapper 75 twice prevents qualified green. Browser redirect at cut. | `0a1f55484` |
+| F-07 Medium | Real nil/manual × next/in_progress PATCH/held-worker/drain/completion controls plus no-run three-save backend matrix. Board browser row stays cut-time. | `0a1f55484` |
+| F-08 Medium | Fresh boot asserts both auxiliary paths absent before and after, plus positive shared task registration; seeded no-access observer retained. | `0a1f55484` |
+| F-09 Medium | Existing memory provider, shared-kind healthy/pressure/unmeasurable/burst cases, exact one structured memory line per wait before/after settlement, healthy→pressure no preemption, actual task handler-vs-live-run control. | `0a1f55484` |
+| F-10 Medium | Stage-1 nil-run callback and separate actual overlap-skipped occurrence, exact stored result/status/run/session/no-notice controls; all six baseline leaves pass. | `0a1f55484` |
+| F-11 Medium | #1243 browser row body moved intact from automatic ui-2 spec to `/workspace/wt-t10/tests/uat/t10-recurring-inflight.spec.ts`, outside configured cut testDir. Still loud on missing fixture; NOT executed. | `0a1f55484` |
+| F-12 Low | Parse structured job_id and compare exact per-ID counts; no `-2` substring heuristic. | `0a1f55484` |
+| F-13 Low | Removed unmandated sentence. Nonempty plain explanation, raw-wrapper/diagnostic exclusion and registered-secret redaction across actual user sinks remain. | `0a1f55484` |
+| F-14 Low | Explicit cut checklist below replaces/removes tracked compile scaffolds with actual built SPA before release. Compile is not browser proof. | `0a1f55484` |
+| F-15 Low | Added arity/type diagnostics to loop/restart/entry constructor bindings; actual publication/store/dispatch/history oracles supplement reflection. The old private `cs` name is still a temporary binding: GREEN must rebind equivalent real ownership, never delete downstream assertions. | `0a1f55484` |
+| F-16 Low | Real registered run_task callbacks use actual TaskExecutor for once/recurring/recurring-done, exact marker/occurrence/job/history and no duplicate automatic fire. Original refusing-spy ordering control retained. | `0a1f55484` |
 
 ### Instrument corrections (not product fixes)
 
+- The config fixture omitted required `version: 1`, so its initial unset/zero/negative/eight load failures did not reach the capacity oracle. Corrected only that input and reran the two named config tests. All four variants now fail on the persisted `max_concurrent_runs` key/retained field; the fresh-install/default-constant assertions also fail. Exact retry-backoff expectations are unchanged. The invalid-fixture log is preserved at `/workspace/logs/t10-red/fix1-before-config-fixture-correction-final-config.jsonl` and is explicitly not RED proof.
 - D-6.7 explicitly allows an existing-session return **or refusal**. The temporary 409-only oracle was not spec-grounded and was removed; exact existing session, no second run, no consumption and unchanged registration remain asserted. Both corrected real gate controls pass. Other new refusal rows likewise assert the error status class plus a nonempty **generated ErrorResponse**, rather than unmandated code lists; no-effects and later real automatic-fire assertions remain. Earlier status-code-only failures are not RED proof.
 - Creator lifecycle now reads raw durable inbox entries, because a real main-session wake can ACK promptly. Generated `As*` methods only unmarshal and do not validate union kind: the observer must inspect the discriminator first. Progress frames are not terminal notices. The corrected observer proves the assignee's **one exact full notice**; creator copy/marker and duplicate occurrence defects remain RED. No duplicate notice defect is inferred from the earlier empty progress projection.
 - Six React Testing Library role queries used unsupported `exact` options. Anchored name expressions retain exact matching and typecheck passes; no assertion was removed.
