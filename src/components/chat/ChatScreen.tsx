@@ -45,7 +45,7 @@ import { AutoApprovePicker } from './composer/AutoApprovePicker'
 import { TokenCounter } from './composer/TokenCounter'
 import { MarkdownText } from './markdown-text'
 import { CATCH_UP_SMOOTH, ThreadRevealContext } from './useOpenReveal'
-import { ModelFooter } from './ModelFooter'
+import { ModelFooter, TurnEffortNote } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -1341,7 +1341,8 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
         {/* Per-turn model record (FR-014). Mirrors MessageItem.tsx so
             replay sessions show the same model footer as the live
             AssistantUI render. */}
-        {message.role === 'assistant' && <ModelFooter model={message.model} />}
+        {message.role === 'assistant' && <TurnEffortNote effort={message.effort} />}
+        {message.role === 'assistant' && <ModelFooter model={message.model} effort={message.effort} turnReasoningTokens={message.turnReasoningTokens} />}
         <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />
       </div>
     </div>

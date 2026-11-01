@@ -23,6 +23,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Info } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
+import type { ProvidersCatalog } from '@/lib/api'
 import { effortLabel, mapEffort, PROVIDER_DEFAULT } from '@/lib/effort/mapEffort'
 import {
   effortItems,
@@ -244,6 +245,8 @@ export interface EffortControlProps extends ModelEffortPickerProps {
   chipRef?: React.Ref<HTMLButtonElement>
   /** The chip cannot be opened (another write is in flight, FR-054). */
   disabled?: boolean
+  /** Explicit tab-order position (the chat composer's closed tab ring). */
+  tabIndex?: number
   'data-testid'?: string
   className?: string
 }
@@ -295,6 +298,7 @@ export function EffortControl(props: EffortControlProps) {
     announcement = '',
     chipRef,
     disabled = false,
+    tabIndex,
     className,
   } = props
   const { catalog, status, retry } = useServedCatalog()
@@ -400,6 +404,7 @@ export function EffortControl(props: EffortControlProps) {
             variant="ghost"
             size="sm"
             aria-disabled="true"
+            tabIndex={tabIndex}
             aria-label={name}
             aria-describedby={descriptionId}
             data-testid={props['data-testid']}
@@ -450,6 +455,7 @@ export function EffortControl(props: EffortControlProps) {
             variant="ghost"
             size="sm"
             disabled={disabled && pendingSwitch === null}
+            tabIndex={tabIndex}
             aria-label={`${name}: ${chip.spoken}`}
             aria-describedby={chip.hint ? hintId : undefined}
             data-testid={props['data-testid']}
@@ -542,6 +548,63 @@ function BlockedStep({ pending, catalogRow, onCommit, onCancel }: BlockedStepPro
         {`${pending.model} can't turn reasoning off. Pick a level to finish switching.`}
       </p>
       <EffortRadioList items={items} checked={undefined} onCommit={onCommit} ariaLabel={`Effort for ${pending.model}`} />
+    </div>
+  )
+}
+
+export interface QuietEffortLineProps {
+  value: EffortValue
+  /** The served catalog the surrounding step already holds (no second read). */
+  catalog: ProvidersCatalog | null | undefined
+  onChange: (effort: string) => void
+  scope: Extract<EffortScope, 'onboarding' | 'replacement'>
+  contextName?: string
+  'data-testid'?: string
+}
+
+/**
+ * The one quiet line of onboarding's model step and the remove-provider
+ * replacement pick (US-11 AS3, AS4; FR-066, FR-067): "Effort: Provider
+ * default. Change now". "Change now" opens the effort choices inline; a pick
+ * closes them. A model without reasoning shows no line; one whose effort
+ * Omnipus can't change shows the muted sentence.
+ */
+export function QuietEffortLine(props: QuietEffortLineProps) {
+  const [choosing, setChoosing] = useState(false)
+  const row = findServedRow(props.catalog ?? undefined, props.value.provider, props.value.model)
+  if (props.value.model === '' || !props.catalog) return null
+  const presentation = presentationOf(row)
+  if (presentation === 'none') return null
+  if (presentation === 'muted') {
+    return (
+      <p data-testid={props['data-testid']} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+        {MUTED_EFFORT_TEXT}
+      </p>
+    )
+  }
+  const stored = props.value.effort === NOT_SET ? PROVIDER_DEFAULT : props.value.effort
+  return (
+    <div data-testid={props['data-testid']} className="space-y-[var(--space-1)]">
+      <p className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+        <span>{`Effort: ${effortLabel(stored)}.`}</span>
+        <Button type="button" variant="link" size="sm" aria-expanded={choosing} onClick={() => setChoosing((open) => !open)}>
+          Change now
+        </Button>
+      </p>
+      {choosing && (
+        <PickerBody
+          value={props.value}
+          scope={props.scope}
+          contextName={props.contextName ?? `Effort for ${props.value.model}`}
+          catalogStatus="success"
+          row={row}
+          onRetry={() => undefined}
+          onCommit={(effort) => {
+            setChoosing(false)
+            props.onChange(effort)
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -1,3 +1,7 @@
+import { Tooltip } from '@/components/ui/tooltip'
+import type { EffortRecord } from '@/lib/api/generated/asyncapi-types'
+import { effortRecordNote, effortStatsLine, thinkingStatsLine } from '@/lib/effort/chatEffort'
+
 /**
  * ModelFooter — per-turn model slug displayed in the message footer.
  *
@@ -44,14 +48,56 @@
  * recorded)", as required by spec §18 Q6.
  */
 
-export function ModelFooter({ model }: { model: string | undefined }) {
+/**
+ * Effort levels (US-3 AS6, US-7, FR-024/FR-036, FR-058): the model slug is
+ * also the turn's statistics tooltip trigger. The tooltip carries
+ * "Effort: High" (what the request carried) and "Thinking: N tokens
+ * (reported by the provider)" / "Thinking: not reported". It appears only on
+ * turns that carry an effort record or a thinking figure: a pre-feature turn
+ * makes no claim either way. No output-token line (S-21).
+ */
+export function ModelFooter({
+  model,
+  effort,
+  turnReasoningTokens,
+}: {
+  model: string | undefined
+  effort?: EffortRecord
+  turnReasoningTokens?: number
+}) {
   if (typeof model !== 'string' || model.trim().length === 0) return null
-  return (
+  const slug = (
     <span
       data-testid="message-model"
       className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)] truncate max-w-[160px]"
     >
       {model.trim()}
     </span>
+  )
+  if (effort === undefined && turnReasoningTokens === undefined) return slug
+  const effortLine = effortStatsLine(effort)
+  return (
+    <Tooltip
+      label={`${model.trim()}, turn statistics`}
+      content={
+        <span className="flex flex-col">
+          {effortLine && <span>{effortLine}</span>}
+          <span>{thinkingStatsLine(turnReasoningTokens)}</span>
+        </span>
+      }
+    >
+      {slug}
+    </Tooltip>
+  )
+}
+
+/** The per-turn effort note (FR-058): only when what was sent differs from what was chosen. */
+export function TurnEffortNote({ effort }: { effort: EffortRecord | undefined }) {
+  const note = effortRecordNote(effort)
+  if (!note) return null
+  return (
+    <p data-testid="turn-effort-note" className="px-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+      {note}
+    </p>
   )
 }
