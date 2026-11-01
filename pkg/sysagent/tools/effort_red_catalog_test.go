@@ -27,7 +27,7 @@ func tlInstallEffortCatalog(t *testing.T) {
 		{"muted", []string{}, false, true},
 		{"no-reasoning", nil, false, false},
 	}
-	models := []any{}
+	models := make([]any, 0, len(rows))
 	for _, row := range rows {
 		m := map[string]any{"id": row.id, "name": row.id, "context_window": 128000, "max_output_tokens": 8192, "input_modalities": []string{"text"}, "tool_call": true, "status": "active"}
 		if row.reasoning {

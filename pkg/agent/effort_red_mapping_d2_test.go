@@ -72,7 +72,6 @@ func cleanupCwd(t *testing.T) string {
 func TestT_S1_Mapping_D2_Fixture(t *testing.T) {
 	cases := loadD2Fixture(t)
 	for _, tc := range cases {
-		tc := tc
 		t.Run(d2CaseName(tc), func(t *testing.T) {
 			got := MapEffort(tc.Source, EffortTarget{
 				Levels:  tc.Target.Levels,
@@ -158,7 +157,6 @@ func TestT_S1_Mapping_S09_NoteTexts(t *testing.T) {
 		{"empty candidate", "empty_candidate", "high", "provider_default", "Effort set to Provider default. " + model + " offers no level here that High maps to."},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.Expected, EffortSwitchNote(tc.kind, model, tc.source, tc.value))
 		})
@@ -182,7 +180,6 @@ func TestT_S1_Mapping_TurnNotes(t *testing.T) {
 		{"empty candidate at request time", "empty_candidate", "high", "", "Effort not sent: " + model + " offers no level here that high maps to."},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.Expected, EffortTurnNote(tc.kind, model, tc.source, tc.sent))
 		})

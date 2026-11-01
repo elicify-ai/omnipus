@@ -826,11 +826,11 @@ func TestT_TL94_UpdateToolNullEffortRefusedBeforeRun(t *testing.T) {
 
 	// The empty string clears it to Not set; get_agent reads the cleared value
 	// as an explicit null.
-	clear := tlExec(t, reg, "update_agent", map[string]any{
+	cleared := tlExec(t, reg, "update_agent", map[string]any{
 		"id": id, "revision": currentAgentRevision(t, deps, id), "reasoning_effort": "",
 	})
-	if clear.IsError {
-		t.Fatalf("RED: update_agent refused reasoning_effort as empty string (spec: empty clears to Not set): %s", clear.ForLLM)
+	if cleared.IsError {
+		t.Fatalf("RED: update_agent refused reasoning_effort as empty string (spec: empty clears to Not set): %s", cleared.ForLLM)
 	}
 	read := tlExec(t, reg, "get_agent", map[string]any{"id": id, "fields": []any{"reasoning_effort"}})
 	if read.IsError {

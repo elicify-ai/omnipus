@@ -64,8 +64,8 @@ func egwSeedHistoryMetadata(t *testing.T, env *egwT7HistoryEnv) string {
 			row["effort"] = map[string]any{"chosen": "provider_default"}
 			count++
 		}
-		encoded, err := json.Marshal(row)
-		require.NoError(t, err)
+		encoded, encodeErr := json.Marshal(row)
+		require.NoError(t, encodeErr)
 		patched.Write(encoded)
 		patched.WriteByte('\n')
 	}

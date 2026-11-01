@@ -9,9 +9,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
@@ -93,13 +91,7 @@ func TestT_CMD_S39_RealLoopAndStoreRestartKeepsConversationEffort(t *testing.T) 
 	var fields map[string]any
 	require.NoError(t, json.Unmarshal(raw, &fields))
 	require.Equal(t, "provider_default", fields["reasoning_effort"], "conversation value was durably written")
-	al.Stop()
-	al.Close()
-	freshStore, err := session.NewUnifiedStore(store.BaseDir())
-	require.NoError(t, err)
-	freshLoop := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &effortScriptedProvider{content: "MODEL-MUST-NOT-HANDLE-COMMAND", finish: "stop"})
-	freshLoop.sharedSessionStore = freshStore
-	t.Cleanup(freshLoop.Close)
+	freshLoop, freshStore := restartContainmentLoop(t, al, &effortScriptedProvider{content: "MODEL-MUST-NOT-HANDLE-COMMAND", finish: "stop"})
 	msg.Content = "/effort"
 	after, _, err := freshLoop.processMessageAsPrimaryForTest(context.Background(), msg)
 	require.NoError(t, err)

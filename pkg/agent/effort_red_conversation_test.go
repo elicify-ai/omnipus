@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
@@ -26,15 +25,16 @@ func installConversationCatalog(t *testing.T, levels []string, sw bool, reasons 
 	if reasons {
 		model["reasoning"] = map[string]any{"levels": levels, "switch": sw}
 	}
-	models := []any{model}
+	models := make([]any, 0, 1+len(ids))
+	models = append(models, model)
 	for _, id := range ids {
-		copy := map[string]any{}
+		cloned := map[string]any{}
 		for k, v := range model {
-			copy[k] = v
+			cloned[k] = v
 		}
-		copy["id"] = id
-		copy["name"] = id
-		models = append(models, copy)
+		cloned["id"] = id
+		cloned["name"] = id
+		models = append(models, cloned)
 	}
 	doc, err := json.Marshal(map[string]any{"schema_version": "2.0.0", "version": "v2026.10.31", "updated_at": "2026-10-31T00:00:00Z", "source": "test", "default_resize_limits": map[string]any{"long_edge_px": 2048, "max_bytes": 10485760}, "providers": []any{map[string]any{"id": "openrouter", "name": "OpenRouter", "company": "OpenRouter", "api": "https://openrouter.ai/api/v1", "protocol": "openai-compatible", "protocols": []any{map[string]any{"protocol": "openai-compatible", "api": "https://openrouter.ai/api/v1"}}, "tier": "popular", "auth_methods": []string{"api_key"}, "aliases": []string{}, "models": models}}})
 	require.NoError(t, err)
@@ -135,15 +135,7 @@ func TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart(t *testin
 	require.Len(t, both, 2)
 	assertOpenRouterLevelBody(t, both[1], "medium") // conversation B keeps its inherited value
 	// Real runtime and store replacement before the next serving request.
-	cfg := al.GetConfig()
-	root := store.BaseDir()
-	al.Stop()
-	al.Close()
-	freshStore, err := session.NewUnifiedStore(root)
-	require.NoError(t, err)
-	fresh := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &effortScriptedProvider{content: "UNEXPECTED-FALLBACK", finish: "stop"})
-	fresh.sharedSessionStore = freshStore
-	t.Cleanup(fresh.Close)
+	fresh, freshStore := restartContainmentLoop(t, al, &effortScriptedProvider{content: "UNEXPECTED-FALLBACK", finish: "stop"})
 	require.Equal(t, "ok", runConversationCommand(t, fresh, sid, "after restart"))
 	bodies := ep.snapshot()
 	require.Len(t, bodies, 3)

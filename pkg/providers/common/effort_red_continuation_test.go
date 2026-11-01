@@ -97,8 +97,8 @@ func TestT_C6_S30_S31_S32_TwoToolRoundsCodecRestartAndRoutes(t *testing.T) {
 				sf, exists := reflect.TypeOf(*response).FieldByName("ReasoningDetails")
 				require.True(t, exists, "private LLMResponse carrier exists")
 				assert.Equal(t, "-", sf.Tag.Get("json"), "response carrier is private too")
-				raw, err := json.Marshal(response.ReasoningDetails)
-				require.NoError(t, err)
+				raw, encodeErr := json.Marshal(response.ReasoningDetails)
+				require.NoError(t, encodeErr)
 				setPrivateDetails(t, &msg, raw)
 				slot := carrierAppend(t, store, meta.ID, msg, nil)
 				carrierAppend(t, store, meta.ID, providers.Message{Role: "tool", ToolCallID: response.ToolCalls[0].ID, Content: "tool result"}, &slot.Addr)
@@ -128,7 +128,7 @@ func TestT_C6_S30_S31_S32_TwoToolRoundsCodecRestartAndRoutes(t *testing.T) {
 			found := 0
 			want := []any{map[string]any{"index": float64(0), "type": "reasoning.text", "text": "step one"}, map[string]any{"index": float64(1), "type": "reasoning.encrypted", "format": "opaque/v1", "unknown_vendor_field": map[string]any{"keep": []any{float64(1), float64(2)}}, "data": "OPAQUE-PAYLOAD-7731", "signature": "SIG-7731", "id": "rs_abc123"}}
 			for _, item := range messages {
-				m := item.(map[string]any)
+				m := effortRequireType[map[string]any](t, item)
 				if m["role"] == "assistant" {
 					found++
 					assert.Equal(t, want, m["reasoning_details"], "every decoded opaque item survives codec/restart/route change unchanged")

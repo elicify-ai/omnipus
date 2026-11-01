@@ -30,7 +30,7 @@ func TestT_TL94_GenericCompositeAllValidStringClassesSurviveReopen(t *testing.T)
 				case "section":
 					key = "agents.defaults"
 					// An existing writable sibling isolates effort validation from new recap-limit support.
-					input = map[string]any{"max_tokens": 4096, "recap_reasoning_effort": value}
+					input = map[string]any{"temperature": 0.25, "recap_reasoning_effort": value}
 				}
 				res := tlSetConfig(t, reg, key, input)
 				require.False(t, res.IsError, "valid actual JSON composite with a <=32 string is accepted without a catalog check: %s", res.ForLLM)
@@ -38,18 +38,18 @@ func TestT_TL94_GenericCompositeAllValidStringClassesSurviveReopen(t *testing.T)
 				var effort any
 				switch shape {
 				case "default_model":
-					m := got.(map[string]any)
+					m := effortRequireType[map[string]any](t, got)
 					assert.Equal(t, "unoffered-generic-model", m["model"])
 					effort = m["reasoning_effort"]
 				case "recap_fallback_models":
-					list := got.([]any)
+					list := effortRequireType[[]any](t, got)
 					require.Len(t, list, 1)
-					m := list[0].(map[string]any)
+					m := effortRequireType[map[string]any](t, list[0])
 					assert.Equal(t, "unoffered-generic-model", m["model"])
 					effort = m["reasoning_effort"]
 				case "section":
-					m := got.(map[string]any)
-					assert.EqualValues(t, 4096, m["max_tokens"], "valid existing sibling persists together")
+					m := effortRequireType[map[string]any](t, got)
+					assert.Equal(t, 0.25, m["temperature"], "valid non-secret sibling persists together")
 					effort = m["recap_reasoning_effort"]
 				}
 				if value == "" {
@@ -104,7 +104,7 @@ func TestT_TL76_SchemaEnumAndRuntimeFieldNamesAgree(t *testing.T) {
 	require.NoError(t, err)
 	var schema map[string]any
 	require.NoError(t, json.Unmarshal(raw, &schema))
-	properties := schema["properties"].(map[string]any)
+	properties := effortRequireType[map[string]any](t, schema["properties"])
 	field, ok := properties["fields"].(map[string]any)
 	if !ok {
 		t.Fatal("BLOCKED: get_agent fields enum/schema not implemented — required by S-76 and T8 dependency TD-1")
@@ -131,7 +131,7 @@ func TestT_TL76_SchemaEnumAndRuntimeFieldNamesAgree(t *testing.T) {
 	}
 	want := make([]string, len(enum))
 	for i, name := range enum {
-		want[i] = name.(string)
+		want[i] = effortRequireType[string](t, name)
 	}
 	assert.ElementsMatch(t, want, listed, "runtime enum and tool schema cannot drift")
 }

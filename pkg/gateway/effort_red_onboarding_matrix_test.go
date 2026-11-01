@@ -117,10 +117,10 @@ func TestT_GW_S61_BothModesVariantsAtomicPairAndAccount(t *testing.T) {
 							// Local onboarding additionally records its session cookie;
 							// that existing write is not a second default-model write.
 							wantWrites = 2
-							users := m["gateway"].(map[string]any)["users"].([]any)
+							users := effortRequireType[[]any](t, effortRequireType[map[string]any](t, m["gateway"])["users"])
 							require.Len(t, users, 1)
-							assert.Equal(t, "effort-admin", users[0].(map[string]any)["username"])
-							assert.NotEmpty(t, users[0].(map[string]any)["password_hash"])
+							assert.Equal(t, "effort-admin", effortRequireType[map[string]any](t, users[0])["username"])
+							assert.NotEmpty(t, effortRequireType[map[string]any](t, users[0])["password_hash"])
 							assert.Equal(t, "effort-admin", response["username"])
 							assert.NotEmpty(t, response["token"])
 						}
@@ -193,10 +193,10 @@ func TestT_GW_S61_InvalidPlacementsKeepWholeTransactionUnchanged(t *testing.T) {
 						body[field] = "high"
 					case "sign-in-key":
 						field = "api_key"
-						body["provider"].(map[string]any)[field] = "test-placeholder"
+						effortRequireType[map[string]any](t, body["provider"])[field] = "test-placeholder"
 					case "api-key-device-code":
 						field = "device_code"
-						body["provider"].(map[string]any)[field] = "test-device-code"
+						effortRequireType[map[string]any](t, body["provider"])[field] = "test-device-code"
 					}
 					raw, err := json.Marshal(body)
 					require.NoError(t, err)

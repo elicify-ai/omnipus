@@ -119,7 +119,7 @@ func TestT_GW_S15_S75_RealFrameRoutesExactPairAndMapsToServingModel(t *testing.T
 			require.NotNil(t, done)
 			require.Len(t, calls, 1, "one serving attempt, no hidden fallback")
 			assert.Equal(t, row.wantProvider, calls[0]["provider"])
-			body := calls[0]["body"].(map[string]any)
+			body := effortRequireType[map[string]any](t, calls[0]["body"])
 			assert.Equal(t, row.wantModel, body["model"])
 			if row.wantProvider == "openrouter" {
 				assert.Equal(t, map[string]any{"effort": row.wantEffort}, body["reasoning"])

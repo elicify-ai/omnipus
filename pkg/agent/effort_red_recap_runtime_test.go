@@ -97,8 +97,8 @@ func recapRuntimeConfig(t *testing.T, source string, values map[string]any) (*co
 					require.True(t, ok)
 					got = section[k]
 				}
-				encoded, err := json.Marshal(v)
-				require.NoError(t, err)
+				encoded, encodeErr := json.Marshal(v)
+				require.NoError(t, encodeErr)
 				var want any
 				require.NoError(t, json.Unmarshal(encoded, &want))
 				require.Equal(t, want, got, "S-83 exact unredacted read %s/%s", key, k)
@@ -173,11 +173,11 @@ func TestT_L4_S79_S80_S83_RecapPromptInputDeadlineAndRetries(t *testing.T) {
 				if row.items > 0 {
 					assert.Equal(t, 3, strings.Count(first.messages[0].Content, fmt.Sprintf("up to %d", row.items)), "each of the three lists uses the configured limit")
 				}
-				cap := 2048
+				outputCap := 2048
 				if row.key == "recap_max_output_tokens" {
-					cap = 4096
+					outputCap = 4096
 				}
-				assert.EqualValues(t, cap, first.options["max_tokens"])
+				assert.EqualValues(t, outputCap, first.options["max_tokens"])
 				if row.deadline > 0 {
 					assert.InDelta(t, start.Add(row.deadline).UnixMilli(), first.deadline.UnixMilli(), 1000, "actual received deadline is the whole configured budget")
 				}
@@ -186,7 +186,7 @@ func TestT_L4_S79_S80_S83_RecapPromptInputDeadlineAndRetries(t *testing.T) {
 				}
 				if row.backoffs != nil {
 					matches := regexp.MustCompile(`backoff_ms=([0-9]+)`).FindAllStringSubmatch(slogBufForTest.String(), -1)
-					got := []string{}
+					got := make([]string, 0, len(matches))
 					for _, m := range matches {
 						got = append(got, m[1])
 					}
@@ -226,8 +226,9 @@ func rewriteRecapAge(t *testing.T, store *session.UnifiedStore, sid string, age 
 	file := filepath.Join(store.BaseDir(), sid, "transcript.jsonl")
 	raw, err := os.ReadFile(file)
 	require.NoError(t, err)
-	out := []string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
 		var m map[string]any
 		require.NoError(t, json.Unmarshal([]byte(line), &m))
 		m["timestamp"] = time.Now().Add(-age).UTC().Format(time.RFC3339Nano)
@@ -418,7 +419,7 @@ func TestT_L4_S81_S83_ClampOnlyInUseWarnsOnceAndPreservesDisk(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(res.ForLLM), &payload))
 			value := payload["value"]
 			if key == "agents.defaults" {
-				value = value.(map[string]any)["recap_summary_words"]
+				value = effortRequireType[map[string]any](t, value)["recap_summary_words"]
 			}
 			assert.Equal(t, float64(1000), value, "both config-tool reads expose written 1000, not the effective clamp")
 		}

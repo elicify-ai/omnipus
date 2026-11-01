@@ -36,6 +36,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,12 +85,6 @@ func (e *recapEndpoint) snapshot() ([]map[string]any, []time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]map[string]any(nil), e.bodies...), append([]time.Time(nil), e.times...)
-}
-
-func (e *recapEndpoint) count() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return len(e.bodies)
 }
 
 // buildEffortRecapLoop is buildRecapTestLoop with an explicit config so recap
@@ -207,6 +202,40 @@ func assertNoHardcodedRecapOff(t *testing.T, body map[string]any, allowSwitchOff
 	}
 }
 
+// installRecapEffortCatalog supplies the capability Given of S-71/S-78,
+// independently of whether production's vendored catalog is populated yet.
+// The real catalog parser, capability mapper, provider factory and HTTP
+// encoders remain under test; only their external catalog data is supplied.
+func installRecapEffortCatalog(t *testing.T) {
+	t.Helper()
+	previous := providers.ProviderCatalog()
+	declared, err := catalog.NewCatalog([]byte(`{
+		"schema_version":"2.0.0", "version":"v2026.11.01",
+		"updated_at":"2026-11-01T00:00:00Z", "source":"S-71/S-78 capability fixture",
+		"default_resize_limits":{"long_edge_px":2048,"max_bytes":10485760},
+		"providers":[{"id":"openrouter","name":"OpenRouter","company":"OpenRouter",
+			"api":"https://openrouter.ai/api/v1","protocol":"openai-compatible",
+			"tier":"popular","auth_methods":["api_key"],"aliases":[],
+			"models":[
+				{"id":"deepseek/deepseek-v4.1-flash","name":"S-71 level model",
+					"context_window":128000,"max_output_tokens":8192,"input_modalities":["text"],
+					"tool_call":true,"status":"active",
+					"reasoning":{"levels":["none","low","medium","high"],"switch":false}},
+				{"id":"minimax/minimax-m3","name":"S-71 switch model",
+					"context_window":128000,"max_output_tokens":8192,"input_modalities":["text"],
+					"tool_call":true,"status":"active",
+					"reasoning":{"levels":[],"switch":true}},
+				{"id":"openai/gpt-6.1-sol","name":"S-71 model without Off",
+					"context_window":128000,"max_output_tokens":8192,"input_modalities":["text"],
+					"tool_call":true,"status":"active",
+					"reasoning":{"levels":["low","medium","high"],"switch":false}}
+			]}]
+	}`))
+	require.NoError(t, err, "the specification's external capability data parses with the production parser")
+	providers.SetCatalog(declared)
+	t.Cleanup(func() { providers.SetCatalog(previous) })
+}
+
 // TestT_C5_S71_RecapDefaultOffPerRoute drives the outline's OpenAI-compatible
 // routes end to end (default Off, FD-19) and asserts the serialised bodies.
 // The native-Anthropic and ChatGPT-login rows are covered at the adapter
@@ -214,6 +243,7 @@ func assertNoHardcodedRecapOff(t *testing.T, body map[string]any, allowSwitchOff
 // tests); the "does not reason" row is a regression pin.
 // Traces to: S-71 (all rows), US-1 AS7, FR-070, SC-014.
 func TestT_C5_S71_RecapDefaultOffPerRoute(t *testing.T) {
+	installRecapEffortCatalog(t)
 	tests := []struct {
 		name        string
 		model       string
@@ -245,7 +275,6 @@ func TestT_C5_S71_RecapDefaultOffPerRoute(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			ep := newRecapEndpoint(t, http.StatusOK)
 			cfg := effortRecapCfg(tc.model, ep.srv.URL, "", "")
@@ -279,6 +308,39 @@ func TestT_C5_S71_RecapDefaultOffPerRoute(t *testing.T) {
 	}
 }
 
+// US-8 AS3 / S-71: the current real vendored rows have no reasoning data.
+// This separate witness must not be confused with the capability-driven
+// encoder tests above. A future catalog refresh that adds the data invalidates
+// this explicit Given; it does not change the positive wire oracles.
+func TestT_C5_S71_VendoredCatalogWithoutReasoningSendsNothing(t *testing.T) {
+	previous := providers.ProviderCatalog()
+	vendored, err := catalog.NewCatalog(catalog.EmbeddedSnapshot)
+	require.NoError(t, err)
+	providers.SetCatalog(vendored)
+	t.Cleanup(func() { providers.SetCatalog(previous) })
+	for _, model := range []string{"deepseek/deepseek-v4.1-flash", "minimax/minimax-m3", "openai/gpt-6.1-sol"} {
+		t.Run(model, func(t *testing.T) {
+			handle := vendored.Resolve("openrouter", model)
+			require.True(t, handle.Found(), "positive control: a real vendored model row exists")
+			levels, switchable, reasons := handle.ServedReasoning()
+			require.Empty(t, levels, "current vendored-data Given, not an encoder oracle")
+			require.False(t, switchable, "current vendored-data Given")
+			require.False(t, reasons, "current vendored-data Given: no reasoning descriptor")
+			ep := newRecapEndpoint(t, http.StatusOK)
+			cfg := effortRecapCfg(model, ep.srv.URL, "", "")
+			al, sessionID, ag, _ := buildEffortRecapLoop(t, cfg, &effortScriptedProvider{content: "unused", finish: "stop"})
+			runRecapAndWait(t, al, sessionID, wu21ReaimHome(ag), ag.ID)
+			bodies, _ := ep.snapshot()
+			require.Len(t, bodies, 1, "a real recap request reached the HTTP peer")
+			for _, key := range []string{"reasoning", "reasoning_effort", "thinking", "output_config", "extended_thinking", "extra_body"} {
+				_, present := bodyFind(bodies[0], key)
+				assert.False(t, present, "%s must be absent without catalog reasoning data", key)
+			}
+			assert.Equal(t, float64(2048), bodies[0]["max_tokens"], "S-71's independent recap output cap remains")
+		})
+	}
+}
+
 // TestT_C5_S71_RecapNoReasonDataSendsNothing pins the "does not reason" row:
 // a model with no catalog reasoning data sends no effort key. This passes at
 // RED (no reasoning data exists yet) and must keep passing.
@@ -305,6 +367,7 @@ func TestT_C5_S71_RecapNoReasonDataSendsNothing(t *testing.T) {
 // not exist yet).
 // Traces to: S-78, FR-070 (L2 configured), FR-072, SC-014.
 func TestT_C5_S78_ConfiguredRecapEffortReachesBody(t *testing.T) {
+	installRecapEffortCatalog(t)
 	ep := newRecapEndpoint(t, http.StatusOK)
 
 	// Hand-write the L2 keys the Settings screen will one day save, plus the
@@ -363,6 +426,7 @@ func TestT_C5_S78_ConfiguredRecapEffortReachesBody(t *testing.T) {
 // never made the fallback serve at all).
 // Traces to: S-78, FR-072, FR-021.
 func TestT_C5_S78_RecapFallbackServesWithItsOwnEffort(t *testing.T) {
+	installRecapEffortCatalog(t)
 	// The endpoint refuses the recap primary's model and serves the fallback.
 	var mu sync.Mutex
 	served := []map[string]any{}

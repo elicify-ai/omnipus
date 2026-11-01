@@ -20,6 +20,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,8 +32,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
-	"log/slog"
-
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -165,14 +164,39 @@ func newContainmentLoop(t *testing.T, cfg *config.Config, prov providers.LLMProv
 		cfg.Agents.List = []config.AgentConfig{{ID: testDefaultAgentID, Home: home}}
 	}
 
-	store, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
-	require.NoError(t, err)
 	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
 	al := mustNewAgentLoop(t, cfg, msgBus, prov)
-	t.Cleanup(func() { al.Close() })
-	al.sharedSessionStore = store
+	t.Cleanup(al.Close)
+	// Use the constructor-owned shared store, also used by the registry and
+	// agents. A second store under the workspace is a retired per-agent layout
+	// that boot cutover must refuse when it duplicates a shared session.
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
 	containmentSessionID = mustContainmentSession(t, store)
 	return al, store, home
+}
+
+// restartContainmentLoop closes the constructor-owned store and lets a new
+// loop reopen that same directory. No test-side store pointer is installed over
+// the constructor's store, so registry and loop share its real lifecycle.
+func restartContainmentLoop(t *testing.T, al *AgentLoop, provider providers.LLMProvider) (*AgentLoop, *session.UnifiedStore) {
+	t.Helper()
+	cfg := al.GetConfig()
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	al.Stop()
+	al.Close()
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	fresh := mustNewAgentLoop(t, cfg, msgBus, provider)
+	t.Cleanup(fresh.Close)
+	freshStore := fresh.GetSessionStore()
+	require.NotNil(t, freshStore)
+	require.NotSame(t, al, fresh, "a restart replaces the runtime")
+	require.NotSame(t, store, freshStore, "a restart reopens the store, not just its registry")
+	require.Equal(t, store.BaseDir(), freshStore.BaseDir(), "the same durable archive is reopened")
+	return fresh, freshStore
 }
 
 // containmentSessionID is the pre-created session for the current
@@ -349,19 +373,21 @@ func TestT_C3_S04_SameTextOnMessengerAndParent(t *testing.T) {
 	chManager.RegisterChannel("telegram", &fakeChannel{id: "s04-chat"})
 	al.SetChannelManager(chManager)
 
-	resp, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
-		Channel: "telegram",
-		Sender:  bus.SenderInfo{CanonicalID: "user-s04"},
-		ChatID:  "s04-chat",
-		Content: "hello",
+	// An ordinary user turn returns its reply to the worker; the worker owns
+	// publication. Actual delegated-parent delivery is covered separately by
+	// TestT_C3_S04_RealDelegatedParentReceivesEmptyAnswerSentinel.
+	worker := newSessionWorker("agent:"+testDefaultAgentID+":telegram:s04-chat", al, func() {})
+	t.Cleanup(worker.cancel)
+	worker.processTurn(context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		Sender:   bus.SenderInfo{CanonicalID: "user-s04"},
+		ChatID:   "s04-chat",
+		Content:  "hello",
+		Metadata: map[string]string{"agent_id": testDefaultAgentID},
 	})
-	require.NoError(t, err)
-	// The parent-visible reply (what a delegating agent receives) is the same
-	// ordinary reply text.
-	assert.Equal(t, redDefaultResponse, resp, "the parent receives exactly the S-03 text (S-04)")
-	assert.NotContains(t, resp, redMarker, "no reasoning text reaches the parent")
+	assert.Equal(t, 2, prov.callCount(), "the real messenger turn retries the reasoning-only response exactly once")
 
-	// The messenger receives exactly the same text on its outbound frame.
+	// The messenger receives exactly the same text on its ordinary outbound frame.
 	deadline := time.After(10 * time.Second)
 	for {
 		var outbound bus.OutboundMessage

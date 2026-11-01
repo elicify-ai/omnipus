@@ -18,7 +18,7 @@ import (
 
 func tlInstallS58Catalog(t *testing.T) {
 	t.Helper()
-	rows := []any{}
+	rows := make([]any, 0, 3)
 	for _, row := range []struct {
 		id         string
 		levels     []string

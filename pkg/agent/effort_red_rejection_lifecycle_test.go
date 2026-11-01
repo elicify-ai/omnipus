@@ -16,8 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,8 +40,8 @@ func TestT_P2_S26_ActualToolRejectionRefreshAndNewProcessState(t *testing.T) {
 				defer mu.Unlock()
 				requests = append(requests, body)
 				hasTool := false
-				for _, raw := range body["messages"].([]any) {
-					m := raw.(map[string]any)
+				for _, raw := range effortRequireType[[]any](t, body["messages"]) {
+					m := effortRequireType[map[string]any](t, raw)
 					if m["role"] == "tool" {
 						hasTool = true
 					}
@@ -90,14 +88,14 @@ func TestT_P2_S26_ActualToolRejectionRefreshAndNewProcessState(t *testing.T) {
 			first := snapshot()
 			toolResult := false
 			for _, body := range first {
-				for _, raw := range body["messages"].([]any) {
-					m := raw.(map[string]any)
+				for _, raw := range effortRequireType[[]any](t, body["messages"]) {
+					m := effortRequireType[map[string]any](t, raw)
 					if m["role"] == "tool" {
 						// Compatible APIs permit either a text scalar or text
 						// blocks. The marker exists only in the actual file, not
 						// in the scripted model's answer or tool-call arguments.
-						content, err := json.Marshal(m["content"])
-						require.NoError(t, err)
+						content, encodeErr := json.Marshal(m["content"])
+						require.NoError(t, encodeErr)
 						if strings.Contains(string(content), "ACTUAL-FILE-TOOL-RESULT-7731") {
 							toolResult = true
 						}
@@ -124,16 +122,7 @@ func TestT_P2_S26_ActualToolRejectionRefreshAndNewProcessState(t *testing.T) {
 				assert.False(t, bodyHasEffort(later[before]), "same pair stays rejected in process, including after catalog refresh")
 				assert.Equal(t, map[string]any{"chosen": "high", "reason": "rejected_earlier", "provider": "openrouter", "model": "primary-m"}, fullEffortAnswer(t, store)["effort"])
 			}
-			cfg := al.GetConfig()
-			al.Stop()
-			al.Close()
-			freshStore, err := session.NewUnifiedStore(store.BaseDir())
-			require.NoError(t, err)
-			msgBus := bus.NewMessageBus()
-			t.Cleanup(msgBus.Close)
-			fresh := mustNewAgentLoop(t, cfg, msgBus, &effortScriptedProvider{content: "UNEXPECTED-FALLBACK", finish: "stop"})
-			fresh.sharedSessionStore = freshStore
-			t.Cleanup(fresh.Close)
+			fresh, _ := restartContainmentLoop(t, al, &effortScriptedProvider{content: "UNEXPECTED-FALLBACK", finish: "stop"})
 			before := len(snapshot())
 			answer, _, err = fresh.processMessageAsPrimaryForTest(context.Background(), containmentTurn("after real loop/store restart"))
 			require.NoError(t, err)

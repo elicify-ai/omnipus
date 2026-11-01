@@ -33,6 +33,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -140,9 +141,10 @@ func (e *rejectionEndpoint) handler(t *testing.T) http.HandlerFunc {
 		e.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(st)
-		if st == http.StatusOK {
+		switch st {
+		case http.StatusOK:
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
-		} else if st == http.StatusBadRequest {
+		case http.StatusBadRequest:
 			// Distinct provider error messages keyed by ORDER so the test can
 			// pin WHICH attempt's failure surfaced (S-25: the original
 			// attempt's error, never a later retry's).
@@ -359,12 +361,15 @@ func TestT_P2_S28_Only400And422TriggerRetry(t *testing.T) {
 		{"503 no retry", http.StatusServiceUnavailable, false},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			ep := &rejectionEndpoint{}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body map[string]any
-				_ = json.NewDecoder(r.Body).Decode(&body)
+				if decodeErr := json.NewDecoder(r.Body).Decode(&body); decodeErr != nil {
+					t.Errorf("rejection matrix request JSON: %v", decodeErr)
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
 				ep.mu.Lock()
 				ep.bodies = append(ep.bodies, body)
 				st := http.StatusOK
@@ -379,13 +384,33 @@ func TestT_P2_S28_Only400And422TriggerRetry(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 			f := newRejectionFixture(t, srv.URL, "", "", "high")
-			_, _ = f.rt.callProviderOnce(f.rf.callMessages, nil)
-			got := len(ep.snapshot())
-			want := 1
+			_, callErr := f.rt.callProviderOnce(f.rf.callMessages, nil)
 			if tc.wantRetry {
-				want = 2
+				require.NoError(t, callErr, "the one effort-free resend succeeds")
+			} else {
+				require.ErrorContains(t, callErr, fmt.Sprint(tc.status), "the original status remains a failure, not a fabricated success")
 			}
-			assert.Equal(t, want, got, "status %d: %d extra request(s) (S-28)", tc.status, want-1)
+			bodies := ep.snapshot()
+			require.NotEmpty(t, bodies, "positive control: a real HTTP request reached the peer")
+			require.True(t, bodyCarriesEffortValue(bodies[0], "high"), "the original request really carries High")
+			effortFree := 0
+			for _, body := range bodies[1:] {
+				if !bodyHasEffort(body) {
+					effortFree++
+				} else {
+					assert.Equal(t, bodies[0], body, "ordinary rate-limit retries keep the effort and every other request field unchanged")
+				}
+			}
+			wantEffortFree := 0
+			if tc.wantRetry {
+				wantEffortFree = 1
+				require.Len(t, bodies, 2, "400/422 cause exactly one resend")
+			} else if tc.status != http.StatusTooManyRequests {
+				require.Len(t, bodies, 1, "non-rate-limit failures do not resend at all")
+			}
+			// S-28 counts only extra requests WITHOUT effort. Existing 429
+			// rate-limit retries may repeat the original effort-bearing request.
+			assert.Equal(t, wantEffortFree, effortFree, "status %d: exact effort-free extra requests (S-28)", tc.status)
 		})
 	}
 }
@@ -578,7 +603,7 @@ func TestT_R0_S20_ExtraBodyOverrideRecorded(t *testing.T) {
 	record := fullEffortAnswer(t, store)
 	eff, has := record["effort"]
 	require.True(t, has, "the override is recorded (S-20 — RED: no record)")
-	em := eff.(map[string]any)
+	em := effortRequireType[map[string]any](t, eff)
 	assert.Equal(t, "low", em["chosen"])
 	assert.Equal(t, "high", em["sent"])
 	assert.Equal(t, "extra_body", em["reason"])

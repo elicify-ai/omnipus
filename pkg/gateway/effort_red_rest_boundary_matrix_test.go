@@ -92,9 +92,9 @@ func newEffortRESTBoundary(t *testing.T, kind string, validate bool) *effortREST
 			f.member = map[string]any{"provider": "openrouter", "model": "m1"}
 			f.body["fallback_models"] = []any{f.member}
 			f.read = func(*httptest.ResponseRecorder) any {
-				rows := egwReadAgentEntity(t, f.api, "test-agent")["fallback_models"].([]any)
+				rows := effortRequireType[[]any](t, egwReadAgentEntity(t, f.api, "test-agent")["fallback_models"])
 				require.Len(t, rows, 1)
-				return rows[0].(map[string]any)["reasoning_effort"]
+				return effortRequireType[map[string]any](t, rows[0])["reasoning_effort"]
 			}
 		}
 	case "default-model":
@@ -114,9 +114,9 @@ func newEffortRESTBoundary(t *testing.T, kind string, validate bool) *effortREST
 			f.member = map[string]any{"provider": "openrouter", "model": "m1"}
 			f.body["recap_fallback_models"] = []any{f.member}
 			f.read = func(*httptest.ResponseRecorder) any {
-				rows := egwDefaultsOf(t, diskConfig(t, f.api.homePath))["recap_fallback_models"].([]any)
+				rows := effortRequireType[[]any](t, egwDefaultsOf(t, diskConfig(t, f.api.homePath))["recap_fallback_models"])
 				require.Len(t, rows, 1)
-				return rows[0].(map[string]any)["reasoning_effort"]
+				return effortRequireType[map[string]any](t, rows[0])["reasoning_effort"]
 			}
 		}
 	case "provider-delete-new-default":

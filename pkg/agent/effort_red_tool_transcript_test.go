@@ -65,8 +65,8 @@ func TestT_Tools_S63_ActualDispatchStoresEffortCallAndResult(t *testing.T) {
 		require.Contains(t, results, id)
 		var payload map[string]any
 		require.NoError(t, json.Unmarshal([]byte(results[id]), &payload), "the production tool result is JSON")
-		canonical, err := json.Marshal(payload)
-		require.NoError(t, err)
+		canonical, encodeErr := json.Marshal(payload)
+		require.NoError(t, encodeErr)
 		require.Contains(t, string(canonical), `"reasoning_effort":"high"`, "S-63 successful tool results must show the stored primary effort; an unknown-field refusal is missing implementation")
 	}
 	bytes, err := os.ReadFile(filepath.Join(home, "entities", "agents", "effort-target.json"))

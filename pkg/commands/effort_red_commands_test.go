@@ -17,26 +17,21 @@ package commands
 // guard, so today's failure reason is honest (command not found), never a
 // silently-passed execution.
 //
-// Harness (GREEN wiring notes — read before making these pass):
-//   - Wired today, existing seams only: rt.GetModelInfo (the same closure
-//     cmd_model.go's bare /model reads for the {model} name) and a counting
-//     spy on rt.SwitchModel (S-40's named seam; the loop's SwitchModel closure
-//     is the agent-wide writer reachable from the command Runtime).
-//   - Not wired, no Runtime seam exists yet: the served capability of the
-//     conversation's model (levels/switch/reasons), the conversation's current
-//     effort value, and the agent's configured effort (the reset row's
-//     "(Medium)"). The spec stores the conversation value in SessionMeta
-//     ("reasoning_effort", with the matching MetaPatch field), outside this
-//     package. Until GREEN adds the capability seam and wires it in THIS
-//     harness, a registered handler replies unavailableMsg and these tests
-//     fail with an exact-text diff ("text missing") — the second honest RED
-//     state named by the dispatch. Assertions are exact-equality on the spec's
-//     pinned strings and are never to be weakened to make them pass.
+// Round-4 binding: Runtime now exposes the required effort callbacks. The
+// fixture supplies their external capability data and a REAL UnifiedStore,
+// and binds each request to its conversation. It never supplies a command
+// reply or reimplements validation. The original exact reply strings and
+// SwitchModel zero-call assertions remain. Full loop/store restart coverage
+// also lives in pkg/agent; this file separately reopens its real binding store.
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // The spec's exact reply strings (effort-levels-spec-r10.md, S-36 examples
@@ -71,25 +66,95 @@ func effortRedLookup(t *testing.T, reg *Registry, scenario string) Definition {
 	return def
 }
 
-// newEffortRedRuntime returns a Runtime wired with the seams that exist today:
-// GetModelInfo (the {model} source the /model handler uses) and a counting
-// SwitchModel spy. The returned spy func reads the call count.
-func newEffortRedRuntime() (*Runtime, *int) {
-	calls := 0
-	rt := &Runtime{
+// Only the command runtime's external dependencies are supplied here: served
+// capability data and real session-store reads/writes. The registry, parser,
+// handler, value validation and exact reply generation remain production code.
+type effortRedBinding struct {
+	runtime       *Runtime
+	store         *session.UnifiedStore
+	conversations map[string]string
+	levels        []string
+	switchCalls   int
+	closed        bool
+}
+
+func newEffortRedBinding(t *testing.T, store *session.UnifiedStore, conversations map[string]string) *effortRedBinding {
+	t.Helper()
+	if store == nil {
+		var err error
+		store, err = session.NewUnifiedStore(filepath.Join(t.TempDir(), "sessions"))
+		if err != nil {
+			t.Fatalf("command fixture session store: %v", err)
+		}
+		conversations = make(map[string]string)
+		for _, chatID := range []string{"conv-a", "conv-b"} {
+			meta, createErr := store.NewSession(session.SessionTypeChat, "telegram", "mia")
+			if createErr != nil {
+				t.Fatalf("command fixture conversation %s: %v", chatID, createErr)
+			}
+			high := "high" // S-36 row 1's explicit initial conversation value.
+			if patchErr := store.SetMeta(meta.ID, session.MetaPatch{ReasoningEffort: &high}); patchErr != nil {
+				t.Fatalf("command fixture effort seed: %v", patchErr)
+			}
+			conversations[chatID] = meta.ID
+		}
+	}
+	f := &effortRedBinding{store: store, conversations: conversations, levels: []string{"none", "low", "medium", "high"}}
+	t.Cleanup(func() { f.close(t) })
+	f.runtime = &Runtime{
 		GetModelInfo: func() (string, string) { return effortTestModel, "openrouter" },
+		SessionID:    func() string { return "conv-a" },
 		SwitchModel: func(string) (string, error) {
-			calls++
+			f.switchCalls++
 			return "previous-model", nil
 		},
 	}
-	return rt, &calls
+	f.runtime.GetEffortState = func() (EffortState, error) {
+		id, found := f.conversations[f.runtime.SessionID()]
+		if !found {
+			return EffortState{}, fmt.Errorf("command fixture: undeclared conversation %q", f.runtime.SessionID())
+		}
+		meta, err := f.store.GetMeta(id)
+		if err != nil {
+			return EffortState{}, err
+		}
+		return EffortState{Model: effortTestModel, Known: true, Reasons: true, Levels: f.levels,
+			Current: meta.ReasoningEffort, AgentSetting: "medium"}, nil
+	}
+	f.runtime.SetConversationEffort = func(value string) error {
+		id, found := f.conversations[f.runtime.SessionID()]
+		if !found {
+			return fmt.Errorf("command fixture: undeclared conversation %q", f.runtime.SessionID())
+		}
+		return f.store.SetMeta(id, session.MetaPatch{ReasoningEffort: &value})
+	}
+	return f
+}
+
+func (f *effortRedBinding) close(t *testing.T) {
+	t.Helper()
+	if f.closed {
+		return
+	}
+	if err := f.store.Close(); err != nil {
+		t.Fatalf("command fixture close: %v", err)
+	}
+	f.closed = true
+}
+
+func newEffortRedRuntime(t *testing.T) (*Runtime, *int) {
+	t.Helper()
+	f := newEffortRedBinding(t, nil, nil)
+	return f.runtime, &f.switchCalls
 }
 
 // runEffort executes one command text on one surface/conversation and returns
 // the reply text and the executor outcome.
 func runEffort(t *testing.T, ex *Executor, channel, chatID, text string) (string, Outcome) {
 	t.Helper()
+	// Runtime is per-request in the product. Bind this fixture's current
+	// conversation before invoking the real executor; do not key all calls to A.
+	ex.rt.SessionID = func() string { return chatID }
 	var reply string
 	res := ex.Execute(context.Background(), Request{
 		Channel:  channel,
@@ -98,6 +163,9 @@ func runEffort(t *testing.T, ex *Executor, channel, chatID, text string) (string
 		Text:     text,
 		Reply:    func(text string) error { reply = text; return nil },
 	})
+	if res.Err != nil {
+		t.Fatalf("execute %q for %s: %v", text, chatID, res.Err)
+	}
 	return reply, res.Outcome
 }
 
@@ -137,7 +205,7 @@ func TestT_CMD_Effort_S36_RegisteredWithSpecContract(t *testing.T) {
 
 	// Surface gating is enforced by the Executor, not just metadata: a CLI
 	// arrival passes through to the model, a messenger arrival is handled.
-	rt, spy := newEffortRedRuntime()
+	rt, spy := newEffortRedRuntime(t)
 	ex := NewExecutor(reg, rt)
 
 	if _, outcome := runEffort(t, ex, "cli", "term", "/effort high"); outcome != OutcomePassthrough {
@@ -170,7 +238,7 @@ func TestT_CMD_Effort_S37_BareEffortRepliesExactStatus(t *testing.T) {
 	reg := NewRegistry(BuiltinDefinitions())
 	effortRedLookup(t, reg, "S-37")
 
-	rt, spy := newEffortRedRuntime()
+	rt, spy := newEffortRedRuntime(t)
 	ex := NewExecutor(reg, rt)
 
 	reply, outcome := runEffort(t, ex, "telegram", "conv-a", "/effort")
@@ -202,7 +270,7 @@ func TestT_CMD_Effort_S38_SetIsConversationScoped(t *testing.T) {
 	reg := NewRegistry(BuiltinDefinitions())
 	effortRedLookup(t, reg, "S-38")
 
-	rt, spy := newEffortRedRuntime()
+	rt, spy := newEffortRedRuntime(t)
 	ex := NewExecutor(reg, rt)
 
 	// Snapshot conversation B before A changes anything.
@@ -254,12 +322,40 @@ func TestT_CMD_Effort_S38_SetIsConversationScoped(t *testing.T) {
 func TestT_CMD_Effort_S39_ConversationValueSurvivesRestart(t *testing.T) {
 	reg := NewRegistry(BuiltinDefinitions())
 	effortRedLookup(t, reg, "S-39")
-	// The former same-Runtime restart was invalid. The durable behavioral
-	// assertion now lives at the actual owner boundary in pkg/agent's
+	original := newEffortRedBinding(t, nil, nil)
+	before := NewExecutor(reg, original.runtime)
+	reply, outcome := runEffort(t, before, "telegram", "conv-a", "/effort default")
+	if outcome != OutcomeHandled || reply != wantEffortDefaultSet {
+		t.Fatalf("set before restart: outcome=%v reply=%q, want handled and %q", outcome, reply, wantEffortDefaultSet)
+	}
+	root := original.store.BaseDir()
+	original.close(t)
+	reopened, err := session.NewUnifiedStore(root)
+	if err != nil {
+		t.Fatalf("reopen command conversation store: %v", err)
+	}
+	rebuilt := newEffortRedBinding(t, reopened, original.conversations)
+	if rebuilt.runtime == original.runtime || rebuilt.store == original.store {
+		t.Fatal("restart must replace both the Runtime and the session-store instance")
+	}
+	after := NewExecutor(NewRegistry(BuiltinDefinitions()), rebuilt.runtime)
+	status, outcome := runEffort(t, after, "telegram", "conv-a", "/effort")
+	want := "Effort for test-model: Provider default. Options: Provider default, Off, low, medium, high. /effort reset returns to the agent's setting."
+	if outcome != OutcomeHandled || status != want {
+		t.Fatalf("status after restart: outcome=%v reply=%q, want handled and %q", outcome, status, want)
+	}
+	meta, err := reopened.GetMeta(rebuilt.conversations["conv-a"])
+	if err != nil {
+		t.Fatalf("read restored conversation: %v", err)
+	}
+	if meta.ReasoningEffort != "provider_default" {
+		t.Errorf("restored effort=%q, want provider_default", meta.ReasoningEffort)
+	}
+	if original.switchCalls != 0 || rebuilt.switchCalls != 0 {
+		t.Errorf("agent-wide SwitchModel calls before/after restart=%d/%d, want 0/0", original.switchCalls, rebuilt.switchCalls)
+	}
+	// The full agent-loop and store restart is additionally covered by
 	// TestT_CMD_S39_RealLoopAndStoreRestartKeepsConversationEffort.
-	// This package still needs a binding to the spec's durable session carrier;
-	// no such hook exists in Runtime in the pre-change tree.
-	t.Fatal("BLOCKED: command Runtime effort/capability/session-storage binding not implemented — required by S-36/S-38/S-39/FR-023; real loop/store restart test added in pkg/agent")
 }
 
 // TestT_CMD_Effort_S40_NeverCallsSwitchModel pins S-40 exactly: with a spy on
@@ -273,7 +369,7 @@ func TestT_CMD_Effort_S40_NeverCallsSwitchModel(t *testing.T) {
 	reg := NewRegistry(BuiltinDefinitions())
 	effortRedLookup(t, reg, "S-40")
 
-	rt, spy := newEffortRedRuntime()
+	rt, spy := newEffortRedRuntime(t)
 	ex := NewExecutor(reg, rt)
 
 	forms := []struct {
@@ -327,7 +423,7 @@ func TestT_CMD_Effort_S41_WebDeliveryClientNoServerRecord(t *testing.T) {
 		t.Errorf("Surfaces=%v must not allow the CLI surface (no terminal registration)", def.Surfaces)
 	}
 
-	rt, spy := newEffortRedRuntime()
+	rt, spy := newEffortRedRuntime(t)
 	ex := NewExecutor(reg, rt)
 
 	// A model offering max; the text arrives as a webchat message anyway
@@ -351,7 +447,8 @@ func TestT_CMD_Effort_S42_UnknownUnofferedAndInputForms(t *testing.T) {
 	reg := NewRegistry(BuiltinDefinitions())
 	effortRedLookup(t, reg, "S-42")
 
-	rt, spy := newEffortRedRuntime()
+	fixture := newEffortRedBinding(t, nil, nil)
+	rt, spy := fixture.runtime, &fixture.switchCalls
 	ex := NewExecutor(reg, rt)
 
 	// Unknown level (the task's /effort bogus; S-36 row 9's invalid class —
@@ -367,6 +464,8 @@ func TestT_CMD_Effort_S42_UnknownUnofferedAndInputForms(t *testing.T) {
 
 	// Differentiation: a KNOWN level the model doesn't offer is refused with
 	// the options list, NOT the invalid-level text (S-36 row 2).
+	// S-36 row 2's premise differs from row 1: this capability has no Off.
+	fixture.levels = []string{"low", "medium", "high"}
 	replyMax, _ := runEffort(t, ex, "telegram", "conv-a", "/effort max")
 	if replyMax != wantEffortMaxUnoffered {
 		t.Fatalf("/effort max reply=%q, want exactly %q (S-36 row 2 — known-but-unoffered differs from unknown)", replyMax, wantEffortMaxUnoffered)
@@ -374,6 +473,9 @@ func TestT_CMD_Effort_S42_UnknownUnofferedAndInputForms(t *testing.T) {
 	if replyMax == wantEffortInvalid {
 		t.Fatal("/effort max was answered with the invalid-level text — unoffered and unknown must stay distinct refusals")
 	}
+
+	// Return to row 1's advertised options for the following High status.
+	fixture.levels = []string{"none", "low", "medium", "high"}
 
 	// S-42 form 1: "/effort DEFAULT" — /effort lower-cases the input first
 	// (boundary table row 10), so the reserved catalog name sets Provider
@@ -416,7 +518,7 @@ func TestT_CMD_Effort_S70_WebBranchRepliesChipHint(t *testing.T) {
 	reg := NewRegistry(BuiltinDefinitions())
 	effortRedLookup(t, reg, "S-70")
 
-	rt, spy := newEffortRedRuntime()
+	rt, spy := newEffortRedRuntime(t)
 	ex := NewExecutor(reg, rt)
 
 	reply, outcome := runEffort(t, ex, "webchat", "run-task", "/effort high")

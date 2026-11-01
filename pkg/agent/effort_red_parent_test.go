@@ -27,13 +27,16 @@ func TestT_C3_S04_RealDelegatedParentReceivesEmptyAnswerSentinel(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, steer.DispatchRunning, admitted.State)
 	waitForCond(t, 5*time.Second, "actual child final publication", func() bool {
-		rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
-		return err == nil && rec.Terminal() && rec.FinalDelivery != nil
+		rec, loadErr := al.GetSessionLifecycleStore().Load(child.SessionID)
+		return loadErr == nil && rec.Terminal() && rec.FinalDelivery != nil
 	})
 	msgs, _, more, err := al.GetMessageInboxStore().Drain(parent, child.SessionID, "", 10)
 	require.NoError(t, err)
 	require.False(t, more)
 	require.Len(t, msgs, 1, "one final handback, not a fabricated root response")
+	kind, err := msgs[0].Discriminator()
+	require.NoError(t, err)
+	assert.Equal(t, "handback", kind, "S-04 requires an ordinary handback, not an error notice")
 	result, err := msgs[0].AsSessionMessageHandback()
 	require.NoError(t, err)
 	assert.Equal(t, redDefaultResponse, result.ResultSoFar)

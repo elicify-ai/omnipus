@@ -20,7 +20,7 @@ import (
 )
 
 type recapAdapterChat interface {
-	Chat(context.Context, []providers.Message, []providers.ToolDefinition, string, map[string]any) (*providers.LLMResponse, error)
+	Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error)
 }
 
 // A leaf adapter does not necessarily expose GetDefaultModel. This wrapper is

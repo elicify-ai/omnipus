@@ -208,24 +208,24 @@ func TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory(t *testing.T) {
 	streamed := aStream
 	mu.Unlock()
 	require.Equal(t, true, streamed, "BLOCKED: streaming multi-candidate fallback not implemented — required by S-88; both actual HTTP peers completed, but A used plain Chat")
-	stats1 := done1["stats"].(map[string]any)
+	stats1 := effortRequireType[map[string]any](t, done1["stats"])
 	assert.Equal(t, float64(120), stats1["reasoning_tokens"])
 	expected := map[string]any{"chosen": "medium", "sent": "low", "reason": "mapped", "provider": "openai", "model": "B"}
 	assert.Equal(t, expected, stats1["effort"])
 	cells := effortModelCells(t, f)
 	require.Contains(t, cells, "A")
 	require.Contains(t, cells, "B")
-	ca := cells["A"].(map[string]any)
-	cb := cells["B"].(map[string]any)
+	ca := effortRequireType[map[string]any](t, cells["A"])
+	cb := effortRequireType[map[string]any](t, cells["B"])
 	assert.Equal(t, float64(300), ca["out"])
 	assert.Equal(t, float64(120), ca["reasoning"])
 	assert.Equal(t, float64(80), cb["out"])
 	assert.NotContains(t, cb, "reasoning", "B remains not-reported after turn one, not credited A's 120")
 	done2 := f.turn(t, "second", "B")
-	assert.Equal(t, float64(0), done2["stats"].(map[string]any)["reasoning_tokens"])
+	assert.Equal(t, float64(0), effortRequireType[map[string]any](t, done2["stats"])["reasoning_tokens"])
 	cells = effortModelCells(t, f)
-	assert.Equal(t, float64(120), cells["A"].(map[string]any)["reasoning"])
-	cb = cells["B"].(map[string]any)
+	assert.Equal(t, float64(120), effortRequireType[map[string]any](t, cells["A"])["reasoning"])
+	cb = effortRequireType[map[string]any](t, cells["B"])
 	assert.Equal(t, float64(0), cb["reasoning"])
 	assert.Equal(t, float64(130), cb["out"])
 	mu.Lock()
@@ -269,7 +269,7 @@ func TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory(t *testing.T) {
 		}
 	}
 	for _, answer := range answers {
-		id := answer["id"].(string)
+		id := effortRequireType[string](t, answer["id"])
 		require.Contains(t, replayed, id)
 		assert.Equal(t, answer["turn_reasoning_tokens"], replayed[id]["turn_reasoning_tokens"])
 		assert.Equal(t, answer["effort"], replayed[id]["effort"])
@@ -283,10 +283,10 @@ func TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory(t *testing.T) {
 	require.NoError(t, json.Unmarshal(page.Body.Bytes(), &history))
 	rest := map[string]map[string]any{}
 	for _, row := range history.Entries {
-		rest[row["id"].(string)] = row
+		rest[effortRequireType[string](t, row["id"])] = row
 	}
 	for _, answer := range answers {
-		id := answer["id"].(string)
+		id := effortRequireType[string](t, answer["id"])
 		require.Contains(t, rest, id)
 		assert.Equal(t, answer["turn_reasoning_tokens"], rest[id]["turn_reasoning_tokens"])
 		assert.Equal(t, answer["effort"], rest[id]["effort"])

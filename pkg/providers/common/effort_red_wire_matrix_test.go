@@ -53,7 +53,7 @@ func captureEffortWire(t *testing.T, route effortWireRoute, streaming bool, effo
 	}))
 	defer srv.Close()
 	var p interface {
-		Chat(context.Context, []providers.Message, []providers.ToolDefinition, string, map[string]any) (*providers.LLMResponse, error)
+		Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error)
 	}
 	var err error
 	switch route.kind {

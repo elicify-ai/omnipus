@@ -28,7 +28,7 @@ func assertRouterLoopCarriers(t *testing.T, body map[string]any, want []any, rou
 	require.True(t, ok, "positive control: request contains real conversation messages")
 	calls, results := 0, 0
 	for _, value := range messages {
-		m := value.(map[string]any)
+		m := effortRequireType[map[string]any](t, value)
 		if m["role"] == "assistant" && m["tool_calls"] != nil {
 			calls++
 			if routed {

@@ -120,7 +120,7 @@ func TestT_GW_S34_S90_StreamingNativeToolLoop(t *testing.T) {
 				assert.NotContains(t, first[1], "output_config")
 				expected["reason"] = "continuation"
 			}
-			assert.Equal(t, expected, done["stats"].(map[string]any)["effort"])
+			assert.Equal(t, expected, effortRequireType[map[string]any](t, done["stats"])["effort"])
 			entries, err := f.al.GetSessionStore().ReadTranscript(f.sid)
 			require.NoError(t, err)
 			var saved map[string]any

@@ -116,7 +116,7 @@ func pendingCallEntries(t *testing.T, rt *agentLoopRunTurn) []map[string]any {
 	t.Helper()
 	rt.ts.mu.Lock()
 	defer rt.ts.mu.Unlock()
-	var out []map[string]any
+	out := make([]map[string]any, 0, len(rt.ts.callAccounting.pending))
 	for _, e := range rt.ts.callAccounting.pending {
 		out = append(out, entryJSON(t, e))
 	}
@@ -274,7 +274,7 @@ func TestT_U1_S88_FailedAttemptKeepsItsCount(t *testing.T) {
 	var totalReasoning float64
 	for _, cell := range cells {
 		if r, ok := cell["reasoning"]; ok {
-			totalReasoning += r.(float64)
+			totalReasoning += effortRequireType[float64](t, r)
 		}
 	}
 	assert.Equal(t, float64(120), totalReasoning, "the cells show exactly A's 120, never 240 (SC-018)")

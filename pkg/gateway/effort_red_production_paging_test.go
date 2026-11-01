@@ -37,7 +37,7 @@ func effortPagingReply(t *testing.T, w http.ResponseWriter, stream bool, message
 		}
 		if calls, ok := message["tool_calls"].([]any); ok {
 			for i, raw := range calls {
-				raw.(map[string]any)["index"] = i
+				effortRequireType[map[string]any](t, raw)["index"] = i
 			}
 			delta["tool_calls"] = calls
 		}
@@ -126,7 +126,7 @@ func effortPagingAssertIncremental(t *testing.T, f *effortProductionTurn, live .
 		var frame map[string]any
 		require.NoError(t, json.Unmarshal(entry.bytes, &frame))
 		if frame["type"] == "done" && frame["message_id"] != nil {
-			want[frame["message_id"].(string)] = entry.bytes
+			want[effortRequireType[string](t, frame["message_id"])] = entry.bytes
 		}
 	}
 	wc := makeTestConn()
@@ -143,7 +143,7 @@ func effortPagingAssertIncremental(t *testing.T, f *effortProductionTurn, live .
 			incremental = frame["mode"] == "incremental"
 		}
 		if frame["type"] == "done" && frame["message_id"] != nil {
-			id := frame["message_id"].(string)
+			id := effortRequireType[string](t, frame["message_id"])
 			require.Contains(t, want, id)
 			assert.Equal(t, want[id], raw, "incremental replay is byte-identical to the actual published journal")
 			got[id] = frame
@@ -151,7 +151,7 @@ func effortPagingAssertIncremental(t *testing.T, f *effortProductionTurn, live .
 	}
 	require.True(t, incremental)
 	for _, frame := range live {
-		assert.Equal(t, frame, got[frame["message_id"].(string)], "effort and reasoning metadata match the observed live done")
+		assert.Equal(t, frame, got[effortRequireType[string](t, frame["message_id"])], "effort and reasoning metadata match the observed live done")
 	}
 }
 
@@ -187,8 +187,8 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 		}
 		prompt := ""
 		afterTool := false
-		for _, raw := range body["messages"].([]any) {
-			m := raw.(map[string]any)
+		for _, raw := range effortRequireType[[]any](t, body["messages"]) {
+			m := effortRequireType[map[string]any](t, raw)
 			text, err := json.Marshal(m["content"])
 			if err != nil {
 				t.Errorf("content: %v", err)
@@ -241,11 +241,11 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 	firstStream := streams[0]
 	mu.Unlock()
 	require.Equal(t, true, firstStream, "BLOCKED: streaming multi-candidate fallback not implemented — required by S-95/S-88; actual fallback completed but primary used plain Chat")
-	assert.Equal(t, float64(120), done1["stats"].(map[string]any)["reasoning_tokens"])
+	assert.Equal(t, float64(120), effortRequireType[map[string]any](t, done1["stats"])["reasoning_tokens"])
 	done2 := f.turn(t, "PAGE-T2", "B")
-	assert.Equal(t, float64(30), done2["stats"].(map[string]any)["reasoning_tokens"])
+	assert.Equal(t, float64(30), effortRequireType[map[string]any](t, done2["stats"])["reasoning_tokens"])
 	done3 := f.turn(t, "PAGE-T3", "B")
-	assert.NotContains(t, done3["stats"].(map[string]any), "reasoning_tokens")
+	assert.NotContains(t, effortRequireType[map[string]any](t, done3["stats"]), "reasoning_tokens")
 	effortPagingAssertIncremental(t, f, done1, done2, done3)
 	entries, err := f.al.GetSessionStore().ReadTranscript(f.sid)
 	require.NoError(t, err)
@@ -293,7 +293,7 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 				found[id] = true
 			}
 		}
-		info := page["page_info"].(map[string]any)
+		info := effortRequireType[map[string]any](t, page["page_info"])
 		if start, ok := info["first_position"].(string); ok {
 			end, ok := info["last_position"].(string)
 			require.True(t, ok)
@@ -336,7 +336,7 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 		f.turn(t, fmt.Sprintf("PAGE-FILL-CUT-%d", i), "B")
 	}
 	cut := effortPagingAttach(t, f)
-	id := answer["id"].(string)
+	id := effortRequireType[string](t, answer["id"])
 	effortPagingAssertAnswer(t, cut[id], answer)
 	assert.Equal(t, float64(120), cut[id]["turn_reasoning_tokens"])
 	for _, contributor := range contributors {
