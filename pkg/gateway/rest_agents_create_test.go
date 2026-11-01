@@ -438,10 +438,17 @@ func TestCreateAgent_ExecutorPersistsAndEchoes(t *testing.T) {
 
 // r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
 func TestCreateAgent_InvalidExecutor_400(t *testing.T) {
-	for _, cli := range []string{"", "not-a-cli"} {
-		t.Run("cli="+cli, func(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		executor map[string]any
+	}{
+		{"omitted cli", map[string]any{}},
+		{"empty cli", map[string]any{"cli": ""}},
+		{"unknown cli", map[string]any{"cli": "not-a-cli"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			api := newTestRestAPIWithValidation(t)
-			body, err := json.Marshal(map[string]any{"name": "X", "type": "subagent_3p", "description": "d", "executor": map[string]any{"cli": cli}})
+			body, err := json.Marshal(map[string]any{"name": "X", "type": "subagent_3p", "description": "d", "executor": tc.executor})
 			require.NoError(t, err)
 			w := httptest.NewRecorder()
 			r := withAdminRole(httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewReader(body)))
