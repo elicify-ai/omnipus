@@ -372,13 +372,33 @@ func (te *TaskExecutor) getLifecycleStore() *session.LifecycleStore {
 	return te.lifecycleStore
 }
 
+// recordStore is the store every task-run lifecycle record is minted into and
+// read from: the executor's own store, or, while the gateway has not yet
+// wired it (SetLifecycleStore runs in startPlanEngine), the loop's
+// session-messaging store, the one enforceTaskRunRuntimeInvariant checks a
+// task run against. The gateway passes both the same instance, so once both
+// are wired they agree. Without this fallback a run dispatched in that boot
+// window (the queue drain starts first, in startSchedulers) was minted
+// nowhere and then refused by the already wired enforcement. Nil only when
+// neither store is wired, the harness/degraded-boot seam where enforcement
+// is off too.
+func (te *TaskExecutor) recordStore() *session.LifecycleStore {
+	if ls := te.getLifecycleStore(); ls != nil {
+		return ls
+	}
+	if te.agentLoop == nil {
+		return nil
+	}
+	return te.agentLoop.GetSessionLifecycleStore()
+}
+
 // mintTaskLifecycleRecordFor is mintTaskLifecycleRecord for a run an agent
 // started: initiatedBy (already authorized by authorizeInitiatedRun) is
 // stamped on the record so the run's later delegations and run_task /
 // execute_plan calls inherit the onward budget. nil means a person or the
 // scheduler started it.
 func (te *TaskExecutor) mintTaskLifecycleRecordFor(sessionID string, t *task.Task, initiatedBy *session.InitiatedBy) error {
-	ls := te.getLifecycleStore()
+	ls := te.recordStore()
 	if ls == nil || sessionID == "" {
 		return nil
 	}
@@ -477,7 +497,7 @@ func (te *TaskExecutor) resolveTaskRuntime(t *task.Task) (bool, error) {
 // ignored for any other target state. See each call site for its own cause
 // reasoning.
 func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.LifecycleState, failedReason string, note *session.StopNote) {
-	ls := te.getLifecycleStore()
+	ls := te.recordStore()
 	if ls == nil || sessionID == "" {
 		return
 	}
@@ -1322,7 +1342,7 @@ func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.T
 			return "", err
 		}
 		generation := 1
-		if lifecycle := te.getLifecycleStore(); lifecycle != nil {
+		if lifecycle := te.recordStore(); lifecycle != nil {
 			if rec, err := lifecycle.Load(t.SessionID); err == nil {
 				generation = rec.Generation
 			}

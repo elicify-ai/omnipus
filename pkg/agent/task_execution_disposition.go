@@ -53,8 +53,10 @@ func taskExecutionFor(ctx context.Context, taskSessionID string) *executionDispo
 }
 
 // ownsTaskBarrier reports whether a task run it dispatches owns an execution:
-// only when a lifecycle store is wired, because only then was a record minted
-// for the run's session and there is a barrier for a Stop to find.
+// only when the executor's own lifecycle store is wired (SetLifecycleStore).
+// A run dispatched before that, whose record recordStore minted into the
+// loop's store, runs without a barrier, as every run in that boot window did
+// before.
 func (te *TaskExecutor) ownsTaskBarrier() bool {
 	return te.agentLoop != nil && te.getLifecycleStore() != nil
 }

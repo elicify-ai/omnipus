@@ -892,7 +892,7 @@ func joinSteeringContent(msgs []providers.Message) string {
 // delegate onward as if it started at depth 0.
 func (te *TaskExecutor) runDelegationDepth(t *task.Task, sessionID string) int {
 	depth := t.DelegationDepth
-	if ls := te.getLifecycleStore(); ls != nil && sessionID != "" {
+	if ls := te.recordStore(); ls != nil && sessionID != "" {
 		if rec, err := ls.Load(sessionID); err == nil && rec.InitiatedBy != nil && rec.InitiatedBy.Depth > depth {
 			depth = rec.InitiatedBy.Depth
 		}
@@ -903,7 +903,7 @@ func (te *TaskExecutor) runDelegationDepth(t *task.Task, sessionID string) int {
 // lifecycleInitiator is the authorized initiator recorded on a run's lifecycle
 // record (nil: a person, the scheduler, or no record).
 func (te *TaskExecutor) lifecycleInitiator(sessionID string) *session.InitiatedBy {
-	if ls := te.getLifecycleStore(); ls != nil && sessionID != "" {
+	if ls := te.recordStore(); ls != nil && sessionID != "" {
 		if rec, err := ls.Load(sessionID); err == nil {
 			return rec.InitiatedBy
 		}
