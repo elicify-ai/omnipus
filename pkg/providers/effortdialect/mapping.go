@@ -24,7 +24,6 @@ package effortdialect
 
 import (
 	"slices"
-	"strings"
 )
 
 // onRank is the rank an On source maps nearest to (medium).
@@ -157,9 +156,11 @@ func MapEffort(source string, target Target) Mapping {
 }
 
 // Rank returns the spec rank of a named level (none 0 … max 6);
-// unranked names have no rank (ok=false).
+// unranked names have no rank (ok=false). The match is exact, like IsOff and
+// the TypeScript twin's rankOf: "HIGH" is an unranked name (DE-5 "Unranked
+// name": exact only, else Provider default, never On).
 func Rank(level string) (int, bool) {
-	switch strings.ToLower(level) {
+	switch level {
 	case "none":
 		return 0, true
 	case "minimal":
