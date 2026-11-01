@@ -139,12 +139,22 @@ const (
 	DecisionError = "error"
 )
 
+// skill.write outcome values (skills spec r15 §5.12): every skill change is
+// recorded with exactly one of these.
+const (
+	DecisionSkillCommitted      = "committed"
+	DecisionSkillRefused        = "refused"
+	DecisionSkillPartial        = "partial"
+	DecisionSkillExternalChange = "external_change"
+)
+
 // IsValidDecision reports whether d is one of the recognized Decision values.
 // Returns false for unknown values (typos, deprecated values) so the audit
 // pipeline can warn-once and continue rather than reject the entry.
 func IsValidDecision(d Decision) bool {
 	switch d {
-	case DecisionAllow, DecisionDeny, DecisionError:
+	case DecisionAllow, DecisionDeny, DecisionError,
+		DecisionSkillCommitted, DecisionSkillRefused, DecisionSkillPartial, DecisionSkillExternalChange:
 		return true
 	}
 	return false
