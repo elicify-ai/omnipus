@@ -10,8 +10,6 @@ import (
 	"time"
 	"unicode"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
@@ -159,15 +157,19 @@ func ValidateSkillMarkdown(expectedName, content string) error {
 	}
 
 	if frontmatter != "" {
-		// Reuse the loader's frontmatter parser to pull name/description.
-		fm := (&SkillsLoader{}).parseSimpleYAML(frontmatter)
+		// The one shared frontmatter parser (FR-002) pulls name/description.
+		parsed, parseErr := parseFrontmatter(frontmatter)
+		if parseErr != nil {
+			slog.Warn("SKILL.md: failed to parse YAML frontmatter", "error", parseErr)
+		}
+		fm := frontmatterFields(parsed)
 		if n := fm["name"]; n != "" {
 			info.Name = n
 		}
 		// S59 fix: once the frontmatter DECLARES a `description` key at all —
 		// even as `description:` (empty) or `description: null` — that
 		// declaration is authoritative and must not be silently papered over
-		// by the body's first paragraph. parseSimpleYAML's map drops
+		// by the body's first paragraph. frontmatterFields' map drops
 		// empty/null values entirely, so `fm["description"] != ""` alone
 		// cannot distinguish "declared empty" from "not declared" — an
 		// author who writes an empty `description:` field was previously let
@@ -234,7 +236,7 @@ func ValidateSkillDescription(skillName, description string) error {
 
 // frontmatterHasKey reports whether the given YAML frontmatter block
 // declares key at all, regardless of whether its value is empty, null, or
-// non-empty. parseSimpleYAML's string-map result cannot make this
+// non-empty. frontmatterFields' string-map result cannot make this
 // distinction on its own (it drops empty/null values from the map), so
 // ValidateSkillMarkdown uses this to tell "the author wrote an empty
 // description:" (must fail validation) apart from "the author wrote no
@@ -244,8 +246,8 @@ func ValidateSkillDescription(skillName, description string) error {
 // tolerates a parse failure by falling back to zero values, and this must
 // not behave more strictly than that fallback.
 func frontmatterHasKey(frontmatter, key string) bool {
-	var raw map[string]any
-	if err := yaml.Unmarshal([]byte(frontmatter), &raw); err != nil {
+	raw, err := parseFrontmatter(frontmatter)
+	if err != nil {
 		return false
 	}
 	_, ok := raw[key]

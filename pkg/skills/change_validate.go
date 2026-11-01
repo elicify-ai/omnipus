@@ -13,8 +13,6 @@ import (
 	"sort"
 	"strings"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 )
@@ -173,8 +171,8 @@ func validateInstruction(slug string, content []byte) string {
 	if front == "" && !bytes.HasPrefix(content, []byte("---\n---")) {
 		return "SKILL.md must start with a YAML frontmatter block (--- name/description ---)"
 	}
-	var fm map[string]any
-	if err := yaml.Unmarshal([]byte(front), &fm); err != nil {
+	fm, err := parseFrontmatter(front)
+	if err != nil {
 		return fmt.Sprintf("the SKILL.md frontmatter is not valid YAML (%v)", err)
 	}
 	name, _ := fm["name"].(string)

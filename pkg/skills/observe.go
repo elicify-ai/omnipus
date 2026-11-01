@@ -14,8 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -350,10 +348,7 @@ type SkillDetailMeta struct {
 // the body is still served (as the load does).
 func (o *SkillObservation) Meta(pathEnv string) SkillDetailMeta {
 	front, body := splitFrontmatter(string(o.Instruction))
-	fm := map[string]any{}
-	if front != "" {
-		_ = yaml.Unmarshal([]byte(front), &fm) // malformed: metadata empty, body served
-	}
+	fm, _ := parseFrontmatter(front) // malformed: metadata empty, body served
 	meta := SkillDetailMeta{Name: stringField(fm, "name"), Description: stringField(fm, "description"), Body: body, Metadata: map[string]string{}}
 	nested, _ := fm["metadata"].(map[string]any)
 	for k, v := range nested {

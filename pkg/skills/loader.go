@@ -540,18 +540,17 @@ func (sl *SkillsLoader) parseSkillMetadata(skillPath string, content []byte) *Sk
 	// from the loader's flat convenience map. `display_name` is an agreed key
 	// within that standard-supported extension map, not a non-standard
 	// top-level field.
-	var skillExtensions struct {
-		Metadata struct {
-			DisplayName string `yaml:"display_name" json:"display_name"`
-		} `yaml:"metadata" json:"metadata"`
+	fm, err := parseFrontmatter(frontmatter)
+	if err != nil {
+		slog.Warn("SKILL.md: failed to parse YAML frontmatter", "error", err)
 	}
-	if err := yaml.Unmarshal([]byte(frontmatter), &skillExtensions); err == nil &&
-		strings.TrimSpace(skillExtensions.Metadata.DisplayName) != "" {
-		metadata.DisplayName = strings.TrimSpace(skillExtensions.Metadata.DisplayName)
+	if nested, ok := fm["metadata"].(map[string]any); ok {
+		if dn, ok := nested["display_name"].(string); ok && strings.TrimSpace(dn) != "" {
+			metadata.DisplayName = strings.TrimSpace(dn)
+		}
 	}
 
-	// Fall back to simple YAML parsing
-	yamlMeta := sl.parseSimpleYAML(frontmatter)
+	yamlMeta := frontmatterFields(fm)
 	if name := yamlMeta["name"]; name != "" {
 		metadata.Name = name
 	}
@@ -643,19 +642,33 @@ func nodeText(n ast.Node) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-// parseSimpleYAML parses YAML frontmatter into a key→value map.
-// Recognizes standard fields and ClawHub-extended fields (argument-hint,
-// context, allowed-tools, model-hint). Unrecognized keys are collected
-// under "extra:<key>" for forward compatibility.
-func (sl *SkillsLoader) parseSimpleYAML(content string) map[string]string {
-	result := make(map[string]string)
-
-	// Unmarshal into a raw map to capture all keys.
-	var raw map[string]any
-	if err := yaml.Unmarshal([]byte(content), &raw); err != nil {
-		slog.Warn("SKILL.md: failed to parse YAML frontmatter", "error", err)
-		return result
+// parseFrontmatter is the one yaml.v3 parser of SKILL.md frontmatter (skills
+// spec r15 FR-002), shared by the loader's metadata, the save check
+// (validateInstruction), the activation load and the observation. It never
+// returns a nil map: an empty block is an empty map, and a malformed block is
+// an empty map plus the parse error, which each caller handles in its own way
+// (the save check refuses, the reads serve the body without metadata).
+func parseFrontmatter(front string) (map[string]any, error) {
+	fm := map[string]any{}
+	if strings.TrimSpace(front) == "" {
+		return fm, nil
 	}
+	if err := yaml.Unmarshal([]byte(front), &fm); err != nil {
+		return map[string]any{}, err
+	}
+	if fm == nil {
+		fm = map[string]any{}
+	}
+	return fm, nil
+}
+
+// frontmatterFields flattens parsed frontmatter into the loader's key→value
+// map: the standard fields and the ClawHub-extended fields (argument-hint,
+// context, allowed-tools as a YAML sequence or a string, model-hint);
+// other string keys are collected under "extra:<key>". Empty and non-string
+// values are dropped.
+func frontmatterFields(raw map[string]any) map[string]string {
+	result := make(map[string]string)
 
 	knownKeys := map[string]bool{
 		"name": true, "description": true, "argument-hint": true,

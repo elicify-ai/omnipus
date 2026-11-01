@@ -16,8 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -249,10 +247,7 @@ type loadView struct {
 
 func renderLoad(v loadView) (string, error) {
 	front, body := splitFrontmatter(string(v.raw))
-	fm := map[string]any{}
-	if front != "" {
-		_ = yaml.Unmarshal([]byte(front), &fm) // a malformed block renders no metadata; the body is still served
-	}
+	fm, _ := parseFrontmatter(front) // a malformed block renders no metadata; the body is still served
 	folder := v.dir
 	if abs, err := filepath.Abs(folder); err == nil {
 		folder = abs
