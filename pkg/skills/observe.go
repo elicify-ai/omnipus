@@ -317,6 +317,46 @@ func GrantBound(dir, slug string, bindings map[string]string) (bool, error) {
 	return false, err
 }
 
+// LoadableFolders returns the real paths of an agent's loadable set under root
+// (§6.1 item 1): every granted name whose folder is installed and whose
+// binding equals the folder's current generation (SD-30). A name that is not
+// installed or whose grant is stale is simply not loadable. The first error
+// reading a folder's identity is returned, so the caller fails closed instead
+// of treating an unreadable stamp as "not granted" silently.
+func LoadableFolders(root string, granted []string, bindings map[string]string) ([]string, error) {
+	root = filepath.Clean(root)
+	var out []string
+	seen := map[string]bool{}
+	for _, name := range granted {
+		name = strings.TrimSpace(name)
+		if !ValidSlug(name) || seen[SkillKey(name)] {
+			continue
+		}
+		seen[SkillKey(name)] = true
+		onDisk, present, err := resolveLiveFolder(root, name)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			continue
+		}
+		dir := filepath.Join(root, onDisk)
+		ok, err := GrantBound(dir, onDisk, bindings)
+		if err != nil {
+			return nil, fmt.Errorf("skill %q: %w", onDisk, err)
+		}
+		if !ok {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			return nil, fmt.Errorf("skill %q: %w", onDisk, err)
+		}
+		out = append(out, real)
+	}
+	return out, nil
+}
+
 // shippedWithVersion is the Omnipus version a built-in skill shipped with
 // (§5.2 last_change for built-ins): built-ins are embedded in this binary.
 func shippedWithVersion() string { return config.GetVersion() }

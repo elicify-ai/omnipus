@@ -183,41 +183,13 @@ var skillsGateProjectSubdirs = []string{
 }
 
 // Shelf discriminators for classifySkillsGatePath's return value and the
-// FR-071a write-audit record's "shelf" field. Both still classify for audit
-// purposes under D10.3 — only the registry shelf's classification still
-// feeds a read-deny; see isSkillInstructionFileLeaf and the op-dispatch
-// switch in ResolvePath.
+// FR-071a write-audit record's "shelf" field. A registry classification
+// routes writes to the skill change pipeline (skills spec r15 §5.5); see the
+// op-dispatch switch in ResolvePath.
 const (
 	skillShelfRegistry = "registry"
 	skillShelfProject  = "project"
 )
-
-// isSkillInstructionFileLeaf reports whether rawPath's final path component
-// is one of a skill's recognised instruction filenames (D10.3). Applied only
-// to the REGISTRY shelf's classification — project-shelf paths are never
-// read-denied at all under D10.3, regardless of leaf name.
-//
-// The names are single-sourced in fspolicy.SkillInstructionLeaves, which the
-// #1284 home-guard predicate also evaluates (A7: instruction files stay
-// gated at the predicate level, with this gate keeping its specific redirect
-// message on top). Deny-side case folding: on a case-insensitive volume
-// SKILL.MD IS SKILL.md, and over-matching a distinctly-named file under the
-// registry shelf withholds only a read the Skill tool exists to route.
-func isSkillInstructionFileLeaf(rawPath string) bool {
-	return fspolicy.IsSkillInstructionLeaf(filepath.Base(rawPath))
-}
-
-// isSkillInstructionFile applies isSkillInstructionFileLeaf to BOTH spellings
-// of the path under judgement: as the caller wrote it, and fully resolved.
-// See classifySkillsGate for why one spelling is not enough — an innocuously
-// named symlink in the work dir has a leaf of "notes.md" and a realpath leaf
-// of "SKILL.md".
-func isSkillInstructionFile(rawPath, realAbs string) bool {
-	if isSkillInstructionFileLeaf(rawPath) {
-		return true
-	}
-	return realAbs != "" && isSkillInstructionFileLeaf(realAbs)
-}
 
 // registrySkillsRoot returns the install-wide skills directory
 // ($OMNIPUS_HOME/skills), realpath-resolved when it already exists on disk.
@@ -350,49 +322,12 @@ func classifySkillsGate(rawPath, realAbs string, policy fspolicy.FSPolicy) (shel
 	return classifySkillsGateCandidate(filepath.Clean(realAbs), policy)
 }
 
-// skillsGateDenialError builds the typed refusal ResolvePath returns for a
-// read/list/send of a registry skill's instruction file (D10.3's narrowed
-// Part A). Only ever called with shelf == skillShelfRegistry — D10.3 removed
-// Part B's project-shelf read denial entirely (see the doc comment above
-// classifySkillsGatePath's declaration), and the caller below additionally
-// requires isSkillInstructionFileLeaf(rawPath) before reaching this
-// function, so a registry skill's bundled sibling files are never denied
-// here either.
-func skillsGateDenialError(rawPath string) error {
-	return fmt.Errorf("%w: %q is an installed registry skill's instruction file — load it with the Skill tool, not a file tool (ADR-072 D10.3 Part A)",
-		ErrCarveOut, rawPath)
-}
-
-// skillsRegistryListDenialError refuses a LIST whose path lands inside the
-// installed registry ($OMNIPUS_HOME/skills) — #1284 T-FT: a listing is a
-// name disclosure of whatever the directory holds, including the gated
-// instruction files.
-func skillsRegistryListDenialError(rawPath string) error {
-	return fmt.Errorf("%w: %q is inside the installed skill registry ($OMNIPUS_HOME/skills), which no file tool may list — browse skills with the Skill tool (ADR-072 D10.3; #1284)",
-		ErrCarveOut, rawPath)
-}
-
-// skillsRegistryNonReadDenialError refuses a WRITE, SERVE or EXEC whose path
-// lands in the installed registry ($OMNIPUS_HOME/skills).
-//
-// D10.3 narrows the registry gate on the READ side only. Every other op kept
-// the answer it already had: until D10.3 the whole registry was an
-// fspolicy.IsCarveOut root, so ResolvePath refused every op under it
-// unconditionally. Removing it from the app carve-out list (so bundled files
-// could be read) would otherwise have opened writes as a side effect —
-// narrowly but really, since a mount that CONTAINS $OMNIPUS_HOME is allowed
-// with a warning (pkg/workspace/mount.go's CheckMountTarget refuses only a
-// target inside it), and a write under a matched mount root is granted. An
-// agent could then clobber another skill's instructions through write_file.
-// Nothing in D10.3 asks for that, so it stays refused.
-//
-// This costs the sanctioned authoring path nothing: create_skill/edit_skill/
-// install_skill write the registry through pkg/skills' own confined, raw I/O
-// (see the lint allowlist entry for skills_install.go), never through
-// ResolvePath — which is also why this deny is exactly behaviour-preserving
-// rather than a new restriction.
+// skillsRegistryNonReadDenialError refuses a registry write that is not a
+// write to a file inside a skill folder (skills spec r15 §5.5: writes to the
+// skills root and its control entries are refused by the boundary, and a path
+// whose real target leaves the registry is never written through it).
 func skillsRegistryNonReadDenialError(rawPath string, op FSOp) error {
-	return fmt.Errorf("%w: %q is inside the installed skill registry ($OMNIPUS_HOME/skills), which no file tool may %s — use the skill authoring tools (ADR-072 D10/D10.3)",
+	return fmt.Errorf("%w: %q is inside the installed skill registry ($OMNIPUS_HOME/skills), where a file tool may only %s files inside a skill folder",
 		ErrCarveOut, rawPath, op)
 }
 
@@ -650,6 +585,12 @@ type PathHandle struct {
 	// PathHandle's only two) checks it first and returns ErrHandleReadOnly
 	// immediately, before doing any I/O.
 	readOnly bool
+
+	// skillWrite is non-nil exactly when ResolvePath classified an FSOpWrite
+	// target as a file inside an installed skill folder (skills spec r15
+	// §5.5). WriteFile then delegates to skills.ApplyChange instead of doing
+	// raw I/O, and MkdirAll refuses (the pipeline creates folders itself).
+	skillWrite *skillWriteTarget
 }
 
 // recheckUnrestrictedCarveOut re-resolves h.abs (following any symlink that
@@ -707,6 +648,9 @@ func (h *PathHandle) ReadFile() ([]byte, error) {
 func (h *PathHandle) WriteFile(data []byte) error {
 	if h.readOnly {
 		return ErrHandleReadOnly
+	}
+	if h.skillWrite != nil {
+		return h.skillWrite.write(data)
 	}
 	if h.root == nil {
 		if err := h.recheckUnrestrictedCarveOut(); err != nil {
@@ -846,6 +790,9 @@ func (h *PathHandle) OpenRegularNonBlocking() (fs.File, error) {
 func (h *PathHandle) MkdirAll(perm os.FileMode) error {
 	if h.readOnly {
 		return ErrHandleReadOnly
+	}
+	if h.skillWrite != nil {
+		return fmt.Errorf("%w: folders inside a skill are created by writing files into them", ErrCarveOut)
 	}
 	if h.root == nil {
 		if err := h.recheckUnrestrictedCarveOut(); err != nil {
@@ -1078,14 +1025,6 @@ func (rp *resolvePath) protectedPathDenial(realAbs string) error {
 	if !fspolicy.IsCarveOut(realAbs, rp.policy) {
 		return nil
 	}
-	// #1284 adds instruction files to the predicate without retiring
-	// D10.3's helpful redirect. This refines the refusal, never admits it.
-	if rp.op == FSOpRead || rp.op == FSOpList || rp.op == FSOpSend {
-		if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched &&
-			shelf == skillShelfRegistry && isSkillInstructionFile(rp.rawPath, realAbs) {
-			return skillsGateDenialError(rp.rawPath)
-		}
-	}
 	return ErrCarveOut
 }
 
@@ -1119,36 +1058,42 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 	// skillsGateProjectSubdirs). This is the whole app-layer rule for skills;
 	// nothing underneath it will catch what it misses.
 	//
-	// D10.3: only a REGISTRY-shelf path whose leaf is a recognised
-	// instruction filename is refused for a read/list/send (FR-057/061a-c) —
-	// a bundled sibling file, and any project-shelf path at all (D4.1 already
-	// makes the mount the grant; Part B's directory-wide project deny is
-	// removed, it protected nothing), are left to the ordinary open-read rule
-	// below. A write is left to proceed exactly as it otherwise would (D6.1:
-	// writes are not gated by the read gate) but carries the classification
-	// forward onto the returned handle so WriteFile can audit it once the
-	// write actually succeeds (FR-071/071a/071c) — write auditing still
-	// applies to BOTH shelves and to every file in a classified directory,
-	// not just instruction files, since D6.1.1's audit trail is about who
-	// wrote into a recognised skills location, not what they wrote.
+	// Skills spec r15 §6.1: reads of the registry are decided by the
+	// predicate above (the loadable set, or every skill for an edit_skill
+	// holder). A registry write becomes a skill change (§5.5) carried by the
+	// returned handle; serve and exec stay refused. Project-shelf writes are
+	// left to the ordinary rules below and carry the D6.1.1 write audit.
+	//
+	// The seen record a read_file / list_directory sets is observed before
+	// the tool reads, so the content the agent sees can only be newer than
+	// the recorded revision — a later write then fails SKILL_CHANGED rather
+	// than overwriting a change the agent never saw.
 	var skillsWriteAudit *skillsWriteAuditFields
 	if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched {
 		switch rp.op {
 		case FSOpRead, FSOpList, FSOpSend:
-			if shelf == skillShelfRegistry {
-				// A raw listing discloses instruction-file names. grep instead
-				// filters every visited entry through grepGateFS/carveOutFS,
-				// so its A7 helper-file search can walk without disclosing them.
-				if rp.op == FSOpList && rp.toolName != "grep" {
-					return nil, skillsRegistryListDenialError(rp.rawPath)
-				}
-				if isSkillInstructionFile(rp.rawPath, realAbs) {
-					return nil, skillsGateDenialError(rp.rawPath)
-				}
+			// Skills spec r15 §6.1: the home-guard predicate (checked just
+			// above) already decided whether this turn may read the skill
+			// path; reads and listings of a readable skill proceed. A
+			// read_file / list_directory inside a skill folder records the
+			// session's "seen" revision (§7.3).
+			if shelf == skillShelfRegistry && rp.op != FSOpSend &&
+				(rp.toolName == "read_file" || rp.toolName == "list_directory") {
+				recordSkillSeen(rp.ctx, realAbs)
 			}
-		case FSOpWrite, FSOpServe:
+		case FSOpWrite:
 			if shelf == skillShelfRegistry {
-				return nil, skillsRegistryNonReadDenialError(rp.rawPath, rp.op)
+				// §5.5: a write into a skill folder is a skill change. The
+				// handle delegates to the change pipeline behind the loop's
+				// composition marker (§10.1 item 7); anything else under
+				// the registry (the root, control entries) was already
+				// refused by the predicate, and a path whose real target
+				// leaves the registry is refused here.
+				target, ok := newSkillWriteTarget(rp.ctx, rp.toolName, realAbs)
+				if !ok {
+					return nil, skillsRegistryNonReadDenialError(rp.rawPath, rp.op)
+				}
+				return &PathHandle{abs: realAbs, policy: rp.policy, skillWrite: target}, nil
 			}
 			skillsWriteAudit = &skillsWriteAuditFields{
 				shelf:       shelf,
@@ -1157,11 +1102,19 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 				sessionID:   ToolTranscriptSessionID(rp.ctx),
 				workspaceID: ToolWorkspaceID(rp.ctx),
 			}
-		case FSOpExec:
-			if shelf == skillShelfRegistry {
-				return nil, skillsRegistryNonReadDenialError(rp.rawPath, rp.op)
+		case FSOpServe:
+			// The predicate is operation-blind (§6.1 item 4): serving a
+			// readable skill folder follows the ordinary serve rules below.
+			skillsWriteAudit = &skillsWriteAuditFields{
+				shelf:       shelf,
+				toolName:    rp.toolName,
+				agentID:     ToolAgentID(rp.ctx),
+				sessionID:   ToolTranscriptSessionID(rp.ctx),
+				workspaceID: ToolWorkspaceID(rp.ctx),
 			}
 		}
+		// FSOpExec: a readable skill folder may be run from (§6.1 item 4,
+		// §5.7 "run scripts with bash"); the ordinary exec rules below apply.
 	}
 
 	if !isWithinWorkspace(realAbs, realWorkDir) {
@@ -1633,6 +1586,11 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool, g
 				policy.HomeGuard.Allow = append(policy.HomeGuard.Allow, fspolicy.AllowRoot{Path: filepath.Clean(dir), Writable: false})
 			}
 		}
+		// Skills spec r15 §6.1 item 1: the loadable set and the editor read
+		// extension are filled here and nowhere else.
+		auth := resolveTurnSkillAuthority(policy.HomeGuard.Home, ToolAgentID(ctx))
+		policy.HomeGuard.SkillFolders = auth.folders
+		policy.HomeGuard.SkillsReadAll = auth.readAll
 	}
 
 	if len(grantOverlay) > 0 && len(grantOverlay[0]) > 0 {
