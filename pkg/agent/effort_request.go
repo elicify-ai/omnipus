@@ -70,7 +70,13 @@ func (a *effortAttempt) record() *generated.EffortRecord {
 	if chosen == EffortProviderDefault {
 		return &generated.EffortRecord{Chosen: &chosen}
 	}
-	rec := &generated.EffortRecord{Chosen: &chosen, Provider: effortStrPtr(a.provider), Model: effortStrPtr(a.model)}
+	provider := a.provider
+	if provider == "" && a.sent != nil {
+		// A single native client with no named pair: the adapter reports
+		// the provider it answers for (FR-058).
+		provider = a.sent.Provider
+	}
+	rec := &generated.EffortRecord{Chosen: &chosen, Provider: effortStrPtr(provider), Model: effortStrPtr(a.model)}
 	reason := a.plan.reason
 	sent := ""
 	if a.rejected {

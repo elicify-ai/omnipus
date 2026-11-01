@@ -111,6 +111,15 @@ func NewProviderWithTimeout(token, apiBase string, timeoutSeconds int) *Provider
 	return p
 }
 
+// effortProviderID is the provider this client answers for in the effort
+// record: the configured catalog row, else the native Anthropic API.
+func (p *Provider) effortProviderID() string {
+	if p.providerID != "" {
+		return p.providerID
+	}
+	return "anthropic"
+}
+
 // WithProviderID pins documented dialect selection to the configured catalog
 // row, even when an operator routes it through a private base URL.
 func (p *Provider) WithProviderID(id string) *Provider { p.providerID = id; return p }
@@ -176,6 +185,7 @@ func (p *Provider) Chat(
 	if err != nil {
 		return nil, err
 	}
+	effortdialect.ReportProvider(options, p.effortProviderID())
 	p.markCache(&params, messages, model)
 
 	// OAuth/setup-tokens require streaming; API keys use non-streaming.
@@ -227,6 +237,7 @@ func (p *Provider) ChatStream(
 	if err != nil {
 		return nil, err
 	}
+	effortdialect.ReportProvider(options, p.effortProviderID())
 	p.markCache(&params, messages, model)
 
 	return p.streamWithCallbacks(ctx, params, opts, onChunk, onProgress)

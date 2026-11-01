@@ -30,6 +30,11 @@ const ReportOptionKey = "reasoning_effort_report"
 type Sent struct {
 	Value  string
 	Reason string
+	// Provider is the catalog provider id of the route that built the body,
+	// when the adapter knows it and the caller's candidate did not name one
+	// (a single native client): the record then still names the answering
+	// pair (FR-058). "" = not reported.
+	Provider string
 }
 
 // Requested returns the resolved effort value the loop asked the adapter to
@@ -49,6 +54,14 @@ func Requested(options map[string]any) string {
 func Report(options map[string]any, s Sent) {
 	if r, ok := options[ReportOptionKey].(*Sent); ok && r != nil {
 		*r = s
+	}
+}
+
+// ReportProvider stores the adapter's own provider id in the request's
+// report slot, when the caller supplied one. Call it after Report.
+func ReportProvider(options map[string]any, provider string) {
+	if r, ok := options[ReportOptionKey].(*Sent); ok && r != nil {
+		r.Provider = provider
 	}
 }
 

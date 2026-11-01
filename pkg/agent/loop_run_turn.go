@@ -1747,11 +1747,8 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	if len(rt.activeCandidates) > 0 {
 		providerName = rt.activeCandidates[0].Provider
 	}
-	effortProvider := providerName
-	if effortProvider == "" && rt.ts.agent != nil {
-		effortProvider = rt.ts.agent.PrimaryEffortProvider
-	}
-	return rt.callWithEffort(effortProvider, rt.llmModel, func(opts map[string]any) (*providers.LLMResponse, error) {
+	// callWithEffort names an unpinned primary by the agent's provider.
+	return rt.callWithEffort(providerName, rt.llmModel, func(opts map[string]any) (*providers.LLMResponse, error) {
 		return rt.runProviderAttempt(providerCtx, rt.activeProvider, providerName, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
 	})
 }

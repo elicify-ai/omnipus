@@ -43,12 +43,13 @@ var effortRankedNames = []string{"none", "minimal", "low", "medium", "high", "xh
 
 func effortCommand() Definition {
 	return Definition{
-		Name:        "effort",
-		Description: "Show or set reasoning effort for this conversation",
-		Usage:       "/effort [level|on|off|default|reset]",
-		Surfaces:    []Surface{SurfaceWeb, SurfaceChannel},
-		Delivery:    DeliveryClient,
-		Handler:     effortHandler,
+		Name:         "effort",
+		Description:  "Show or set reasoning effort for this conversation",
+		Usage:        "/effort [level|on|off|default|reset]",
+		ArgumentHint: "[level|on|off|default|reset]",
+		Surfaces:     []Surface{SurfaceWeb, SurfaceChannel},
+		Delivery:     DeliveryClient,
+		Handler:      effortHandler,
 	}
 }
 
