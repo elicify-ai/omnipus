@@ -274,6 +274,113 @@ func TestU2bBootReplay_OrderlyStop_LateWiredBoot_KeepsRuntimeClassification_AndR
 	require.Equal(t, task.StatusDone, after.Status)
 }
 
+// wireEnforcementOnly wires ONLY the loop's session-messaging plane — the
+// enforcement side of the runtime invariant (session_messaging_wire.go's
+// SetSessionMessagingStores → GetSessionLifecycleStore) — and deliberately
+// leaves the task executor's lifecycle store and SteerLauncher unwired, as
+// production's boot had them at the owed fire. Instance T's boot resolved the
+// timing race in exactly this shape: the replay's session was minted with no
+// lifecycle store while the wired enforcement refused it. Pre-wiring the
+// enforcement side forces that refusal deterministically (no goroutine race),
+// so the refusal mode's spec oracles are pinned independently of timing.
+func wireEnforcementOnly(t *testing.T, p *u2bLauncherProcess) {
+	t.Helper()
+	home := config.OmnipusHomeDir()
+	p.loop.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(home, "session_messages")),
+		session.NewLifecycleStore(filepath.Join(home, "session_lifecycle")))
+	require.NotNil(t, p.loop.GetSessionLifecycleStore(), "instrument: the enforcement plane is wired")
+	require.Nil(t, GetTaskExecutor(p.loop).getLifecycleStore(), "instrument: the executor's store is still unwired")
+	require.Nil(t, GetTaskExecutor(p.loop).launcher, "instrument: no SteerLauncher yet")
+}
+
+// TestU2bBootReplay_RefusedReplayMode_ExecutesOnce_NoThirdRun pins the
+// refusal mode of the same defect — the mode instance T actually recorded —
+// deterministically, and pins addendum 9's no-third-run requirement in that
+// mode. Oracle sources: rows-rerun.md U2b-crash and the re-run-2 scope ("the
+// replay actually executing (real outcome), exactly 2 runs"; "the 3rd 'Run
+// now' run must not appear"), and task_run_loop.go's own settlement contract
+// for a run that never ran the work: no attempt, no restart.
+//
+// After the fix, a replay dispatched with the enforcement plane already wired
+// must still execute to a real judged outcome — the classification must EXIST
+// by construction, not be excused — and the refused-run settlement must never
+// re-arm the once fire or re-dispatch the task.
+func TestU2bBootReplay_RefusedReplayMode_ExecutesOnce_NoThirdRun(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker) // eager wiring = production steady state
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop() // Join old writers before restoring the unchanged live crash image.
+	u2bAsyncRestore(t, home, image)
+
+	// Boot 2 in the half-wired state: enforcement wired, executor store and
+	// launcher still unwired — the owed fire dispatches exactly like T's did.
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, newU2bAsyncWorker())
+	wireEnforcementOnly(t, p2)
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "real task execution", p2.loop.taskExecutor.wg.Wait)
+
+	runs := p2.runs(t, fire.taskID)
+	require.Len(t, runs, 2,
+		"U2b: run history shows exactly the abandoned original plus one replay attempt")
+	original, replay := runs[0], runs[1]
+	if replay.RunID == fire.run.RunID {
+		original, replay = replay, original
+	}
+	require.Equal(t, fire.run.RunID, original.RunID, "boot retains the original run's identity")
+	require.Equal(t, "abandoned: gateway restarted mid-execution", original.Result)
+
+	// Instrument precondition: this boot really is in T's refusal mode — the
+	// classification-less replay was refused by the wired enforcement and the
+	// task ended failed with no attempt used (task_run_loop.go's
+	// ErrTaskRunNotDispatched settlement).
+	failedTask, err := p2.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err)
+	require.Contains(t, failedTask.Result, "The task could not be started:",
+		"instrument: expected the deterministic refusal mode (no attempt used)")
+	require.Contains(t, failedTask.Result, "no persisted runtime classification",
+		"instrument: the refusal is the unpersisted-runtime-classification one")
+
+	// THE classification oracle, now deterministic: the replayed session must
+	// have a persisted runtime classification even though its dispatch saw no
+	// executor store — enforcement could observe it, so it must exist.
+	rec, err := p2.loop.GetSessionLifecycleStore().Load(replay.SessionID)
+	require.NoError(t, err,
+		"U2b: the replayed run's session must have a persisted runtime classification; "+
+			"without it the wired enforce refuses the replay (agent execution failed: processTaskDirect: "+
+			"the task run was not dispatched: session has no persisted runtime classification)")
+	require.NotNil(t, rec)
+	p2.requireMainChild(t, fire.taskID, replay.SessionID)
+
+	// The replay must have actually executed to its real judged outcome — the
+	// fix may not answer this state by excusing the enforcement.
+	require.NotContains(t, replay.Result, "no persisted runtime classification",
+		"U2b: the replay must not fail with the unpersisted-classification refusal")
+	require.Equal(t, task.StatusDone, replay.Status, "the replay's real worker claim is judged and completed")
+	require.Equal(t, u2bAsyncEvidence, replay.Result)
+	require.NotNil(t, replay.EndedAt)
+	require.Equal(t, task.RunKindScheduled, replay.Kind)
+	require.Nil(t, replay.OccurrenceMs)
+
+	// Addendum 9: a refused replay is not a replayable interruption. Its once
+	// job must be gone, and neither a further tick nor a further boot may add
+	// the third "Run now" run.
+	require.Empty(t, p2.storedJobs(t, fire.taskID),
+		"a refused replay must not keep its once job armed")
+	p2.runDueAndJoin(t)
+	require.Equal(t, runs, p2.runs(t, fire.taskID), "no third run may follow a refused replay")
+	p2.stop()
+	p3 := bootU2bLauncherProcess(t, home, clk)
+	require.Equal(t, runs, p3.runs(t, fire.taskID), "no third run after a further boot either")
+	after, err := p3.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err, "U2b: the task is not deleted")
+	require.Equal(t, task.StatusDone, after.Status)
+}
+
 // fireIsolatedWhileProviderHeld is fireWhileProviderHeld with run_isolated on:
 // the same MAIN-eligible assignee, but the task is forced onto the ISOLATED
 // path (deriveTaskRunMode: run_isolated wins over an eligible main).
