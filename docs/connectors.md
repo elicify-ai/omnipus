@@ -127,6 +127,8 @@ Enter one id per line, up to 20; the same id entered twice counts once. Write th
 
 Starting messages works on Discord and Telegram only. On every other connector the section says `Starting messages is not supported yet on <name>. The agent only answers here.` The [Discord](connectors/discord.md#starting-messages) and [Telegram](connectors/telegram.md#starting-messages) guides say which ids to use.
 
+On a Discord or Telegram connector that has never been saved, the section shows only `Save the connection first`. Fill in the connector's settings, press the panel's main **Save**, and the two choices appear.
+
 You can take permission away even while the connector is not running: remove ids, or switch to **Only answer**, and save. If an earlier change to the connector did not finish applying, removing only some ids can be refused; switching to **Only answer** still works (see [troubleshooting](troubleshooting.md#saving-starting-messages-is-refused-or-shows-a-warning)). Adding a Discord id needs the connector running, because Omnipus checks each new id with Discord before it saves.
 
 When an agent starts a message, the result it gets says `accepted for sending … (delivery not confirmed)`. That means the message was handed over for sending, not that the person received it. If sending fails later, the failure appears only in the gateway log; see [troubleshooting](troubleshooting.md#an-agent-started-message-never-arrived).
