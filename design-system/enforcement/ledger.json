@@ -1314,6 +1314,60 @@
       "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), transplanted 2026-10-11",
       "replacement": "No replacement planned: this <button> is a row in the composer menu's ARIA listbox (role=\"option\"). The Button primitive always renders an adjacent role=\"status\" live-region sibling (ActionAnnouncement), which would sit between listbox rows and pollute the listbox's expected child structure. Reviewed and retained 2026-09-22 while the rows lived in ChatScreen.tsx; moved verbatim into this file on 2026-10-11 (the @-mention restore + ChatScreen size shrink) with the ChatScreen.tsx entry retired — that file now has zero raw buttons. Not scheduled debt.",
       "expiryCheckpoint": "C6"
+    },
+    {
+      "fingerprint": "51b0bcc6264fac4d2c0b97657fa0dd8a071e5916f4806a295fa4d874a0ebb600",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/agents/AgentFallbackModels.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 5: Agents and skills",
+      "replacement": "Relocate `import { EffortControl } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "142f830a31c00e2f9e8e4df521136ed7374bf80745bf92da001f396a48a58cba",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/agents/AgentFallbackModels.tsx",
+      "syntax": "import { ModelSelector } from \"src/components/ui/model-selector\"",
+      "owner": "C5 Lane 5: Agents and skills",
+      "replacement": "Relocate `import { ModelSelector } from \"src/components/ui/model-selector\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "8b37c6b22ccd38d5f90d215f3327c7a8d2f383cbba04153b9b4da66cbd6ddf37",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 5: Agents and skills",
+      "replacement": "Relocate `import { EffortControl } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "79f602a013d9afc52c90704af2a16e41a0bfbff35202806b5a3536528a3d4a57",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/RecapLimitsArea.tsx",
+      "syntax": "import { FormError } from \"src/components/ui/FormError\"",
+      "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Relocate `import { FormError } from \"src/components/ui/FormError\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "352ebfa4d1b62711534ab141a09c1a7e1d6d615b991933322eaab9788c9d9a3e",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/RecapModelSlot.tsx",
+      "syntax": "import { EffortControl, type EffortValue } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Relocate `import { EffortControl, type EffortValue } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "d23d8647f8f530e27474fadbaa03df6ed9b328c4eaf76a98b466ae05470615f8",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/ui/model-effort-picker.tsx",
+      "syntax": "import { FormError } from \"src/components/ui/FormError\"",
+      "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Relocate `import { FormError } from \"src/components/ui/FormError\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
     }
   ],
   "exceptions": [
@@ -2498,6 +2552,13 @@
       "path": "src/components/agents/AgentProfile.tsx",
       "syntax": "AgentProfile#svg-attribute.color<-selectedColor",
       "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1; founder decision 2026-09-19; commit d45146f13 (ts-colors.mjs colour lock) classification P2. Same `selectedColor` state as AgentProfile#dom-style.backgroundColor<-selectedColor above, this time forwarded unchanged to an SVG `color` attribute in the same avatar preview markup. Governed at the colour picker, not this paint sink.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "renderBasicsPanel#svg-attribute.color<-selectedColor",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1; founder decision 2026-09-19; commit d45146f13 (ts-colors.mjs colour lock) classification P2. Same `selectedColor` state as AgentProfile#dom-style.backgroundColor<-selectedColor above, also forwarded unchanged to an SVG `color` attribute in the same avatar preview markup. Governed at the colour picker, not this paint sink. This copy sits in renderBasicsPanel (the Basics panel is a function of the active layout so the effort chip renders once, effort-levels WP-FE).",
       "owner": "user-authored colours exception registry"
     },
     {
@@ -5173,6 +5234,27 @@
       "syntax": "StatusMotionFixture#svg-attribute.color<-AgentColor.options[9]",
       "reason": "Governed identity data, not chrome: the named StatusMotionFixture passes the literal final generated AgentColor option unchanged to the real AgentStatusIndicator and AgentIcon. This exact app-story palette source and sink allow actual icon/text timing verification without introducing a second colour palette or a raw colour.",
       "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/model-effort-picker.tsx",
+      "syntax": "EffortControl#props.className",
+      "reason": "Caller pass-through: the effort control forwards its own className unchanged through cn to its wrapper span. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data.",
+      "owner": "frontend-lead — effort levels WP-FE"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/model-effort-picker.tsx",
+      "syntax": "EffortControl#className",
+      "reason": "Caller pass-through: the effort control forwards its own className unchanged through cn to its wrapper span. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data.",
+      "owner": "frontend-lead — effort levels WP-FE"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/model-effort-picker.tsx",
+      "syntax": "EffortControl#className",
+      "reason": "Caller pass-through: the effort control forwards its own className unchanged through cn to its wrapper span. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data.",
+      "owner": "frontend-lead — effort levels WP-FE"
     }
   ],
   "reviewedBoundaries": [
@@ -8460,6 +8542,11 @@
       "path": "src/components/settings/PerformanceSection.goalTimerOwnership.gate1.test.tsx",
       "kind": "test",
       "reason": "Exact test-only native PerformanceSection ownership integration fixture: mounts the real existing application-classified ToastContainer beside the real PerformanceSection under QueryClient; the HTTP transport and the browser-cookie boundary are stubbed. This preserves the application toast host while driving real confirmation/cancellation and held-PUT/newer-draft flows. The cases assert consent, request and live-field ownership, not toast contents. No production consumer, raw product control, component export, catalog, scanner, manifest or debt-baseline change is authorized."
+    },
+    {
+      "path": "src/components/ui/model-effort-picker.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for the effort-levels RED pack (T-F1 to T-F3): the test imports the domain effort picker it verifies and mounts the real Memory screen. No production import, public export, scanner rule, or QA assertion is changed."
     }
   ]
 }

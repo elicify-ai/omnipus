@@ -114,6 +114,13 @@
       "count": 1
     },
     {
+      "fingerprint": "142f830a31c00e2f9e8e4df521136ed7374bf80745bf92da001f396a48a58cba",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/agents/AgentFallbackModels.tsx",
+      "syntax": "import { ModelSelector } from \"src/components/ui/model-selector\"",
+      "count": 1
+    },
+    {
       "fingerprint": "1b2588b4325cfdfb49df08602ba563158b0fce52bd649d404efea3eb838425ed",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/ComposerMediaLibrary.tsx",
@@ -209,6 +216,13 @@
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/routes/onboarding.tsx",
       "syntax": "import { BrandDisclaimer } from \"src/components/ui/brand-disclaimer\"",
+      "count": 1
+    },
+    {
+      "fingerprint": "352ebfa4d1b62711534ab141a09c1a7e1d6d615b991933322eaab9788c9d9a3e",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/RecapModelSlot.tsx",
+      "syntax": "import { EffortControl, type EffortValue } from \"src/components/ui/model-effort-picker\"",
       "count": 1
     },
     {
@@ -359,6 +373,13 @@
       "count": 1
     },
     {
+      "fingerprint": "51b0bcc6264fac4d2c0b97657fa0dd8a071e5916f4806a295fa4d874a0ebb600",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/agents/AgentFallbackModels.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "count": 1
+    },
+    {
       "fingerprint": "53707978b8cd2413f8c32dd7d0750043575b9bc5a6105117e6062379f12612cd",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/preview/LibraryPdfPreview.tsx",
@@ -506,6 +527,13 @@
       "count": 1
     },
     {
+      "fingerprint": "79f602a013d9afc52c90704af2a16e41a0bfbff35202806b5a3536528a3d4a57",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/RecapLimitsArea.tsx",
+      "syntax": "import { FormError } from \"src/components/ui/FormError\"",
+      "count": 1
+    },
+    {
       "fingerprint": "7e7f7e9aa5b7751dde3ac336606011613b0ed78cf90c6e1e74b80d51b1c79587",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/calendar/CalendarEventSlideOver.tsx",
@@ -531,6 +559,13 @@
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/settings/DataSection.tsx",
       "syntax": "import { AutoSaveIndicator } from \"src/components/ui/AutoSaveIndicator\"",
+      "count": 1
+    },
+    {
+      "fingerprint": "8b37c6b22ccd38d5f90d215f3327c7a8d2f383cbba04153b9b4da66cbd6ddf37",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
       "count": 1
     },
     {
@@ -573,6 +608,13 @@
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/screens/ConnectorsScreen.tsx",
       "syntax": "import { BrandIcon } from \"src/components/ui/brand-icon\"",
+      "count": 1
+    },
+    {
+      "fingerprint": "d23d8647f8f530e27474fadbaa03df6ed9b328c4eaf76a98b466ae05470615f8",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/ui/model-effort-picker.tsx",
+      "syntax": "import { FormError } from \"src/components/ui/FormError\"",
       "count": 1
     },
     {
