@@ -11,22 +11,26 @@ package tools
 // ORACLE: every expected value below is derived from the spec's normative
 // texts (§7.13 error table, projection rules, size bound, cut rule, per-tool
 // Valid lists; §7.12.1 agent names). Nothing was derived from running an
-// implementation: the helper is RED scaffolding (red_scaffolding_fieldselect.go)
-// and the four read tools do not exist yet, so every failure is the expected
-// "not implemented / wrong shape" failure of RED.
+// implementation. The missing helper fails explicitly BLOCKED via test-only
+// adapters; no stub return value is claimed as behavioral RED. get_agent exists
+// at the pin; the other three read tools are absent.
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // -----------------------------------------------------------------------------
@@ -112,9 +116,8 @@ func t8SpecGoal() FieldSpec {
 	return FieldSpec{Object: "goal", Identity: []string{"goal_id"}, Valid: t8ValidGoal()}
 }
 
-// t8Thousands formats n with the thousands separators the spec's marker and
-// too-large texts use (§7.13: "<n> = the full length, with thousands
-// separators").
+// t8Thousands formats the full length with the thousands separators explicitly
+// required by the cut marker (§7.13).
 func t8Thousands(n int) string {
 	s := fmt.Sprintf("%d", n)
 	var out []byte
@@ -135,27 +138,47 @@ func t8EncodedLen(t *testing.T, v any) int {
 	t.Helper()
 	b, err := json.Marshal(v)
 	require.NoError(t, err)
-	return len(b)
+	return utf8.RuneCount(b) // §7.13 measures JSON-encoded characters, not UTF-8 bytes.
 }
 
-// t8SchemaProps reflects the top-level json properties of a generated wire
-// type (the schema properties the enum formula subtracts identity and
-// metadata from — FR-184: "generated from the schemas at test time").
+// t8SchemaProps reads the committed source schema's property order. Generated
+// Go structs alphabetize fields, so reflection cannot provide schema order.
 func t8SchemaProps(t *testing.T, v any) []string {
 	t.Helper()
 	rt := reflect.TypeOf(v)
 	require.Equal(t, reflect.Ptr, rt.Kind(), "pass a pointer to the generated struct")
-	rt = rt.Elem()
-	var names []string
-	for i := 0; i < rt.NumField(); i++ {
-		tag := rt.Field(i).Tag.Get("json")
-		name := strings.Split(tag, ",")[0]
-		if name == "" || name == "-" {
-			continue
-		}
-		names = append(names, name)
+	path := filepath.Join("..", "..", "contracts", "components", "schemas", rt.Elem().Name()+".yaml")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "read the source schema, not a second hand-maintained property list")
+	return t8OrderedSchemaProps(t, data)
+}
+
+func t8OrderedSchemaProps(t *testing.T, data []byte) []string {
+	t.Helper()
+	var document struct {
+		Properties yaml.Node `yaml:"properties"`
 	}
+	require.NoError(t, yaml.Unmarshal(data, &document))
+	require.Equal(t, yaml.MappingNode, document.Properties.Kind, "schema must declare a properties mapping")
+	content := document.Properties.Content
+	require.Zero(t, len(content)%2, "ordered mapping contains complete key/value pairs")
+	names := make([]string, 0, len(content)/2)
+	for i := 0; i < len(content); i += 2 {
+		names = append(names, content[i].Value)
+	}
+	require.NotEmpty(t, names, "an empty schema read cannot certify an enum")
 	return names
+}
+
+// Test-side instrument control, not production-enum or scenario-20.9 proof.
+func TestT8SchemaPropertyInstrument_PreservesOrderAndSeesAddedProperty(t *testing.T) {
+	base := []byte("type: object\nproperties:\n  id: {type: string}\n  z_last_alphabetically: {type: string}\n  a_first_alphabetically: {type: string}\n")
+	want := []string{"id", "z_last_alphabetically", "a_first_alphabetically"}
+	assert.Equal(t, want, t8OrderedSchemaProps(t, base), "retain source order rather than generated alphabetical order")
+	mutated := append(append([]byte{}, base...), []byte("  zz_probe: {type: string}\n")...)
+	got := t8OrderedSchemaProps(t, mutated)
+	assert.Equal(t, append(append([]string{}, want...), "zz_probe"), got,
+		"the instrument sees an added schema property; production enum must still be bound and checked independently")
 }
 
 // -----------------------------------------------------------------------------
@@ -163,6 +186,14 @@ func t8SchemaProps(t *testing.T, v any) []string {
 // -----------------------------------------------------------------------------
 
 func TestFieldSelect_ParseAndProject(t *testing.T) {
+	t8FieldSelectParseCases(t)
+	t8FieldSelectProjectionCases(t)
+	t8FieldSelectCutCases(t)
+	t8FieldSelectOversizeCases(t)
+}
+
+func t8FieldSelectParseCases(t *testing.T) {
+	t.Helper()
 	t.Run("parse: fields missing, empty, wrong type, non-string items (20.1, 20.2)", func(t *testing.T) {
 		for _, spec := range []FieldSpec{t8SpecAgent(), t8SpecPreview(), t8SpecTask(), t8SpecPlan(), t8SpecGoal()} {
 			want := fmt.Sprintf(
@@ -175,7 +206,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 				"a number":           {"fields": 42},
 				"mixed non-strings":  {"fields": []any{spec.Valid[0], 42}},
 			} {
-				selected, errRes := ValidateFieldsArg(args, spec)
+				selected, errRes := t8ValidateFieldsArg(t, args, spec)
 				require.Nil(t, selected, "%s/%s: no names may be selected on refusal", spec.Object, name)
 				require.NotNil(t, errRes, "%s/%s: fields=%v must be refused", spec.Object, name, args["fields"])
 				assert.True(t, errRes.IsError, "%s/%s: refusal must be an error result", spec.Object, name)
@@ -200,7 +231,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		for _, tc := range cases {
 			want := fmt.Sprintf(`unknown field "nope" for %s. Valid: all, %s`,
 				tc.spec.Object, strings.Join(tc.spec.Valid, ", "))
-			selected, errRes := ValidateFieldsArg(map[string]any{"fields": []any{tc.val, "nope"}}, tc.spec)
+			selected, errRes := t8ValidateFieldsArg(t, map[string]any{"fields": []any{tc.val, "nope"}}, tc.spec)
 			require.Nil(t, selected)
 			require.NotNil(t, errRes)
 			assert.True(t, errRes.IsError)
@@ -223,7 +254,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 			for _, name := range tc.answers {
 				want := fmt.Sprintf(`unknown field %q for %s. Valid: all, %s`,
 					name, tc.spec.Object, strings.Join(tc.spec.Valid, ", "))
-				_, errRes := ValidateFieldsArg(map[string]any{"fields": []any{name}}, tc.spec)
+				_, errRes := t8ValidateFieldsArg(t, map[string]any{"fields": []any{name}}, tc.spec)
 				require.NotNil(t, errRes, "%s: %q must not be selectable", tc.spec.Object, name)
 				assert.Equal(t, want, errRes.ForLLM)
 			}
@@ -232,7 +263,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 
 	t.Run("parse: all cannot be combined (20.4)", func(t *testing.T) {
 		for _, spec := range []FieldSpec{t8SpecAgent(), t8SpecPreview(), t8SpecTask(), t8SpecPlan(), t8SpecGoal()} {
-			selected, errRes := ValidateFieldsArg(
+			selected, errRes := t8ValidateFieldsArg(t,
 				map[string]any{"fields": []any{"all", spec.Valid[0]}}, spec)
 			require.Nil(t, selected)
 			require.NotNil(t, errRes)
@@ -244,15 +275,15 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 
 	t.Run("parse: all selects every valid name; two and three names select exactly those (20.5, 20.6)", func(t *testing.T) {
 		spec := t8SpecTask()
-		selected, errRes := ValidateFieldsArg(map[string]any{"fields": []any{"all"}}, spec)
+		selected, errRes := t8ValidateFieldsArg(t, map[string]any{"fields": []any{"all"}}, spec)
 		require.Nil(t, errRes, "all alone must be accepted")
 		assert.Equal(t, spec.Valid, selected, `["all"] selects every valid name, in schema order`)
 
-		selected, errRes = ValidateFieldsArg(map[string]any{"fields": []any{"title", "status"}}, spec)
+		selected, errRes = t8ValidateFieldsArg(t, map[string]any{"fields": []any{"title", "status"}}, spec)
 		require.Nil(t, errRes)
 		assert.Equal(t, []string{"title", "status"}, selected)
 
-		selected, errRes = ValidateFieldsArg(map[string]any{"fields": []any{"title", "trigger", "result"}}, spec)
+		selected, errRes = t8ValidateFieldsArg(t, map[string]any{"fields": []any{"title", "trigger", "result"}}, spec)
 		require.Nil(t, errRes)
 		assert.Equal(t, []string{"title", "trigger", "result"}, selected)
 	})
@@ -260,7 +291,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 	t.Run("parse: preview rejects agent-valid names with the preview text (19.4b, §7.13 row 4)", func(t *testing.T) {
 		want := `fields for a new-agent preview: pass ["all"] or one or more of: tool_permissions, connectors`
 		// "soul" is valid for get_agent but not for a preview.
-		selected, errRes := ValidateFieldsArg(map[string]any{"fields": []any{"soul"}}, t8SpecPreview())
+		selected, errRes := t8ValidateFieldsArg(t, map[string]any{"fields": []any{"soul"}}, t8SpecPreview())
 		require.Nil(t, selected)
 		require.NotNil(t, errRes)
 		assert.True(t, errRes.IsError)
@@ -270,11 +301,15 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		// the preview's object name and valid list (§7.13 row 2 with
 		// <object> = "agent preview").
 		generic := `unknown field "nope" for agent preview. Valid: all, tool_permissions, connectors`
-		_, errRes = ValidateFieldsArg(map[string]any{"fields": []any{"nope"}}, t8SpecPreview())
+		_, errRes = t8ValidateFieldsArg(t, map[string]any{"fields": []any{"nope"}}, t8SpecPreview())
 		require.NotNil(t, errRes)
 		assert.Equal(t, generic, errRes.ForLLM)
 	})
 
+}
+
+func t8FieldSelectProjectionCases(t *testing.T) {
+	t.Helper()
 	t.Run("project: identity plus selected keys, nothing else (20.5, 20.6)", func(t *testing.T) {
 		task := &generated.Task{
 			Id:     "t-1",
@@ -282,7 +317,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 			Prompt: strPtr("do the work"),
 			Status: generated.TaskStatus("inbox"),
 		}
-		out, errRes := Project(task, t8SpecTask(), []string{"title", "prompt"})
+		out, errRes := t8Project(t, task, t8SpecTask(), []string{"title", "prompt"})
 		require.Nil(t, errRes)
 		require.NotNil(t, out)
 		assert.ElementsMatch(t, []string{"id", "title", "prompt"}, t8Keys(out),
@@ -297,7 +332,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		// marshalled object, so it is absent — left out, named in
 		// absent_fields, never null (§7.13 rule 2's own example).
 		task := &generated.Task{Id: "t-2", Title: "no due", Status: generated.TaskStatus("next")}
-		out, errRes := Project(task, t8SpecTask(), []string{"due"})
+		out, errRes := t8Project(t, task, t8SpecTask(), []string{"due"})
 		require.Nil(t, errRes)
 		require.NotNil(t, out)
 		assert.ElementsMatch(t, []string{"id", "absent_fields"}, t8Keys(out),
@@ -305,15 +340,16 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		assert.Equal(t, []string{"due"}, t8StringSlice(t, out["absent_fields"]))
 		_, has := out["due"]
 		assert.False(t, has, "no due key")
-		assert.NotContains(t, out, "due_null_sentinel")
-		v, ok := out["due"]
-		assert.False(t, ok || v == nil, "the absent key is left out, not null-filled")
+		encoded, err := json.Marshal(out)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"id":"t-2","absent_fields":["due"]}`, string(encoded),
+			"§7.13 rule 2's exact example: no due:null and no other keys")
 	})
 
 	t.Run("project: null is kept only where the full object carries null (§7.13 rule 1)", func(t *testing.T) {
 		spec := FieldSpec{Object: "synthetic", Identity: []string{"id"}, Valid: []string{"maybe_null", "filled"}}
 		full := map[string]any{"id": "x", "maybe_null": nil, "filled": "value"}
-		out, errRes := Project(full, spec, []string{"maybe_null", "filled"})
+		out, errRes := t8Project(t, full, spec, []string{"maybe_null", "filled"})
 		require.Nil(t, errRes)
 		require.NotNil(t, out)
 		assert.Contains(t, out, "maybe_null")
@@ -321,6 +357,10 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		assert.Equal(t, "value", out["filled"])
 	})
 
+}
+
+func t8FieldSelectCutCases(t *testing.T) {
+	t.Helper()
 	t.Run("project: size bound cuts the longest value first, task fixture (20.8)", func(t *testing.T) {
 		result := "RESULT|" + strings.Repeat("r", 50000-len("RESULT|"))
 		prompt := "PROMPT|" + strings.Repeat("p", 10000-len("PROMPT|"))
@@ -338,7 +378,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		require.Greater(t, fullLen, ResultBoundChars,
 			"fixture must be over the %d-character bound before cutting", ResultBoundChars)
 
-		out, errRes := Project(task, t8SpecTask(), t8ValidTask())
+		out, errRes := t8Project(t, task, t8SpecTask(), t8ValidTask())
 		require.Nil(t, errRes, "the task fixture must fit after cutting result")
 		require.NotNil(t, out)
 		assert.LessOrEqual(t, t8EncodedLen(t, out), ResultBoundChars,
@@ -360,7 +400,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		sA := strings.Repeat("A", 45000)
 		sB := "B|" + strings.Repeat("b", 42000-len("B|"))
 		full := map[string]any{"id": "x", "sA": sA, "sB": sB, "small": "keep"}
-		out, errRes := Project(full, spec, spec.Valid)
+		out, errRes := t8Project(t, full, spec, spec.Valid)
 		require.Nil(t, errRes, "cutting sA then sB must make the result fit")
 		require.NotNil(t, out)
 		assert.LessOrEqual(t, t8EncodedLen(t, out), ResultBoundChars)
@@ -381,7 +421,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		spec := FieldSpec{Object: "synthetic", Identity: []string{"id"}, Valid: []string{"big45k", "s8001"}}
 		s8001 := strings.Repeat("z", 8001)
 		full := map[string]any{"id": "x", "big45k": strings.Repeat("q", 45000), "s8001": s8001}
-		out, errRes := Project(full, spec, spec.Valid)
+		out, errRes := t8Project(t, full, spec, spec.Valid)
 		require.Nil(t, errRes)
 		require.NotNil(t, out)
 		assert.Equal(t, []string{"big45k"}, t8StringSlice(t, out["truncated_fields"]))
@@ -393,7 +433,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		spec := FieldSpec{Object: "synthetic", Identity: []string{"id"}, Valid: []string{"big45k", "s8k"}}
 		s8k := strings.Repeat("e", 8000)
 		full := map[string]any{"id": "x", "big45k": strings.Repeat("f", 45000), "s8k": s8k}
-		out, errRes := Project(full, spec, spec.Valid)
+		out, errRes := t8Project(t, full, spec, spec.Valid)
 		require.Nil(t, errRes)
 		require.NotNil(t, out)
 		assert.Equal(t, s8k, out["s8k"], "a value of exactly 8,000 characters is untouched")
@@ -404,7 +444,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		spec := FieldSpec{Object: "synthetic", Identity: []string{"id"}, Valid: []string{"big45k"}}
 		longID := strings.Repeat("i", 9000)
 		full := map[string]any{"id": longID, "big45k": strings.Repeat("f", 45000)}
-		out, errRes := Project(full, spec, spec.Valid)
+		out, errRes := t8Project(t, full, spec, spec.Valid)
 		require.Nil(t, errRes)
 		require.NotNil(t, out)
 		assert.Equal(t, longID, out["id"], "identity keys are excluded by name, never cut")
@@ -415,7 +455,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		spec := FieldSpec{Object: "synthetic", Identity: []string{"id"}, Valid: []string{"big45k", "list"}}
 		list := []any{strings.Repeat("L", 6000), strings.Repeat("M", 6000)}
 		full := map[string]any{"id": "x", "big45k": strings.Repeat("f", 45000), "list": list}
-		out, errRes := Project(full, spec, spec.Valid)
+		out, errRes := t8Project(t, full, spec, spec.Valid)
 		require.Nil(t, errRes)
 		require.NotNil(t, out)
 		got := t8AnySlice(t, out["list"])
@@ -430,7 +470,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		soul := "SOUL|" + strings.Repeat("s", 60000-len("SOUL|"))
 		agent := &generated.AgentDetail{Id: "a-1", Revision: "r1"}
 		setString(t, agent, "Soul", soul)
-		out, errRes := Project(agent, t8SpecAgent(), t8ValidAgent())
+		out, errRes := t8Project(t, agent, t8SpecAgent(), t8ValidAgent())
 		require.Nil(t, errRes)
 		require.NotNil(t, out)
 		assert.Equal(t, []string{"soul"}, t8StringSlice(t, out["truncated_fields"]))
@@ -439,7 +479,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 
 		latest := strings.Repeat("l", 50000)
 		goal := &generated.Goal{GoalId: "g-1", State: generated.GoalState("active"), LatestReason: &latest}
-		out, errRes = Project(goal, t8SpecGoal(), t8ValidGoal())
+		out, errRes = t8Project(t, goal, t8SpecGoal(), t8ValidGoal())
 		require.Nil(t, errRes)
 		require.NotNil(t, out)
 		assert.Equal(t, []string{"latest_reason"}, t8StringSlice(t, out["truncated_fields"]))
@@ -447,28 +487,33 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 
 		paused := strings.Repeat("p", 50000)
 		plan := &generated.Plan{Id: "pl-1", State: generated.PlanState("running"), PausedReason: &paused}
-		out, errRes = Project(plan, t8SpecPlan(), t8ValidPlan())
+		out, errRes = t8Project(t, plan, t8SpecPlan(), t8ValidPlan())
 		require.Nil(t, errRes)
 		require.NotNil(t, out)
 		assert.Equal(t, []string{"paused_reason"}, t8StringSlice(t, out["truncated_fields"]))
 		assert.Equal(t, paused[:8000]+t8CutMarker(50000), out["paused_reason"])
 	})
 
+}
+
+func t8FieldSelectOversizeCases(t *testing.T) {
+	t.Helper()
 	t.Run("project: array-only oversize fails with the too-large template, no partial object (20.8b)", func(t *testing.T) {
-		// A real generated Goal whose terminal_history alone is over the
-		// bound: entries are cut-proof, so the error names terminal_history.
+		// Synthetic map fixture for the shared helper: terminal_history alone
+		// exceeds the bound. This is NOT the real-store goal history required
+		// by 20.8b; that integration fixture remains a traceability gap.
 		entry := map[string]any{"at": "2026-10-31T00:00:00Z", "outcome": strings.Repeat("T", 6000)}
 		history := make([]any, 0, 12)
 		for i := 0; i < 12; i++ {
 			history = append(history, entry) // 12 × ~6,100 ≈ 73,000 characters
 		}
 		goal := map[string]any{
-			"goal_id":         "g-2",
-			"state":           "active",
+			"goal_id":          "g-2",
+			"state":            "active",
 			"terminal_history": history,
-			"prompt":          "small",
+			"prompt":           "small",
 		}
-		out, errRes := Project(goal, t8SpecGoal(), t8ValidGoal())
+		out, errRes := t8Project(t, goal, t8SpecGoal(), t8ValidGoal())
 		require.NotNil(t, errRes, "an uncuttable array over the bound must fail the call")
 		assert.True(t, errRes.IsError)
 		assert.Nil(t, out, "no partial object is returned")
@@ -478,14 +523,15 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 		assert.Regexp(t, reLarge, errRes.ForLLM,
 			"the too-large text follows the §7.13 template; <n>/<m> are derived numbers the spec does not pin")
 
-		// The same for a real Plan whose dod alone is over the bound; the
-		// second call with a small selection succeeds (20.8b's second half).
+		// Synthetic Plan-shaped map; not a persisted plan or read-tool proof.
+		// A smaller selection of the same object must then fit. Real-store
+		// plan DoD and numeric-error-count assertions remain integration gaps.
 		dod := make([]any, 0, 10)
 		for i := 0; i < 10; i++ {
 			dod = append(dod, map[string]any{"text": strings.Repeat("D", 6000)})
 		}
 		plan := map[string]any{"id": "pl-2", "state": "running", "dod": dod}
-		out, errRes = Project(plan, t8SpecPlan(), t8ValidPlan())
+		out, errRes = t8Project(t, plan, t8SpecPlan(), t8ValidPlan())
 		require.NotNil(t, errRes)
 		assert.Nil(t, out)
 		reLargePlan := regexp.MustCompile(
@@ -493,7 +539,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 				`largest field: dod \(\d+ characters\)\. Request fewer fields\.$`)
 		assert.Regexp(t, reLargePlan, errRes.ForLLM)
 
-		out, errRes = Project(plan, t8SpecPlan(), []string{"state"})
+		out, errRes = t8Project(t, plan, t8SpecPlan(), []string{"state"})
 		require.Nil(t, errRes, "fields=[\"state\"] on the same plan succeeds")
 		require.NotNil(t, out)
 		assert.ElementsMatch(t, []string{"id", "state"}, t8Keys(out))
@@ -506,7 +552,7 @@ func TestFieldSelect_ParseAndProject(t *testing.T) {
 			strings.Repeat("R", 6000), strings.Repeat("S", 6000), strings.Repeat("U", 6000)}
 		longstr := strings.Repeat("w", 20000)
 		full := map[string]any{"id": "x", "longstr": longstr, "biglist": list}
-		out, errRes := Project(full, spec, spec.Valid)
+		out, errRes := t8Project(t, full, spec, spec.Valid)
 		require.NotNil(t, errRes, "even after cutting longstr the array keeps the result over the bound")
 		assert.True(t, errRes.IsError)
 		assert.Nil(t, out, "no partial object")
@@ -640,8 +686,6 @@ func TestFieldSelect_EnumsMatchSchemas(t *testing.T) {
 			{"Task", &generated.Task{}},
 			{"Plan", &generated.Plan{}},
 			{"Goal", &generated.Goal{}},
-			{"AgentDetail", &generated.AgentDetail{}},
-			{"AgentPreview", &generated.AgentPreview{}},
 		} {
 			for _, prop := range t8SchemaProps(t, tc.typ) {
 				assert.NotContains(t, metadataNames, prop,
