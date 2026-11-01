@@ -181,7 +181,6 @@ function OutboundSettings({
   // True while the operator has unsaved edits: a background re-read must not
   // replace what they typed. A deliberate re-read (stale_revision) does.
   const dirtyRef = useRef(false)
-  const fieldErrorId = useId()
   const headingId = useId()
 
   function hydrate(next: Pick<ChannelOutboundRead, 'outbound' | 'revision'>) {
@@ -317,6 +316,10 @@ function OutboundSettings({
         )}
 
         {policy === 'agent_may_start' && (
+          // S-81 names FormError for the per-line refusals, but FormError is a
+          // domain widget outside the public catalog; the catalogued Field's
+          // own error region (role="alert") is used instead. Field marks the
+          // textarea aria-invalid and adds the region to its aria-describedby.
           <Field
             label={FIELD_LABEL}
             description={
@@ -325,26 +328,25 @@ function OutboundSettings({
                 {PLATFORM_HELP[platform] && <p>{PLATFORM_HELP[platform]}</p>}
               </>
             }
+            error={
+              refusal.items.length > 0 ? (
+                <div className="space-y-[var(--space-1)]">
+                  {refusal.items.map((item, i) => (
+                    <p key={`${item.line}-${i}`}>{`Line ${item.line}: ${item.reason}`}</p>
+                  ))}
+                </div>
+              ) : undefined
+            }
           >
             <Textarea
               value={text}
               rows={4}
-              aria-describedby={refusal.items.length > 0 ? fieldErrorId : undefined}
-              aria-invalid={refusal.items.length > 0 ? true : undefined}
               onChange={(event) => {
                 dirtyRef.current = true
                 setText(event.target.value)
               }}
             />
           </Field>
-        )}
-
-        {refusal.items.length > 0 && (
-          <div id={fieldErrorId} className="space-y-[var(--space-1)]">
-            {refusal.items.map((item, i) => (
-              <Notice key={`${item.line}-${i}`} message={`Line ${item.line}: ${item.reason}`} />
-            ))}
-          </div>
         )}
 
         {sectionMessage && <Notice message={sectionMessage} />}
