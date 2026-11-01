@@ -69,7 +69,7 @@ func (l RecapLimit) use(saved int, missing bool) int {
 	if missing {
 		return l.Default
 	}
-	inUse := saved
+	var inUse int
 	switch {
 	case saved < l.Min:
 		inUse = l.Min

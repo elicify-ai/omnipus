@@ -483,9 +483,12 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
-	reasoning, err := parseReasoning(path+".reasoning", dto.Reasoning)
-	if err != nil {
-		return Model{}, err
+	// A model with no reasoning object does not reason: Reasoning stays nil.
+	var reasoning *ModelReasoning
+	if dto.Reasoning != nil {
+		if reasoning, err = parseReasoning(path+".reasoning", dto.Reasoning); err != nil {
+			return Model{}, err
+		}
 	}
 	return Model{
 		ID:                dto.ID,
@@ -505,11 +508,8 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 
 // parseReasoning validates a model's reasoning object: each level is a
 // non-empty name of at most 32 characters, listed once, kept in published
-// order. nil stays nil (the model does not reason).
+// order. The caller handles an absent object (the model does not reason).
 func parseReasoning(path string, dto *reasoningDTO) (*ModelReasoning, error) {
-	if dto == nil {
-		return nil, nil
-	}
 	levels := make([]string, 0, len(dto.Levels))
 	seen := make(map[string]bool, len(dto.Levels))
 	for i, l := range dto.Levels {
