@@ -603,6 +603,14 @@ func (cs *CronService) RunDueJobs(now time.Time) {
 			cs.store.Jobs[i].State.NextRunAtMS = nil
 		}
 	}
+	// The same critical section that consumes each due occurrence publishes
+	// its dispatch-pending reservation (tool-parity spec r17 §7.2 TK-30, r12),
+	// so no observer can see a collected occurrence owned by neither its next
+	// run nor JobDispatchInFlight. dispatch's goroutine releases it on every
+	// settle path.
+	for _, jobID := range dueJobIDs {
+		cs.markDispatchPendingUnsafe(jobID)
+	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
 		slog.Error("cron failed to save store", "job_ids", dueJobIDs, "error", err)
@@ -669,7 +677,8 @@ func (cs *CronService) dispatch(jobID string, win laneWindow) {
 		laneCtx = context.Background()
 	}
 
-	cs.markDispatchPending(jobID)
+	// The dispatch-pending reservation was published by RunDueJobs in the
+	// collection critical section (its only caller).
 	go func() {
 		defer cs.laneDone(win.runs)
 		// Cleared on every exit: run finished, lane cancelled while queued,
@@ -1371,6 +1380,11 @@ func generateID() string {
 func (cs *CronService) markDispatchPending(jobID string) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+	cs.markDispatchPendingUnsafe(jobID)
+}
+
+// markDispatchPendingUnsafe is markDispatchPending with mu already held.
+func (cs *CronService) markDispatchPendingUnsafe(jobID string) {
 	if cs.dispatchPending == nil {
 		cs.dispatchPending = make(map[string]int)
 	}

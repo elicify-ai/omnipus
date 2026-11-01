@@ -540,9 +540,18 @@ func (s *TaskTriggerScheduler) rearmRrule(t *task.Task, fireGen, firingJobID str
 	unlock := task.LockTaskWriteOrder(t.ID)
 	defer unlock()
 	fresh, err := s.store.Get(t.ID)
-	if err != nil || triggerGeneration(fresh.Trigger) != fireGen {
+	switch {
+	case err == nil && triggerGeneration(fresh.Trigger) != fireGen,
+		errors.Is(err, task.ErrNotFound):
 		slog.Debug("task_trigger: rrule re-arm superseded by a newer persisted trigger, no-op", "task_id", t.ID)
 		return
+	case err != nil:
+		// An unreadable task file is not evidence that its schedule changed:
+		// the series continues from the fire's own snapshot, still guarded by
+		// registration identity below, and the recovery sweep reports it.
+		slog.Warn("task_trigger: rrule re-arm: task unreadable, continuing from the fire snapshot",
+			"task_id", t.ID, "error", err)
+		fresh = t
 	}
 
 	s.mu.Lock()
