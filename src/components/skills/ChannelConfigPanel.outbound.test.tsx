@@ -54,6 +54,7 @@ const FIELD_HELP = "One id per line, like the allowed senders: a person's user i
 const FIELD_LABEL = 'People and groups the agent may message'
 const fetchMock = vi.fn<typeof fetch>()
 let readBody: ReturnType<typeof ReadSchema.parse>
+let readStatus: number
 let writeBody: unknown
 let writeStatus: number
 let reads: number
@@ -64,6 +65,7 @@ beforeEach(() => {
   devToast.mockReset()
   reads = 0
   writes = []
+  readStatus = 200
   readBody = ReadSchema.parse({
     outbound: { policy: 'agent_may_start', targets: ['discord:111', 'discord:222'] },
     revision: 't30-before', availability: { state: 'running' }, start_supported: true,
@@ -77,7 +79,9 @@ beforeEach(() => {
     expect(init?.credentials).toBe('include')
     if ((init?.method ?? 'GET') === 'GET') {
       reads++
-      return new Response(JSON.stringify(readBody), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      return new Response(JSON.stringify(readStatus === 200 ? readBody : { error: 'QA outbound settings read unavailable' }), {
+        status: readStatus, headers: { 'Content-Type': 'application/json' },
+      })
     }
     expect(init?.method).toBe('PUT')
     writes.push(UpdateSchema.parse(JSON.parse(String(init?.body))))
@@ -286,6 +290,26 @@ describe('T-30 per-code conflict handling — S-81', () => {
     await waitFor(() => expect(targetsField()).toHaveValue('999'))
     expect(reads).toBeGreaterThanOrEqual(2)
     expect(messages()).toContain(STALE)
+  })
+
+  it('stale_revision failed re-read keeps the form and entered values without claiming current values are shown', async () => {
+    const client = renderPanel()
+    await loaded()
+    readStatus = 503
+    writeStatus = 409
+    writeBody = RejectionSchema.parse({ code: 'stale_revision', error: 'stale revision' })
+    await submit('333\n444')
+    // Wait for the async rejection/reread handler to finish, not just for
+    // the second GET to start. S-81's current-values claim is conditional
+    // on a successful refresh; no fallback wording is specified.
+    await waitFor(() => expect(client.getMutationCache().getAll()[0]?.state.status).toBe('error'))
+    expect(reads).toBe(2)
+    const field = screen.queryByRole('textbox', { name: FIELD_LABEL })
+    expect(field, 'F5: a failed stale-revision reread must keep the editable form visible, not replace it with the load-error screen').not.toBeNull()
+    expect(field).toHaveValue('333\n444')
+    expect(screen.getByRole('radio', { name: 'Answer and also start messages' })).toBeChecked()
+    expect(messages()).not.toContain(STALE)
+    expect(screen.getAllByRole('alert').length).toBeGreaterThan(0)
   })
 
   it('connect_first preserves entered values and never presents stale-form guidance', async () => {
