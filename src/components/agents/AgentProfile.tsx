@@ -702,8 +702,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     (pair: EffortPair) => findServedRow(effortCatalog, pair.provider, pair.model),
     [effortCatalog],
   )
+  // S-57: the pair the server holds while a committed model/effort save is in
+  // flight, so a failed save can show it again; plus the chip to focus then.
+  const primaryShownRef = useRef({ model, provider: primaryProvider, effort: reasoningEffort })
+  primaryShownRef.current = { model, provider: primaryProvider, effort: reasoningEffort }
+  const primaryAcknowledgedRef = useRef<{ model: string; provider: string; effort: string } | null>(null)
+  const primaryChipRef = useRef<HTMLButtonElement | null>(null)
   // One model-and-effort commit: both land together and save at once.
   const commitPrimaryModelEffort = useCallback((pair: EffortPair, effort: string, note: string | null) => {
+    // An earlier commit still unsaved keeps its captured server pair.
+    primaryAcknowledgedRef.current ??= { ...primaryShownRef.current }
     isDirtyRef.current = true
     setModel(pair.model)
     setPrimaryProvider(pair.provider)
@@ -1165,6 +1173,24 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     saveAgentNow()
   }, [immediateSaveTick])
 
+  // S-57 / U20: a committed model/effort save that fails shows the server's
+  // previous model and effort again and puts focus on the effort chip; the
+  // footer keeps the save error. A successful save drops the captured pair.
+  useEffect(() => {
+    const acknowledged = primaryAcknowledgedRef.current
+    if (!acknowledged) return
+    if (saveStatus === 'saved') { primaryAcknowledgedRef.current = null; return }
+    if (saveStatus !== 'error') return
+    primaryAcknowledgedRef.current = null
+    setModel(acknowledged.model)
+    setPrimaryProvider(acknowledged.provider)
+    setReasoningEffort(acknowledged.effort)
+    setPrimaryEffortNote(null)
+    // The next tick lets a closing popover finish its own focus return first.
+    const timer = setTimeout(() => primaryChipRef.current?.focus(), 0)
+    return () => clearTimeout(timer)
+  }, [saveStatus])
+
   // Item 1 (MERGE-BLOCKER — sheet-close data loss): AgentProfile is mounted
   // at the route level and does NOT unmount when the sheet closes (only
   // `editAgentId` flips to null) — so useAutoSave's own unmount-flush never
@@ -1546,6 +1572,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 onSwitchCancel={primaryEffortSwitch.cancelPending}
                 cancelFocusTarget={() => document.querySelector<HTMLElement>('[data-testid="agent-model-trigger"]')}
                 note={primaryEffortNote}
+                chipRef={primaryChipRef}
                 announcement={primaryEffortSwitch.announcement}
                 onChange={(effort) => commitPrimaryModelEffort({ provider: primaryProvider, model }, effort, null)}
               />

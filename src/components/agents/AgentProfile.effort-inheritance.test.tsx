@@ -106,3 +106,28 @@ it.each(['Cancel', 'Escape'])('S-86 agent primary: %s on nothing-sendable preser
   await user.click(screen.getByRole('button', { name: /^Effort/i }))
   expect(screen.getByRole('radio', { name: /^(Not set|Default's setting)/i })).toHaveAttribute('aria-checked', 'true')
 })
+
+// Traces to: effort-levels-spec-r10.md S-57 (amended) and UAT row U20: a failed
+// save after a remapping switch shows the server's previous model and effort
+// again, puts focus on the effort chip and shows the surface's error.
+it('S-57 agent primary: a failed mapped autosave restores the saved model and Medium, focuses the chip and shows the error', async () => {
+  acknowledgedAgent = { ...riding, model: target, provider: 'openrouter', reasoning_effort: 'medium' } as unknown as Agent
+  vi.mocked(updateAgent).mockReset().mockRejectedValue(new Error('SAVE-FAILED-7731'))
+  const user = userEvent.setup()
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><AgentProfile agentId={riding.id} /></QueryClientProvider>)
+  await screen.findByText(riding.name)
+  // Positive control: the saved pair is shown before the switch.
+  await screen.findByRole('button', { name: /^Effort.*Medium/i })
+  const modelButton = screen.getByRole('combobox', { name: /^Model selector/ })
+  expect(modelButton).toHaveTextContent(target)
+  await user.click(modelButton)
+  await user.click(await screen.findByText(oldModel, { exact: true }))
+  await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+  // The attempted write was the mapped pair: the switch really happened.
+  expect(vi.mocked(updateAgent).mock.calls[0][1]).toMatchObject({ model: oldModel, reasoning_effort: 'low' })
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/SAVE-FAILED-7731|save.*failed/i))
+  await waitFor(() => expect(modelButton).toHaveTextContent(target))
+  const chip = screen.getByRole('button', { name: /^Effort.*Medium/i })
+  await waitFor(() => expect(chip).toHaveFocus())
+  expect(screen.queryByText(`Effort set to Low. ${oldModel} doesn't offer Medium.`)).toBeNull()
+})
