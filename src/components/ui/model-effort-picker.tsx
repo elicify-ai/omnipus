@@ -1,16 +1,45 @@
-// model-effort-picker.tsx — RED SCAFFOLDING for the effort-levels feature
-// (train T7, branch landing/effort). Spec: effort-levels-spec-r10.md,
-// "Design-System Components" / "Reachability": new components
-// `ModelEffortPicker` (domain) and `EffortControl` (composite: chip +
-// popover + radio group).
+// model-effort-picker.tsx — the shared model-and-effort picker
+// (effort-levels-spec-r10.md, "Design-System Components", "Presentation by
+// capability", "Accessibility and Keyboard"; FR-019, FR-052, FR-053, FR-054;
+// founder P-Q1 A to P-Q5 A).
 //
-// The RED component tests (src/components/ui/model-effort-picker.test.tsx and
-// the T-F2/T-F3 suites) render these components and assert the S-07/S-08/S-10
-// to S-14/S-54/S-57/S-60/S-73/S-74 behaviour. GREEN replaces both stubs with
-// the real publication (catalog entry, barrel export, @source line, manifest)
-// composed from the catalogued RadioGroup/Popover/Button primitives; the prop
-// shapes below are the contract the tests pin. Both stubs render nothing, so
-// every rendered-output assertion fails until the real components land.
+// Two exports, one domain file (it reads the served providers catalog through
+// the SPA's catalog query, so it cannot be part of the reusable package):
+//   - ModelEffortPicker: the effort radio group for one model — Not set (where
+//     something sits above the slot), Provider default, then the model's own
+//     levels / Off / On, exactly as the served `reasoning` object allows.
+//   - EffortControl: the chip + popover around it, including the blocked
+//     pick-a-level / "Let the provider decide" step of a pending model switch
+//     (useEffortSwitch) and the mapping note with its Change link.
+//
+// Commit model: the commit is the change (no confirm step, P-Q4 A). A click,
+// Enter or Space on an item commits it; arrow keys only move the selection
+// (the catalogued RadioGroup moves focus and selection together, the commit
+// waits for Enter/Space so a keyboard user can move without saving).
+
+import * as React from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Info } from '@phosphor-icons/react'
+import { cn } from '@/lib/utils'
+import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
+import { effortLabel, mapEffort, PROVIDER_DEFAULT } from '@/lib/effort/mapEffort'
+import {
+  effortItems,
+  effortTargetOf,
+  findServedRow,
+  itemForStored,
+  levelItems,
+  presentationOf,
+  type EffortItem,
+  type ServedRow,
+} from '@/lib/effort/servedReasoning'
+import type { EffortPendingSwitch } from '@/lib/effort/useEffortSwitch'
+import { Button } from './button'
+import { FormError } from './FormError'
+import { Popover, PopoverContent, PopoverTrigger } from './popover'
+import { RadioGroup, RadioGroupItem } from './radio-group'
+import { Tooltip } from './tooltip'
 
 export interface EffortValue {
   provider: string
@@ -24,37 +53,495 @@ export interface EffortChangeMeta {
   note?: string
 }
 
+export type EffortScope =
+  | 'chat'
+  | 'agent-primary'
+  | 'agent-fallback'
+  | 'default-model'
+  | 'recap-model'
+  | 'recap-fallback'
+  | 'onboarding'
+  | 'replacement'
+
 export interface ModelEffortPickerProps {
   value: EffortValue
   onChange?: (effort: string, meta?: EffortChangeMeta) => void
-  /** The inherited value a Not set slot resolves to (chat: agent's setting). */
+  /**
+   * The inherited value a Not set slot resolves to (chat: the agent's
+   * setting; an agent primary riding the default model: the default model's).
+   * The chat always offers Not set; elsewhere Not set is offered only when
+   * this is given (FR-044, "Stored states").
+   */
   inherit?: string
-  scope:
-    | 'chat'
-    | 'agent-primary'
-    | 'agent-fallback'
-    | 'default-model'
-    | 'recap-model'
-    | 'recap-fallback'
-    | 'onboarding'
-    | 'replacement'
+  scope: EffortScope
   /** Contextual accessible name, e.g. "Effort for fallback 2, MiniMax M3". */
   contextName?: string
   /** Recap slots default to Off and have no Not set row (FD-19). */
   defaultEffort?: 'off'
 }
 
-/** Shared model-and-effort picker body (radio group inside the popover). RED stub. */
-export function ModelEffortPicker(_props: ModelEffortPickerProps): null {
-  return null
+export const MUTED_EFFORT_TEXT = "Omnipus can't change effort for this model."
+
+const NOT_SET = ''
+
+/** The one catalog read every picker shares (ADR-068's catalog query). */
+function useServedCatalog() {
+  const query = useQuery(providersCatalogQueryOptions())
+  return {
+    catalog: query.data,
+    status: query.status,
+    retry: () => {
+      void query.refetch()
+    },
+  }
+}
+
+function inheritPrefix(scope: EffortScope): string {
+  return scope === 'agent-primary' ? "Default model's setting" : "Agent's setting"
+}
+
+function offersNotSet(props: Pick<ModelEffortPickerProps, 'scope' | 'inherit' | 'defaultEffort'>): boolean {
+  if (props.defaultEffort === 'off') return false
+  return props.scope === 'chat' || props.inherit !== undefined
+}
+
+/** What a stored value means on this slot: '' on a recap slot is Off; '' without a Not set row is Provider default. */
+function effectiveStored(props: Pick<ModelEffortPickerProps, 'scope' | 'inherit' | 'defaultEffort'>, stored: string): string {
+  if (stored !== NOT_SET) return stored
+  if (props.defaultEffort === 'off') return 'off'
+  return offersNotSet(props) ? NOT_SET : PROVIDER_DEFAULT
+}
+
+/** "Agent's setting: High", plus ", sent as Medium here" / ", nothing sent here" when the model differs (S-12, S-72, S-87). */
+function inheritedText(scope: EffortScope, inherit: string | undefined, row: ServedRow): { text: string; differs: boolean } {
+  const inherited = inherit && inherit !== '' ? inherit : PROVIDER_DEFAULT
+  const base = `${inheritPrefix(scope)}: ${effortLabel(inherited)}`
+  const mapping = mapEffort(inherited, effortTargetOf(row))
+  if (mapping.blocked) return { text: `${base}, nothing sent here`, differs: true }
+  const same =
+    mapping.value === inherited || ((mapping.value === 'none' || mapping.value === 'off') && (inherited === 'off' || inherited === 'none'))
+  if (same || mapping.value === NOT_SET || mapping.value === PROVIDER_DEFAULT) return { text: base, differs: false }
+  return { text: `${base}, sent as ${effortLabel(mapping.value)} here`, differs: true }
+}
+
+interface EffortRadioListProps {
+  items: EffortItem[]
+  /** The checked item's value; undefined when none is checked (stale value, blocked step). */
+  checked: string | undefined
+  onCommit: (value: string) => void
+  disabled?: boolean
+  ariaLabel: string
+}
+
+const NO_SELECTION = '\u0000none'
+
+/** The radio list: arrows move the selection; click, Enter or Space commits. */
+function EffortRadioList({ items, checked, onCommit, disabled, ariaLabel }: EffortRadioListProps) {
+  const [selected, setSelected] = useState<string>(checked ?? NO_SELECTION)
+  useEffect(() => {
+    setSelected(checked ?? NO_SELECTION)
+  }, [checked])
+  return (
+    <RadioGroup
+      aria-label={ariaLabel}
+      orientation="vertical"
+      value={selected}
+      onValueChange={setSelected}
+      disabled={disabled}
+      className="gap-[var(--space-1)]"
+    >
+      {items.map((item) => (
+        <RadioGroupItem
+          key={item.value === NOT_SET ? 'not-set' : item.value}
+          value={item.value}
+          onClick={(event) => {
+            event.preventDefault()
+            setSelected(item.value)
+            onCommit(item.value)
+          }}
+          className="p-[var(--space-2)]"
+        >
+          {item.label}
+        </RadioGroupItem>
+      ))}
+    </RadioGroup>
+  )
+}
+
+interface PickerBodyProps extends ModelEffortPickerProps {
+  catalogStatus: 'pending' | 'error' | 'success'
+  row: ServedRow
+  onRetry: () => void
+  onCommit: (value: string) => void
+}
+
+function PickerBody({ catalogStatus, row, onRetry, onCommit, ...props }: PickerBodyProps) {
+  const stored = effectiveStored(props, props.value.effort)
+  if (catalogStatus !== 'success') {
+    // Loading or failed: the stored value as text, no choices (S-07).
+    return (
+      <div className="space-y-[var(--space-1)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{effortLabel(stored)}</p>
+        {catalogStatus === 'error' && (
+          <div className="flex items-center gap-[var(--space-2)]">
+            <FormError error="Could not load this model's effort options." className="mt-0" />
+            <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+              Retry
+            </Button>
+          </div>
+        )}
+      </div>
+    )
+  }
+  const presentation = presentationOf(row)
+  if (presentation === 'none') return null
+  if (presentation === 'muted') {
+    return <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{MUTED_EFFORT_TEXT}</p>
+  }
+  const notSetLabel = offersNotSet(props) ? `Not set: ${inheritedText(props.scope, props.inherit, row).text}` : null
+  const items = effortItems(effortTargetOf(row), notSetLabel)
+  return (
+    <EffortRadioList
+      items={items}
+      checked={itemForStored(items, stored)?.value}
+      onCommit={onCommit}
+      ariaLabel={props.contextName ?? 'Effort'}
+    />
+  )
+}
+
+/** The effort radio group for one model (no chip, no popover). */
+export function ModelEffortPicker(props: ModelEffortPickerProps) {
+  const { catalog, status, retry } = useServedCatalog()
+  const row = findServedRow(catalog, props.value.provider, props.value.model)
+  return (
+    <PickerBody
+      {...props}
+      catalogStatus={status}
+      row={row}
+      onRetry={retry}
+      onCommit={(effort) => props.onChange?.(effort)}
+    />
+  )
 }
 
 export interface EffortControlProps extends ModelEffortPickerProps {
-  /** Blocked-step keep-open view state is internal to the control. */
-  keepOpenOnBlocked?: boolean
+  /** A model switch waiting on the blocked step (useEffortSwitch). */
+  pendingSwitch?: EffortPendingSwitch | null
+  /** The blocked step was answered: a level, or Provider default. */
+  onSwitchComplete?: (effort: string) => void
+  /** The blocked step was cancelled (Escape, Cancel or a click outside). */
+  onSwitchCancel?: () => void
+  /** Where focus returns after a cancelled switch (the model button, FR-053). */
+  cancelFocusTarget?: () => HTMLElement | null
+  /** The mapping note of the last switch; shows with a Change link (P-Q4 A). */
+  note?: string | null
+  /** The value was set by `/effort` in this conversation (gold dot, S-41). */
+  setByCommand?: boolean
+  /** Polite announcement for the picker's one live region. */
+  announcement?: string
+  /** The chip element (focus target after a failed save, S-57). */
+  chipRef?: React.Ref<HTMLButtonElement>
+  /** The chip cannot be opened (another write is in flight, FR-054). */
+  disabled?: boolean
+  'data-testid'?: string
+  className?: string
 }
 
-/** The chip + popover control wrapping ModelEffortPicker. RED stub. */
-export function EffortControl(_props: EffortControlProps): null {
-  return null
+interface ChipDescription {
+  /** The chip's visible text. */
+  text: string
+  /** The value part of the accessible name. */
+  spoken: string
+  inherited: boolean
+  amber: boolean
+  /** A visible sentence under the chip explaining the amber state, if any. */
+  hint?: string
+}
+
+/** Recap slots on a model that cannot turn reasoning off (Interaction states, Settings Memory). */
+export const RECAP_OFF_NOT_SENDABLE_TEXT = "This model can't turn reasoning off; the recap sends no effort setting."
+
+function describeChip(props: EffortControlProps, row: ServedRow, items: EffortItem[]): ChipDescription {
+  const stored = effectiveStored(props, props.value.effort)
+  if (stored === NOT_SET) {
+    const inherited = inheritedText(props.scope, props.inherit, row)
+    return { text: inherited.text, spoken: `Not set: ${inherited.text}`, inherited: true, amber: inherited.differs }
+  }
+  const label = effortLabel(stored)
+  if (itemForStored(items, stored) === undefined) {
+    if (props.defaultEffort === 'off' && (stored === 'off' || stored === 'none')) {
+      // A recap slot keeps reading Off; the amber dot and one sentence say nothing is sent.
+      return { text: 'Off', spoken: 'Off', inherited: false, amber: true, hint: RECAP_OFF_NOT_SENDABLE_TEXT }
+    }
+    // A stored value this model no longer offers keeps its text; say what is sent (FR-022).
+    const mapping = mapEffort(stored, effortTargetOf(row))
+    const sent = mapping.blocked || mapping.value === PROVIDER_DEFAULT || mapping.value === NOT_SET ? 'nothing sent here' : `sent as ${effortLabel(mapping.value)} here`
+    const text = `${label}, ${sent}`
+    return { text, spoken: text, inherited: false, amber: true }
+  }
+  const text = props.setByCommand ? `${label}, set for this conversation` : label
+  return { text, spoken: text, inherited: false, amber: false }
+}
+
+/** The effort chip and its popover (S-07, S-10 to S-14, S-54, S-57, S-73, S-74). */
+export function EffortControl(props: EffortControlProps) {
+  const {
+    pendingSwitch = null,
+    onSwitchComplete,
+    onSwitchCancel,
+    cancelFocusTarget,
+    note,
+    announcement = '',
+    chipRef,
+    disabled = false,
+    className,
+  } = props
+  const { catalog, status, retry } = useServedCatalog()
+  const [open, setOpen] = useState(false)
+  const cancelledRef = useRef(false)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const descriptionId = useId()
+  const hintId = useId()
+  const row = findServedRow(catalog, props.value.provider, props.value.model)
+  const name = props.contextName ?? 'Effort'
+  const popoverOpen = open || pendingSwitch !== null
+
+  // The picker's one polite live region (FR-053). It carries the mapping note
+  // with its Change link when a switch remapped the value, else the latest
+  // announcement ("Switch cancelled", "{model} has no effort setting.").
+  const liveRegion = (
+    <span
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      className={cn(note ? 'inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]' : 'sr-only')}
+    >
+      {note ? (
+        <>
+          <span>{note}</span>
+          <Button type="button" variant="link" size="sm" onClick={() => setOpen(true)}>
+            Change
+          </Button>
+        </>
+      ) : (
+        announcement
+      )}
+    </span>
+  )
+
+  function closeWithCancel() {
+    cancelledRef.current = true
+    setOpen(false)
+    onSwitchCancel?.()
+  }
+
+  function handleOpenChange(next: boolean) {
+    if (next) {
+      setOpen(true)
+      return
+    }
+    if (pendingSwitch) {
+      closeWithCancel()
+      return
+    }
+    setOpen(false)
+  }
+
+  function commit(effort: string) {
+    cancelledRef.current = false
+    setOpen(false)
+    if (pendingSwitch) {
+      onSwitchComplete?.(effort)
+      return
+    }
+    if (effort !== props.value.effort) props.onChange?.(effort)
+  }
+
+  if (status !== 'success' && pendingSwitch === null) {
+    // Loading / failed: stored value as text, no choices; failure offers Retry (S-07).
+    return (
+      <span className={cn('inline-flex items-center gap-[var(--space-2)]', className)}>
+        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+          {effortLabel(effectiveStored(props, props.value.effort))}
+        </span>
+        {status === 'error' && (
+          <>
+            <FormError error="Could not load this model's effort options." className="mt-0" />
+            <Button type="button" variant="outline" size="sm" onClick={retry}>
+              Retry
+            </Button>
+          </>
+        )}
+        {liveRegion}
+      </span>
+    )
+  }
+
+  const presentation = presentationOf(row)
+  if (presentation === 'none' && pendingSwitch === null) return liveRegion
+
+  if (presentation === 'muted' && pendingSwitch === null) {
+    if (props.scope !== 'chat') {
+      // Settings surfaces: one muted line (FR-052).
+      return (
+        <span className={cn('inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]', className)}>
+          <Info size={12} aria-hidden="true" />
+          {MUTED_EFFORT_TEXT}
+          {liveRegion}
+        </span>
+      )
+    }
+    return (
+      <span className={cn('inline-flex items-center', className)}>
+        <Tooltip content={MUTED_EFFORT_TEXT} interactive>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-disabled="true"
+            aria-label={name}
+            aria-describedby={descriptionId}
+            data-testid={props['data-testid']}
+            className="gap-[var(--space-1)] text-[var(--color-muted)]"
+          >
+            Effort
+            <Info size={12} aria-hidden="true" />
+          </Button>
+        </Tooltip>
+        <span id={descriptionId} className="sr-only">
+          {MUTED_EFFORT_TEXT}
+        </span>
+        {liveRegion}
+      </span>
+    )
+  }
+
+  const items = effortItems(effortTargetOf(row), offersNotSet(props) ? `Not set: ${inheritedText(props.scope, props.inherit, row).text}` : null)
+  const chip = describeChip(props, row, items)
+
+  function focusInitial() {
+    const content = contentRef.current
+    if (!content) return
+    let target: HTMLElement | null
+    if (pendingSwitch?.kind === 'nothing_sendable') {
+      target = content.querySelector<HTMLElement>('[data-effort-action="provider-default"]')
+    } else if (pendingSwitch) {
+      const radios = Array.from(content.querySelectorAll<HTMLElement>('[role="radio"]'))
+      target = radios.find((radio) => radio.dataset.radioValue === pendingSwitch.nearest) ?? null
+    } else {
+      target = content.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')
+    }
+    target ??= content.querySelector<HTMLElement>('[role="radio"]:not([disabled])')
+    target?.focus()
+  }
+
+  return (
+    <span className={cn('inline-flex flex-wrap items-center gap-[var(--space-2)]', className)}>
+      {/* Picking a value: modal, the rest of the page is inert until the
+          commit or Escape. The blocked step of a pending switch is not modal:
+          the slot's model button and chip stay in the page for assistive
+          technology, and a click outside or Escape cancels the switch. */}
+      <Popover open={popoverOpen} onOpenChange={handleOpenChange} modal={pendingSwitch === null}>
+        <PopoverTrigger asChild>
+          <Button
+            ref={chipRef}
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={disabled && pendingSwitch === null}
+            aria-label={`${name}: ${chip.spoken}`}
+            aria-describedby={chip.hint ? hintId : undefined}
+            data-testid={props['data-testid']}
+            data-effort-inherited={chip.inherited ? 'true' : undefined}
+            className={cn(
+              'gap-[var(--space-1)] border',
+              chip.inherited ? 'border-dashed border-[var(--color-border)]' : 'border-solid border-[var(--color-border)]',
+            )}
+          >
+            {chip.amber && <span aria-hidden="true" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-warning)]" />}
+            {props.setByCommand && !chip.amber && (
+              <span aria-hidden="true" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-accent)]" />
+            )}
+            {chip.text}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          ref={contentRef}
+          align="start"
+          className="w-72"
+          onFocusOutside={(event) => {
+            // The model list closing hands focus back to its own button; that
+            // must not cancel the pending switch. Escape, Cancel or a click
+            // outside still do.
+            if (pendingSwitch) event.preventDefault()
+          }}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            // After the model popover closes its own focus return runs on a
+            // timer; focusing on the next tick keeps focus here (FR-053).
+            setTimeout(focusInitial, 0)
+          }}
+          onCloseAutoFocus={(event) => {
+            if (!cancelledRef.current) return
+            cancelledRef.current = false
+            const target = cancelFocusTarget?.()
+            if (target) {
+              event.preventDefault()
+              target.focus()
+            }
+          }}
+        >
+          {pendingSwitch ? (
+            <BlockedStep pending={pendingSwitch} catalogRow={findServedRow(catalog, pendingSwitch.provider, pendingSwitch.model)} onCommit={commit} onCancel={closeWithCancel} />
+          ) : (
+            <PickerBody {...props} catalogStatus={status} row={row} onRetry={retry} onCommit={commit} />
+          )}
+        </PopoverContent>
+      </Popover>
+      {chip.hint && (
+        <span id={hintId} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+          {chip.hint}
+        </span>
+      )}
+      {liveRegion}
+    </span>
+  )
+}
+
+interface BlockedStepProps {
+  pending: EffortPendingSwitch
+  catalogRow: ServedRow
+  onCommit: (effort: string) => void
+  onCancel: () => void
+}
+
+/** The pick-a-level step (S-10, S-11) or the "Let the provider decide" step (S-73). */
+function BlockedStep({ pending, catalogRow, onCommit, onCancel }: BlockedStepProps) {
+  if (pending.kind === 'nothing_sendable') {
+    return (
+      <div className="space-y-[var(--space-2)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+          {`${pending.model} can't turn reasoning off here. Let the provider decide, or cancel.`}
+        </p>
+        <div className="flex gap-[var(--space-2)]">
+          <Button type="button" size="sm" data-effort-action="provider-default" onClick={() => onCommit(PROVIDER_DEFAULT)}>
+            Let the provider decide
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    )
+  }
+  const items = levelItems(effortTargetOf(catalogRow))
+  return (
+    <div className="space-y-[var(--space-2)]">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+        {`${pending.model} can't turn reasoning off. Pick a level to finish switching.`}
+      </p>
+      <EffortRadioList items={items} checked={undefined} onCommit={onCommit} ariaLabel={`Effort for ${pending.model}`} />
+    </div>
+  )
 }
