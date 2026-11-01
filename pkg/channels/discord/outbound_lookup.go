@@ -94,6 +94,17 @@ func restErrorIs(err error, status, code int) bool {
 	return restErr.Message != nil && restErr.Message.Code == code
 }
 
+// CachedPostableChannel implements channels.LocalChannelCache: T-9 step 1
+// only (the local session cache, no network call), for the Channels block's
+// kind label (T-5, FR-006).
+func (c *DiscordChannel) CachedPostableChannel(id string) bool {
+	if c.session == nil || c.session.State == nil {
+		return false
+	}
+	cached, err := c.session.State.Channel(id)
+	return err == nil && cached != nil && supportedStartChannel(cached.Type)
+}
+
 // discordTarget is the outcome of the T-9 steps for one id.
 type discordTarget struct {
 	person bool                     // true: a user (start opens the DM); false: a postable channel

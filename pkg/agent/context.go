@@ -154,6 +154,12 @@ type ContextBuilder struct {
 	// wired by wireModeNoteInjectors in loop_env.go.
 	modeNoteInjector func() string
 
+	// channelsInjector returns the per-turn "## Channels" block
+	// (channels-spec-r8 FR-001) for the turn's effective workspace and
+	// delegation depth, or "" to omit it. Un-cached path; set via
+	// WithChannelsInjector, wired by wireChannelsInjectors.
+	channelsInjector func(workspaceID string, delegationDepth int) string
+
 	// env carries the environment provider + any per-builder env state. Split
 	// into a nested struct so context_env.go owns the mutation surface without
 	// touching the core ContextBuilder definition.
@@ -207,6 +213,15 @@ func (cb *ContextBuilder) WithWorkingDirInjector(fn func(workspaceID string) str
 // Passing nil disables it.
 func (cb *ContextBuilder) WithModeNoteInjector(fn func() string) *ContextBuilder {
 	cb.modeNoteInjector = fn
+	return cb
+}
+
+// WithChannelsInjector installs the per-turn "## Channels" block callback
+// (FR-001). fn receives the turn's effective workspaceID (may be "") and
+// delegation depth, and is called on every turn from buildDynamicContext.
+// Passing nil disables the block.
+func (cb *ContextBuilder) WithChannelsInjector(fn func(workspaceID string, delegationDepth int) string) *ContextBuilder {
+	cb.channelsInjector = fn
 	return cb
 }
 
@@ -1457,6 +1472,14 @@ func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, 
 	// re-rooted working directory) can change at runtime.
 	if cb.workingDirInjector != nil {
 		if block := cb.workingDirInjector(workspaceID); block != "" {
+			fmt.Fprintf(&sb, "\n\n%s", block)
+		}
+	}
+
+	// Channels block (channels-spec-r8 FR-001): one live snapshot and one
+	// availability per connection, rendered every turn.
+	if cb.channelsInjector != nil {
+		if block := cb.channelsInjector(workspaceID, delegationDepth); block != "" {
 			fmt.Fprintf(&sb, "\n\n%s", block)
 		}
 	}
