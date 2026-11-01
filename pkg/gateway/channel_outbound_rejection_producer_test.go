@@ -73,17 +73,19 @@ func t30cAssertProduced(t *testing.T, raw []byte, indices []int, hints []string,
 func TestT30c_ProductionRejection_SanitizesBoundsAndRequestPositions(t *testing.T) {
 	controls := "\x00\t\n" + strings.Repeat("\x7f", 20) + strings.Repeat("a", 233) // exactly 256 raw characters
 	escaping := strings.Repeat("\"\\<>&１２３", 30) + "safe"                          // 244 characters; unsafe characters all drop, safe suffix survives
-	cases := []struct {
+	type rejectionCase struct {
 		name    string
 		targets []string
 		indices []int
 		hints   []string
 		omitted int
-	}{
+	}
+	cases := make([]rejectionCase, 0, 7) // three fixed cases plus four specified count boundaries
+	cases = append(cases, []rejectionCase{
 		{"control-heavy-max-raw", []string{"111", controls, "222", "prefix" + strings.Repeat("\x7f", 20) + "suffix"}, []int{1, 3}, []string{strings.Repeat("a", 20) + "...", "prefixsuffix"}, 0},
 		{"escaping-heavy", []string{"111", escaping}, []int{1}, []string{"safe"}, 0},
 		{"short-envelope", []string{strings.Repeat("\x7f", 20)}, []int{0}, []string{""}, 0},
-	}
+	}...)
 	// Boundary around the ten-error envelope, plus the schema maximum of 64.
 	// All entries have the same hint but remain distinct request positions.
 	// Full 256-character raw values also expose a removed server hint bound.
@@ -97,13 +99,7 @@ func TestT30c_ProductionRejection_SanitizesBoundsAndRequestPositions(t *testing.
 		for i := range indices {
 			indices[i], hints[i] = i, strings.Repeat("x", 20)+"..."
 		}
-		cases = append(cases, struct {
-			name    string
-			targets []string
-			indices []int
-			hints   []string
-			omitted int
-		}{fmt.Sprintf("invalid-batch-%d", count), targets, indices, hints, count - shown})
+		cases = append(cases, rejectionCase{fmt.Sprintf("invalid-batch-%d", count), targets, indices, hints, count - shown})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,7 +155,12 @@ func TestT30c_RejectionSchemaInstrument_RejectsUnsafeStringsAndExcessBounds(t *t
 			if field == "error" {
 				altered[field] = "unsafe\x7f"
 			} else {
-				altered["target_errors"].([]any)[0].(map[string]any)[field] = "unsafe\x7f"
+				items, ok := altered["target_errors"].([]any)
+				require.True(t, ok, "instrument: the cloned valid body contains a target_errors array")
+				require.Len(t, items, 1, "instrument: the valid schema control has one target error")
+				item, ok := items[0].(map[string]any)
+				require.True(t, ok, "instrument: the cloned target error is an object")
+				item[field] = "unsafe\x7f"
 			}
 			msg, internal := validateBodyAgainstSchema("ChannelOutboundRejection", serialize(t, altered))
 			require.False(t, internal, msg)
@@ -170,7 +171,11 @@ func TestT30c_RejectionSchemaInstrument_RejectsUnsafeStringsAndExcessBounds(t *t
 		t.Run("excess-bound-"+field, func(t *testing.T) {
 			var altered map[string]any
 			require.NoError(t, json.Unmarshal(serialize(t, valid), &altered))
-			item := altered["target_errors"].([]any)[0].(map[string]any)
+			items, ok := altered["target_errors"].([]any)
+			require.True(t, ok, "instrument: the cloned valid body contains a target_errors array")
+			require.Len(t, items, 1, "instrument: the valid schema control has one target error")
+			item, ok := items[0].(map[string]any)
+			require.True(t, ok, "instrument: the cloned target error is an object")
 			switch field {
 			case "error":
 				altered[field] = strings.Repeat("e", 501)

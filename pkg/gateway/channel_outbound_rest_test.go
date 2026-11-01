@@ -148,7 +148,7 @@ func TestT14_PutOutbound_OfflineRevocationPersistsAndMovesToken(t *testing.T) {
 	read := t14Read(t, f, "discord")
 	require.Equal(t, written.Revision, read.Revision)
 	require.Equal(t, "reply_only", string(read.Outbound.Policy))
-	channels := readConfigChannelsFile(t, f)
+	channels := readOutboundConfigChannelsFile(t, f)
 	inst, ok := channels["discord"].(map[string]any)
 	require.True(t, ok)
 	stored, ok := inst["outbound"].(map[string]any)

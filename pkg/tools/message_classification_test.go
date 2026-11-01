@@ -4,29 +4,13 @@ package tools
 // T-4 / T-12; dataset D3 = scenario table S-40; FR-040, FR-041, FR-043;
 // S-41's tool-level refusal texts).
 //
-// Two halves, stated plainly:
-//
-//  1. PRESERVED rows — the classification rows that must hold unchanged
-//     before and after the channels work (S-40 rows 1, 2, 3, 5, 6, 9, 10).
-//     These are positive controls: they PASS today, and their job in RED is
-//     to pin the behaviour the start work must not disturb. Oracles: the
-//     S-40 table plus the existing texts (ErrMainConnectorReplyOnly's
-//     amended text; "Message sent to …"; ErrSteeredSessionOwnChatOnly).
-//
-//  2. START rows — the rows whose expected result is a start (S-40 rows 4,
-//     7, 8; S-41's tool-level texts; FR-043's Operation=start publish). The
-//     seam they need does not exist yet in WP-0: there is no start-policy
-//     injection on MessageTool (only mainConnectorGuard), and SendOrigin has
-//     no Operation field (the FR-043 rename is production work). Per the RED
-//     rules they are t.Fatal BLOCKED — loud, never skipped — naming exactly
-//     what the backend lead must provide. The backend lead implements the
-//     seam together with the classification, and these become the wired
-//     start-policy fixture tests the spec's regression table calls for.
-//
-// Fixture: the existing real-component patterns of this package —
-// NewMessageTool with a real send callback, the context accessors, the
-// fakeSteerAudience double for the steered row. No production code is
-// invented here.
+// The six original preserved/unwired roots below remain byte-for-byte.
+// The original four missing-start-seam roots now use the actual SetStartPolicy
+// API and SendOrigin.Operation. Their oracles remain T-3/T-4/S-40/S-41/D2;
+// no expected text is obtained by invoking the implementation.
+// Real MessageTool + StartAllowed + Manager.Availability; only the outbound
+// callback and external adapter state are controlled. The separate T-32 row
+// drives the constructor-installed production policy and actual bus callback.
 
 import (
 	"context"
@@ -165,39 +149,57 @@ func TestT12_S40_MainReplyTo_CapturedReplyUnchanged(t *testing.T) {
 	require.False(t, *sent, "S-40 row 10: the ordinary send does not run")
 }
 
-// --- the START rows: BLOCKED on the missing WP-0 seam -----------------------
-//
-// What the backend lead must provide (all named in the RED report):
-//   1. a start-policy injection on MessageTool (the T-3 check wired from the
-//      live policy source + availability — pkg/channels.StartAllowed), and
-//   2. the FR-043 rename SendOrigin.OwnershipChecked → Operation with
-//      bus.OperationChecked / bus.OperationStart values reaching the send
-//      callback and the published bus message (bare chat id on starts).
+// START rows reconciled to the committed API (same author, original names).
+// The independent fixture/oracles are in message_start_policy_spec_test.go.
 
 func TestT12_S40_MainWebchatToListedDiscordTarget_StartAccepted(t *testing.T) {
-	// S-40 row 4: a main on webchat naming a listed, running discord target
-	// explicitly — a start: T-3 passes, the publish carries Operation=start
-	// and the bare chat id. No seam exists in WP-0 to wire the start policy.
-	t.Fatalf("BLOCKED: no start-policy seam on MessageTool and no Operation field on SendOrigin — required by S-40 row 4 / T-4 step 5 / FR-043; backend lead provides the wired start-policy fixture named in the RED report")
+	// S-40 row4, plus D2 row9: a canonical prefix is removed before publication.
+	for _, target := range []string{"222", "discord:222"} {
+		t.Run(target, func(t *testing.T) {
+			tool, policy, sent := t12WiredStart(t, "discord")
+			ctx := t12StartCtx("main-1", "webchat", "w")
+			res := tool.Execute(ctx, map[string]any{"content": "hello", "channel": "discord", "chat_id": target})
+			t12RequireAccepted(t, tool, res, *sent, "discord", "222", "hello")
+			require.Equal(t, []t12StartCall{{"discord", target, "ws-t12", "mia"}}, policy.calls)
+		})
+	}
 }
 
 func TestT12_S40_NonMainExplicitDifferentChat_StartCheck(t *testing.T) {
-	// S-40 row 7: a non-main session naming a DIFFERENT chat on the same
-	// platform — step 5, a start through T-3.
-	t.Fatalf("BLOCKED: no start-policy seam on MessageTool and no Operation field on SendOrigin — required by S-40 row 7 / T-4 step 5 / FR-043; backend lead provides the wired start-policy fixture named in the RED report")
+	for _, target := range []string{"chat-2", "222"} {
+		t.Run(target, func(t *testing.T) {
+			tool, policy, sent := t12WiredStart(t, "telegram")
+			ctx := t12StartCtx("chat-session", "telegram", "chat-1")
+			res := tool.Execute(ctx, map[string]any{"content": "status", "channel": "telegram", "chat_id": target})
+			require.Equal(t, []t12StartCall{{"telegram", target, "ws-t12", "mia"}}, policy.calls, "S-40 row7: different chat must go through T-3")
+			if target == "chat-2" {
+				// T-2 requires numeric Telegram ids. The literal S-40 example is
+				// therefore a refused start, not a successful ordinary own reply.
+				t12RequireRefused(t, tool, res, *sent, `cannot start a message to "chat-2" on "telegram": it is not on this connection's list. Listed: 222. Nothing was sent.`)
+			} else {
+				t12RequireAccepted(t, tool, res, *sent, "telegram", "222", "status")
+			}
+		})
+	}
 }
 
 func TestT12_S40_HeartbeatNoConversation_StartCheck(t *testing.T) {
-	// S-40 row 8: a heartbeat (no connector conversation of its own) sending
-	// to discord 222 — step 5, a start; every connector send from a
-	// heartbeat is step 5 (T-4's explicit note).
-	t.Fatalf("BLOCKED: no start-policy seam on MessageTool and no Operation field on SendOrigin — required by S-40 row 8 / T-4 heartbeat note / FR-043; backend lead provides the wired start-policy fixture named in the RED report")
+	tool, policy, sent := t12WiredStart(t, "discord")
+	ctx := t12StartCtx("heartbeat-1", "system", "")
+	res := tool.Execute(ctx, map[string]any{"content": "heartbeat status", "channel": "discord", "chat_id": "222"})
+	t12RequireAccepted(t, tool, res, *sent, "discord", "222", "heartbeat status")
+	require.Equal(t, []t12StartCall{{"discord", "222", "ws-t12", "mia"}}, policy.calls, "S-40 row8: no connector conversation means step5")
 }
 
 func TestT12_S41_ToolLevelStartRefusalTexts(t *testing.T) {
-	// S-41: the seven setups return EXACTLY the T-3 text for their code and
-	// publish nothing. D2 pins the pure function (pkg/channels
-	// start_allowed_test.go); this is the tool-level surface with the live
-	// policy source and Manager.Availability wired in.
-	t.Fatalf("BLOCKED: no start-policy seam on MessageTool — required by S-41 / FR-041; backend lead provides the wired start-policy fixture named in the RED report")
+	for _, tc := range t12RefusalRows() {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, policy, sent := t12WiredStart(t, tc.platform)
+			tc.setup(policy)
+			ctx := t12StartCtx("main-1", "webchat", "w")
+			res := tool.Execute(ctx, map[string]any{"content": "must not send", "channel": tc.channel, "chat_id": tc.chat})
+			t12RequireRefused(t, tool, res, *sent, tc.want)
+			require.Equal(t, []t12StartCall{{tc.channel, tc.chat, "ws-t12", "mia"}}, policy.calls, "S-41: the tool reaches the real T-3 policy exactly once")
+		})
+	}
 }

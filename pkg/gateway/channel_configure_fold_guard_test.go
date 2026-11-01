@@ -79,13 +79,13 @@ func TestT19_ConfigureSaveWithoutOutboundKeepsStoredList_GuardRule3(t *testing.T
 		cfg.Channels["line.healthy"] = inst
 		return config.SaveConfig(f.f1277.configPath, cfg)
 	}))
-	before := readConfigChannelsFile(t, f)
+	before := readOutboundConfigChannelsFile(t, f)
 	beforeInst, ok := before["line.healthy"].(map[string]any)
 	require.True(t, ok)
 
 	rec := t14Request(t, f, http.MethodPut, "/api/v1/channels/line.healthy/configure", `{"allow_from":["qa1277-user"]}`, true)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	after := readConfigChannelsFile(t, f)
+	after := readOutboundConfigChannelsFile(t, f)
 	inst, ok := after["line.healthy"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, beforeInst["outbound"], inst["outbound"], "T-8 rule 3: omission preserves the stored setting")

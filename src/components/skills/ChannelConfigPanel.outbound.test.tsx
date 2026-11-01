@@ -8,7 +8,9 @@ import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { fetchChannelConfig, fetchChannels } from '@/lib/api'
 import { ApiError } from '@/lib/api-error'
+import { ApiSchemaError, getApiSchemaErrorCount } from '@/lib/api/http'
 import {
   ChannelOutboundRead as ReadSchema,
   ChannelOutboundRejection as RejectionSchema,
@@ -31,6 +33,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual, // outbound clients, request and ApiError remain REAL, not stubs.
+    fetchChannels: vi.fn().mockResolvedValue([]),
+    fetchMailboxes: vi.fn().mockResolvedValue([]),
     fetchChannelConfig: vi.fn().mockResolvedValue({ token: '[configured]' }),
     fetchChannelRouting: vi.fn().mockResolvedValue({ default_agent_id: '', workspace_id: '', bound: false }),
     fetchAgents: vi.fn().mockResolvedValue([]),
@@ -44,6 +48,7 @@ vi.mock('framer-motion', () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 import { ChannelConfigPanel } from './ChannelConfigPanel'
+import { ConnectorsScreen } from '@/components/screens/ConnectorsScreen'
 
 const STALE = 'These settings changed since you opened them. The current values are shown; check them and save again.'
 const CONNECT_FIRST = 'Connect the channel first to add Discord ids.'
@@ -53,6 +58,7 @@ const FIELD_HELP = "One id per line, like the allowed senders: a person's user i
 const FIELD_LABEL = 'People and groups the agent may message'
 const fetchMock = vi.fn<typeof fetch>()
 let readBody: ReturnType<typeof ReadSchema.parse>
+let readStatus: number
 let writeBody: unknown
 let writeStatus: number
 let reads: number
@@ -63,6 +69,7 @@ beforeEach(() => {
   devToast.mockReset()
   reads = 0
   writes = []
+  readStatus = 200
   readBody = ReadSchema.parse({
     outbound: { policy: 'agent_may_start', targets: ['discord:111', 'discord:222'] },
     revision: 't30-before', availability: { state: 'running' }, start_supported: true,
@@ -76,7 +83,9 @@ beforeEach(() => {
     expect(init?.credentials).toBe('include')
     if ((init?.method ?? 'GET') === 'GET') {
       reads++
-      return new Response(JSON.stringify(readBody), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      return new Response(JSON.stringify(readStatus === 200 ? readBody : { error: 'QA outbound settings read unavailable' }), {
+        status: readStatus, headers: { 'Content-Type': 'application/json' },
+      })
     }
     expect(init?.method).toBe('PUT')
     writes.push(UpdateSchema.parse(JSON.parse(String(init?.body))))
@@ -98,9 +107,17 @@ function renderPanel(platform = 'discord') {
   client.setQueryData(['channel-routing', id], { default_agent_id: '', workspace_id: '', bound: false })
   client.setQueryData(['agents'], [])
   client.setQueryData(['workspaces', { status: 'active' }], [])
+  // A timer cannot stop a synchronous render storm. Observe the real panel's
+  // commits (not a mocked child) and fail loudly before one case monopolises
+  // the worker. This is a harness safety bound, not a product render budget.
+  let commits = 0
   render(<QueryClientProvider client={client}>
-    <ChannelConfigPanel channelId={id} channelName={platform === 'discord' ? 'Discord' : platform === 'telegram' ? 'Telegram' : 'Slack'}
-      enabled={true} open={true} onOpenChange={vi.fn()} />
+    <React.Profiler id={id} onRender={() => {
+      if (++commits > 32) throw new Error(`Configure ${id} did not settle after 32 commits; possible render loop (no product assertion was skipped)`)
+    }}>
+      <ChannelConfigPanel channelId={id} channelName={platform === 'discord' ? 'Discord' : platform === 'telegram' ? 'Telegram' : platform === 'webchat' ? 'Web Chat' : 'Slack'}
+        enabled={true} open={true} onOpenChange={vi.fn()} />
+    </React.Profiler>
   </QueryClientProvider>)
   return client
 }
@@ -191,6 +208,52 @@ describe('T-30 starting messages section — S-80', () => {
     expect(screen.queryByRole('radio', { name: 'Only answer' })).not.toBeInTheDocument()
     expect(screen.queryByRole('radio', { name: 'Answer and also start messages' })).not.toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: FIELD_LABEL })).not.toBeInTheDocument()
+    expect(reads).toBe(0) // Chief Q1 / S-80: unsupported platforms do not GET the setting.
+  })
+
+  it('F2 / S-80 / FR-026: built-in webchat offers no Configure and its mounted panel settles without start controls', async () => {
+    // S-80 specifies Discord/Slack/Telegram, not a Web Chat Configure form.
+    // Team-lead's F2 clarification: preserve the built-in card with no Configure;
+    // even an accidentally mounted panel must settle with no outbound section.
+    vi.mocked(fetchChannels).mockResolvedValueOnce([
+      { id: 'webchat', name: 'Web Chat', transport: 'websocket', enabled: true, description: 'Built-in browser chat' },
+      { id: 'discord', instance_id: 'discord.qa', name: 'Discord', transport: 'websocket', enabled: true, description: 'Discord Gateway' },
+    ])
+    const screenClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const connectors = render(<QueryClientProvider client={screenClient}><ConnectorsScreen /></QueryClientProvider>)
+    const webchatCard = await screen.findByTestId('channel-card-webchat')
+    expect(within(webchatCard).getByText('Web Chat')).toBeVisible()
+    expect(within(webchatCard).getByText('Always on')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Configure discord.qa' })).toBeVisible() // positive control: real Configure actions render
+    expect(within(webchatCard).queryByRole('button', { name: /Configure/i })).not.toBeInTheDocument()
+    connectors.unmount()
+    screenClient.clear()
+
+    vi.mocked(fetchChannelConfig).mockClear()
+    const panelClient = renderPanel('webchat') // unchanged real-panel render-loop guard
+    await act(async () => { await panelClient.refetchQueries({ queryKey: ['channel-config', 'webchat.qa'], exact: true }) })
+    expect(fetchChannelConfig).toHaveBeenCalledWith('webchat.qa') // positive control: mounted, enabled hydration query ran
+    expect(panelClient.getQueryState(['channel-config', 'webchat.qa'])?.status).toBe('success')
+    expect(screen.queryByText('Starting messages', { exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Only answer' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Answer and also start messages' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: FIELD_LABEL })).not.toBeInTheDocument()
+    expect(reads).toBe(0)
+    expect(writes).toEqual([])
+  })
+
+  it('Only answer and back preserves the exact entered list without saving', async () => {
+    renderPanel()
+    await loaded()
+    expect(targetsField()).toHaveValue('111\n222')
+    fireEvent.change(targetsField(), { target: { value: '333\n444' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Only answer' }))
+    expect(screen.getByRole('radio', { name: 'Only answer' })).toBeChecked()
+    expect(screen.queryByRole('textbox', { name: FIELD_LABEL })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: 'Answer and also start messages' }))
+    expect(screen.getByRole('radio', { name: 'Answer and also start messages' })).toBeChecked()
+    expect(targetsField()).toHaveValue('333\n444') // Spec ambiguity6 / chief Q2, not the original GET list.
+    expect(writes).toEqual([])
   })
 
   it('Telegram shows its exact help after choosing may-start', async () => {
@@ -215,6 +278,36 @@ describe('T-30 starting messages section — S-80', () => {
   })
 })
 
+describe('T-30 write-response contract — FR-090 / required outbound and revision', () => {
+  it('a schema-invalid 200 write records a contract violation and hydrates neither form nor cache', async () => {
+    // Contract table: revision is required even when outbound itself is valid.
+    // A different valid target makes accidental success hydration observable.
+    writeBody = { outbound: { policy: 'agent_may_start', targets: ['discord:999'] } }
+    expect(WriteSchema.safeParse(writeBody).success).toBe(false)
+    const client = renderPanel()
+    await loaded()
+    const originalRead = ReadSchema.parse(client.getQueryData(['channel-outbound', 'discord.qa']))
+    const violationsBefore = getApiSchemaErrorCount()
+    await submit('333\n444')
+    await waitFor(() => expect(client.getMutationCache().getAll()[0]?.state.status).toBe('error'))
+    const mutations = client.getMutationCache().getAll()
+    expect(mutations).toHaveLength(1)
+    const error = mutations[0].state.error
+    expect(error).toBeInstanceOf(ApiSchemaError)
+    if (!(error instanceof ApiSchemaError)) throw new Error('instrument: invalid write must retain the real contract-schema error')
+    expect(error.endpoint).toBe('PUT /api/v1/channels/discord.qa/outbound')
+    expect(error.zodIssues.map((issue) => issue.path)).toEqual([['revision']])
+    expect(error.rawBody).toEqual(writeBody)
+    expect(getApiSchemaErrorCount()).toBe(violationsBefore + 1)
+    expect(devToast).toHaveBeenCalledTimes(1)
+    expect(targetsField()).toHaveValue('333\n444')
+    expect(screen.getByRole('radio', { name: 'Answer and also start messages' })).toBeChecked()
+    expect(client.getQueryData(['channel-outbound', 'discord.qa'])).toEqual(originalRead)
+    expect(writes).toEqual([{ policy: 'agent_may_start', targets: ['333', '444'], expected_revision: 't30-before' }])
+    expect(addToast.mock.calls.filter(([toast]) => toast.variant === 'success')).toEqual([])
+  })
+})
+
 describe('T-30 per-code conflict handling — S-81', () => {
   it('stale_revision re-reads GET, replaces values and shows exactly the stale-form guidance', async () => {
     renderPanel()
@@ -226,6 +319,26 @@ describe('T-30 per-code conflict handling — S-81', () => {
     await waitFor(() => expect(targetsField()).toHaveValue('999'))
     expect(reads).toBeGreaterThanOrEqual(2)
     expect(messages()).toContain(STALE)
+  })
+
+  it('stale_revision failed re-read keeps the form and entered values without claiming current values are shown', async () => {
+    const client = renderPanel()
+    await loaded()
+    readStatus = 503
+    writeStatus = 409
+    writeBody = RejectionSchema.parse({ code: 'stale_revision', error: 'stale revision' })
+    await submit('333\n444')
+    // Wait for the async rejection/reread handler to finish, not just for
+    // the second GET to start. S-81's current-values claim is conditional
+    // on a successful refresh; no fallback wording is specified.
+    await waitFor(() => expect(client.getMutationCache().getAll()[0]?.state.status).toBe('error'))
+    expect(reads).toBe(2)
+    const field = screen.queryByRole('textbox', { name: FIELD_LABEL })
+    expect(field, 'F5: a failed stale-revision reread must keep the editable form visible, not replace it with the load-error screen').not.toBeNull()
+    expect(field).toHaveValue('333\n444')
+    expect(screen.getByRole('radio', { name: 'Answer and also start messages' })).toBeChecked()
+    expect(messages()).not.toContain(STALE)
+    expect(screen.getAllByRole('alert').length).toBeGreaterThan(0)
   })
 
   it('connect_first preserves entered values and never presents stale-form guidance', async () => {
@@ -255,6 +368,83 @@ describe('T-30 per-code conflict handling — S-81', () => {
 })
 
 describe('T-30 indexed errors and T-30b actual section decoder — S-81/S-83', () => {
+  it('S-81 / FR-026: a blank line keeps the refused entry on its visible textarea line', async () => {
+    // Chief ruling Q1 A (2026-11-01): request index 1 is visible line 3,
+    // because blank textarea lines count even though they are not targets.
+    const reason = 'this entry is a username'
+    writeStatus = 400
+    writeBody = RejectionSchema.parse({
+      code: 'invalid_targets', error: 'invalid targets',
+      target_errors: [{ index: 1, target: '@alice', code: 'username_not_allowed', reason }],
+    })
+    renderPanel()
+    await loaded()
+    await submit('111\n\n@alice')
+    await waitFor(() => expect(messages()).toContain(reason))
+    expect(writes).toEqual([{ policy: 'agent_may_start', targets: ['111', '@alice'], expected_revision: 't30-before' }])
+    const reasonLines = [...new Set(screen.getAllByRole('alert')
+      .flatMap((alert) => [alert, ...alert.querySelectorAll('*')])
+      .flatMap((element) => (element.textContent ?? '').split('\n'))
+      .filter((line) => line.includes(reason)))]
+    // Assert the association, not a particular punctuation or wrapper tag.
+    expect(reasonLines, 'request index 1 must identify visible textarea line 3')
+      .toEqual(expect.arrayContaining([expect.stringMatching(/(?:^|\D)3(?:\D|$)/)]))
+    expect(reasonLines, 'request index + 1 would incorrectly identify blank line 2')
+      .not.toEqual(expect.arrayContaining([expect.stringMatching(/(?:^|\D)2(?:\D|$)/)]))
+    expect(targetsField()).toHaveValue('111\n\n@alice')
+  })
+
+  it('S-81 / FR-026: a corrected second save clears old per-line refusals and notice while pending and after success', async () => {
+    const oldNotice = 'QA first save was refused'
+    const oldReason = 'this entry is a username'
+    writeStatus = 400
+    writeBody = RejectionSchema.parse({
+      code: 'invalid_targets', error: oldNotice,
+      target_errors: [{ index: 1, target: '@alice', code: 'username_not_allowed', reason: oldReason }],
+    })
+    const client = renderPanel()
+    await loaded()
+    await submit('111\n@alice')
+    await waitFor(() => expect(screen.getByText(oldNotice, { exact: true })).toBeVisible())
+    expectIndexedErrors([{ index: 1, reason: oldReason }]) // prove both old displays actually existed
+    const corrected = WriteSchema.parse({
+      outbound: { policy: 'agent_may_start', targets: ['discord:111', 'discord:333'] }, revision: 't30-second-save',
+    })
+    let resolveSecond!: (response: Response) => void
+    const secondResponse = new Promise<Response>((resolve) => { resolveSecond = resolve })
+    fetchMock.mockImplementationOnce(async (input, init) => {
+      expect(input).toBe('/api/v1/channels/discord.qa/outbound')
+      expect(init?.method).toBe('PUT')
+      expect(init?.credentials).toBe('include')
+      writes.push(UpdateSchema.parse(JSON.parse(String(init?.body))))
+      return secondResponse // external HTTP edge: keep the real mutation pending
+    })
+    try {
+      fireEvent.change(targetsField(), { target: { value: '111\n333' } })
+      await act(async () => { fireEvent.click(ownSave()) })
+      await waitFor(() => expect(writes).toHaveLength(2))
+      expect(client.getMutationCache().getAll().at(-1)?.state.status).toBe('pending')
+      expect(ownSave()).toBeDisabled()
+      expect(messages()).not.toContain(oldReason)
+      expect(screen.queryByText(oldNotice, { exact: true })).not.toBeInTheDocument()
+      expect(targetsField()).toHaveValue('111\n333')
+    } finally {
+      // Release even after an assertion fails; no unresolved HTTP work may leak
+      // into the next case. This is cleanup, not a product-error fallback.
+      await act(async () => { resolveSecond(new Response(JSON.stringify(corrected), { status: 200, headers: { 'Content-Type': 'application/json' } })) })
+    }
+    await waitFor(() => expect(client.getMutationCache().getAll().at(-1)?.state.status).toBe('success'))
+    expect(ownSave()).toBeEnabled()
+    expect(messages()).not.toContain(oldReason)
+    expect(screen.queryByText(oldNotice, { exact: true })).not.toBeInTheDocument()
+    expect(targetsField()).toHaveValue('111\n333')
+    expect(client.getQueryData(['channel-outbound', 'discord.qa'])).toEqual({ ...readBody, ...corrected })
+    expect(writes).toEqual([
+      { policy: 'agent_may_start', targets: ['111', '@alice'], expected_revision: 't30-before' },
+      { policy: 'agent_may_start', targets: ['111', '333'], expected_revision: 't30-before' },
+    ])
+  })
+
   it('maps by request index, not duplicate hint or response order, and counts omitted errors', async () => {
     const errors = [
       { index: 7, target: 'same hint', code: 'invalid_id', reason: 'eighth entry is invalid' },
