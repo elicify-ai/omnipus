@@ -2213,7 +2213,7 @@ describe('ChannelConfigPanel — same-channel close→reopen rehydration (R2F-1 
     // structural sharing returning the pre-close cached reference on reopen.
     const telegramConfig = { type: 'telegram', enabled: true, token: '[configured]' }
     vi.mocked(fetchChannelConfig).mockImplementation(() => Promise.resolve(telegramConfig))
-    vi.mocked(configureChannel).mockResolvedValue(undefined as never)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
 
     const { rerender } = renderPanelControlled('telegram', 'Telegram', true)
     await waitFor(() => {
