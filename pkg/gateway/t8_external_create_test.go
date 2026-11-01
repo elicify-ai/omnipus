@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 )
 
 func TestRestExternalCreate_SoulContract(t *testing.T) {
@@ -39,10 +41,23 @@ func TestRestExternalCreate_SoulContract(t *testing.T) {
 				return
 			}
 			require.Equal(t, http.StatusCreated, w.Code, "12.2 external worker must not require SOUL: %s", w.Body.String())
-			var created map[string]any
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
-			assert.Equal(t, "subagent_3p", created["type"])
-			assert.NotContains(t, created, "soul")
+			// 12.2 requires creation without SOUL input. K-8's absent-soul
+			// rule belongs to get_agent/AgentDetail, not the REST Agent echo.
+			// Verify empty instruction content, not a different result shape.
+			created := decodeAgentResp(t, w.Body.Bytes())
+			assert.Equal(t, "subagent_3p", string(created.Type))
+			assert.Equal(t, "T8 external worker", created.Name)
+			assert.Empty(t, created.Soul, "no SOUL instruction content is invented for the external worker")
+			state, err := agentstore.New(api.homePath).ReadState(created.Id)
+			require.NoError(t, err, "201 must identify a durably created protected agent")
+			require.NotNil(t, state.Agent)
+			assert.Equal(t, "subagent_3p", string(state.Agent.Type))
+			assert.Equal(t, "T8 external worker", state.Agent.Name)
+			assert.Empty(t, state.Soul, "the real stored worker has no SOUL instruction content")
+			require.NotNil(t, state.Agent.Subagents)
+			require.NotNil(t, state.Agent.Subagents.Executor)
+			assert.Equal(t, "codex", state.Agent.Subagents.Executor.CLI)
+			assert.Empty(t, state.Agent.Subagents.Executor.CLIPath, "the program remains Settings-owned")
 		})
 	}
 }

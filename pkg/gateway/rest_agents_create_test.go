@@ -767,11 +767,16 @@ func TestCreateAgent_Subagent3p_WithoutCliPath_Succeeds(t *testing.T) {
 	require.NotNil(t, exec)
 	assert.Equal(t, "claude-code", exec.CLI)
 	assert.Empty(t, exec.CLIPath, "program path is Settings-owned, never agent-owned")
+	// r17 §3.8: REST returns Agent with ExecutorConfig's read model;
+	// create_agent's top-level result fields are a different contract (K-9).
+	assert.Nil(t, created.Executor.EffectiveCliPath, "unset Settings path is absent from the read model")
+	require.NotNil(t, created.Executor.ProgramWarning, "REST create must explain why the new worker cannot run")
+	const warning = "This agent cannot run: no program path is set for Claude Code. A person can set it in Settings → Third-party agents → Claude Code."
+	assert.Equal(t, warning, *created.Executor.ProgramWarning)
 	var out map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
-	assert.Equal(t, false, out["runnable"])
-	const warning = "This agent cannot run: no program path is set for Claude Code. A person can set it in Settings → Third-party agents → Claude Code."
-	assert.Equal(t, warning, out["program_warning"])
+	assert.NotContains(t, out, "runnable", "runnable is not a REST Agent property")
+	assert.NotContains(t, out, "program_warning", "the REST warning belongs inside executor")
 }
 
 // TestCreateAgent_WorkerVoiceFieldRejected proves the unconditional
