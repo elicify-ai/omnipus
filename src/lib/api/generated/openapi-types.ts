@@ -23165,7 +23165,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
-            /** @description Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED, SAVE_CHECK_FAILED). */
+            /** @description Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED). A copy refused by the save check (SAVE_CHECK_FAILED) answers 400. */
             409: {
                 headers: {
                     [name: string]: unknown;

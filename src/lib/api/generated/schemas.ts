@@ -15101,7 +15101,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       },
       {
         status: 409,
-        description: `Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED, SAVE_CHECK_FAILED).`,
+        description: `Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED). A copy refused by the save check (SAVE_CHECK_FAILED) answers 400.`,
         schema: ErrorResponse,
       },
       {
