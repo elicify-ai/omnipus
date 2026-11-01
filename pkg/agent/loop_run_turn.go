@@ -469,12 +469,19 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 	// loaded model, run handleModelSwitch BEFORE the first LLM call so the next
 	// request sees the compressed, annotated history. handleModelSwitch is a
 	// no-op when no switch is requested.
-	if requested := strings.TrimSpace(
+	requested := strings.TrimSpace(
 		inboundMetadata(bus.InboundMessage{Metadata: rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata}, "model_name"),
-	); requested != "" {
-		// Skip when the requested model is the same as the agent's currently
-		// loaded one — this is the no-op case in spec §11 Dataset 3 row 1.
-		if requested != rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Model {
+	)
+	// S-15: a frame naming only the provider asks for the loaded model on
+	// that provider.
+	pairProvider := frameProvider(rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata)
+	if requested == "" && pairProvider != "" {
+		requested = rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Model
+	}
+	if requested != "" {
+		// Skip when the requested pair is the one currently loaded — this
+		// is the no-op case in spec §11 Dataset 3 row 1.
+		if pairSwitchNeeded(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, pairProvider, requested) {
 			switchedAgent, switchErr := rp.rc.rx.rr.rq.ri.rf.rt.al.handleModelSwitch(
 				rp.rc.rx.ctx,
 				rp.rc.rx.rr.rq.ri.rf.rt.ts.agent,
@@ -483,6 +490,12 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 				requested,
 				bus.InboundMessage{Metadata: rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata},
 			)
+			if switchErr != nil && pairProvider != "" {
+				// D5 row 8: an explicit pair that does not resolve is refused
+				// on the error path; the turn never borrows another
+				// configured provider (S-15).
+				return rp.refuseUnresolvedPair(pairProvider, requested, switchErr)
+			}
 			if switchErr != nil {
 				logger.WarnCF("agent", "switch-time compress failed; continuing with current model",
 					map[string]any{

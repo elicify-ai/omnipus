@@ -453,14 +453,6 @@ func resolvedCandidateProvider(candidates []providers.FallbackCandidate, fallbac
 	return fallback
 }
 
-// resolvedModelConfig resolves a model name to a *config.ModelConfig usable by
-// the chat runtime. After the phase-1 refactor (FR-003) it delegates to the
-// shared ResolveModelCfg so the chat runtime and the UI selector agree on
-// the FR-040 rules.
-func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*config.ModelConfig, error) {
-	return ResolveModelCfg(cfg, modelName, workspace)
-}
-
 // IsKnownModel reports whether `slug` names a model at least one configured
 // provider offers. It is the validation half of W6-C4 / G12: the SPA lets
 // users type arbitrary model ids into the AgentProfile picker, and this is

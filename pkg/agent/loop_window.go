@@ -375,7 +375,7 @@ func (al *AgentLoop) handleModelSwitch(
 	transcriptID string,
 	sessionKey string,
 	newModel string,
-	_ bus.InboundMessage,
+	msg bus.InboundMessage,
 ) (*AgentInstance, error) {
 	if agent == nil {
 		return nil, fmt.Errorf("handleModelSwitch: nil agent")
@@ -385,7 +385,10 @@ func (al *AgentLoop) handleModelSwitch(
 	}
 
 	oldModel := agent.Model
-	if oldModel == newModel {
+	// S-15: a frame naming the provider switches to that exact pair, even
+	// when only the provider differs from the loaded primary.
+	pairProvider := frameProvider(msg.Metadata)
+	if !pairSwitchNeeded(agent, pairProvider, newModel) {
 		return agent, nil
 	}
 
@@ -407,7 +410,7 @@ func (al *AgentLoop) handleModelSwitch(
 	cfg := al.cfg
 	al.mu.RUnlock()
 	if cfg != nil {
-		if modelCfg, resolveErr := ResolveModelCfg(cfg, newModel, agent.Home); resolveErr != nil {
+		if modelCfg, resolveErr := ResolveModelPairCfg(cfg, pairProvider, newModel, agent.Home); resolveErr != nil {
 			logger.WarnCF("agent", "handleModelSwitch: requested model did not resolve; keeping the current window",
 				map[string]any{
 					"requested_model": newModel,
@@ -415,7 +418,7 @@ func (al *AgentLoop) handleModelSwitch(
 					"resolve_error":   resolveErr.Error(),
 				})
 		} else {
-			candidates := resolveModelCandidatesForAgent(cfg, cfg.Agents.Defaults.DefaultModel.Provider, modelCfg.Model, agent)
+			candidates := switchCandidates(cfg, pairProvider, modelCfg.Model, agent)
 			windowProvider, windowModel := primaryWindowPair(candidates, cfg.Agents.Defaults.DefaultModel.Provider, modelCfg.Model)
 			newContextWindow = ResolveWindow(cfg, windowProvider, windowModel, agent.ID).Window
 		}
@@ -473,7 +476,7 @@ func (al *AgentLoop) handleModelSwitch(
 	//
 	//    ApplyAgentModel takes its own agent.mu lock internally, so we
 	//    dispatch it and rely on its serialization rather than double-locking.
-	if _, applyErr := al.ApplyAgentModel(agent.ID, newModel); applyErr != nil {
+	if _, applyErr := al.ApplyAgentModelPair(agent.ID, pairProvider, newModel); applyErr != nil {
 		// ApplyAgentModel failed — leave the in-memory state untouched and
 		// surface the error. We do NOT fall back to the bare Model write
 		// because that would re-introduce the torn-state race.
