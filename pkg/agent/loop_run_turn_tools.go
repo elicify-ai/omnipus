@@ -1127,7 +1127,8 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	// inline or because the channel has no human recipient.
 	if ex.rx.rr.rq.ri.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
 		feedbackReachesUser && !ts.opts.SuppressToolFeedback &&
-		isMessagingChannel(ts.channel) {
+		isMessagingChannel(ts.channel) &&
+		!ex.refuseMainConnectorText(tc.Name) {
 		feedbackPreview := utils.Truncate(
 			string(argsJSON),
 			ex.rx.rr.rq.ri.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
@@ -1259,7 +1260,7 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 					AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(),
 				},
 			)
-		} else if userContent != "" {
+		} else if userContent != "" && !ex.refuseMainConnectorText(toolName) {
 			outboundSessionID := ""
 			if allowSuppressedErrorFeedback {
 				outboundSessionID = ts.transcriptSessionID
@@ -1623,6 +1624,21 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		if mediaAudience != steer.AudienceUser {
 			logger.DebugCF("agent", "Steered session: media contained (not sent to a channel)",
 				map[string]any{"tool": ex.toolName, "session_id": ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID})
+		} else if ts := ex.rx.rr.rq.ri.rf.rt.ts; ex.rx.rr.rq.ri.rf.rt.al.mainConnectorTurn(ts.channel, ts.transcriptSessionID) {
+			// #1507 (FR-070, m-03): a connection-fed main keeps the file in
+			// the conversation. The result stays whole (Media, IsError,
+			// text; ArtifactTags below); the model is told in one line.
+			base := ex.toolResult.ForLLM
+			if base == "" && ex.toolResult.Err != nil {
+				base = ex.toolResult.Err.Error()
+			}
+			note := mainConnectorMediaNote(ts.channel)
+			if base != "" {
+				note = base + "\n" + note
+			}
+			ex.toolResult.ForLLM = note
+			logger.DebugCF("agent", "Main connector turn: media kept in the conversation (not sent)",
+				map[string]any{"tool": ex.toolName, "channel": ts.channel, "session_id": ts.transcriptSessionID})
 		} else if ex.rx.turnChannelManager != nil && ex.rx.rr.rq.ri.rf.rt.ts.channel != "" && !constants.IsInternalChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
 			if err := ex.rx.turnChannelManager.SendMedia(ex.rx.ctx, outboundMedia); err != nil {
 				logger.WarnCF("agent", "Failed to deliver tool media",
@@ -1655,7 +1671,8 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse &&
 		ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
 			ex.rx.ctx, steer.BoundarySyncToolText, ex.rx.rr.rq.ri.rf.rt.ts,
-		) {
+		) &&
+		!ex.refuseMainConnectorText(ex.toolName) {
 		if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(ex.rx.ctx, bus.OutboundMessage{
 			Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,

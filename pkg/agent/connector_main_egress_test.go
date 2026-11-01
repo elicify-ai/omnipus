@@ -38,6 +38,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -239,10 +240,14 @@ func TestT40_MainConnectorTurn_ToolMediaIsKeptAndNeverPublished(t *testing.T) {
 	// S-60 row 1 (m-03): a tool returns media in a connection-fed main —
 	// nothing reaches telegram (bus and SendMedia both checked); the result
 	// is kept whole and exactly one note line is appended.
-	f := t40NewFixture(t,
-		testutil.NewScenario().WithToolCall("handled_media_tool", `{}`).WithText("Here is the screenshot."),
-		false, true)
+	provider := testutil.NewScenario().WithToolCall("handled_media_tool", `{}`).WithText("Here is the screenshot.")
+	f := t40NewFixture(t, provider, false, true)
 	allowProbeTool(t, f.al, &handledMediaTool{store: f.mediaStore, path: f.imagePath})
+	imageBytes, err := os.ReadFile(f.imagePath)
+	require.NoError(t, err)
+	// FR-070: the model must still receive this input file, unchanged. Derive
+	// the expected attachment from fixture input BEFORE tool execution.
+	wantModelMedia := []string{"data:image/png;base64," + base64.StdEncoding.EncodeToString(imageBytes)}
 
 	f.t40RunScheduledTurn(t, "take a screenshot")
 
@@ -258,6 +263,7 @@ func TestT40_MainConnectorTurn_ToolMediaIsKeptAndNeverPublished(t *testing.T) {
 	entries, err := f.store.ReadTranscript(f.main.ID)
 	require.NoError(t, err)
 	toolResults := 0
+	var persistedText string
 	for _, e := range entries {
 		if e.Type != session.EntryTypeToolCall {
 			continue
@@ -284,6 +290,11 @@ func TestT40_MainConnectorTurn_ToolMediaIsKeptAndNeverPublished(t *testing.T) {
 			require.True(t, ok)
 			path, _, err := f.mediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{})
 			require.NoError(t, err, "the persisted reference still resolves to the retained file")
+			require.Contains(t, text, "Local artifact paths: ",
+				"S-60 row 1/FR-070: ArtifactTags are retained in the persisted tool text")
+			require.Contains(t, text, path,
+				"S-60 row 1/FR-070: the artifact path names the retained file")
+			persistedText = text
 			original, err := os.ReadFile(f.imagePath)
 			require.NoError(t, err)
 			retained, err := os.ReadFile(path)
@@ -295,6 +306,21 @@ func TestT40_MainConnectorTurn_ToolMediaIsKeptAndNeverPublished(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, toolResults, "instrument: exactly one persisted handled_media_tool result expected")
+
+	// Observe the actual provider request after the tool ran, not a mocked
+	// message or the replay descriptor alone. The fixture supplied this call
+	// id; exactly one matching tool message must carry the entire image.
+	var modelResults []providers.Message
+	for _, message := range provider.LastMessages() {
+		if message.Role == "tool" && message.ToolCallID == "handled_media_tool-0" {
+			modelResults = append(modelResults, message)
+		}
+	}
+	require.Len(t, modelResults, 1, "FR-070: exactly one actual model-facing result for the media tool")
+	require.Equal(t, persistedText, modelResults[0].Content,
+		"FR-070: retained text, artifact paths and refusal note reach the model unchanged")
+	require.Equal(t, wantModelMedia, modelResults[0].Media,
+		"FR-070: suppressing connector delivery must not strip or change the model's media attachment")
 }
 
 func TestT40_MainConnectorTurn_AsyncForUserTextNotPublished(t *testing.T) {
@@ -375,10 +401,20 @@ func TestT40_MainConnectorTurn_OriginWarningNotPublished(t *testing.T) {
 		Content:             "t40 async origin warning content",
 	}
 
-	require.NoError(t, notifier.reportAsyncNotifyFailure(context.Background(), event, "t40-notice-1"),
+	readLog := t40CaptureLog(t)
+	var notifyErr error
+	delta := t40RefusalsDelta(t, func() {
+		notifyErr = notifier.reportAsyncNotifyFailure(context.Background(), event, "t40-notice-1")
+	})
+	entries := readLog() // restore the capture before any assertion can abort
+	require.NoError(t, notifyErr,
 		"S-60 row 5: the guarded site must decline silently, not error")
 	require.Empty(t, drainOutboundText(f.bus),
 		"S-60 row 5: the origin warning must not reach the connector")
+	require.Equal(t, int64(1), delta,
+		"S-60 row 5/FR-070: the existing refusal counter increments exactly once")
+	require.Equal(t, 1, t40CountRefusalLines(entries),
+		"S-60 row 5/FR-070: exactly one `main connector tool output not sent` info line")
 }
 
 func TestT40_NonMainConnectorSession_MediaStillSent(t *testing.T) {
