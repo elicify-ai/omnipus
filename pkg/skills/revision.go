@@ -1,15 +1,10 @@
 package skills
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
@@ -90,6 +85,10 @@ func (w *SkillWriter) SkillRevision(name string) (string, error) {
 	return revisionForDir(dir)
 }
 
+// revisionForDir is the published package's revision: §7.3's content
+// revision (ContentRevision), so every caller — REST, the tools and the
+// change pipeline — compares one revision definition. A folder without
+// SKILL.md is not a published package here (ErrNotFound).
 func revisionForDir(dir string) (string, error) {
 	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -97,60 +96,7 @@ func revisionForDir(dir string) (string, error) {
 		}
 		return "", err
 	}
-	h := sha256.New()
-	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
-		}
-		if rel == versionsDir || strings.HasPrefix(rel, versionsDir+string(filepath.Separator)) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if rel == "." {
-			return nil
-		}
-		if _, err = io.WriteString(h, filepath.ToSlash(rel)+"\x00"); err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if _, err = fmt.Fprintf(h, "%o\x00", info.Mode().Type()); err != nil {
-			return err
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			target, readlinkErr := os.Readlink(path)
-			if readlinkErr != nil {
-				return readlinkErr
-			}
-			_, err = io.WriteString(h, target)
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(h, file)
-		closeErr := file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	})
-	if err != nil {
-		return "", fmt.Errorf("compute skill revision: %w", err)
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return ContentRevision(dir)
 }
 
 func (w *SkillWriter) CreateSkillReviewed(name, content string) (path, revision string, err error) {

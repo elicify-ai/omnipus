@@ -75,6 +75,9 @@ type ChangeRequest struct {
 	Expect    Expectation
 	Actor     ChangeActor
 	Grants    GrantEditor // delete-time best-effort grant removal (founder Q-S3); may be nil
+	// ReplaceLocalChanges confirms an install_replace of a skill whose
+	// has_local_changes is true (§5.6); evaluated after step 1's detection.
+	ReplaceLocalChanges bool
 }
 
 func (r ChangeRequest) isCopy() bool { return r.Kind == KindCreate && r.To != "" }
@@ -416,7 +419,7 @@ func (p *pipeline) saveCheckState(st *state, slug string, entries map[string]tre
 // SKILL_MD_REQUIRED / INVALID_INPUT carry their own sentence; every other code
 // is "the change to '<slug>' was not saved: <reason>".
 func refusalText(slug string, r *refusal) string {
-	for _, own := range []error{ErrSkillExists, ErrSkillChanged, ErrSkillMDRequired, ErrInvalidInput, ErrUnknownVersion, ErrNotFound} {
+	for _, own := range []error{ErrSkillExists, ErrSkillChanged, ErrSkillMDRequired, ErrInvalidInput, ErrUnknownVersion, ErrNotFound, ErrLocalChangesConfirmationRequired} {
 		if errors.Is(r.code, own) {
 			return r.reason
 		}

@@ -306,6 +306,13 @@ func (p *pipeline) runInstall() (PublishOutcome, error) {
 	if err = p.precondition(st); err != nil {
 		return refusedOutcome(), err
 	}
+	// §5.6 ordering: the local-changes confirmation is evaluated after step
+	// 1's detection in the same lock hold, so an unrecorded outside edit is
+	// recorded first and then counted (§9.2).
+	if p.req.Kind == KindInstallReplace && !p.req.ReplaceLocalChanges && localChanges(st.head, st.present, st.rev) {
+		return refusedOutcome(), p.refuse(st, &refusal{code: ErrLocalChangesConfirmationRequired,
+			reason: fmt.Sprintf("'%s' has local changes that this install would replace. They stay in the version history. Confirm with replace_local_changes to continue.", st.slug)})
+	}
 	staged, err := p.newStaged(st.slug)
 	if err != nil {
 		return refusedOutcome(), p.storageError(st.slug, err)
