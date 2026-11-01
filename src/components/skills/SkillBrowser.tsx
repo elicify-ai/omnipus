@@ -45,6 +45,7 @@ import {
   isApiError,
 } from '@/lib/api'
 import type { SkillSearchResult, SkillMarketplaceStatus } from '@/lib/api'
+import { parseServerErrorField } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { generateId } from '@/lib/constants'
@@ -287,8 +288,9 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
         let msg: string
         if (isApiError(err) && err.status === 409 && err.code) {
           // A coded refusal (BUILTIN_NAME_RESERVED, SKILL_CHANGED, …) carries
-          // its own exact text (r15 §5.10).
-          msg = err.userMessage
+          // its own exact text (r15 §5.10), e.g. the BUILTIN_NAME_RESERVED
+          // "Choose a different name." remedy — never the generic 409 line.
+          msg = parseServerErrorField(err.body) ?? err.userMessage
         } else if (isApiError(err) && err.status === 409) {
           msg = `Skill "${slug}" is already installed.`
         } else if (isApiError(err) && err.status === 502) {
