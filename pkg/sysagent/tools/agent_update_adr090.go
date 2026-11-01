@@ -91,14 +91,20 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 	if _, hasVoice := args["voice"]; hasVoice && message == "" {
 		message = "voice is persisted; playback is inactive in this release"
 	}
-	return changeSuccess(map[string]any{
+	body := map[string]any{
 		"id":                 id,
 		"revision":           newRevision,
 		"persistence_status": agentstore.PersistenceComplete,
 		"activation_status":  activation,
 		"changed_fields":     durable,
 		"message":            message,
-	}, updateVerdict(activation, message))
+	}
+	if err := addStoredEffort(store, id, fields, body); err != nil {
+		return tools.ErrorResult(errorJSON("READ_FAILED",
+			fmt.Sprintf("the update was saved at revision %s, but %v", newRevision, err),
+			"Read the agent with get_agent"))
+	}
+	return changeSuccess(body, updateVerdict(activation, message))
 }
 
 // mutateRecord applies the record and SOUL.md fields under the store's

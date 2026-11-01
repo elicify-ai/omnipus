@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
@@ -160,4 +161,41 @@ func storedEffortView(a config.AgentConfig) any {
 		return nil
 	}
 	return a.ReasoningEffort
+}
+
+// effortResultFields lists the update_agent arguments that can change a stored
+// effort: the effort fields themselves and a primary model change, which maps
+// the stored value (S-58).
+var effortResultFields = []string{"reasoning_effort", "fallback_models", "model", "provider"}
+
+// addStoredEffort puts the saved agent's effort fields on a successful
+// update_agent result when the update touched one of them (S-63: "the result
+// shows the stored agent with every effort field"). A failed read-back of
+// the just-saved record is returned, never dropped.
+func addStoredEffort(store *agentstore.Store, id string, fields []string, body map[string]any) error {
+	touched := false
+	for _, f := range effortResultFields {
+		if slices.Contains(fields, f) {
+			touched = true
+			break
+		}
+	}
+	if !touched {
+		return nil
+	}
+	state, err := store.ReadState(id)
+	if err != nil {
+		return fmt.Errorf("read back the saved effort fields: %w", err)
+	}
+	body["reasoning_effort"] = storedEffortView(*state.Agent)
+	fallbacks := make([]map[string]any, 0, len(state.Agent.FallbackModels))
+	for _, fb := range state.Agent.FallbackModels {
+		entry := map[string]any{"provider": fb.Provider, "model": fb.Model, "reasoning_effort": nil}
+		if fb.ReasoningEffort != "" && !state.Agent.IsExternalCLIWorker() {
+			entry["reasoning_effort"] = fb.ReasoningEffort
+		}
+		fallbacks = append(fallbacks, entry)
+	}
+	body["fallback_models"] = fallbacks
+	return nil
 }
