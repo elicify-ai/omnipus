@@ -173,17 +173,31 @@ describe('ChannelConfigPanel — Configure outcome toasts (T-6c / S-57 / FR-055)
 
   it('applied shows the exact restart-success toast before Save & Enable enables', async () => {
     resolveConfigure({ apply_outcome: 'applied' })
-    const { addToast } = renderPanel()
+    // T-6c: enable reports its own result "as today". Keep that operation
+    // pending while asserting the exact CONFIGURE toast list and ordering;
+    // its later result is not an extra Configure-outcome toast.
+    let finishEnable: (() => void) | undefined
+    vi.mocked(enableChannel).mockImplementationOnce(() => new Promise((resolve) => {
+      finishEnable = () => resolve({ id: 'whatsapp', enabled: true })
+    }))
+    const { addToast, client } = renderPanel()
 
-    await clickSave(/Save & Enable/i)
-
+    try {
+      await clickSave(/Save & Enable/i)
+      await waitFor(() => {
+        expect(addToast.mock.calls).toEqual([
+          [{ message: 'Saved. The connection restarted with the new settings.', variant: 'success' }],
+        ])
+        expect(vi.mocked(enableChannel).mock.calls).toEqual([['whatsapp']])
+      })
+      expect(addToast.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(enableChannel).mock.invocationCallOrder[0])
+    } finally {
+      await act(async () => { finishEnable?.() })
+    }
     await waitFor(() => {
-      expect(addToast.mock.calls).toEqual([
-        [{ message: 'Saved. The connection restarted with the new settings.', variant: 'success' }],
-      ])
-      expect(vi.mocked(enableChannel).mock.calls).toEqual([['whatsapp']])
+      expect(client.getMutationCache().getAll()).toHaveLength(1)
+      expect(client.getMutationCache().getAll()[0].state.status).toBe('success')
     })
-    expect(addToast.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(enableChannel).mock.invocationCallOrder[0])
   })
 
   it('no_reload_needed shows exactly "Saved." (Save)', async () => {
