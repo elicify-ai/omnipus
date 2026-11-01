@@ -75,7 +75,12 @@ func TestActivation_OversizedHelperStillLoadsBoundedInstructions(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "huge.bin"), make([]byte, 10485761), 0o644))
 	text, err := LoadForActivation(root, "foo", LoadActivationOptions{EditAllowed: true})
 	require.NoError(t, err, "helpers over capture limit degrade version availability, not instruction loading")
-	assert.Contains(t, text, "SKILL_VERSION_UNAVAILABLE")
+	assert.Contains(t, text, "last change: unknown (changed outside Omnipus)", "§9.5's truthful degraded-load state, not an invented error code")
+	assert.NotContains(t, text, `revision="`, "an aborted capture certifies no revision")
+	assert.NotContains(t, text, `version="`, "an aborted capture supplies no version")
+	// The real-session companion TestSkillDegradedActivation_ClearsSeenAndMarksLocal
+	// checks has_local_changes and the next mutation's SKILL_NOT_READ through
+	// registered tools; this renderer has no session input and cannot prove seen.
 	assert.Contains(t, text, "fixture skill foo")
 	assert.Contains(t, text, "Body of foo.", "valid instruction body is actually loaded, not just its header")
 	assert.Contains(t, text, "huge.bin")

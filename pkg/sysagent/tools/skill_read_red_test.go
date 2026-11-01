@@ -115,7 +115,7 @@ func readCtx(agentID string) context.Context {
 // TestGetSkill_FieldsShape (S-8.1). BDD: a granted skill read with
 // fields:["description","files"] returns exactly id, revision, description,
 // files; files = {items, total}.
-// Traces to: skills-spec-r13.md §5.2, S-8.1.
+// Traces to: skills-spec-r15.md §5.2, S-8.1.
 func TestGetSkill_FieldsShape(t *testing.T) {
 	global := t.TempDir()
 	validSkillFixture(t, global, "pdf-tools", "read PDFs")
@@ -162,7 +162,7 @@ func TestGetSkill_FieldsShape(t *testing.T) {
 // BDD: missing / empty / string-"all" / ["all","name"] / ["name","name"] /
 // ["nope"] / ["absent_fields"] / all 14 names — the T8 shared validation
 // texts, byte-exact where the spec fixes them.
-// Traces to: skills-spec-r13.md §5.2 parameters + errors, §17.2 D-5, S-8.2.
+// Traces to: skills-spec-r15.md §5.2 parameters + errors, §17.2 D-5, S-8.2.
 func TestGetSkill_FieldsValidation_D5(t *testing.T) {
 	global := t.TempDir()
 	validSkillFixture(t, global, "app", "fixture")
@@ -245,7 +245,7 @@ func TestGetSkill_FieldsValidation_D5(t *testing.T) {
 // non-editor on a deleted skill (history exists) → PERMISSION_DENIED —
 // authorization precedes existence; an authorised caller with neither folder
 // nor history → NOT_FOUND.
-// Traces to: skills-spec-r13.md §5.2 who-may-call table + §5.3 precedence
+// Traces to: skills-spec-r15.md §5.2 who-may-call table + §5.3 precedence
 // rule (R2-MIN-001), S-8.4–S-8.6.
 func TestGetSkill_AuthorizationMatrix(t *testing.T) {
 	nonEditor := skillDepsOpts{
@@ -327,7 +327,7 @@ func TestGetSkill_AuthorizationMatrix(t *testing.T) {
 // BDD: an editor reading a deleted skill with fields:["state","name","versions"]
 // gets {id, revision: null, state: "deleted", versions: {…}, absent_fields:
 // ["name"]} and no other key.
-// Traces to: skills-spec-r13.md §5.2 deleted-skill row, S-8.8.
+// Traces to: skills-spec-r15.md §5.2 deleted-skill row, S-8.8.
 func TestGetSkill_DeletedSkillShape(t *testing.T) {
 	global := t.TempDir()
 	validSkillFixture(t, global, "gone", "later deleted")
@@ -364,7 +364,7 @@ func TestGetSkill_DeletedSkillShape(t *testing.T) {
 
 // TestGetSkill_BuiltinVersionsEmptyPage (E-9).
 // BDD: get_skill on a built-in with fields:["versions"] → the empty page.
-// Traces to: skills-spec-r13.md E-9, §5.2 built-ins row.
+// Traces to: skills-spec-r15.md E-9, §5.2 built-ins row.
 func TestGetSkill_BuiltinVersionsEmptyPage(t *testing.T) {
 	global := t.TempDir()
 	validSkillFixture(t, global, "plan", "built-in fixture")
@@ -387,7 +387,7 @@ func TestGetSkill_BuiltinVersionsEmptyPage(t *testing.T) {
 
 // TestGetSkill_UnknownVersion (§5.10 unknown-version text).
 // BDD: versions_before "v999999-…" → INVALID_INPUT with the byte-exact text.
-// Traces to: skills-spec-r13.md §5.10 unknown version, S-5.12.
+// Traces to: skills-spec-r15.md §5.10 unknown version, S-5.12.
 func TestGetSkill_UnknownVersion(t *testing.T) {
 	global := t.TempDir()
 	validSkillFixture(t, global, "app", "fixture")
@@ -411,7 +411,7 @@ func TestGetSkill_UnknownVersion(t *testing.T) {
 // BDD: list_skills with name → INVALID_INPUT `name was removed from
 // list_skills; use get_skill with id and fields`; management rows never
 // carry content.
-// Traces to: skills-spec-r13.md §5.3, S-8.7.
+// Traces to: skills-spec-r15.md §5.3, S-8.7.
 func TestListSkills_NameRemoved(t *testing.T) {
 	global := t.TempDir()
 	validSkillFixture(t, global, "app", "fixture")
@@ -447,7 +447,7 @@ func TestListSkills_NameRemoved(t *testing.T) {
 // TestListSkills_UsableRowsGrantFiltered_Regression (§17.3 regression row 1).
 // BDD: usable scope returns exactly the loadable set (unchanged predicate).
 // This pair must PASS on the baseline and stay green through the migration.
-// Traces to: skills-spec-r13.md §17.3 (ADR-072 D4/N1 regression).
+// Traces to: skills-spec-r15.md §17.3 (ADR-072 D4/N1 regression).
 func TestListSkills_UsableRowsGrantFiltered_Regression(t *testing.T) {
 	global := t.TempDir()
 	validSkillFixture(t, global, "granted", "mine")
@@ -475,7 +475,7 @@ func TestListSkills_UsableRowsGrantFiltered_Regression(t *testing.T) {
 // still serves ONE captured observation: the instructions and the revision
 // come from the same observation, never a revision recomputed from projected
 // output (R6-MAJ-001).
-// Traces to: skills-spec-r13.md §5.2 side effect (three-way oracle), S-8.10.
+// Traces to: skills-spec-r15.md §5.2 side effect (three-way oracle), S-8.10.
 func TestGetSkill_LockedReadCoherence(t *testing.T) {
 	t.Run("managed writer cannot cross a paused reader", func(t *testing.T) {
 		global := t.TempDir()

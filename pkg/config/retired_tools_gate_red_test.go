@@ -3,7 +3,7 @@ package config
 // RED tests — landing/skills (T9): the T-E9b retired-tools gate's
 // defaults.go ceiling (§15 item 1): neither the sysagent policy family nor
 // the merged global ceiling may name create_skill or remove_skill.
-// Traces to: skills-spec-r13.md §15 item 1, §17.1 row 4, SC-002.
+// Traces to: skills-spec-r15.md §15 item 1, §17.1 row 4, SC-002.
 //
 // RED expectation: both maps still seed the retired names — the assertions
 // below fail on the baseline.
@@ -18,7 +18,7 @@ import (
 // TestRetiredTools_GoneFromDefaultsCeiling (§15 item 1).
 // BDD: defaultToolPoliciesSysagent and the merged DefaultToolPolicyCeiling
 // contain neither retired name.
-// Traces to: skills-spec-r13.md §15 item 1, T-E9b.
+// Traces to: skills-spec-r15.md §15 item 1, T-E9b.
 func TestRetiredTools_GoneFromDefaultsCeiling(t *testing.T) {
 	family := defaultToolPoliciesSysagent()
 	require.NotEmpty(t, family, "the sysagent policy family is populated")

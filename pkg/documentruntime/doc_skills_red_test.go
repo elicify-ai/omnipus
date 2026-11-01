@@ -5,7 +5,7 @@ package documentruntime
 // copy of any skill: the skills env name is gone from the child environment,
 // provision installs no embedded skills copy, and the manifest is bumped to
 // the new revision so an old cached layout is never served.
-// Traces to: skills-spec-r13.md S-1.5 (app part), §15 item 3
+// Traces to: skills-spec-r15.md S-1.5 (app part), §15 item 3
 // (OMNIPUS_DOCUMENT_SKILLS / InstallEmbeddedSkills are gone-forever names),
 // §17.1 row 10.
 //
@@ -28,7 +28,7 @@ import (
 // BDD: the document child's environment carries no OMNIPUS_DOCUMENT_SKILLS
 // entry — the worker reads the same registry folders through the §6.2
 // per-skill kernel grants instead of a copied tree.
-// Traces to: skills-spec-r13.md S-1.5, §15 item 3.
+// Traces to: skills-spec-r15.md S-1.5, §15 item 3.
 func TestChildEnvironment_NoDocumentSkillsEnv(t *testing.T) {
 	layout := Layout{
 		Prefix:   t.TempDir(),
@@ -57,7 +57,7 @@ func TestChildEnvironment_NoDocumentSkillsEnv(t *testing.T) {
 // TestProvision_NoEmbeddedSkillsCopy (S-1.5 app part; §15 item 3).
 // BDD: provision installs no embedded skills copy under the layout — the
 // registry is the only copy (no skill tree is materialized under Prefix).
-// Traces to: skills-spec-r13.md S-1.5, §15 item 3.
+// Traces to: skills-spec-r15.md S-1.5, §15 item 3.
 func TestProvision_NoEmbeddedSkillsCopy(t *testing.T) {
 	dataRoot := t.TempDir()
 	layout, err := ResolveLayout(dataRoot, manifestRevisionForTest(), "worker-1")

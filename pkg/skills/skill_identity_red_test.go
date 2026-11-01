@@ -2,7 +2,7 @@ package skills
 
 // RED tests — landing/skills (T9): skill identity, one rule (spec §5.13),
 // test row 29 / T-K1; scenarios S-6.7, S-6.8, S-6.9, E-10, E-11; dataset D-1.
-// Traces to: skills-spec-r13.md §5.13, §5.10, §16 S-6.7–S-6.9, §17.1 row 29,
+// Traces to: skills-spec-r15.md §5.13, §5.10, §16 S-6.7–S-6.9, §17.1 row 29,
 // §17.2 D-1.
 //
 // RED expectation: every test in this file FAILS on the baseline because the
@@ -41,7 +41,7 @@ func builtinMarkerFixture(t *testing.T, dir string) {
 
 // TestSkillKey_IsTheLowercasedSlug pins the one identity function (§5.13).
 // BDD: Given any slug spelling, When SkillKey is applied, Then equal keys.
-// Traces to: skills-spec-r13.md §5.13 (SkillKey = strings.ToLower).
+// Traces to: skills-spec-r15.md §5.13 (SkillKey = strings.ToLower).
 func TestSkillKey_IsTheLowercasedSlug(t *testing.T) {
 	// RED: scaffold returns "" — the identity function is not implemented.
 	assert.Equal(t, "plan", SkillKey("plan"), "lowercase stays itself")
@@ -55,13 +55,14 @@ func TestSkillKey_IsTheLowercasedSlug(t *testing.T) {
 // BDD: Given user skill foo installed on a case-sensitive disk, When a create
 // or copy targets Foo/FOO (same key), Then SKILL_EXISTS naming the on-disk
 // slug foo, and no second folder exists.
-// Traces to: skills-spec-r13.md §5.13 table (create/copy rows), S-6.9.
+// Traces to: skills-spec-r15.md §5.13 table (create/copy rows), S-6.9.
 func TestCreate_CaseTwin_OfUserSkill_Refused_SKILL_EXISTS(t *testing.T) {
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		t.Skip("case-sensitive-disk scenario (S-6.9): needs a case-sensitive volume (Linux)")
 	}
 	root := t.TempDir()
 	writeSkillFixture(t, root, "foo")
+	exportShipped(t, "plan", filepath.Join(root, "plan")) // a valid copy source, independent of the target collision
 
 	newSkillMD := "---\nname: Foo\ndescription: case twin\n---\nbody\n"
 	cases := []struct {
@@ -96,8 +97,8 @@ func TestCreate_CaseTwin_OfUserSkill_Refused_SKILL_EXISTS(t *testing.T) {
 				"SKILL_EXISTS must name the folder that is on disk (foo), byte-exact §5.10")
 			_, statErr := os.Stat(filepath.Join(root, "Foo"))
 			_, statErr2 := os.Stat(filepath.Join(root, "FOO"))
-			assert.True(t, os.IsNotExist(statErr) || os.IsNotExist(statErr2),
-				"no second folder may be created for the case twin")
+			assert.True(t, os.IsNotExist(statErr), "no stray Foo folder may exist after refusal")
+			assert.True(t, os.IsNotExist(statErr2), "no stray FOO folder may exist after refusal")
 		})
 	}
 }
@@ -106,7 +107,7 @@ func TestCreate_CaseTwin_OfUserSkill_Refused_SKILL_EXISTS(t *testing.T) {
 // BDD: Given built-in plan, When any create/copy/install targets Plan, PLAN
 // or pLaN, Then BUILTIN_NAME_RESERVED with the byte-exact text, no folder,
 // no grant change.
-// Traces to: skills-spec-r13.md §5.13 (IsBuiltin row), §5.10, S-6.7.
+// Traces to: skills-spec-r15.md §5.13 (IsBuiltin row), §5.10, S-6.7.
 func TestBuiltinNameReserved_CaseInsensitive_AllEntryPoints(t *testing.T) {
 	root := t.TempDir()
 
@@ -167,7 +168,7 @@ func TestBuiltinNameReserved_CaseInsensitive_AllEntryPoints(t *testing.T) {
 // identity rule (S-6.1 partial, S-6.8's Linux-visible half): a write whose
 // slug key matches a built-in folder on disk is refused BUILTIN_READ_ONLY
 // with the byte-exact §5.10 text, before the lock (§7.1 step 0).
-// Traces to: skills-spec-r13.md §7.1 step 0, §5.10 BUILTIN_READ_ONLY, S-6.1.
+// Traces to: skills-spec-r15.md §7.1 step 0, §5.10 BUILTIN_READ_ONLY, S-6.1.
 func TestWrite_IntoBuiltinFolder_BUILTIN_READ_ONLY(t *testing.T) {
 	root := t.TempDir()
 	builtinDir := writeSkillFixture(t, root, "plan")
@@ -194,16 +195,18 @@ func TestWrite_IntoBuiltinFolder_BUILTIN_READ_ONLY(t *testing.T) {
 
 // TestCreate_ValidSlugBoundaries (D-1 rows 1–4, 6): the slug rule is unchanged
 // (namePattern, ≤ 64); copy/create enforce it before anything else.
-// Traces to: skills-spec-r13.md §17.2 D-1, §5.4 copy precondition (to valid).
+// Traces to: skills-spec-r15.md §17.2 D-1, §5.4 copy precondition (to valid).
 func TestCreate_ValidSlugBoundaries(t *testing.T) {
-	root := t.TempDir()
 	tests := []struct {
 		name    string
 		to      string
 		wantErr bool
 	}{
 		{"min length a", "a", false},
+		{"min+1 ab", "ab", false},
+		{"max-1 63", strings.Repeat("a", 63), false},
 		{"max length 64", strings.Repeat("a", 64), false},
+		{"uppercase permitted by D-1 row 5", "My-Skill", false},
 		{"max+1 65 chars", strings.Repeat("a", 65), true},
 		{"double hyphen", "my--skill", true},
 		{"leading hyphen", "-x", true},
@@ -215,6 +218,12 @@ func TestCreate_ValidSlugBoundaries(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// A valid shipped source is a prerequisite, not the subject of
+			// this target-name test (§7.2 requires built-in/shipped equality).
+			root := t.TempDir()
+			exportShipped(t, "plan", filepath.Join(root, "plan"))
+			source := readFile(t, filepath.Join(root, "plan", "SKILL.md"))
+			require.Contains(t, source, "name: plan", "fixture has the source frontmatter")
 			out, err := ApplyChange(root, ChangeRequest{
 				Kind: KindCreate, Slug: "plan", To: tc.to,
 				Expect: Expectation{Absent: true},
@@ -222,14 +231,26 @@ func TestCreate_ValidSlugBoundaries(t *testing.T) {
 			})
 			if tc.wantErr {
 				require.Error(t, err, "invalid copy target %q must be refused", tc.to)
+				if len(tc.to) == 65 {
+					assert.Contains(t, err.Error(), "INVALID_INPUT", "D-1 row 3 fixes the max+1 error code")
+				}
+				entries, readErr := os.ReadDir(root)
+				require.NoError(t, readErr)
+				var names []string
+				for _, entry := range entries {
+					names = append(names, entry.Name())
+				}
+				assert.Equal(t, []string{"plan"}, names, "invalid target leaves no staged or published second folder")
+				assert.Equal(t, source, readFile(t, filepath.Join(root, "plan", "SKILL.md")), "refusal never rewrites the source")
 				return
 			}
 			// Valid target: the copy must actually commit and land on disk
 			// (a refusal here would be a slug-rule regression).
 			require.NoError(t, err, "valid copy target %q must not be refused", tc.to)
 			assert.Equal(t, PersistenceComplete, out.PersistenceStatus)
-			_, statErr := os.Stat(filepath.Join(root, tc.to))
-			assert.NoError(t, statErr, "the copy destination folder must exist after a committed copy")
+			assert.Equal(t, strings.Replace(source, "name: plan", "name: "+tc.to, 1),
+				readFile(t, filepath.Join(root, tc.to, "SKILL.md")),
+				"the real copy contains the shipped source with only the declared name transform")
 		})
 	}
 	_ = time.Now // keep time import stable for date-stamped fixtures in this file's siblings

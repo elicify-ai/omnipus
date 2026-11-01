@@ -71,8 +71,9 @@ func TestRestore_PutsEveryFileBack_AndRoundTrips(t *testing.T) {
 
 // TestRestore_DeletedSkill_ThenRecreateByOtherSession_Refused (S-5.4).
 // BDD: Given the skill was deleted and then recreated by another session,
-// restoring the deleted version is refused (the key is present —
-// SKILL_CHANGED against the recreated state).
+// restoring with expected absence is refused as SKILL_EXISTS (the key is
+// present). A stale expected revision would instead mean SKILL_CHANGED;
+// these two §7.3 branches are not interchangeable.
 // Traces to: skills-spec-r15.md §7.3, §5.4 restore row (deleted: expected
 // absence), S-5.4.
 func TestRestore_DeletedSkill_ThenRecreateByOtherSession_Refused(t *testing.T) {
@@ -95,6 +96,9 @@ func TestRestore_DeletedSkill_ThenRecreateByOtherSession_Refused(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, PersistenceComplete, out2.PersistenceStatus, "the recreate commits")
 
+	before := readFile(t, filepath.Join(root, "foo", "SKILL.md"))
+	beforeHistory := manifestIDs(t, SkillHistoryRoot(root), "foo")
+	g2 := generationOf(t, filepath.Join(root, "foo"))
 	// The first session's restore of the deleted version is refused: the key
 	// is present and the expected absence no longer holds.
 	_, err = ApplyChange(root, ChangeRequest{
@@ -102,9 +106,12 @@ func TestRestore_DeletedSkill_ThenRecreateByOtherSession_Refused(t *testing.T) {
 		Expect: Expectation{Absent: true},
 		Actor:  ChangeActor{Kind: "agent", AgentID: "agent-a", SessionID: "s1", Tool: "edit_skill"},
 	})
-	require.Error(t, err, "the restore's expected absence no longer holds")
-	assert.True(t, errors.Is(err, ErrSkillExists) || errors.Is(err, ErrSkillChanged),
-		"refused as SKILL_CHANGED/present, got %v", err)
+	require.ErrorIs(t, err, ErrSkillExists, "§7.3: expected absence plus a present key is only SKILL_EXISTS")
+	assert.False(t, errors.Is(err, ErrSkillChanged), "the distinct stale-revision code is not accepted")
+	assert.Contains(t, err.Error(), "skill 'foo' already exists; read it first", "exact §5.10 remedy")
+	assert.Equal(t, before, readFile(t, filepath.Join(root, "foo", "SKILL.md")), "refusal cannot overwrite the other session's recreation")
+	assert.Equal(t, beforeHistory, manifestIDs(t, SkillHistoryRoot(root), "foo"), "refusal adds no restore version")
+	assert.Equal(t, g2, generationOf(t, filepath.Join(root, "foo")), "refusal does not replace the current generation")
 }
 
 // TestOutsideChange_DetectionAndRestore (S-5.9, §9.4 + §7.1 step 1 rule).

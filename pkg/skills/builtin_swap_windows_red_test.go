@@ -4,11 +4,11 @@ package skills
 
 // RED tests — landing/skills (T9): S-12.1, the Windows pipeline leg (spec
 // §17.1 row 26, T-W1, Windows CI). PLATFORM-GATED: this pod is Linux; the
-// file compiles and runs only on Windows CI. The RED claim therefore holds
-// by inspection of the declaration (the pipeline does not exist yet), not by
-// a local run — the implementing worker runs this file in the Windows CI
-// job and reports its result there.
-// Traces to: skills-spec-r13.md S-12.1, §17.1 row 26.
+// file compiles and runs only on Windows CI. Native Windows RED is NOT
+// established by source inspection or a Linux cross-compile. The implementing
+// worker must retain the native Windows failing-run receipt; until then that
+// execution claim is UNVERIFIED.
+// Traces to: skills-spec-r15.md S-12.1, §17.1 row 26.
 //
 // BDD (S-12.1): on Windows, the §7.1 swap (skills/.swap/<slug> → live) and
 // the whole pipeline are what actually run on a real Windows volume —
@@ -30,7 +30,7 @@ import (
 // BDD: on Windows, an edit through ApplyChange commits (swap-in works with
 // Windows rename semantics), the committed state round-trips, and the
 // refusal paths (built-in write) behave identically.
-// Traces to: skills-spec-r13.md S-12.1.
+// Traces to: skills-spec-r15.md S-12.1.
 func TestWindowsPipeline_SwapSemantics(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSkillFixture(t, root, "foo")

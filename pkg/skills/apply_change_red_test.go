@@ -3,7 +3,7 @@ package skills
 // RED tests — landing/skills (T9): the one change pipeline (§7.1), its
 // preconditions (§7.3) and the save check (§7.2, dataset D-2).
 // Scenarios: S-3.4, S-3.5, S-3.6, S-5.5, S-4.1 (D-2), E-1, E-2.
-// Traces to: skills-spec-r13.md §7.1–§7.3, §5.10, §16 US-3/US-4/US-5,
+// Traces to: skills-spec-r15.md §7.1–§7.3, §5.10, §16 US-3/US-4/US-5,
 // §17.1 rows 11/12, §17.2 D-2.
 
 import (
@@ -28,7 +28,7 @@ func agentActor(id string) ChangeActor {
 // BDD: Given session A saw revision A and session B committed revision B,
 // When A writes with expectation A, Then SKILL_CHANGED naming B's revision
 // and actor, byte-exact §5.10, and nothing is written.
-// Traces to: skills-spec-r13.md §7.3, §5.10 SKILL_CHANGED, S-3.4.
+// Traces to: skills-spec-r15.md §7.3, §5.10 SKILL_CHANGED, S-3.4.
 func TestEdit_StaleExpectation_SKILL_CHANGED_NamesNewRevisionAndActor(t *testing.T) {
 	root := t.TempDir()
 	writeSkillFixture(t, root, "app")
@@ -68,7 +68,7 @@ func TestEdit_StaleExpectation_SKILL_CHANGED_NamesNewRevisionAndActor(t *testing
 // newskill/SKILL.md, Then a create version commits, no grant is created or
 // inherited (§5.13a fresh name), and the outcome carries the new state the
 // menu refreshes from.
-// Traces to: skills-spec-r13.md §5.5 create row, §7.3, S-3.5.
+// Traces to: skills-spec-r15.md §5.5 create row, §7.3, S-3.5.
 func TestCreate_Commits_NoGrant_MenuFreshness(t *testing.T) {
 	root := t.TempDir()
 	grants := &recordingGrants{}
@@ -95,7 +95,7 @@ func TestCreate_Commits_NoGrant_MenuFreshness(t *testing.T) {
 // BDD: Given two sessions create the same new slug, When both run, Then
 // exactly one commits and the other gets SKILL_EXISTS; the content on disk is
 // the winner's.
-// Traces to: skills-spec-r13.md §7.1 step 2, S-3.6, E-1.
+// Traces to: skills-spec-r15.md §7.1 step 2, S-3.6, E-1.
 func TestCreate_ConcurrentSameSlug_OneCommitsOtherSKILL_EXISTS(t *testing.T) {
 	root := t.TempDir()
 
@@ -141,7 +141,7 @@ func TestCreate_ConcurrentSameSlug_OneCommitsOtherSKILL_EXISTS(t *testing.T) {
 
 // TestDeleteFile_SKILLMD_Refused (S-5.5). BDD: When delete_file targets
 // SKILL.md, Then SKILL_MD_REQUIRED with the byte-exact text; nothing removed.
-// Traces to: skills-spec-r13.md §5.10 SKILL_MD_REQUIRED, §7.2 delete_file
+// Traces to: skills-spec-r15.md §5.10 SKILL_MD_REQUIRED, §7.2 delete_file
 // row, S-5.5.
 func TestDeleteFile_SKILLMD_Refused(t *testing.T) {
 	root := t.TempDir()
@@ -162,7 +162,7 @@ func TestDeleteFile_SKILLMD_Refused(t *testing.T) {
 
 // TestSaveCheck_Dataset (S-4.1, D-2): every would-be state row is refused
 // with its reason; the boundary rows on both sides.
-// Traces to: skills-spec-r13.md §7.2, §17.2 D-2, S-4.1.
+// Traces to: skills-spec-r15.md §7.2, §17.2 D-2, S-4.1.
 func TestSaveCheck_Dataset(t *testing.T) {
 	const (
 		maxMarkdown = 262144

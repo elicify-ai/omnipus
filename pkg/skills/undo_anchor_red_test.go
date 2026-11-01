@@ -4,7 +4,7 @@ package skills
 // five byte-exact variants) and caller-owned multi-file recovery (§7.5).
 // Scenarios S-3.8 (both legs), S-3.14, S-3.15 (both legs), S-3.16 (both legs
 // + class-2 texts), S-3.17 (both legs).
-// Traces to: skills-spec-r13.md §5.5 closing rule + §7.5, §5.10
+// Traces to: skills-spec-r15.md §5.5 closing rule + §7.5, §5.10
 // SKILL_PARTIALLY_SAVED variants, §16 US-3, §17.1 rows 11/33.
 
 import (
@@ -51,7 +51,7 @@ func validSkillMD(slug, description, body string) string {
 // NO sequence anchor or restore instruction; recovery follows write 1's own
 // undo line (restore V1) and restores the exact pre-sequence bytes; restoring
 // the newest version instead does not undo write 1.
-// Traces to: skills-spec-r13.md §7.5, §5.5 variant 1, S-3.8 leg 1.
+// Traces to: skills-spec-r15.md §7.5, §5.5 variant 1, S-3.8 leg 1.
 func TestMultiFileSequence_RecoveryFromOwnWrite1Anchor(t *testing.T) {
 	root := t.TempDir()
 	writeSkillFixture(t, root, "foo")
@@ -117,7 +117,7 @@ func TestMultiFileSequence_RecoveryFromOwnWrite1Anchor(t *testing.T) {
 // W-B1 (VA → VB) whose W-B2 was refused — Then recovering B from W-B1's own
 // anchor (restore VA) returns exactly to before B, A's change stays in place,
 // and no tool text ever suggested restoring P0.
-// Traces to: skills-spec-r13.md §7.5, S-3.8 leg 2.
+// Traces to: skills-spec-r15.md §7.5, S-3.8 leg 2.
 func TestMultiFileSequence_TwoSequences_RecoverBOnly(t *testing.T) {
 	root := t.TempDir()
 	writeSkillFixture(t, root, "foo")
@@ -163,7 +163,7 @@ func TestMultiFileSequence_TwoSequences_RecoverBOnly(t *testing.T) {
 // foo — write 1's committed result names `it follows the recorded deletion`;
 // the refusal of write 2 carries no undo variant; restore V2 is refused;
 // recovery is edit_skill action=delete, returning the key to absence.
-// Traces to: skills-spec-r13.md §5.5 variant 3, §7.2 restore row, S-3.14.
+// Traces to: skills-spec-r15.md §5.5 variant 3, §7.2 restore row, S-3.14.
 func TestRecreate_AfterDelete_UndoVariantNamesDeletion(t *testing.T) {
 	root := t.TempDir()
 
@@ -244,7 +244,7 @@ func TestRecreate_AfterDelete_UndoVariantNamesDeletion(t *testing.T) {
 // predecessor as not restorable with the repair; leg 2 (class 2 partial):
 // the partial-save text carries the not-restorable variant. Neither offers an
 // exact undo.
-// Traces to: skills-spec-r13.md §5.5 variant 5, §5.10 SKILL_PARTIALLY_SAVED
+// Traces to: skills-spec-r15.md §5.5 variant 5, §5.10 SKILL_PARTIALLY_SAVED
 // not-restorable sub-variant, S-3.15.
 func TestRecreate_AfterBrokenPredecessor_UndoNamesRepair(t *testing.T) {
 	// fixture builds: foo at V1; outside edit removes SKILL.md (helpers left).
@@ -316,7 +316,7 @@ func TestRecreate_AfterBrokenPredecessor_UndoNamesRepair(t *testing.T) {
 // restore; attempting the restore is refused SECRET_IN_SKILL. BDD leg 2: a
 // non-portable `a:b` entry → refused with the per-path reason. Both repeated
 // as class-2 partial saves.
-// Traces to: skills-spec-r13.md §5.5 variant 5, §7.2, §5.10, S-3.16.
+// Traces to: skills-spec-r15.md §5.5 variant 5, §7.2, §5.10, S-3.16.
 func TestUndoVariant_KeyedToCompleteRestoreGate(t *testing.T) {
 	const secretValue = "sk-live-abcdef123456"
 
@@ -443,7 +443,7 @@ func TestUndoVariant_KeyedToCompleteRestoreGate(t *testing.T) {
 // the undo of the recreation; leg 2: the class-2-create-ii text says "the
 // previous live state was absent (the folder had been removed outside
 // Omnipus)".
-// Traces to: skills-spec-r13.md §5.5 variant 4, §5.10 absence-with-history,
+// Traces to: skills-spec-r15.md §5.5 variant 4, §5.10 absence-with-history,
 // S-3.17.
 func TestRecreate_AfterOutsideRemoval_ContentHeadVariant(t *testing.T) {
 	root := t.TempDir()

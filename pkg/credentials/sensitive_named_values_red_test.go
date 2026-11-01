@@ -7,7 +7,7 @@ package credentials
 // a locked store refuses with ErrStoreLocked, a damaged entry scopes to
 // DamagedEntriesError with the sibling still readable, and a missing store
 // file is an empty allowed enumeration.
-// Traces to: skills-spec-r13.md §7.4, S-4.2–S-4.6 (store-side legs), §17.1
+// Traces to: skills-spec-r15.md §7.4, S-4.2–S-4.6 (store-side legs), §17.1
 // row 13 (T-E10 input contract).
 //
 // RED expectation: SensitiveNamedValues is a scaffold that returns
@@ -60,7 +60,7 @@ func namedValuesIndex(t *testing.T, store *Store) map[string]string {
 // BDD: 4-byte values and 3-byte values are both enumerated faithfully — the
 // length policy (≥ 4 bytes counts as a secret) belongs to the save check,
 // never to the store's enumeration.
-// Traces to: skills-spec-r13.md §7.4, S-4.2, S-4.3.
+// Traces to: skills-spec-r15.md §7.4, S-4.2, S-4.3.
 func TestSensitiveNamedValues_EnumeratesFaithfully(t *testing.T) {
 	store := newUnlockedStoreWith(t,
 		[2]string{"API_KEY", "abcd"},         // 4 bytes
@@ -78,7 +78,7 @@ func TestSensitiveNamedValues_EnumeratesFaithfully(t *testing.T) {
 // TestSensitiveNamedValues_OAuthSubValues (S-4.4 store side).
 // BDD: an OAuth blob entry enumerates its access_token and refresh_token as
 // <NAME>.access_token / <NAME>.refresh_token, never the raw blob name only.
-// Traces to: skills-spec-r13.md §7.4, S-4.4.
+// Traces to: skills-spec-r15.md §7.4, S-4.4.
 func TestSensitiveNamedValues_OAuthSubValues(t *testing.T) {
 	provider := OAuthEntryName("exa") // exa_oauth
 	blob := `{"access_token":"at-1234","refresh_token":"rt-5678","account_id":"acc","expires_at":0}`
@@ -96,7 +96,7 @@ func TestSensitiveNamedValues_OAuthSubValues(t *testing.T) {
 // TestSensitiveNamedValues_LockedStore (S-4.5 leg 1).
 // BDD: a locked store refuses with ErrStoreLocked — the save check then
 // fails closed with SECRET_CHECK_UNAVAILABLE.
-// Traces to: skills-spec-r13.md §7.4, S-4.5.
+// Traces to: skills-spec-r15.md §7.4, S-4.5.
 func TestSensitiveNamedValues_LockedStore(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -114,7 +114,7 @@ func TestSensitiveNamedValues_LockedStore(t *testing.T) {
 // BDD: one damaged entry among readable ones returns the readable pairs
 // plus a DamagedEntriesError naming the damaged entry — the save check
 // fails closed with the reason and the readable names.
-// Traces to: skills-spec-r13.md §7.4, S-4.5.
+// Traces to: skills-spec-r15.md §7.4, S-4.5.
 func TestSensitiveNamedValues_DamagedEntryScopes(t *testing.T) {
 	store := newUnlockedStoreWith(t,
 		[2]string{"GOOD_REF", "good-plain-value"},
@@ -152,7 +152,7 @@ func TestSensitiveNamedValues_DamagedEntryScopes(t *testing.T) {
 // TestSensitiveNamedValues_MissingStoreFile (S-4.6 store side).
 // BDD: no store file → an empty enumeration, no error (the save check then
 // commits without consulting anything).
-// Traces to: skills-spec-r13.md §7.4, S-4.6.
+// Traces to: skills-spec-r15.md §7.4, S-4.6.
 func TestSensitiveNamedValues_MissingStoreFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

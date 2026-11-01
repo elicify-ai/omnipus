@@ -4,7 +4,7 @@ package skills
 // (§7.1 copy clause, R3/R6/R7), the capture lifecycle and cleanup
 // (§9.5 rules 1–8, R8/R9/R10/R11), and oversized copy sources (S-6.17).
 // Scenarios S-5.21 (legs a–i), S-6.13, S-6.14, S-6.15, S-6.16, S-6.17.
-// Traces to: skills-spec-r13.md §7.1 step 1, §9.5, §17.1 rows 40/41.
+// Traces to: skills-spec-r15.md §7.1 step 1, §9.5, §17.1 rows 40/41.
 
 import (
 	"encoding/json"
@@ -67,7 +67,7 @@ func incomingDirs(t *testing.T, dir string) []string {
 // before-state, no manifest added, three repeated attempts leave no
 // orphan-per-attempt growth, and a no-manifest-yet skill cleans up without
 // consulting any committed version.
-// Traces to: skills-spec-r13.md §9.5 rules 1–3, §17.1 row 41, S-5.21.
+// Traces to: skills-spec-r15.md §9.5 rules 1–3, §17.1 row 41, S-5.21.
 func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 	const perFileLimit = 10485760
 
@@ -170,7 +170,7 @@ func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 // suffix, referenced blobs preserved, the residual acknowledged.
 // (f) partial promotion: the blob promoted before the later promotion failed
 // is removed with the temporaries.
-// Traces to: skills-spec-r13.md §9.5 rules 2–3, §7.2 cleanup suffix,
+// Traces to: skills-spec-r15.md §9.5 rules 2–3, §7.2 cleanup suffix,
 // S-5.21 legs e1/e2/f.
 func TestS521_LegsEF_ManifestFaultAndPartialPromotion(t *testing.T) {
 	t.Run("leg e1 manifest fault after finalization — twin kept, new final removed", func(t *testing.T) {
@@ -270,7 +270,7 @@ func TestS521_LegsEF_ManifestFaultAndPartialPromotion(t *testing.T) {
 // copies to dst1/dst2/dst3 — each commits with its creation manifest, no new
 // source manifest, and each attempt's scratch disposed in the copy's lock
 // hold; after the third copy the source history holds exactly the before-state.
-// Traces to: skills-spec-r13.md §9.5 rule 5, S-5.21 leg g.
+// Traces to: skills-spec-r15.md §9.5 rule 5, S-5.21 leg g.
 func TestS521_LegG_SuccessByReuse_ThreeDistinctDestinations(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := SkillHistoryRoot(root)
@@ -300,7 +300,7 @@ func TestS521_LegG_SuccessByReuse_ThreeDistinctDestinations(t *testing.T) {
 // any point; the copy's staging scratch lived under skills/.staging/ and is
 // absent after success; the faulted-disposal variant surfaces the class-3
 // finishing warning while the copy still succeeds.
-// Traces to: skills-spec-r13.md §9.5 rule 6, §7.2 built-in equality,
+// Traces to: skills-spec-r15.md §9.5 rule 6, §7.2 built-in equality,
 // S-5.21 leg h.
 func TestS521_LegH_BuiltinSource_NoHistoryEver(t *testing.T) {
 	t.Run("main — copy succeeds, no built-in history, staging scratch disposed", func(t *testing.T) {
@@ -343,7 +343,7 @@ func TestS521_LegH_BuiltinSource_NoHistoryEver(t *testing.T) {
 // count grows by exactly one, referenced blobs present and hash-identical, and
 // no .incoming-* remains; the faulted variant keeps the success and surfaces
 // the class-3 warning.
-// Traces to: skills-spec-r13.md §9.5 rule 4, S-5.21 leg i.
+// Traces to: skills-spec-r15.md §9.5 rule 4, S-5.21 leg i.
 func TestS521_LegI_RepeatedCommits_NoTemporariesAccumulate(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := SkillHistoryRoot(root)
@@ -390,7 +390,7 @@ func TestS521_LegI_RepeatedCommits_NoTemporariesAccumulate(t *testing.T) {
 // source changed since its last version → external_change V2 provenance and
 // the destination carries the declared frontmatter-name transform;
 // externally edited built-in → refused until the next start replaces it.
-// Traces to: skills-spec-r13.md §7.1 copy clause, §5.4 copy row, rows 40, E-6.
+// Traces to: skills-spec-r15.md §7.1 copy clause, §5.4 copy row, rows 40, E-6.
 func TestCopyProvenance(t *testing.T) {
 	t.Run("S-6.13 unversioned source records a baseline", func(t *testing.T) {
 		root := t.TempDir()
@@ -472,7 +472,7 @@ func TestCopyProvenance(t *testing.T) {
 // transform; the live source is never read again after the capture
 // (probe-asserted); the negative control proves the probe detects a rereading
 // variant.
-// Traces to: skills-spec-r13.md §7.1 copy clause, §9.5, E-6, S-6.16.
+// Traces to: skills-spec-r15.md §7.1 copy clause, §9.5, E-6, S-6.16.
 func TestCopyInterference_CaptureThenStage(t *testing.T) {
 	t.Run("leg 1 interference before the capture — B captured and provenanced", func(t *testing.T) {
 		root := t.TempDir()
@@ -539,39 +539,55 @@ func TestCopyInterference_CaptureThenStage(t *testing.T) {
 		assert.Equal(t, "src@"+ids[0], manifestField(t, historyRoot, "dst", head, "restored_from"))
 	})
 
-	t.Run("leg 4 negative control — the probe detects a genuinely rereading variant", func(t *testing.T) {
+	t.Run("leg 4 negative control — illegal reread inside the same copy is detected", func(t *testing.T) {
 		root := t.TempDir()
-		srcDir := writeSkillFixture(t, root, "src")
-
-		// The identical counter predicate leg 3 relies on, in its exact
-		// post-boundary state (armed).
+		historyRoot := SkillHistoryRoot(root)
+		srcDir := writeSkillFixture(t, root, "src") // the single copy must capture baseline A
+		srcPath := filepath.Join(srcDir, "SKILL.md")
+		capturedA := readFile(t, srcPath)
 		var armed, postBoundarySourceReads int32
-		prevOpen := CaptureOpenProbe
+		var boundaryFired, rereadOK bool
+		var injectionErr error
+		var rereadBody string
+		oldManifest, oldOpen := FaultManifestWrite, CaptureOpenProbe
+		defer func() { FaultManifestWrite, CaptureOpenProbe = oldManifest, oldOpen }()
 		CaptureOpenProbe = func(op, path string) {
 			if op != "metadata" && (path == srcDir || strings.HasPrefix(path, srcDir+string(filepath.Separator))) && atomic.LoadInt32(&armed) == 1 {
 				atomic.AddInt32(&postBoundarySourceReads, 1)
 			}
 		}
-		defer func() { CaptureOpenProbe = prevOpen }()
-
-		// Deliberately wrong algorithm: capture A, then stage by recapturing
-		// the LIVE source after B arrives instead of using captured A. BOTH
-		// captures enter the actual production pipeline; this test never calls
-		// the observation callback itself. A disconnected production probe
-		// cannot be made green by a test-owned read wrapper.
-		capturedA := readFile(t, filepath.Join(srcDir, "SKILL.md"))
-		_, err := copySrcToDst(t, root, "src", "captured-a")
-		require.NoError(t, err, "negative control needs the real first capture")
-		require.NoError(t, os.WriteFile(filepath.Join(srcDir, "SKILL.md"),
-			[]byte(validSkillMD("src", "B", "B body")), 0o644))
-		atomic.StoreInt32(&armed, 1)
-		_, err = copySrcToDst(t, root, "src", "wrong-reread")
-		require.NoError(t, err, "deliberately rereading staging path uses real production I/O")
-
+		FaultManifestWrite = func(path string) error {
+			if filepath.Dir(path) != filepath.Join(historyRoot, "src", "versions") || boundaryFired {
+				return nil
+			}
+			boundaryFired = true
+			injectionErr = os.WriteFile(srcPath, []byte(validSkillMD("src", "B", "B body")), 0o644)
+			if injectionErr != nil {
+				return injectionErr
+			}
+			atomic.StoreInt32(&armed, 1)
+			// Deliberately wrong variant of THIS copy: after its complete
+			// capture, insert an extra real production instruction read of
+			// the live source. LoadSkillFile must report actual I/O through
+			// §9.5's probe. No second copy, manual probe call or test-owned
+			// read wrapper exists. Even a discarded reread is forbidden.
+			rereadBody, rereadOK = LoadSkillFile(srcPath)
+			return nil
+		}
+		_, err := copySrcToDst(t, root, "src", "dst") // exactly ONE copy invocation
+		require.NoError(t, err)
+		require.True(t, boundaryFired, "the wrong read was inserted at the same post-capture boundary as leg 3")
+		require.NoError(t, injectionErr)
+		require.True(t, rereadOK, "the injected production reader really opens the now-live B")
+		assert.Equal(t, "B body", strings.TrimSpace(rereadBody), "actual reader sees B, not captured A")
 		assert.Greater(t, atomic.LoadInt32(&postBoundarySourceReads), int32(0),
-			"the identical production instrument catches the prohibited second live-source capture")
-		assert.Equal(t, validSkillMD("wrong-reread", "B", "B body"), readFile(t, filepath.Join(root, "wrong-reread", "SKILL.md")), "wrong reread really stages B, not captured A")
-		assert.Equal(t, strings.Replace(capturedA, "name: src", "name: captured-a", 1), readFile(t, filepath.Join(root, "captured-a", "SKILL.md")), "first captured A remains the exact control")
+			"leg 3's identical zero-read oracle detects the deliberately illegal in-copy read; disconnected instrumentation fails")
+		assert.Equal(t, strings.Replace(capturedA, "name: src", "name: dst", 1),
+			readFile(t, filepath.Join(root, "dst", "SKILL.md")), "the copy's legitimate staging still consumes captured A, independently of the discarded illegal B read")
+		ids := manifestIDs(t, historyRoot, "src")
+		require.Len(t, ids, 1, "no second legitimate capture/version hides the illegal read")
+		head := newestManifest(t, historyRoot, "dst", manifestIDs(t, historyRoot, "dst"))
+		assert.Equal(t, "src@"+ids[0], manifestField(t, historyRoot, "dst", head, "restored_from"))
 	})
 }
 
@@ -580,7 +596,7 @@ func TestCopyInterference_CaptureThenStage(t *testing.T) {
 // reason; nothing created; no source version recorded; the lock is released;
 // the temporaries removed; with retention disabled and a content-twin early
 // file (leg c), every referenced final is intact before and after.
-// Traces to: skills-spec-r13.md §7.1 step 1 (bounded copy capture), §9.5,
+// Traces to: skills-spec-r15.md §7.1 step 1 (bounded copy capture), §9.5,
 // S-6.17.
 func TestS617_OversizedCopySource(t *testing.T) {
 	const perFileLimit = 10485760

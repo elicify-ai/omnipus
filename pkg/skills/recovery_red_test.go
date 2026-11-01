@@ -3,7 +3,7 @@ package skills
 // RED tests — landing/skills (T9): interrupted changes (§9.3 recovery).
 // Scenarios S-11.1, S-11.2, S-11.3, S-11.5, S-11.10, S-11.12 (T-V12 legacy
 // backups), plus the §9.3 r10 staging-scratch rules.
-// Traces to: skills-spec-r13.md §9.3, §16 US-11, §17.1 rows 19/34.
+// Traces to: skills-spec-r15.md §9.3, §16 US-11, §17.1 rows 19/34.
 
 import (
 	"os"
@@ -28,7 +28,7 @@ func makeSwap(t *testing.T, root, slug, body string) string {
 // BDD: Given .swap/<slug> with live absent and the newest manifest not
 // delete_skill, a restart renames it back to live; a second restart changes
 // nothing.
-// Traces to: skills-spec-r13.md §9.3 .swap table row 1, S-11.1.
+// Traces to: skills-spec-r15.md §9.3 .swap table row 1, S-11.1.
 func TestRecovery_SwapLiveAbsent_NonDeleteHead_PutBack(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := t.TempDir()
@@ -50,7 +50,7 @@ func TestRecovery_SwapLiveAbsent_NonDeleteHead_PutBack(t *testing.T) {
 // TestRecovery_SwapLivePresent_Removed (S-11.3 / §9.3 row 2).
 // BDD: Given .swap/<slug> while live is present (delete completed, .swap
 // cleanup crashed), a restart removes it — twice (stays deleted).
-// Traces to: skills-spec-r13.md §9.3 .swap table row 2, S-11.3.
+// Traces to: skills-spec-r15.md §9.3 .swap table row 2, S-11.3.
 func TestRecovery_SwapLivePresent_Removed(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := t.TempDir()
@@ -69,7 +69,7 @@ func TestRecovery_SwapLivePresent_Removed(t *testing.T) {
 // TestRecovery_SwapOfBuiltin_PutBackThenSyncReplaces (S-11.5).
 // BDD: Given .swap/plan of a built-in after a crash during sync, a restart
 // renames it back and SyncBuiltins then replaces it — one clean plan.
-// Traces to: skills-spec-r13.md §9.3, §8.2, S-11.5.
+// Traces to: skills-spec-r15.md §9.3, §8.2, S-11.5.
 func TestRecovery_SwapOfBuiltin_PutBackThenSyncReplaces(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := t.TempDir()
@@ -94,7 +94,7 @@ func TestRecovery_SwapOfBuiltin_PutBackThenSyncReplaces(t *testing.T) {
 // BDD: Given live foo and a legacy foo.replace-backup (pre-T9 publisher
 // leftover, F17), a start deletes the backup with one INFO line; foo and its
 // history are unchanged.
-// Traces to: skills-spec-r13.md §9.3 legacy table row 2 (r2.1 F-28), S-11.10.
+// Traces to: skills-spec-r15.md §9.3 legacy table row 2 (r2.1 F-28), S-11.10.
 func TestRecovery_LegacyBackup_LivePresent_Deleted(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := t.TempDir()
@@ -117,7 +117,7 @@ func TestRecovery_LegacyBackup_LivePresent_Deleted(t *testing.T) {
 // TestRecovery_LegacyBackup_LiveAbsent_PutBack (S-11.12).
 // BDD: Given live absent and a legacy foo.replace-backup, a start renames it
 // back to foo (the pre-T9 publisher's intent).
-// Traces to: skills-spec-r13.md §9.3 legacy table row 1, S-11.12.
+// Traces to: skills-spec-r15.md §9.3 legacy table row 1, S-11.12.
 func TestRecovery_LegacyBackup_LiveAbsent_PutBack(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := t.TempDir()
@@ -136,7 +136,7 @@ func TestRecovery_LegacyBackup_LiveAbsent_PutBack(t *testing.T) {
 // BDD: Given crash leftovers under system/skill-history/<id>/blobs/.incoming-*
 // and skills/.staging/.incoming-*, a start removes both; no committed
 // manifest can reference a temporary.
-// Traces to: skills-spec-r13.md §9.3 (capture-blob temporaries, r10
+// Traces to: skills-spec-r15.md §9.3 (capture-blob temporaries, r10
 // staging-scratch rule), §9.5 rule 8.
 func TestRecovery_CaptureTemporaries_RemovedAtStart(t *testing.T) {
 	root := t.TempDir()

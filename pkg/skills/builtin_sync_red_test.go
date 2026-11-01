@@ -3,7 +3,7 @@ package skills
 // RED tests — landing/skills (T9): built-ins read-only, synced at start,
 // retired (spec §8, test rows 22–23). Scenarios S-7.1, S-7.2, S-7.4, S-7.5,
 // S-7.10, S-7.6–S-7.9; dataset D-6 (start-up matrix).
-// Traces to: skills-spec-r13.md §8.1–§8.5, §16 US-7, §17.1 rows 22/23,
+// Traces to: skills-spec-r15.md §8.1–§8.5, §16 US-7, §17.1 rows 22/23,
 // §17.2 D-6.
 //
 // RED expectation: SyncBuiltins / RetireBuiltins / RetiredBuiltinNames /
@@ -142,7 +142,7 @@ func (g *seededGrants) holders(name string) []string {
 // TestSyncBuiltins_StartupMatrix (S-7.1 + D-6 rows for a current built-in):
 // stamped old content → replaced; stamped outside edit → replaced; missing →
 // installed; stamped equal → untouched (mtime unchanged).
-// Traces to: skills-spec-r13.md §8.2 case table, S-7.1, D-6.
+// Traces to: skills-spec-r15.md §8.2 case table, S-7.1, D-6.
 func TestSyncBuiltins_StartupMatrix(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -242,7 +242,7 @@ func TestSyncBuiltins_StartupMatrix(t *testing.T) {
 // TestSyncBuiltins_EditedUnstampedOverwritten_NoCustomCopy (S-7.2, r2.1
 // founder F-28 greenfield): an unstamped edited built-in is overwritten, no
 // <slug>-custom copy, grants unchanged, no banner.
-// Traces to: skills-spec-r13.md §8.2 (r2.1 F-28 row), S-7.2, E-7.
+// Traces to: skills-spec-r15.md §8.2 (r2.1 F-28 row), S-7.2, E-7.
 func TestSyncBuiltins_EditedUnstampedOverwritten_NoCustomCopy(t *testing.T) {
 	root := t.TempDir()
 	planDir := writeSkillFixture(t, root, "plan") // edited content, unstamped
@@ -264,7 +264,7 @@ func TestSyncBuiltins_EditedUnstampedOverwritten_NoCustomCopy(t *testing.T) {
 
 // TestSyncBuiltins_SecondStartIsIdempotent (S-7.4): after a full sync, a
 // second start changes nothing (folder mtime unchanged).
-// Traces to: skills-spec-r13.md §8.2, S-7.4.
+// Traces to: skills-spec-r15.md §8.2, S-7.4.
 func TestSyncBuiltins_SecondStartIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	planDir := writeSkillFixture(t, root, "plan")
@@ -283,7 +283,7 @@ func TestSyncBuiltins_SecondStartIsIdempotent(t *testing.T) {
 
 // TestSyncBuiltins_UnstampedEqual_GetsStampOnly (S-7.5): content equals
 // shipped → only the stamp is written, no copy.
-// Traces to: skills-spec-r13.md §8.2 (stamp-only row, SD-1), S-7.5.
+// Traces to: skills-spec-r15.md §8.2 (stamp-only row, SD-1), S-7.5.
 func TestSyncBuiltins_UnstampedEqual_GetsStampOnly(t *testing.T) {
 	root := t.TempDir()
 	planDir := filepath.Join(root, "plan")
@@ -308,7 +308,7 @@ func TestSyncBuiltins_UnstampedEqual_GetsStampOnly(t *testing.T) {
 
 // TestSyncBuiltins_RemovesStaleSeedStaging (S-7.10, F4): stale
 // skills/.seed-<name>-* entries are removed first.
-// Traces to: skills-spec-r13.md §8.2 (stale .seed-* removal, F4), S-7.10.
+// Traces to: skills-spec-r15.md §8.2 (stale .seed-* removal, F4), S-7.10.
 func TestSyncBuiltins_RemovesStaleSeedStaging(t *testing.T) {
 	root := t.TempDir()
 	stale := filepath.Join(root, ".seed-plan-123")
@@ -324,7 +324,7 @@ func TestSyncBuiltins_RemovesStaleSeedStaging(t *testing.T) {
 // TestRetireBuiltins_StampedFolderDeleted_GrantRemoved (S-7.6): a stamped
 // retired built-in folder is deleted and the name is removed from all 12
 // granting agents.
-// Traces to: skills-spec-r13.md §8.4 (stamped row), S-7.6, Skills NQ2 A.
+// Traces to: skills-spec-r15.md §8.4 (stamped row), S-7.6, Skills NQ2 A.
 func TestRetireBuiltins_StampedFolderDeleted_GrantRemoved(t *testing.T) {
 	root := t.TempDir()
 	handoffDir := writeSkillFixture(t, root, "handoff")
@@ -351,7 +351,7 @@ func TestRetireBuiltins_StampedFolderDeleted_GrantRemoved(t *testing.T) {
 
 // TestRetireBuiltins_DanglingNameRemoved (S-7.7): no summarize folder; the
 // dangling grant name is removed.
-// Traces to: skills-spec-r13.md §8.4 (no-folder row), S-7.7.
+// Traces to: skills-spec-r15.md §8.4 (no-folder row), S-7.7.
 func TestRetireBuiltins_DanglingNameRemoved(t *testing.T) {
 	root := t.TempDir()
 	grants := newSeededGrants("summarize", "agent-a")
@@ -366,7 +366,7 @@ func TestRetireBuiltins_DanglingNameRemoved(t *testing.T) {
 
 // TestRetireBuiltins_UnstampedFolderKept (S-7.8): an unstamped retired folder
 // and its grants are untouched; skill.builtin_retired_kept once per start.
-// Traces to: skills-spec-r13.md §8.4 (unstamped row), S-7.8.
+// Traces to: skills-spec-r15.md §8.4 (unstamped row), S-7.8.
 func TestRetireBuiltins_UnstampedFolderKept(t *testing.T) {
 	root := t.TempDir()
 	summarizeDir := writeSkillFixture(t, root, "summarize") // unstamped
@@ -385,7 +385,7 @@ func TestRetireBuiltins_UnstampedFolderKept(t *testing.T) {
 // TestRetireBuiltins_SkippedWhenABuiltinInstallFailed (S-7.9): a current
 // built-in install failure skips retirement (the deleteOrphanedDefineDoneDir
 // guard's property, kept).
-// Traces to: skills-spec-r13.md §8.4 (ordering guard), S-7.9.
+// Traces to: skills-spec-r15.md §8.4 (ordering guard), S-7.9.
 func TestRetireBuiltins_SkippedWhenABuiltinInstallFailed(t *testing.T) {
 	root := t.TempDir()
 	summarizeDir := writeSkillFixture(t, root, "summarize")

@@ -4,7 +4,7 @@ package systools_test
 // registered tool set" surface (§15 item 1): the composition boot registers
 // (systools.AllTools — the same function buildCentralBuiltinRegistry calls)
 // must not contain a tool named create_skill or remove_skill.
-// Traces to: skills-spec-r13.md §15 item 1, §17.1 row 4, SC-002.
+// Traces to: skills-spec-r15.md §15 item 1, §17.1 row 4, SC-002.
 //
 // RED expectation: AllTools still returns both retired tools — the
 // assertion below fails on the baseline.
@@ -20,7 +20,7 @@ import (
 // TestRetiredTools_GoneFromRegisteredSet (§15 item 1).
 // BDD: the real registered tool set (AllTools, the system family boot
 // registers) contains neither retired name.
-// Traces to: skills-spec-r13.md §15 item 1, T-E9b.
+// Traces to: skills-spec-r15.md §15 item 1, T-E9b.
 func TestRetiredTools_GoneFromRegisteredSet(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	registered := systools.AllTools(deps)

@@ -8,7 +8,7 @@ package fspolicy
 // skill), §6.1 item 1 (HomeGuard contract), §6.1 item 2 (inventory-first
 // order), §6.1 item 3 (skills leaves BaseAllowRelative) and the S-2.9
 // regression pair (whole-system protection exists at the pin, V-43).
-// Traces to: skills-spec-r13.md §6.1 items 1–3 + item 7, S-2.2–S-2.4,
+// Traces to: skills-spec-r15.md §6.1 items 1–3 + item 7, S-2.2–S-2.4,
 // S-2.9 (regression), S-2.10 read half, §17.1 rows 5 and 8.
 //
 // RED expectation: HomeGuard lacks the two new fields, skills is still in
@@ -29,7 +29,7 @@ import (
 // BDD: FSPolicy.HomeGuard gains SkillFolders []string (real paths of the
 // loadable set) and SkillsReadAll bool (effective edit_skill ≠ deny), filled
 // only by tools.ResolveTurnFSPolicy.
-// Traces to: skills-spec-r13.md §6.1 item 1, §17.1 row 5.
+// Traces to: skills-spec-r15.md §6.1 item 1, §17.1 row 5.
 func TestSkillsBoundary_HomeGuardContract(t *testing.T) {
 	guardType := reflect.TypeOf(HomeGuard{})
 
@@ -49,7 +49,7 @@ func TestSkillsBoundary_HomeGuardContract(t *testing.T) {
 // skills/.staging/x, .swap/x, .hidden, plan.replace-backup/SKILL.md and any
 // non-slug first component are refused (inventory denies). The skills root
 // itself is refused too (§6.1 item 2's `first == ""` leg).
-// Traces to: skills-spec-r13.md §6.1 item 2, S-2.4.
+// Traces to: skills-spec-r15.md §6.1 item 2, S-2.4.
 func TestSkillsBoundary_RegistryControlEntriesRefused(t *testing.T) {
 	home := realHome(t)
 	// A maximally permissive reader: SkillsReadAll semantics are asserted
@@ -92,7 +92,7 @@ func TestSkillsBoundary_RegistryControlEntriesRefused(t *testing.T) {
 // an ungranted folder is denied for a non-editor (edit_skill: deny, S-2.2);
 // with SkillsReadAll=true (an editor, S-2.3's read half) every valid-slug
 // skill folder is readable.
-// Traces to: skills-spec-r13.md §6.1 item 2, S-2.2, S-2.3.
+// Traces to: skills-spec-r15.md §6.1 item 2, S-2.2, S-2.3.
 func TestSkillsBoundary_LoadableSetGrantFiltered(t *testing.T) {
 	home := realHome(t)
 
@@ -127,7 +127,7 @@ func TestSkillsBoundary_LoadableSetGrantFiltered(t *testing.T) {
 // TestSkillsBoundary_InventoryFirstOrder (§6.1 item 2).
 // BDD: inventoryDenies runs before every mount, path grant, setup root and
 // work dir — no allowance re-admits a refused skill path.
-// Traces to: skills-spec-r13.md §6.1 item 2 (order sentence).
+// Traces to: skills-spec-r15.md §6.1 item 2 (order sentence).
 func TestSkillsBoundary_InventoryFirstOrder(t *testing.T) {
 	home := realHome(t)
 	pol := FSPolicy{
@@ -152,7 +152,7 @@ func TestSkillsBoundary_InventoryFirstOrder(t *testing.T) {
 // TestSkillsBoundary_SkillsLeaveBaseAllowRelative (§6.1 item 3).
 // BDD: `skills` is removed from BaseAllowRelative; the turn-free protection
 // predicate therefore reports skill paths as protected.
-// Traces to: skills-spec-r13.md §6.1 item 3.
+// Traces to: skills-spec-r15.md §6.1 item 3.
 func TestSkillsBoundary_SkillsLeaveBaseAllowRelative(t *testing.T) {
 	assert.NotContains(t, BaseAllowRelative, "skills",
 		"RED: skills is still a base allow entry (§6.1 item 3 removes it)")
@@ -166,7 +166,7 @@ func TestSkillsBoundary_SkillsLeaveBaseAllowRelative(t *testing.T) {
 // BDD: dot-files inside a granted skill folder are part of that skill —
 // whoever may read the skill may read them (they are display-hidden, not
 // access-controlled).
-// Traces to: skills-spec-r13.md §6.1 item 7, S-2.10 read half.
+// Traces to: skills-spec-r15.md §6.1 item 7, S-2.10 read half.
 func TestSkillsBoundary_DotFilesInsideSkillArePartOfIt(t *testing.T) {
 	home := realHome(t)
 	pol := FSPolicy{HomeGuard: configuredSkillGuard(t, home, false)}
@@ -180,7 +180,7 @@ func TestSkillsBoundary_DotFilesInsideSkillArePartOfIt(t *testing.T) {
 // regression pair, row 8; V-43: whole-system protection exists at the pin).
 // BDD: read AND write of system/skill-history/ are refused for a child with
 // file tools in God Mode — must PASS on the baseline and the candidate.
-// Traces to: skills-spec-r13.md S-2.9, §17.1 row 8, SC-001.
+// Traces to: skills-spec-r15.md S-2.9, §17.1 row 8, SC-001.
 func TestSkillsBoundary_SystemSubtreeProtected_Regression(t *testing.T) {
 	home := realHome(t)
 	history := filepath.Join(home, "system", "skill-history", "foo", "versions", "v1.json")
@@ -198,7 +198,7 @@ func TestSkillsBoundary_SystemSubtreeProtected_Regression(t *testing.T) {
 // TestSkillsBoundary_InventoryRulesCarveOuts (S-2.9's kernel-adjacent shape).
 // BDD: InventoryGuarded — the operator-pattern adapter's veto — holds for
 // the system subtree regardless of allowances.
-// Traces to: skills-spec-r13.md §6.1 item 6.
+// Traces to: skills-spec-r15.md §6.1 item 6.
 func TestSkillsBoundary_InventoryRulesCarveOuts(t *testing.T) {
 	home := realHome(t)
 	pol := FSPolicy{

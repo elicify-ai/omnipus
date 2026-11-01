@@ -9,7 +9,7 @@ package tools
 // find none of the seven gone-forever symbols outside _test.go files — with
 // the r3 feasibility assertions proving the gate rejects a real leftover
 // skills symbol and accepts the four unrelated live workspace identifiers.
-// Traces to: skills-spec-r13.md §15 items 1–3, §17.1 row 4, SC-002.
+// Traces to: skills-spec-r15.md §15 items 1–3, §17.1 row 4, SC-002.
 //
 // RED expectation: create_skill/remove_skill still exist as registered
 // tools, auto-approve entries, a golden-definitions row and an
@@ -79,7 +79,7 @@ func goFilesUnder(t *testing.T, root, rel string) []string {
 
 // TestRetiredTools_GoneFromAutoApprove (§15 item 1).
 // BDD: autoApproveClasses classifies neither retired name.
-// Traces to: skills-spec-r13.md §15 item 1, T-E9b.
+// Traces to: skills-spec-r15.md §15 item 1, T-E9b.
 func TestRetiredTools_GoneFromAutoApprove(t *testing.T) {
 	for _, name := range retiredToolNamesUnderGate {
 		_, ok := autoApproveClasses[name]
@@ -91,7 +91,7 @@ func TestRetiredTools_GoneFromAutoApprove(t *testing.T) {
 // BDD: the names appear ONLY in the allowed places this package owns — the
 // refusal-answer map (retiredToolCanonicalNames) and T8's prune input
 // (RetiredToolNames) — and both actually carry the two names.
-// Traces to: skills-spec-r13.md §15 item 1, SC-002.
+// Traces to: skills-spec-r15.md §15 item 1, SC-002.
 func TestRetiredTools_RefusalAnswersPresent(t *testing.T) {
 	for _, name := range retiredToolNamesUnderGate {
 		canonical, ok := retiredToolCanonicalNames[name]
@@ -107,7 +107,7 @@ func TestRetiredTools_RefusalAnswersPresent(t *testing.T) {
 
 // TestRetiredTools_GoldenProviderDefs (§15 item 1).
 // BDD: provider_defs.golden.json contains neither retired name.
-// Traces to: skills-spec-r13.md §15 item 1, T-E9b.
+// Traces to: skills-spec-r15.md §15 item 1, T-E9b.
 func TestRetiredTools_GoldenProviderDefs(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "provider_defs.golden.json"))
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestRetiredTools_GoldenProviderDefs(t *testing.T) {
 // TestRetiredTools_NoToolTypeImplementsRetiredName (§15 item 1).
 // BDD: no type in pkg/ implements a tool whose Name() returns either name —
 // an AST scan over non-test files, not a grep.
-// Traces to: skills-spec-r13.md §15 item 1, T-E9b.
+// Traces to: skills-spec-r15.md §15 item 1, T-E9b.
 func TestRetiredTools_NoToolTypeImplementsRetiredName(t *testing.T) {
 	root := repoRootFromPkgTools(t)
 	needle := map[string]bool{"`create_skill`": true, "`remove_skill`": true,
@@ -163,7 +163,7 @@ func TestRetiredTools_NoToolTypeImplementsRetiredName(t *testing.T) {
 // .skill-origin.json through a file-write helper. (.skill-origin.json may
 // appear only in contentRevision's skip list and the stamp writer — reads
 // and comparisons, never creations.)
-// Traces to: skills-spec-r13.md §15 item 2, T-E9b.
+// Traces to: skills-spec-r15.md §15 item 2, T-E9b.
 func TestRetiredTools_NoOriginMetaWriter(t *testing.T) {
 	root := repoRootFromPkgTools(t)
 
@@ -278,7 +278,7 @@ func textGateMatches(src string) []string {
 // TestRetiredTools_TextGate (§15 item 3).
 // BDD: the symbol-boundary text gate over pkg/ and cmd/ finds none of the
 // seven gone-forever symbols outside _test.go files.
-// Traces to: skills-spec-r13.md §15 item 3, SC-002, row 4.
+// Traces to: skills-spec-r15.md §15 item 3, SC-002, row 4.
 func TestRetiredTools_TextGate(t *testing.T) {
 	root := repoRootFromPkgTools(t)
 	var offenders []string
@@ -300,7 +300,7 @@ func TestRetiredTools_TextGate(t *testing.T) {
 // live workspace identifiers unchanged — passing the gate never requires
 // renaming an unrelated API. The four identifiers are additionally verified
 // to still exist in the real sources, so the acceptance is not vacuous.
-// Traces to: skills-spec-r13.md §15 item 3 (r3 feasibility), row 4.
+// Traces to: skills-spec-r15.md §15 item 3 (r3 feasibility), row 4.
 func TestRetiredTools_TextGateFeasibility(t *testing.T) {
 	t.Run("rejects a leftover skills symbol", func(t *testing.T) {
 		leftover := "package skills\n\n// leftover\nfunc SeedDefaults() {}\n"

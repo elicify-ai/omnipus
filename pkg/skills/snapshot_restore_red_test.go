@@ -7,7 +7,7 @@ package skills
 // (R8-MIN-002). Load-side halves of S-5.20/S-5.22/S-5.23 live in the pkg/tools
 // loading-path tests.
 // Scenarios: S-5.16, S-5.17, S-5.18, S-5.19, S-5.20 (mutation legs), D-9.
-// Traces to: skills-spec-r13.md §9.5, §7.2, §17.1 rows 39/40/41, §17.2 D-9.
+// Traces to: skills-spec-r15.md §9.5, §7.2, §17.1 rows 39/40/41, §17.2 D-9.
 
 import (
 	"errors"
@@ -37,7 +37,7 @@ func blobNames(t *testing.T, historyRoot, slug string) []string {
 // V2 capturing it (V1 predates .notes), restore V1 removes .notes (folder
 // matches V1 byte-exact) and restore V2 brings it back byte-exact; both pass
 // validation.
-// Traces to: skills-spec-r13.md §6.1 item 7 + §7.2 restore row (SD-16),
+// Traces to: skills-spec-r15.md §6.1 item 7 + §7.2 restore row (SD-16),
 // §17.1 row 39, S-5.16.
 func TestRestore_ReproducesNestedDotContent(t *testing.T) {
 	root := t.TempDir()
@@ -77,7 +77,7 @@ func TestRestore_ReproducesNestedDotContent(t *testing.T) {
 // the target text — the canary's bytes appear nowhere in blobs/ and the probe
 // records zero open attempts on the canary during capture; restore V3 is
 // refused WHOLLY; restore V1 returns the pre-link state.
-// Traces to: skills-spec-r13.md §9.5 capture contract + canary oracle,
+// Traces to: skills-spec-r15.md §9.5 capture contract + canary oracle,
 // §17.1 row 41, S-5.17.
 func TestSnapshot_SymlinkCanary(t *testing.T) {
 	root := t.TempDir()
@@ -95,21 +95,26 @@ func TestSnapshot_SymlinkCanary(t *testing.T) {
 	require.NoError(t, os.WriteFile(canary, []byte("CANARY-BYTES-42"), 0o644))
 	require.NoError(t, os.Symlink(canary, filepath.Join(appDir, "link.md")))
 
-	var canaryOpens int
+	expected := readLiveRevision(t, appDir) // outside the measured capture, so revision lookup cannot satisfy its control
+	var canaryOpens, includedCaptureOpens int
 	prevProbe := CaptureOpenProbe
 	CaptureOpenProbe = func(op, path string) {
 		if path == canary {
 			canaryOpens++
 		}
+		if op == "capture" && path == filepath.Join(appDir, "SKILL.md") {
+			includedCaptureOpens++
+		}
 	}
 	defer func() { CaptureOpenProbe = prevProbe }()
 
 	out3, v3 := commitWrite(t, root, "foo", "SKILL.md",
-		validSkillMD("foo", "v3", "v3 body"), readLiveRevision(t, appDir))
+		validSkillMD("foo", "v3", "v3 body"), expected)
+	require.Greater(t, includedCaptureOpens, 0, "positive control: this same production capture reports an included regular-file open; a disconnected probe must fail")
 
 	// The canary's bytes appear nowhere in the blob store.
 	blobsDir := filepath.Join(historyRoot, "foo", "blobs")
-	require.NoError(t, os.MkdirAll(blobsDir, 0o755))
+	require.DirExists(t, blobsDir, "the real committed capture, not the test, must create its blob store")
 	for _, b := range blobNames(t, historyRoot, "foo") {
 		raw, err := os.ReadFile(filepath.Join(blobsDir, b))
 		require.NoError(t, err)
@@ -150,7 +155,7 @@ func TestSnapshot_SymlinkCanary(t *testing.T) {
 // and V3 = delete_skill; restore V2 refused (no valid SKILL.md); restore V3
 // refused (delete_skill selection); refusals leave the live state deleted;
 // restore V1 rebuilds the pre-break state; recreate-then-delete completes.
-// Traces to: skills-spec-r13.md §7.2 restore row, §9.5, §17.1 row 41, S-5.18.
+// Traces to: skills-spec-r15.md §7.2 restore row, §9.5, §17.1 row 41, S-5.18.
 func TestSnapshot_RetainedNotRestorable(t *testing.T) {
 	root := t.TempDir()
 	historyRoot := SkillHistoryRoot(root)
@@ -255,7 +260,7 @@ func TestSnapshot_RetainedNotRestorable(t *testing.T) {
 // instructions.md is refused with the resulting-instruction reason — nothing
 // written, revision unchanged, the skill still loadable. BDD leg 2: deleting
 // an ordinary helper commits.
-// Traces to: skills-spec-r13.md §7.2 delete_file row, §17.1 row 11, S-5.19.
+// Traces to: skills-spec-r15.md §7.2 delete_file row, §17.1 row 11, S-5.19.
 func TestDeleteFile_ResultingInstructionValidity(t *testing.T) {
 	t.Run("leg 1 symlinked instruction target deletion refused", func(t *testing.T) {
 		root := t.TempDir()
@@ -303,7 +308,7 @@ func TestDeleteFile_ResultingInstructionValidity(t *testing.T) {
 // every mutation — including delete — is refused with the capture-time reason
 // before anything changes; the consumed counter stops at the limit + one
 // buffer; delete included.
-// Traces to: skills-spec-r13.md §7.2 capture-time enforcement, §9.5 bounded
+// Traces to: skills-spec-r15.md §7.2 capture-time enforcement, §9.5 bounded
 // capture, §17.1 row 41, S-5.20.
 func TestBoundedCapture_MutationRefusedBeforeAnythingChanges(t *testing.T) {
 	const perFileLimit = 10485760
@@ -326,15 +331,21 @@ func TestBoundedCapture_MutationRefusedBeforeAnythingChanges(t *testing.T) {
 				make([]byte, perFileLimit+1), 0o644))
 		})
 
+		dataPath := filepath.Join(root, "foo", "data.bin")
+		expected := readLiveRevision(t, filepath.Join(root, "foo"))
 		var consumed int64
 		prevConsumed := CaptureConsumedProbe
-		CaptureConsumedProbe = func(path string, n int64) { consumed = n }
+		CaptureConsumedProbe = func(path string, n int64) {
+			if path == dataPath && n > consumed {
+				consumed = n // running total: retain its maximum, never sum it
+			}
+		}
 		defer func() { CaptureConsumedProbe = prevConsumed }()
 
 		_, err := ApplyChange(root, ChangeRequest{
 			Kind: KindEdit, Slug: "foo", Path: "clean.md",
 			Content: []byte("clean\n"),
-			Expect:  Expectation{Revision: readLiveRevision(t, filepath.Join(root, "foo"))},
+			Expect:  Expectation{Revision: expected},
 			Actor:   ChangeActor{Kind: "agent", AgentID: "a", Tool: "write_file"},
 		})
 		require.Error(t, err, "refused before anything changes")
@@ -343,6 +354,7 @@ func TestBoundedCapture_MutationRefusedBeforeAnythingChanges(t *testing.T) {
 			"byte-exact §7.2 per-file capture-time reason")
 		assert.NotContains(t, err.Error(), "data.bin\":", "the reason names the offending path")
 		assert.Contains(t, err.Error(), "data.bin")
+		require.Greater(t, consumed, int64(0), "positive control: ApplyChange's actual data.bin reader must report consumption; a disconnected counter is not bounded-read proof")
 		assert.LessOrEqual(t, consumed, int64(perFileLimit+65536),
 			"consumed counter stops at the enforced limit plus at most one buffer")
 	})
@@ -401,7 +413,7 @@ func TestBoundedCapture_MutationRefusedBeforeAnythingChanges(t *testing.T) {
 // executable bit flipped → different content revisions from the proposed
 // contract (the pinned tree hash is NOT an oracle: it hashes entry types,
 // never permission bits).
-// Traces to: skills-spec-r13.md §7.3 contentRevision, D-9 (r9 fixture).
+// Traces to: skills-spec-r15.md §7.3 contentRevision, D-9 (r9 fixture).
 func TestExecBitRevisionFixture(t *testing.T) {
 	buildTree := func(t *testing.T, exec bool) string {
 		t.Helper()

@@ -3,7 +3,7 @@ package skills
 // RED tests — landing/skills (T9): retention counts supersession, not
 // creation (§9.1, r3 R2-CRIT-001). Scenarios S-5.6, S-5.7, S-5.8, S-5.13,
 // S-5.14, S-11.18's sweep halves; dataset D-4.
-// Traces to: skills-spec-r13.md §9.1, §16 US-5, §17.1 rows 16/38, §17.2 D-4.
+// Traces to: skills-spec-r15.md §9.1, §16 US-5, §17.1 rows 16/38, §17.2 D-4.
 
 import (
 	"crypto/sha256"
@@ -165,7 +165,7 @@ func manifestIDs(t *testing.T, historyRoot, slug string) []string {
 // successor V2 is 100 days old), V2/V3/V4 kept, unreferenced blobs removed.
 // A version's own creation age decides nothing — V2 is 100 days old and
 // retained.
-// Traces to: skills-spec-r13.md §9.1 rule 1, S-5.6, D-4.
+// Traces to: skills-spec-r15.md §9.1 rule 1, S-5.6, D-4.
 func TestRetention_SupersessionClock(t *testing.T) {
 	now := time.Now().UTC()
 	historyRoot := t.TempDir()
@@ -203,7 +203,7 @@ func TestRetention_SupersessionClock(t *testing.T) {
 // sweep retains V1 with its full file list despite its age; boundary both
 // ways on the successor age; the whole history goes exactly when the
 // delete_skill manifest passes 90 days.
-// Traces to: skills-spec-r13.md §9.1 rule 2, S-5.13.
+// Traces to: skills-spec-r15.md §9.1 rule 2, S-5.13.
 func TestRetention_DeleteHeadKeepsPreDeletionState_FullWindow(t *testing.T) {
 	now := time.Now().UTC()
 
@@ -258,7 +258,7 @@ func TestRetention_DeleteHeadKeepsPreDeletionState_FullWindow(t *testing.T) {
 
 // TestRetention_NewestSupersededToday_Kept (S-5.14): no delete — a version
 // superseded today stays regardless of its own age.
-// Traces to: skills-spec-r13.md §9.1 rule 1, S-5.14.
+// Traces to: skills-spec-r15.md §9.1 rule 1, S-5.14.
 func TestRetention_NewestSupersededToday_Kept(t *testing.T) {
 	now := time.Now().UTC()
 	historyRoot := t.TempDir()
@@ -277,7 +277,7 @@ func TestRetention_NewestSupersededToday_Kept(t *testing.T) {
 // (S-5.8 + §9.1 scope rule). BDD: Given retention disabled, a sweep removes
 // nothing from committed history — and per §9.1's scope (r9) a capture
 // temporary under blobs/.incoming-* is NOT its concern either.
-// Traces to: skills-spec-r13.md §9.1 scope + IsDisabled, S-5.8.
+// Traces to: skills-spec-r15.md §9.1 scope + IsDisabled, S-5.8.
 func TestRetention_Disabled_KeepsCommittedHistory_NeverTouchesCaptureTemporaries(t *testing.T) {
 	now := time.Now().UTC()
 	historyRoot := t.TempDir()
@@ -308,7 +308,7 @@ func TestRetention_Disabled_KeepsCommittedHistory_NeverTouchesCaptureTemporaries
 // content version V4 commits (the detection trigger's effect), the SECOND
 // sweep applies rule 1 (V1 removed, V2/V3 kept by young successors, V4 newest
 // never removed).
-// Traces to: skills-spec-r13.md §9.1 rules 1–2, §7.1 step 6, S-11.18.
+// Traces to: skills-spec-r15.md §9.1 rules 1–2, §7.1 step 6, S-11.18.
 func TestRetention_S11_18HeadRules(t *testing.T) {
 	now := time.Now().UTC()
 	historyRoot := t.TempDir()

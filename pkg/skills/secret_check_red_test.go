@@ -8,7 +8,7 @@ package skills
 // store → SECRET_CHECK_UNAVAILABLE with the reason and the readable names,
 // fails closed), S-4.6 (no store → committed), S-4.7 (a restore whose
 // version contains a now-stored value is refused).
-// Traces to: skills-spec-r13.md §7.4, S-4.2–S-4.7, §17.1 rows 12/13.
+// Traces to: skills-spec-r15.md §7.4, S-4.2–S-4.7, §17.1 rows 12/13.
 //
 // RED expectation: ApplyChange is a scaffold and SecretValuesProvider is
 // nil — every RED assertion below fails on the baseline.
@@ -47,7 +47,7 @@ func namedSecrets(pairs ...[2]string) func() ([]credentials.NamedValue, error) {
 // BDD: a write whose would-be content contains a stored 4-byte value is
 // refused SECRET_IN_SKILL naming the secret; the value itself appears
 // nowhere in the refusal.
-// Traces to: skills-spec-r13.md §7.4, S-4.2.
+// Traces to: skills-spec-r15.md §7.4, S-4.2.
 func TestSecretCheck_ValueInContent_RefusedNamedNotEchoed(t *testing.T) {
 	root := t.TempDir()
 	appDir := writeSkillFixture(t, root, "foo")
@@ -71,7 +71,7 @@ func TestSecretCheck_ValueInContent_RefusedNamedNotEchoed(t *testing.T) {
 // TestSecretCheck_ThreeByteValue_Exempt_Committed (S-4.3).
 // BDD: a stored 3-byte value in the content does not refuse — the check's
 // threshold is 4 bytes; the write commits.
-// Traces to: skills-spec-r13.md §7.4, S-4.3.
+// Traces to: skills-spec-r15.md §7.4, S-4.3.
 func TestSecretCheck_ThreeByteValue_Exempt_Committed(t *testing.T) {
 	root := t.TempDir()
 	appDir := writeSkillFixture(t, root, "foo")
@@ -90,7 +90,7 @@ func TestSecretCheck_ThreeByteValue_Exempt_Committed(t *testing.T) {
 // TestSecretCheck_OAuthSubValue_RefusedNamed (S-4.4).
 // BDD: content containing an OAuth access_token sub-value is refused naming
 // <NAME>.access_token.
-// Traces to: skills-spec-r13.md §7.4, S-4.4.
+// Traces to: skills-spec-r15.md §7.4, S-4.4.
 func TestSecretCheck_OAuthSubValue_RefusedNamed(t *testing.T) {
 	root := t.TempDir()
 	appDir := writeSkillFixture(t, root, "foo")
@@ -112,7 +112,7 @@ func TestSecretCheck_OAuthSubValue_RefusedNamed(t *testing.T) {
 // BDD: a locked/unreadable/damaged store makes EVERY write refuse
 // SECRET_CHECK_UNAVAILABLE with the reason and the readable names — nothing
 // commits while the check cannot run.
-// Traces to: skills-spec-r13.md §7.4, S-4.5.
+// Traces to: skills-spec-r15.md §7.4, S-4.5.
 func TestSecretCheck_StoreUnavailable_FailsClosed(t *testing.T) {
 	root := t.TempDir()
 	appDir := writeSkillFixture(t, root, "foo")
@@ -154,7 +154,7 @@ func TestSecretCheck_StoreUnavailable_FailsClosed(t *testing.T) {
 
 // TestSecretCheck_NoStore_Committed (S-4.6).
 // BDD: with no store (nil provider or empty enumeration) the write commits.
-// Traces to: skills-spec-r13.md §7.4, S-4.6.
+// Traces to: skills-spec-r15.md §7.4, S-4.6.
 func TestSecretCheck_NoStore_Committed(t *testing.T) {
 	root := t.TempDir()
 	appDir := writeSkillFixture(t, root, "foo")
@@ -174,7 +174,7 @@ func TestSecretCheck_NoStore_Committed(t *testing.T) {
 // BDD: a version captured BEFORE a value was stored is refused on restore —
 // the restore's content would reintroduce the secret; the live state is
 // unchanged.
-// Traces to: skills-spec-r13.md §7.4, S-4.7.
+// Traces to: skills-spec-r15.md §7.4, S-4.7.
 func TestSecretCheck_RestoreRefused_WhenVersionGainsAStoredValue(t *testing.T) {
 	root := t.TempDir()
 	appDir := writeSkillFixture(t, root, "foo")

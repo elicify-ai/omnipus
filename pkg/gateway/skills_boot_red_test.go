@@ -2,7 +2,9 @@ package gateway
 
 // RED reconciliation — r15 §8.5, S-7.13/S-7.14, CHECK-09/CHECK-11.
 // Helper tests and actual startup wiring are separate claims. RetireBuiltins
-// still removes product-retired grants; SD-30 forbids ordinary-deletion sweeps.
+// still removes product-retired grants; SD-30 removes deletion-dependent
+// correctness sweeps. Answered Q-S3 (2026-10-31) separately requires best-effort
+// managed-deletion hygiene, never an authorization dependency.
 import (
 	"bufio"
 	"context"

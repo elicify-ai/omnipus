@@ -4,7 +4,7 @@ package skills
 // activation header). Scenarios S-1.1 (full registry header), S-1.2
 // (built-in header), S-1.3 (200-file cap), S-1.4 (allowed-tools spellings
 // regression pair), S-1.6 (outside change).
-// Traces to: skills-spec-r13.md §5.7, §16 US-1, §17.1 rows 9 and 18.
+// Traces to: skills-spec-r15.md §5.7, §16 US-1, §17.1 rows 9 and 18.
 //
 // RED expectation: LoadForActivation is a scaffold that refuses — every
 // header assertion below fails on the baseline. S-1.4 is a named regression
@@ -51,7 +51,7 @@ func loadHeader(t *testing.T, skillsRoot, slug string, opts LoadActivationOption
 // "sh definitely-missing-xyz" — the header carries the absolute real folder,
 // 3 files, revision, version, the needs line with one present and one
 // MISSING entry, and edit per policy; dot-files are absent from the list.
-// Traces to: skills-spec-r13.md §5.7, S-1.1.
+// Traces to: skills-spec-r15.md §5.7, S-1.1.
 func TestLoadHeader_RegistrySkillFullFormat(t *testing.T) {
 	root := t.TempDir()
 	dir := fixtureWithFiles(t, root, "pdf-tools", "reference/forms.md", "scripts/extract.py")
@@ -89,7 +89,7 @@ func TestLoadHeader_RegistrySkillFullFormat(t *testing.T) {
 
 // TestLoadHeader_EditDeniedClause (S-1.1's `edit:` per policy leg).
 // BDD: with edit_skill denied the header's edit clause flips.
-// Traces to: skills-spec-r13.md §5.7, S-1.1.
+// Traces to: skills-spec-r15.md §5.7, S-1.1.
 func TestLoadHeader_EditDeniedClause(t *testing.T) {
 	root := t.TempDir()
 	writeSkillFixture(t, root, "plain")
@@ -102,7 +102,7 @@ func TestLoadHeader_EditDeniedClause(t *testing.T) {
 // BDD: Skill(plan) for a granted built-in — shelf="builtin", no revision or
 // version attribute, "shipped with Omnipus" last change, edit refused with
 // the copy advice.
-// Traces to: skills-spec-r13.md §5.7, S-1.2.
+// Traces to: skills-spec-r15.md §5.7, S-1.2.
 func TestLoadHeader_BuiltinShelf(t *testing.T) {
 	root := t.TempDir()
 	builtinRoot := t.TempDir()
@@ -126,7 +126,7 @@ func TestLoadHeader_BuiltinShelf(t *testing.T) {
 // TestLoadHeader_FileListCap (S-1.3).
 // BDD: a skill with 250 files lists 200 and names the overflow with the
 // list_directory pointer.
-// Traces to: skills-spec-r13.md §5.7, S-1.3.
+// Traces to: skills-spec-r15.md §5.7, S-1.3.
 func TestLoadHeader_FileListCap(t *testing.T) {
 	root := t.TempDir()
 	helpers := make([]string, 0, 249)
@@ -150,7 +150,7 @@ func TestLoadHeader_FileListCap(t *testing.T) {
 // pair, SC-001: must pass on the baseline; guards the parser consolidation).
 // BDD: `allowed-tools` as a YAML sequence and as a space list parse to the
 // identical tool set through the LIVE loader.
-// Traces to: skills-spec-r13.md S-1.4, §17.1 row 9, SC-001.
+// Traces to: skills-spec-r15.md S-1.4, §17.1 row 9, SC-001.
 func TestLoadHeader_AllowedToolsSpellings_Regression(t *testing.T) {
 	root := t.TempDir()
 	seqDir := writeSkillFixture(t, root, "seq-form")
@@ -175,7 +175,7 @@ func TestLoadHeader_AllowedToolsSpellings_Regression(t *testing.T) {
 // TestLoadHeader_OutsideChange (S-1.6).
 // BDD: after an outside edit, the header reads "unknown (changed outside
 // Omnipus)" and an external_change version exists.
-// Traces to: skills-spec-r13.md §5.7, §9.4, S-1.6, §17.1 row 18.
+// Traces to: skills-spec-r15.md §5.7, §9.4, S-1.6, §17.1 row 18.
 func TestLoadHeader_OutsideChange(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSkillFixture(t, root, "foo")

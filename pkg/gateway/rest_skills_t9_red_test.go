@@ -6,7 +6,7 @@ package gateway
 // S-11.19's REST legs (failure envelopes validating against the reused C-9
 // ConfigurationMutationFailureState; the r5 rule that a cleanup warning
 // rides the existing `message` field).
-// Traces to: skills-spec-r13.md §5.8, §16, §17.1 rows 17/36/42, C-4/C-5/C-6/C-9.
+// Traces to: skills-spec-r15.md §5.8, §16, §17.1 rows 17/36/42, C-4/C-5/C-6/C-9.
 //
 // RED expectation: the copy route is a scaffold (501), DELETE ignores the
 // revision query, the list rows lack has_local_changes, and no 500 leg
@@ -61,7 +61,7 @@ func t9Body(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 // TestRestDelete_RevisionEnvelope (S-6.10, M-09).
 // BDD: DELETE with the current revision deletes (delete_skill by person);
 // with a stale revision 409 SKILL_CHANGED; with no revision 400.
-// Traces to: skills-spec-r13.md §5.8 delete row, S-6.10.
+// Traces to: skills-spec-r15.md §5.8 delete row, S-6.10.
 func TestRestDelete_RevisionEnvelope(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
@@ -98,7 +98,7 @@ func TestRestDelete_RevisionEnvelope(t *testing.T) {
 // TestRestCopy_Route (S-6.5's REST legs, §5.8 copy row).
 // BDD: POST /skills/{name}/copy — 201 with the new skill; 400 invalid name;
 // 404 missing source; 409 taken name (any case).
-// Traces to: skills-spec-r13.md §5.8 copy row, D-1, S-6.5.
+// Traces to: skills-spec-r15.md §5.8 copy row, D-1, S-6.5.
 func TestRestCopy_Route(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
@@ -138,7 +138,7 @@ func TestRestCopy_Route(t *testing.T) {
 // TestRestList_HasLocalChanges (S-9.1, S-9.2 legs, S-9.4).
 // BDD: rows carry has_local_changes; fresh install false; after an outside
 // edit the flag is true at READ time and the read writes NO version.
-// Traces to: skills-spec-r13.md §5.8 GET row, §9.2 rule 2, S-9.1–S-9.4.
+// Traces to: skills-spec-r15.md §5.8 GET row, §9.2 rule 2, S-9.1–S-9.4.
 func TestRestList_HasLocalChanges(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
@@ -189,7 +189,7 @@ func TestRestList_HasLocalChanges(t *testing.T) {
 // FailureState shape (error_stage, persistence_status, activation_status,
 // changed_fields); a class-3 success maps the cleanup warning into `message`
 // and never invents a `warning` field.
-// Traces to: skills-spec-r13.md S-11.19, C-4/C-5/C-6/C-9, §17.1 row 42.
+// Traces to: skills-spec-r15.md S-11.19, C-4/C-5/C-6/C-9, §17.1 row 42.
 func TestRestS1119_FailureEnvelopes(t *testing.T) {
 	assertFailureEnvelope := func(t *testing.T, w *httptest.ResponseRecorder, wantStatus int) {
 		t.Helper()

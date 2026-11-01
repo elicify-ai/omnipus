@@ -6,7 +6,7 @@ package skills
 // S-11.16, S-11.17 (the session halves of the "seen"-record rules are
 // asserted at the tool level; the restart/detection halves at the boot and
 // loader levels — split noted in the traceability table).
-// Traces to: skills-spec-r13.md §7.6, §7.1 steps 5–7, §5.10 partial variants,
+// Traces to: skills-spec-r15.md §7.6, §7.1 steps 5–7, §5.10 partial variants,
 // §16 US-11, §17.1 row 33, §17.2 D-8.
 
 import (
@@ -26,7 +26,7 @@ import (
 // names the previous version id; the live file has the new content;
 // persistence partial. (The menu-generation bump and the session "seen"
 // clearing are asserted at the gateway/tool level.)
-// Traces to: skills-spec-r13.md §7.6 class 2, S-11.6.
+// Traces to: skills-spec-r15.md §7.6 class 2, S-11.6.
 func TestClass2_SingleFilePublished_ManifestWriteFails(t *testing.T) {
 	root := t.TempDir()
 	out0, vPrev := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
@@ -69,7 +69,7 @@ func TestClass2_SingleFilePublished_ManifestWriteFails(t *testing.T) {
 // BDD: Given a returned error injected into the blob write after a folder
 // replace published, Then the same class-2 outcome, and the previous state is
 // restorable from history.
-// Traces to: skills-spec-r13.md §7.6 class 2, S-11.7.
+// Traces to: skills-spec-r15.md §7.6 class 2, S-11.7.
 func TestClass2_InstallReplace_BlobWriteFails_PredecessorRestorable(t *testing.T) {
 	root := t.TempDir()
 	// The prerequisite is committed through the pipeline, so a predecessor
@@ -134,7 +134,7 @@ func TestClass2_InstallReplace_BlobWriteFails_PredecessorRestorable(t *testing.T
 // into the audit write, after the manifest committed, Then the change
 // succeeds with the version id and a warning (swap) / silently-degraded audit
 // counted by the audit-degraded counter, never an agent-facing failure.
-// Traces to: skills-spec-r13.md §7.6 class 3, S-11.8.
+// Traces to: skills-spec-r15.md §7.6 class 3, S-11.8.
 func TestClass3_SwapRemoveOrAuditFault_SuccessWithWarning(t *testing.T) {
 	t.Run("swap removal fault", func(t *testing.T) {
 		root := t.TempDir()
@@ -204,7 +204,7 @@ func TestClass3_SwapRemoveOrAuditFault_SuccessWithWarning(t *testing.T) {
 // step 5 with the previous folder put back, Then class-1 "not saved", the
 // live folder unchanged, and no new version except step 1's
 // baseline/external_change.
-// Traces to: skills-spec-r13.md §7.6 class 1, S-11.9.
+// Traces to: skills-spec-r15.md §7.6 class 1, S-11.9.
 func TestClass1_Step5FailsWithPutBack(t *testing.T) {
 	root := t.TempDir()
 	writeSkillFixture(t, root, "app")
@@ -242,7 +242,7 @@ func TestClass1_Step5FailsWithPutBack(t *testing.T) {
 // (no manifest existed for the key), Then the true-first-creation variant:
 // names no previous version, names delete as the undo, live folder present,
 // persistence partial.
-// Traces to: skills-spec-r13.md §7.6 class 2-create-i, §5.10
+// Traces to: skills-spec-r15.md §7.6 class 2-create-i, §5.10
 // true-first-creation variant, S-11.13.
 func TestClass2CreateI_TrueFirstCreate_ManifestFails(t *testing.T) {
 	root := t.TempDir()
@@ -282,7 +282,7 @@ func TestClass2CreateI_TrueFirstCreate_ManifestFails(t *testing.T) {
 // BDD: Given the delete's manifest write fails after live → .swap, Then the
 // put-back renames the folder to live, the caller gets the ordinary "not
 // saved" failure, and there is no leftover, no version, no generation change.
-// Traces to: skills-spec-r13.md §7.6 class 1b-del, S-11.14.
+// Traces to: skills-spec-r15.md §7.6 class 1b-del, S-11.14.
 func TestDelete_ManifestFails_PutBackSucceeds_Class1(t *testing.T) {
 	root := t.TempDir()
 	out0, _ := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
@@ -315,7 +315,7 @@ func TestDelete_ManifestFails_PutBackSucceeds_Class1(t *testing.T) {
 // BDD: Given the put-back rename also fails, Then the 1b-del-2 text with
 // persistence partial; the restart repairs (asserted at the recovery level —
 // S-11.1's rule).
-// Traces to: skills-spec-r13.md §7.6 class 1b-del-2, S-11.14 variant.
+// Traces to: skills-spec-r15.md §7.6 class 1b-del-2, S-11.14 variant.
 func TestDelete_ManifestFails_PutBackAlsoFails_Class1bDel2(t *testing.T) {
 	root := t.TempDir()
 	out0, _ := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
@@ -358,7 +358,7 @@ func TestDelete_ManifestFails_PutBackAlsoFails_Class1bDel2(t *testing.T) {
 // Then the loss text with the previous version id, persistence partial; the
 // skills generation is bumped so the menu drops the skill until restore
 // (asserted at the gateway level); restart renames .swap back.
-// Traces to: skills-spec-r13.md §7.6 class 1b, S-11.15.
+// Traces to: skills-spec-r15.md §7.6 class 1b, S-11.15.
 func TestClass1b_ReplaceSwapAndPutBackFail(t *testing.T) {
 	root := t.TempDir()
 	out0, _ := createSkillViaPipeline(t, root, "app", "v0", "v0 body")
@@ -408,7 +408,7 @@ func TestClass1b_ReplaceSwapAndPutBackFail(t *testing.T) {
 // skills/<new>/ and before the file published, with the cleanup succeeding,
 // Then class 1; the live state returns to absent; the retry is a clean
 // create (no SKILL_EXISTS); no version, no generation change.
-// Traces to: skills-spec-r13.md §7.6 class 1 + step 5 create cleanup, S-11.16.
+// Traces to: skills-spec-r15.md §7.6 class 1 + step 5 create cleanup, S-11.16.
 func TestCreateFails_AfterParentDirCreated_CleanupSucceeds(t *testing.T) {
 	root := t.TempDir()
 
@@ -453,7 +453,7 @@ func TestCreateFails_AfterParentDirCreated_CleanupSucceeds(t *testing.T) {
 // the leftover folder and the repair chain; the leftover folder counts as
 // present, so an existing-folder write with an expected revision commits
 // (never SKILL_EXISTS).
-// Traces to: skills-spec-r13.md §7.6 class 1c, §7.3 present-and-repairable,
+// Traces to: skills-spec-r15.md §7.6 class 1c, §7.3 present-and-repairable,
 // S-11.16 variant.
 func TestCreateFails_CleanupAlsoFails_Class1c_LeftoverFolder(t *testing.T) {
 	root := t.TempDir()
@@ -509,7 +509,7 @@ func TestCreateFails_CleanupAlsoFails_Class1c_LeftoverFolder(t *testing.T) {
 // variant: "the previous live state was absent (the skill had been deleted)",
 // the earlier history unchanged, undo is delete — never "no previous version
 // exists".
-// Traces to: skills-spec-r13.md §7.6 class 2-create-ii, §5.10
+// Traces to: skills-spec-r15.md §7.6 class 2-create-ii, §5.10
 // absence-with-history, S-11.17.
 func TestRestoreIntoAbsence_ManifestFails_Class2CreateIi(t *testing.T) {
 	root := t.TempDir()
