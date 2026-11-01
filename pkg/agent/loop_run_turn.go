@@ -13,6 +13,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -1098,16 +1099,8 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 	if rq.useNativeSearch && !narrowingActive {
 		rq.ri.rf.rt.llmOpts["native_search"] = true
 	}
-	rq.ri.rf.rt.ts.agent.mu.RLock()
-	agentThinkingLevel := rq.ri.rf.rt.ts.agent.ThinkingLevel
-	rq.ri.rf.rt.ts.agent.mu.RUnlock()
-	if agentThinkingLevel != ThinkingOff {
-		if tc, ok := rq.ri.rf.rt.activeProvider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
-			rq.ri.rf.rt.llmOpts["thinking_level"] = string(agentThinkingLevel)
-		} else {
-			logger.WarnCF("agent", "thinking_level is set but current provider does not support it, ignoring",
-				map[string]any{"agent_id": rq.ri.rf.rt.ts.agent.ID, "thinking_level": string(agentThinkingLevel)})
-		}
+	if v := rq.ri.rf.rt.primaryEffortChoice(); v != "" {
+		rq.ri.rf.rt.llmOpts[effortdialect.EffortOptionKey] = v
 	}
 
 	rq.ri.rf.rt.llmModel = rq.ri.activeModel
@@ -1666,8 +1659,10 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					// for one candidate. Keep this attempt path for streaming
 					// and rt.llmModel: a BeforeLLM hook may have overridden the
 					// selected model, which the chain's model would discard.
-					rt.providerCallStreamedBytes.Store(0) // C-10 counts THIS attempt only
-					return rt.runProviderAttempt(ctx, rt.activeProvider, provider, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes)
+					return rt.callWithEffort(provider, rt.llmModel, func(opts map[string]any) (*providers.LLMResponse, error) {
+						rt.providerCallStreamedBytes.Store(0) // C-10 counts THIS attempt only
+						return rt.runProviderAttempt(ctx, rt.activeProvider, provider, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
+					})
 				}
 				cat := rt.al.getCapabilityCatalog()
 				budget := resizeBudgetForModel(cat, provider, model, int(catalog.DefaultResizeLimits.MaxBytes))
@@ -1705,9 +1700,11 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 				}
 				rt.ts.setLastProducedModel(model)
 				rt.ts.setLastProducedProvider(provider)
-				response, err := p.Chat(ctx, candidateMessages, toolDefsForCall, model, rt.llmOpts)
-				rt.accountProviderAttempt(provider, model, response, err)
-				return response, err
+				return rt.callWithEffort(provider, model, func(opts map[string]any) (*providers.LLMResponse, error) {
+					response, err := p.Chat(ctx, candidateMessages, toolDefsForCall, model, opts)
+					rt.accountProviderAttempt(provider, model, response, err)
+					return response, err
+				})
 			},
 		)
 		if fbErr != nil {
@@ -1737,5 +1734,11 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	if len(rt.activeCandidates) > 0 {
 		providerName = rt.activeCandidates[0].Provider
 	}
-	return rt.runProviderAttempt(providerCtx, rt.activeProvider, providerName, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes)
+	effortProvider := providerName
+	if effortProvider == "" && rt.ts.agent != nil {
+		effortProvider = rt.ts.agent.PrimaryEffortProvider
+	}
+	return rt.callWithEffort(effortProvider, rt.llmModel, func(opts map[string]any) (*providers.LLMResponse, error) {
+		return rt.runProviderAttempt(providerCtx, rt.activeProvider, providerName, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
+	})
 }

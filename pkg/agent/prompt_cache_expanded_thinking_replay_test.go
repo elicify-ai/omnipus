@@ -276,7 +276,7 @@ func newExpandedThinkingFixture(t *testing.T, streamed bool) *expandedThinkingFi
 	ag := registerAgent(t, al, home, "mia", provider)
 	ag.mu.Lock()
 	ag.Candidates = []providers.FallbackCandidate{{Provider: "anthropic", Model: expandedThinkingModel}}
-	ag.ThinkingLevel = ThinkingLow
+	ag.PrimaryEffort = "low" // thinking_level was removed (effort-levels FR-056); effort replaces it
 	ag.mu.Unlock()
 	ag.StoreProviderPool(map[string]providers.LLMProvider{"anthropic": provider})
 

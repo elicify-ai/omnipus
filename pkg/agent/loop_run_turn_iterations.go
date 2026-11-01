@@ -335,9 +335,7 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 	}
 	er.cn.rc.rx.rr.rq.ri.rf.response = retryResp
 	er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.Content
-	if er.cn.responseContent == "" && er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
-		er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent
-	}
+	// Reasoning is never presented as the answer (effort-levels FR-018).
 	// ADR-087 D4/D6/D9: the empty-response retry's own
 	// successful attempt goes through the SAME success-arm
 	// handler as the other two call sites (§7.9).
@@ -455,9 +453,8 @@ func (cn *agentLoopRunTurnConductorRunIterations) prepareIteration() agentLoopRu
 // handleInitialResponse handles orphan markup, steering, and truncated success.
 func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentLoopRunTurnConductorRunIterationsFlow {
 	cn.responseContent = cn.rc.rx.rr.rq.ri.rf.response.Content
-	if cn.responseContent == "" && cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
-		cn.responseContent = cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent
-	}
+	// Reasoning is never presented as the answer (effort-levels FR-018):
+	// an empty answer takes the empty-response retry, then the sentinel.
 
 	// ── Orphan tool-call markup with NO tool call: repair, or fail loudly ──
 	//

@@ -1,111 +1,138 @@
-// reasoning_effort_map.go — RED SCAFFOLDING for the effort-levels feature
-// (train T7, branch landing/effort). Spec:
-// /workspace/omnipus-coordination/designs-20261029/effort-levels-spec-r10.md
-// (section "Mapping table (DE-5)", dataset D2, FR-046, FR-058).
+// reasoning_effort_map.go — the effort mapping table (effort-levels-spec-r10.md,
+// "Mapping table (DE-5)", dataset D2, FR-046, FR-047, FR-058).
 //
-// This file is written by the RED test author so the failing tests compile and
-// fail on behaviour. The GREEN implementation replaces the bodies of these
-// functions with the real mapping table; the signatures below are the
-// contract the tests pin. Every stub result is a sentinel that can never be a
-// legal mapping outcome, so every mapping assertion fails until the real
-// table lands. The note strings are the exact spec texts; the note KINDS are
-// what the shared D2 fixture pins.
+// Go twin of src/lib/effort/mapEffort.ts; both are pinned by the one shared
+// fixture src/lib/effort/fixtures/effort-mapping-d2.json (SC-002: identical
+// results for every row).
 //
-// Mapping table (DE-5), restated for the implementation:
-//   normalise: off/none = Off, on = On
-//   ranks: none 0 < minimal 1 < low 2 < medium 3 < high 4 < xhigh 5 < max 6
-//   nearest ties go to the LOWER level; a non-Off source never maps into none.
+// Rules, in order:
+//   - Not set ("") and Provider default are never changed.
+//   - A target that does not reason clears the value (Not set), no note.
+//   - Off ("off"/"none"): `none` if offered, else the switch's `off`, else
+//     blocked (levels: pick a level, nearest marked; nothing sendable: "Let the
+//     provider decide" or Cancel).
+//   - On: the switch's `on`, else the level nearest rank 3.
+//   - A ranked level: exact, else nearest; switch only → `on`.
+//   - An unranked name: exact only, else Provider default with a note (never On).
+//   - Empty candidate: an On or ranked source whose target offers no eligible
+//     destination (only `none` or only unranked names) → Provider default with
+//     the mapping explanation. A non-Off value never maps into `none`.
+//
+// "Nearest" ties go to the lower level.
 
 package agent
 
-import "strings"
+import (
+	"strings"
 
-// EffortTarget is the SERVED capability of the candidate (provider, model)
-// pair — already filtered by the encoder table, so "reasons but nothing
-// sendable" is Reasons with no levels and no switch (spec DE-5 target kinds).
-type EffortTarget struct {
-	Levels  []string // level names as published, may include "none"
-	Switch  bool
-	Reasons bool // a served reasoning object is present
-}
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
+)
+
+// The mapping table itself lives in effortdialect (shared with the agent
+// tools and the REST writers); these names keep the agent-side spelling.
+
+// Reserved stored effort words (FR-044).
+const (
+	EffortProviderDefault = effortdialect.ValueProviderDefault
+	EffortOn              = effortdialect.ValueOn
+	EffortOff             = effortdialect.ValueOff
+	effortNone            = effortdialect.ValueNone
+)
+
+// EffortTarget is the served capability of the candidate (provider, model).
+type EffortTarget = effortdialect.Target
 
 // EffortMapping is the outcome of the mapping table for one (source, target).
-type EffortMapping struct {
-	// Value is the mapped stored value for a picker switch: a level name,
-	// "on", "off", "provider_default", or "" for Not set / cleared.
-	Value string
-	// Blocked is true when the switch must not complete silently: the picker
-	// shows the blocked step and REST/tools refuse.
-	Blocked bool
-	// Nearest is the nearest level suggested (marked, not chosen) on the
-	// blocked step for a levels target; empty otherwise.
-	Nearest string
-	// ProviderDefaultEscape is true for the "nothing sendable" blocked kind,
-	// where the step offers "Let the provider decide" or Cancel (P-Q2 A).
-	ProviderDefaultEscape bool
-	// NoteKind is a stable note identifier; "" means no note. Kinds:
-	//   mapped            — "Effort set to X. {model} doesn't offer Y."
-	//   mapped_on         — "Effort set to X." (On source; nothing missing)
-	//   switch_only       — "{model} only turns reasoning on or off." suffix
-	//   nothing_sendable  — "Omnipus can't change effort for {model}."
-	//   empty_candidate   — "{model} offers no level here that Y maps to."
-	//   unranked_default  — "{model} doesn't offer that setting." (never On)
-	//   not_supported     — request-time "can't turn reasoning off" (X-paths)
-	NoteKind string
-}
-
-// MapEffort applies the spec mapping table (DE-5) to one source value and one
-// served target capability. RED scaffold: returns a sentinel outcome that
-// every D2 row assertion rejects.
-func MapEffort(source string, target EffortTarget) EffortMapping {
-	_ = source
-	_ = target
-	return EffortMapping{Value: "__red_scaffold_not_implemented__", NoteKind: "__red_scaffold_not_implemented__"}
-}
+type EffortMapping = effortdialect.Mapping
 
 // EffortNoteKinds enumerates the stable note kinds MapEffort can return.
-var EffortNoteKinds = []string{
-	"mapped", "mapped_on", "switch_only", "nothing_sendable",
-	"empty_candidate", "unranked_default", "not_supported",
+var EffortNoteKinds = effortdialect.NoteKinds
+
+// MapEffort applies the spec mapping table (DE-5).
+func MapEffort(source string, target EffortTarget) EffortMapping {
+	return effortdialect.MapEffort(source, target)
+}
+
+func isEffortOff(v string) bool { return effortdialect.IsOff(v) }
+
+func effortRank(level string) (int, bool) { return effortdialect.Rank(level) }
+
+// EffortLabel is the display label of a stored effort value ("none" reads
+// Off, "xhigh" XHigh), the same labels the web UI uses.
+func EffortLabel(v string) string {
+	switch v {
+	case effortNone, EffortOff:
+		return "Off"
+	case EffortOn:
+		return "On"
+	case EffortProviderDefault:
+		return "Provider default"
+	case "xhigh":
+		return "XHigh"
+	case "":
+		return "Not set"
+	}
+	return strings.ToUpper(v[:1]) + v[1:]
+}
+
+// firstValue returns the optional mapped/sent value argument, "" if absent.
+func firstValue(value []string) string {
+	if len(value) == 0 {
+		return ""
+	}
+	return value[0]
 }
 
 // EffortSwitchNote renders the picker switch note for a note kind, with the
 // model name and the source value interpolated, per the spec's exact strings
-// (S-09, S-72, S-73; FR-058). RED scaffold: returns the sentinel text.
-func EffortSwitchNote(kind, model, source string) string {
-	_ = kind
-	_ = model
-	_ = source
-	return "__red_scaffold_note_not_implemented__"
+// (S-09, S-72, S-73; FR-058). The `mapped` and `mapped_on` texts name the
+// mapped value, so callers pass it as the optional fourth argument; without
+// it those two kinds have no text to render and return "".
+func EffortSwitchNote(kind, model, source string, value ...string) string {
+	v := firstValue(value)
+	switch kind {
+	case "mapped":
+		if v == "" {
+			return ""
+		}
+		return "Effort set to " + EffortLabel(v) + ". " + model + " doesn't offer " + EffortLabel(source) + "."
+	case "mapped_on":
+		if v == "" {
+			return ""
+		}
+		return "Effort set to " + EffortLabel(v) + "."
+	case "switch_only":
+		return "Effort set to On. " + model + " only turns reasoning on or off."
+	case "nothing_sendable":
+		return "Effort set to Provider default. Omnipus can't change effort for " + model + "."
+	case "unranked_default":
+		return "Effort set to Provider default. " + model + " doesn't offer that setting."
+	case "empty_candidate":
+		return "Effort set to Provider default. " + model + " offers no level here that " + EffortLabel(source) + " maps to."
+	case "not_supported":
+		return model + " can't turn reasoning off."
+	}
+	return ""
 }
 
 // EffortTurnNote renders the per-turn note ("Sent as Low: {model} doesn't
-// offer Medium." / "Effort not sent: …") for a note kind. RED scaffold.
-func EffortTurnNote(kind, model, source string) string {
-	_ = kind
-	_ = model
-	_ = source
-	return "__red_scaffold_turn_note_not_implemented__"
-}
-
-// effortRank returns the spec rank of a named level (none 0 … max 6);
-// unranked names have no rank (ok=false).
-func effortRank(level string) (int, bool) {
-	switch strings.ToLower(level) {
-	case "none":
-		return 0, true
-	case "minimal":
-		return 1, true
-	case "low":
-		return 2, true
-	case "medium":
-		return 3, true
-	case "high":
-		return 4, true
-	case "xhigh":
-		return 5, true
-	case "max":
-		return 6, true
+// offer Medium." / "Effort not sent: …") for a note kind. The `mapped`,
+// `mapped_on` and `switch_only` texts name the value actually sent, passed as
+// the optional fourth argument; without it they return "".
+func EffortTurnNote(kind, model, source string, sent ...string) string {
+	s := firstValue(sent)
+	switch kind {
+	case "mapped", "mapped_on", "switch_only":
+		if s == "" {
+			return ""
+		}
+		return "Sent as " + EffortLabel(s) + ": " + model + " doesn't offer " + EffortLabel(source) + "."
+	case "not_supported":
+		return "Effort not sent: " + model + " can't turn reasoning off."
+	case "empty_candidate":
+		return "Effort not sent: " + model + " offers no level here that " + source + " maps to."
+	case "nothing_sendable", "unranked_default":
+		return "Effort not sent: Omnipus can't change effort for " + model + "."
 	}
-	return 0, false
+	return ""
 }

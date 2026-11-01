@@ -293,7 +293,7 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 }
 
 // ApplyAgentModel switches a live agent instance to a new primary model in
-// place — rebuilding its provider, candidate chain, and thinking level under
+// place — rebuilding its provider and candidate chain under
 // the instance lock WITHOUT recreating the instance. This preserves the agent's
 // in-memory conversation state and avoids a config hot-reload that would drop
 // the WebSocket (#73). The new model must already be persisted to config (the
@@ -347,7 +347,6 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	agent.Model = model
 	agent.Provider = nextProvider
 	agent.Candidates = nextCandidates
-	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
 	agent.applyWindowResolutionLocked(window)
 	// From the CONFIGURED max_tokens, never from the current (possibly
 	// already-clamped) field: the clamp only lowers, so re-feeding its own

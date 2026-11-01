@@ -28,7 +28,7 @@ import (
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
-	// mu protects Model, Provider, Candidates, and ThinkingLevel which may be
+	// mu protects Model, Provider, and Candidates which may be
 	// written by SwitchModel while runTurn reads them concurrently.
 	mu sync.RWMutex
 
@@ -50,9 +50,17 @@ type AgentInstance struct {
 	// slice reaches the agent every entry carries a populated Provider (or an
 	// empty one if no configured provider matched).
 	FallbackModels []config.FallbackModel
-	Home           string
-	MaxIterations  int
-	MaxTokens      int
+	// PrimaryEffort is the primary model's stored effort (effort-levels spec
+	// FR-029/FR-045): the agent's own setting, or — only when the agent rides
+	// the default model and sets none — the default model's. "" = Not set.
+	PrimaryEffort string
+	// PrimaryEffortProvider is the provider the primary model is pinned to
+	// ("" = default-provider resolution); it names the pair in the per-call
+	// effort record when the turn's candidate carries no provider (FR-058).
+	PrimaryEffortProvider string
+	Home                  string
+	MaxIterations         int
+	MaxTokens             int
 	// configuredMaxTokens is the CONFIGURED max_tokens, before the FR-005b
 	// window clamp. MaxTokens is the clamped value the turn actually uses.
 	//
@@ -65,7 +73,6 @@ type AgentInstance struct {
 	// this field, never MaxTokens.
 	configuredMaxTokens int
 	Temperature         float64
-	ThinkingLevel       ThinkingLevel
 	// ContextWindow is the effective window resolved by the ADR-066 D2
 	// ladder (ResolveWindow) at construction and on every model switch. 0
 	// when the provider is exempt (WindowExempt) or the window is unknown
@@ -192,7 +199,6 @@ type newAgentInstance struct {
 	maxIter             int
 	maxTokens           int
 	temperature         float64
-	thinkingLevel       ThinkingLevel
 	candidates          []providers.FallbackCandidate
 	poolBuild           providerPoolBuild
 	window              WindowResolution
@@ -439,7 +445,7 @@ func (nai *newAgentInstance) prepareIdentity() {
 	nai.toolsRegistry.Register(tools.NewRetrospectiveTool(memAdapter, nil))
 }
 
-// resolveRuntimeLimits resolves iteration, sampling, and thinking-level settings.
+// resolveRuntimeLimits resolves iteration and sampling settings.
 func (nai *newAgentInstance) resolveRuntimeLimits() {
 	// Per-turn tool-round cap (#904): the single resolver —
 	// min(global in force, agent's own value), the global when the agent has
@@ -472,12 +478,6 @@ func (nai *newAgentInstance) resolveRuntimeLimits() {
 	if nai.agentCfg != nil && nai.agentCfg.ModelParams != nil && nai.agentCfg.ModelParams.Temperature != nil {
 		nai.temperature = *nai.agentCfg.ModelParams.Temperature
 	}
-
-	var thinkingLevelStr string
-	if mc, err := nai.cfg.FindModelConfigBySlug(nai.model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
-	}
-	nai.thinkingLevel = parseThinkingLevel(thinkingLevelStr)
 }
 
 // resolveCandidates resolves provider candidates, provider pool, and context-window limits.
@@ -567,37 +567,38 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 	// There is no default agent (omnipus-system-agent FR-120): an instance
 	// carries no routing-default flag of any kind.
 	inst := &AgentInstance{
-		ID:                  nai.agentID,
-		Name:                nai.agentName,
-		Model:               nai.model,
-		Fallbacks:           nai.fallbacks,
-		FallbackModels:      nai.fallbackModels,
-		Home:                nai.workspace,
-		MaxIterations:       nai.maxIter,
-		MaxTokens:           nai.maxTokens,
-		configuredMaxTokens: nai.configuredMaxTokens,
-		Temperature:         nai.temperature,
-		ThinkingLevel:       nai.thinkingLevel,
-		ContextWindow:       nai.contextWindow,
-		WindowSource:        nai.window.Source,
-		WindowClamped:       nai.window.Clamped,
-		WindowExempt:        nai.window.Exempt,
-		WindowUnknown:       nai.window.Unknown,
-		needsProvider:       nai.poolBuild.primaryUnknown,
-		needsProviderID:     nai.poolBuild.primaryProvider,
-		Provider:            nai.provider,
-		Sessions:            nai.sessions,
-		ContextBuilder:      nai.contextBuilder,
-		Tools:               nai.toolsRegistry,
-		Subagents:           nai.subagents,
-		SkillsFilter:        nai.skillsFilter,
-		Candidates:          nai.candidates,
-		Router:              nai.router,
-		LightCandidates:     nai.lightCandidates,
-		LightProvider:       nai.lightProvider,
-		lightProviderPair:   nai.lightProviderPair,
-		DocumentRuntime:     nai.documentRuntime,
-		AgentType:           resolvedAgentType,
+		ID:                    nai.agentID,
+		Name:                  nai.agentName,
+		Model:                 nai.model,
+		Fallbacks:             nai.fallbacks,
+		FallbackModels:        nai.fallbackModels,
+		PrimaryEffort:         resolveAgentPrimaryEffort(nai.agentCfg, nai.defaults),
+		PrimaryEffortProvider: resolveAgentPrimaryProvider(nai.agentCfg, nai.defaults),
+		Home:                  nai.workspace,
+		MaxIterations:         nai.maxIter,
+		MaxTokens:             nai.maxTokens,
+		configuredMaxTokens:   nai.configuredMaxTokens,
+		Temperature:           nai.temperature,
+		ContextWindow:         nai.contextWindow,
+		WindowSource:          nai.window.Source,
+		WindowClamped:         nai.window.Clamped,
+		WindowExempt:          nai.window.Exempt,
+		WindowUnknown:         nai.window.Unknown,
+		needsProvider:         nai.poolBuild.primaryUnknown,
+		needsProviderID:       nai.poolBuild.primaryProvider,
+		Provider:              nai.provider,
+		Sessions:              nai.sessions,
+		ContextBuilder:        nai.contextBuilder,
+		Tools:                 nai.toolsRegistry,
+		Subagents:             nai.subagents,
+		SkillsFilter:          nai.skillsFilter,
+		Candidates:            nai.candidates,
+		Router:                nai.router,
+		LightCandidates:       nai.lightCandidates,
+		LightProvider:         nai.lightProvider,
+		lightProviderPair:     nai.lightProviderPair,
+		DocumentRuntime:       nai.documentRuntime,
+		AgentType:             resolvedAgentType,
 	}
 	if nai.agentCfg != nil {
 		inst.sourceConfigJSON, _ = json.Marshal(nai.agentCfg)
@@ -731,7 +732,7 @@ func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider)
 // to a long-running dispatch that executes OUTSIDE of a.mu's protection
 // window (e.g. an external-CLI run, which can take minutes) — a itself may be
 // the LIVE registry instance, and SwitchModel/ApplyAgentModel can concurrently
-// rewrite its Model/Provider/Candidates/ThinkingLevel (+ providerPool) tuple
+// rewrite its Model/Provider/Candidates (+ providerPool) tuple
 // while the dispatched run is in flight (see mu's doc comment above).
 //
 // FIX 1 (7-reviewer gate, data race): processTaskDirectExternalCLI used to
@@ -759,7 +760,6 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	model := a.Model
 	provider := a.Provider
 	candidates := a.Candidates
-	thinkingLevel := a.ThinkingLevel
 	contextWindow := a.ContextWindow
 	windowSource := a.WindowSource
 	windowClamped := a.WindowClamped
@@ -773,36 +773,37 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	a.mu.RUnlock()
 
 	out := &AgentInstance{
-		ID:                a.ID,
-		Name:              a.Name,
-		Model:             model,
-		Fallbacks:         a.Fallbacks,
-		FallbackModels:    a.FallbackModels,
-		Home:              a.Home,
-		MaxIterations:     a.MaxIterations,
-		MaxTokens:         a.MaxTokens,
-		Temperature:       a.Temperature,
-		ThinkingLevel:     thinkingLevel,
-		ContextWindow:     contextWindow,
-		WindowSource:      windowSource,
-		WindowClamped:     windowClamped,
-		WindowExempt:      windowExempt,
-		WindowUnknown:     windowUnknown,
-		needsProvider:     needsProvider,
-		needsProviderID:   needsProviderID,
-		Provider:          provider,
-		Sessions:          a.Sessions,
-		ContextBuilder:    a.ContextBuilder,
-		Tools:             a.Tools,
-		Subagents:         a.Subagents,
-		SkillsFilter:      a.SkillsFilter,
-		Candidates:        candidates,
-		AgentType:         a.AgentType,
-		Router:            a.Router,
-		LightCandidates:   a.LightCandidates,
-		LightProvider:     a.LightProvider,
-		lightProviderPair: a.lightProviderPair,
-		DocumentRuntime:   a.DocumentRuntime,
+		ID:                    a.ID,
+		Name:                  a.Name,
+		Model:                 model,
+		Fallbacks:             a.Fallbacks,
+		FallbackModels:        a.FallbackModels,
+		PrimaryEffort:         a.PrimaryEffort,
+		PrimaryEffortProvider: a.PrimaryEffortProvider,
+		Home:                  a.Home,
+		MaxIterations:         a.MaxIterations,
+		MaxTokens:             a.MaxTokens,
+		Temperature:           a.Temperature,
+		ContextWindow:         contextWindow,
+		WindowSource:          windowSource,
+		WindowClamped:         windowClamped,
+		WindowExempt:          windowExempt,
+		WindowUnknown:         windowUnknown,
+		needsProvider:         needsProvider,
+		needsProviderID:       needsProviderID,
+		Provider:              provider,
+		Sessions:              a.Sessions,
+		ContextBuilder:        a.ContextBuilder,
+		Tools:                 a.Tools,
+		Subagents:             a.Subagents,
+		SkillsFilter:          a.SkillsFilter,
+		Candidates:            candidates,
+		AgentType:             a.AgentType,
+		Router:                a.Router,
+		LightCandidates:       a.LightCandidates,
+		LightProvider:         a.LightProvider,
+		lightProviderPair:     a.lightProviderPair,
+		DocumentRuntime:       a.DocumentRuntime,
 	}
 	if pool != nil {
 		out.StoreProviderPool(*pool)
@@ -1209,6 +1210,21 @@ func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefau
 		return ""
 	}
 	return strings.TrimSpace(defaults.DefaultModel.Model)
+}
+
+// resolveAgentPrimaryEffort returns the primary model's stored effort: the
+// agent's own reasoning_effort; when the agent has no model of its own and
+// no effort of its own, the default model's effort (FR-045).
+func resolveAgentPrimaryEffort(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
+	own := ""
+	if agentCfg != nil {
+		own = strings.TrimSpace(agentCfg.ReasoningEffort)
+	}
+	ridesDefault := agentCfg == nil || agentCfg.Model == nil || strings.TrimSpace(agentCfg.Model.Primary) == ""
+	if own != "" || !ridesDefault || defaults == nil {
+		return own
+	}
+	return strings.TrimSpace(defaults.DefaultModel.ReasoningEffort)
 }
 
 // resolveAgentPrimaryProvider returns the provider the agent's primary model is

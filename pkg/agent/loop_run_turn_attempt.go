@@ -35,6 +35,7 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 	messagesForCall []providers.Message,
 	toolDefsForCall []providers.ToolDefinition,
 	streamed *atomic.Int64,
+	opts map[string]any,
 ) (response *providers.LLMResponse, err error) {
 	defer func() { rt.accountProviderAttempt(providerName, model, response, err) }()
 	var imageErr error
@@ -108,7 +109,7 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 			// entry identical — and both clean. See
 			// providers.StreamTextFilter.
 			var streamFilter providers.StreamTextFilter
-			resp, streamErr := sp.ChatStream(ctx, messagesForCall, toolDefsForCall, model, rt.llmOpts, func(accumulated string) {
+			resp, streamErr := sp.ChatStream(ctx, messagesForCall, toolDefsForCall, model, opts, func(accumulated string) {
 				// B4: if the turn has been abandoned (stuck-goroutine detach),
 				// suppress further frame emits so a zombie goroutine cannot
 				// push frames to disconnected clients.
@@ -179,5 +180,5 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 	}
 	rt.ts.setLastProducedModel(model)
 	rt.ts.setLastProducedProvider(providerName)
-	return p.Chat(ctx, messagesForCall, toolDefsForCall, model, rt.llmOpts)
+	return p.Chat(ctx, messagesForCall, toolDefsForCall, model, opts)
 }
