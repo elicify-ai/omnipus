@@ -51,6 +51,9 @@ const NOT_RUNNING_DISCORD = 'This connection is not running. You can remove ids 
 
 // S-81: each 409 is handled by its rejection code, never by one stale-form text.
 const STALE_TEXT = 'These settings changed since you opened them. The current values are shown; check them and save again.'
+// stale_revision when the re-read itself fails: the form still holds the
+// operator's edits, so it must not claim the current values are shown.
+const STALE_REREAD_FAILED_TEXT = 'These settings changed since you opened them, but the current values could not be loaded, so the form still shows your edits. Reload the page to see the current values, then make your changes again and save.'
 const CONNECT_FIRST_TEXT = 'Connect the channel first to add Discord ids.'
 const SAVED_LIVE_MISMATCH_TEXT = 'An earlier change to this connection did not finish applying, so nothing was saved. Finish applying it first (any successful save of this connection, or disable and enable it), then save the list again.'
 const UNREADABLE_REFUSAL_TEXT = 'The server refused this save, but its answer could not be read. Close and reopen this panel to see the current values, then try again.'
@@ -169,6 +172,12 @@ function OutboundSettings({
   const [revision, setRevision] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
   const [refusal, setRefusal] = useState<Refusal>(NO_REFUSAL)
+  // True after a stale_revision re-read failed: the form stays on screen
+  // (with the operator's edits and the fallback notice) instead of being
+  // replaced by the load-error state the failed GET would otherwise select.
+  // Cleared only by hydrate (a successful read or save), so a retry Save
+  // while the query is still in error keeps the form visible.
+  const [rereadFailed, setRereadFailed] = useState(false)
   // True while the operator has unsaved edits: a background re-read must not
   // replace what they typed. A deliberate re-read (stale_revision) does.
   const dirtyRef = useRef(false)
@@ -177,6 +186,7 @@ function OutboundSettings({
 
   function hydrate(next: Pick<ChannelOutboundRead, 'outbound' | 'revision'>) {
     dirtyRef.current = false
+    setRereadFailed(false)
     setPolicy(next.outbound.policy)
     setText(targetsText(next, platform))
     setRevision(next.revision)
@@ -215,9 +225,16 @@ function OutboundSettings({
       switch (rejection.code) {
         case 'stale_revision': {
           // Show the current values instead of overwriting a concurrent change.
+          // A failed refetch keeps the previous cached `data`, so success is
+          // read from the result status, never from `data` being present.
           const reread = await refetch()
-          if (reread.data) hydrate(reread.data)
-          setNotice(STALE_TEXT)
+          if (reread.isSuccess) {
+            hydrate(reread.data)
+            setNotice(STALE_TEXT)
+          } else {
+            setRereadFailed(true)
+            setNotice(STALE_REREAD_FAILED_TEXT)
+          }
           return
         }
         case 'connect_first':
@@ -249,7 +266,7 @@ function OutboundSettings({
       </div>
     )
   }
-  if (isError || !read) {
+  if (!read || (isError && !rereadFailed)) {
     return (
       <SectionFrame headingId={headingId}>
         <Notice message={`Couldn't load the Starting messages setting for ${channelName}. Check your connection, then close and reopen this panel.`} />
