@@ -143,7 +143,7 @@ function expectIndexedErrors(items: Pick<NonNullable<ReturnType<typeof Rejection
     const reason = item.reason
     expect(typeof reason).toBe('string')
     if (!reason) throw new Error('instrument: this fixture has a distinct reason per indexed error')
-    const otherReasons = items.map((other) => other.reason).filter((other) => other !== reason && other !== undefined)
+    const otherReasons = items.map((other) => other.reason).filter((other): other is string => other !== reason && other !== undefined)
     const lines = new Set(alerts.flatMap((alert) => [alert, ...alert.querySelectorAll('*')])
       .flatMap((element) => (element.textContent ?? '').split('\n'))
       .filter((line) => line.includes(reason) && !otherReasons.some((other) => line.includes(other))))
