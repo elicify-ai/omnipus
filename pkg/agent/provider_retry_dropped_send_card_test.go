@@ -17,9 +17,11 @@ import (
 )
 
 // Oracles: addendum-f1-network-card.md; handoff-2b.txt sections 1.1/1.6 B.
-// Full literal copy is pinned by contracts/components/schemas/LLMError.yaml's
-// x-user-messages, never read from the translator as an expected value.
-const f1NetworkUserMessage = "We couldn’t reach the model provider. Check your internet connection and retry."
+// Expected text comes from the message catalogue via UserMessageForCode.
+// Codegen pins its wording to contracts/components/schemas/LLMError.yaml's
+// x-user-messages; catalogue tests enforce coverage. Mutant f1 must still fail:
+// removing transport promotion changes the emitted code/text, not this oracle.
+var f1NetworkUserMessage = UserMessageForCode(CodeNetwork)
 
 func TestF1DroppedSend_BareEOFExhaustionEndsWithNetworkCard(t *testing.T) {
 	got := observeF1DroppedSend(t, f1DroppedSendError(io.EOF))
@@ -66,7 +68,7 @@ func TestF1DroppedSend_AuthenticationFailureKeepsItsOwnMessage(t *testing.T) {
 	})
 	// The fixture injects an unnamed provider, so the contract's facts-absent
 	// authentication copy applies, not its named-provider template.
-	const authMessage = "The model provider rejected our credentials. Check this provider’s API key in Settings."
+	authMessage := UserMessageForCode(CodeProviderAuthFailed)
 	assert.Equal(t, "provider_auth_failed", got.card.Code)
 	assert.Equal(t, authMessage, got.card.Message, "a real credentials failure keeps its own actionable text")
 	assert.Equal(t, "provider_auth_failed", string(got.turn.Code))
