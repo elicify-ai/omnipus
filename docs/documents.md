@@ -74,6 +74,15 @@ the model catalog:
 | Sees images, but does not read PDFs or the PDF is too large | Images of the requested pages, with a note when the PDF was too large |
 | Reads text only, or the pages could not be made into images | The text of the requested pages (at most 4 MiB), with the reason |
 
+Within one turn, preview content shares a media budget: 64 MiB per turn,
+256 MiB across all chats at once, and 32 MiB per request to the model. When a
+newer preview needs the room, the oldest previews of the turn are dropped
+first, and a single preview larger than 64 MiB is not kept at all; a request
+that runs out of room sends the newest previews and leaves older ones out.
+The agent sees a note in the tool result: a preview that was dropped or left
+out says to call `preview_document` again, and one that was too large to keep
+says so.
+
 The model gets this content for the current turn only. In later turns the
 conversation keeps the tool's result text, which says to call
 `preview_document` again. The result text names the file and the first 12
@@ -137,7 +146,7 @@ reads any other file.
   applies when Omnipus cannot read a source of write access: an unreadable
   settings file refuses registration, and an unreadable or partly invalid
   mount record keeps previews off.
-- `omnipus doctor` warns when a component is `… damaged (<reason>)` or `… is in a folder an agent can write (<access>)`, each with what it means for previews and how to fix it. On Linux it also warns `Document preview memory limit not enforced: <reason>` when the kernel does not apply the memory limit (see "Limits and isolation"). A component that is simply not installed is not a warning: previews report it when they are used. Like every doctor warning, these make `omnipus doctor` finish with exit code 1. Doctor never starts either program.
+- `omnipus doctor` warns when a component is `… damaged (<reason>)` or `… is in a folder an agent can write (<access>)`, each with what it means for previews and how to fix it: `WARN-PREVIEW-001` for the PDF renderer, `WARN-PREVIEW-002` for LibreOffice. On Linux it also warns `WARN-PREVIEW-003` `Document preview memory limit not enforced: <reason>` when the kernel does not apply the memory limit (see "Limits and isolation"). `WARN-PREVIEW-000` means doctor could not check the components at all (it could not find the Omnipus program's own path). A component that is simply not installed is not a warning: previews report it when they are used. Like every doctor warning, these make `omnipus doctor` finish with exit code 1. Doctor never starts either program.
 - What the check does not cover yet: an **Allow once** approval for a single
   command that is still running in another chat, access granted while a
   preview is already running (it is seen by the next preview), and links
@@ -148,8 +157,12 @@ reads any other file.
 
 LibreOffice and the PDF renderer run as separate programs, never inside
 Omnipus. At most two renderer runs and one LibreOffice conversion run at a
-time; other previews wait. Each run is limited to 60 seconds and, for memory,
-512 MiB (renderer) or 1 GiB (LibreOffice). On Linux the memory limit counts
+time; other previews wait. Each renderer or text-extraction run is limited to
+60 seconds (wall clock) and 60 seconds of CPU time. A LibreOffice conversion is
+limited to 60 seconds of CPU time and to the preview call's whole 120-second
+budget (including queueing); it has no separate wall-clock limit. For memory
+the limits are 512 MiB (renderer and text extraction) and 1 GiB (LibreOffice).
+On Linux the memory limit counts
 the memory a program actually uses (the kernel's data limit), not address
 space it only reserves; on kernels older than 4.7, or with the boot option
 `ignore_rlimit_data`, the kernel does not enforce it, and the result says
