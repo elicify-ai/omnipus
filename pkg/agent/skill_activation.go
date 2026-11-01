@@ -13,7 +13,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -31,7 +30,7 @@ func (al *AgentLoop) loadSkillActivation(
 	root := filepath.Dir(filepath.Dir(resolved.Path))
 	opts := skills.LoadActivationOptions{
 		EditAllowed: tools.ResolveEffectivePolicy(agent.LoadToolPolicy(), "edit_skill") != string(config.ToolPolicyDeny),
-		PATHEnv:     os.Getenv("PATH"),
+		PATHEnv:     tools.BashChildPATH(ctx, agent.Tools), // r15 §5.7: the PATH the agent's bash gets
 		Bindings:    agent.ContextBuilder.SkillBindings(),
 	}
 	res, err := skills.LoadActivation(root, resolved.Slug, opts)

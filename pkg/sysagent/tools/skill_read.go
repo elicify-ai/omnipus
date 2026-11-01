@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -122,7 +121,7 @@ func (t *GetSkillTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if err != nil {
 		return t.observeFailure(session, req.id, err)
 	}
-	res, refusal := renderSkillDetail(obs, req)
+	res, refusal := renderSkillDetail(obs, req, tools.AgentBashPATH(ctx))
 	if refusal != nil {
 		return refusal
 	}
@@ -376,7 +375,8 @@ func agentMayLoad(d *Deps, actor, root, onDisk string) (bool, error) {
 
 // renderSkillDetail projects an observation onto the requested fields and
 // applies T8's size rule.
-func renderSkillDetail(obs *skills.SkillObservation, req getSkillRequest) (string, *tools.ToolResult) {
+// pathEnv is the PATH the calling agent's bash gets (the `needs` lookup, §5.7).
+func renderSkillDetail(obs *skills.SkillObservation, req getSkillRequest, pathEnv string) (string, *tools.ToolResult) {
 	out := map[string]any{"id": obs.Slug}
 	var absent []string
 	var instructions string
@@ -395,7 +395,7 @@ func renderSkillDetail(obs *skills.SkillObservation, req getSkillRequest) (strin
 		}
 	} else {
 		out["revision"] = obs.Revision
-		meta := obs.Meta(os.Getenv("PATH"))
+		meta := obs.Meta(pathEnv)
 		for _, f := range req.fields {
 			needsInstruction := f == "name" || f == "description" || f == "metadata" ||
 				f == "compatibility" || f == "allowed_tools" || f == "needs" || f == "instructions"
