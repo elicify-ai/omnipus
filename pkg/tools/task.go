@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -436,9 +437,7 @@ func TerminateTaskGoalRecord(
 	}
 	slog.Info("task goal: paired goal record terminated with its task",
 		"task_id", taskID, "goal_id", g.GoalID, "goal_state", string(state))
-	if hook := taskGoalEndedHook.Load(); hook != nil {
-		(*hook)(*updated, status)
-	}
+	notifyTaskGoalEnded(*updated, status)
 }
 
 // taskGoalEndedHook is TerminateTaskGoalRecord's after-transition observer:
@@ -461,6 +460,74 @@ func SetTaskGoalEndedHook(fn func(ended goal.Goal, taskStatus task.Status)) (res
 	}
 	prev := taskGoalEndedHook.Swap(next)
 	return func() { taskGoalEndedHook.Store(prev) }
+}
+
+// heldTaskGoalEnded holds goal transitions TerminateTaskGoalRecord made while
+// no observer was installed, between HoldTaskGoalEndedUntilReplay and
+// ReplayHeldTaskGoalEnded.
+var heldTaskGoalEnded struct {
+	mu      sync.Mutex
+	holding bool
+	ended   []heldGoalEnded
+}
+
+type heldGoalEnded struct {
+	goal   goal.Goal
+	status task.Status
+}
+
+// HoldTaskGoalEndedUntilReplay makes TerminateTaskGoalRecord keep, rather
+// than drop, every transition it makes while no after-transition observer is
+// installed, until ReplayHeldTaskGoalEnded. The gateway boot calls it before
+// it reconciles interrupted tasks — which must happen before any task
+// producer starts and therefore before the goal outcome recorder and its
+// session stores are wired — so those transitions still get their lasting
+// goal_outcome line (6b re-review N2).
+func HoldTaskGoalEndedUntilReplay() {
+	heldTaskGoalEnded.mu.Lock()
+	heldTaskGoalEnded.holding = true
+	heldTaskGoalEnded.mu.Unlock()
+}
+
+// ReplayHeldTaskGoalEnded ends the hold and hands every held transition, in
+// order, to the installed observer. Call it once the observer and everything
+// it writes through are wired. With no observer installed the held
+// transitions stay held, the hold stays on, and the call reports an error.
+func ReplayHeldTaskGoalEnded() error {
+	heldTaskGoalEnded.mu.Lock()
+	hook := taskGoalEndedHook.Load()
+	if hook == nil {
+		n := len(heldTaskGoalEnded.ended)
+		heldTaskGoalEnded.mu.Unlock()
+		if n == 0 {
+			return nil
+		}
+		return fmt.Errorf("task goal: %d held goal transition(s) cannot be replayed: no outcome observer installed", n)
+	}
+	held := heldTaskGoalEnded.ended
+	heldTaskGoalEnded.ended = nil
+	heldTaskGoalEnded.holding = false
+	heldTaskGoalEnded.mu.Unlock()
+	for _, h := range held {
+		(*hook)(h.goal, h.status)
+	}
+	return nil
+}
+
+// notifyTaskGoalEnded delivers one transition to the installed observer, or
+// holds it while a boot hold is on and no observer is installed yet.
+func notifyTaskGoalEnded(ended goal.Goal, status task.Status) {
+	heldTaskGoalEnded.mu.Lock()
+	hook := taskGoalEndedHook.Load()
+	if hook == nil && heldTaskGoalEnded.holding {
+		heldTaskGoalEnded.ended = append(heldTaskGoalEnded.ended, heldGoalEnded{goal: ended, status: status})
+		heldTaskGoalEnded.mu.Unlock()
+		return
+	}
+	heldTaskGoalEnded.mu.Unlock()
+	if hook != nil {
+		(*hook)(ended, status)
+	}
 }
 
 // TaskCreateTool creates a task and delegates it to another agent.

@@ -786,6 +786,10 @@ func startRetryStopTurn(t *testing.T) *retryStopEnv {
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
 	al := mustAgentLoop(t, cfg, msgBus, provider)
+	// Issue #1280: the reset is retried by the chain's retry plan; its
+	// 2 s first wait would only slow the test, so waits return at once (a
+	// cancelled ctx — Stop — still ends them).
+	al.SetProviderRetryWait(func(ctx context.Context, _ time.Duration) error { return ctx.Err() })
 
 	runCtx, cancelRun := context.WithCancel(context.Background())
 	env := &retryStopEnv{
@@ -910,6 +914,26 @@ func waitRetryStopSignal(t *testing.T, ch <-chan struct{}, what string) {
 	case <-time.After(cancelTestTurnStartDeadline):
 		t.Fatalf("deadlock guard: %s within %s", what, cancelTestTurnStartDeadline)
 	}
+}
+
+// retryStopProjectionHasToken reports whether the session's active-turn
+// projection holds a streamed-text (token) item.
+func retryStopProjectionHasToken(h *WSHandler, sessionID string) bool {
+	if h == nil || h.hubs == nil || sessionID == "" {
+		return false
+	}
+	hub := h.hubs.lookup(sessionID)
+	if hub == nil {
+		return false
+	}
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	for _, it := range hub.proj.items {
+		if it.kind == hubKindToken {
+			return true
+		}
+	}
+	return false
 }
 
 func retryStopProjectionActive(h *WSHandler, sessionID string) bool {
@@ -1195,8 +1219,12 @@ func TestWebchatRetryThenStop_CancelsWithoutFalseCompletion(t *testing.T) {
 	env.notice.assertRetryNotice(t)
 	canceledTurnID := retryStopLiveTurnID(t, env.al, sessionID, "retry turn id is empty while the retry call is held")
 	assertRetryStopJournalQuiet(t, retryStopJournal(t, env.handler, sessionID))
-	if retryStopProjectionActive(env.handler, sessionID) {
-		t.Fatal("hub projection is active before Stop; a token was published for the retry notice")
+	// Issue #1280 (founder decision Q2): the retry state is shown from the
+	// first failed attempt, so the provider_retry frame is now a projection
+	// item before Stop. What this check proves is unchanged: the progress
+	// notice never becomes answer text — no token item may be projected.
+	if retryStopProjectionHasToken(env.handler, sessionID) {
+		t.Fatal("hub projection holds a token before Stop; a token was published for the retry notice")
 	}
 
 	writeRetryStopFrame(t, env.conn, generated.CancelFrame{

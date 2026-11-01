@@ -6646,6 +6646,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/ProviderWaitingIndicator.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/RateLimitIndicator.tsx",
       "lane": 3
     },
