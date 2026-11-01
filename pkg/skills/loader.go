@@ -181,7 +181,14 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				continue
 			}
 			skillFile := filepath.Join(dir, d.Name(), "SKILL.md")
-			if _, err := os.Stat(skillFile); err != nil {
+			// §9.5: resolve the instruction file by Lstat/Readlink only and
+			// read it bounded; an oversized or unresolvable instruction file
+			// is omitted from the loadable set (logged once per scan).
+			metadata, metaErr := sl.getSkillMetadataChecked(skillFile)
+			if metaErr != nil {
+				if !errors.Is(metaErr, os.ErrNotExist) {
+					slog.Warn("skills: skill omitted from the menu", "skill", d.Name(), "source", source, "error", metaErr)
+				}
 				continue
 			}
 			info := SkillInfo{
@@ -192,7 +199,6 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				Path:   skillFile,
 				Source: source,
 			}
-			metadata := sl.getSkillMetadata(skillFile)
 			if metadata != nil {
 				info.Description = metadata.Description
 				// Name is the human-readable display label. It is kept separate
@@ -274,13 +280,51 @@ func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
 // resolved path, for every shelf (project, registry, builtin) alike.
 // Exported for the ADR-072 D1 `Skill` tool's load resolver
 // (pkg/agent/loop.go, pkg/tools/skill.go).
+//
+// The read is bounded by MaxSkillMarkdownBytes and reported to the §9.5
+// open/consumption probes (op "instruction"); an oversized file is not
+// served (ok=false), never truncated.
 func LoadSkillFile(path string) (string, bool) {
-	content, err := os.ReadFile(path)
+	content, err := readBoundedInstruction("instruction", path, filepath.Base(path))
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("skills: instruction file not served", "path", path, "error", err)
+		}
 		return "", false
 	}
 	_, body := splitFrontmatter(string(content))
 	return body, true
+}
+
+// instructionUnresolvedError marks an instruction symlink whose target is not a
+// regular file inside the skill (§9.5 captured-domain rule).
+type instructionUnresolvedError struct{ target string }
+
+func (e *instructionUnresolvedError) Error() string {
+	return fmt.Sprintf("the instruction file is a symlink to '%s', which is not a regular file of the skill", e.target)
+}
+
+// readInstructionForMetadata reads a skill's instruction file for the menu
+// scan (op "metadata"), bounded by MaxSkillMarkdownBytes. A SKILL.md symlink
+// is resolved by Lstat/Readlink inside its folder; a target outside the
+// skill, inside control metadata, dangling or non-regular is refused before
+// it is opened.
+func readInstructionForMetadata(skillPath string) ([]byte, error) {
+	if filepath.Base(skillPath) != "SKILL.md" {
+		return readBoundedInstruction("metadata", skillPath, filepath.Base(skillPath))
+	}
+	dir := filepath.Dir(skillPath)
+	ref, err := resolveInstructionOnDisk(dir)
+	if err != nil {
+		return nil, err
+	}
+	switch ref.state {
+	case instructionMissing:
+		return nil, fmt.Errorf("read %s: %w", skillPath, os.ErrNotExist)
+	case instructionUnresolved:
+		return nil, &instructionUnresolvedError{target: ref.target}
+	}
+	return readBoundedInstruction("metadata", filepath.Join(dir, filepath.FromSlash(ref.rel)), ref.rel)
 }
 
 func (sl *SkillsLoader) LoadSkillsForContext(skillNames []string) string {
@@ -437,7 +481,7 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 // getSkillMetadataChecked preserves content-read failures separately from
 // readable metadata that a caller may reject through validation.
 func (sl *SkillsLoader) getSkillMetadataChecked(skillPath string) (*SkillMetadata, error) {
-	content, err := os.ReadFile(skillPath)
+	content, err := readInstructionForMetadata(skillPath)
 	if err != nil {
 		logger.WarnCF("skills", "Failed to read skill metadata",
 			map[string]any{
@@ -446,7 +490,12 @@ func (sl *SkillsLoader) getSkillMetadataChecked(skillPath string) (*SkillMetadat
 			})
 		return nil, err
 	}
+	return sl.parseSkillMetadata(skillPath, content), nil
+}
 
+// parseSkillMetadata parses already-read instruction bytes; skillPath names
+// the skill folder (its base directory is the fallback name).
+func (sl *SkillsLoader) parseSkillMetadata(skillPath string, content []byte) *SkillMetadata {
 	frontmatter, bodyContent := splitFrontmatter(string(content))
 	dirName := filepath.Base(filepath.Dir(skillPath))
 	title, bodyDescription := extractMarkdownMetadata(bodyContent)
@@ -461,7 +510,7 @@ func (sl *SkillsLoader) getSkillMetadataChecked(skillPath string) (*SkillMetadat
 	}
 
 	if frontmatter == "" {
-		return metadata, nil
+		return metadata
 	}
 
 	// Try JSON first (for backward compatibility)
@@ -484,7 +533,7 @@ func (sl *SkillsLoader) getSkillMetadataChecked(skillPath string) (*SkillMetadat
 		if jsonMeta.Version != "" {
 			metadata.Version = jsonMeta.Version
 		}
-		return metadata, nil
+		return metadata
 	}
 
 	// Agent Skills `metadata` is a nested string map, so parse it separately
@@ -537,7 +586,7 @@ func (sl *SkillsLoader) getSkillMetadataChecked(skillPath string) (*SkillMetadat
 	if len(extra) > 0 {
 		metadata.Extra = extra
 	}
-	return metadata, nil
+	return metadata
 }
 
 func extractMarkdownMetadata(content string) (title, description string) {
