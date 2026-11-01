@@ -1112,9 +1112,15 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 				sessionID:   ToolTranscriptSessionID(rp.ctx),
 				workspaceID: ToolWorkspaceID(rp.ctx),
 			}
+		case FSOpExec:
+			if shelf == skillShelfRegistry {
+				// A skill folder the predicate lets this turn read may also
+				// be run from (§6.1 item 4 operation-blind predicate; §5.7
+				// "run scripts with bash"; §6.2 read+execute for children).
+				// The handle never writes: exec never needs it to.
+				return &PathHandle{abs: realAbs, policy: rp.policy, readOnly: true}, nil
+			}
 		}
-		// FSOpExec: a readable skill folder may be run from (§6.1 item 4,
-		// §5.7 "run scripts with bash"); the ordinary exec rules below apply.
 	}
 
 	if !isWithinWorkspace(realAbs, realWorkDir) {
