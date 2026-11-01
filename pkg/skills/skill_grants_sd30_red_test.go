@@ -288,12 +288,13 @@ func TestGenerationLifecycle_StampRules(t *testing.T) {
 	assert.Equal(t, g1, generationOf(t, appDir), "restore onto a live skill preserves its generation")
 
 	// Install replace preserves it too (grants keep working — §5.13a).
+	// This restored/authored state needs §5.6/§9.2 local-change consent.
 	staged := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(staged, "SKILL.md"),
 		[]byte(validSkillMD("app", "replaced", "replaced body")), 0o644))
 	rev := readLiveRevision(t, appDir)
 	_, err = ApplyChange(root, ChangeRequest{
-		Kind: KindInstallReplace, Slug: "app", StagedDir: staged,
+		Kind: KindInstallReplace, ReplaceLocalChanges: true, Slug: "app", StagedDir: staged,
 		Expect: Expectation{Revision: rev},
 		Actor:  ChangeActor{Kind: "person", Tool: "rest-install"},
 	})
@@ -340,7 +341,7 @@ func TestInstallReplace_PreservesGeneration_GrantsKeepWorking(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(staged, "SKILL.md"),
 		[]byte(validSkillMD("app", "replaced", "replaced body")), 0o644))
 	_, err := ApplyChange(root, ChangeRequest{
-		Kind: KindInstallReplace, Slug: "app", StagedDir: staged,
+		Kind: KindInstallReplace, ReplaceLocalChanges: true, Slug: "app", StagedDir: staged,
 		Expect: Expectation{Revision: outCreate.Revision},
 		Actor:  ChangeActor{Kind: "person", Tool: "rest-install"},
 	})

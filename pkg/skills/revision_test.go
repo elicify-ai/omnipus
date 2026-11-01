@@ -103,7 +103,9 @@ func stageReviewedPackage(t *testing.T, root, body, helper string) string {
 }
 
 // §§7.2–7.3: replacing a staged package needs an explicit current revision;
-// all staged assets, not only SKILL.md, are published together.
+// all staged assets, not only SKILL.md, are published together. Authored
+// downstream success/fault fixtures explicitly consent under r15 §5.6/§9.2;
+// the missing/stale-revision table remains unchanged.
 func TestApplyChange_InstallReplaceRequiresCurrentRevisionAndPreservesAssets(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "skills")
 	created := createAuthoredSkill(t, root, "package", validFor("package"))
@@ -128,7 +130,7 @@ func TestApplyChange_InstallReplaceRequiresCurrentRevisionAndPreservesAssets(t *
 		})
 	}
 	stage := stageReviewedPackage(t, root, "reviewed", "new")
-	next, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, Slug: "package", StagedDir: stage,
+	next, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, ReplaceLocalChanges: true, Slug: "package", StagedDir: stage,
 		Expect: Expectation{Revision: withAsset.Revision}})
 	require.NoError(t, err)
 	assert.Equal(t, PersistenceComplete, next.PersistenceStatus)
@@ -146,7 +148,7 @@ func TestApplyChange_ReportsSuccessfulPublishWhenSwapCleanupFails(t *testing.T) 
 	calls := []string{}
 	FaultSwapRemove = func(path string) error { calls = append(calls, path); return errors.New("cleanup refused") }
 	t.Cleanup(func() { FaultSwapRemove = previous })
-	outcome, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, Slug: "package", StagedDir: stage,
+	outcome, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, ReplaceLocalChanges: true, Slug: "package", StagedDir: stage,
 		Expect: Expectation{Revision: created.Revision}})
 	require.NoError(t, err, "committed replacement is successful despite cleanup failure")
 	assert.Equal(t, []string{filepath.Join(root, ".swap", "package")}, calls, "fault fired on the actual backup disposal")
@@ -188,7 +190,7 @@ func TestApplyChange_ReportsFailedPutBackWithoutClaimingPublication(t *testing.T
 		return restoreErr
 	}
 	t.Cleanup(func() { renamePublishedSkill, FaultPutBackRename = previousRename, previousPutBack })
-	outcome, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, Slug: "package", StagedDir: stage,
+	outcome, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, ReplaceLocalChanges: true, Slug: "package", StagedDir: stage,
 		Expect: Expectation{Revision: created.Revision}})
 	require.ErrorIs(t, err, publishErr)
 	require.ErrorIs(t, err, restoreErr)
@@ -217,7 +219,7 @@ func TestApplyChange_RejectsInvalidStageBeforeMovingPublishedSkill(t *testing.T)
 	created := createAuthoredSkill(t, root, "package", validFor("package"))
 	stage := filepath.Join(root, ".staging", "invalid")
 	require.NoError(t, os.MkdirAll(stage, 0o755))
-	outcome, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, Slug: "package", StagedDir: stage,
+	outcome, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, ReplaceLocalChanges: true, Slug: "package", StagedDir: stage,
 		Expect: Expectation{Revision: created.Revision}})
 	require.ErrorIs(t, err, ErrSaveCheckFailed)
 	assert.Contains(t, err.Error(), "the change to 'package' was not saved:")

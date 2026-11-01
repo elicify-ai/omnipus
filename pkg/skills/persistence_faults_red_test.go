@@ -8,6 +8,8 @@ package skills
 // loader levels — split noted in the traceability table).
 // Traces to: skills-spec-r15.md §7.6, §7.1 steps 5–7, §5.10 partial variants,
 // §16 US-11, §17.1 row 33, §17.2 D-8.
+// Replacement fixtures are authored or lack history: §5.6/§9.2 requires
+// explicit local-change confirmation to reach these downstream fault stages.
 
 import (
 	"errors"
@@ -96,7 +98,7 @@ func TestClass2_InstallReplace_BlobWriteFails_PredecessorRestorable(t *testing.T
 		[]byte(validSkillMD("app", "replaced", "replaced body")), 0o644))
 
 	out, err := ApplyChange(root, ChangeRequest{
-		Kind: KindInstallReplace, Slug: "app", StagedDir: staged,
+		Kind: KindInstallReplace, ReplaceLocalChanges: true, Slug: "app", StagedDir: staged,
 		Expect: Expectation{Revision: out0.Revision},
 		Actor:  ChangeActor{Kind: "person", Tool: "rest-install"},
 	})
@@ -151,7 +153,7 @@ func TestClass3_SwapRemoveOrAuditFault_SuccessWithWarning(t *testing.T) {
 		defer func() { FaultSwapRemove = nil }()
 
 		out, err := ApplyChange(root, ChangeRequest{
-			Kind: KindInstallReplace, Slug: "app", StagedDir: stagedWithSkillMD(t, "app", "replaced"),
+			Kind: KindInstallReplace, ReplaceLocalChanges: true, Slug: "app", StagedDir: stagedWithSkillMD(t, "app", "replaced"),
 			Expect: Expectation{Revision: out0.Revision},
 			Actor:  ChangeActor{Kind: "person", Tool: "rest-install"},
 		})
@@ -223,7 +225,7 @@ func TestClass1_Step5FailsWithPutBack(t *testing.T) {
 	defer func() { FaultForwardRename = nil }()
 
 	out, err := ApplyChange(root, ChangeRequest{
-		Kind: KindInstallReplace, Slug: "app", StagedDir: stagedWithSkillMD(t, "app", "replacement"),
+		Kind: KindInstallReplace, ReplaceLocalChanges: true, Slug: "app", StagedDir: stagedWithSkillMD(t, "app", "replacement"),
 		Expect: Expectation{Revision: original},
 		Actor:  ChangeActor{Kind: "person", Tool: "rest-install"},
 	})
@@ -382,7 +384,7 @@ func TestClass1b_ReplaceSwapAndPutBackFail(t *testing.T) {
 	}()
 
 	out, err := ApplyChange(root, ChangeRequest{
-		Kind: KindInstallReplace, Slug: "app", StagedDir: staged,
+		Kind: KindInstallReplace, ReplaceLocalChanges: true, Slug: "app", StagedDir: staged,
 		Expect: Expectation{Revision: rev},
 		Actor:  ChangeActor{Kind: "person", Tool: "rest-install"},
 	})
