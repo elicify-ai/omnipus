@@ -126,6 +126,26 @@ func wireLikeTheGatewayLatesWiresIt(t *testing.T, p *u2bLauncherProcess) {
 	}})
 }
 
+// expectSessionPlaneLikeTheGateway marks the executor's session plane
+// expected, exactly as the gateway does before it starts the schedulers
+// (pkg/gateway/gateway_boot.go::setupAndStartServices →
+// TaskExecutor.ExpectSessionPlane, 9a82f7ecf). On a tree without the seam
+// (the pre-fix ebb5d3922, where the drain dispatches into the unwired
+// window) the method does not exist, so the call goes through a local
+// interface assertion: the row then drives the raw unwired boot — the
+// defect itself — and the absence is logged, never faked.
+type sessionPlaneExpecter interface{ ExpectSessionPlane() }
+
+func expectSessionPlaneLikeTheGateway(t *testing.T, p *u2bLauncherProcess) {
+	t.Helper()
+	if e, ok := any(GetTaskExecutor(p.loop)).(sessionPlaneExpecter); ok {
+		e.ExpectSessionPlane()
+		return
+	}
+	t.Logf("seam TaskExecutor.ExpectSessionPlane absent on this tree: the boot cannot mark " +
+		"the plane expected, so the drain dispatches into the unwired window (the defect under test)")
+}
+
 func TestU2bBootReplay_LateWiredBoot_DefaultLauncherPath_KeepsRuntimeClassification_AndRunsOnce(t *testing.T) {
 	home, clk := t.TempDir(), newTriggerFakeClock()
 	worker := newU2bAsyncWorker()
@@ -612,17 +632,17 @@ func TestU2bBootReplay_HeldFire_TaskDeletedWhileHeld_NeverRuns_JobRemoved(t *tes
 }
 
 // TestU2bBootReplay_QueueDrain_UnwiredWindow_TaskKeepsClassification_AndRunsOnce
-// is addendum-10 C3: the queued-task drain dispatches `next` tasks directly
-// through pkg/agent/task_executor.go::CheckQueuedTasks — the sole production
-// caller is pkg/heartbeat/task_drain.go, whose runLoop fires its FIRST tick
-// one second after Start, and pkg/gateway/gateway_boot.go::startSchedulers
-// starts the drain before the session plane is wired. The hold
-// (task_trigger_boot_hold.go::holdBootOwedFire) covers only RunScheduled's
-// boot-owed fires, so a drain dispatch in the same unwired window falls back
-// to ISOLATED, mints nothing and is refused later — the same defect, a
-// parallel path. Expected: RED on BOTH the pre-fix tree and a92efc83e; if it
-// fails on a92efc83e it is a real defect for the developer, exactly as the
-// addendum anticipated.
+// is addendum-10 C3, updated for addendum 11: the drain-path regression
+// control. Its earlier shape expected a run from a tick whose launcher and
+// resolver were never wired — the exact isolated-run behaviour the drain
+// hold (round A) removes — so it now wires the plane fully, late and in
+// production order (as the half-wired fire test does) before expecting the
+// run. The outcome oracles are unchanged: exactly one run, a persisted
+// runtime classification, a real judged outcome, never dispatched twice.
+// Production path this pins: the queue drain (sole caller
+// pkg/heartbeat/task_drain.go, first tick one second after Start) dispatches
+// `next` tasks through pkg/agent/task_executor.go::CheckQueuedTasks once the
+// session plane is wired.
 func TestU2bBootReplay_QueueDrain_UnwiredWindow_TaskKeepsClassification_AndRunsOnce(t *testing.T) {
 	home, clk := t.TempDir(), newTriggerFakeClock()
 	p1 := newU2bLauncherProcess(t, home, clk, completedWorkerForU2b())
@@ -633,22 +653,25 @@ func TestU2bBootReplay_QueueDrain_UnwiredWindow_TaskKeepsClassification_AndRunsO
 	p1.stop()
 	u2bAsyncRestore(t, home, image)
 
-	drain := completedWorkerForU2b()
-	p2 := newU2bUnwiredLauncherProcess(t, home, clk, drain)
-	wireEnforcementOnly(t, p2) // deterministic: the wired plane refuses any classification-less dispatch
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	expectSessionPlaneLikeTheGateway(t, p2) // the gateway marks the plane expected before the schedulers start
+	wireEnforcementOnly(t, p2)
 	p2.physicalBoot(t)
+	// The production wiring order completes the plane before the drain is
+	// expected to dispatch: stores, then executor store + launcher, then the
+	// main resolver LAST.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release after full wiring", p2.loop.taskExecutor.wg.Wait)
+
 	// One drain tick through the drain's own production entry.
 	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
 	u2bAsyncJoin(t, "queue-drain dispatch and execution", p2.loop.taskExecutor.wg.Wait)
 
 	runs := p2.runs(t, queued.ID)
-	require.Len(t, runs, 1, "C3: the queued task dispatches exactly once in the window")
+	require.Len(t, runs, 1, "C3: the queued task dispatches exactly once, after full wiring")
 	qrec, err := p2.loop.GetSessionLifecycleStore().Load(runs[0].SessionID)
 	require.NoError(t, err,
-		"C3: a task the queue drain dispatches in the unwired window must carry a persisted "+
-			"runtime classification; without it the wired enforce refuses the run "+
-			"(processTaskDirect: the task run was not dispatched: session has no persisted runtime "+
-			"classification) — the drain path is outside the boot-owed-fire hold")
+		"C3: a task the queue drain dispatches must carry a persisted runtime classification")
 	require.NotNil(t, qrec)
 	require.Equal(t, task.StatusDone, runs[0].Status, "C3: the drained task executes to a real outcome")
 	require.Equal(t, u2bAsyncEvidence, runs[0].Result)
@@ -660,4 +683,122 @@ func TestU2bBootReplay_QueueDrain_UnwiredWindow_TaskKeepsClassification_AndRunsO
 	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
 	u2bAsyncJoin(t, "second drain tick", p2.loop.taskExecutor.wg.Wait)
 	require.Equal(t, runs, p2.runs(t, queued.ID), "C3: the drained task is never dispatched twice")
+}
+
+// TestU2bBootReplay_DrainHold_NoStoreWindow_TickWaits_ThenRunsOnce is
+// addendum-11 W1: the drain's tick lands while NO store is wired at all —
+// production's startSchedulers-to-setupPlans window (gateway_boot.go: start
+// schedulers :360, SetSessionMessagingStores :1029). A run dispatched there
+// was minted nowhere (ebb5d3922's recordStore has neither store) and is
+// refused once enforcement is wired: the same UAT error. Oracle: the tick
+// dispatches nothing before the plane is fully wired; after wiring in
+// production order the next tick dispatches exactly one run that executes to
+// Done with a persisted classification; a further tick adds nothing; the
+// task is not left stuck in queued.
+//
+// "Plane expected" is the gateway's own seam: TaskExecutor.ExpectSessionPlane,
+// called before startSchedulers (9a82f7ecf), so the drain holds until the
+// launcher, the executor's lifecycle store and the main resolver are all
+// wired. An executor never marked (the existing no-plane CheckQueuedTasks
+// unit fixtures) dispatches as before.
+func TestU2bBootReplay_DrainHold_NoStoreWindow_TickWaits_ThenRunsOnce(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	p1 := newU2bLauncherProcess(t, home, clk, completedWorkerForU2b())
+	queued := newCompletionContractTask(t, p1.loop, "native-agent", "U2b drain W1 task")
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	expectSessionPlaneLikeTheGateway(t, p2) // the gateway marks the plane expected before the schedulers start
+	p2.physicalBoot(t)
+	require.Nil(t, GetTaskExecutor(p2.loop).getLifecycleStore(), "state: no store is wired at tick 1")
+
+	// Drain tick 1: NO store is wired (the W1 window).
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "drain tick 1 in the no-store window", p2.loop.taskExecutor.wg.Wait)
+	require.Empty(t, p2.runs(t, queued.ID),
+		"W1: the drain must dispatch nothing while the expected session plane is unwired — "+
+			"a run minted nowhere is refused once enforcement is wired")
+
+	// Wire in production order: stores (setupPlans), then executor store and
+	// launcher, then the main resolver LAST (buildRESTAPI).
+	wireEnforcementOnly(t, p2)
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+
+	// Drain tick 2, after full wiring.
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "drain tick 2 after full wiring", p2.loop.taskExecutor.wg.Wait)
+
+	runs := p2.runs(t, queued.ID)
+	require.Len(t, runs, 1, "W1: exactly one run, dispatched after the plane is fully wired")
+	w1rec, err := p2.loop.GetSessionLifecycleStore().Load(runs[0].SessionID)
+	require.NoError(t, err, "W1: the dispatched task's session must have a persisted runtime classification")
+	require.NotNil(t, w1rec)
+	require.Equal(t, task.StatusDone, runs[0].Status, "W1: the drained task executes to a real outcome")
+	require.Equal(t, u2bAsyncEvidence, runs[0].Result)
+	tk, err := p2.loop.taskStore.Get(queued.ID)
+	require.NoError(t, err)
+	require.Equal(t, task.StatusDone, tk.Status, "W1: the task is not left stuck in queued")
+
+	// Tick 3 adds nothing: the task is terminal.
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "drain tick 3", p2.loop.taskExecutor.wg.Wait)
+	require.Equal(t, runs, p2.runs(t, queued.ID), "W1: the drained task is never dispatched twice")
+}
+
+// TestU2bBootReplay_DrainHold_HalfWiredWindow_NoIsolatedRun_MainChildAfterWiring
+// is addendum-11 W2: the drain's tick lands in the half-wired window — the
+// session-messaging stores wired (setupPlans) while the launcher and main
+// resolver are not yet (startPlanEngine/buildRESTAPI) — and the assignee owns
+// an eligible main. A run dispatched there derives ISOLATED (no launcher, no
+// resolver) instead of being that main's child: the run loses its parent,
+// grants inheritance and per-chat Auto setting. Oracle: no isolated run from
+// the half-wired tick; after full wiring in production order the next tick
+// dispatches exactly one run as a MAIN child (requireMainChild evidence,
+// which also proves the persisted classification), executing to Done; a
+// further tick adds nothing. Same plane-expected seam as W1.
+func TestU2bBootReplay_DrainHold_HalfWiredWindow_NoIsolatedRun_MainChildAfterWiring(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	p1 := newU2bLauncherProcess(t, home, clk, completedWorkerForU2b())
+	queued := newCompletionContractTask(t, p1.loop, "native-agent", "U2b drain W2 task")
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	expectSessionPlaneLikeTheGateway(t, p2) // the gateway marks the plane expected before the schedulers start
+	wireEnforcementOnly(t, p2)              // stores wired; launcher and resolver not
+	require.Nil(t, GetTaskExecutor(p2.loop).getLifecycleStore(), "state: the executor's store is not wired at tick 1")
+	require.Nil(t, GetTaskExecutor(p2.loop).launcher, "state: no launcher is wired yet")
+	require.Nil(t, GetTaskExecutor(p2.loop).mainResolver, "state: no main resolver is wired yet")
+	p2.physicalBoot(t)
+
+	// Drain tick 1: the half-wired window (W2), assignee owns a main.
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "drain tick 1 in the half-wired window", p2.loop.taskExecutor.wg.Wait)
+	require.Empty(t, p2.runs(t, queued.ID),
+		"W2: the drain must dispatch nothing while the expected plane is only half wired — "+
+			"a run here went isolated instead of being the assignee main's child")
+
+	// Full wiring in production order; the resolver LAST.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+
+	// Drain tick 2, after full wiring.
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "drain tick 2 after full wiring", p2.loop.taskExecutor.wg.Wait)
+
+	runs := p2.runs(t, queued.ID)
+	require.Len(t, runs, 1, "W2: exactly one run, dispatched after the plane is fully wired")
+	p2.requireMainChild(t, queued.ID, runs[0].SessionID) // classification + real launcher parentage + task origin
+	require.Equal(t, task.StatusDone, runs[0].Status, "W2: the drained task executes to a real outcome")
+	require.Equal(t, u2bAsyncEvidence, runs[0].Result)
+	tk, err := p2.loop.taskStore.Get(queued.ID)
+	require.NoError(t, err)
+	require.Equal(t, task.StatusDone, tk.Status, "W2: the task is not left stuck in queued")
+
+	// Tick 3 adds nothing.
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "drain tick 3", p2.loop.taskExecutor.wg.Wait)
+	require.Equal(t, runs, p2.runs(t, queued.ID), "W2: the drained task is never dispatched twice")
 }
