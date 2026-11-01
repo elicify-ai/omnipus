@@ -8,6 +8,7 @@ import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { fetchChannelConfig, fetchChannels } from '@/lib/api'
 import { ApiError } from '@/lib/api-error'
 import { ApiSchemaError, getApiSchemaErrorCount } from '@/lib/api/http'
 import {
@@ -32,6 +33,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual, // outbound clients, request and ApiError remain REAL, not stubs.
+    fetchChannels: vi.fn().mockResolvedValue([]),
+    fetchMailboxes: vi.fn().mockResolvedValue([]),
     fetchChannelConfig: vi.fn().mockResolvedValue({ token: '[configured]' }),
     fetchChannelRouting: vi.fn().mockResolvedValue({ default_agent_id: '', workspace_id: '', bound: false }),
     fetchAgents: vi.fn().mockResolvedValue([]),
@@ -45,6 +48,7 @@ vi.mock('framer-motion', () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 import { ChannelConfigPanel } from './ChannelConfigPanel'
+import { ConnectorsScreen } from '@/components/screens/ConnectorsScreen'
 
 const STALE = 'These settings changed since you opened them. The current values are shown; check them and save again.'
 const CONNECT_FIRST = 'Connect the channel first to add Discord ids.'
@@ -207,12 +211,29 @@ describe('T-30 starting messages section — S-80', () => {
     expect(reads).toBe(0) // Chief Q1 / S-80: unsupported platforms do not GET the setting.
   })
 
-  it('webchat has a real Configure panel but no Starting messages section', async () => {
-    renderPanel('webchat')
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Configure Web Chat' })).toBeInTheDocument())
-    // A loaded Configure form, not a closed panel or a loading skeleton, is
-    // the control for this negation (T-2 nonconnector row / NB-10).
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeInTheDocument())
+  it('F2 / S-80 / FR-026: built-in webchat offers no Configure and its mounted panel settles without start controls', async () => {
+    // S-80 specifies Discord/Slack/Telegram, not a Web Chat Configure form.
+    // Team-lead's F2 clarification: preserve the built-in card with no Configure;
+    // even an accidentally mounted panel must settle with no outbound section.
+    vi.mocked(fetchChannels).mockResolvedValueOnce([
+      { id: 'webchat', name: 'Web Chat', transport: 'websocket', enabled: true, description: 'Built-in browser chat' },
+      { id: 'discord', instance_id: 'discord.qa', name: 'Discord', transport: 'websocket', enabled: true, description: 'Discord Gateway' },
+    ])
+    const screenClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const connectors = render(<QueryClientProvider client={screenClient}><ConnectorsScreen /></QueryClientProvider>)
+    const webchatCard = await screen.findByTestId('channel-card-webchat')
+    expect(within(webchatCard).getByText('Web Chat')).toBeVisible()
+    expect(within(webchatCard).getByText('Always on')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Configure discord.qa' })).toBeVisible() // positive control: real Configure actions render
+    expect(within(webchatCard).queryByRole('button', { name: /Configure/i })).not.toBeInTheDocument()
+    connectors.unmount()
+    screenClient.clear()
+
+    vi.mocked(fetchChannelConfig).mockClear()
+    const panelClient = renderPanel('webchat') // unchanged real-panel render-loop guard
+    await act(async () => { await panelClient.refetchQueries({ queryKey: ['channel-config', 'webchat.qa'], exact: true }) })
+    expect(fetchChannelConfig).toHaveBeenCalledWith('webchat.qa') // positive control: mounted, enabled hydration query ran
+    expect(panelClient.getQueryState(['channel-config', 'webchat.qa'])?.status).toBe('success')
     expect(screen.queryByText('Starting messages', { exact: true })).not.toBeInTheDocument()
     expect(screen.queryByRole('radio', { name: 'Only answer' })).not.toBeInTheDocument()
     expect(screen.queryByRole('radio', { name: 'Answer and also start messages' })).not.toBeInTheDocument()
