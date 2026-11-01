@@ -69,7 +69,7 @@ func TestT26_OutboundWriterExactlyMatchesTheUserWritableSurface(t *testing.T) {
 	require.Equal(t, false, schema["additionalProperties"], "FR-030: undeclared writable fields must be refused")
 	require.ElementsMatch(t, []string{"id", "policy", "targets", "expected_revision"}, schema["required"],
 		"FR-030: routing id, both writable properties and concurrency token are all required")
-	var names []string
+	names := make([]string, 0, len(properties))
 	for name := range properties {
 		names = append(names, name)
 	}
@@ -92,7 +92,8 @@ func TestT26_OutboundWriterExactlyMatchesTheUserWritableSurface(t *testing.T) {
 		require.True(t, ok, "FR-030: %s is a declared property", name)
 		require.Equal(t, "string", property["type"], "FR-030: %s has string type", name)
 	}
-	policy := properties["policy"].(map[string]any)
+	// The loop above already fatally requires policy to be an object.
+	policy, _ := properties["policy"].(map[string]any)
 	require.ElementsMatch(t, []string{"reply_only", "agent_may_start"}, policy["enum"], "FR-030: exact posting-policy enum")
 	targets, ok := properties["targets"].(map[string]any)
 	require.True(t, ok)
