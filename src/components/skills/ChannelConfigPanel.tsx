@@ -35,7 +35,7 @@ import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
 import { ChannelOutboundSection } from '@/components/connectors/ChannelOutboundSection'
 import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
 import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
-import type { ChannelConfigureResponse } from '@/lib/api/generated/openapi-types'
+import type { ChannelConfigureResponse, ChannelRejectedSenders } from '@/lib/api/generated/openapi-types'
 import {
   availabilityText,
   describeConfigureOutcome,
@@ -82,6 +82,12 @@ interface ChannelConfigPanelProps {
   enabled?: boolean
   /** A failed channels readback is unknown, not a confirmed disabled state. */
   enabledStateUnknown?: boolean
+  /**
+   * ChannelEntry.rejected_senders from the parent's live channels query
+   * (channels spec FR-061): present only when the running adapter ignored at
+   * least one message from a sender not on its allowed list.
+   */
+  rejectedSenders?: ChannelRejectedSenders
 }
 
 // #326: Map raw snake_case API field keys to human-readable labels using the
@@ -417,6 +423,7 @@ export function ChannelConfigPanel({
   nativeAvailable,
   enabled,
   enabledStateUnknown = false,
+  rejectedSenders,
 }: ChannelConfigPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -895,6 +902,21 @@ export function ChannelConfigPanel({
             ? 'Link your WhatsApp account by scanning the QR code with your phone.'
             : `Enter your ${channelName} credentials to connect the bot.`}
         </p>
+
+        {/* Channels spec FR-061 / S-53: one line from the roster entry's
+            rejected_senders (present only when count >= 1). Each canonical id
+            is its own text span so it can be selected and copied whole. */}
+        {rejectedSenders && (
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed px-[var(--space-4)] pt-[var(--space-2)]">
+            {`Ignored ${rejectedSenders.count} messages from senders not on the allowed list. Latest: `}
+            {rejectedSenders.recent.map((id, i) => (
+              <span key={`${i}-${id}`}>
+                {i > 0 && ', '}
+                <span className="select-all text-[var(--color-secondary)]">{id}</span>
+              </span>
+            ))}
+          </p>
+        )}
 
         {isLoading ? (
           <div className="px-[var(--space-4)] pt-[var(--space-4)] space-y-[var(--space-3)]">
