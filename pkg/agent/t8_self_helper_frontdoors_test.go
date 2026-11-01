@@ -37,8 +37,8 @@ func TestOmnipusSelfDelegate_QuestionAndResponseReachHelper(t *testing.T) {
 		if entry.Message == nil {
 			continue
 		}
-		q, err := entry.Message.AsSessionMessageQuestion()
-		require.NoError(t, err)
+		q, decodeErr := entry.Message.AsSessionMessageQuestion()
+		require.NoError(t, decodeErr)
 		if q.Kind == "question" && q.CorrelationId == correlation {
 			questions = append(questions, q)
 		}
@@ -76,7 +76,7 @@ func TestOmnipusSelfDelegate_ListJobsShowsBothHelpers(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &payload))
 	rows, ok := payload["rows"].([]any)
 	require.True(t, ok, "rows must be an array")
-	var ids []string
+	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		obj, ok := row.(map[string]any)
 		require.True(t, ok)

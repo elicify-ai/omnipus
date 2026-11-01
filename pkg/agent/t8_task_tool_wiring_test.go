@@ -77,7 +77,8 @@ func TestTaskTrigger_ScheduledTaskNotRunEarly_ProductionWiring(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			al, sched, clock := t8NativeSchedulingFixture(t)
 			at := clock.Now().Add(24 * time.Hour).UnixMilli()
-			args := t8CreateSchedulingArgs("T8 " + kind)
+			title := "T8 " + kind
+			args := t8CreateSchedulingArgs(title)
 			if kind == "once" {
 				args["trigger"] = map[string]any{"type": "once", "config": map[string]any{"at_ms": at}}
 			}
@@ -87,7 +88,7 @@ func TestTaskTrigger_ScheduledTaskNotRunEarly_ProductionWiring(t *testing.T) {
 			sessionsBefore := t8SessionCount(t, al)
 			result := t8NativeTool(t, al, "create_task").Execute(t8NativeTaskCallContext(), args)
 			require.False(t, result.IsError, "valid production create: %s", result.ForLLM)
-			tk := t8CreatedTask(t, al, args["title"].(string))
+			tk := t8CreatedTask(t, al, title)
 			if kind == "manual" {
 				require.Equal(t, task.StatusNext, tk.Status, "18.13 ordinary pickup control")
 				al.taskExecutor.CheckQueuedTasks(context.Background())
@@ -134,10 +135,11 @@ func TestTaskTrigger_ScheduledTaskNotRunEarly_ProductionWiring(t *testing.T) {
 
 func TestTaskTrigger_AttachmentMovesNextToWaiting_ProductionWiring(t *testing.T) {
 	al, sched, clock := t8NativeSchedulingFixture(t)
-	args := t8CreateSchedulingArgs("T8 attach before drain")
+	const title = "T8 attach before drain"
+	args := t8CreateSchedulingArgs(title)
 	result := t8NativeTool(t, al, "create_task").Execute(t8NativeTaskCallContext(), args)
 	require.False(t, result.IsError, "manual creation: %s", result.ForLLM)
-	tk := t8CreatedTask(t, al, args["title"].(string))
+	tk := t8CreatedTask(t, al, title)
 	require.Equal(t, task.StatusNext, tk.Status)
 	before := t8SessionCount(t, al)
 	at := clock.Now().Add(24 * time.Hour).UnixMilli()

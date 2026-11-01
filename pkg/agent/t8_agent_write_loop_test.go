@@ -131,8 +131,8 @@ func TestT8AgentEnv_RealLoopApprovalAndRedaction(t *testing.T) {
 			require.NoError(t, err)
 			require.NotEmpty(t, sessions)
 			for _, meta := range sessions {
-				transcript, err := al.GetSessionStore().ReadTranscript(meta.ID)
-				require.NoError(t, err)
+				transcript, transcriptErr := al.GetSessionStore().ReadTranscript(meta.ID)
+				require.NoError(t, transcriptErr)
 				t8AssertSecretAbsent(t, "persisted transcript", tc.secret, transcript)
 			}
 			// ProcessDirectAs's explicit scope key addresses the model archive;

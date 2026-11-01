@@ -13,13 +13,13 @@ import (
 func TestSteerAdmission_ReleaseLockedRespectsLiveCap(t *testing.T) {
 	for _, method := range []string{"release", "releaseExecution", "disposition-owner releaseLocked"} {
 		t.Run(method, func(t *testing.T) {
-			cap := 3
-			g := newSteerAdmission(func() int { return cap })
+			liveCap := 3
+			g := newSteerAdmission(func() int { return liveCap })
 			for i := 0; i < 3; i++ {
 				yes, _, _ := g.tryAdmitRun(fmt.Sprint(i), 1, fmt.Sprint("run-", i), 1)
 				require.True(t, yes)
 			}
-			cap = 2
+			liveCap = 2
 			yes, pos, limit := g.tryAdmitRun("queued", 1, "run-q", 1)
 			require.False(t, yes)
 			assert.Equal(t, 1, pos)
@@ -77,8 +77,8 @@ func TestSelfDelegate_MemoryPressure_AdmissionBoundary(t *testing.T) {
 }
 
 func TestSelfDelegate_QueueDrainsUnderLiveCap(t *testing.T) {
-	cap := 2
-	g := newSteerAdmission(func() int { return cap })
+	liveCap := 2
+	g := newSteerAdmission(func() int { return liveCap })
 	for _, id := range []string{"a", "b"} {
 		ok, _, _ := g.tryAdmit(id, 1)
 		require.True(t, ok)
@@ -97,7 +97,7 @@ func TestSelfDelegate_QueueDrainsUnderLiveCap(t *testing.T) {
 	assert.Zero(t, g.queueLen())
 	// A resolver going lower while work is already running must never cancel
 	// existing work and must not promote until capacity actually becomes free.
-	cap = 1
+	liveCap = 1
 	_, promoted := g.release("q2", 1)
 	assert.False(t, promoted)
 	assert.Equal(t, 1, g.activeCount())

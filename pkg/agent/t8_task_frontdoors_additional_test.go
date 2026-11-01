@@ -31,7 +31,7 @@ func TestT8Discovery_TaskDetailInTopThree(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(strings.NewReader(r.ForLLM[start:])).Decode(&out))
 	require.NotEmpty(t, out.Matches, "instrument: search actually returned candidates")
-	var first []string
+	first := make([]string, 0, min(3, len(out.Matches)))
 	for _, m := range out.Matches[:min(3, len(out.Matches))] {
 		first = append(first, m.Name)
 	}
@@ -77,8 +77,8 @@ func TestT8Omnipus_WeeklySelfTaskWaitAndMissingMiaEdge(t *testing.T) {
 				require.True(t, r.IsError, "21.8 creation without an edge is refused")
 				assert.Contains(t, r.ForLLM, "mia", "existing delegation refusal identifies the prohibited target")
 				assert.Contains(t, strings.ToLower(r.ForLLM), "delegat", "it is a delegation refusal, not an unrelated schema error")
-				after, err := al.taskStore.List(task.Filter{})
-				require.NoError(t, err)
+				after, listErr := al.taskStore.List(task.Filter{})
+				require.NoError(t, listErr)
 				assert.Equal(t, before, after)
 				assert.Empty(t, sched.cs.ListJobs(true))
 				assert.Equal(t, beforeSessions, t8SessionCount(t, al))

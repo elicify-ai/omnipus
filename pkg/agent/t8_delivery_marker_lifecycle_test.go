@@ -52,8 +52,8 @@ func TestT8DeliveryMarker_SettledInvalidationAndIdenticalSave(t *testing.T) {
 			switch kind {
 			case "18.33a clear and reattach":
 				manual := &task.Trigger{Type: task.TriggerManual}
-				changed, err := al.taskStore.Update(member.ID, task.Patch{Trigger: &manual})
-				require.NoError(t, err)
+				changed, writeErr := al.taskStore.Update(member.ID, task.Patch{Trigger: &manual})
+				require.NoError(t, writeErr)
 				assert.Nil(t, t8StoredMarker(t, al.taskStore, member.ID), "clear atomically invalidates delivery before any scheduler callback")
 				sched.OnTaskUpserted(changed)
 			case "18.33b1 replace future":
@@ -61,8 +61,8 @@ func TestT8DeliveryMarker_SettledInvalidationAndIdenticalSave(t *testing.T) {
 				change = &task.Trigger{Type: task.TriggerOnce, Config: task.TriggerConfig{AtMs: &future}}
 			case "18.36 other edit and sweep":
 				title := "edited while held"
-				changed, err := al.taskStore.Update(member.ID, task.Patch{Title: &title})
-				require.NoError(t, err)
+				changed, writeErr := al.taskStore.Update(member.ID, task.Patch{Title: &title})
+				require.NoError(t, writeErr)
 				sched.OnTaskUpserted(changed)
 				sched.RunRecoverySweep()
 			}

@@ -97,7 +97,9 @@ func TestReads_VisibilityTable(t *testing.T) {
 		criteria, ok := out["criteria"].([]any)
 		require.True(t, ok)
 		require.Len(t, criteria, 1)
-		assert.Equal(t, c.Text, criteria[0].(map[string]any)["text"])
+		criterion, ok := criteria[0].(map[string]any)
+		require.True(t, ok, "the criterion is an object, not an unchecked JSON value")
+		assert.Equal(t, c.Text, criterion["text"])
 	})
 	t.Run("4.5 no session goal is plain result", func(t *testing.T) {
 		f := t8ReadLoop(t)
@@ -108,7 +110,7 @@ func TestReads_VisibilityTable(t *testing.T) {
 		for _, sameWorkspace := range []bool{false, true} {
 			t.Run(fmt.Sprintf("4.6 4.7 4.9 4.10 %s same-workspace-%t", reader.tool, sameWorkspace), func(t *testing.T) {
 				const id = "identical-request-id"
-				var results []string
+				results := make([]string, 0, 2)
 				for _, exists := range []bool{true, false} {
 					f := t8ReadLoop(t)
 					if exists {

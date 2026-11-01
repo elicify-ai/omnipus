@@ -235,12 +235,12 @@ func TestSelfDelegate_MemoryPressureQueues_ProductionWiring(t *testing.T) {
 			stubMemory(t, true, tc.measurable)
 			al, provider, parent := t8SelfDelegateFixture(t)
 			al.GetConfig().Performance.MaxParallelAgents = tc.explicit
-			cap := 2
+			admissionLimit := 2
 			if tc.explicit > 0 {
-				cap = tc.explicit
+				admissionLimit = tc.explicit
 			}
-			turns := make([]*t8HelperTurn, 0, cap)
-			for range cap {
+			turns := make([]*t8HelperTurn, 0, admissionLimit)
+			for range admissionLimit {
 				r := t8DelegateCall(t, al, parent, "occupy pressure slot")
 				require.Equal(t, "running", string(r.State))
 				turns = append(turns, provider.next(t))
@@ -249,13 +249,13 @@ func TestSelfDelegate_MemoryPressureQueues_ProductionWiring(t *testing.T) {
 			require.Equal(t, "queued", string(extra.State), "FR-200 memory applies on real delegate admission")
 			require.NotNil(t, extra.QueuePosition)
 			assert.Equal(t, 1, *extra.QueuePosition)
-			t8WaitHelperQueue(t, al, cap, 1)
+			t8WaitHelperQueue(t, al, admissionLimit, 1)
 			if tc.name == "21.16 pressure" {
 				stubMemory(t, false, true) // specified healthy-relief schedule
 			}
 			turns[0].finish()
 			queued := provider.next(t)
-			t8WaitHelperQueue(t, al, cap, 0)
+			t8WaitHelperQueue(t, al, admissionLimit, 0)
 			queued.finish()
 			for _, turn := range turns {
 				turn.finish()
@@ -267,7 +267,7 @@ func TestSelfDelegate_MemoryPressureQueues_ProductionWiring(t *testing.T) {
 func TestSelfDelegate_PromotionRespectsMemoryCap_ProductionWiring(t *testing.T) {
 	stubMemory(t, false, true)
 	al, provider, parent := t8SelfDelegateFixture(t)
-	var turns []*t8HelperTurn
+	turns := make([]*t8HelperTurn, 0, 3)
 	for range 3 {
 		r := t8DelegateCall(t, al, parent, "healthy running helper")
 		require.Equal(t, "running", string(r.State))

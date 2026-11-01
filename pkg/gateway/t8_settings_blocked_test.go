@@ -84,9 +84,10 @@ func TestThirdPartySettings_PathPresetAndPersonOnly(t *testing.T) {
 	t.Run("9.21 all rows validate before any save and fixed validation order", func(t *testing.T) {
 		f := t8SettingsAPI(t)
 		program := t8Program(t, t.TempDir(), "codex", 0o755)
-		body := map[string]any{"clis": map[string]any{"codex": map[string]any{"path": program, "preset_args": "--model ok"}, "opencode": map[string]any{"path": "relative", "preset_args": "bad\nline"}}}
+		clis := map[string]any{"codex": map[string]any{"path": program, "preset_args": "--model ok"}, "opencode": map[string]any{"path": "relative", "preset_args": "bad\nline"}}
+		body := map[string]any{"clis": clis}
 		f.expectRejected(t, body, "opencode", "path", "cli_path_invalid", "not_absolute", "relative", "The program path for OpenCode was not saved: it must be an absolute path.")
-		body["clis"].(map[string]any)["claude-code"] = map[string]any{"path": "first-relative", "preset_args": "bad\nline"}
+		clis["claude-code"] = map[string]any{"path": "first-relative", "preset_args": "bad\nline"}
 		f.expectRejected(t, body, "claude-code", "path", "cli_path_invalid", "not_absolute", "first-relative", "The program path for Claude Code was not saved: it must be an absolute path.")
 	})
 	t.Run("9.22 unknown fields and no revision token", func(t *testing.T) {
