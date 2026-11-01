@@ -31,6 +31,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { ModelSelector } from '@/components/ui/model-selector'
+import { QuietEffortLine } from '@/components/ui/model-effort-picker'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { buildProviderModelGroups } from '@/lib/providerModelGroups'
 import { isEligibleNewDefault, providerStatusLabel } from '@/lib/providerStatus'
@@ -126,6 +127,8 @@ export function RemoveProviderDialog({
   // so such an effect would re-run constantly and wipe a pending model pick.
   const [candidateId, setCandidateId] = React.useState<string>('')
   const [model, setModel] = React.useState('')
+  // Effort levels FR-066: the replacement's effort, stored with it ('' = Provider default).
+  const [effort, setEffort] = React.useState('')
   const activeCandidateId = candidateId || candidates[0]?.id || ''
 
   // A freshly opened dialog never inherits the previous provider's answers.
@@ -133,6 +136,7 @@ export function RemoveProviderDialog({
     if (!open) return
     setCandidateId('')
     setModel('')
+    setEffort('')
   }, [open, provider.id])
 
   const groups = React.useMemo(
@@ -143,7 +147,7 @@ export function RemoveProviderDialog({
   const needsNewDefault = provider.backs_default
   const onlyProvider = needsNewDefault && candidates.length === 0
   const chosenPair: DefaultModelUpdateRequest | undefined =
-    activeCandidateId && model ? { provider: activeCandidateId, model } : undefined
+    activeCandidateId && model ? { provider: activeCandidateId, model, ...(effort ? { reasoning_effort: effort } : {}) } : undefined
   const canRemove = !isRemoving && !onlyProvider && (!needsNewDefault || chosenPair !== undefined)
 
   const grouped = React.useMemo(() => {
@@ -227,6 +231,7 @@ export function RemoveProviderDialog({
                 // A model belongs to the provider it was picked under —
                 // carrying it across would submit a pair that does not exist.
                 setModel('')
+                setEffort('')
               }}
               className="h-auto flex-wrap gap-[var(--space-1)] border-0 bg-transparent p-0"
             >
@@ -255,7 +260,12 @@ export function RemoveProviderDialog({
             <ModelSelector
               models={[]}
               value={model}
-              onChange={setModel}
+              onChange={(next) => {
+                setModel(next)
+                // An effort belongs to the model it was chosen for; a new
+                // model starts again at Provider default, shown on the line.
+                setEffort('')
+              }}
               constrainToCatalog
               catalogGroups={groups}
               filterProviders={{ providerIds: activeCandidateId ? [activeCandidateId] : [] }}
@@ -263,6 +273,14 @@ export function RemoveProviderDialog({
               triggerTestId="new-default-model-select"
               itemTestIdPrefix="new-default-model-"
               emptyCatalogHint="This provider has no models to offer"
+            />
+            <QuietEffortLine
+              scope="replacement"
+              catalog={catalog}
+              value={{ provider: activeCandidateId, model, effort }}
+              onChange={setEffort}
+              contextName={`Effort for the new default model, ${model}`}
+              data-testid="new-default-effort"
             />
           </div>
         )}

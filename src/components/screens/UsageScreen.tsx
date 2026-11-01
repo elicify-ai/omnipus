@@ -76,6 +76,18 @@ interface BarItem {
   tokens: number
   href?: string
   cacheHitRatio?: ModelTokens['cache_hit_ratio']
+  /**
+   * Effort levels US-7 / FR-024 (by-model view only): output tokens and the
+   * provider-reported thinking tokens (a subset of output, never added to the
+   * total). `thinking` undefined = no call reported a count.
+   */
+  outputAndThinking?: { output: number; thinking?: number }
+}
+
+/** "Output 1.2K · Thinking 300 (reported by the provider)" or "Output 1.2K · Thinking tokens: not reported". */
+function thinkingSummary({ output, thinking }: { output: number; thinking?: number }): string {
+  const thinkingText = thinking === undefined ? 'Thinking tokens: not reported' : `Thinking ${formatTokens(thinking)} (reported by the provider)`
+  return `Output ${formatTokens(output)} · ${thinkingText}`
 }
 
 function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) {
@@ -116,6 +128,11 @@ function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) 
             >
               {formattedTokens}
             </div>
+            {item.outputAndThinking && (
+              <div className="w-full sm:w-auto shrink-0 whitespace-nowrap text-right text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                {thinkingSummary(item.outputAndThinking)}
+              </div>
+            )}
             {item.cacheHitRatio != null && (
               <div className="w-full sm:w-auto shrink-0 whitespace-nowrap text-right text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 <span>Cache hit</span>{' '}
@@ -358,15 +375,18 @@ export function UsageScreen() {
   const agentMax = agentItems[0]?.tokens ?? 0
 
   // By-model bar items
-  const modelMap = new Map<string, number>()
+  const modelMap = new Map<string, { total: number; output: number; thinking?: number }>()
   for (const a of summary?.agents ?? []) {
     if (!a.by_model) continue
     for (const [model, entry] of Object.entries(a.by_model)) {
-      modelMap.set(model, (modelMap.get(model) ?? 0) + (entry.total ?? 0))
+      const prior = modelMap.get(model) ?? { total: 0, output: 0 }
+      // Thinking: the sum of reported counts; absent only when no cell reported one.
+      const thinking = entry.reasoning === undefined ? prior.thinking : (prior.thinking ?? 0) + entry.reasoning
+      modelMap.set(model, { total: prior.total + (entry.total ?? 0), output: prior.output + (entry.out ?? 0), thinking })
     }
   }
   const modelItems: BarItem[] = [...modelMap.entries()]
-    .map(([name, tokens]) => ({ name, tokens }))
+    .map(([name, cell]) => ({ name, tokens: cell.total, outputAndThinking: { output: cell.output, thinking: cell.thinking } }))
     .filter((m) => m.tokens > 0)
     .sort((a, b) => b.tokens - a.tokens)
   const modelMax = modelItems[0]?.tokens ?? 0

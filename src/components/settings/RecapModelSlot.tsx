@@ -10,6 +10,7 @@
 
 import { useCallback, type ReactNode, type Ref } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Button } from '@/components/ui/button'
 import { EffortControl, type EffortValue } from '@/components/ui/model-effort-picker'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import { findServedRow } from '@/lib/effort/servedReasoning'
@@ -50,7 +51,35 @@ export function RecapModelSlot({ value, scope, contextName, disabled, note, chip
     ready: catalogQuery.status === 'success',
   })
 
-  const chip =
+  // #1291 / FR-063: a slot saved without its provider (old data) cannot be
+  // matched to one catalog row; the picker asks for the provider first and
+  // offers effort only once the pair is stored.
+  const providerCandidates =
+    value.model !== '' && value.provider === '' && catalog
+      ? catalog.providers.filter((p) => p.models.some((m) => m.id === value.model))
+      : []
+  const askProvider =
+    effortSwitch.pending === null && providerCandidates.length > 0 ? (
+      <span className="inline-flex flex-wrap items-center gap-[var(--space-2)]" data-testid={`${scope}-ask-provider`}>
+        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+          {`Choose the provider for ${value.model} before setting its effort.`}
+        </span>
+        {providerCandidates.map((candidate) => (
+          <Button
+            key={candidate.id}
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={disabled}
+            onClick={() => onCommit({ provider: candidate.id, model: value.model }, value.effort, null)}
+          >
+            {`Use ${candidate.name}`}
+          </Button>
+        ))}
+      </span>
+    ) : null
+
+  const chip = askProvider ?? (
     value.model === '' && effortSwitch.pending === null ? null : (
       <EffortControl
         scope={scope}
@@ -68,6 +97,7 @@ export function RecapModelSlot({ value, scope, contextName, disabled, note, chip
         onChange={(effort) => onCommit({ provider: value.provider, model: value.model }, effort, null)}
       />
     )
+  )
 
   return <>{children({ handlers: effortSwitch.selectorHandlers, chip })}</>
 }
