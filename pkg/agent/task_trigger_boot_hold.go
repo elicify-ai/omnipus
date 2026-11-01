@@ -323,10 +323,23 @@ func (te *TaskExecutor) agentRegistered(agentID string) bool {
 
 // recordUnstartedFireFailure records a scheduled fire that could not start as
 // a failed run in t's run history and fails the task with reason.
+//
+// It is idempotent across its own two writes: when an earlier settle opened
+// the failed run but could not close it (a failed close, or a crash between
+// the two writes), that run is still open, and boot recovery never closes it
+// because the task is not in progress. Such a run is recognised by the shape
+// only this settle writes (a scheduled run with no session and no
+// occurrence) and is closed as Failed here instead of being refused. Any
+// other open run is still refused.
 func (te *TaskExecutor) recordUnstartedFireFailure(t *task.Task, reason string) error {
 	run, created, err := te.store.OpenRun(t.ID, nil, task.RunKindScheduled, "", nil)
 	if err != nil {
 		return fmt.Errorf("task_trigger: record failed run for task %q: %w", t.ID, err)
+	}
+	if !created && isUnstartedFireFailureRun(run) {
+		slog.Warn("task_trigger: closing the failed run an earlier settle left open",
+			"task_id", t.ID, "run_id", run.RunID)
+		created = true
 	}
 	if !created {
 		return fmt.Errorf("task_trigger: record failed run for task %q: run %q is still open", t.ID, run.RunID)
@@ -336,6 +349,15 @@ func (te *TaskExecutor) recordUnstartedFireFailure(t *task.Task, reason string) 
 	}
 	te.emitRunStatus(t.ID, run.RunID, nil, task.StatusFailed)
 	return te.saveUnstartedFireFailed(t.ID, reason)
+}
+
+// isUnstartedFireFailureRun reports whether run has the shape
+// recordUnstartedFireFailure opens: a scheduled run with no session and no
+// occurrence. A dispatched run carries its session (only the executor's rare
+// session-creation degrade path writes a blank one, and closing such a run as
+// Failed is correct here too: the task's agent is gone).
+func isUnstartedFireFailureRun(run *task.TaskRun) bool {
+	return run != nil && run.Kind == task.RunKindScheduled && run.SessionID == "" && run.OccurrenceMs == nil
 }
 
 // saveUnstartedFireFailed marks the task Failed with reason, as failTask
