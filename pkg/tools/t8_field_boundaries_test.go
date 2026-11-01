@@ -44,18 +44,21 @@ func TestTaskFields_D1_Boundaries(t *testing.T) {
 		rows = append(rows, row{fmt.Sprintf("tag length %d", n), "tags", []any{strings.Repeat("x", n)}, n <= 64})
 	}
 	for _, n := range []int{-1, 0, 1, 4, 5, 6} {
-		rows = append(rows, row{fmt.Sprintf("priority %d", n), "priority", n, false})
+		// r17 D-1 priority 0/1/5/6; Task.yaml constrains the wire value to 1–5.
+		rows = append(rows, row{fmt.Sprintf("priority %d", n), "priority", n, n >= 1 && n <= 5})
 	}
 	for _, tc := range rows {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.field == "priority" {
-				t.Fatal("BLOCKED: r17 D-1 lists priority boundary inputs but does not define the accepted range — no priority-range oracle is inferred from implementation or the draft fixture")
-			}
 			store, _ := parityStorePair(t)
 			tk := parityTask(t, store, "agent-a", "agent-a", "ws-a", task.StatusInbox, false)
 			before, err := json.Marshal(tk)
 			require.NoError(t, err)
-			res := NewTaskUpdateTool(store).Execute(parityCtx("agent-a"), map[string]any{"task_id": tk.ID, tc.field: tc.value})
+			// Match the model/registry JSON boundary: JSON numbers decode as float64.
+			encoded, err := json.Marshal(map[string]any{"task_id": tk.ID, tc.field: tc.value})
+			require.NoError(t, err)
+			var args map[string]any
+			require.NoError(t, json.Unmarshal(encoded, &args))
+			res := NewTaskUpdateTool(store).Execute(parityCtx("agent-a"), args)
 			got, err := store.Get(tk.ID)
 			require.NoError(t, err)
 			if !tc.accept {
