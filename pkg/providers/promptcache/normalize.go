@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -107,7 +108,7 @@ func NormalizeUsage(providerID string, raw []byte) (protocoltypes.UsageInfo, err
 		return protocoltypes.UsageInfo{}, errors.New("total token counts exceed the supported integer range")
 	}
 	u.TotalTokens = total
-	u.ReasoningTokens = reasoningCount(fields, u.CompletionTokens)
+	u.ReasoningTokens = reasoningCount(providerID, fields, u.CompletionTokens)
 	return u, nil
 }
 
@@ -115,15 +116,20 @@ func NormalizeUsage(providerID string, raw []byte) (protocoltypes.UsageInfo, err
 // spec FR-024): chat completions' completion_tokens_details.reasoning_tokens
 // or the Responses form output_tokens_details.reasoning_tokens. nil when no
 // count was reported (absent is never 0); a reported zero stays 0. The count
-// is a subset of the output, so an over-report is capped at the output count.
-// It is never added to any total.
-func reasoningCount(fields map[string]json.RawMessage, output int) *int {
+// is a subset of the output, so an over-report is capped at the output count
+// and one log line notes the inconsistency (spec D7 row 4, S-43). It is never
+// added to any total.
+func reasoningCount(providerID string, fields map[string]json.RawMessage, output int) *int {
 	for _, details := range []string{"completion_tokens_details", "output_tokens_details"} {
 		n, ok := usageCountPresent(fields, details, "reasoning_tokens")
 		if !ok {
 			continue
 		}
-		n = min(n, output)
+		if n > output {
+			logger.WarnCF("providers", "Provider reported more reasoning tokens than output tokens; thinking capped at the output count",
+				map[string]any{"provider": providerID, "reasoning_tokens": n, "output_tokens": output})
+			n = output
+		}
 		return &n
 	}
 	return nil
