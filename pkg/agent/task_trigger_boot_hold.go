@@ -185,6 +185,33 @@ func SetHeldFireBeforeRunHookForTest(fn func(taskID string)) {
 	heldFireBeforeRunHookForTest.Store(&fn)
 }
 
+// heldFireCloseRunHookForTest, when set, runs in recordUnstartedFireFailure
+// after its OpenRun succeeded and before store.CloseRun; a non-nil result is
+// used as the CloseRun error in place of calling CloseRun. Nil in
+// production; set only by tests through SetHeldFireCloseRunHookForTest.
+var heldFireCloseRunHookForTest atomic.Pointer[func() error]
+
+// SetHeldFireCloseRunHookForTest installs fn as the hook run right before the
+// failed-run close of an unstarted fire (nil removes it). For tests only.
+func SetHeldFireCloseRunHookForTest(fn func() error) {
+	if fn == nil {
+		heldFireCloseRunHookForTest.Store(nil)
+		return
+	}
+	heldFireCloseRunHookForTest.Store(&fn)
+}
+
+// closeUnstartedFireRun closes the failed run of an unstarted fire, unless
+// the test hook (heldFireCloseRunHookForTest) supplies the close error.
+func (te *TaskExecutor) closeUnstartedFireRun(taskID, runID, reason string) error {
+	if hook := heldFireCloseRunHookForTest.Load(); hook != nil {
+		if err := (*hook)(); err != nil {
+			return err
+		}
+	}
+	return te.store.CloseRun(taskID, runID, task.StatusFailed, reason)
+}
+
 // keepHeldFire keeps a held fire that could not start: the job stays with
 // its Running flag (the next physical boot's replay evidence), its marker is
 // restored so a reconcile cannot take it away, and an audit warning names the
@@ -304,7 +331,7 @@ func (te *TaskExecutor) recordUnstartedFireFailure(t *task.Task, reason string) 
 	if !created {
 		return fmt.Errorf("task_trigger: record failed run for task %q: run %q is still open", t.ID, run.RunID)
 	}
-	if err := te.store.CloseRun(t.ID, run.RunID, task.StatusFailed, reason); err != nil {
+	if err := te.closeUnstartedFireRun(t.ID, run.RunID, reason); err != nil {
 		return fmt.Errorf("task_trigger: close failed run %q for task %q: %w", run.RunID, t.ID, err)
 	}
 	te.emitRunStatus(t.ID, run.RunID, nil, task.StatusFailed)
