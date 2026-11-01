@@ -781,6 +781,10 @@ func (wsf *wsStreamerFinalize) publishDone() {
 			Cost:               &wsf.costF,
 			DurationMs:         &wsf.durF,
 			SessionTokensTotal: h.sessionTokensTotal(wsf.s.sessionID),
+			// Effort levels (FR-058, FR-024): the answering call's effort
+			// record and the display-only turn reasoning sum.
+			Effort:          turnEffortRecord(wsf.callAccounting),
+			ReasoningTokens: turnReasoningSum(wsf.callAccounting),
 		}
 		// #1178 (amendment §4.1): a late streamed-transcript write failure is
 		// a failed turn even though the turn was healthy before it — the done
@@ -1081,6 +1085,9 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 				entry.Truncated = true
 				entry.TruncationReason = wsf.truncationReason
 			}
+			// The stored display-only snapshot of the turn's reported
+			// reasoning sum, read back as-is by both history transports.
+			entry.TurnReasoningTokens = turnReasoningSum(wsf.callAccounting)
 			// ADR-057 FR-001/FR-002 (W3): AppendTranscriptStrict refuses loudly
 			// (and creates nothing on disk) when s.sessionID does not resolve to
 			// a real, store-backed session, instead of AppendTranscript's old

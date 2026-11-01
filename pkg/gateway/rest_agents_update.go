@@ -82,6 +82,7 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	add(req.Model != nil, "model")
 	add(req.Provider != nil, "provider")
 	add(req.FallbackModels != nil, "fallback_models")
+	add(req.ReasoningEffort != nil, "reasoning_effort")
 	add(req.ContextWindowOverride != nil, "context_window_override")
 	add(req.ModelParams != nil, "model_params")
 	add(req.MaxToolIterations != nil, "max_tool_iterations")
@@ -212,6 +213,11 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	// in both validation modes, so an ordinary field bundled with it is not
 	// silently saved while the retired one is dropped.
 	if rejectRetiredDefaultField(uf.w, uf.rawBody) {
+		return true
+	}
+	// Effort members (primary and fallbacks) are checked on the raw body in
+	// both validation modes, before any decode or write (FR-060, S-94).
+	if refuseInvalidEffortBody(uf.w, uf.rawBody) {
 		return true
 	}
 	validateEnabled := uf.cfg.Gateway.ValidateInbound
@@ -977,6 +983,10 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 		if errors.Is(updateErr, agentstore.ErrInvalidRevision) {
 			return fmt.Errorf("invalid revision: %w", updateErr)
 		}
+		var refusal *requestRefusalError
+		if errors.As(updateErr, &refusal) {
+			return refusal
+		}
 		return &configurationMutationError{Result: result, Err: fmt.Errorf("update agent entity record: %w", updateErr)}
 	}
 	// O6: heartbeat is now fully per-agent (written inside the agent-found
@@ -990,7 +1000,12 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	// MutateState checks the reviewed revision under the entity lock before
 	// applying these fields. UpdatedAt is display metadata, never a precondition.
 	storedModelBefore, storedFallbacksBefore := agentModelIdentity(agentRec)
+	providerBefore, modelBefore := agentPrimaryPair(agentRec)
+	effortBefore := agentRec.ReasoningEffort
 	rp.updateIdentityAndModel(agentRec)
+	if err := rp.updateEffort(agentRec, providerBefore, modelBefore); err != nil {
+		return err
+	}
 	rp.updatePresentationAndFallbacks(agentRec)
 	rp.updateToolsConfig(agentRec)
 	if err := rp.updateMCPServers(agentRec); err != nil {
@@ -1004,8 +1019,11 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	// Refresh the display timestamp with sub-second precision;
 	// the frontend compares it as an ordinal when incorporating autosaves.
 	storedModelAfter, storedFallbacksAfter := agentModelIdentity(agentRec)
+	// The primary effort is read when the agent instance is built, so an
+	// effort change rebuilds it like a model change (FR-029).
 	rp.ru.modelIdentityChanged = !sameAgentModelIdentity(
-		storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter)
+		storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter) ||
+		effortBefore != agentRec.ReasoningEffort
 	agentRec.UpdatedAt = &rp.ru.now
 	return nil
 }
@@ -1118,7 +1136,7 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 			if fm.Provider != nil {
 				provider = *fm.Provider
 			}
-			fbs = append(fbs, config.FallbackModel{Model: fm.Model, Provider: provider})
+			fbs = append(fbs, fallbackWithEffort(fm.Model, provider, fm.ReasoningEffort, agentRec.FallbackModels))
 		}
 		agentRec.FallbackModels = fbs
 	}

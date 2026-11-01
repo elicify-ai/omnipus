@@ -243,9 +243,12 @@ type restAPICreateAgentPrepareAgent struct {
 	resolvedRole   string
 	skills         *[]string
 	fallbackModels *[]gen.FallbackModel
-	modelParamsIn  *agentModelParamsInput
-	mcpServers     *[]agentCreateMCPServerInput
-	policyChanges  *agentmutation.ToolPolicyChanges
+	// reasoningEffort is the new agent primary's stored effort (FR-029),
+	// stored as written; subagent_3p has no such property (S-77).
+	reasoningEffort *string
+	modelParamsIn   *agentModelParamsInput
+	mcpServers      *[]agentCreateMCPServerInput
+	policyChanges   *agentmutation.ToolPolicyChanges
 	// maxToolIterations is the new agent's own tool-iteration limit (#904,
 	// every variant incl. subagent_3p per D14); nil = rides the global.
 	maxToolIterations *int
@@ -300,6 +303,11 @@ func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, s
 		return nil, "", "", true
 	}
 	if pap.rejectNullCreateMembers(presence) {
+		return nil, "", "", true
+	}
+	// Effort members are checked on the raw body in both validation modes
+	// (FR-060, S-94).
+	if refuseInvalidEffortBody(pap.cra.w, raw) {
 		return nil, "", "", true
 	}
 
@@ -424,6 +432,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.mcpServers = agentCreateMCPServersFromWire(vreq.McpServers)
 		pap.policyChanges = agentCreatePolicyChangesFromWire(vreq.ToolPolicyChanges)
 		pap.fallbackModels = vreq.FallbackModels
+		pap.reasoningEffort = vreq.ReasoningEffort
 		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
 		pap.maxToolIterations = vreq.MaxToolIterations
@@ -445,6 +454,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.mcpServers = agentCreateMCPServersFromWire(vreq.McpServers)
 		pap.policyChanges = agentCreatePolicyChangesFromWire(vreq.ToolPolicyChanges)
 		pap.fallbackModels = vreq.FallbackModels
+		pap.reasoningEffort = vreq.ReasoningEffort
 		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
 		pap.maxToolIterations = vreq.MaxToolIterations
@@ -628,6 +638,9 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	}
 	if pap.maxToolIterations != nil {
 		pap.cra.ac.MaxToolIterations = *pap.maxToolIterations
+	}
+	if pap.reasoningEffort != nil {
+		pap.cra.ac.ReasoningEffort = *pap.reasoningEffort
 	}
 	if pap.model != nil && *pap.model != "" {
 		pap.cra.ac.Model = &config.AgentModelConfig{Primary: *pap.model}
