@@ -36,7 +36,7 @@ This is **original-author reconciliation, not independent CHECK**. The founder r
 | Finding | Independent oracle and test-side disposition | Evidence / remaining limit |
 |---|---|---|
 | C4-01 Major — old Go defaults/catalog/tool oracles | §§5.2–5.5/§6.1/§10/§10.1/§15 replace retired create/remove, old global edit Allow and instruction-only read rules. Exact fresh/override/role tables, real loop consent, file authoring, seen-bound destructive actions, pure lists and real project boundaries replace them. Independent catalog arithmetic is 119−2+1=118; system tools 35−2+1=34; founder Auto lists 77/27→78/25. Judge/PlanSupervisor retain exact complement Deny after adding only get_skill. | Every involved file and renamed test is accounted below. Narrow package receipts retain actual production failures; no expected value was changed to actual 120/36 or stale registry/table entries. |
-| C4-02 Major — required Skill field, stale C-1 premise, corpus | C-1 `2038b3bffa6c7fcd8619992cc83656cd6584f2b8` is present. All 73 original five-key Skill-shaped literals across 27 files receive scenario-derived required booleans; coherent clean installs/built-ins false, authored/copied true. Derived copy/install spreads override deliberately. No generated edits, new casts or suppression. | `/workspace/logs/skills-red/fixround6/02-fixture-plan.json`; `/workspace/logs/skills-red/fixround6/36-fixture-verification.json`: 73/27, zero mismatches, in-memory missing-field negative caught, EXIT=0. All 27 one-file runs collect 531 PASS, raw exits 0. Real producer/corpus limitations are stated below; C4-02 is not fully certified. |
+| C4-02 Major — required Skill field, stale C-1 premise, corpus | C-1 `2038b3bffa6c7fcd8619992cc83656cd6584f2b8` is present. All 73 original five-key Skill-shaped literals across 27 files receive scenario-derived required booleans; coherent clean installs/built-ins false, authored/copied true. Derived copy/install spreads override deliberately. No generated edits, new casts or suppression. | `/workspace/logs/skills-red/fixround6/02-fixture-plan.json`; `/workspace/logs/skills-red/fixround6/36-fixture-verification.json`: 73/27, zero mismatches, in-memory missing-field negative caught, EXIT=0. All 27 one-file runs collect 531 PASS, raw exits 0. Subsequent real producer and consumer runs 50/53 each complete all five legs with EXIT=0; producer gateway-input drift and the once-only red typecheck remain explicit. Independent closure is deferred to CHECK. |
 | C4-03 Major — coded 409 remedy | Exact BUILTIN_NAME_RESERVED / `Choose a different name.` test retained; this was a production defect, not a stale oracle. | `/workspace/logs/skills-red/fixround6/35-coded-409-body.json`: entire old/current test body byte-identical. Historical product RED remains in round 4; owner repair `37064ef16840afe240169076e36b466f8a1d09e7`; seven-case file passes in `/workspace/logs/skills-red/fixround6/14-frontend-01.log`, EXIT=0, source-bound author observation only. |
 | C4-04 Minor — exact copy toast | Preserve refreshed copied-row Remove control and additionally require exactly one success toast: `Created 'my-plan'. No agent is granted it yet; grant it to others in their settings.` (§13). Fix selector-compatible toast store mock, not the assertion. | `/workspace/logs/skills-red/fixround6/08-copy-dialog.log` reproduces the mock defect, EXIT=1; repaired `/workspace/logs/skills-red/fixround6/10-copy-dialog.log` and final `/workspace/logs/skills-red/fixround6/33-frontend-16.log`, each EXIT=0, 21 PASS. |
 | C4-05 Minor — invented dialog title/role | Locate the exact slug-specific §13 question, exact Replace/Cancel controls and exact disappearance of that question. Retain zero-request-before-consent, cancel, explicit consent flag/revision and actual 409 transition checks. No invented alertdialog/name contract. | `/workspace/wt-skills/src/components/skills/SkillBrowser.local-changes.test.tsx::confirmation`; complete seven-case run `/workspace/logs/skills-red/fixround6/14-frontend-01.log`, EXIT=0. |
@@ -181,36 +181,36 @@ These are **version-bound author observations**. Concurrent production edits aft
 
 The following 27 complete one-file runs have **531 PASS**, no failing cases and raw exits 0. `/workspace/logs/skills-red/fixround6/40-frontend-results.json` gives every actual receipt. Index 18's first interrupted attempt is preserved; its completed rerun uses the fresh receipt name shown below. The separately repaired local-changes file adds seven cases, for **28 files / 538 PASS in completed receipts**. This is not a full frontend suite, typecheck, independent CHECK or product reachability result.
 
-| Exact file | PASS / raw exit | Receipt prefix under `/workspace/logs/skills-red/fixround6/` |
+| Exact file | PASS / raw exit | Actual log receipt |
 |---|---|---|
-| `/workspace/wt-skills/src/components/agents/AgentProfile.test.tsx` | 122 / 0 | `33-frontend-01` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.agent-mention.test.tsx` | 14 / 0 | `33-frontend-02` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.agents-command.test.tsx` | 4 / 0 | `33-frontend-03` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.cap-footer.test.tsx` | 3 / 0 | `33-frontend-04` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.combobox-aria.test.tsx` | 10 / 0 | `33-frontend-05` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.ghost-text.test.tsx` | 5 / 0 | `33-frontend-06` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.partitioned-menu.test.tsx` | 12 / 0 | `33-frontend-07` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.redirect-turn.test.tsx` | 8 / 0 | `33-frontend-08` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.send-button-intercept.test.tsx` | 3 / 0 | `33-frontend-09` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.skill-chip.test.tsx` | 18 / 0 | `33-frontend-10` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.skills-filter.test.tsx` | 5 / 0 | `33-frontend-11` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.slash-commands-error.test.tsx` | 4 / 0 | `33-frontend-12` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.stop-scope.test.tsx` | 47 / 0 | `33-frontend-13` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.test.tsx` | 16 / 0 | `33-frontend-14` |
-| `/workspace/wt-skills/src/components/chat/ChatScreen.unknown-slash.test.tsx` | 6 / 0 | `33-frontend-15` |
-| `/workspace/wt-skills/src/components/screens/SkillsScreen.copy-dialog.test.tsx` | 21 / 0 | `33-frontend-16` |
-| `/workspace/wt-skills/src/components/skills/SkillBrowser.test.tsx` | 25 / 0 | `33-frontend-17` |
-| `/workspace/wt-skills/src/components/skills/SkillCard.test.tsx` | 6 / 0 | `33b-frontend-18` |
-| `/workspace/wt-skills/src/components/skills/SkillsScreen.delete.test.tsx` | 1 / 0 | `33-frontend-19` |
-| `/workspace/wt-skills/src/components/skills/SkillsScreenLastInvoked.test.tsx` | 2 / 0 | `33-frontend-20` |
-| `/workspace/wt-skills/src/components/skills/SkillsScreenToolsTab.test.tsx` | 17 / 0 | `33-frontend-21` |
-| `/workspace/wt-skills/src/hooks/useSlashMenu.test.ts` | 103 / 0 | `33-frontend-22` |
-| `/workspace/wt-skills/src/lib/api.skills.test.ts` | 10 / 0 | `33-frontend-23` |
-| `/workspace/wt-skills/src/lib/api/configuration.test.ts` | 36 / 0 | `33-frontend-24` |
-| `/workspace/wt-skills/src/lib/api/skills-mutation-envelope.test.ts` | 8 / 0 | `33-frontend-25` |
-| `/workspace/wt-skills/src/lib/api/skills-upload.test.ts` | 6 / 0 | `33-frontend-26` |
-| `/workspace/wt-skills/src/test/contract.test.ts` | 19 / 0 | `33-frontend-27` |
-| `/workspace/wt-skills/src/components/skills/SkillBrowser.local-changes.test.tsx` | 7 / 0 | `14-frontend-01` |
+| `/workspace/wt-skills/src/components/agents/AgentProfile.test.tsx` | 122 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-01.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.agent-mention.test.tsx` | 14 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-02.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.agents-command.test.tsx` | 4 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-03.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.cap-footer.test.tsx` | 3 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-04.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.combobox-aria.test.tsx` | 10 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-05.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.ghost-text.test.tsx` | 5 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-06.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.partitioned-menu.test.tsx` | 12 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-07.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.redirect-turn.test.tsx` | 8 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-08.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.send-button-intercept.test.tsx` | 3 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-09.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.skill-chip.test.tsx` | 18 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-10.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.skills-filter.test.tsx` | 5 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-11.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.slash-commands-error.test.tsx` | 4 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-12.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.stop-scope.test.tsx` | 47 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-13.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.test.tsx` | 16 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-14.log` |
+| `/workspace/wt-skills/src/components/chat/ChatScreen.unknown-slash.test.tsx` | 6 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-15.log` |
+| `/workspace/wt-skills/src/components/screens/SkillsScreen.copy-dialog.test.tsx` | 21 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-16.log` |
+| `/workspace/wt-skills/src/components/skills/SkillBrowser.test.tsx` | 25 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-17.log` |
+| `/workspace/wt-skills/src/components/skills/SkillCard.test.tsx` | 6 / 0 | `/workspace/logs/skills-red/fixround6/33b-frontend-18.log` |
+| `/workspace/wt-skills/src/components/skills/SkillsScreen.delete.test.tsx` | 1 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-19.log` |
+| `/workspace/wt-skills/src/components/skills/SkillsScreenLastInvoked.test.tsx` | 2 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-20.log` |
+| `/workspace/wt-skills/src/components/skills/SkillsScreenToolsTab.test.tsx` | 17 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-21.log` |
+| `/workspace/wt-skills/src/hooks/useSlashMenu.test.ts` | 103 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-22.log` |
+| `/workspace/wt-skills/src/lib/api.skills.test.ts` | 10 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-23.log` |
+| `/workspace/wt-skills/src/lib/api/configuration.test.ts` | 36 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-24.log` |
+| `/workspace/wt-skills/src/lib/api/skills-mutation-envelope.test.ts` | 8 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-25.log` |
+| `/workspace/wt-skills/src/lib/api/skills-upload.test.ts` | 6 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-26.log` |
+| `/workspace/wt-skills/src/test/contract.test.ts` | 19 / 0 | `/workspace/logs/skills-red/fixround6/33-frontend-27.log` |
+| `/workspace/wt-skills/src/components/skills/SkillBrowser.local-changes.test.tsx` | 7 / 0 | `/workspace/logs/skills-red/fixround6/14-frontend-01.log` |
 
 Only Go inputs changed during frontend runs 1/3/13. `/workspace/logs/skills-red/fixround6/45-frontend-final-inputs.json` compares all 28 completed receipts with current frontend TS/TSX, contract YAML, package/lock and Vite/tsconfig inputs: zero mismatches. This establishes **source freshness of those receipts**, not another execution or a typecheck.
 
@@ -228,7 +228,7 @@ Only Go inputs changed during frontend runs 1/3/13. `/workspace/logs/skills-red/
 
 The producer now uses the existing **real enabled-marketplace test fixture** and asserts its enabled prerequisite before install. All five leg names, fault-firing assertions, operation-specific statuses, schemas and real-handler capture remain unchanged. Plan/direct-reference impact: `/workspace/logs/skills-red/fixround6/39-corpus-fixture-plan.md` (impact Inferred; GitNexus unavailable).
 
-The corrected producer attempt `/workspace/logs/skills-red/fixround6/39-corpus-producer.console.log` emitted dispatcher finish 409 and no Go test output. It was stopped; `/workspace/logs/skills-red/fixround6/39-corpus-interrupted.json` records raw test exit null and no resulting corpus. The consumer attempt used the **actual unchanged run-38 corpus**, not invented replacement bytes, but `/workspace/logs/skills-red/fixround6/42-corpus-consumer.console.log` likewise emitted dispatcher finish 409 and no Vitest case output. It was stopped; `/workspace/logs/skills-red/fixround6/42-corpus-interrupted.json` records raw exit null and no collected SPA case. **Corrected producer and consumer are UNVERIFIED**, not green or measured consumer failures. C4-02's cross-language real-response certification is therefore still open. A subsequent retry, if authorized/completed, needs a new receipt and does not erase these attempts.
+The corrected producer attempt `/workspace/logs/skills-red/fixround6/39-corpus-producer.console.log` emitted dispatcher finish 409 and no Go test output. It was stopped; `/workspace/logs/skills-red/fixround6/39-corpus-interrupted.json` records raw test exit null and no resulting corpus. The consumer attempt used the **actual unchanged run-38 corpus**, not invented replacement bytes, but `/workspace/logs/skills-red/fixround6/42-corpus-consumer.console.log` likewise emitted dispatcher finish 409 and no Vitest case output. It was stopped; `/workspace/logs/skills-red/fixround6/42-corpus-interrupted.json` records raw exit null and no collected SPA case. **At this checkpoint, corrected producer and consumer were UNVERIFIED**, not green or measured consumer failures. The subsequent authorized runs 50/53 below complete both stages; they do not erase these failed/interrupted attempts or establish exact-cut Go certification.
 
 ### Static checks, ownership and pending work at the checkpoint
 
@@ -769,7 +769,7 @@ GitNexus `impact`/`detect_changes` tools were unavailable (tool search returned 
 
 Author-owned changes are confined to test files plus this explicitly authorized internal traceability document; concurrent backend implementation commits/dirty paths are outside this QA commission. The SD-28 file replacement is required by the commission and r15's withdrawal of that machinery, not suppression of a failing requirement. No skip/xfail/only marker, assertion-disable, budget edit, production fix, generated contract change or fabricated success receipt was added. The exact final source hashes and raw logs remain outside the commit under the evidence directory. Local tests-only commit is permitted; failing tests must stay local until paired with implementation, and **no push** is authorized.
 
-Code correct and tested: **not established for the feature.** Round 6 has 538 frontend PASS in 28 completed one-file receipts, retained measured Go failures and explicitly unverified corpus/static checks. Earlier round-4/5 totals below are historical. No full CI, final typecheck or overall Go PASS is claimed.
+Code correct and tested: **not established for the feature.** Round 6 has 538 frontend PASS in 28 changed-file receipts plus 5 PASS in the unchanged real-response consumer. The five-leg real producer completes, but earlier measured Go failures, producer input drift, UNVERIFIED Go lint and no final typecheck remain explicit. Earlier round-4/5 totals below are historical. No full CI, final typecheck or overall Go PASS is claimed.
 
 Reachable by a user/agent: **not established in this repair.** No live UI/agent invocation was executed. The final checks exercise real loader/catalog/seed/pipeline seams, not a running product session. Earlier startup/router evidence above is historical, not a fresh run.
 
@@ -826,3 +826,56 @@ Skills: omnipus-shared-rules, elicify-test-writing, omnipus-design-system (alrea
 | Typecheck/lint/budget/ESLint are not silently passed | `/workspace/logs/skills-red/fixround6/03-typecheck.log` EXIT=2, no second run; `/workspace/logs/skills-red/fixround6/46b-lint-terminal.json`: interrupted/no final exit; owned budget/ESLint still pending at checkpoint | Verified failures/limits; final static verdicts Unknown |
 | Owned formatting and added-line integrity checked, no production source staged by this commission | `/workspace/logs/skills-red/fixround6/48-checkpoint-source-checks.json`: gofmt -l on 39 exact Go files EXIT=0 with empty output, git diff --check EXIT=0, zero added suppression markers, exact eight continuation paths; unrelated index entry preserved separately | Verified bounded source check; commit scope checked at commit time |
 | Self-check | Re-read the seven continuation code diffs, independent spec distinctions, complete 59-file/27-name tables and new execution account; compared named counts/raw exits and source-binding receipts; preserved failed/interrupted logs and historical scope. The final checkpoint diff is checked before commit. Source dispositions do not certify every unselected test; GREEN/mutation/full failability remain deferred to CHECK. | Verified author checkpoint review only |
+
+### Round-6 final post-checkpoint results
+
+The explicit eight-path test/doc checkpoint is `186490b22abfc88bda87b86554267f671696c72e`. It was authored and committed as Daniel Piatkowski, without an AI trailer or push. The unrelated production deletion already staged by another owner was **not** swept into it: a separate checkpoint index held only the eight authorized paths, and every other entry of the real index was preserved byte-for-byte. Receipt: `/workspace/logs/skills-red/fixround6/49-checkpoint-commit.json` (commit EXIT=0).
+
+The authorized plain-heavy retry has now **completed both corpus stages**, superseding the earlier interruptions as the latest measured result, without deleting their logs:
+
+| Stage | Actual result | Scope / caveat |
+|---|---|---|
+| Corrected real Go producer | `/workspace/logs/skills-red/fixround6/50-corpus-producer.log`: all five named fault legs PASS; EXIT=0; actual corpus copied back | `/workspace/logs/skills-red/fixround6/50-corpus/skills-real-responses.json` contains actual statuses 200/500/500/500/500. Enabled marketplace prerequisite and every intended fault-firing assertion passed. Concurrent gateway Go input drift occurred; this is not exact-cut certification. |
+| Real generated-schema / adapter consumer | `/workspace/logs/skills-red/fixround6/53-corpus-consumer.log`: complete one-file run, 5 PASS, EXIT=0, INPUT_DRIFT=[] | Uses the unedited run-50 bodies, generated Skill/failure schemas and actual adapters, checking exact method/URL/body and returned/failed state. Not a running browser or hosted CI. |
+
+The 28 changed frontend files still have 538 completed PASS observations. The unchanged real-response consumer adds five cases: **29 executed frontend files / 543 cases** across these distinct receipts, not a full suite. `/workspace/logs/skills-red/fixround6/51-final-frontend-inputs.json` records all 2,572 compared frontend/contract/config inputs and identical-comparer controls for unchanged, changed, missing and extra input hashes, all successful; no real source was mutated. Its command EXIT=0 and zero mismatches certify source freshness only, not another test execution or typecheck. Final source binding is checked again in the final integrity receipt.
+
+| Scoped quality check | Raw result | Instrument / caveat |
+|---|---|---|
+| ESLint of exactly 28 changed frontend files | `/workspace/logs/skills-red/fixround6/55-owned-eslint.log`: EXIT=0; all 28 exact paths returned, 0 unsuppressed errors and 0 warnings | Deliberately malformed stdin, using the same real filename/config, produces `Parsing error: Expression expected`, EXIT=1. One inherited no-explicit-any suppression is unchanged from the pre-round-six source; none was added. Only concurrent Go source drift occurred. |
+| Real function/file budget gates on exact owned-code mirror | `/workspace/logs/skills-red/fixround6/56-owned-budgets.log`: function EXIT=0 and file EXIT=0, overall EXIT=0, INPUT_DRIFT=[] | Deliberate 247-line function and 3,001-line file each fail with EXIT=1. The mirror's 67 source hashes still match. Warnings and unchanged grandfather pins are disclosed: AgentProfile.test.tsx is 3,111 lines under its unchanged 3,194-line pin; long describe callbacks retain their existing function pins. No budget was increased. |
+| Comment-only protected fixture | 77 lines, directly checked below the file cap | The file-size script's Go roots do not include tests/, so this support file is not falsely described as scanned by that gate. No executable fixture change. |
+| Go lint's first detached retry | `/workspace/logs/skills-red/fixround6/52-scoped-go-lint.console.log`: EXIT=3 and RAW_DRIVER_EXIT=3 | Actual tooling refusal: `parallel golangci-lint is running`. This is not a code-lint result or a green gate. |
+
+The single additional lint retry was configured to use the dispatcher-approved `--allow-parallel-runners` and a private cache, still behind the unchanged heavy --local shared-slot admission. The script would verify the installed binary run-help before using that flag, but admission never reached that command. The dispatcher cancelled only this owned queued runner; actual cancellation EXIT=143 and RAW_DRIVER_EXIT=143 are preserved below. No lint rule, test, severity or slot capacity was changed. Scoped Go lint is UNVERIFIED, not green.
+
+The once-only typecheck remains EXIT=2 with its ten unsupported Testing Library options subsequently removed; **no second typecheck or final typecheck green**. Earlier measured Go failures remain listed with exact names and input caveats. Their later production state is not inferred from a passing corpus or lint. CHECK-4's additional uncommissioned coverage gaps (for example failed retirement grant-write logging/retry and full live/e2e paths) are not silently closed by these source repairs.
+
+Code correct and tested: **not established for the whole feature**. These are bounded original-author repair/execution observations, not independent CHECK, full CI or complete coverage.
+
+Reachable by a user/agent: **not established here**. No exact-cut UAT or live Test Lab result.
+
+
+### Final lint disposition and original-author handoff
+
+The extra private-cache attempt **never acquired a slot**. At 14:57:27Z the read-only process/lock receipt `/workspace/logs/skills-red/fixround6/58b-lint-wait-state.json` showed only this author's driver/wrapper/waiting runner, with both build locks held by other runners. The dispatcher then explicitly stopped this queued attempt rather than preempt either owner. Only this author's waiting runner, PID 28144, received SIGTERM; its wrapper and driver remained alive to write the real terminal receipt. `/workspace/logs/skills-red/fixround6/59-lint-cancelled.json` records the exact ownership guards and signal. Other slot owners were not signalled.
+
+`/workspace/logs/skills-red/fixround6/54-scoped-go-lint.console.log` ends with **EXIT=143, RECEIPT_COMPLETE=1, RAW_DRIVER_EXIT=143**. These are cancellation exits, **not a code-lint result**. The installed-help probe and lint body did not execute. Scoped Go lint remains **UNVERIFIED** for the dispatcher/independent CHECK; the earlier run-52 lock refusal (EXIT=3) and run-43 harness interruption remain visible. No locking flag, private cache, timeout, cancellation or missing diagnostic is counted as a green gate. No owned lint/test/receipt-watcher process is left running at handoff.
+
+Independent CHECK remains a different instance. This original author makes **no CHECK PASS/WARN/BLOCK verdict**, does not certify mutation or the full proof-of-failability checklist, and does not close earlier unauthored/integration gaps. The once-only typecheck and latest full-Go state remain explicit verification gaps. Any later test-side finding returns to this same feature author.
+
+Skills: omnipus-shared-rules, elicify-test-writing, omnipus-design-system (loaded earlier; no setup repeated).
+
+| Claim | Evidence | Certainty |
+|---|---|---|
+| All six numbered CHECK-4 findings have explicit source dispositions, not a self-issued closure | Complete round-six tables above; `/workspace/logs/skills-red/fixround6/44-accounting.json`: 59 files and 27 renamed tests, every replacement present; named retirement negatives retained | Verified source reconciliation; independent closure deferred |
+| Both additionally reported wrong tests were repaired without deleting cases or losing real positives | `/workspace/logs/skills-red/fixround6/20-boundary-before.log` EXIT=1, then `/workspace/logs/skills-red/fixround6/21-boundary-after.log` EXIT=0, 3 selected top-level PASS, no drift | Verified test-defect reproduction/repair, not new product RED |
+| Required fixtures use independent scenario values | `/workspace/logs/skills-red/fixround6/36-fixture-verification.json`: 73 literals / 27 files, zero mismatches and missing-field control caught; verifier EXIT=0; final owned-source hashes unchanged | Verified source check; final typecheck Unknown |
+| Frontend observations are complete for their bounded files | `/workspace/logs/skills-red/fixround6/40-frontend-results.json`, `/workspace/logs/skills-red/fixround6/14-frontend-01.log`, `/workspace/logs/skills-red/fixround6/53-corpus-consumer.log`: 29 distinct file receipts / 543 PASS, raw exits 0; final input comparison in `/workspace/logs/skills-red/fixround6/60-final-integrity.json` | Verified scoped observations/source binding, not full suite or independent GREEN |
+| Exact coded 409 remedy test was retained unchanged | `/workspace/logs/skills-red/fixround6/35-coded-409-body.json`; historical round-four failing logs plus owner repair and complete seven-case round-six receipt above | Verified source/observations; no QA production edit |
+| Real five-leg REST-to-generated-schema/adapter bridge executed | `/workspace/logs/skills-red/fixround6/50-corpus-producer.log` and `/workspace/logs/skills-red/fixround6/53-corpus-consumer.log`: five producer legs / five consumer cases PASS, raw exits 0; actual run-50 corpus retained | Verified execution; producer gateway drift prevents exact-cut certification |
+| Retained earlier Go failures are not silently passed on the later working copy | Runs 26/30/32 above: EXIT=1 with 4/4/2 named failures; exact names and drift limits retained | Verified earlier measurements; later full Go state UNVERIFIED |
+| Owned static checks could detect failure and completed | `/workspace/logs/skills-red/fixround6/55-owned-eslint.log`: parser negative EXIT=1 then 28 exact paths / EXIT=0; `/workspace/logs/skills-red/fixround6/56-owned-budgets.log`: deliberate negatives EXIT=1/1, owned gates EXIT=0/0; `/workspace/logs/skills-red/fixround6/57-scoped-static-results.json` | Verified bounded checks; warnings and inherited suppression disclosed, no budget change |
+| Scoped Go lint is explicitly unverified, with no owned job left running | `/workspace/logs/skills-red/fixround6/52-scoped-go-lint.console.log` EXIT=3; `/workspace/logs/skills-red/fixround6/54-scoped-go-lint.console.log` cancelled EXIT=143 / RAW_DRIVER_EXIT=143; `/workspace/logs/skills-red/fixround6/59-lint-cancelled.json`; final process check | Verified refusal/cancellation; code-lint verdict Unknown |
+| Scope, formatting and source ownership remain exact | `/workspace/logs/skills-red/fixround6/49-checkpoint-commit.json`: exact eight test/doc paths, human author/committer, unrelated index preserved, no push; `/workspace/logs/skills-red/fixround6/60-final-integrity.json`: 39 Go files gofmt-clean, diff check EXIT=0, no added suppression, all 67 code/support hashes unchanged | Verified source/commit checks; final document-only commit reported in handoff |
+| Self-check | Final source/doc diff and artifact reread against CHECK-4/r15 and both added reports; actual assertions, every mapped file/name, named counts/raw exits, real corpus, source freshness, negative instruments, warning/pin/suppression scope, cancellation ownership and process termination checked in `/workspace/logs/skills-red/fixround6/60-final-integrity.json`. No full CI/typecheck/UAT/reachability or independent CHECK success substituted for missing evidence. | Verified original-author final review only |
