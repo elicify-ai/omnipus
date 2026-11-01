@@ -12,6 +12,7 @@ package tools
 // the same answer the loader and edit_skill see.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
@@ -69,6 +71,19 @@ func resolveTurnSkillAuthority(home, agentID string) turnSkillAuthority {
 		folders: folders,
 		readAll: ResolveEffectivePolicy(pol, "edit_skill") != string(config.ToolPolicyDeny),
 	}
+}
+
+// turnSkillFolders returns the real paths of the acting agent's loadable
+// skill folders under the registered sandbox home, for the God floor's kernel
+// grant (§6.2 item 1; the ordinary path reads them from the authored policy's
+// HomeGuard.SkillFolders, filled by the same resolveTurnSkillAuthority). No
+// registered home or no agent → none (fail closed).
+func turnSkillFolders(ctx context.Context) []string {
+	base, ok := sandbox.RegisteredTurnPolicyBase()
+	if !ok || base.HomePath == "" {
+		return nil
+	}
+	return resolveTurnSkillAuthority(base.HomePath, ToolAgentID(ctx)).folders
 }
 
 // readGlobalToolCeiling returns the global tool-policy ceiling as the next

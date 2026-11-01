@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -88,6 +89,18 @@ func KernelDeniedPathsFor(home, workDir string, extraAllowed ...string) ([]strin
 	return denied, err
 }
 
+// kernelSkillSlugPattern is skills.ValidSlug's grammar (pkg/skills/loader.go
+// namePattern; this package cannot import pkg/skills): letters and digits
+// joined by single hyphens, at most kernelSkillSlugMax characters. A dot
+// entry can never match.
+var kernelSkillSlugPattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
+
+const kernelSkillSlugMax = 64
+
+func kernelSkillSlug(name string) bool {
+	return name != "" && len(name) <= kernelSkillSlugMax && kernelSkillSlugPattern.MatchString(name)
+}
+
 // runtimeAllowanceOverridesInventory reports whether a Runtime-marked branch
 // must be dropped because it would reopen protected inventory: it sits at or
 // under a named protected entry, covers one, covers the home itself, or
@@ -115,6 +128,13 @@ func runtimeAllowanceOverridesInventory(home, rawPath string) bool {
 	}
 	if !CoversForDeny(home, clean) {
 		return false // outside the home: the enumeration ignores it anyway
+	}
+	// Skills spec r15 §6.2 item 3: one loadable skill folder — exactly one
+	// level under <home>/skills, a valid slug, never a dot entry — is the
+	// only runtime shape inside the skills registry. The registry root, its
+	// control entries (.staging, .swap, ...) and anything deeper still drop.
+	if SameLocationForDeny(filepath.Dir(clean), filepath.Join(home, "skills")) && kernelSkillSlug(filepath.Base(clean)) {
+		return false
 	}
 	overlaps := func(root, p string) bool {
 		return CoversForDeny(root, p) || CoversForDeny(p, root)
