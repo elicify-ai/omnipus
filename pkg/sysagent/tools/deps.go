@@ -513,8 +513,15 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 			return fmt.Errorf("WithConfig: failed to snapshot config: %w", err)
 		}
 		snapshotJSON := snapshotBuf.Bytes()
+		// FR-018: the outbound guard's "before" is the config this tool
+		// write started from; no tool writes outbound (dedicated = false).
+		beforeOutbound := outboundSnapshot(cfg)
 
-		if fnErr := fn(cfg); fnErr != nil {
+		fnErr := fn(cfg)
+		if fnErr == nil {
+			_, fnErr = config.GuardOutbound(beforeOutbound, cfg, false)
+		}
+		if fnErr != nil {
 			// Roll back in-memory state to pre-mutation snapshot.
 			if restoreErr := restoreConfig(cfg, snapshotJSON); restoreErr != nil {
 				return fmt.Errorf("fn error: %w; also: restore failed: %w", fnErr, restoreErr)
@@ -542,6 +549,21 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 		}
 		return nil
 	})
+}
+
+// outboundSnapshot copies the channel instances of cfg with their outbound
+// settings deep-copied, as the "before" side of config.GuardOutbound.
+func outboundSnapshot(cfg *config.Config) *config.Config {
+	before := &config.Config{Channels: make(map[string]config.ChannelInstanceConfig, len(cfg.Channels))}
+	for id, inst := range cfg.Channels {
+		inst.Outbound = inst.Outbound.Clone()
+		if inst.Identity != nil {
+			identity := *inst.Identity // the pair rows compare it; fn may edit in place
+			inst.Identity = &identity
+		}
+		before.Channels[id] = inst
+	}
+	return before
 }
 
 // validateID rejects entity IDs containing path separators, "..", or null bytes

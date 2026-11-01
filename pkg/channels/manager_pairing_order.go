@@ -171,8 +171,10 @@ func (mr *managerReload) recordStartFailure(name string, channel Channel, err er
 
 func (mr *managerReload) restartDrainedWorker(name string, w *channelWorker) {
 	// Join the cancelled generation BEFORE entering the ordering boundary.
+	mr.m.observeWorkerJoin(name, workerJoinJoining, w.done, w.mediaDone)
 	<-w.done
 	<-w.mediaDone
+	mr.m.observeWorkerJoin(name, workerJoinJoined, w.done, w.mediaDone)
 	order := mr.m.PairingAttempts().LockChannel(name)
 	defer order.Unlock()
 	if !order.MatchesConfig(mr.cfg) || mr.m.workers[name] != w || mr.dispatchCtx.Err() != nil {

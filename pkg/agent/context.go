@@ -154,6 +154,12 @@ type ContextBuilder struct {
 	// wired by wireModeNoteInjectors in loop_env.go.
 	modeNoteInjector func() string
 
+	// channelsInjector returns the per-turn "## Channels" block
+	// (channels-spec-r8 FR-001) for the turn's effective workspace and
+	// transcript session, or "" to omit it. Un-cached path; set via
+	// WithChannelsInjector, wired by wireChannelsInjectors.
+	channelsInjector func(workspaceID, sessionID string) string
+
 	// env carries the environment provider + any per-builder env state. Split
 	// into a nested struct so context_env.go owns the mutation surface without
 	// touching the core ContextBuilder definition.
@@ -207,6 +213,17 @@ func (cb *ContextBuilder) WithWorkingDirInjector(fn func(workspaceID string) str
 // Passing nil disables it.
 func (cb *ContextBuilder) WithModeNoteInjector(fn func() string) *ContextBuilder {
 	cb.modeNoteInjector = fn
+	return cb
+}
+
+// WithChannelsInjector installs the per-turn "## Channels" block callback
+// (FR-001). fn receives the turn's effective workspaceID (may be "") and
+// its transcript session id (may be "": no session to classify), and is
+// called on every turn from buildDynamicContext. The session id lets fn
+// classify the session as steered the same way send_message does (FR-004).
+// Passing nil disables the block.
+func (cb *ContextBuilder) WithChannelsInjector(fn func(workspaceID, sessionID string) string) *ContextBuilder {
+	cb.channelsInjector = fn
 	return cb
 }
 
@@ -1430,6 +1447,14 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 // buildDynamicContext renders live metadata in its original system-prefix slot.
 // The clock is rendered separately by buildVolatileContext.
 func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, channel, chatID, senderID, senderDisplayName string) string {
+	return cb.buildDynamicContextForSession("", delegationDepth, workspaceID, channel, chatID, senderID, senderDisplayName)
+}
+
+// buildDynamicContextForSession is buildDynamicContext for the turn of
+// transcript session sessionID ("" when the caller has none).
+func (cb *ContextBuilder) buildDynamicContextForSession(sessionID string, delegationDepth int,
+	workspaceID, channel, chatID, senderID, senderDisplayName string,
+) string {
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 	var sb strings.Builder
@@ -1457,6 +1482,14 @@ func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, 
 	// re-rooted working directory) can change at runtime.
 	if cb.workingDirInjector != nil {
 		if block := cb.workingDirInjector(workspaceID); block != "" {
+			fmt.Fprintf(&sb, "\n\n%s", block)
+		}
+	}
+
+	// Channels block (channels-spec-r8 FR-001): one live snapshot and one
+	// availability per connection, rendered every turn.
+	if cb.channelsInjector != nil {
+		if block := cb.channelsInjector(workspaceID, sessionID); block != "" {
 			fmt.Fprintf(&sb, "\n\n%s", block)
 		}
 	}
@@ -1511,6 +1544,25 @@ func (cb *ContextBuilder) BuildMessages(
 	recallSpan []providers.Message,
 	activeSkills ...string,
 ) []providers.Message {
+	return cb.BuildMessagesForSession("", delegationDepth, history, currentMessage, media, workspaceID,
+		channel, chatID, senderID, senderDisplayName, breadcrumb, recallSpan, activeSkills...)
+}
+
+// BuildMessagesForSession is BuildMessages for one turn of transcript
+// session sessionID: the per-turn blocks that depend on the session (the
+// "## Channels" block's steered-session classification, FR-004) read it.
+func (cb *ContextBuilder) BuildMessagesForSession(
+	sessionID string,
+	delegationDepth int,
+	history []providers.Message,
+	currentMessage string,
+	media []string,
+	workspaceID string,
+	channel, chatID, senderID, senderDisplayName string,
+	breadcrumb string,
+	recallSpan []providers.Message,
+	activeSkills ...string,
+) []providers.Message {
 	messages := []providers.Message{}
 
 	// The static part (identity, bootstrap, skills, memory) is cached locally to
@@ -1532,7 +1584,7 @@ func (cb *ContextBuilder) BuildMessages(
 
 	// Keep runtime, session, sender and delegation metadata in the system prefix.
 	// workspaceID is threaded so the delegation block reads the same graph the gate enforces.
-	dynamicCtx := cb.buildDynamicContext(delegationDepth, workspaceID, channel, chatID, senderID, senderDisplayName)
+	dynamicCtx := cb.buildDynamicContextForSession(sessionID, delegationDepth, workspaceID, channel, chatID, senderID, senderDisplayName)
 
 	// Compose stable system instructions; volatile context is appended at the tail.
 	// Keeping all system content in one message ensures every provider adapter can

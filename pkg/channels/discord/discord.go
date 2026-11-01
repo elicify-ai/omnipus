@@ -152,6 +152,9 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 		return nil
 	}
 
+	if msg.Operation == bus.OperationStart {
+		return c.sendStart(ctx, msg)
+	}
 	return c.sendChunk(ctx, channelID, msg.Content, msg.ReplyToMessageID)
 }
 
