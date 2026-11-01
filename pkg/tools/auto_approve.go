@@ -192,6 +192,7 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"list_agents":     AutoRuns,
 	"create_plan":     AutoRuns,
 	"execute_plan":    AutoRuns,
+	"update_plan":     AutoRuns,
 	"plan_correct":    AutoRuns,
 	"stop_plan":       AutoRuns,
 	"run_task":        AutoRuns,

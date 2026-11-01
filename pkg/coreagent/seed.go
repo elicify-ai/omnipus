@@ -215,6 +215,8 @@ var allStaticToolNames = []string{
 	// ADR-052 — autonomous agent plan execution: planning tools + the
 	// verifier-role-only inspect_session tool.
 	"create_plan", "execute_plan", "run_task", "inspect_session",
+	// r17 §7.3 — update_plan beside create_plan.
+	"update_plan",
 
 	// ADR-055 (plan-supervisor-spec FR-006) — the supervision/containment
 	// pair. plan_correct is PlanSupervisor's ONLY tool (the correction verb
@@ -907,6 +909,7 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"list_jobs":           allow,
 				"create_plan":         allow,
 				"execute_plan":        allow,
+				"update_plan":         allow,
 				"stop_plan":           allow,
 				"plan_correct":        allow,
 				"list_tasks":          allow,
@@ -985,7 +988,7 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 // one; they do not author goals, plans, new tasks or retrospectives.
 var workerTierDeniedTools = []string{
 	"answer_request", "read_conversation", "set_goal", "run_retrospective",
-	"create_plan", "execute_plan", "stop_plan", "plan_correct", "create_task",
+	"create_plan", "execute_plan", "update_plan", "stop_plan", "plan_correct", "create_task",
 	"request_secret",
 }
 

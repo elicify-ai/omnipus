@@ -515,6 +515,7 @@ func defaultToolPoliciesPlanning() map[string]string {
 		// is refused regardless of its stored policy.
 		"create_plan":     "allow",
 		"execute_plan":    "allow",
+		"update_plan":     "allow",
 		"run_task":        "allow",
 		"inspect_session": "allow",
 	}

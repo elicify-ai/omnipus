@@ -60,7 +60,7 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		// above) rather than silently defaulting to it.
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "browser_upload_file", "environment_setup", "bash")
 	case IDJim:
-		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "send_file", "create_task", "update_task", "list_tasks", "list_jobs", "set_todos", "delegate", "create_plan", "execute_plan", "stop_plan", "find_skills", "list_skills")...)
+		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "send_file", "create_task", "update_task", "list_tasks", "list_jobs", "set_todos", "delegate", "create_plan", "execute_plan", "update_plan", "stop_plan", "find_skills", "list_skills")...)
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "browser_upload_file")
 	case IDPlanner:
 		grant(allow, append(commonWork, "search_web", "fetch_url", "create_task", "update_task", "list_tasks", "delegate")...)
@@ -79,6 +79,12 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		// intended bash posture is Ask too, listed explicitly rather than
 		// silently defaulting to it.
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "environment_setup", "bash")
+	}
+	// r17 §16 D-7: Planner and Researcher may edit plans they own or created
+	// (the update_plan authority check still applies); the general-purpose
+	// Worker and custom workers may not.
+	if id == IDPlanner || id == IDResearcher {
+		grant(allow, "update_plan")
 	}
 	if id == IDMia || id == IDJim || id == IDWorker {
 		grant(ask, "knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create")

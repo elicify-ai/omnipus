@@ -878,6 +878,8 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 		// Same live goal try limit as taskCreate above, for the goal record
 		// update_task creates when a legacy task gets criteria/dod.
 		taskUpdate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(rw.rs.al) })
+		// r17 TK-05: the max_attempts ceiling reads the LIVE global.
+		taskUpdate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(rw.rs.al) })
 		taskUpdate.SetAssigneeReadinessChecker(rw.rs.al.TaskAssigneeCannotFinish)
 		taskUpdate.SetOnComplete(func(t *task.Task) {
 			if rw.rs.al.taskExecutor != nil {
@@ -1742,7 +1744,16 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	planCreate.SetOwnerValidator(func(ownerAgentID string) error {
 		return validatePlanOwnerAgentForTool(al.GetConfig(), ownerAgentID)
 	})
+	planCreate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(al) })
 	agent.Tools.RegisterReplacing(planCreate)
+
+	// update_plan (r17 §7.3): same owner validator and live bounds ceiling.
+	planUpdate := tools.NewPlanUpdateTool(planStore)
+	planUpdate.SetOwnerValidator(func(ownerAgentID string) error {
+		return validatePlanOwnerAgentForTool(al.GetConfig(), ownerAgentID)
+	})
+	planUpdate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(al) })
+	agent.Tools.RegisterReplacing(planUpdate)
 
 	// execute_plan (FR-003/004/030, US-3): SD-A7 tiered-DoD gate's isAgentID
 	// checker (SetIsAgentIDChecker) mirrors gateway's restAPI.isAgentID.

@@ -1493,6 +1493,9 @@ type TaskUpdateTool struct {
 	// assigneeCannotFinish mirrors TaskCreateTool.assigneeCannotFinish (set via
 	// SetAssigneeReadinessChecker).
 	assigneeCannotFinish AssigneeReadinessChecker
+	// planningFn reads the live planning configuration for the max_attempts
+	// ceiling (r17 TK-05); see SetPlanningConfigFn.
+	planningFn PlanningConfigFn
 }
 
 func NewTaskUpdateTool(store *task.Store) *TaskUpdateTool {
@@ -1705,6 +1708,17 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 					"changed (the Judge scores the finished work against it), and supplying it is refused. " +
 					"Your status, todos, result and artifacts stay editable throughout.",
 			},
+			"max_attempts": map[string]any{
+				"type":    "integer",
+				"minimum": 1,
+				"description": "How many fresh runs this task gets (its retry limit). Only the agent that created " +
+					"the task may change it. It must be at most the global limit in Settings, even when it lowers " +
+					"a higher value a person set. Stays editable while the task runs.",
+			},
+			"clear_max_attempts": map[string]any{
+				"type":        "boolean",
+				"description": "true clears the task's own retry limit so it inherits the global limit. Always accepted from the creator.",
+			},
 			"dod": map[string]any{
 				"type": "array",
 				"items": map[string]any{
@@ -1768,6 +1782,10 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	}
 
 	if r0, stop := tu.buildPatchFields(); stop {
+		return r0
+	}
+
+	if r0, stop := tu.applyRetryLimit(); stop {
 		return r0
 	}
 
@@ -2129,7 +2147,7 @@ func (tu *taskUpdateToolExecute) buildJudgedContract() (*ToolResult, bool) {
 func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	if len(tu.updatedFields) == 0 {
 		return ErrorResult(
-			"no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by, write_set, stream, is_join)",
+			"no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by, write_set, stream, is_join, max_attempts, clear_max_attempts)",
 		), true
 	}
 

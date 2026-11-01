@@ -198,6 +198,7 @@ func GeneralBuiltinMetadata() []Tool {
 	// metadata catalog, at the per-agent tool-dispatch gate. ---
 	out = append(out, NewPlanCreateTool(nil))
 	out = append(out, NewPlanExecuteTool(nil, nil))
+	out = append(out, NewPlanUpdateTool(nil))
 	out = append(out, NewTaskRunTool(nil))
 	// inspect_session: verifier-role-only (ceiling-deny for every ordinary
 	// agent); listed here purely as a capability-reference entry.
