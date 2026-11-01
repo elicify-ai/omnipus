@@ -15,10 +15,11 @@ import {
   ChannelOutboundRead as ChannelOutboundReadSchema,
 } from '@/lib/api/generated/schemas'
 
-const { addToast, fetchAvailability, enable } = vi.hoisted(() => ({
+const { addToast, fetchAvailability, enable, fetchConfig } = vi.hoisted(() => ({
   addToast: vi.fn(),
   fetchAvailability: vi.fn(),
   enable: vi.fn(),
+  fetchConfig: vi.fn(),
 }))
 
 vi.mock('@/store/ui', () => ({ useUiStore: () => ({ addToast }) }))
@@ -39,7 +40,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     // configureChannel and isApiError deliberately remain real.
-    fetchChannelConfig: vi.fn().mockResolvedValue({}),
+    fetchChannelConfig: fetchConfig,
     fetchChannelRouting: vi.fn().mockResolvedValue({ default_agent_id: '', workspace_id: '', bound: false }),
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
@@ -60,6 +61,7 @@ vi.mock('framer-motion', () => ({
 import { ChannelConfigPanel } from './ChannelConfigPanel'
 
 const FAILED_TEXT = 'Saved, but applying the change did not complete: scripted disposal failure. Check the connection status before retrying.'
+const APPLY_NOTE = 'A connection restart was attempted; other connections and scheduled services may have paused briefly while it ran.'
 const PARTIAL_ERRORS = [
   {
     code: 'saved_not_refreshed',
@@ -79,6 +81,7 @@ const fetchMock = vi.fn<typeof fetch>()
 beforeEach(() => {
   addToast.mockReset()
   fetchAvailability.mockReset()
+  fetchConfig.mockReset().mockResolvedValue({})
   enable.mockReset().mockResolvedValue({ id: 'whatsapp', enabled: true })
   status = 200
   body = ChannelConfigureResponseSchema.parse({ apply_outcome: 'failed', apply_reason: 'scripted disposal failure' })
@@ -99,9 +102,10 @@ afterEach(() => {
   document.cookie = 'csrf=; Max-Age=0; path=/'
 })
 
-function renderPanel() {
+function renderPanel(config: Record<string, unknown> = {}) {
+  fetchConfig.mockResolvedValue(config)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  client.setQueryData(['channel-config', 'whatsapp'], {})
+  client.setQueryData(['channel-config', 'whatsapp'], config)
   client.setQueryData(['channel-routing', 'whatsapp'], { default_agent_id: '', workspace_id: '', bound: false })
   client.setQueryData(['agents'], [])
   client.setQueryData(['workspaces', { status: 'active' }], [])
@@ -184,5 +188,90 @@ describe.each(['Save', 'Save & Enable'])('T-06 real Configure wire path — %s',
     expect(addToast.mock.calls[0][0].message).not.toMatch(/saved/i)
     expectNoEnableOrSuccess()
     expect(fetchAvailability).not.toHaveBeenCalled()
+  })
+})
+
+// Complete the T-6c matrix through the actual response-reading/schema path.
+// Note placement is not specified: its exact text may share a toast or appear
+// alongside it. The principal result toast is exact, including its variant.
+describe.each(['Save', 'Save & Enable'])('T-06 complete outcome wire matrix — %s', (label) => {
+  it('applied shows the exact success and attempted-restart note before an optional enable', async () => {
+    body = ChannelConfigureResponseSchema.parse({ apply_outcome: 'applied', apply_note: APPLY_NOTE })
+    renderPanel()
+    await save(label)
+    await waitFor(() => expect(addToast.mock.calls.map(([toast]) => toast)).toContainEqual(
+      expect.objectContaining({ message: 'Saved. The connection restarted with the new settings.', variant: 'success' }),
+    ))
+    expect(addToast.mock.calls.map(([toast]) => toast.message).join('\n')).toContain(APPLY_NOTE)
+    expect(fetchAvailability).not.toHaveBeenCalled()
+    if (label === 'Save & Enable') {
+      await waitFor(() => expect(enable.mock.calls).toEqual([['whatsapp']]))
+      const successIndex = addToast.mock.calls.findIndex(([toast]) => toast.message === 'Saved. The connection restarted with the new settings.')
+      expect(addToast.mock.invocationCallOrder[successIndex]).toBeLessThan(enable.mock.invocationCallOrder[0])
+    } else {
+      expect(enable).not.toHaveBeenCalled()
+    }
+    expect(addToast.mock.calls.map(([toast]) => toast.message)).not.toContain('Configuration saved')
+  })
+
+  it('no_reload_needed says Saved or enables as today without claiming a restart', async () => {
+    body = ChannelConfigureResponseSchema.parse({ apply_outcome: 'no_reload_needed' })
+    renderPanel()
+    await save(label)
+    if (label === 'Save & Enable') {
+      await waitFor(() => expect(enable.mock.calls).toEqual([['whatsapp']]))
+    } else {
+      await waitFor(() => expect(addToast.mock.calls.map(([toast]) => toast)).toContainEqual(
+        expect.objectContaining({ message: 'Saved.', variant: 'success' }),
+      ))
+      expect(enable).not.toHaveBeenCalled()
+    }
+    expect(addToast.mock.calls.map(([toast]) => toast.message).join('\n')).not.toMatch(/restart|Configuration saved/i)
+    expect(addToast.mock.calls.filter(([toast]) => toast.variant === 'warning' || toast.variant === 'error')).toEqual([])
+    expect(fetchAvailability).not.toHaveBeenCalled()
+  })
+
+  it('applied_not_running shows the exact warning, never success or enable', async () => {
+    body = ChannelConfigureResponseSchema.parse({ apply_outcome: 'applied_not_running', apply_reason: '401 unauthorized', apply_note: APPLY_NOTE })
+    renderPanel()
+    await save(label)
+    await waitFor(() => expect(addToast.mock.calls.map(([toast]) => toast)).toContainEqual(
+      expect.objectContaining({ message: 'Saved, but the connection is not running: 401 unauthorized.', variant: 'warning' }),
+    ))
+    expectNoEnableOrSuccess()
+    expect(addToast.mock.calls.map(([toast]) => toast.message).join('\n')).not.toMatch(/keeps running with its old settings|restarted with the new settings/)
+    expect(fetchAvailability).not.toHaveBeenCalled()
+  })
+
+  it('unconfirmed shows the exact warning, never success or enable', async () => {
+    body = ChannelConfigureResponseSchema.parse({ apply_outcome: 'unconfirmed', apply_note: APPLY_NOTE })
+    renderPanel()
+    await save(label)
+    await waitFor(() => expect(addToast.mock.calls.map(([toast]) => toast)).toContainEqual(
+      expect.objectContaining({ message: 'Saved. The restart was not confirmed yet; check the connection status in a moment.', variant: 'warning' }),
+    ))
+    expectNoEnableOrSuccess()
+    expect(addToast.mock.calls.map(([toast]) => toast.message).join('\n')).not.toMatch(/keeps running with its old settings|restarted with the new settings/)
+    expect(fetchAvailability).not.toHaveBeenCalled()
+  })
+})
+
+describe.each(['Save', 'Save & Enable'])('T-19 hydrate exclusion through real Configure — %s', (label) => {
+  it('omits outbound and all three apply metadata keys while keeping the ordinary field', async () => {
+    body = ChannelConfigureResponseSchema.parse({ apply_outcome: 'no_reload_needed' })
+    renderPanel({
+      allow_from: ['15551234567'],
+      outbound: { policy: 'agent_may_start', targets: ['discord:111'] },
+      apply_outcome: 'failed',
+      apply_reason: 'old readback only',
+      apply_note: APPLY_NOTE,
+    })
+    await save(label)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/v1/channels/whatsapp/configure')
+    expect(init?.method).toBe('PUT')
+    // S-34: this is an actual serialized form submission, not a direct call
+    // to a guessed hydrate helper or a mock Configure function.
+    expect(JSON.parse(String(init?.body))).toEqual({ allow_from: ['15551234567'] })
   })
 })
