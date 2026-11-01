@@ -879,6 +879,9 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 		// update_task creates when a legacy task gets criteria/dod.
 		taskUpdate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(rw.rs.al) })
 		// r17 TK-05: the max_attempts ceiling reads the LIVE global.
+		// r17 TK-11: plan_id attach is checked against the plan store; the
+		// SetPlanStore late-binding pass re-wires it once the store exists.
+		taskUpdate.SetPlanStore(rw.rs.al.GetPlanStore())
 		taskUpdate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(rw.rs.al) })
 		taskUpdate.SetAssigneeReadinessChecker(rw.rs.al.TaskAssigneeCannotFinish)
 		taskUpdate.SetOnComplete(func(t *task.Task) {

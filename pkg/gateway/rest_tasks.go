@@ -1001,6 +1001,10 @@ type taskPatch struct {
 	preUpdateStatus       task.Status
 	updated               *task.Task
 	priorForUpdate        *task.Task
+	// goalDefinitionErr and goalPromptErr are the paired-goal
+	// synchronisation failures of the reconciled write (applyUpdate).
+	goalDefinitionErr error
+	goalPromptErr     error
 }
 
 // handleTaskPatch handles PATCH /api/v1/tasks/{id}.
@@ -1219,6 +1223,11 @@ func (tp *taskPatch) buildPatch() bool {
 		return true
 	}
 	if tp.req.PlanId != nil {
+		// r17 TK-11: the one plan_id rule REST and update_task share
+		// (tools.PlanMembershipChange). Attach / re-parent (plan A -> plan B,
+		// or standalone -> plan B) needs the same-workspace FK and a draft
+		// plan; DETACH (plan_id -> "") is always allowed.
+		workspaceID := ""
 		if *tp.req.PlanId != "" {
 			// A task's workspace_id is immutable via PATCH (not a
 			// TaskUpdateRequest field) — read the existing task to learn it,
@@ -1233,40 +1242,30 @@ func (tp *taskPatch) buildPatch() bool {
 				jsonErr(tp.w, http.StatusInternalServerError, "could not read task")
 				return true
 			}
-			// Same-workspace FK + draft-only membership, via the one choke
-			// point every attach path shares. This is the RE-PARENT/attach
-			// half of PATCH (plan A -> plan B, or standalone -> plan B); the
-			// DETACH half (plan_id -> "") is the else branch below and is
-			// deliberately not gated — leaving a plan is always allowed.
-			if err := tools.ValidateTaskPlanMembership(
-				tp.a.planStore, *tp.req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
-				jsonErr(tp.w, http.StatusBadRequest, err.Error())
-				return true
-			}
-		} else if tp.req.Status == nil {
-			// DETACH (plan_id -> ""). Sibling of the plan-delete laundering
-			// hole: detaching a member without touching its status turns a
-			// `next` member of a draft/stopped plan into a STANDALONE `next`
-			// task, which requirePlanExecuting rightly permits (PlanID == ""
-			// means "not a plan member") and CheckQueuedTasks' ~60s drain then
-			// auto-dispatches — running work the Execute gate never approved.
-			// Reachable from the UI today: TaskDetailPanel's Plan dropdown ->
-			// "No plan" sends exactly this patch.
-			//
-			// Mirror detachMemberOnPlanDelete: a detached non-terminal member
-			// returns to triage rather than inheriting a dispatchable resting
-			// state it was never approved for. Applied on the SAME patch as the
-			// plan_id clear, so there is no window where the task is standalone
-			// and still `next`.
-			//
-			// Only when the caller did NOT also set `status` in the same
-			// request (an explicit status wins). Re-parenting plan A -> plan B
-			// is untouched — that takes the non-empty branch above.
-			// detachResetsStatus drives the ErrIllegalTransition retry at the
-			// Update call site: the store refuses this combined patch for
-			// `blocked`/`done`/`failed` (blocked may only leave via the store's
-			// own recompute; done is frozen), and those must still detach
-			// rather than 400 — history is never rewritten.
+			workspaceID = existingForPlanCheck.WorkspaceID
+		}
+		// A detach without a status in the same request returns the task to
+		// inbox (detachToInbox). Sibling of the plan-delete laundering hole: detaching a
+		// member without touching its status turns a `next` member of a
+		// draft/stopped plan into a STANDALONE `next` task, which
+		// requirePlanExecuting rightly permits (PlanID == "" means "not a plan
+		// member") and CheckQueuedTasks' ~60s drain then auto-dispatches —
+		// running work the Execute gate never approved. Reachable from the UI
+		// today: TaskDetailPanel's Plan dropdown -> "No plan" sends exactly
+		// this patch. Mirror detachMemberOnPlanDelete: a detached non-terminal
+		// member returns to triage, on the SAME patch as the plan_id clear, so
+		// there is no window where the task is standalone and still `next`.
+		// An explicit status wins. detachResetsStatus drives the
+		// ErrIllegalTransition retry at the write: the store refuses this
+		// combined patch for `blocked`/`done`/`failed`, and those must still
+		// detach rather than 400 — history is never rewritten.
+		detachToInbox, err := tools.PlanMembershipChange(
+			tp.a.planStore, workspaceID, *tp.req.PlanId, tp.req.Status != nil)
+		if err != nil {
+			jsonErr(tp.w, http.StatusBadRequest, err.Error())
+			return true
+		}
+		if detachToInbox {
 			inbox := task.StatusInbox
 			tp.patch.Status = &inbox
 			tp.detachResetsStatus = true
@@ -1452,9 +1451,13 @@ func (tp *taskPatch) applyUpdate() bool {
 	// snapshot below is captured atomically under the SAME per-task lock as
 	// this write — see priorTriggerForAudit's own doc comment above for the
 	// TOCTOU window a separate pre-patch Get() would have.
-	var err error
-	tp.updated, tp.priorForUpdate, err = tp.a.taskStore.UpdateWithPrior(tp.id, tp.patch)
-	if err != nil && tp.detachResetsStatus && errors.Is(err, task.ErrIllegalTransition) {
+	//
+	// r17 TK-03: the write goes through the shared reconciled write, which
+	// holds the task's coordination lock across the task write and the paired
+	// goal's synchronisation (criteria/dod here, then the prompt), so REST and
+	// update_task writers of one task are strictly ordered.
+	req := tools.TaskWriteRequest{Patch: tp.patch, Prior: true}
+	if tp.detachResetsStatus {
 		// The detach above optimistically added `status: inbox`. A terminal or
 		// `blocked` member legitimately refuses that (done is frozen; blocked
 		// may only leave via the store's own recompute), but the DETACH itself
@@ -1463,8 +1466,20 @@ func (tp *taskPatch) applyUpdate() bool {
 		// close does not apply to them. Retry with the plan_id clear alone and
 		// let recomputeBlockedStateLocked (which runs at the end of every
 		// Update) settle `blocked`.
-		tp.patch.Status = nil
-		tp.updated, tp.priorForUpdate, err = tp.a.taskStore.UpdateWithPrior(tp.id, tp.patch)
+		req.RetryWithoutStatus = tools.DetachStatusRefused
+	}
+	if tp.criteriaProvided || tp.dodProvided {
+		req.SyncGoalDefinition = func(updated *task.Task) error {
+			return tp.a.syncTaskGoalRecord(updated, tp.criteriaProvided, tp.patchDoD, tp.dodProvided)
+		}
+	}
+	out, err := tools.WriteTaskReconciled(tp.a.taskStore, tp.id, req)
+	if err == nil {
+		if out.StatusDropped {
+			tp.patch.Status = nil
+		}
+		tp.updated, tp.priorForUpdate = out.Updated, out.Prior
+		tp.goalDefinitionErr, tp.goalPromptErr = out.GoalDefinitionErr, out.GoalPromptErr
 	}
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
@@ -1508,7 +1523,7 @@ func (tp *taskPatch) syncGoalRecord() bool {
 	// two lists) is a 400 — the client can fix it by sending both. Every
 	// other failure is a storage fault and stays a 500.
 	if tp.criteriaProvided || tp.dodProvided {
-		if gErr := tp.a.syncTaskGoalRecord(tp.updated, tp.criteriaProvided, tp.patchDoD, tp.dodProvided); gErr != nil {
+		if gErr := tp.goalDefinitionErr; gErr != nil {
 			slog.Error("rest: task update: failed to sync paired goal record",
 				"id", tp.id, "error", gErr)
 			if errors.Is(gErr, errGoalRecordNeedsBothLists) {
@@ -1520,6 +1535,17 @@ func (tp *taskPatch) syncGoalRecord() bool {
 					"Check disk space and permissions, then retry. Details are in the server log.", tp.id))
 			return true
 		}
+	}
+	// r17 TK-03 / §7.11: the paired goal follows the task prompt (or the
+	// title when the prompt is empty); a failure after the task write is a
+	// truthful 500, never a silent 200.
+	if tp.goalPromptErr != nil {
+		slog.Error("rest: task update: failed to sync paired goal prompt",
+			"id", tp.id, "error", tp.goalPromptErr)
+		jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
+			"task %q was updated but its goal record could not be updated. "+
+				"Check disk space and permissions, then retry. Details are in the server log.", tp.id))
+		return true
 	}
 	return false
 }

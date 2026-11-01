@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	rrule "github.com/teambition/rrule-go"
@@ -511,10 +512,10 @@ func (t *Task) normalize() error {
 	if !IsValidSurface(t.Surface) {
 		return verr("invalid surface %q", t.Surface)
 	}
-	if len(t.Description) > 2000 {
+	if utf8.RuneCountInString(t.Description) > maxDescriptionChars {
 		return verr("description must be 2000 characters or fewer")
 	}
-	if len(t.Prompt) > 10000 {
+	if utf8.RuneCountInString(t.Prompt) > maxPromptChars {
 		return verr("prompt must be 10000 characters or fewer")
 	}
 	if len(t.Result) > 50000 {
@@ -582,6 +583,15 @@ func (t *Task) validateScheduledAgentAssignment() error {
 	}
 	return nil
 }
+
+// maxDescriptionChars and maxPromptChars bound Task.Description and
+// Task.Prompt in characters (runes), never bytes (tool-parity spec r17 D-1:
+// description up to 2000, prompt up to 10000 characters), so a valid
+// non-ASCII text is not refused for its encoded size.
+const (
+	maxDescriptionChars = 2000
+	maxPromptChars      = 10000
+)
 
 // maxTagRunes and maxTagsPerTask bound Task.Tags (spec Part A §B). Also used
 // by the milestone migration (migrate_milestones.go) when sizing the
@@ -1169,13 +1179,13 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, bool, error) {
 		su.t.Title = trimmedTitle
 	}
 	if su.patch.Description != nil {
-		if len(*su.patch.Description) > 2000 {
+		if utf8.RuneCountInString(*su.patch.Description) > maxDescriptionChars {
 			return nil, true, verr("description must be 2000 characters or fewer")
 		}
 		su.t.Description = *su.patch.Description
 	}
 	if su.patch.Prompt != nil {
-		if len(*su.patch.Prompt) > 10000 {
+		if utf8.RuneCountInString(*su.patch.Prompt) > maxPromptChars {
 			return nil, true, verr("prompt must be 10000 characters or fewer")
 		}
 		su.t.Prompt = *su.patch.Prompt

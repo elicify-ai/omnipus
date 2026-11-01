@@ -25,6 +25,29 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
+// PlanMembershipChange is the one plan_id rule the REST PATCH handler and
+// update_task share (tool-parity spec r17 §7.2 TK-11, MAJ-011). Attaching or
+// re-parenting (planID != "") must pass ValidateTaskPlanMembership (same
+// workspace, target plan still a draft). Detaching (planID == "") is always
+// allowed; without an explicit status in the same call it also returns the
+// task to inbox (detachToInbox), so a detached member never becomes a
+// standalone dispatchable task its plan never approved. When the store
+// refuses that status (blocked, done, ...) the write is retried without it
+// (DetachStatusRefused): the detach still lands and history is never
+// rewritten. An explicit status wins.
+func PlanMembershipChange(planStore *plan.Store, workspaceID, planID string, explicitStatus bool) (detachToInbox bool, err error) {
+	if planID != "" {
+		return false, ValidateTaskPlanMembership(planStore, planID, workspaceID)
+	}
+	return !explicitStatus, nil
+}
+
+// DetachStatusRefused reports whether a write refused the detach's inbox
+// status, the one case PlanMembershipChange retries without it.
+func DetachStatusRefused(err error) bool {
+	return errors.Is(err, task.ErrIllegalTransition)
+}
+
 // --- shared plan/task-linkage validation (the ONE choke point every
 // direct-attach path calls — ADR-052 FR-002) ---
 

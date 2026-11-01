@@ -35,9 +35,8 @@ func (tu *taskUpdateToolExecute) applyRetryLimit() (*ToolResult, bool) {
 	if !present && !clearOn {
 		return nil, false
 	}
-	if !tu.existing.CreatedByAgent(tu.callerID) {
-		return ErrorResult(definitionCreatorOnlyText), true
-	}
+	// Creator-only authority is checked for the whole definition group in
+	// validateAndLoad (checkDefinitionAuthority), before anything is built.
 	if present && clearOn {
 		return ErrorResult("max_attempts and clear_max_attempts cannot be combined: send one of them"), true
 	}
