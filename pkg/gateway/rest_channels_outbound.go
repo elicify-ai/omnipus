@@ -104,12 +104,19 @@ func outboundTargetHint(raw string) string {
 	return s
 }
 
-// outboundTargetReasons are the fixed catalog reasons (all in the safe-echo
-// set, at most 120 characters).
+// outboundTargetReasons are the fixed catalog reasons, one per target error
+// code (all in the safe-echo set, at most 120 characters): every refused
+// entry reaches the operator with its reason (S-90).
 var outboundTargetReasons = map[channels.TargetErrorCode]string{
+	channels.TargetErrInvalidID:          "not a valid id for this platform; use the numeric id",
+	channels.TargetErrWildcardNotAllowed: "a wildcard is not allowed; list each person or group by its id",
 	channels.TargetErrUsernameNotAllowed: "a message cannot be sent to a name; use the numeric id",
+	channels.TargetErrWrongPlatform:      "this id names a different platform than this connection",
+	channels.TargetErrNotFound:           "no person, channel or thread with this id was found",
 	channels.TargetErrUnsupportedChannelKind: "this kind of Discord channel cannot receive a posted message; " +
 		"use a text channel, announcement channel or thread id",
+	channels.TargetErrCannotMessagePeople: "this platform can only answer, not start a direct message",
+	channels.TargetErrLookupUnavailable:   "the platform could not be reached to check this id; try again",
 }
 
 // invalidTargetsRejection builds the 400 invalid_targets body: the first 10
