@@ -49,7 +49,7 @@ func permissionFieldRefusal(args map[string]any) *tools.ToolResult {
 var agentCreateArgNames = map[string]struct{}{
 	"name": {}, "description": {}, "soul": {}, "model": {}, "color": {},
 	"figure": {}, "role": {}, // visual identity (#1303); defaults resolved in validate
-	"agent_type": {}, "cli": {}, "cli_path": {}, "provider": {}, "fallback_models": {},
+	"agent_type": {}, "cli": {}, "env_overrides": {}, "cli_args": {}, "provider": {}, "fallback_models": {},
 	"heartbeat": {}, "max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
 	"tool_policy_changes": {}, "memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
@@ -68,7 +68,7 @@ func rejectUnknownAgentFields(args map[string]any, allowed map[string]struct{}) 
 func mutationFieldNames(args map[string]any) []string {
 	fields := make([]string, 0, len(args))
 	for name := range args {
-		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" || name == "cli_path" ||
+		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" ||
 			name == "heartbeat" || name == "agent_md" || name == workspaceIDParam {
 			continue
 		}

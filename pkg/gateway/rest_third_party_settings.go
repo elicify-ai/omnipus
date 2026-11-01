@@ -12,6 +12,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"unicode/utf8"
@@ -71,11 +72,7 @@ func (a *restAPI) HandleThirdPartyAgentSettings(w http.ResponseWriter, r *http.R
 // workspace root lives under it) and the sandbox's read+write grants
 // (sandbox.allowed_paths). r17 §3.5.
 func thirdPartyAgentWritable(homePath string, cfg *config.Config) []string {
-	out := []string{homePath}
-	if cfg != nil {
-		out = append(out, cfg.Sandbox.AllowedPaths...)
-	}
-	return out
+	return thirdpartycli.AgentWritableRoots(homePath, cfg)
 }
 
 // putThirdPartyAgentSettings validates every row, then writes the whole
@@ -193,7 +190,8 @@ func validateThirdPartyRow(cli string, row config.ThirdPartyCLIConfig, writable 
 // asCheckError keeps the check error; any other error is reported as the
 // path not being found, never as success.
 func asCheckError(cli string, err error) *thirdpartycli.CheckError {
-	if ce, ok := err.(*thirdpartycli.CheckError); ok {
+	var ce *thirdpartycli.CheckError
+	if errors.As(err, &ce) {
 		return ce
 	}
 	return &thirdpartycli.CheckError{CLI: cli, Check: thirdpartycli.CheckNotFound, Detail: err.Error()}

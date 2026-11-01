@@ -850,7 +850,7 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 					copy(skills, ac.Skills)
 					ag.Skills = &skills
 				}
-				setAgentExecutorResponse(&ag, ac.Subagents)
+				setAgentExecutorResponse(&ag, ac.Subagents, liveCfg, uf.ru.a.homePath)
 				if ac.UpdatedAt != nil {
 					ag.UpdatedAt = ac.UpdatedAt
 				}

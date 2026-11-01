@@ -56,6 +56,9 @@ var subagent3pForbiddenUpdateFields = []string{
 	"skills",
 	"fallback_models",
 	"model_params",
+	// r17 AG-04 / FR-110: an external worker has no soul at all; dispatch
+	// never reads a SOUL.md for it, so an update cannot add one.
+	"soul",
 }
 
 // subagent3pCreateOnlyExemptFields documents wire fields that are present on
@@ -134,6 +137,9 @@ func firstForbiddenSubagent3pField(req *gen.AgentUpdateRequest) (string, bool) {
 	}
 	if req.ModelParams != nil {
 		return "model_params", true
+	}
+	if req.Soul != nil {
+		return "soul", true
 	}
 	return "", false
 }

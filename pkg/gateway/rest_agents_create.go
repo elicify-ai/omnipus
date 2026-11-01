@@ -14,6 +14,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 	"github.com/google/uuid"
 )
 
@@ -231,6 +232,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 // restAPICreateAgentPrepareAgent carries the shared state of prepareAgent across its stages.
 type restAPICreateAgentPrepareAgent struct {
 	cra            *restAPICreateAgent
+	wireType       string
 	createType     config.AgentType
 	name           string
 	description    *string
@@ -258,6 +260,7 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 	if stop {
 		return true
 	}
+	pap.wireType = wireType
 	executorIn, stop := pap.normalizeVariant(raw, wireType, variantName)
 	if stop {
 		return true
@@ -319,6 +322,13 @@ func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, s
 		return nil, "", "", true
 	}
 	pap.createType = coreagent.ResolveType(gen.AgentType(*typePeek.Type))
+	// r17 §3.11/§7.11: executor.kind is derived and executor.cli_path is
+	// Settings-owned; each is refused with its own text and field before the
+	// schema validator or the strict decoder could answer generically.
+	if *typePeek.Type == string(gen.AgentTypeSubagent3p) &&
+		refuseForbiddenExecutorFields(pap.cra.w, raw, "kind", "cli_path") {
+		return nil, "", "", true
+	}
 
 	if pap.cra.a.agentLoop.GetConfig().Gateway.ValidateInbound &&
 		!validateAgentIdentitySchema(pap.cra.w, variantName, raw, true) {
@@ -479,10 +489,20 @@ func (pap *restAPICreateAgentPrepareAgent) buildExecutor(wireType string, execut
 				jsonErr(pap.cra.w, http.StatusBadRequest, errMsg)
 				return true
 			}
+			// r17 §7.6 EX-01/EX-04: the same env_overrides and cli_args rules
+			// as create_agent and the update merge (pkg/thirdpartycli).
 			if executorIn.EnvOverrides != nil {
+				if err := thirdpartycli.ValidateEnvOverrides(*executorIn.EnvOverrides); err != nil {
+					jsonErrField(pap.cra.w, http.StatusBadRequest, err.Error(), "executor.env_overrides")
+					return true
+				}
 				execCfg.EnvOverrides = *executorIn.EnvOverrides
 			}
 			if executorIn.CliArgs != nil {
+				if err := thirdpartycli.ValidateCLIArgs(*executorIn.CliArgs); err != nil {
+					jsonErrField(pap.cra.w, http.StatusBadRequest, err.Error(), "executor.cli_args")
+					return true
+				}
 				execCfg.CLIArgs = *executorIn.CliArgs
 			}
 			pap.cra.ac.Subagents = &config.SubagentsConfig{Executor: execCfg}
@@ -545,10 +565,15 @@ func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, strin
 	// error before this point is ever reached.
 	// W2 spec §4.7 / §9.2 row 8: whitespace-only soul is rejected (the wire
 	// schema enforces minLength:1; whitespace-only is the natural
-	// soft-bypass). Backend trims before validation.
-	if pap.cra.soul == "" || strings.TrimSpace(pap.cra.soul) == "" {
-		jsonErr(pap.cra.w, http.StatusBadRequest, "soul is required (whitespace-only is rejected as minLength violation)")
-		return "", "", true
+	// soft-bypass). Backend trims before validation. r17 §7.5 AG-04 (F-05):
+	// an external worker (subagent_3p) has no soul at all — its variant
+	// carries no soul property (a supplied one is refused at decode), so the
+	// requirement applies to the native types only.
+	if pap.wireType != string(gen.AgentTypeSubagent3p) {
+		if strings.TrimSpace(pap.cra.soul) == "" {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "soul is required (whitespace-only is rejected as minLength violation)")
+			return "", "", true
+		}
 	}
 	pap.resolvedFigure = coreagent.DefaultFigure
 	if pap.figure != nil && string(*pap.figure) != "" {
@@ -877,7 +902,7 @@ func (cra *restAPICreateAgent) publishResponse() {
 		copy(skillsResp, cra.ac.Skills)
 		ag.Skills = &skillsResp
 	}
-	setAgentExecutorResponse(&ag, cra.ac.Subagents)
+	setAgentExecutorResponse(&ag, cra.ac.Subagents, cfgAfterCreate, cra.a.homePath)
 	ag.Revision = cra.mutationResult.Revision
 	persistence := gen.AgentPersistenceStatusComplete
 	ag.PersistenceStatus = &persistence

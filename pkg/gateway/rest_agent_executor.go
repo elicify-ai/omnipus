@@ -1,10 +1,13 @@
 package gateway
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 // rest_agent_executor.go — mapping helpers for the sub-agent Executor wire field.
@@ -91,11 +94,41 @@ func executorConfigFromRequest(kind, cli string) (*config.ExecutorConfig, string
 	}
 }
 
+// refuseForbiddenExecutorFields answers 400 with the r17 §3.11/§7.11 text and
+// `field: executor.<name>` when the body's executor object carries one of the
+// named properties (checked in the given order), and reports whether it did.
+// It runs before the schema validator and the strict decoder, which would
+// otherwise refuse the same body with a generic unknown-property message.
+// A body that is not an object, or has no executor object, passes untouched:
+// the later decode reports its real problem.
+func refuseForbiddenExecutorFields(w http.ResponseWriter, raw []byte, forbidden ...string) bool {
+	var body struct {
+		Executor map[string]json.RawMessage `json:"executor"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || body.Executor == nil {
+		return false
+	}
+	for _, field := range forbidden {
+		if _, present := body.Executor[field]; present {
+			jsonErrField(w, http.StatusBadRequest, thirdpartycli.ExecutorFieldRefusal(field), "executor."+field)
+			return true
+		}
+	}
+	return false
+}
+
 // setAgentExecutorResponse populates the generated Agent.Executor response field
 // from the persisted config.SubagentsConfig so a GET (and the create/update echo)
 // reflects the stored executor. When the agent has no executor configured the field
 // is left nil (omitted) — a GET→edit→PUT round-trip then preserves "native".
-func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig) {
+//
+// r17 §3.8 read model: env_overrides values are masked; for an external CLI the
+// echo carries the Settings program path and preset for that CLI exactly as a
+// person saved them (effective_cli_path, effective_preset_args, each absent
+// when empty) and program_warning, the exact text a run would be refused with
+// right now (absent when a run would start). cfg is the live configuration and
+// homePath the gateway home (the agent-writable roots of the path check).
+func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig, cfg *config.Config, homePath string) {
 	if sub == nil || sub.Executor == nil {
 		return
 	}
@@ -124,9 +157,8 @@ func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig) {
 		cli := gen.ExternalCliTool(ec.CLI)
 		exec.Cli = &cli
 	}
-	if len(ec.EnvOverrides) > 0 {
-		eo := ec.EnvOverrides
-		exec.EnvOverrides = &eo
+	if masked := thirdpartycli.MaskEnv(ec.EnvOverrides); masked != nil {
+		exec.EnvOverrides = &masked
 	}
 	if ec.CLIArgs != "" {
 		ca := ec.CLIArgs
@@ -134,5 +166,30 @@ func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig) {
 	}
 	kind := gen.ExecutorConfigKind(ec.EffectiveKind())
 	exec.Kind = executorKindPtr(kind)
+	if ec.EffectiveKind() == config.ExecutorKindExternalCLI && ec.CLI != "" {
+		exec.EffectiveCliPath, exec.EffectivePresetArgs, exec.ProgramWarning = executorProgramView(ec.CLI, cfg, homePath)
+	}
 	ag.Executor = &exec
+}
+
+// executorProgramView reads the Settings row for cli and returns the three
+// read-only program fields of the executor echo (nil when empty / when a run
+// would start).
+func executorProgramView(cli string, cfg *config.Config, homePath string) (path, preset, warning *string) {
+	var row config.ThirdPartyCLIConfig
+	if cfg != nil {
+		row = cfg.Sandbox.ThirdPartyCLI(cli)
+	}
+	if row.Path != "" {
+		p := row.Path
+		path = &p
+	}
+	if row.PresetArgs != "" {
+		pa := row.PresetArgs
+		preset = &pa
+	}
+	if text := thirdpartycli.ProgramWarning(cli, row.Path, thirdPartyAgentWritable(homePath, cfg)...); text != "" {
+		warning = &text
+	}
+	return path, preset, warning
 }
