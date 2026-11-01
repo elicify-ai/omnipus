@@ -15,6 +15,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/require"
@@ -247,5 +248,39 @@ func TestT32_SavedNotRefreshed_ToolRefusalNeedsTheRealStartPolicyWiring(t *testi
 }
 
 func TestT32_GuardToPublish_UsesTransformedGuardOutputNotRequestedValue(t *testing.T) {
-	t.Fatal("BLOCKED: actual guarded writer has no test-only guard-transform injection seam — required by T-32/S-25 provenance/T-6b; the dedicated identity guard alone cannot distinguish accepted value from requested value")
+	// S-25's provenance amendment: deliberately make accepted != requested.
+	// The real guard/writer/persistence/failed refresh/narrow publish stay real.
+	f, _ := t32Fixture(t, "discord", []string{"discord:222"})
+	t32FaultRefresh(t, f)
+	type guardInput struct {
+		dedicated bool
+		policy    string
+		targets   []string
+	}
+	inputs := []guardInput{}
+	SetOutboundGuardTransformForTest(func(candidate *config.Config, _ []string, dedicated bool) []string {
+		inst := candidate.Channels["discord"]
+		if inst.Outbound != nil {
+			inputs = append(inputs, guardInput{dedicated, inst.Outbound.Policy, append([]string(nil), inst.Outbound.Targets...)})
+		}
+		inst.Outbound = &config.ChannelOutboundConfig{Policy: "reply_only", Targets: []string{"discord:222"}}
+		candidate.Channels["discord"] = inst
+		return []string{"discord"} // this guard output must replace the requested value
+	})
+	t.Cleanup(func() { SetOutboundGuardTransformForTest(nil) })
+	before := t14Read(t, f, "discord").Revision
+	rec := t14Put(t, f, "discord", "agent_may_start", []string{"222"}, before)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, []guardInput{{true, "agent_may_start", []string{"discord:222"}}}, inputs,
+		"instrument: the actual dedicated writer traversed the guard seam with the canonical requested value")
+	var written gen.ChannelOutboundWriteResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &written))
+	require.Equal(t, "reply_only", string(written.Outbound.Policy), "T-32: response reports guard output, not requested permission")
+	require.Equal(t, []string{"discord:222"}, written.Outbound.Targets)
+	require.NotNil(t, written.Warning, "instrument: the actual refresh failed after the file was saved")
+	require.True(t, strings.HasPrefix(*written.Warning, "Saved and in force for starting messages."))
+	t13AssertOutbound(t, f, "discord", "reply_only", []string{"discord:222"})
+	require.NotEqual(t, before, written.Revision, "T-6b: conflict token describes the guard-accepted revocation")
+	require.Equal(t, written.Revision, t14Read(t, f, "discord").Revision)
+	t32Binding(t, f, "discord", "mia", "mia")
 }
