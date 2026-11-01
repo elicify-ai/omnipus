@@ -64,7 +64,7 @@ func TestWebchatSend_ProgressNotice(t *testing.T) {
 }
 
 // testProgressNoticeJSONNotWire locks Decision 1: ProgressNotice is the same
-// class as OwnershipChecked. Flagged and unflagged envelopes marshal to the
+// in-process class as Operation. Flagged and unflagged envelopes marshal to the
 // same bytes, and a progress_notice key on the wire does not set the field.
 func testProgressNoticeJSONNotWire(t *testing.T) {
 	plain := bus.OutboundMessage{

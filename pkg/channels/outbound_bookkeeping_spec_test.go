@@ -5,7 +5,6 @@ package channels
 
 import (
 	"context"
-	"reflect"
 	"testing"
 	"time"
 
@@ -57,14 +56,8 @@ func t15BookkeepingFixture() (*Manager, *channelWorker, *t15BookkeepingAdapter) 
 
 func t15BookkeepingStart(t *testing.T) bus.OutboundMessage {
 	t.Helper()
-	msg := bus.OutboundMessage{Channel: "discord", ChatID: "222", Content: "S1",
-		AgentID: "mia", WorkspaceID: "ws-t15", OwnershipChecked: true}
-	op := reflect.ValueOf(&msg).Elem().FieldByName("Operation")
-	if !op.IsValid() || op.Kind() != reflect.String || !op.CanSet() {
-		t.Fatal("BLOCKED: bus.OutboundMessage.Operation not implemented — required by T-15b/S-85/FR-040/FR-044")
-	}
-	op.SetString("start")
-	return msg
+	return bus.OutboundMessage{Channel: "discord", ChatID: "222", Content: "S1",
+		AgentID: "mia", WorkspaceID: "ws-t15", Operation: bus.OperationStart}
 }
 
 func TestT15b_StartPreservesReplyPlaceholderAndFinalizedStreamMarker(t *testing.T) {

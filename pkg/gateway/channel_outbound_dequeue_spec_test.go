@@ -22,14 +22,8 @@ import (
 
 func t15Start(t *testing.T, content string) bus.OutboundMessage {
 	t.Helper()
-	msg := bus.OutboundMessage{Channel: "discord", ChatID: "222", Content: content,
-		AgentID: "mia", WorkspaceID: "ws-t15", OwnershipChecked: true}
-	op := reflect.ValueOf(&msg).Elem().FieldByName("Operation")
-	if !op.IsValid() || op.Kind() != reflect.String || !op.CanSet() {
-		t.Fatal("BLOCKED: bus.OutboundMessage.Operation not implemented — required by T-15/S-19/FR-040/FR-044")
-	}
-	op.SetString("start")
-	return msg
+	return bus.OutboundMessage{Channel: "discord", ChatID: "222", Content: content,
+		AgentID: "mia", WorkspaceID: "ws-t15", Operation: bus.OperationStart}
 }
 
 func t15Bound(t *testing.T, f *wu6Fixture) {

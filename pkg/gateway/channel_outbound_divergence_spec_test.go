@@ -15,6 +15,8 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/require"
 )
 
@@ -178,7 +180,70 @@ func TestT32_SavedNotRefreshed_RealDispatchRefusesTheNewReplyOnlyPolicy(t *testi
 }
 
 func TestT32_SavedNotRefreshed_ToolRefusalNeedsTheRealStartPolicyWiring(t *testing.T) {
-	t.Fatal("BLOCKED: MessageTool start-policy/live-source injection not implemented on frozen WP-2 — required by T-32/S-25/FR-020; a direct StartAllowed call cannot replace tool-boundary enforcement")
+	f, adapter := t32Fixture(t, "discord", []string{"discord:222"})
+	inst, present := f.al.GetRegistry().GetAgent("mia")
+	require.True(t, present)
+	executable, present := inst.Tools.Get("send_message")
+	require.True(t, present, "instrument: real registry contains constructor-wired send_message")
+	require.IsType(t, (*tools.MessageTool)(nil), executable)
+	meta, err := f.al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+	ctx := tools.WithTranscriptSessionID(tools.WithToolContext(tools.WithWorkspaceID(tools.WithAgentID(context.Background(), "mia"), "ws-t32"), "webchat", "qa-t32-chat"), meta.ID)
+	delivered := make(chan bus.OutboundMessage, 4)
+	adapter.send = func(_ context.Context, msg bus.OutboundMessage) error { delivered <- msg; return nil }
+	accepted := executable.Execute(ctx, map[string]any{"channel": "discord", "chat_id": "222", "content": "QA T32 allowed instrument"})
+	require.NoError(t, accepted.Err)
+	require.False(t, accepted.IsError)
+	require.Equal(t, "accepted for sending to discord:222 (delivery not confirmed)", accepted.ForLLM)
+	select {
+	case msg := <-delivered:
+		require.Equal(t, "QA T32 allowed instrument", msg.Content)
+		require.Equal(t, "start", msg.Operation, "instrument: actual agent callback copies start classification to the real bus")
+	case <-time.After(5 * time.Second):
+		t.Fatal("instrument: allowed real-tool start never reached the adapter")
+	}
+
+	t32FaultRefresh(t, f)
+	rec := t14Put(t, f, "discord", "reply_only", []string{"222"}, t14Read(t, f, "discord").Revision)
+	require.Equal(t, http.StatusOK, rec.Code, "S-25: saved revocation remains enforced despite failed refresh: %s", rec.Body.String())
+	t13AssertOutbound(t, f, "discord", "reply_only", []string{"discord:222"})
+	// Join only the dispatcher after the real save, so the actual constructor
+	// callback's bus is directly observable. Do not replace that callback or
+	// let a second consumer steal its publication. Policy must refuse BEFORE
+	// publishing, not merely rely on the manager's later refusal.
+	stopCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	manager := f.svc.ChannelManager
+	// Take over this fixture resource's teardown exactly once. Its shared
+	// cleanup must not call StopAll a second time on already closed queues.
+	// AgentLoop retains the SAME manager for the actual policy read below.
+	f.svc.ChannelManager = nil
+	require.NoError(t, manager.StopAll(stopCtx))
+	require.Len(t, f.bus.OutboundChan(), 0, "instrument: no pending traffic after the completed positive control")
+	refused := executable.Execute(ctx, map[string]any{"channel": "discord", "chat_id": "222", "content": "QA T32 forbidden after revocation"})
+	require.True(t, refused.IsError)
+	require.ErrorIs(t, refused.Err, tools.ErrStartRefused)
+	require.Equal(t, `cannot start a message on "discord": this connection is set to "Only answer". The operator can change it in Connectors > Discord > Configure ("Answer and also start messages"). Nothing was sent.`, refused.ForLLM, "S-25/FR-020: SAME real tool sees the narrowly published live revocation")
+	select {
+	case msg := <-f.bus.OutboundChan():
+		t.Fatalf("S-25: refused tool call published to the real bus: %+v", msg)
+	default:
+	}
+	// Positive control on this exact observable bus: the same unmodified tool
+	// still publishes an ordinary webchat send, with checked (not start).
+	control := executable.Execute(ctx, map[string]any{"channel": "webchat", "chat_id": "qa-t32-chat", "content": "QA T32 bus still observable"})
+	require.NoError(t, control.Err)
+	require.False(t, control.IsError)
+	require.Equal(t, "Message sent to webchat:qa-t32-chat", control.ForLLM)
+	select {
+	case msg := <-f.bus.OutboundChan():
+		require.Equal(t, "QA T32 bus still observable", msg.Content)
+		require.Equal(t, "webchat", msg.Channel)
+		require.Equal(t, "checked", msg.Operation)
+	case <-time.After(5 * time.Second):
+		t.Fatal("instrument: actual callback/bus positive control disappeared")
+	}
+	require.Len(t, adapter.attemptSnapshot(), 1, "only the pre-revocation positive control reached Send")
 }
 
 func TestT32_GuardToPublish_UsesTransformedGuardOutputNotRequestedValue(t *testing.T) {

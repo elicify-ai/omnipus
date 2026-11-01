@@ -15,7 +15,7 @@ import (
 func TestT15b_PersonStart_RealManagerKeepsReplyPlaceholderWhileOpeningTheDM(t *testing.T) {
 	// S-85 case3/S-12: never substitute a fake DM opener inside the adapter.
 	start := t09StartMessage(t, "333", "S1")
-	start.AgentID, start.WorkspaceID, start.OwnershipChecked = "mia", "ws-t15", true
+	start.AgentID, start.WorkspaceID, start.Operation = "mia", "ws-t15", bus.OperationStart
 	adapter, network := t09Adapter(t,
 		t09HTTPResponse{Status: 404, Body: `{"code":10003,"message":"Unknown Channel"}`},
 		t09HTTPResponse{Status: 200, Body: `{"id":"333","username":"qa"}`},
