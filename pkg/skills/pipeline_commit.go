@@ -513,22 +513,22 @@ func auditEntry(req ChangeRequest, decision string, details map[string]any) *aud
 func auditRefusal(req ChangeRequest, slug, reason string) {
 	emitAudit(auditEntry(req, "refused", map[string]any{
 		"slug": slug, "shelf": "registry", "kind": string(req.Kind), "outcome": "refused",
-		"reason": reason, "workspace": req.Actor.WorkspaceID,
+		"reason": reason, "workspace_id": req.Actor.WorkspaceID,
 	}))
 }
 
 func auditPartial(req ChangeRequest, slug string, kind any, reason string) {
 	emitAudit(auditEntry(req, "partial", map[string]any{
 		"slug": slug, "shelf": "registry", "kind": fmt.Sprint(kind), "outcome": "partial",
-		"reason": reason, "workspace": req.Actor.WorkspaceID,
+		"reason": reason, "workspace_id": req.Actor.WorkspaceID,
 	}))
 }
 
 func auditCommitted(req ChangeRequest, st *state, m *versionManifest) {
 	emitAudit(auditEntry(req, "committed", map[string]any{
-		"slug": st.slug, "shelf": "registry", "kind": m.Kind, "paths": m.Paths, "version": m.ID,
+		"slug": st.slug, "shelf": "registry", "kind": m.Kind, "paths": m.Paths, "version_id": m.ID,
 		"revision_before": st.rev, "revision_after": m.Revision, "outcome": "committed",
-		"workspace": req.Actor.WorkspaceID,
+		"reason": "", "workspace_id": req.Actor.WorkspaceID,
 	}))
 }
 
@@ -536,8 +536,8 @@ func auditCheckpoint(slug string, m *versionManifest) {
 	emitAudit(&audit.Entry{
 		Timestamp: time.Now().UTC(), Event: "skill.write", Decision: "external_change",
 		Details: map[string]any{
-			"slug": slug, "shelf": "registry", "kind": m.Kind, "paths": m.Paths, "version": m.ID,
-			"revision_after": m.Revision, "outcome": "external_change",
+			"slug": slug, "shelf": "registry", "kind": m.Kind, "paths": m.Paths, "version_id": m.ID,
+			"revision_after": m.Revision, "outcome": "external_change", "reason": "",
 		},
 	})
 }

@@ -48,6 +48,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -517,10 +518,14 @@ var (
 // SetSkillsWriteAuditLogger installs (or, with nil, clears) the process-wide
 // audit.Logger ResolvePath's write hook uses. Safe to call multiple times
 // (idempotent, mirrors SetProcessChainKey); the last caller wins.
+//
+// The same logger receives the change pipeline's skill.write events
+// (skills spec r15 §5.12), so one setter wires every skill write audit.
 func SetSkillsWriteAuditLogger(l *audit.Logger) {
 	skillsWriteAuditMu.Lock()
 	defer skillsWriteAuditMu.Unlock()
 	skillsWriteAuditLogger = l
+	skills.SetAuditLogger(l)
 }
 
 func getSkillsWriteAuditLogger() *audit.Logger {

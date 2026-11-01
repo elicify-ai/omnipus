@@ -50,6 +50,8 @@ func AllTools(d *Deps) []tools.Tool {
 		// Skill management (4: install and search retired)
 		NewSkillRemoveTool(d),
 		NewSkillListTool(d),
+		// get_skill: the one reader of one installed skill (skills spec r15 §5.2).
+		NewGetSkillTool(d),
 		// Skill authoring / self-improvement (Spec-6 U2): consent-gated +
 		// versioned writes. Editing a built-in produces a user override.
 		NewSkillCreateTool(d),

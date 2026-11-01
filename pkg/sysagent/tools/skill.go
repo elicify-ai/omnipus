@@ -191,14 +191,13 @@ func (t *SkillListTool) Name() string           { return "list_skills" }
 func (t *SkillListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillListTool) Description() string {
 	return "List installed skills. scope=usable (the default) lists only skills assigned for this agent to run. " +
-		"scope=management lists sanitized installed inventory for configuration review when the caller has management-read authority; " +
-		"name may inspect one skill's sanitized content in management scope. Use Skill to run an assigned skill and find_skills to search the marketplace."
+		"scope=management lists sanitized installed inventory for configuration review when the caller has management-read authority. " +
+		"Read one skill's details with get_skill. Use Skill to run an assigned skill and find_skills to search the marketplace."
 }
 
 func (t *SkillListTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
 		"scope":          map[string]any{"type": "string", "enum": []string{"usable", "management"}, "default": "usable"},
-		"name":           map[string]any{"type": "string", "description": "Installed skill id to inspect; management scope only."},
 		workspaceIDParam: workspaceIDProperty("whose project skills the management listing includes (management scope only)"),
 	}}
 }
@@ -209,15 +208,16 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]any) *tools
 			"skill loader not configured", "ensure the gateway is started with a valid workspace"))
 	}
 
-	scope, name, err := parseSkillListArgs(args)
+	scope, err := parseSkillListArgs(args)
 	if err == nil {
 		if _, present := args[workspaceIDParam]; present && scope != "management" {
 			err = errors.New("workspace_id is available only with management scope")
 		}
 	}
 	if err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "use scope usable or management and an installed skill id"))
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "use scope usable or management"))
 	}
+	session := tools.ToolTranscriptSessionID(ctx)
 	if scope == "management" {
 		if err := authorizeSkillManagementRead(t.deps, ctx); err != nil {
 			return tools.ErrorResult(errorJSON("PERMISSION_DENIED", err.Error(), "use an authorized configuration agent"))
@@ -226,10 +226,7 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]any) *tools
 		if refusal != nil {
 			return refusal
 		}
-		return t.executeManagement(target.ID, name)
-	}
-	if name != "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is available only with management scope", "set scope to management"))
+		return t.executeManagement(target.ID, session)
 	}
 
 	slog.Info("sysagent: list_skills", "scope", "usable")
@@ -246,10 +243,9 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]any) *tools
 		if allow != nil && !allow(info.ID) {
 			continue
 		}
-		writer := skills.NewSkillWriter(filepath.Dir(filepath.Dir(info.Path)))
-		revision, err := writer.SkillRevision(info.ID)
+		revision, description, err := observeListRow(info, session)
 		if err != nil {
-			return tools.ErrorResult(errorJSON("READ_FAILED", fmt.Sprintf("could not read revision for skill %q: %v", info.ID, err), "retry list_skills"))
+			return tools.ErrorResult(errorJSON("READ_FAILED", fmt.Sprintf("could not read skill %q: %v", info.ID, err), "retry list_skills"))
 		}
 		skillMaps = append(skillMaps, map[string]any{
 			// id is the stable slug used to read/activate the skill; name is the
@@ -263,7 +259,7 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]any) *tools
 			"id":          info.ID,
 			"name":        info.Name,
 			"source":      info.Source,
-			"description": info.Description,
+			"description": description,
 			"revision":    revision,
 		})
 	}
@@ -274,32 +270,47 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]any) *tools
 	}))
 }
 
-func parseSkillListArgs(args map[string]any) (scope, name string, err error) {
+func parseSkillListArgs(args map[string]any) (scope string, err error) {
 	scope = "usable"
+	if _, ok := args["name"]; ok {
+		// skills spec r15 §5.3: reading one skill moved to get_skill.
+		return "", errors.New("name was removed from list_skills; use get_skill with id and fields")
+	}
 	for key := range args {
-		if key != "scope" && key != "name" && key != workspaceIDParam {
-			return "", "", fmt.Errorf("unknown parameter %q", key)
+		if key != "scope" && key != workspaceIDParam {
+			return "", fmt.Errorf("unknown parameter %q", key)
 		}
 	}
 	if raw, ok := args["scope"]; ok {
 		var valid bool
 		scope, valid = raw.(string)
 		if !valid || (scope != "usable" && scope != "management") {
-			return "", "", errors.New("scope must be usable or management")
+			return "", errors.New("scope must be usable or management")
 		}
 	}
-	if raw, ok := args["name"]; ok {
-		var valid bool
-		name, valid = raw.(string)
-		name = strings.TrimSpace(name)
-		if !valid || name == "" {
-			return "", "", errors.New("name must be a non-empty string")
-		}
-		if err := validateID(name); err != nil {
-			return "", "", errors.New("name must be an installed skill id without path separators")
+	return scope, nil
+}
+
+// observeListRow reads one listed skill through one captured observation
+// (skills spec r15 §5.2 side effect, §7.3): the row's description and
+// revision come from the same walk, and the row records this session's seen
+// revision for the skill.
+func observeListRow(info skills.SkillInfo, session string) (revision, description string, err error) {
+	dir := filepath.Dir(info.Path)
+	root, slug := filepath.Dir(dir), filepath.Base(dir)
+	obs, err := skills.ObserveSkill(root, slug, skills.VersionQuery{})
+	if err != nil {
+		skills.ForgetSeen(session, slug)
+		return "", "", err
+	}
+	description = info.Description
+	if obs.HasInstruction {
+		if d := obs.Meta("").Description; d != "" {
+			description = d
 		}
 	}
-	return scope, name, nil
+	skills.RecordSeen(session, obs.Slug, obs.Revision)
+	return obs.Revision, description, nil
 }
 
 func authorizeSkillManagementRead(deps *Deps, ctx context.Context) error {
@@ -311,7 +322,7 @@ func authorizeSkillManagementRead(deps *Deps, ctx context.Context) error {
 	if !ok || (policy != string(config.ToolPolicyAllow) && policy != string(config.ToolPolicyAsk)) {
 		return errors.New("list_skills management discovery is denied")
 	}
-	for _, candidate := range []string{"create_agent", "update_agent", "create_skill", "edit_skill"} {
+	for _, candidate := range []string{"create_agent", "update_agent", "edit_skill"} {
 		policy, current := deps.ResolveToolPolicy(actor, candidate)
 		if !current {
 			return errors.New("the caller is no longer registered")
@@ -330,19 +341,12 @@ type managedSkill struct {
 	mount        string
 }
 
-func (t *SkillListTool) executeManagement(wsID, name string) *tools.ToolResult {
+func (t *SkillListTool) executeManagement(wsID, session string) *tools.ToolResult {
 	items := make([]managedSkill, 0)
 	seen := make(map[string]struct{})
-	shelf, collisions, shelfRefusal := resolveProjectShelfWithCollisions(t.deps, wsID, name)
+	shelf, _, shelfRefusal := resolveProjectShelfWithCollisions(t.deps, wsID, "")
 	if shelfRefusal != nil {
 		return shelfRefusal
-	}
-	if name != "" {
-		for _, collision := range collisions {
-			if strings.EqualFold(collision.Slug, name) {
-				return tools.ErrorResult(errorJSON("AMBIGUOUS", fmt.Sprintf("skill %q exists in more than one mounted project", name), "use a workspace without the slug collision"))
-			}
-		}
 	}
 	for _, projectSkill := range shelf {
 		key := strings.ToLower(projectSkill.ID)
@@ -366,17 +370,16 @@ func (t *SkillListTool) executeManagement(wsID, name string) *tools.ToolResult {
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].info.ID < items[j].info.ID })
 
+	// Management rows never carry content (skills spec r15 §5.3); one skill's
+	// details are read with get_skill.
 	results := make([]map[string]any, 0, len(items))
 	for _, item := range items {
-		if name != "" && !strings.EqualFold(item.info.ID, name) {
-			continue
-		}
-		revision, content, readErr := readManagedSkillSnapshot(item.info, name != "")
+		revision, description, readErr := observeListRow(item.info, session)
 		if readErr != nil {
-			return tools.ErrorResult(errorJSON("READ_FAILED", fmt.Sprintf("could not safely read skill %q", item.info.ID), "retry list_skills"))
+			return tools.ErrorResult(errorJSON("READ_FAILED", fmt.Sprintf("could not safely read skill %q: %v", item.info.ID, readErr), "retry list_skills"))
 		}
 		entry := map[string]any{
-			"id": item.info.ID, "name": item.info.Name, "description": item.info.Description,
+			"id": item.info.ID, "name": item.info.Name, "description": description,
 			"origin": item.origin, "shared_impact": item.sharedImpact, "revision": revision,
 		}
 		if item.mount != "" {
@@ -388,42 +391,9 @@ func (t *SkillListTool) executeManagement(wsID, name string) *tools.ToolResult {
 		if item.info.Version != "" {
 			entry["version"] = item.info.Version
 		}
-		if name != "" {
-			entry["content"] = content
-		}
 		results = append(results, entry)
 	}
-	if name != "" && len(results) == 0 {
-		return tools.ErrorResult(errorJSON("NOT_FOUND", fmt.Sprintf("skill %q is not installed", name), "list management inventory without a name"))
-	}
 	return tools.NewToolResult(successJSON(map[string]any{"scope": "management", "skills": results, "count": len(results)}))
-}
-
-func readManagedSkillSnapshot(info skills.SkillInfo, includeContent bool) (revision, content string, err error) {
-	root := filepath.Dir(filepath.Dir(info.Path))
-	err = skills.WithMutationLock(root, func() error {
-		rootReal, rootErr := filepath.EvalSymlinks(root)
-		pathReal, pathErr := filepath.EvalSymlinks(info.Path)
-		if rootErr != nil || pathErr != nil {
-			return errors.New("skill path cannot be resolved")
-		}
-		rel, relErr := filepath.Rel(rootReal, pathReal)
-		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-			return errors.New("skill path escapes its installed root")
-		}
-		writer := skills.NewSkillWriter(root)
-		revision, err = writer.SkillRevision(info.ID)
-		if err != nil || !includeContent {
-			return err
-		}
-		var ok bool
-		content, ok = skills.LoadSkillFile(pathReal)
-		if !ok {
-			return errors.New("skill content cannot be read")
-		}
-		return nil
-	})
-	return revision, content, err
 }
 
 // grantPredicateFor resolves the acting agent's per-agent skill grant list
