@@ -29,6 +29,11 @@ var readListedSkillLocalChanges = func(root, id string) (bool, error) {
 	return obs.HasLocalChanges, nil
 }
 
+// restBuiltinDeleteRefusal is the §5.10 text of the REST 403 on a built-in
+// delete: the screen offers "Make a copy", so the agent-facing
+// BUILTIN_READ_ONLY copy command does not belong here.
+const restBuiltinDeleteRefusal = `Built-in skills can't be removed or edited. Use "Make a copy" to create your own version.`
+
 // personActor is the manifest/audit actor of a REST change.
 func personActor(tool string) skills.ChangeActor {
 	return skills.ChangeActor{Kind: "person", Tool: tool}
@@ -73,8 +78,7 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	if skills.IsBuiltin(name) {
-		ce := skills.BuiltinReadOnlyError(name)
-		jsonErrCode(w, http.StatusForbidden, ce.Text, ce.Code.Error())
+		jsonErrCode(w, http.StatusForbidden, restBuiltinDeleteRefusal, skills.ErrBuiltinReadOnly.Error())
 		return
 	}
 	revision := strings.TrimSpace(r.URL.Query().Get("revision"))
