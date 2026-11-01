@@ -76,6 +76,10 @@ When you press **Save** or **Save & Enable** in a connection's settings on the *
 | `The credential was saved, but the configuration change was not: …` | A token or other secret from this save was stored, then saving the rest failed. Nothing else was applied, and the connection keeps its previous token until it next restarts. A restart picks up the new value only when the saved settings refer to the credential this form writes (the usual case); if they refer to a different stored credential, the new value stays stored but unused. | Save again: a successful save of the same form applies everything. |
 | `could not save config` or another error | Nothing was saved. | Fix the cause shown and save again. |
 
+## The bot ignores someone
+
+A connector whose **Allow From** list is not empty ignores messages from everyone not on the list and sends them no reply. Open the connector's **Configure** panel on the **Connectors** screen. A line `Ignored <count> messages from senders not on the allowed list. Latest: <ids>` means it has ignored such messages since the connector last started; the ids are the latest ignored senders, most recent first. To let that person in, select and copy their id from the line, add it to **Allow From**, and save. The gateway log also records a newly ignored sender, once, with the message `channel ignored a sender not on the allowed list` and the sender's id — never the message text. A sender is logged again only after 20 other senders have been ignored since. With an empty **Allow From** list, nobody is ignored.
+
 ## Every request returns 401 Unauthorized
 
 The web app signs you in once, then rides a session cookie. Scripts must present a Bearer token belonging to a configured account or the gateway's CLI token, or match `OMNIPUS_BEARER_TOKEN`.
