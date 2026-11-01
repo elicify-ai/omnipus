@@ -322,7 +322,7 @@ func TestT24b_DMOpen_StarvationRequiresTheSharedTwoSlotPhaseBarrier(t *testing.T
 	resumeDM, releaseHTTP := make(chan struct{}), make(chan struct{})
 	var resumeOnce, releaseOnce sync.Once
 	var participants sync.WaitGroup
-	rawCalls := []struct{ entered, finished <-chan struct{} }{}
+	rawCalls := make([]struct{ entered, finished <-chan struct{} }, 0, 2) // S-89: both shared slots
 	ctx, cancel := context.WithCancel(context.Background())
 	SetBeforeDMOpenHookForTest(func(id string) { person <- id; <-resumeDM })
 	SetWrappedCallSlotHookForTest(func(call string) { admitted <- call })

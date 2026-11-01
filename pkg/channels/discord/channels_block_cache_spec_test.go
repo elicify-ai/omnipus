@@ -43,8 +43,8 @@ func TestT25_Block_RealDiscordCacheLabelsAndNoREST_S06(t *testing.T) {
 		{"111", 0}, {"112", 5}, {"113", 10}, {"114", 11}, {"115", 12}, {"116", 2},
 	} {
 		require.NoError(t, s.State.ChannelAdd(&discordgo.Channel{ID: tc.id, GuildID: "qa-t25-guild", Type: tc.kind}))
-		cached, err := s.State.Channel(tc.id)
-		require.NoError(t, err)
+		cached, cacheErr := s.State.Channel(tc.id)
+		require.NoError(t, cacheErr)
 		require.Equal(t, tc.kind, cached.Type, "instrument: actual session cache contains this kind")
 	}
 	_, err = s.State.Channel("117")

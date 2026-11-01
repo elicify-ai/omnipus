@@ -43,8 +43,8 @@ func TestT33_RealLimiterHeaderWaitIsInsideTheFiveSecondLookupBound(t *testing.T)
 		if index == 0 {
 			// Real Bucket.Release consumes these headers. Eight seconds is
 			// deliberately beyond the normative5s, not a raised product bound.
-			response.Header.Set("X-RateLimit-Remaining", "0")
-			response.Header.Set("X-RateLimit-Reset-After", "8")
+			response.Header.Set("X-Ratelimit-Remaining", "0")
+			response.Header.Set("X-Ratelimit-Reset-After", "8")
 		} else if strings.HasSuffix(req.URL.Path, "/channels/777") {
 			response.Body = &t33ClosedBody{ReadCloser: response.Body, closeSignal: func() { lateOnce.Do(func() { close(lateClosed) }) }}
 		}

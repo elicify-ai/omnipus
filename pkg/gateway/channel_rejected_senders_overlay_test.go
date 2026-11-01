@@ -32,7 +32,7 @@ func t04ListedChannel(t *testing.T, f *wu6Fixture, id string) (gen.ChannelEntry,
 	for _, raw := range entries {
 		var entry gen.ChannelEntry
 		require.NoError(t, json.Unmarshal(raw, &entry))
-		if string(entry.Id) == id {
+		if entry.Id == id {
 			matches = append(matches, raw)
 		}
 	}

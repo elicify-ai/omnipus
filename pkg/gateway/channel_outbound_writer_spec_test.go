@@ -17,13 +17,15 @@ import (
 )
 
 func TestT13_Writer_TelegramCanonicalValidationAndDistinctCountBoundary(t *testing.T) {
-	cases := []struct {
+	type writerCase struct {
 		name string
 		raw  []string
 		want []string
 		code string
 		item string
-	}{
+	}
+	cases := make([]writerCase, 0, 18) // fifteen fixed cases plus the three distinct-count neighbors
+	cases = append(cases, []writerCase{
 		{name: "empty", raw: []string{}, want: []string{}},
 		{name: "one", raw: []string{"123456"}, want: []string{"telegram:123456"}},
 		{name: "person_group_topic_offline", raw: []string{"123456", "-1001234567890", "-1001234567890/45"}, want: []string{"telegram:123456", "telegram:-1001234567890", "telegram:-1001234567890/45"}},
@@ -39,16 +41,10 @@ func TestT13_Writer_TelegramCanonicalValidationAndDistinctCountBoundary(t *testi
 		{name: "topic_zero", raw: []string{"-100/0"}, code: "invalid_targets", item: "invalid_id"},
 		{name: "topic_overflow", raw: []string{"-100/2147483648"}, code: "invalid_targets", item: "invalid_id"},
 		{name: "positive_chat_topic", raw: []string{"123456/7"}, code: "invalid_targets", item: "invalid_id"},
-	}
+	}...)
 	// T-2 maximum 20 distinct targets: exercise the immediate neighbors too.
 	for _, count := range []int{19, 20, 21} {
-		row := struct {
-			name string
-			raw  []string
-			want []string
-			code string
-			item string
-		}{name: "distinct_" + strconv.Itoa(count), raw: []string{}, want: []string{}}
+		row := writerCase{name: "distinct_" + strconv.Itoa(count), raw: []string{}, want: []string{}}
 		for i := 1; i <= count; i++ {
 			id := strconv.Itoa(i)
 			row.raw = append(row.raw, id)

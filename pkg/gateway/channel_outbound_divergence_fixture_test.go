@@ -94,14 +94,26 @@ func t32RequireMismatch(t *testing.T, f *wu6Fixture, id string, targets []string
 	t13Unchanged(t, f, before)
 }
 
-func t32RebindDoc(doc map[string]any) error {
-	inst := doc["channels"].(map[string]any)["discord"].(map[string]any)
-	inst["identity"] = map[string]any{"kind": "agent", "id": "qa-b"}
-	return nil
+func t32RebindDoc(t *testing.T) func(map[string]any) error {
+	t.Helper()
+	return func(doc map[string]any) error {
+		instances, ok := doc["channels"].(map[string]any)
+		require.True(t, ok, "instrument: configuration contains a channels object")
+		inst, ok := instances["discord"].(map[string]any)
+		require.True(t, ok, "instrument: configuration contains the selected Discord instance")
+		inst["identity"] = map[string]any{"kind": "agent", "id": "qa-b"}
+		return nil
+	}
 }
 
-func t32SmallerSavedDoc(doc map[string]any) error {
-	inst := doc["channels"].(map[string]any)["discord"].(map[string]any)
-	inst["outbound"] = map[string]any{"policy": "agent_may_start", "targets": []string{"discord:222"}}
-	return nil
+func t32SmallerSavedDoc(t *testing.T) func(map[string]any) error {
+	t.Helper()
+	return func(doc map[string]any) error {
+		instances, ok := doc["channels"].(map[string]any)
+		require.True(t, ok, "instrument: configuration contains a channels object")
+		inst, ok := instances["discord"].(map[string]any)
+		require.True(t, ok, "instrument: configuration contains the selected Discord instance")
+		inst["outbound"] = map[string]any{"policy": "agent_may_start", "targets": []string{"discord:222"}}
+		return nil
+	}
 }

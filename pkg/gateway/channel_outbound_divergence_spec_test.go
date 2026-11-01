@@ -84,19 +84,25 @@ func TestT32_S28_PermissionSetCasesNeverTransferOrSilentlyExtendAGrant(t *testin
 			savedAgent := "mia"
 			switch tc.shape {
 			case "rebind":
-				t32FailedCommonSave(t, f, false, t32RebindDoc)
+				t32FailedCommonSave(t, f, false, t32RebindDoc(t))
 				savedAgent = "qa-b"
 				require.Nil(t, t32Saved(t, f, "discord")["outbound"], "T-8: real non-dedicated guard clears a rebound instance")
 			case "allow_from":
 				t32FailedCommonSave(t, f, false, func(doc map[string]any) error {
-					doc["channels"].(map[string]any)["discord"].(map[string]any)["allow_from"] = []string{"qa-saved-sender"}
+					instances, ok := doc["channels"].(map[string]any)
+					require.True(t, ok, "instrument: configuration contains a channels object")
+					inst, ok := instances["discord"].(map[string]any)
+					require.True(t, ok, "instrument: configuration contains the selected Discord instance")
+					inst["allow_from"] = []string{"qa-saved-sender"}
 					return nil
 				})
 				require.Equal(t, []any{"qa-saved-sender"}, t32Saved(t, f, "discord")["allow_from"])
 				require.Empty(t, f.al.GetConfig().Channels["discord"].AllowFrom, "instrument: non-binding field really diverges")
 			case "targets":
-				t32FailedCommonSave(t, f, true, t32SmallerSavedDoc)
-				require.Equal(t, []any{"discord:222"}, t32Saved(t, f, "discord")["outbound"].(map[string]any)["targets"])
+				t32FailedCommonSave(t, f, true, t32SmallerSavedDoc(t))
+				outbound, ok := t32Saved(t, f, "discord")["outbound"].(map[string]any)
+				require.True(t, ok, "instrument: persisted instance contains an outbound object")
+				require.Equal(t, []any{"discord:222"}, outbound["targets"])
 				require.Equal(t, []string{"discord:222", "discord:333"}, []string(f.al.GetConfig().Channels["discord"].Outbound.Targets))
 			}
 			t32Binding(t, f, "discord", savedAgent, "mia")
@@ -115,7 +121,7 @@ func TestT32_S28_PermissionSetCasesNeverTransferOrSilentlyExtendAGrant(t *testin
 func TestT32_S28F_SuccessfulRefreshMakesThePreviouslyRefusedExtensionAvailable(t *testing.T) {
 	f, _ := t32Fixture(t, "discord", []string{"discord:222", "discord:333"})
 	restore := t32FaultRefresh(t, f)
-	t32FailedCommonSave(t, f, true, t32SmallerSavedDoc)
+	t32FailedCommonSave(t, f, true, t32SmallerSavedDoc(t))
 	t32RequireMismatch(t, f, "discord", []string{"222", "333"})
 	restore()
 	require.NoError(t, f.api.safeUpdateConfigJSON(func(map[string]any) error { return nil }), "S-28f: real successful refresh, not a test pointer swap")
@@ -130,7 +136,11 @@ func TestT32_CanonicalCorrespondence_BulkOmittedTypeIsNotASavedLiveMismatch(t *t
 		t.Run(id, func(t *testing.T) {
 			f, _ := t32Fixture(t, id, []string{"discord:222"})
 			require.NoError(t, f.api.safeUpdateConfigJSON(func(doc map[string]any) error {
-				delete(doc["channels"].(map[string]any)[id].(map[string]any), "type")
+				instances, ok := doc["channels"].(map[string]any)
+				require.True(t, ok, "instrument: configuration contains a channels object")
+				inst, ok := instances[id].(map[string]any)
+				require.True(t, ok, "instrument: configuration contains the selected instance")
+				delete(inst, "type")
 				return nil
 			}), "valid ordinary bulk/common save can omit type")
 			_, explicit := t32Saved(t, f, id)["type"]

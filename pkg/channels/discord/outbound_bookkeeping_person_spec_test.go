@@ -47,8 +47,9 @@ func TestT15b_PersonStart_RealManagerKeepsReplyPlaceholderWhileOpeningTheDM(t *t
 	})
 	mgr.RecordPlaceholder("discord", "333", "reply-placeholder")
 	require.NoError(t, mgr.SendMessage(ctx, start))
-	startRoutes := []string{t09Route("GET", "/channels/333"), t09Route("GET", "/users/333"),
-		t09Route("POST", "/users/@me/channels"), t09Route("POST", "/channels/999/messages")}
+	startRoutes := make([]string, 0, 5) // S-85: four start requests, then the one reply edit below
+	startRoutes = append(startRoutes, t09Route("GET", "/channels/333"), t09Route("GET", "/users/333"),
+		t09Route("POST", "/users/@me/channels"), t09Route("POST", "/channels/999/messages"))
 	calls := t09RequireRoutes(t, network, startRoutes)
 	var recipient map[string]string
 	require.NoError(t, json.Unmarshal([]byte(calls[2].Body), &recipient))
