@@ -521,7 +521,7 @@ func emitSkillPathWriteAudit(fields skillsWriteAuditFields, resolvedPath string)
 // (emitSkillPathWriteAudit, fired from PathHandle.WriteFile) covers every
 // write reaching a recognised skills location through a generic file tool
 // (write_file, edit_file, ...), but the ADR-072 D6.1 authoring path —
-// create_skill/edit_skill/remove_skill resolved against a workspace's
+// edit_skill resolved against a workspace's
 // project shelf via skills.ResolveProjectSkillWriter — writes through
 // pkg/skills' own confined, raw os.* I/O (mirroring how the registry-shelf
 // authoring path already worked before D6.1.1 moved the hook here), so

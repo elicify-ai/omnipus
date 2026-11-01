@@ -282,11 +282,9 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"delete_workspace": AutoAsks,
 
 	// System (skills)
-	"list_skills":  AutoRuns,
-	"get_skill":    AutoRuns, // skills spec r15 §10: a read
-	"create_skill": AutoAsks,
-	"edit_skill":   AutoAsks,
-	"remove_skill": AutoAsks,
+	"list_skills": AutoRuns,
+	"get_skill":   AutoRuns, // skills spec r15 §10: a read
+	"edit_skill":  AutoAsks,
 
 	// Omnipus system agent (omnipus-system-agent FR-021, BDD-3.3): the
 	// connection, permission and secret-removal/selection tools are on the

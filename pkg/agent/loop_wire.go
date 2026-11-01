@@ -651,17 +651,8 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 		// agent.Home, so a skill installed by one agent is discoverable
 		// by every other agent.
 		agent.Tools.RegisterReplacing(tools.NewInstallSkillTool(registryMgr, globalSkillsDir()))
-		// remove_skill is NOT registered here: it is a ScopeCore
-		// management tool (systools.SkillRemoveTool, "remove_skill"),
-		// wired onto every agent's Tools registry by WireSysagentDeps
-		// (pkg/gateway/gateway.go), which shares its SkillInstaller/
-		// SkillsLoader with this same skill engine. A prior version of
-		// this block registered a second, competing ScopeGeneral
-		// implementation here, constructed against the agent's own
-		// per-agent workspace root (the field ADR-057 FR-001/FR-002
-		// renamed to .Home) — a root that predates ADR-046 FR-009's move
-		// to a single global skills directory and that install_skill
-		// above no longer targets. Do not reintroduce it.
+		// remove_skill is retired (skills spec r15 §5.1): a skill is deleted with
+		// edit_skill action=delete. Do not register a removal tool here.
 	}
 
 	// Email tools (M11) — registered UNCONDITIONALLY for every agent. The
