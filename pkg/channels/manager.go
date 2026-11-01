@@ -138,6 +138,10 @@ type Manager struct {
 	// policySource is the live policy source of the dispatch and dequeue
 	// start checks (FR-044, SetPolicySource); read lock-free.
 	policySource atomic.Pointer[func() *config.Config]
+	// Test-only observation points (manager_test_hooks.go); nil in production.
+	beforeDequeueStartHook atomic.Pointer[func(msg bus.OutboundMessage)]
+	reloadWriteLockHook    atomic.Pointer[func(stage string)]
+	workerJoinHook         atomic.Pointer[func(instance, phase string)]
 	// returnRefusalObserver is told about answers the return-route check refused.
 	returnRefusalObserver atomic.Pointer[ReturnRefusalObserver]
 	secrets               credentials.SecretBundle // resolved plaintext secrets; never written to env
@@ -1577,8 +1581,11 @@ func (m *Manager) sendWithRetry(
 	// FR-044 dequeue start check, lock-free, before preSend. A start never
 	// enters preSend's reply bookkeeping (T-11, S-85): it always goes to Send.
 	isStart := msg.Operation == bus.OperationStart
-	if isStart && !m.startMayProceed(msg, w.ch, startStageDequeue) {
-		return
+	if isStart {
+		m.observeBeforeDequeueStart(msg)
+		if !m.startMayProceed(msg, w.ch, startStageDequeue) {
+			return
+		}
 	}
 
 	// Pre-send: stop typing and try to edit placeholder
@@ -2169,6 +2176,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 
 	mr.m.mu.Lock()
 	defer mr.m.mu.Unlock()
+	mr.m.observeReloadWriteLock(reloadLockAcquired)
 
 	if !mr.publishConfigSnapshot() {
 		return nil // obsolete continuation; the coalesced current reload owns the effect
@@ -2315,6 +2323,7 @@ func (mr *managerReload) quiesceDispatch() {
 		}
 		mr.oldTask.wg.Wait() // OLD dispatchers have EXITED; nothing can send on a removed channel's queue now
 		mr.m.mu.Lock()
+		mr.m.observeReloadWriteLock(reloadLockReacquired)
 	}
 }
 

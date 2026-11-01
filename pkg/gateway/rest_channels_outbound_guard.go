@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
@@ -36,8 +37,31 @@ func guardedConfigMutate(mutate func(map[string]any) error, dedicated bool) func
 		if err != nil {
 			return err
 		}
+		if transform := outboundGuardTransform.Load(); transform != nil {
+			changed = (*transform)(candidate, changed, dedicated)
+		}
 		return applyGuardedOutbound(doc, candidate, changed)
 	}
+}
+
+// outboundGuardTransform is the test-only guard-transform seam (T-32, S-25
+// provenance); nil in production.
+var outboundGuardTransform atomic.Pointer[func(candidate *config.Config, changed []string, dedicated bool) []string]
+
+// SetOutboundGuardTransformForTest installs fn at the guard's output on
+// every guarded save: after config.GuardOutbound returned, fn may adjust
+// candidate's outbound values and returns the instance ids whose outbound
+// is then written to the document (and so persisted and, on the dedicated
+// path, narrowly published). It lets a test tell "publishes the guard's
+// output" from "publishes the requested value" on the dedicated path,
+// where the real guard keeps the value (S-25). Nil removes it. Process-wide:
+// tests using it must not run in parallel.
+func SetOutboundGuardTransformForTest(fn func(candidate *config.Config, changed []string, dedicated bool) []string) {
+	if fn == nil {
+		outboundGuardTransform.Store(nil)
+		return
+	}
+	outboundGuardTransform.Store(&fn)
 }
 
 // decodeChannelsDoc decodes the channels section of a raw config document the

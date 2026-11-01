@@ -35,8 +35,8 @@ var errWrappedCallUnavailable = errors.New("discord call did not complete in tim
 // goroutine, one shared in-flight slot, a 5-second deadline that covers the
 // limiter's admission wait, and request options that turn off discordgo's
 // rate-limit and 502 retries. A late result is dropped: nothing continues
-// from it.
-func wrappedCall[T any](ctx context.Context, call func(options ...discordgo.RequestOption) (T, error)) (T, error) {
+// from it. name labels the call for the test-only slot hook.
+func wrappedCall[T any](ctx context.Context, name string, call func(options ...discordgo.RequestOption) (T, error)) (T, error) {
 	var zero T
 	callCtx, cancel := context.WithTimeout(ctx, wrappedCallTimeout)
 	defer cancel()
@@ -52,6 +52,7 @@ func wrappedCall[T any](ctx context.Context, call func(options ...discordgo.Requ
 	done := make(chan outcome, 1)
 	go func() {
 		defer func() { <-wrappedCallSlots }()
+		observeWrappedCallSlot(name)
 		value, err := call(
 			discordgo.WithContext(callCtx),
 			discordgo.WithRetryOnRatelimit(false),
@@ -143,7 +144,7 @@ func (c *DiscordChannel) resolveTarget(ctx context.Context, id string) discordTa
 			return unsupportedKind(cached.Type)
 		}
 	}
-	channel, err := wrappedCall(ctx, func(options ...discordgo.RequestOption) (*discordgo.Channel, error) {
+	channel, err := wrappedCall(ctx, wrappedCallChannel, func(options ...discordgo.RequestOption) (*discordgo.Channel, error) {
 		return c.session.Channel(id, options...)
 	})
 	switch {
@@ -161,7 +162,7 @@ func (c *DiscordChannel) resolveTarget(ctx context.Context, id string) discordTa
 	default:
 		return discordTarget{code: channels.TargetErrLookupUnavailable, cause: err}
 	}
-	user, err := wrappedCall(ctx, func(options ...discordgo.RequestOption) (*discordgo.User, error) {
+	user, err := wrappedCall(ctx, wrappedCallUser, func(options ...discordgo.RequestOption) (*discordgo.User, error) {
 		return c.session.User(id, options...)
 	})
 	switch {
@@ -204,7 +205,8 @@ func (c *DiscordChannel) sendStart(ctx context.Context, msg bus.OutboundMessage)
 	}
 	channelID := id
 	if target.person {
-		dm, err := wrappedCall(ctx, func(options ...discordgo.RequestOption) (*discordgo.Channel, error) {
+		observeBeforeDMOpen(id)
+		dm, err := wrappedCall(ctx, wrappedCallDMOpen, func(options ...discordgo.RequestOption) (*discordgo.Channel, error) {
 			return c.session.UserChannelCreate(id, options...)
 		})
 		if err != nil || dm == nil || dm.ID == "" {
