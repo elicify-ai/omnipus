@@ -129,24 +129,6 @@ const workspaceInternalDir = ".omnipus"
 // own working area.
 const workspaceWorkDirName = "work"
 
-// SkillInstructionLeaves are the filenames D10.3's narrowed Part A gates — a
-// skill's INSTRUCTIONS, not its directory. They are single-sourced HERE
-// (the #1284 predicate denies them under the registry skills shelf, A7) and
-// pkg/tools' skills gate reads them through IsSkillInstructionLeaf so the
-// ResolvePath refusal message and the predicate can never name different
-// files. Keys are lowercase; the lookup folds case (deny side).
-var SkillInstructionLeaves = map[string]bool{
-	"skill.md":  true,
-	"agent.md":  true,
-	"agents.md": true,
-}
-
-// IsSkillInstructionLeaf reports whether name — a final path component — is
-// one of the gated skill instruction filenames. Deny-side: folds case.
-func IsSkillInstructionLeaf(name string) bool {
-	return SkillInstructionLeaves[strings.ToLower(name)]
-}
-
 // BaseAllowRelative are the $OMNIPUS_HOME-relative subtrees the app layer
 // re-admits for every turn without per-turn context (amendment §2 D3):
 //
