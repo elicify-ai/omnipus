@@ -192,6 +192,15 @@ properties:
     $ref: './AgentRateLimits.yaml'
   stats:
     $ref: './AgentStats.yaml'
+  skill_grants:
+    type: object
+    additionalProperties:
+      type: string
+    description: >
+      Skill key → generation the grant is bound to (SD-30). Written wholesale
+      by the server at every agent create/update from its own observation of
+      the installed skill folders; requests stay name-only. An absent field or
+      entry is unbound and authorizes nothing.
   skills:
     type: array
     uniqueItems: true

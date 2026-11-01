@@ -1923,6 +1923,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skills/{name}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy an installed or built-in skill to a new user-owned skill
+         * @description Creates a new user-owned skill from the named skill; the copy's frontmatter name is rewritten to new_id. The copy starts ungranted.
+         */
+        post: operations["copySkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skills/{name}": {
         parameters: {
             query?: never;
@@ -1935,7 +1955,7 @@ export interface paths {
         post?: never;
         /**
          * Delete an installed skill
-         * @description Removes an installed skill from the local skills directory. The skill must not be the default skill, in use by any agent, or required by a seeded dependency. On success the gateway removes the skill directory and returns 204 No Content.
+         * @description Deletes an installed user-owned skill through the change pipeline (a delete_skill version is recorded; history is kept until retention). revision is the caller's expected revision; a mismatch is 409 SKILL_CHANGED. Built-in skills are refused with 403.
          */
         delete: operations["deleteSkill"];
         options?: never;
@@ -8708,6 +8728,10 @@ export interface components {
             model_params?: components["schemas"]["AgentModelParams"];
             rate_limits?: components["schemas"]["AgentRateLimits"];
             stats?: components["schemas"]["AgentStats"];
+            /** @description Skill key → generation the grant is bound to (SD-30). Written wholesale by the server at every agent create/update from its own observation of the installed skill folders; requests stay name-only. An absent field or entry is unbound and authorizes nothing. */
+            skill_grants?: {
+                [key: string]: string;
+            };
             /**
              * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
              * @example [
@@ -11317,6 +11341,8 @@ export interface components {
         };
         /** @description A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata. */
         Skill: {
+            /** @description true when any of: (a) the newest version's kind is not install or install_replace (a restore of an install version counts as a change); (b) the live folder's current content revision differs from the newest version's revision (an outside change not yet recorded) — evaluated at read time, never by writing history; (c) history is missing or unreadable. Always false for built-ins. */
+            has_local_changes: boolean;
             revision: components["schemas"]["ConfigurationRevision"];
             persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
             activation_status?: components["schemas"]["ConfigurationActivationStatus"];
@@ -14536,6 +14562,8 @@ export interface components {
          * @description Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
          */
         SkillInstallRequest: {
+            /** @description Required true to replace an installed skill whose has_local_changes is true. Absent means false. */
+            replace_local_changes?: boolean;
             revision?: components["schemas"]["ConfigurationRevision"];
             /**
              * @description Slug of the skill to install from the ClawHub registry.
@@ -14550,6 +14578,79 @@ export interface components {
              */
             version?: string;
         } & (unknown | unknown);
+        /**
+         * SkillCopyRequest
+         * @description Request body for POST /api/v1/skills/{name}/copy: the name of the new user-owned copy. The copy starts ungranted.
+         */
+        SkillCopyRequest: {
+            /**
+             * @description Slug of the new skill (letters, digits and single hyphens).
+             * @example plan-copy
+             */
+            new_id: string;
+        };
+        /**
+         * SkillDetail
+         * @description Tool-only: the complete result envelope of the get_skill agent tool (skills spec §5.2). Not served by any REST route; it exists so the selectable `fields` names are generated and compared, not typed twice.
+         */
+        SkillDetail: {
+            /** @description The skill slug as it is on disk. */
+            id: string;
+            /** @description Content revision; null only for a deleted skill. */
+            revision: string | null;
+            /** @enum {string} */
+            state?: "installed" | "deleted";
+            name?: string;
+            description?: string;
+            /** @enum {string} */
+            shelf?: "builtin" | "registry";
+            folder?: string;
+            files?: {
+                items: {
+                    path: string;
+                    /** Format: int64 */
+                    size: number;
+                    exec: boolean;
+                }[];
+                total: number;
+            };
+            metadata?: {
+                [key: string]: string;
+            };
+            compatibility?: string | null;
+            allowed_tools?: string[];
+            needs?: {
+                program: string;
+                /** @enum {string} */
+                status: "present" | "missing";
+                path?: string;
+            }[];
+            last_change?: {
+                at?: string;
+                actor?: string;
+                tool?: string;
+                paths?: string[];
+                shipped_with?: string;
+                unknown?: boolean;
+            };
+            has_local_changes?: boolean;
+            versions?: {
+                items: {
+                    id: string;
+                    kind: string;
+                    actor: string;
+                    tool?: string;
+                    at: string;
+                    paths: string[];
+                    paths_total: number;
+                }[];
+                total: number;
+                next_before: string | null;
+            };
+            instructions?: string;
+            absent_fields?: string[];
+            truncated_fields?: string[];
+        };
         /**
          * SkillSearchResult
          * @description A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
@@ -23015,8 +23116,73 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
+            /** @description Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller's expected revision and the skill changed since it was read). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Storage failure, before publication (error_stage names the failed stage) or after publication (a partial save; message names the undo). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
             502: components["responses"]["502BadGateway"];
+        };
+    };
+    copySkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source skill slug. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillCopyRequest"];
+            };
+        };
+        responses: {
+            /** @description Copy created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Skill"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED, SAVE_CHECK_FAILED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Storage failure, before publication or after publication (partial save). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
         };
     };
     deleteSkill: {
@@ -23034,17 +23200,37 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Skill removed. */
-            204: {
+            /** @description Skill deleted. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description The skill is a built-in skill and is read-only (BUILTIN_READ_ONLY). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             404: components["responses"]["404NotFound"];
             409: components["responses"]["409Conflict"];
+            /** @description Storage failure, before publication or after publication (partial deletion). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
         };
     };
     getActivity: {
@@ -28090,6 +28276,8 @@ export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest
 export type ProviderValidation = components["schemas"]["ProviderValidation"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];
 export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
+export type SkillCopyRequest = components["schemas"]["SkillCopyRequest"];
+export type SkillDetail = components["schemas"]["SkillDetail"];
 export type SkillSearchResult = components["schemas"]["SkillSearchResult"];
 export type SkillMarketplaceStatus = components["schemas"]["SkillMarketplaceStatus"];
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
