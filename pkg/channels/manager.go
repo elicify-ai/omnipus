@@ -135,6 +135,9 @@ type Manager struct {
 	config   *config.Config
 	// liveCfg mirrors config for lock-free reads from workers (see liveConfig).
 	liveCfg atomic.Pointer[config.Config]
+	// policySource is the live policy source of the dispatch and dequeue
+	// start checks (FR-044, SetPolicySource); read lock-free.
+	policySource atomic.Pointer[func() *config.Config]
 	// returnRefusalObserver is told about answers the return-route check refused.
 	returnRefusalObserver atomic.Pointer[ReturnRefusalObserver]
 	secrets               credentials.SecretBundle // resolved plaintext secrets; never written to env
@@ -1571,9 +1574,15 @@ func (m *Manager) sendWithRetry(
 	if !m.refuseReturnRoute(m.liveConfig(), msg, "pre-send") {
 		return
 	}
+	// FR-044 dequeue start check, lock-free, before preSend. A start never
+	// enters preSend's reply bookkeeping (T-11, S-85): it always goes to Send.
+	isStart := msg.Operation == bus.OperationStart
+	if isStart && !m.startMayProceed(msg, w.ch, startStageDequeue) {
+		return
+	}
 
 	// Pre-send: stop typing and try to edit placeholder
-	if m.preSend(ctx, name, msg, w.ch) {
+	if !isStart && m.preSend(ctx, name, msg, w.ch) {
 		return // placeholder was edited successfully, skip Send
 	}
 
@@ -1637,7 +1646,9 @@ func (m *Manager) sendWithRetry(
 	// fallback that itself fails to send does not recurse into a notice storm. The
 	// publish is non-blocking (see notifyDrop) to avoid stalling the worker when
 	// the bus is saturated.
-	if !isNotice {
+	// FR-048 (S-87): no fallback is derived from a start; it would post as
+	// unrestricted system traffic. The error log above is the signal.
+	if !isNotice && !isStart {
 		m.notifyDrop(name, msg.ChatID, "[message delivery failed]")
 	}
 }
@@ -1739,8 +1750,9 @@ func (m *Manager) enqueueOutbound(ctx context.Context, w *channelWorker, msg bus
 		logger.ErrorCF("channels", "Outbound queue full, message dropped",
 			map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID})
 		// Don't re-notify if a drop notice itself got dropped (avoids
-		// an amplification loop).
-		if !strings.HasPrefix(msg.Content, dropNoticePrefix) {
+		// an amplification loop). FR-048 (S-86): no notice is derived from a
+		// dropped start either.
+		if !strings.HasPrefix(msg.Content, dropNoticePrefix) && msg.Operation != bus.OperationStart {
 			m.notifyDrop(msg.Channel, msg.ChatID, "[message dropped: channel is overloaded, please retry]")
 		}
 		return true
@@ -1764,6 +1776,11 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 			// channel, permanently, on the first refused send. Skip the
 			// message; keep the loop alive.
 			if !m.authorizeOutbound(msg) {
+				return true
+			}
+			// FR-044 dispatch start check, on the worker this loop resolved;
+			// a refusal skips the message and keeps the loop alive too.
+			if msg.Operation == bus.OperationStart && !m.startMayProceed(msg, w.ch, startStageDispatch) {
 				return true
 			}
 			return m.enqueueOutbound(ctx, w, msg)

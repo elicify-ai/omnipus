@@ -2023,6 +2023,9 @@ func wireChannelManager(cm *channels.Manager, al *agent.AgentLoop) {
 	// unbound or deleted since the request arrived) must be visible to the
 	// responding side, not only counted and logged.
 	cm.SetReturnRefusalObserver(al.ReportReturnRefusal)
+	// channels-spec-r8 FR-044: the dispatch and dequeue start checks read
+	// the same live configuration send_message reads.
+	cm.SetPolicySource(al.GetConfig)
 }
 
 // agentCheckerFunc adapts a func to the agentChecker interface used by the
