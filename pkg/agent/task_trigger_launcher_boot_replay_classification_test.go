@@ -45,12 +45,13 @@ import (
 // deterministic in both race outcomes; the refusal and completion oracles are
 // asserted in addition (they can only add failures, never turn one green).
 //
-// Fix-direction caveat, recorded for the architect: this fixture pins the
-// boot-wiring order as observed in production. A fix that reorders the
-// gateway (wire the plane before the scheduler starts) is legitimate, but it
-// changes the order this fixture must mirror — the test author updates the
-// fixture's order to the new production order; the oracles below are never
-// weakened to pass.
+// Fix-direction note, updated 2026-11-01: the delivered fix (a92efc83e,
+// pkg/agent/task_trigger_boot_hold.go) is the readiness-hold shape — a
+// boot-owed fire waits until the launcher, lifecycle store and main resolver
+// are all wired — so this fixture's observed production order stands
+// unchanged. A gateway-order fix, had it been chosen, would instead have
+// required updating this fixture's order (by the test author) to mirror the
+// new production order; the oracles below are never weakened to pass.
 
 // newU2bUnwiredLauncherProcess mirrors newU2bLauncherProcess in every respect
 // except the wiring: the SAME config, workspace membership, persisted main,
@@ -141,8 +142,10 @@ func TestU2bBootReplay_LateWiredBoot_DefaultLauncherPath_KeepsRuntimeClassificat
 	u2bAsyncRestore(t, home, image)
 
 	// Boot 2 in production's real order: the scheduler starts UNWIRED, the owed
-	// fire dispatches in that window, and only then is the plane wired.
-	p2 := newU2bUnwiredLauncherProcess(t, home, clk, newU2bAsyncWorker())
+	// fire dispatches (or, under the fix, is held and later released), and only
+	// then is the plane wired. The worker is released up front: a fixed replay
+	// really executes, and a held provider must not be what stops it.
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
 	p2.physicalBoot(t)
 	p2.scheduler.RunDueJobs(p2.clock.Now())
 	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
@@ -223,8 +226,10 @@ func TestU2bBootReplay_OrderlyStop_LateWiredBoot_KeepsRuntimeClassification_AndR
 	p1.gracefulProcessExit(t, fire.taskID)
 
 	// Boot 2 in production's real order: scheduler unwired, owed fire dispatches
-	// in that window, plane wired only afterwards.
-	p2 := newU2bUnwiredLauncherProcess(t, home, clk, newU2bAsyncWorker())
+	// (or, under the fix, is held and later released), plane wired only
+	// afterwards. The worker is released up front: a fixed replay really
+	// executes, and a held provider must not be what stops it.
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
 	p2.physicalBoot(t)
 	p2.scheduler.RunDueJobs(p2.clock.Now())
 	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
@@ -274,6 +279,15 @@ func TestU2bBootReplay_OrderlyStop_LateWiredBoot_KeepsRuntimeClassification_AndR
 	require.Equal(t, task.StatusDone, after.Status)
 }
 
+// completedWorkerForU2b returns an already-released provider worker, for a
+// boot whose fire may really execute once the plane is wired — the same shape
+// bootU2bLauncherProcess uses for its own workers.
+func completedWorkerForU2b() *u2bAsyncWorker {
+	worker := newU2bAsyncWorker()
+	worker.complete()
+	return worker
+}
+
 // wireEnforcementOnly wires ONLY the loop's session-messaging plane — the
 // enforcement side of the runtime invariant (session_messaging_wire.go's
 // SetSessionMessagingStores → GetSessionLifecycleStore) — and deliberately
@@ -294,19 +308,18 @@ func wireEnforcementOnly(t *testing.T, p *u2bLauncherProcess) {
 	require.Nil(t, GetTaskExecutor(p.loop).launcher, "instrument: no SteerLauncher yet")
 }
 
-// TestU2bBootReplay_RefusedReplayMode_ExecutesOnce_NoThirdRun pins the
-// refusal mode of the same defect — the mode instance T actually recorded —
-// deterministically, and pins addendum 9's no-third-run requirement in that
-// mode. Oracle sources: rows-rerun.md U2b-crash and the re-run-2 scope ("the
-// replay actually executing (real outcome), exactly 2 runs"; "the 3rd 'Run
-// now' run must not appear"), and task_run_loop.go's own settlement contract
-// for a run that never ran the work: no attempt, no restart.
-//
-// After the fix, a replay dispatched with the enforcement plane already wired
-// must still execute to a real judged outcome — the classification must EXIST
-// by construction, not be excused — and the refused-run settlement must never
-// re-arm the once fire or re-dispatch the task.
-func TestU2bBootReplay_RefusedReplayMode_ExecutesOnce_NoThirdRun(t *testing.T) {
+// TestU2bBootReplay_HalfWiredWindow_FireWaitsForPlane_ThenExecutesOnce_NoThirdRun
+// pins the half-wired window — the enforcement plane wired while the
+// executor's lifecycle store, launcher and main resolver are not — as a STATE
+// precondition, and requires the owed fire to survive it: dispatched in the
+// window (pre-fix) or held and released once the plane is complete (under the
+// a92efc83e hold), the replay must execute to a real judged outcome with a
+// persisted runtime classification, exactly 2 runs, and never a third.
+// Oracle sources: rows-rerun.md U2b-crash and the re-run-2 scope ("the replay
+// actually executing (real outcome), exactly 2 runs"; "the 3rd 'Run now' run
+// must not appear"). No outcome assertion names the refusal: the refusal was
+// the pre-fix symptom, never the spec.
+func TestU2bBootReplay_HalfWiredWindow_FireWaitsForPlane_ThenExecutesOnce_NoThirdRun(t *testing.T) {
 	home, clk := t.TempDir(), newTriggerFakeClock()
 	worker := newU2bAsyncWorker()
 	p1 := newU2bLauncherProcess(t, home, clk, worker) // eager wiring = production steady state
@@ -315,13 +328,26 @@ func TestU2bBootReplay_RefusedReplayMode_ExecutesOnce_NoThirdRun(t *testing.T) {
 	p1.stop() // Join old writers before restoring the unchanged live crash image.
 	u2bAsyncRestore(t, home, image)
 
-	// Boot 2 in the half-wired state: enforcement wired, executor store and
-	// launcher still unwired — the owed fire dispatches exactly like T's did.
-	p2 := newU2bUnwiredLauncherProcess(t, home, clk, newU2bAsyncWorker())
+	// Boot 2 in the half-wired state: enforcement wired, executor store,
+	// launcher and main resolver not — the fire becomes due in exactly this
+	// state. The worker is released up front: once the plane is wired the
+	// replay really executes, and a held provider must not be what stops it.
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
 	wireEnforcementOnly(t, p2)
 	p2.physicalBoot(t)
 	p2.scheduler.RunDueJobs(p2.clock.Now())
 	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	// State precondition at the moment the fire became due — about wiring,
+	// never about outcomes.
+	require.NotNil(t, p2.loop.GetSessionLifecycleStore(), "state: the enforcement plane is wired")
+	require.Nil(t, GetTaskExecutor(p2.loop).getLifecycleStore(), "state: the executor's lifecycle store is not wired")
+	require.Nil(t, GetTaskExecutor(p2.loop).launcher, "state: no launcher is wired yet")
+	require.Nil(t, GetTaskExecutor(p2.loop).mainResolver, "state: no main resolver is wired yet")
+	// The production wiring order completes the plane — installTestSession
+	// Launcher's stores and launcher, then the resolver LAST, as buildRESTAPI
+	// does. This is what releases a held fire and what makes any replay
+	// dispatched in the window executable.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
 	u2bAsyncJoin(t, "real task execution", p2.loop.taskExecutor.wg.Wait)
 
 	runs := p2.runs(t, fire.taskID)
@@ -334,20 +360,9 @@ func TestU2bBootReplay_RefusedReplayMode_ExecutesOnce_NoThirdRun(t *testing.T) {
 	require.Equal(t, fire.run.RunID, original.RunID, "boot retains the original run's identity")
 	require.Equal(t, "abandoned: gateway restarted mid-execution", original.Result)
 
-	// Instrument precondition: this boot really is in T's refusal mode — the
-	// classification-less replay was refused by the wired enforcement and the
-	// task ended failed with no attempt used (task_run_loop.go's
-	// ErrTaskRunNotDispatched settlement).
-	failedTask, err := p2.loop.taskStore.Get(fire.taskID)
-	require.NoError(t, err)
-	require.Contains(t, failedTask.Result, "The task could not be started:",
-		"instrument: expected the deterministic refusal mode (no attempt used)")
-	require.Contains(t, failedTask.Result, "no persisted runtime classification",
-		"instrument: the refusal is the unpersisted-runtime-classification one")
-
-	// THE classification oracle, now deterministic: the replayed session must
-	// have a persisted runtime classification even though its dispatch saw no
-	// executor store — enforcement could observe it, so it must exist.
+	// THE classification oracle: the replayed session must have a persisted
+	// runtime classification — a dispatch the wired enforcement can observe is
+	// a dispatch whose classification must exist, never be excused.
 	rec, err := p2.loop.GetSessionLifecycleStore().Load(replay.SessionID)
 	require.NoError(t, err,
 		"U2b: the replayed run's session must have a persisted runtime classification; "+
@@ -496,4 +511,153 @@ func TestU2bBootReplay_UserStoppedTask_LateWiredBoot_IsNeverReplayed(t *testing.
 	p2.stop()
 	p3 := bootU2bLauncherProcess(t, home, clk)
 	require.Equal(t, before, p3.runs(t, fire.taskID), "even repeated boots cannot replay a person-stopped run")
+}
+
+// TestU2bBootReplay_HeldFire_SchedulerStopsFirst_KeptAndReplayedOnceAtNextBoot
+// is addendum-10 C1: a fire held in the unwired window whose scheduler stops
+// before the plane is wired must keep its job, and the next physical boot must
+// replay it exactly once — with a persisted runtime classification and a real
+// outcome. Oracle: rows-rerun.md U2b-crash (exactly 2 runs, replay executing),
+// and the fix's own contract (task_trigger_boot_hold.go::runHeldBootOwedFire:
+// a stop before the wiring leaves the debt for the next boot).
+func TestU2bBootReplay_HeldFire_SchedulerStopsFirst_KeptAndReplayedOnceAtNextBoot(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	// Boot 2: NOTHING is wired — the plain unwired window. The worker is
+	// released up front: pre-fix the fire dispatches here and its replay must
+	// not hang the fixture; under the fix the fire is held and this worker is
+	// never called in boot 2.
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID),
+		"C1: a fire held for the unwired window keeps its job while held")
+	p2.stop() // The scheduler stops first; the plane was never wired in boot 2.
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID),
+		"C1: the stop must not consume or drop the held fire's job")
+
+	// Boot 3, fully wired and steady: exactly one replay, real outcome.
+	p3 := bootU2bLauncherProcess(t, home, clk)
+	runs := p3.runs(t, fire.taskID)
+	original, replay := requireU2bAsyncReplay(t, fire, runs)
+	require.Equal(t, "abandoned: gateway restarted mid-execution", original.Result)
+	rec, err := p3.loop.GetSessionLifecycleStore().Load(replay.SessionID)
+	require.NoError(t, err,
+		"C1: the next boot's replay must carry a persisted runtime classification")
+	require.NotNil(t, rec)
+	p3.requireMainChild(t, fire.taskID, replay.SessionID)
+	require.Empty(t, p3.storedJobs(t, fire.taskID), "the replayed fire's job is settled")
+	p3.runDueAndJoin(t)
+	require.Equal(t, runs, p3.runs(t, fire.taskID), "another tick adds no replay")
+	p3.stop()
+	p4 := bootU2bLauncherProcess(t, home, clk)
+	require.Equal(t, runs, p4.runs(t, fire.taskID), "a further boot adds nothing")
+	after, err := p4.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err, "C1: the task is not deleted")
+	require.Equal(t, task.StatusDone, after.Status)
+}
+
+// TestU2bBootReplay_HeldFire_TaskDeletedWhileHeld_NeverRuns_JobRemoved is
+// addendum-10 C2: a fire held in the unwired window must not run when the task
+// is deleted while it is held, even though the plane is wired afterwards (the
+// release must find the fire superseded), and the job must be removed.
+// Oracle: the fix's own contract (task_trigger_boot_hold.go::runHeldBootOwed
+// Fire's superseded branch) over pkg/agent/task_trigger.go::OnTaskDeleted and
+// the AgentLoop.NotifyTaskDeleted notification production uses.
+func TestU2bBootReplay_HeldFire_TaskDeletedWhileHeld_NeverRuns_JobRemoved(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	runsWhileHeld := p2.runs(t, fire.taskID)
+	require.Len(t, runsWhileHeld, 1,
+		"C2: the held fire must not run while the plane is unwired — a run here means nothing held it")
+
+	// The task is deleted while the fire is held, through the production
+	// notification the loop itself uses.
+	_, err := p2.loop.taskStore.Delete(fire.taskID)
+	require.NoError(t, err)
+	p2.loop.NotifyTaskDeleted(fire.taskID)
+	require.Empty(t, p2.storedJobs(t, fire.taskID),
+		"C2: deleting the task removes the held fire's job")
+
+	// Wiring the plane now (the release condition) must not resurrect the fire.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release after deletion", p2.loop.taskExecutor.wg.Wait)
+	require.Equal(t, runsWhileHeld, p2.runs(t, fire.taskID),
+		"C2: the superseded fire must not run once the plane is wired")
+	require.Empty(t, p2.storedJobs(t, fire.taskID))
+	p2.stop()
+	p3 := bootU2bLauncherProcess(t, home, clk)
+	require.Empty(t, p3.storedJobs(t, fire.taskID), "C2: no job is recreated for a deleted task")
+	_, err = p3.loop.taskStore.Get(fire.taskID)
+	require.Error(t, err, "C2: the deleted task is not resurrected by a later boot")
+}
+
+// TestU2bBootReplay_QueueDrain_UnwiredWindow_TaskKeepsClassification_AndRunsOnce
+// is addendum-10 C3: the queued-task drain dispatches `next` tasks directly
+// through pkg/agent/task_executor.go::CheckQueuedTasks — the sole production
+// caller is pkg/heartbeat/task_drain.go, whose runLoop fires its FIRST tick
+// one second after Start, and pkg/gateway/gateway_boot.go::startSchedulers
+// starts the drain before the session plane is wired. The hold
+// (task_trigger_boot_hold.go::holdBootOwedFire) covers only RunScheduled's
+// boot-owed fires, so a drain dispatch in the same unwired window falls back
+// to ISOLATED, mints nothing and is refused later — the same defect, a
+// parallel path. Expected: RED on BOTH the pre-fix tree and a92efc83e; if it
+// fails on a92efc83e it is a real defect for the developer, exactly as the
+// addendum anticipated.
+func TestU2bBootReplay_QueueDrain_UnwiredWindow_TaskKeepsClassification_AndRunsOnce(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	p1 := newU2bLauncherProcess(t, home, clk, completedWorkerForU2b())
+	queued := newCompletionContractTask(t, p1.loop, "native-agent", "U2b queue-drain task")
+	// No trigger is armed: the cron lane can never fire it — only the queue
+	// drain can dispatch it, which isolates the path under test.
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	drain := completedWorkerForU2b()
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, drain)
+	wireEnforcementOnly(t, p2) // deterministic: the wired plane refuses any classification-less dispatch
+	p2.physicalBoot(t)
+	// One drain tick through the drain's own production entry.
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "queue-drain dispatch and execution", p2.loop.taskExecutor.wg.Wait)
+
+	runs := p2.runs(t, queued.ID)
+	require.Len(t, runs, 1, "C3: the queued task dispatches exactly once in the window")
+	qrec, err := p2.loop.GetSessionLifecycleStore().Load(runs[0].SessionID)
+	require.NoError(t, err,
+		"C3: a task the queue drain dispatches in the unwired window must carry a persisted "+
+			"runtime classification; without it the wired enforce refuses the run "+
+			"(processTaskDirect: the task run was not dispatched: session has no persisted runtime "+
+			"classification) — the drain path is outside the boot-owed-fire hold")
+	require.NotNil(t, qrec)
+	require.Equal(t, task.StatusDone, runs[0].Status, "C3: the drained task executes to a real outcome")
+	require.Equal(t, u2bAsyncEvidence, runs[0].Result)
+	tk, err := p2.loop.taskStore.Get(queued.ID)
+	require.NoError(t, err)
+	require.Equal(t, task.StatusDone, tk.Status)
+
+	// A further drain tick dispatches nothing: the task is terminal.
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "second drain tick", p2.loop.taskExecutor.wg.Wait)
+	require.Equal(t, runs, p2.runs(t, queued.ID), "C3: the drained task is never dispatched twice")
 }
