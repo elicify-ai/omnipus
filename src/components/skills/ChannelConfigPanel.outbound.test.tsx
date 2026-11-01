@@ -103,9 +103,17 @@ function renderPanel(platform = 'discord') {
   client.setQueryData(['channel-routing', id], { default_agent_id: '', workspace_id: '', bound: false })
   client.setQueryData(['agents'], [])
   client.setQueryData(['workspaces', { status: 'active' }], [])
+  // A timer cannot stop a synchronous render storm. Observe the real panel's
+  // commits (not a mocked child) and fail loudly before one case monopolises
+  // the worker. This is a harness safety bound, not a product render budget.
+  let commits = 0
   render(<QueryClientProvider client={client}>
-    <ChannelConfigPanel channelId={id} channelName={platform === 'discord' ? 'Discord' : platform === 'telegram' ? 'Telegram' : platform === 'webchat' ? 'Web Chat' : 'Slack'}
-      enabled={true} open={true} onOpenChange={vi.fn()} />
+    <React.Profiler id={id} onRender={() => {
+      if (++commits > 32) throw new Error(`Configure ${id} did not settle after 32 commits; possible render loop (no product assertion was skipped)`)
+    }}>
+      <ChannelConfigPanel channelId={id} channelName={platform === 'discord' ? 'Discord' : platform === 'telegram' ? 'Telegram' : platform === 'webchat' ? 'Web Chat' : 'Slack'}
+        enabled={true} open={true} onOpenChange={vi.fn()} />
+    </React.Profiler>
   </QueryClientProvider>)
   return client
 }
