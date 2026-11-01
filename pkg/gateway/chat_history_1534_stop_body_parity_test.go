@@ -842,3 +842,160 @@ func TestStopSuccessRaceE2E_LateSuccessTailNeverSaved(t *testing.T) {
 	assert.Equal(t, 1, nonemptySavedBodies, "the continuation saves exactly one non-empty answer body")
 	assert.Equal(t, "AB", savedJoined, "saved answer bodies equal the pre-Stop screen exactly")
 }
+
+// TestStopSecondWriterE2E_LateToolCallsNeverSavedOrReplayed closes CHECK F2:
+// a successful response carrying ToolCalls arrives after the real Stop claim.
+// Q1=A requires both browser reload paths to retain only the shown answer,
+// never recordToolCalls' post-claim narration or a card for the late tool.
+// This is baseline-green coverage on the round-2 fix; CHECK owns mutation.
+func TestStopSecondWriterE2E_LateToolCallsNeverSavedOrReplayed(t *testing.T) {
+	const (
+		shownBody  = "SHOWN"
+		lateTail   = "TAIL-AFTER-CLAIM"
+		nextAnswer = "NEXT-ANSWER-AFTER-STOP"
+	)
+	home, cfg := historyD16Config(t)
+	cfg.Tools.Manifest.Compressed = false // offer the registered fixture, not a compressed builtin-only manifest
+	tool := &stopWholeTurnCountTool{name: "stop_second_writer_e2e"}
+	provider := &stopWholeTurnE2EProvider{steps: []stopWholeTurnStep{
+		{
+			stream: shownBody, waitCancel: true,
+			postCancelStream: shownBody + lateTail,
+			content:          shownBody + lateTail,
+			finishReason:     "tool_calls",
+			toolCalls:        []providers.ToolCall{stopWholeTurnToolCall("1534-late-call", tool.Name())},
+		},
+		// If the turn incorrectly continues, make the forbidden answer visible
+		// instead of relying on an unscripted-provider error to end the test.
+		{stream: nextAnswer, content: nextAnswer, finishReason: "stop"},
+	}}
+	h := newHistoryD16Harness(t, home, cfg, provider, true)
+	stopWholeTurnRegisterTools(t, h, tool)
+	sid := h.session()
+	peer := h.connect()
+	h.attach(peer, sid)
+	h.send(peer, sid, "1534-second-writer-instruction", "narrate, then use the tool")
+
+	preStopRaws := h.readUntil(peer, func(raw []byte) bool {
+		if historyD16Type(t, raw) != string(generated.WsFrameTypeToken) {
+			return false
+		}
+		var frame generated.TokenFrame
+		require.NoError(t, json.Unmarshal(raw, &frame))
+		return frame.Content == shownBody
+	})
+	shown := stopBodyParityParseLive(t, preStopRaws)
+	require.Equal(t, shownBody, strings.Join(shown.tokenContents, ""), "the exact body actually delivered before Stop")
+	require.NotEmpty(t, shown.liveMessageID, "capture the shown answer ID before any racing response")
+
+	// The provider's waitCancel barrier releases its successful ToolCalls
+	// response only after claimCancel has cut the streamer and cancelled the
+	// request context. A socket write alone would not establish that ordering.
+	require.NoError(t, peer.WriteJSON(generated.CancelFrame{Type: "cancel", SessionId: sid}))
+	claimed := h.event(func(event agent.Event) bool {
+		payload, ok := event.Payload.(agent.InterruptReceivedPayload)
+		return event.Kind == agent.EventKindInterruptReceived && ok &&
+			payload.Kind == agent.InterruptKindGraceful && strings.HasSuffix(event.Meta.SessionKey, sid)
+	})
+	require.NotEmpty(t, claimed.Meta.TurnID, "the genuine Stop event identifies the claimed turn")
+	liveRaws := append(preStopRaws, stopBodyParityReadToDone(t, h, peer)...)
+	live := stopBodyParityParseLive(t, liveRaws)
+	require.Equal(t, claimed.Meta.TurnID, live.turnID, "done belongs to the turn whose Stop was claimed")
+	require.Contains(t, strings.Join(live.tokenContents, ""), lateTail,
+		"fixture sanity: the in-flight provider delivered its post-claim tail; the browser discards it")
+	assert.NotContains(t, strings.Join(live.tokenContents, ""), nextAnswer, "Stop must not start a further answer")
+	for _, raw := range liveRaws {
+		kind := historyD16Type(t, raw)
+		assert.NotEqual(t, string(generated.WsFrameTypeToolCallStart), kind, "no late tool card may start live")
+		assert.NotEqual(t, string(generated.WsFrameTypeToolCallResult), kind, "no late tool result may appear live")
+		if kind == string(generated.WsFrameTypeToken) {
+			var token generated.TokenFrame
+			require.NoError(t, json.Unmarshal(raw, &token))
+			assert.Equal(t, shown.liveMessageID, derefString(token.MessageId), "no new answer bubble after Stop")
+		}
+	}
+
+	// done precedes the durable cancellation record (#1524). The request
+	// drain alone does not join that session-worker append; await it explicitly.
+	historyD16AwaitCancelRecord(t, h, sid, live.turnID)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.True(t, h.loop.WaitForActiveRequestsContext(ctx), "owned provider work drained before reload")
+	assert.Equal(t, 1, provider.CallCount(), "Stop permits no further provider round or answer")
+	assert.Equal(t, int32(0), tool.execs.Load(), "a tool requested only after the claim must never execute")
+
+	// Browser GET-history path: check every entry, not just the first matching
+	// answer, so a second writer cannot hide a tail/card under another ID.
+	page := h.page(sid, "")
+	require.NotEmpty(t, page.Entries, "the reload must return the saved conversation")
+	assert.False(t, page.HasEarlier, "this tiny conversation must fit wholly in the history page")
+	assert.False(t, page.HasLater, "no later source group may hide a post-Stop write")
+	var restBodies []string
+	for _, entry := range page.Entries {
+		body := derefString(entry.Content)
+		assert.NotContains(t, body, lateTail, "no REST entry may carry post-claim narration")
+		assert.NotContains(t, body, nextAnswer, "no REST entry may carry a further answer")
+		if entry.Type != nil {
+			assert.NotEqual(t, "tool_call", string(*entry.Type), "no saved tool-card source in REST history")
+		}
+		if entry.ToolCalls != nil {
+			assert.Empty(t, *entry.ToolCalls, "no tool requested after the claim may have a saved REST card")
+		}
+		if entry.Role != nil && *entry.Role == "assistant" {
+			assert.Equal(t, live.turnID, derefString(entry.TurnId), "all REST answer records retain turn identity")
+			if body != "" {
+				assert.Equal(t, shown.liveMessageID, entry.Id, "only nonempty answer bodies require the original ID")
+				restBodies = append(restBodies, body)
+			}
+		}
+	}
+	assert.Equal(t, []string{shownBody}, restBodies, "REST reload has exactly one nonempty answer, exactly as shown at Stop")
+
+	// Fresh-socket replay path: inspect all frame types, not only assistant
+	// prose. Tool cards replay as start/result frames outside replay_message.
+	peer2 := h.connect()
+	replayRaws := h.attach(peer2, sid)
+	var replayBodies []string
+	for _, raw := range replayRaws {
+		kind := historyD16Type(t, raw)
+		assert.NotEqual(t, string(generated.WsFrameTypeToolCallStart), kind, "no late tool card in reload replay")
+		assert.NotEqual(t, string(generated.WsFrameTypeToolCallResult), kind, "no late tool result in reload replay")
+		assert.NotContains(t, string(raw), lateTail, "no replay or current-projection frame may hide post-claim narration")
+		assert.NotContains(t, string(raw), nextAnswer, "no reload frame may hide a further answer")
+		if kind == string(generated.WsFrameTypeReplayMessage) {
+			var frame generated.ReplayMessageFrame
+			require.NoError(t, json.Unmarshal(raw, &frame))
+			if frame.Role == "assistant" {
+				assert.Equal(t, live.turnID, derefString(frame.TurnId), "all replay answer records retain turn identity")
+				if frame.Content != "" {
+					assert.Equal(t, shown.liveMessageID, derefString(frame.Id), "the nonempty replay answer keeps its original ID")
+					replayBodies = append(replayBodies, frame.Content)
+				}
+			}
+		}
+	}
+	assert.Equal(t, []string{shownBody}, replayBodies, "replay has exactly one nonempty answer, exactly as shown at Stop")
+
+	// Canonical readback rules out a hidden write that both projections omit.
+	// Empty per-call accounting records may have separate IDs; they are not
+	// answer bubbles and are still checked for turn identity and forbidden text.
+	entries, err := h.store.ReadTranscript(sid)
+	require.NoError(t, err)
+	var savedBodies []string
+	for _, entry := range entries {
+		assert.NotContains(t, entry.Content, lateTail, "the second writer must not save post-claim narration")
+		assert.NotContains(t, entry.Content, nextAnswer, "the archive must not gain a further answer")
+		assert.NotEqual(t, session.EntryTypeToolCall, entry.Type, "the archive must not gain a late tool-card source")
+		assert.Empty(t, entry.ToolCalls, "no late tool call or result may be saved")
+		if entry.Role == "assistant" {
+			assert.Equal(t, live.turnID, entry.TurnID, "all saved answer records retain turn identity")
+			if entry.Content != "" {
+				assert.Equal(t, shown.liveMessageID, entry.ID, "the nonempty saved answer keeps its original ID")
+				savedBodies = append(savedBodies, entry.Content)
+			}
+		}
+	}
+	assert.Equal(t, []string{shownBody}, savedBodies, "the archive has exactly one nonempty answer, exactly as shown at Stop")
+	t.Logf("second-writer reload: shown=%q REST=%q replay=%q saved=%q provider_calls=%d tool_executions=%d",
+		shownBody, restBodies, replayBodies, savedBodies, provider.CallCount(), tool.execs.Load())
+}
