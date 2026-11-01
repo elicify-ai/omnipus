@@ -113,10 +113,10 @@ func TestRestInstall_ExpectationAndLocalConfirmationMatrix(t *testing.T) {
 				if state == "outside-undetected-refused" {
 					manifests := t9ManifestFiles(t, root, "x")
 					require.Len(t, manifests, len(initial)+1, "detection precedes the confirmation refusal under the same lock")
-					raw, err := os.ReadFile(manifests[len(manifests)-1])
-					require.NoError(t, err)
+					manifestRaw, manifestErr := os.ReadFile(manifests[len(manifests)-1])
+					require.NoError(t, manifestErr)
 					var last map[string]any
-					require.NoError(t, json.Unmarshal(raw, &last))
+					require.NoError(t, json.Unmarshal(manifestRaw, &last))
 					assert.Equal(t, "external_change", last["kind"])
 				}
 				return
