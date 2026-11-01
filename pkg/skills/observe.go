@@ -372,11 +372,16 @@ func (o *SkillObservation) Meta(pathEnv string) SkillDetailMeta {
 	if meta.AllowedTools == nil {
 		meta.AllowedTools = []string{}
 	}
-	req, _ := nested["omnipus-requires"].(string)
+	// needs lists the checked program declarations only (C-7: status is
+	// present or missing); a declaration that is not a program name is shown
+	// "declared, not checked" in the load header, never reported missing.
 	meta.Needs = []NeedStatus{}
-	for _, name := range strings.Fields(req) {
-		p := lookPath(name, pathEnv)
-		meta.Needs = append(meta.Needs, NeedStatus{Program: name, Present: p != "", Path: p})
+	for _, e := range requiredEntries(fm) {
+		if !e.program {
+			continue
+		}
+		p := lookPath(e.text, pathEnv)
+		meta.Needs = append(meta.Needs, NeedStatus{Program: e.text, Present: p != "", Path: p})
 	}
 	return meta
 }

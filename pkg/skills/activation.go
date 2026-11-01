@@ -12,9 +12,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
@@ -388,24 +390,70 @@ func toolList(v any) []string {
 	return nil
 }
 
-// needsLine checks metadata.omnipus-requires (space-separated program names)
-// by PATH lookup over pathEnv.
+// needsLine renders metadata.omnipus-requires (§5.7, FR-003): each program
+// name is checked by PATH lookup over pathEnv (present / MISSING); every other
+// declaration is shown quoted as "declared, not checked".
 func needsLine(fm map[string]any, pathEnv string) string {
-	nested, _ := fm["metadata"].(map[string]any)
-	req, _ := nested["omnipus-requires"].(string)
-	names := strings.Fields(req)
-	if len(names) == 0 {
+	entries := requiredEntries(fm)
+	if len(entries) == 0 {
 		return ""
 	}
-	parts := make([]string, 0, len(names))
-	for _, name := range names {
-		if p := lookPath(name, pathEnv); p != "" {
-			parts = append(parts, fmt.Sprintf("%s — present (%s)", name, p))
+	parts := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.program {
+			parts = append(parts, `"`+e.text+`" — declared, not checked`)
+			continue
+		}
+		if p := lookPath(e.text, pathEnv); p != "" {
+			parts = append(parts, fmt.Sprintf("%s — present (%s)", e.text, p))
 		} else {
-			parts = append(parts, name+" — MISSING")
+			parts = append(parts, e.text+" — MISSING")
 		}
 	}
 	return strings.Join(parts, " · ")
+}
+
+// requiredEntry is one metadata.omnipus-requires declaration; program is true
+// when it is a plain program name that a PATH lookup can check.
+type requiredEntry struct {
+	text    string
+	program bool
+}
+
+// programNamePattern is a plain executable name: no path separator, no
+// version constraint, no spaces or quotes.
+var programNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+
+// requiredEntries splits metadata.omnipus-requires into declarations:
+// whitespace-separated, with a double-quoted span ("pypdf >= 4") kept as one
+// declaration. A declaration that is not a plain program name (for example
+// pypdf>=4) is not checked (§5.7).
+func requiredEntries(fm map[string]any) []requiredEntry {
+	nested, _ := fm["metadata"].(map[string]any)
+	req, _ := nested["omnipus-requires"].(string)
+	var out []requiredEntry
+	var cur strings.Builder
+	quoted, inQuote := false, false
+	flush := func() {
+		if cur.Len() > 0 {
+			text := cur.String()
+			out = append(out, requiredEntry{text: text, program: !quoted && programNamePattern.MatchString(text)})
+		}
+		cur.Reset()
+		quoted = false
+	}
+	for _, r := range req {
+		switch {
+		case r == '"':
+			inQuote, quoted = !inQuote, true
+		case !inQuote && unicode.IsSpace(r):
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return out
 }
 
 // lookPath finds an executable named name in pathEnv ("" when absent).
