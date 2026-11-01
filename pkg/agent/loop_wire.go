@@ -1533,6 +1533,9 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 					}
 
 					if resolved, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug); resolvedOK {
+						if resolved.Shelf != skills.ShelfProject {
+							return rw.rs.al.loadSkillActivation(ctx, callerAgent, callerID, workspaceID, resolved)
+						}
 						if content, readOK := skills.LoadSkillFile(resolved.Path); readOK {
 							audit.EmitSkillCall(rw.rs.al.auditLogger, callerID, workspaceID, resolved.Slug,
 								audit.SkillCallModeLoad, audit.SkillCallOutcomeLoaded, string(resolved.Shelf))
@@ -1561,6 +1564,11 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 						if strings.EqualFold(s.ID, slug) || strings.EqualFold(s.Name, slug) {
 							audit.EmitSkillCall(rw.rs.al.auditLogger, callerID, workspaceID, slug,
 								audit.SkillCallModeLoad, audit.SkillCallOutcomeDenied, "")
+							if callerAgent.ContextBuilder.HoldsSkillName(s.ID) {
+								// Granted by name, refused by identity (SD-30).
+								skills.ForgetSeen(tools.ToolTranscriptSessionID(ctx), s.ID)
+								return tools.SkillLoadOutcome{Status: tools.SkillLoadRefused, Message: skills.StaleGrantError(s.ID).Error()}
+							}
 							return tools.SkillLoadOutcome{Status: tools.SkillLoadDenied}
 						}
 					}

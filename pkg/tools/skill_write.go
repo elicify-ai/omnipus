@@ -204,11 +204,11 @@ func skillWriteTargetOf(ctx context.Context, agentHome string, restrict bool, to
 		return "", false
 	}
 	defer func() { _ = handle.Close() }()
-	real, err := handle.RealPath()
+	realPath, err := handle.RealPath()
 	if err != nil {
 		return "", false
 	}
-	return RegistrySkillKeyForPath(real)
+	return RegistrySkillKeyForPath(realPath)
 }
 
 func (t *WriteFileTool) SkillWriteTarget(ctx context.Context, args map[string]any) (string, bool) {

@@ -213,7 +213,13 @@ func (s *Store) Create(id string, cfg *config.AgentConfig) error {
 		return fmt.Errorf("agentstore: create %q: cfg.ID %q does not match requested id", id, cfg.ID)
 	}
 	cfg.ID = id
-	if err := s.inner.Create(cfg); err != nil {
+	err := s.withSkillsLock(func() error {
+		if err := s.bindSkillGrants(cfg); err != nil {
+			return err
+		}
+		return s.inner.Create(cfg)
+	})
+	if err != nil {
 		return fmt.Errorf("agentstore: create %q: %w", id, err)
 	}
 	if s.notifier != nil {
@@ -227,7 +233,12 @@ func (s *Store) Create(id string, cfg *config.AgentConfig) error {
 // notifies the registry cache of the result. mutate must not change the
 // record's ID.
 func (s *Store) Update(id string, mutate func(*config.AgentConfig) error) (*config.AgentConfig, error) {
-	updated, err := s.inner.Update(id, mutate)
+	var updated *config.AgentConfig
+	err := s.withSkillsLock(func() error {
+		var updateErr error
+		updated, updateErr = s.inner.Update(id, s.bindingMutate(mutate))
+		return updateErr
+	})
 	if err != nil {
 		return nil, fmt.Errorf("agentstore: update %q: %w", id, err)
 	}

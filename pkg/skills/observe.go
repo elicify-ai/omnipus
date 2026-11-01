@@ -9,6 +9,7 @@ package skills
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"time"
@@ -63,10 +64,15 @@ type SkillObservation struct {
 	HasInstruction  bool
 	Files           []SkillFile // displayable files in path order (dot segments hidden)
 	HasLocalChanges bool
-	LastChange      LastChange
-	Versions        []VersionRow
-	VersionsTotal   int
-	NextBefore      string // "" = no older retained versions
+	// Degraded is true when the capture aborted at a §7.2 limit on a helper
+	// (§9.5 checkpoint encounters (i)): the instructions were read through
+	// the bounded reader, the file list comes from a metadata-only walk, and
+	// no revision is certified (Revision is "").
+	Degraded      bool
+	LastChange    LastChange
+	Versions      []VersionRow
+	VersionsTotal int
+	NextBefore    string // "" = no older retained versions
 }
 
 const maxVersionRowPaths = 5
@@ -105,7 +111,12 @@ func observeLocked(root, slug string, q VersionQuery) (*SkillObservation, error)
 		}
 		obs.Deleted = true
 	} else if capErr := obs.capture(); capErr != nil {
-		return nil, capErr
+		if !errors.Is(capErr, ErrSaveCheckFailed) {
+			return nil, capErr
+		}
+		if degErr := obs.degrade(); degErr != nil {
+			return nil, degErr
+		}
 	}
 	if obs.Builtin {
 		obs.LastChange = LastChange{ShippedWith: shippedWithVersion()}
@@ -122,6 +133,12 @@ func observeLocked(root, slug string, q VersionQuery) (*SkillObservation, error)
 	}
 	obs.HasLocalChanges = localChanges(newest, obs.Present, obs.Revision)
 	obs.LastChange = lastChangeOf(newest, obs.Present, obs.Revision)
+	if obs.Degraded {
+		// §9.5 (i): the uncheckpointable state is a local change of unknown
+		// origin until a successful checkpoint records it.
+		obs.HasLocalChanges = true
+		obs.LastChange = LastChange{Unknown: true}
+	}
 	if q.Want {
 		if err := obs.page(hist, ids, q); err != nil {
 			return nil, err
@@ -162,6 +179,71 @@ func (o *SkillObservation) capture() error {
 		o.Files = append(o.Files, SkillFile{Path: e.Path, Size: e.Size, Exec: e.Exec})
 	}
 	return nil
+}
+
+// degrade fills a §9.5 (i) observation after a helper aborted the capture at
+// a §7.2 limit: the instruction file through the bounded reader (an
+// oversized instruction file is still the SKILL_INSTRUCTION_LIMIT failure)
+// and the displayable files from a metadata-only walk. No revision.
+func (o *SkillObservation) degrade() error {
+	ref, err := resolveInstructionOnDisk(o.Dir)
+	if err != nil {
+		return fmt.Errorf("read skill '%s': %w", o.Slug, err)
+	}
+	switch ref.state {
+	case instructionUnresolved:
+		return &ChangeError{Code: ErrSkillInstructionUnresolved, Text: fmt.Sprintf(
+			"skill '%s' cannot be served: its instruction file is a symlink to '%s', which is not a regular file captured with the skill (outside the skill, Omnipus control metadata, or missing or not a plain file); fix the instruction file outside Omnipus and try again",
+			o.Slug, ref.target)}
+	case instructionRegular, instructionLinked:
+		raw, readErr := readActivationInstruction(o.Dir, ref)
+		if readErr != nil {
+			return readErr
+		}
+		o.Instruction, o.HasInstruction = raw, true
+	}
+	files, err := listDisplayFiles(o.Dir)
+	if err != nil {
+		return fmt.Errorf("read skill '%s': %w", o.Slug, err)
+	}
+	o.Files, o.Revision, o.Degraded = files, "", true
+	return nil
+}
+
+// listDisplayFiles lists dir's regular files and symlinks in path order by
+// Lstat only (no content is opened), hiding Omnipus control metadata and dot
+// segments like the captured list.
+func listDisplayFiles(dir string) ([]SkillFile, error) {
+	var out []SkillFile
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if p == dir {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if isControlEntry(rel) || hiddenFromDisplay(rel) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		out = append(out, SkillFile{Path: rel, Size: info.Size(), Exec: info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0})
+		return nil
+	})
+	return out, err
 }
 
 // hiddenFromDisplay reports a path with any dot segment (§5.2 `files`: nested
@@ -306,7 +388,12 @@ func (o *SkillObservation) Meta(pathEnv string) SkillDetailMeta {
 
 // GrantBound reports whether an agent's bindings authorize the live folder
 // dir of slug (§5.13a SD-30): the binding must equal the folder generation.
+// bindings is an agent record's table, so a nil table (a record without the
+// field) is unbound: it authorizes nothing.
 func GrantBound(dir, slug string, bindings map[string]string) (bool, error) {
+	if bindings == nil {
+		bindings = map[string]string{}
+	}
 	err := checkBinding(dir, slug, bindings)
 	if err == nil {
 		return true, nil
@@ -348,11 +435,11 @@ func LoadableFolders(root string, granted []string, bindings map[string]string) 
 		if !ok {
 			continue
 		}
-		real, err := filepath.EvalSymlinks(dir)
+		realDir, err := filepath.EvalSymlinks(dir)
 		if err != nil {
 			return nil, fmt.Errorf("skill %q: %w", onDisk, err)
 		}
-		out = append(out, real)
+		out = append(out, realDir)
 	}
 	return out, nil
 }

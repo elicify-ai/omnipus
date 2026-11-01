@@ -309,7 +309,11 @@ func observeListRow(info skills.SkillInfo, session string) (revision, descriptio
 			description = d
 		}
 	}
-	skills.RecordSeen(session, obs.Slug, obs.Revision)
+	if obs.Revision == "" {
+		skills.ForgetSeen(session, obs.Slug) // degraded: no revision certified (§7.3)
+	} else {
+		skills.RecordSeen(session, obs.Slug, obs.Revision)
+	}
 	return obs.Revision, description, nil
 }
 

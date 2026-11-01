@@ -126,8 +126,13 @@ func (t *GetSkillTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if refusal != nil {
 		return refusal
 	}
-	if obs.Present {
+	switch {
+	case obs.Present && obs.Revision != "":
 		skills.RecordSeen(session, obs.Slug, obs.Revision)
+	case obs.Present:
+		// A degraded read certifies no revision and clears any earlier
+		// record (§7.3 clearing rule, §9.5 (i)).
+		skills.ForgetSeen(session, obs.Slug)
 	}
 	return tools.NewToolResult(res)
 }

@@ -55,6 +55,12 @@ type ContextBuilder struct {
 	// lower-cased, trimmed skill names.
 	skillAllowlist map[string]struct{}
 
+	// skillBindings is the agent's skill key → generation table (skills spec
+	// r15 §5.13a SD-30), set once at construction from AgentConfig.SkillGrants.
+	// A registry/builtin load is served only when the binding equals the
+	// folder's current generation (skills.LoadActivation checks it).
+	skillBindings map[string]string
+
 	// projectShelf is the acting agent's WORKSPACE'S already-merged project
 	// shelf (ADR-072 D4.1 shelf 1 — pkg/skills.ProjectShelf, built by
 	// skills.MergeProjectSkills over that workspace's mounts). nil when no
@@ -275,6 +281,26 @@ func (cb *ContextBuilder) WithSkillAllowlist(allowlist []string) *ContextBuilder
 	}
 	cb.skillAllowlist = set
 	return cb
+}
+
+// WithSkillBindings installs the agent's construction-time skill bindings
+// (SD-30). The map is copied.
+func (cb *ContextBuilder) WithSkillBindings(bindings map[string]string) *ContextBuilder {
+	cp := make(map[string]string, len(bindings))
+	for k, v := range bindings {
+		cp[k] = v
+	}
+	cb.skillBindings = cp
+	return cb
+}
+
+// SkillBindings returns a copy of the agent's construction-time bindings.
+func (cb *ContextBuilder) SkillBindings() map[string]string {
+	cp := make(map[string]string, len(cb.skillBindings))
+	for k, v := range cb.skillBindings {
+		cp[k] = v
+	}
+	return cp
 }
 
 // WithProjectShelf sets the acting agent's workspace project shelf (ADR-072
@@ -738,7 +764,7 @@ func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf, w
 	// (FR-9.4): the prompt advertises only the skills this agent is permitted
 	// to use. The menu is uncapped (D1.1) and lists every currently-available
 	// skill, so there is no "search find_skills for the rest" caveat to make.
-	skillsSummary := cb.skillsLoader.BuildSkillsSummaryFuncWithProject(cb.skillAllowed, shelf)
+	skillsSummary := cb.skillsLoader.BuildSkillsSummaryFuncWithProject(cb.grantedPredicate(cb.skillsLoader.ListSkills()), shelf)
 	if skillsSummary != "" {
 		parts = append(parts, fmt.Sprintf(`# Skills
 
@@ -1858,12 +1884,13 @@ func (cb *ContextBuilder) ListSkillNames() []string {
 	}
 
 	allSkills := cb.skillsLoader.ListSkills()
+	granted := cb.grantedPredicate(allSkills)
 	names := make([]string, 0, len(allSkills))
 	for _, skill := range allSkills {
 		// Progressive disclosure: only list skills this agent may use (FR-9.4).
 		// The allowlist and the loadable identity are both keyed on the slug
 		// (ID = directory name), never the human-readable display name.
-		if !cb.skillAllowed(skill.ID) {
+		if !granted(skill.ID) {
 			continue
 		}
 		names = append(names, skill.ID)
@@ -1904,7 +1931,8 @@ func (cb *ContextBuilder) ResolveSkillFullForWorkspace(workspaceID, name string)
 		return skills.ResolvedSkill{}, false
 	}
 
-	resolved, ok, collision := skills.ResolveSkillName(cb.skillsLoader.ListSkills(), cb.skillAllowed, cb.effectiveProjectShelf(workspaceID), name)
+	allSkills := cb.skillsLoader.ListSkills()
+	resolved, ok, collision := skills.ResolveSkillName(allSkills, cb.grantedPredicate(allSkills), cb.effectiveProjectShelf(workspaceID), name)
 	if !ok {
 		logger.WarnCF("agent", "skill resolution denied or not found",
 			map[string]any{
@@ -1969,7 +1997,7 @@ func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 // fallback check, rather than triggering two full scans back-to-back on
 // every failed delegate.run requested_skill.
 func (cb *ContextBuilder) resolveSkillNameWithList(allSkills []skills.SkillInfo, name string) (skills.ResolvedSkill, bool) {
-	resolved, ok, collision := skills.ResolveSkillName(allSkills, cb.skillAllowed, cb.projectShelf, name)
+	resolved, ok, collision := skills.ResolveSkillName(allSkills, cb.grantedPredicate(allSkills), cb.projectShelf, name)
 	if !ok {
 		// FR-9.4/ADR-072 D4: an installed-but-ungranted registry/builtin slug
 		// (or one that exists on no shelf at all) cannot be resolved — so it

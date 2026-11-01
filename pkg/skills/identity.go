@@ -124,6 +124,44 @@ func EnsureGeneration(dir string) (string, error) {
 	return gen, nil
 }
 
+// BindGrants is §5.13a's one write rule for an agent persist: it observes the
+// granted names under root and returns the wholesale skill key → generation
+// table. An installed name binds the generation read from its folder's stamp
+// (an unstamped folder is stamped fresh first, then bound); a name that is
+// not installed stays unbound (no entry), never a refusal. A nil table means
+// no name is bound. The caller must hold root's mutation lock
+// (WithMutationLock), because stamping is a write.
+func BindGrants(root string, names []string) (map[string]string, error) {
+	root = filepath.Clean(root)
+	var out map[string]string
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if !ValidSlug(name) {
+			continue
+		}
+		key := SkillKey(name)
+		if _, done := out[key]; done {
+			continue
+		}
+		onDisk, present, err := resolveLiveFolder(root, name)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			continue
+		}
+		gen, err := EnsureGeneration(filepath.Join(root, onDisk))
+		if err != nil {
+			return nil, fmt.Errorf("bind skill %q: %w", onDisk, err)
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[key] = gen
+	}
+	return out, nil
+}
+
 // resolveLiveFolder finds the installed folder whose skill key equals slug's
 // key. It returns the on-disk slug and whether it exists. An exact-name match
 // wins over a case twin (§5.13 already-present case twins are left alone).

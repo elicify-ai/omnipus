@@ -238,8 +238,8 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) (re
 	}
 
 	// Ensure skills directory exists.
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create skills directory: %v", err))
+	if mkErr := os.MkdirAll(skillsDir, 0o755); mkErr != nil {
+		return ErrorResult(fmt.Sprintf("failed to create skills directory: %v", mkErr))
 	}
 
 	// Download to a staging directory and only swap it into place once
@@ -262,8 +262,8 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) (re
 	// the same filesystem as skillsDir, so the final os.Rename below remains
 	// an atomic, cheap rename.
 	stagingRoot := filepath.Join(skillsDir, stagingDirName)
-	if err := os.MkdirAll(stagingRoot, 0o755); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create the staging directory for %q: %v", slug, err))
+	if mkErr := os.MkdirAll(stagingRoot, 0o755); mkErr != nil {
+		return ErrorResult(fmt.Sprintf("failed to create the staging directory for %q: %v", slug, mkErr))
 	}
 	stageDir, err := os.MkdirTemp(stagingRoot, slug+".install-")
 	if err != nil {

@@ -60,6 +60,11 @@ const (
 	SkillLoadNotFound SkillLoadStatus = iota
 	SkillLoadDenied
 	SkillLoadLoaded
+	// SkillLoadRefused: the skill is granted and installed but cannot be
+	// served (skills spec r15 §5.10: SKILL_GRANT_STALE, SKILL_INSTRUCTION_LIMIT,
+	// SKILL_INSTRUCTION_UNRESOLVED, a storage error). Message carries the
+	// coded text the agent reads.
+	SkillLoadRefused
 )
 
 // SkillLoadOutcome is what a SkillTool's injected load resolver hands back
@@ -74,6 +79,9 @@ type SkillLoadOutcome struct {
 	// CanonicalSlug is the resolved slug (case-canonicalised to how it is
 	// actually stored), populated only when Status == SkillLoadLoaded.
 	CanonicalSlug string
+	// Message is the refusal text, populated only when Status ==
+	// SkillLoadRefused.
+	Message string
 }
 
 // SkillSearchDoc is one entry of the corpus SkillTool's search mode ranks
@@ -246,6 +254,8 @@ func (t *SkillTool) execLoad(ctx context.Context, name string) *ToolResult {
 		return SilentResult(content)
 	case SkillLoadDenied:
 		return skillPermissionDeniedResult(name)
+	case SkillLoadRefused:
+		return ErrorResult(outcome.Message)
 	default: // SkillLoadNotFound
 		return skillNotFoundResult(name)
 	}

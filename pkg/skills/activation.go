@@ -37,15 +37,31 @@ type LoadActivationOptions struct {
 	Bindings map[string]string
 }
 
+// ActivationResult is one §5.7 load: the rendered text plus what the caller
+// records — the on-disk slug, the shelf and the certified revision ("" for a
+// built-in or a degraded load, which certify none; §7.3).
+type ActivationResult struct {
+	Content  string
+	Slug     string
+	Shelf    string // "registry" | "builtin"
+	Revision string
+}
+
 // LoadForActivation renders the §5.7 load result for slug.
 func LoadForActivation(skillsRoot, slug string, opts LoadActivationOptions) (string, error) {
+	res, err := LoadActivation(skillsRoot, slug, opts)
+	return res.Content, err
+}
+
+// LoadActivation is LoadForActivation with the load's identity and revision.
+func LoadActivation(skillsRoot, slug string, opts LoadActivationOptions) (ActivationResult, error) {
 	if !ValidSlug(slug) {
-		return "", fmt.Errorf("%w: %q is not a valid skill name", ErrNotFound, slug)
+		return ActivationResult{}, fmt.Errorf("%w: %q is not a valid skill name", ErrNotFound, slug)
 	}
 	root := filepath.Clean(skillsRoot)
 	onDisk, present, err := resolveLiveFolder(root, slug)
 	if err != nil {
-		return "", err
+		return ActivationResult{}, err
 	}
 	builtin := IsBuiltin(slug)
 	dir := filepath.Join(root, onDisk)
@@ -55,53 +71,74 @@ func LoadForActivation(skillsRoot, slug string, opts LoadActivationOptions) (str
 		}
 	}
 	if !present {
-		return "", fmt.Errorf("%w: '%s'", ErrNotFound, slug)
+		return ActivationResult{}, fmt.Errorf("%w: '%s'", ErrNotFound, slug)
 	}
 	// The instruction file is resolved first (Lstat/Readlink only, no target
 	// is opened), so a link onto control metadata such as the generation stamp
 	// is reported as unresolved rather than read as an identity.
 	ref, err := resolveInstructionOnDisk(dir)
 	if err != nil {
-		return "", err
+		return ActivationResult{}, err
 	}
 	switch ref.state {
 	case instructionMissing:
-		return "", fmt.Errorf("%w: skill '%s' has no SKILL.md", ErrNotFound, onDisk)
+		return ActivationResult{}, fmt.Errorf("%w: skill '%s' has no SKILL.md", ErrNotFound, onDisk)
 	case instructionUnresolved:
-		return "", fmt.Errorf("%w: skill '%s': SKILL.md is a symlink to '%s', which is not a regular file of the skill; fix the link or replace it with the file", ErrSkillInstructionUnresolved, onDisk, ref.target)
+		return ActivationResult{}, fmt.Errorf("%w: skill '%s': SKILL.md is a symlink to '%s', which is not a regular file of the skill; fix the link or replace it with the file", ErrSkillInstructionUnresolved, onDisk, ref.target)
 	}
-	if err := checkBinding(dir, onDisk, opts.Bindings); err != nil {
-		return "", err
+	if err = checkBinding(dir, onDisk, opts.Bindings); err != nil {
+		return ActivationResult{}, err
 	}
 
+	var view loadView
 	if builtin {
-		raw, err := readActivationInstruction(dir, ref)
-		if err != nil {
-			return "", err
+		raw, readErr := readActivationInstruction(dir, ref)
+		if readErr != nil {
+			return ActivationResult{}, readErr
 		}
-		return renderLoad(loadView{slug: onDisk, shelf: "builtin", dir: dir, raw: raw, opts: opts,
-			lastChange: "shipped with Omnipus " + config.GetVersion()})
+		view = loadView{slug: onDisk, shelf: "builtin", dir: dir, raw: raw, opts: opts,
+			lastChange: "shipped with Omnipus " + config.GetVersion()}
+	} else if view, err = loadRegistry(root, onDisk, dir, ref, opts); err != nil {
+		return ActivationResult{}, err
 	}
-	return loadRegistry(root, onDisk, dir, ref, opts)
+	content, err := renderLoad(view)
+	if err != nil {
+		return ActivationResult{}, err
+	}
+	return ActivationResult{Content: content, Slug: onDisk, Shelf: view.shelf, Revision: view.revision}, nil
 }
 
 // checkBinding is SD-30's identity half: the agent's binding for the key must
-// equal the folder's current generation. A missing binding and an unstamped
-// folder are both "", so an unstamped folder loads for an agent with no
-// binding for it, and a stamped one does not.
+// equal the folder's current generation. An agent's table (non-nil, possibly
+// empty) is strict: a missing binding or an unstamped folder matches nothing
+// (§5.13a "unbound = inert", "an unstamped folder matches no binding"). A nil
+// table means the caller supplied no agent identity at all (a direct
+// LoadForActivation without an agent); then only an unstamped folder loads.
+// Every agent caller passes its table (ContextBuilder.SkillBindings,
+// GrantBound), so the nil case never authorizes an agent.
 func checkBinding(dir, slug string, bindings map[string]string) error {
 	gen, err := ReadGeneration(dir)
 	if err != nil {
 		return err
 	}
-	if bindings[SkillKey(slug)] == gen {
+	if bindings == nil {
+		if gen == "" {
+			return nil
+		}
+	} else if gen != "" && bindings[SkillKey(slug)] == gen {
 		return nil
 	}
+	return StaleGrantError(slug)
+}
+
+// StaleGrantError is the §5.10 SKILL_GRANT_STALE refusal for slug: the agent
+// holds the name, but its binding matches no live generation.
+func StaleGrantError(slug string) error {
 	return &ChangeError{Code: ErrSkillGrantStale, Text: fmt.Sprintf("skill '%s' is not available: your grant is for a previous skill with this name that no longer exists; ask the owner to re-grant the current '%s'", slug, slug)}
 }
 
 // loadRegistry runs detection, then renders the user-owned header.
-func loadRegistry(root, slug, dir string, ref instructionRef, opts LoadActivationOptions) (string, error) {
+func loadRegistry(root, slug, dir string, ref instructionRef, opts LoadActivationOptions) (loadView, error) {
 	view := loadView{slug: slug, shelf: "registry", dir: dir, opts: opts}
 	var degraded bool
 	err := WithMutationLock(root, func() error {
@@ -141,16 +178,16 @@ func loadRegistry(root, slug, dir string, ref instructionRef, opts LoadActivatio
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return loadView{}, err
 	}
 	if degraded {
 		raw, err := readActivationInstruction(dir, ref)
 		if err != nil {
-			return "", err
+			return loadView{}, err
 		}
 		view.raw, view.lastChange = raw, "unknown (changed outside Omnipus)"
 	}
-	return renderLoad(view)
+	return view, nil
 }
 
 func instructionLimit(slug string, e *instructionLimitError, suffix string) error {
