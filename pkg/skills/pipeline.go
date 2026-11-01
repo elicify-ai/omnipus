@@ -115,19 +115,11 @@ func BuiltinReadOnlyError(slug string) *ChangeError {
 
 // ApplyChange is the ONE change pipeline (§0 principle 3, §7.1).
 func ApplyChange(root string, req ChangeRequest) (PublishOutcome, error) {
-	target := req.target()
 	if err := validateRequestShape(req); err != nil {
 		return refusedOutcome(), err
 	}
 	// Step 0 (before the lock): built-in names are read-only and reserved.
-	if IsBuiltin(target) {
-		var err *ChangeError
-		if creates(req) {
-			err = &ChangeError{Code: ErrBuiltinNameReserved, Text: fmt.Sprintf("'%s' is the name of a built-in skill and cannot be used for another skill. Choose a different name.", SkillKey(target))}
-		} else {
-			err = BuiltinReadOnlyError(target)
-		}
-		auditRefusal(req, target, "builtin_read_only")
+	if err := RefuseBuiltinTarget(req); err != nil {
 		return refusedOutcome(), err
 	}
 
@@ -155,10 +147,39 @@ func ApplyChange(root string, req ChangeRequest) (PublishOutcome, error) {
 	return out, runErr
 }
 
+// RefuseBuiltinTarget is the pipeline's step 0 (§7.1): a change whose target
+// is a built-in key is refused before the lock — BUILTIN_NAME_RESERVED for a
+// create, copy or any install (§5.6), BUILTIN_READ_ONLY otherwise — and the
+// refusal is audited. It returns nil for a non-built-in target. Install
+// adapters call it before their own "already installed" pre-checks, because a
+// built-in folder is present on disk and those checks would otherwise answer
+// first with a different refusal.
+func RefuseBuiltinTarget(req ChangeRequest) error {
+	target := req.target()
+	if !IsBuiltin(target) {
+		return nil
+	}
+	var err *ChangeError
+	if creates(req) {
+		err = BuiltinNameReservedError(target)
+	} else {
+		err = BuiltinReadOnlyError(target)
+	}
+	auditRefusal(req, target, "builtin_read_only")
+	return err
+}
+
+// BuiltinNameReservedError is the §5.10 BUILTIN_NAME_RESERVED refusal.
+func BuiltinNameReservedError(slug string) *ChangeError {
+	return &ChangeError{Code: ErrBuiltinNameReserved, Text: fmt.Sprintf("'%s' is the name of a built-in skill and cannot be used for another skill. Choose a different name.", SkillKey(slug))}
+}
+
 // creates reports whether the request publishes a new name (create, copy,
-// install into absence) — the BUILTIN_NAME_RESERVED class.
+// install) — the BUILTIN_NAME_RESERVED class. An install onto a built-in name
+// is reserved whether or not it carries a revision (§5.6): installing is
+// never a way to change a built-in.
 func creates(req ChangeRequest) bool {
-	return req.Kind == KindCreate || req.Kind == KindInstall
+	return req.Kind == KindCreate || req.Kind == KindInstall || req.Kind == KindInstallReplace
 }
 
 func refusedOutcome() PublishOutcome {

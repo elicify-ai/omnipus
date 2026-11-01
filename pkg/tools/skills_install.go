@@ -216,6 +216,17 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) (re
 	// that matches an installed skill only by letter case is a replacement
 	// of that skill (§5.6).
 	skillsDir := t.globalSkillsDir
+	// A built-in name is reserved for every install (§5.6): refuse it before
+	// the "already installed" check, which a built-in folder would trip.
+	if refusal := skills.RefuseBuiltinTarget(skills.ChangeRequest{
+		Kind: skills.KindInstall, Slug: slug,
+		Actor: skills.ChangeActor{
+			Kind: "agent", AgentID: ToolAgentID(ctx), SessionID: ToolTranscriptSessionID(ctx),
+			WorkspaceID: ToolWorkspaceID(ctx), Tool: t.Name(),
+		},
+	}); refusal != nil {
+		return ErrorResult(refusal.Error())
+	}
 	onDisk, alreadyInstalled, err := skills.ResolveInstalledSlug(skillsDir, slug)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("could not read the skills directory: %v", err))

@@ -45,14 +45,19 @@ func personActor(tool string) skills.ChangeActor {
 // caller's revision and, when the skill has local changes, the explicit
 // confirmation. It returns the on-disk slug the change published to.
 func publishInstall(root, slug, stageDir, expected string, replaceLocal bool) (string, skills.PublishOutcome, error) {
-	onDisk, present, err := skills.ResolveInstalledSlug(root, slug)
-	if err != nil {
-		return slug, skills.PublishOutcome{}, err
-	}
 	req := skills.ChangeRequest{
 		Kind: skills.KindInstall, Slug: slug, StagedDir: stageDir,
 		Expect: skills.Expectation{Absent: true}, ReplaceLocalChanges: replaceLocal,
 		Actor: personActor("rest-install"),
+	}
+	// A built-in name is reserved for every install (§5.6, 409): refuse it
+	// before the "already installed" check, which a built-in folder trips.
+	if refusal := skills.RefuseBuiltinTarget(req); refusal != nil {
+		return slug, skills.PublishOutcome{PersistenceStatus: skills.PersistenceNone, ActivationStatus: skills.ActivationNotAttempted}, refusal
+	}
+	onDisk, present, err := skills.ResolveInstalledSlug(root, slug)
+	if err != nil {
+		return slug, skills.PublishOutcome{}, err
 	}
 	switch {
 	case present && expected == "":
