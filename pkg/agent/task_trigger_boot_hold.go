@@ -34,6 +34,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/cron"
@@ -61,15 +63,14 @@ func (s *TaskTriggerScheduler) holdFire(ctx context.Context, job *cron.CronJob) 
 		return false
 	}
 	s.mu.Lock()
-	owed := s.bootOwedFire[taskID]
+	current := s.tracksJobLocked(taskID, job.ID)
+	owed := current && s.bootOwedFire[taskID]
 	marked := false
-	if !owed {
+	if current && !owed {
 		// Marked before it is queued, so a release that runs at once still
 		// finds it. Unheld, the mark is taken back below.
-		if tracked, ok := s.taskToJob[taskID]; ok && tracked.jobID == job.ID {
-			s.bootOwedFire[taskID] = true
-			marked = true
-		}
+		s.bootOwedFire[taskID] = true
+		marked = true
 	}
 	s.mu.Unlock()
 	held := *job
@@ -91,12 +92,15 @@ func (s *TaskTriggerScheduler) holdFire(ctx context.Context, job *cron.CronJob) 
 //
 //   - the scheduler stopped first: the job is kept, the next physical boot
 //     replays it;
-//   - the task is gone: an audit warning names it and the job is removed;
+//   - the task is gone (before the release or during its dispatch): one audit
+//     warning names it and the job is removed;
 //   - the task cannot be read right now: an audit warning names it and the
 //     job is kept, with its Running flag and marker, for the next boot;
-//   - the schedule was edited meanwhile: the edit wins, the job is removed;
+//   - the schedule was edited meanwhile (this job is no longer the task's
+//     tracked job): the edit wins, the job is removed;
 //   - the task's agent is gone: a failed run is recorded in the task's run
-//     history (and the task fails), then the job is removed;
+//     history and the task is saved as Failed, then the job is removed; if
+//     either write fails, the job is kept;
 //   - the fire cannot start for another reason: an audit warning names it and
 //     the job is kept for the next boot.
 //
@@ -115,39 +119,47 @@ func (s *TaskTriggerScheduler) runHeldFire(ctx context.Context, job *cron.CronJo
 	}
 	t, err := s.store.Get(taskID)
 	if errors.Is(err, task.ErrNotFound) {
-		s.executor.auditHeldFireNotStarted(ctx, taskID, job.ID, heldFireTaskDeleted, err)
-		s.OnTaskDeleted(taskID)
-		s.cs.RemoveJob(job.ID)
+		s.dropDeletedHeldFire(ctx, taskID, job.ID, err)
 		return
 	}
 	if err != nil {
 		s.keepHeldFire(ctx, taskID, job.ID, heldFireTaskUnreadable, err)
 		return
 	}
+	// The held fire runs only while it is still this task's tracked job and
+	// still marked: a schedule edit replaces the job (and clears the mark), so
+	// a replacement that came due and was marked meanwhile is never run by
+	// the replaced fire's release.
 	s.mu.Lock()
-	marked := s.bootOwedFire[taskID]
+	current := s.tracksJobLocked(taskID, job.ID) && s.bootOwedFire[taskID]
 	s.mu.Unlock()
-	if !marked {
+	if !current {
+		if _, gerr := s.store.Get(taskID); errors.Is(gerr, task.ErrNotFound) {
+			s.dropDeletedHeldFire(ctx, taskID, job.ID, gerr)
+			return
+		}
 		slog.Info("task_trigger: held scheduled fire superseded by a schedule edit before it ran",
 			"task_id", taskID, "job_id", job.ID)
 		s.cs.RemoveJob(job.ID)
 		return
 	}
 	if t.AgentID != "" && !s.executor.agentRegistered(t.AgentID) {
-		s.mu.Lock()
-		delete(s.bootOwedFire, taskID)
-		s.mu.Unlock()
-		reason := fmt.Sprintf("agent %q not found", t.AgentID)
-		if recErr := s.executor.recordUnstartedFireFailure(t, reason); recErr != nil {
-			s.keepHeldFire(ctx, taskID, job.ID, heldFireAgentMissing, recErr)
-			return
-		}
-		s.executor.auditHeldFireNotStarted(ctx, taskID, job.ID, heldFireAgentMissing, errors.New(reason))
-		s.cs.RemoveJob(job.ID)
+		s.settleMissingAgentFire(ctx, t, job.ID)
 		return
+	}
+	if hook := heldFireBeforeRunHookForTest.Load(); hook != nil {
+		(*hook)(taskID)
 	}
 	_, err = s.runScheduledFire(ctx, job)
 	if errors.Is(err, cron.ErrRunHandedOff) {
+		return
+	}
+	if errors.Is(err, errScheduledFireTaskGone) {
+		// Deleted after the read above; runScheduledFire already removed the
+		// job and dropped the tracking.
+		slog.Warn("task_trigger: held scheduled fire not started: the task was deleted",
+			"task_id", taskID, "job_id", job.ID)
+		s.executor.auditHeldFireNotStarted(ctx, taskID, job.ID, heldFireTaskDeleted, err)
 		return
 	}
 	if err != nil {
@@ -155,6 +167,22 @@ func (s *TaskTriggerScheduler) runHeldFire(ctx context.Context, job *cron.CronJo
 		return
 	}
 	s.cs.RemoveJob(job.ID)
+}
+
+// heldFireBeforeRunHookForTest, when set, runs in runHeldFire after the
+// release has read the task and checked its job, marker and agent, right
+// before runScheduledFire reads the task again. Nil in production; set only
+// by tests through SetHeldFireBeforeRunHookForTest.
+var heldFireBeforeRunHookForTest atomic.Pointer[func(taskID string)]
+
+// SetHeldFireBeforeRunHookForTest installs fn as the hook run right before a
+// released held fire calls runScheduledFire (nil removes it). For tests only.
+func SetHeldFireBeforeRunHookForTest(fn func(taskID string)) {
+	if fn == nil {
+		heldFireBeforeRunHookForTest.Store(nil)
+		return
+	}
+	heldFireBeforeRunHookForTest.Store(&fn)
 }
 
 // keepHeldFire keeps a held fire that could not start: the job stays with
@@ -170,6 +198,68 @@ func (s *TaskTriggerScheduler) keepHeldFire(ctx context.Context, taskID, jobID, 
 	slog.Error("task_trigger: held scheduled fire could not start; kept for the next boot",
 		"task_id", taskID, "job_id", jobID, "reason", reason, "error", err)
 	s.executor.auditHeldFireNotStarted(ctx, taskID, jobID, reason, err)
+}
+
+// settleMissingAgentFire settles a fire whose task's agent is gone: a failed
+// run is recorded and the task saved as Failed, then the job is removed. If
+// either write fails, the job is kept (keepHeldFire) and the next physical
+// boot settles it.
+func (s *TaskTriggerScheduler) settleMissingAgentFire(ctx context.Context, t *task.Task, jobID string) {
+	s.mu.Lock()
+	delete(s.bootOwedFire, t.ID)
+	s.mu.Unlock()
+	reason := fmt.Sprintf("agent %q not found", t.AgentID)
+	if err := s.executor.recordUnstartedFireFailure(t, reason); err != nil {
+		s.keepHeldFire(ctx, t.ID, jobID, heldFireAgentMissing, err)
+		return
+	}
+	slog.Warn("task_trigger: scheduled fire not started: its agent is gone; failed run recorded",
+		"task_id", t.ID, "job_id", jobID, "agent_id", t.AgentID)
+	s.executor.auditHeldFireNotStarted(ctx, t.ID, jobID, heldFireAgentMissing, errors.New(reason))
+	s.cs.RemoveJob(jobID)
+}
+
+// settleOwedFireOfMissingAgent settles the owed fire of a crashed one-time
+// trigger that runs unheld (the plane is already wired) when its task's agent
+// is gone, exactly as a released held fire would (settleMissingAgentFire):
+// the debt a failed save kept at the previous boot is settled with a failed
+// run, not left to the dispatch path, which fails the task without one. It
+// reports true when it settled the fire; every other fire, and a task it
+// cannot read, goes on to runScheduledFire unchanged.
+func (s *TaskTriggerScheduler) settleOwedFireOfMissingAgent(ctx context.Context, job *cron.CronJob) bool {
+	taskID := job.Payload.Message
+	if s.executor == nil || taskID == "" {
+		return false
+	}
+	s.mu.Lock()
+	owed := s.tracksJobLocked(taskID, job.ID) && s.bootOwedFire[taskID]
+	s.mu.Unlock()
+	if !owed {
+		return false
+	}
+	t, err := s.store.Get(taskID)
+	if err != nil || t.AgentID == "" || s.executor.agentRegistered(t.AgentID) {
+		return false
+	}
+	s.settleMissingAgentFire(ctx, t, job.ID)
+	return true
+}
+
+// dropDeletedHeldFire settles a held fire whose task is gone: one audit
+// warning, then the job and its tracking are removed.
+func (s *TaskTriggerScheduler) dropDeletedHeldFire(ctx context.Context, taskID, jobID string, err error) {
+	slog.Warn("task_trigger: held scheduled fire not started: the task was deleted",
+		"task_id", taskID, "job_id", jobID, "error", err)
+	s.executor.auditHeldFireNotStarted(ctx, taskID, jobID, heldFireTaskDeleted, err)
+	s.OnTaskDeleted(taskID)
+	s.cs.RemoveJob(jobID)
+}
+
+// tracksJobLocked reports whether jobID is the job currently tracked for
+// taskID. Caller holds s.mu.
+func (s *TaskTriggerScheduler) tracksJobLocked(taskID, jobID string) bool {
+	tracked, ok := s.taskToJob[taskID]
+	return ok && tracked.jobID == jobID
 }
 
 // The reasons a held fire did not start, as written to the audit log.
@@ -219,7 +309,25 @@ func (te *TaskExecutor) recordUnstartedFireFailure(t *task.Task, reason string) 
 		return fmt.Errorf("task_trigger: close failed run %q for task %q: %w", run.RunID, t.ID, err)
 	}
 	te.emitRunStatus(t.ID, run.RunID, nil, task.StatusFailed)
-	te.failTask(t.ID, reason)
+	return te.saveUnstartedFireFailed(t.ID, reason)
+}
+
+// saveUnstartedFireFailed marks the task Failed with reason, as failTask
+// does, but returns the save error so the caller keeps the job until the
+// Failed status is saved.
+func (te *TaskExecutor) saveUnstartedFireFailed(taskID, reason string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	failed := task.StatusFailed
+	updated, err := te.store.Update(taskID, task.Patch{
+		Status:      &failed,
+		Result:      &reason,
+		CompletedAt: &now,
+	})
+	if err != nil {
+		return fmt.Errorf("task_trigger: mark task %q failed: %w", taskID, err)
+	}
+	terminateTaskGoalRecord(taskID, updated.Status, updated.CancelReason, reason)
+	te.emitStatusChanged(updated, task.StatusFailed)
 	return nil
 }
 

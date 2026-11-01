@@ -1022,11 +1022,21 @@ func (s *TaskTriggerScheduler) OnTaskDeleted(taskID string) {
 // held until the plane is wired (holdFire, task_trigger_boot_hold.go); it
 // then runs through runScheduledFire exactly like any other fire.
 func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (string, error) {
-	if s.holdFire(ctx, job) {
+	if s.holdFire(ctx, job) || s.settleOwedFireOfMissingAgent(ctx, job) {
 		return "", cron.ErrRunHandedOff
 	}
-	return s.runScheduledFire(ctx, job)
+	out, err := s.runScheduledFire(ctx, job)
+	if errors.Is(err, errScheduledFireTaskGone) {
+		return out, nil
+	}
+	return out, err
 }
+
+// errScheduledFireTaskGone is runScheduledFire's outcome when the task was
+// deleted mid-fire (job removed, tracking dropped). RunScheduled reports it as
+// a plain nil to the engine; a held fire's release audits it
+// (task_trigger_boot_hold.go::runHeldFire).
+var errScheduledFireTaskGone = errors.New("task_trigger: task deleted mid-fire")
 
 // runScheduledFire is RunScheduled's body: one fire of job, dispatched now.
 func (s *TaskTriggerScheduler) runScheduledFire(ctx context.Context, job *cron.CronJob) (string, error) {
@@ -1054,7 +1064,7 @@ func (s *TaskTriggerScheduler) runScheduledFire(ctx context.Context, job *cron.C
 				"task_id", taskID, "job_id", job.ID)
 			s.OnTaskDeleted(taskID)
 			s.cs.RemoveJob(job.ID)
-			return "", nil
+			return "", errScheduledFireTaskGone
 		}
 		// Task-unreadable exit (Scheduler rule 2e): a transient read error means
 		// the trigger cannot be consulted, so re-arming is impossible here — the
@@ -1121,7 +1131,7 @@ func (s *TaskTriggerScheduler) runScheduledFire(ctx context.Context, job *cron.C
 				"task_id", taskID, "job_id", job.ID)
 			s.OnTaskDeleted(taskID)
 			s.cs.RemoveJob(job.ID)
-			return "", nil
+			return "", errScheduledFireTaskGone
 		}
 		if errors.Is(err, task.ErrAlreadyRunning) {
 			// Task is in_progress — overlap guard fires. Benign skip: the next
