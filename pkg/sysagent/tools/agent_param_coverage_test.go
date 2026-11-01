@@ -72,43 +72,40 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 	}
 }
 
-// TestAgentUpdateTool_NoOrphanedParameters mirrors
-// TestAgentCreateTool_NoOrphanedParameters for update_agent.
+// TestAgentUpdateTool_NoOrphanedParameters mirrors the schema-only creation
+// guard. r17 AG-12/AG-13 add runtime inputs; AG-06/AG-07/AG-08/AG-10 forbid
+// heartbeat, permission inputs and CLI selection/path on update. Actual
+// persistence/merge/removal behavior is tested separately, not inferred here.
 func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentUpdateTool(deps)
 
 	declared := declaredObjectProperties(t, tool.Parameters())
-
-	consumedByExecute := map[string]bool{
+	contractFields := map[string]bool{
 		"id": true, "revision": true, "name": true, "description": true, "soul": true,
 		"model": true, "fallback_models": true, "provider": true,
-		"color": true, "skills": true,
-		"figure": true, "role": true, // read in validateVisualUpdateArgs and the shared apply step (#1303)
+		"color": true, "skills": true, "figure": true, "role": true,
 		"max_tool_iterations": true,
 		"memory_enabled":      true, "voice": true,
 		"context_window_override": true, "model_params": true,
-		"agent_md": true, // agentMetadataWrites (#1064)
+		"agent_md":      true,
+		"env_overrides": true, "env_overrides_remove": true, "cli_args": true,
 	}
 
 	for name := range declared {
-		if !consumedByExecute[name] {
-			t.Errorf(
-				"update_agent Parameters() declares %q but Execute() never reads it — "+
-					"a caller passing it gets a success response implying it was applied "+
-					"when it silently was not (ADR-037 anti-pattern)", name,
-			)
+		if !contractFields[name] {
+			t.Errorf("update_agent declares %q without an update-contract coverage entry", name)
 		}
 	}
-	for name := range consumedByExecute {
+	for name := range contractFields {
 		if !declared[name] {
-			t.Errorf("consumedByExecute lists %q but update_agent Parameters() no longer declares it — stale test fixture", name)
+			t.Errorf("update_agent does not declare contract field %q", name)
 		}
 	}
 
-	for _, retired := range []string{"timeout_seconds", "restrict_to_workspace"} {
+	for _, retired := range []string{"timeout_seconds", "restrict_to_workspace", "heartbeat", "cli_path", "cli", "tools_cfg", "tool_policy_changes", "mcp_servers"} {
 		if declared[retired] {
-			t.Errorf("update_agent Parameters() still declares retired/unbacked field %q", retired)
+			t.Errorf("update_agent Parameters() still declares retired/forbidden field %q", retired)
 		}
 	}
 }
