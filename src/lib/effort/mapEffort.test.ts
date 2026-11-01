@@ -4,10 +4,10 @@
 //
 // Spec: /workspace/omnipus-coordination/designs-20261029/effort-levels-spec-r10.md
 //
-// RED reason: src/lib/effort/mapEffort.ts is scaffolding and throws — every
-// mapping and note assertion fails until GREEN implements the DE-5 table.
-// The expected note strings are pinned verbatim from the spec's S-09 note
-// column and the FR-058 per-turn texts, in exact parity with the Go test.
+// The mapping originally failed against RED scaffolding. Round 3 repairs the
+// note-renderer inputs, not the oracle: S-09's result and FR-058's sent value
+// must be supplied alongside kind/model/source. The exact sentences remain
+// pinned to the specification, in parity with the Go twin.
 
 import { describe, it, expect } from 'vitest'
 import {
@@ -115,34 +115,37 @@ describe('mapEffort — SC-002 hard rules over every fixture row', () => {
   })
 })
 
-// Traces to: effort-levels-spec-r10.md S-09 (note column), FR-058 (picker note
-// is a pure function of kind + model + source); strings in exact parity with
-// pkg/agent/effort_red_mapping_d2_test.go::TestT_S1_Mapping_S09_NoteTexts.
+// Traces to: effort-levels-spec-r10.md S-09 (result AND note columns), FR-058.
+// The renderer receives the already-mapped result; it must not guess it from
+// kind/model/source. Exact sentences match the Go twin's note-text test.
 describe('effortSwitchNote — S-09 exact picker note strings', () => {
   const model = 'deepseek/deepseek-v4.1-flash'
 
   it.each([
-    { kind: 'mapped', source: 'medium', expected: `Effort set to Low. ${model} doesn't offer Medium.` },
-    { kind: 'mapped', source: 'xhigh', expected: `Effort set to High. ${model} doesn't offer XHigh.` },
-    { kind: 'mapped_on', source: 'on', expected: 'Effort set to Medium.' },
-    { kind: 'switch_only', source: 'high', expected: `Effort set to On. ${model} only turns reasoning on or off.` },
+    { kind: 'mapped', source: 'medium', value: 'low', expected: `Effort set to Low. ${model} doesn't offer Medium.` },
+    { kind: 'mapped', source: 'xhigh', value: 'high', expected: `Effort set to High. ${model} doesn't offer XHigh.` },
+    { kind: 'mapped_on', source: 'on', value: 'medium', expected: 'Effort set to Medium.' },
+    { kind: 'switch_only', source: 'high', value: 'on', expected: `Effort set to On. ${model} only turns reasoning on or off.` },
     {
       kind: 'nothing_sendable',
       source: 'high',
+      value: 'provider_default',
       expected: `Effort set to Provider default. Omnipus can't change effort for ${model}.`,
     },
     {
       kind: 'unranked_default',
       source: 'default',
+      value: 'provider_default',
       expected: `Effort set to Provider default. ${model} doesn't offer that setting.`,
     },
     {
       kind: 'empty_candidate',
       source: 'high',
+      value: 'provider_default',
       expected: `Effort set to Provider default. ${model} offers no level here that High maps to.`,
     },
-  ])('$kind note for source "$source" reads exactly as the spec pins', ({ kind, source, expected }) => {
-    expect(effortSwitchNote(kind as never, model, source)).toBe(expected)
+  ])('$kind note for source "$source" reads exactly as the spec pins', ({ kind, source, value, expected }) => {
+    expect(effortSwitchNote(kind as never, model, source, value)).toBe(expected)
   })
 })
 
@@ -152,15 +155,17 @@ describe('effortTurnNote — exact per-turn note strings', () => {
   const model = 'm1'
 
   it.each([
-    { kind: 'mapped', source: 'high', expected: `Sent as Low: ${model} doesn't offer High.` },
-    { kind: 'not_supported', source: 'off', expected: `Effort not sent: ${model} can't turn reasoning off.` },
+    { kind: 'mapped', source: 'high', sent: 'low', expected: `Sent as Low: ${model} doesn't offer High.` },
+    { kind: 'not_supported', source: 'off', sent: '', expected: `Effort not sent: ${model} can't turn reasoning off.` },
     {
       kind: 'empty_candidate',
       source: 'high',
+      sent: '',
       expected: `Effort not sent: ${model} offers no level here that high maps to.`,
     },
-  ])('$kind turn note for source "$source" reads exactly as the spec pins', ({ kind, source, expected }) => {
-    expect(effortTurnNote(kind as never, model, source)).toBe(expected)
+  ])('$kind turn note for source "$source" reads exactly as the spec pins', ({ kind, source, sent, expected }) => {
+    // FR-058 renders the stored record's chosen/source and actual sent value.
+    expect(effortTurnNote(kind as never, model, source, sent)).toBe(expected)
   })
 })
 

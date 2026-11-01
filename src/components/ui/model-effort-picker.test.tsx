@@ -15,7 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactElement } from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EffortControl, ModelEffortPicker, type EffortValue } from './model-effort-picker'
@@ -217,8 +217,9 @@ describe('ModelEffortPicker — T-F1 presentation', () => {
     renderWithCatalog(
       <ModelEffortPicker value={effortValue('deepseek/deepseek-v4.1-flash', 'high')} scope="chat" />,
     )
-    expect(await screen.findByText('High')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+    // High also exists during loading: Retry identifies the failed state.
+    expect(await screen.findByRole('button', { name: /retry/i })).toBeInTheDocument()
+    expect(screen.getByText('High')).toBeInTheDocument()
     for (const radio of screen.queryAllByRole('radio')) {
       expect(radio).toBeDisabled()
     }
@@ -345,12 +346,16 @@ describe('EffortControl — blocked step and keyboard', () => {
   // save-on-commit semantics).
   it('S-10: picking High completes the switch — onChange fires at once with high and the popover closes', async () => {
     const { onChange } = await openBlockedStep()
-    await user.click(screen.getByRole('radio', { name: 'High' }))
-    expect(onChange).toHaveBeenCalled()
+    const popover = screen.getByRole('dialog')
+    // No confirmation inside the switch UI; Memory's separate Save is valid.
+    expect(within(popover).queryByRole('button', { name: /confirm|save/i })).toBeNull()
+    await user.click(within(popover).getByRole('radio', { name: 'High' }))
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1))
     expect(onChange.mock.calls[0][0]).toEqual({recap_model:'openai/gpt-6.1-sol',recap_provider:'openrouter',recap_reasoning_effort:'high'})
     expect(screen.queryAllByRole('radio')).toHaveLength(0)
-    // No confirm step: nothing in the popover asks before saving (P-Q4 A).
-    expect(screen.queryByRole('button', { name: /confirm|save/i })).toBeNull()
+    await waitFor(() => expect(popover).not.toBeInTheDocument())
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('button', { name: /save memory settings/i })).toBeInTheDocument()
   })
 
   // Traces to: effort-levels-spec-r10.md S-10 ("Escape instead keeps the
@@ -434,11 +439,15 @@ describe('EffortControl — remapped stored value shows the note with a Change l
     expect(
       screen.getByText("Effort set to Low. deepseek/deepseek-v4.1-flash doesn't offer Medium."),
     ).toBeInTheDocument()
+    const memorySave = screen.getByRole('button', { name: /save memory settings/i })
     await user.click(screen.getByRole('button', { name: 'Change' }))
-    expect(await screen.findByRole('radio', { name: 'Low' })).toBeInTheDocument()
-    expect(screen.queryByRole('radio', { name: 'Medium' })).toBeNull()
+    const popover = await screen.findByRole('dialog')
+    expect(within(popover).getByRole('radio', { name: 'Low' })).toBeInTheDocument()
+    expect(within(popover).queryByRole('radio', { name: 'Medium' })).toBeNull()
     // Save-on-commit (S-57/P-Q4): no extra confirm step inside the popover.
-    expect(screen.queryByRole('button', { name: /confirm|save/i })).toBeNull()
+    expect(within(popover).queryByRole('button', { name: /confirm|save/i })).toBeNull()
+    // The modal hides background controls from role queries, not from the DOM.
+    expect(memorySave).toBeInTheDocument()
   })
   it('S-57: failed mapped autosave restores the acknowledged old pair and Medium, focus and FormError', async()=>{
     await switchFromSaved('openai/gpt-6.1-sol','medium','deepseek/deepseek-v4.1-flash',true)

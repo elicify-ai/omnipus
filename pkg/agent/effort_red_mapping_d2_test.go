@@ -6,9 +6,9 @@ package agent
 // Traces to: scenarios S-09, S-14, S-48, S-49, S-72, S-73 (test order item
 // T-S1), dataset D2 (all 27 rows), FR-046, FR-058, SC-002.
 //
-// RED reason: pkg/agent/reasoning_effort_map.go::MapEffort is scaffolding and
-// returns a sentinel; every mapping assertion fails until GREEN implements
-// the DE-5 table.
+// The mapping originally failed against RED scaffolding. Round 3 repairs
+// renderer inputs: the mapped/sent value is part of the record named by the
+// fixed note sentence; kind/model/source alone cannot determine that value.
 
 import (
 	"encoding/json"
@@ -146,20 +146,21 @@ func TestT_S1_Mapping_S09_NoteTexts(t *testing.T) {
 		name     string
 		kind     string
 		source   string
+		value    string // S-09 result column, not inferred from the model name
 		Expected string
 	}{
-		{"mapped level", "mapped", "medium", "Effort set to Low. " + model + " doesn't offer Medium."},
-		{"xhigh source", "mapped", "xhigh", "Effort set to High. " + model + " doesn't offer XHigh."},
-		{"on source to level", "mapped_on", "on", "Effort set to Medium."},
-		{"ranked to switch", "switch_only", "high", "Effort set to On. " + model + " only turns reasoning on or off."},
-		{"nothing sendable", "nothing_sendable", "high", "Effort set to Provider default. Omnipus can't change effort for " + model + "."},
-		{"unranked default", "unranked_default", "default", "Effort set to Provider default. " + model + " doesn't offer that setting."},
-		{"empty candidate", "empty_candidate", "high", "Effort set to Provider default. " + model + " offers no level here that High maps to."},
+		{"mapped level", "mapped", "medium", "low", "Effort set to Low. " + model + " doesn't offer Medium."},
+		{"xhigh source", "mapped", "xhigh", "high", "Effort set to High. " + model + " doesn't offer XHigh."},
+		{"on source to level", "mapped_on", "on", "medium", "Effort set to Medium."},
+		{"ranked to switch", "switch_only", "high", "on", "Effort set to On. " + model + " only turns reasoning on or off."},
+		{"nothing sendable", "nothing_sendable", "high", "provider_default", "Effort set to Provider default. Omnipus can't change effort for " + model + "."},
+		{"unranked default", "unranked_default", "default", "provider_default", "Effort set to Provider default. " + model + " doesn't offer that setting."},
+		{"empty candidate", "empty_candidate", "high", "provider_default", "Effort set to Provider default. " + model + " offers no level here that High maps to."},
 	}
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.Expected, EffortSwitchNote(tc.kind, model, tc.source))
+			assert.Equal(t, tc.Expected, EffortSwitchNote(tc.kind, model, tc.source, tc.value))
 		})
 	}
 }
@@ -173,16 +174,17 @@ func TestT_S1_Mapping_TurnNotes(t *testing.T) {
 		name     string
 		kind     string
 		source   string
+		sent     string // FR-058 record: actual sent value, empty when not sent
 		Expected string
 	}{
-		{"sent as nearest", "mapped", "high", "Sent as Low: " + model + " doesn't offer High."},
-		{"not_supported neutral text", "not_supported", "off", "Effort not sent: " + model + " can't turn reasoning off."},
-		{"empty candidate at request time", "empty_candidate", "high", "Effort not sent: " + model + " offers no level here that high maps to."},
+		{"sent as nearest", "mapped", "high", "low", "Sent as Low: " + model + " doesn't offer High."},
+		{"not_supported neutral text", "not_supported", "off", "", "Effort not sent: " + model + " can't turn reasoning off."},
+		{"empty candidate at request time", "empty_candidate", "high", "", "Effort not sent: " + model + " offers no level here that high maps to."},
 	}
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.Expected, EffortTurnNote(tc.kind, model, tc.source))
+			assert.Equal(t, tc.Expected, EffortTurnNote(tc.kind, model, tc.source, tc.sent))
 		})
 	}
 }

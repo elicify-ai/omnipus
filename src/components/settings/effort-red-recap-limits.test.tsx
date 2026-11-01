@@ -121,7 +121,12 @@ const RECAP_CATALOG = {
  ].map(([id,levels])=>({id,name:id,context_window:128000,max_output_tokens:8192,input_modalities:['text'],tool_call:true,status:'active',reasoning:{levels,switch:false}}))}]
 } as unknown as ProvidersCatalog
 
-beforeEach(()=>{vi.mocked(fetchProvidersCatalog).mockResolvedValue(RECAP_CATALOG)})
+beforeEach(() => {
+  // S-93 call counts and queued one-off responses belong to this test only.
+  // Reset before the nested setups establish each case's API behavior.
+  vi.resetAllMocks()
+  vi.mocked(fetchProvidersCatalog).mockResolvedValue(RECAP_CATALOG)
+})
 
 function settings(overrides: Partial<typeof DEFAULT_LIMITS & typeof DEFAULT_SETTINGS> = {}): MemorySettings {
   return { ...DEFAULT_SETTINGS, ...DEFAULT_LIMITS, ...overrides } as unknown as MemorySettings

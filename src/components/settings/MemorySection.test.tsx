@@ -4,7 +4,7 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemorySection } from './MemorySection'
 import { fetchMemorySettings, updateMemorySettings, fetchProviders } from '@/lib/api'
-import type { Provider } from '@/lib/api'
+import type { MemorySettings, Provider } from '@/lib/api'
 
 // ResizeObserver is required by cmdk (used inside ModelSelector popovers);
 // jsdom does not implement it. Polyfill with a noop so popover-open tests work.
@@ -426,6 +426,11 @@ describe('MemorySection — H6 R2 duplicate-provider picks', () => {
 
   it('picking the recap PRIMARY model under the SECOND provider keeps THAT provider\'s row chosen on reopen', async () => {
     vi.mocked(fetchProviders).mockResolvedValue(DUAL_PROVIDERS)
+    vi.mocked(updateMemorySettings).mockClear()
+    let acknowledge!: (settings: MemorySettings) => void
+    vi.mocked(updateMemorySettings).mockImplementation(() => new Promise<MemorySettings>((resolve) => {
+      acknowledge = resolve
+    }))
     renderSection()
     await screen.findByText('Memory & Recap')
 
@@ -434,10 +439,24 @@ describe('MemorySection — H6 R2 duplicate-provider picks', () => {
     const rows = await vi.waitFor(() => optionRowsFor('gpt-6.1-sol'))
     expect(rows).toHaveLength(2)
     fireEvent.click(rows[1])
+    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(updateMemorySettings).mock.calls[0][0]
+    expect(body).toMatchObject({ recap_model: 'gpt-6.1-sol', recap_provider: 'openai-chatgpt' })
 
-    // Reopen: the check must sit on openai-chatgpt's row — NOT grok-local's,
-    // which a first-provider lookup would claim (pre-fix failure).
-    fireEvent.click(screen.getByTestId('recap-model-trigger'))
+    // FR-054: reopening during the slot autosave is forbidden. This guard
+    // now covers provider identity across ACKNOWLEDGED autosave, not a draft.
+    const primaryPicker = screen.getByTestId('recap-model-trigger')
+    expect(primaryPicker).toBeDisabled()
+    expect(screen.getByRole('button', { name: /save memory settings/i })).toBeDisabled()
+    fireEvent.click(primaryPicker)
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1)
+    await act(async () => { acknowledge({ ...DEFAULT_SETTINGS, ...body }) })
+    await waitFor(() => expect(primaryPicker).toBeEnabled())
+
+    // The acknowledged pair must choose openai-chatgpt's row, NOT the first
+    // provider that happens to serve the same slug (the original H6 intent).
+    fireEvent.click(primaryPicker)
     await vi.waitFor(() => optionRowsFor('gpt-6.1-sol'))
     const reopened = optionRowsFor('gpt-6.1-sol')
     expect(reopened).toHaveLength(2)

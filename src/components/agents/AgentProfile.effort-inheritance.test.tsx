@@ -29,17 +29,27 @@ const catalog = {
     [oldModel, ['none', 'low', 'high', 'max']], [target, ['low', 'medium', 'high']], [muted, []],
   ].map(([id, levels]) => ({ id, name: id, context_window: 128000, max_output_tokens: 8192, input_modalities: ['text'], tool_call: true, status: 'active', reasoning: { levels, switch: false } })) }],
 } as unknown as ProvidersCatalog
+const baselineUpdatedAt = '2026-11-01T06:00:00.000Z'
 const riding = { ...mockCoreAgent, id: 'effort-inherited', name: 'Effort inherited fixture', model: '', provider: '', reasoning_effort: null,
+  updated_at: baselineUpdatedAt,
   editable_fields: [...mockCoreAgent.editable_fields!, { name: 'reasoning_effort', editable: true }], fallback_models: [] } as unknown as Agent
+let acknowledgedAgent: Agent
 
 beforeEach(() => {
-  vi.mocked(fetchAgent).mockReset().mockResolvedValue(riding)
+  // Model the API edge, not a GET that permanently returns the pre-save row.
+  acknowledgedAgent = { ...riding }
+  let acknowledgedAt = Date.parse(baselineUpdatedAt)
+  vi.mocked(fetchAgent).mockReset().mockImplementation(async () => ({ ...acknowledgedAgent }))
   vi.mocked(fetchConfig).mockReset().mockResolvedValue({ agents: { defaults: { default_model: { provider: 'openrouter', model: oldModel, reasoning_effort: 'off' } } } } as unknown as Config)
   vi.mocked(fetchProvidersCatalog).mockReset().mockResolvedValue(catalog)
   vi.mocked(fetchProviders).mockReset().mockResolvedValue([{ id: 'openrouter', name: 'openrouter', display_name: 'OpenRouter', status: 'connected', models: [oldModel, target, muted], auth_method: 'api_key', dependents: [], backs_default: true }] as Provider[])
   vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   vi.mocked(fetchPerformanceSettings).mockReset().mockResolvedValue({ max_tool_iterations: 20 } as never)
-  vi.mocked(updateAgent).mockReset().mockImplementation(async (_id, body) => ({ ...riding, ...body }) as Agent)
+  vi.mocked(updateAgent).mockReset().mockImplementation(async (_id, body) => {
+    acknowledgedAt += 1000
+    acknowledgedAgent = { ...acknowledgedAgent, ...body, updated_at: new Date(acknowledgedAt).toISOString() } as Agent
+    return { ...acknowledgedAgent }
+  })
 })
 
 async function beginSwitch(to: string) {
