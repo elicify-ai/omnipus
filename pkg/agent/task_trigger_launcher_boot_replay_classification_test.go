@@ -1123,6 +1123,30 @@ func rsauditJSON(v any) string {
 	return string(data)
 }
 
+// countAuditRowsTaskReasonAtWarn counts the WARN audit rows naming taskID
+// whose reason field is exactly reason — R4's exactly-one oracle needs the
+// count, not only the presence auditRowNamesTaskAtWarn checks.
+func countAuditRowsTaskReasonAtWarn(rows []map[string]any, taskID, reason string) int {
+	n := 0
+	for _, r := range rows {
+		if sev, _ := r["severity"].(string); sev != "WARN" {
+			continue
+		}
+		evt, _ := r["event"].(string)
+		if evt == "" || !audit.IsValidEventName(audit.EventName(evt)) {
+			continue
+		}
+		if !strings.Contains(rsauditJSON(r), taskID) {
+			continue
+		}
+		fields, _ := r["fields"].(map[string]any)
+		if got, _ := fields["reason"].(string); got == reason {
+			n++
+		}
+	}
+	return n
+}
+
 // TestU2bBootReplay_HeldFire_TransientReadError_JobKept_Audited_ReplayedAtNextBoot
 // is addendum-12 W5 case (a), the chief's exact oracle. The defect
 // (pkg/agent/task_trigger_boot_hold.go::runHeldFire's error branch):
@@ -1377,7 +1401,10 @@ func TestU2bBootReplay_HeldFireAudit_BoundedReason_NoStoragePath(t *testing.T) {
 // behaviour: the job is KEPT (never removed while the required persistence
 // has not succeeded), an audit WARN names the task, and after the store
 // recovers the next boot settles the debt exactly once — one new failed run,
-// the task ending Failed. The update failure is real and targeted: the
+// the task ending Failed. The agent's absence is the real shape: a registry
+// removal (the task's AgentID is unchanged), at boot 2 and again at the
+// settle boot, since a fresh boot re-registers every configured agent. The
+// update failure is real and targeted: the
 // tasks directory is made read-only, so the task file's atomic write (which
 // creates its temp file in that directory) fails, while the already-created
 // runs directory stays writable and the failed-run recording succeeds.
@@ -1401,12 +1428,19 @@ func TestU2bBootReplay_HeldFireAgentGone_TaskUpdateFails_JobKept_SettledAtNextBo
 
 	readAudit := swapAuditLogger(t, p2.loop)
 
-	// The assignee stops existing, and the task store's directory goes
+	// The assignee stops existing — the REAL missing-agent shape, registry
+	// removal: the task's AgentID stays exactly as it is and the agent is
+	// simply no longer registered. (An AgentID patch here would instead make
+	// the next boot's restore see a job/task owner mismatch and apply the
+	// "changed while down: the edit wins" rule, so the fire would never be
+	// replayed — a different case.) The task store's directory also goes
 	// read-only: the failed-run recording (inside the existing runs dir)
 	// succeeds, the task-file update fails.
-	ghost := "retired-agent"
-	_, err := p2.loop.taskStore.Update(fire.taskID, task.Patch{AgentID: &ghost})
+	held, err := p2.loop.taskStore.Get(fire.taskID)
 	require.NoError(t, err)
+	require.NotEmpty(t, held.AgentID, "instrument: the held fire has an assignee")
+	require.True(t, p2.loop.GetRegistry().RemoveAgent(held.AgentID),
+		"instrument: the assignee is removed from the registry")
 	tasksDir := filepath.Join(home, "tasks")
 	require.NoError(t, os.Chmod(tasksDir, 0o555), "instrument: the task store dir is read-only")
 
@@ -1427,14 +1461,26 @@ func TestU2bBootReplay_HeldFireAgentGone_TaskUpdateFails_JobKept_SettledAtNextBo
 
 	p2.stop()
 	// The next boot, the store recovered: the debt settles exactly once.
-	p3 := bootU2bLauncherProcess(t, home, clk)
+	// Built as bootU2bLauncherProcess builds one, by hand, so the assignee
+	// can be absent from THIS boot's registry before its drain reaches the
+	// retained job — a fresh boot re-registers every configured agent, so
+	// the boot-2 removal does not carry across boots.
+	p3 := newU2bLauncherProcess(t, home, clk, completedWorkerForU2b())
+	settleBootTask, err := p3.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err, "instrument: the task survives into the settle boot")
+	require.True(t, p3.loop.GetRegistry().RemoveAgent(settleBootTask.AgentID),
+		"instrument: the assignee is absent from the settle boot's registry too")
+	p3.physicalBoot(t)
+	p3.runDueAndJoin(t)
 	runs := p3.runs(t, fire.taskID)
 	require.Len(t, runs, 3,
 		"R2: the next boot settles the retained debt exactly once — boot 1's abandoned run, "+
 			"the recorded failed run, and the settle's own failed run")
 	var settled *task.TaskRun
 	for i := range runs {
-		if runs[i].RunID != fire.run.RunID && runs[i].Status == task.StatusFailed && settled == nil {
+		// The break below makes this first-match-only, so a settled == nil
+		// guard here is provably tautological (govet nilness).
+		if runs[i].RunID != fire.run.RunID && runs[i].Status == task.StatusFailed {
 			settled = &runs[i]
 			break
 		}
@@ -1536,7 +1582,9 @@ func TestU2bBootReplay_HeldFireReplacedWhileUnwired_ReplacementRuns_OldFireNever
 			"the interrupted released run, and the replay")
 	var replay *task.TaskRun
 	for i := range runs {
-		if runs[i].RunID != fire.run.RunID && runs[i].Status == task.StatusDone && replay == nil {
+		// The break below makes this first-match-only, so a replay == nil
+		// guard here is provably tautological (govet nilness).
+		if runs[i].RunID != fire.run.RunID && runs[i].Status == task.StatusDone {
 			replay = &runs[i]
 			break
 		}
@@ -1561,8 +1609,12 @@ func TestU2bBootReplay_HeldFireReplacedWhileUnwired_ReplacementRuns_OldFireNever
 // has started but before the run is created — between runHeldFire's
 // classification read and runScheduledFire's re-read. Oracle: no run, the
 // job removed, and exactly ONE WARN audit row naming the task with reason
-// task_deleted (the inner deletion branches currently remove-and-nil without
-// any warning).
+// task_deleted. The interleaving point is the developer's test-only seam
+// SetHeldFireBeforeRunHookForTest (nil in production): runHeldFire calls it
+// after the classification read and the marker/agent checks, immediately
+// before runScheduledFire's re-read, so a deletion in the hook lands in
+// exactly that window. (Addendum-13 wrote this row BLOCKED because no
+// deterministic interleaving point existed; this seam is that hook.)
 func TestU2bBootReplay_HeldFireDeletedBetweenReads_OneAuditedWarning(t *testing.T) {
 	home, clk := t.TempDir(), newTriggerFakeClock()
 	worker := newU2bAsyncWorker()
@@ -1581,21 +1633,33 @@ func TestU2bBootReplay_HeldFireDeletedBetweenReads_OneAuditedWarning(t *testing.
 	require.Len(t, p2.runs(t, fire.taskID), 1,
 		"instrument: only boot 1's abandoned run exists — the held fire has not run")
 
-	// The deletion must land between runHeldFire's classification read and
-	// runScheduledFire's re-read (the real row would then swap in the audit
-	// logger, delete at the interleaving point, wire, and assert). No
-	// deterministic interleaving point exists:
-	t.Fatal("BLOCKED: no deterministic interleaving point exists between runHeldFire's " +
-		"classification read (pkg/agent/task_trigger_boot_hold.go) and runScheduledFire's " +
-		"re-read (pkg/agent/task_trigger.go) — the two reads are adjacent in the release " +
-		"callback with only in-memory steps between (marker check, registry check), " +
-		"pkg/task's Store is a concrete type with no test hook (its only injection point is " +
-		"the unexported writeFileAtomicFn package variable, unreachable from pkg/agent), and " +
-		"releaseSessionPlaneWaiters runs queued callbacks strictly in order, so a second " +
-		"waiter can never run between the two reads. Required seam: a test hook on the task " +
-		"store read path (or an equivalent scheduler-level hook) that can run a deletion " +
-		"between the two reads. Required by addendum-13 R4 (S4: a deletion in that window is " +
-		"removed-and-nil without the required WARN audit).")
+	readAudit := swapAuditLogger(t, p2.loop)
+
+	// The deletion lands inside the release, in the seam's window: the hook
+	// deletes the task through the real store between runHeldFire's read and
+	// runScheduledFire's re-read. A concurrent delete (another actor) is the
+	// scenario — the scheduler is not notified, so the held callback itself
+	// is what meets the deleted task.
+	SetHeldFireBeforeRunHookForTest(func(taskID string) {
+		require.Equal(t, fire.taskID, taskID, "instrument: the hook runs for the held fire's task")
+		_, delErr := p2.loop.taskStore.Delete(taskID)
+		require.NoError(t, delErr, "instrument: the task is deleted between the two reads")
+	})
+	t.Cleanup(func() { SetHeldFireBeforeRunHookForTest(nil) })
+
+	// Wire the plane: the release reads the task, the hook deletes it, the
+	// re-read misses — the deleted-between-reads outcome.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release against a task deleted between the reads", p2.loop.taskExecutor.wg.Wait)
+
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"R4: no run happens for a fire whose task was deleted between the release's two reads")
+	require.Empty(t, p2.storedJobs(t, fire.taskID),
+		"R4: the held job is removed once its task is gone")
+	require.Equal(t, 1, countAuditRowsTaskReasonAtWarn(readAudit(), fire.taskID, heldFireTaskDeleted),
+		"R4: exactly ONE WARN audit row must name the task with reason task_deleted — "+
+			"the inner deletion outcome must stay audible, not remove-and-nil silently")
+	p2.stop()
 }
 
 // TestU2bBootReplay_OrdinaryHeldFire_EditBeforeWiring_EditWins is
