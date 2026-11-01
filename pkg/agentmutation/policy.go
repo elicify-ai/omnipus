@@ -18,9 +18,21 @@ type FieldError struct {
 	Code   ErrorCode
 	Fields []string
 	Reason string
+	// Message, when set, is the complete user-facing sentence the spec pins
+	// for this refusal; Error returns it verbatim instead of the
+	// "<code>: fields <names>: <reason>" form.
+	Message string
 }
 
+// ExternalCLIEffortRefusal is the pinned refusal of reasoning_effort on an
+// external-CLI worker (effort-levels spec S-77): the worker runs its own CLI's
+// model settings, so no Omnipus effort applies.
+const ExternalCLIEffortRefusal = "reasoning_effort does not apply to external-CLI workers; they use their own CLI's model settings."
+
 func (e *FieldError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
 	return fmt.Sprintf("%s: fields %s: %s", e.Code, strings.Join(e.Fields, ", "), e.Reason)
 }
 
@@ -29,6 +41,7 @@ var knownFields = map[string]struct{}{
 	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "model": {}, "provider": {},
 	"fallback_models": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
 	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {}, "cli_path": {},
+	"reasoning_effort": {}, // the primary model's effort (effort-levels spec FR-048)
 	// AGENT.md beside SOUL.md (#1064), written by the update_agent tool; it
 	// follows soul's protection rules.
 	"agent_md": {},
@@ -59,7 +72,7 @@ type FieldDescriptor struct {
 	Reason   string
 }
 
-var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "voice", "type"}
+var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "reasoning_effort", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "voice", "type"}
 
 // metadataFileFields are the agent metadata files the update_agent tool writes
 // beside SOUL.md (#1064). They are described separately because the REST
@@ -102,6 +115,16 @@ func describeFields(agent config.AgentConfig, validate func(config.AgentConfig, 
 // ValidateFields validates a write to supplied agent fields: the ADR-090
 // role matrix.
 func ValidateFields(agent config.AgentConfig, supplied []string) error {
+	if agent.IsExternalCLIWorker() {
+		for _, field := range supplied {
+			if field == "reasoning_effort" {
+				return &FieldError{
+					Code: InvalidInput, Fields: []string{field},
+					Reason: ExternalCLIEffortRefusal, Message: ExternalCLIEffortRefusal,
+				}
+			}
+		}
+	}
 	var invalid []string
 	for _, field := range supplied {
 		if _, ok := knownFields[field]; !ok {

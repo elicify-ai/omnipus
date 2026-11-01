@@ -65,6 +65,7 @@ func (t *AgentGetTool) Execute(_ context.Context, args map[string]any) *tools.To
 		"memory_enabled": state.Agent.MemoryEnabled, "voice": state.Agent.Voice,
 		"context_window_override": state.Agent.ContextWindowOverride,
 		"model_params":            state.Agent.ModelParams,
+		"reasoning_effort":        storedEffortView(*state.Agent),
 	}
 	return tools.NewToolResult(successJSON(resp))
 }

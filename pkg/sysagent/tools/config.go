@@ -7,6 +7,7 @@ package systools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -47,7 +48,7 @@ func (t *ConfigGetTool) Execute(_ context.Context, args map[string]any) *tools.T
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "key is required", ""))
 	}
 	// Block reading sensitive keys by name.
-	if isSensitiveConfigName(key) {
+	if isSensitiveConfigPath(key) {
 		return tools.ErrorResult(errorJSON("FORBIDDEN",
 			"Credentials cannot be read via config.get — they are write-only",
 			"Use list_providers to see configured providers (without keys)",
@@ -113,7 +114,7 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	if !hasValue {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "value is required", ""))
 	}
-	if isSensitiveConfigName(key) {
+	if isSensitiveConfigPath(key) {
 		return tools.ErrorResult(errorJSON("FORBIDDEN",
 			"Use configure_provider to set API keys",
 			"Credentials are stored encrypted in credentials.json, not config.json",
@@ -137,7 +138,7 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	// window the lock exists to close: an instance created between the two
 	// reads could flip the deny-list verdict. Both checks now read the SAME
 	// locked cfg.
-	var denyErr, schemaErr, setErr, landErr error
+	var denyErr, schemaErr, setErr, landErr, inputErr error
 	var prevValue, storedValue any
 	var normalised []string
 	err := t.deps.withGenericConfigWrite(key, value, func(cfg *config.Config) error {
@@ -171,6 +172,12 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 		// call now: validateConfigKeyLands just proved key lands, so the
 		// walk below addresses the same field dotSet is about to write.
 		value = coerceValueToFieldKind(resolveConfigFieldKind(cfg, key), value)
+		// Effort values are checked after coercion and before the write
+		// (FR-060): a refused value saves nothing of this write.
+		if msg := checkConfigEffortValues(key, value); msg != "" {
+			inputErr = errors.New(msg)
+			return fmt.Errorf("INVALID_INPUT: %w", inputErr)
+		}
 		prevValue, _ = dotGet(cfg, key)
 		if err := dotSet(cfg, key, value); err != nil {
 			setErr = err
@@ -197,6 +204,10 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	if denyErr != nil {
 		return tools.ErrorResult(errorJSON("INVALID_KEY", denyErr.Error(),
 			"Use get_config to inspect available config keys"))
+	}
+	if inputErr != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", inputErr.Error(),
+			"Nothing was changed. Send each reasoning_effort as a string of at most 32 characters"))
 	}
 	if schemaErr != nil {
 		return tools.ErrorResult(errorJSON("INVALID_KEY", schemaErr.Error(),
@@ -993,7 +1004,7 @@ func redactConfigValue(path string, value any) any {
 			if path != "" {
 				childPath = path + "." + name
 			}
-			if isSensitiveConfigName(name) || configReadIsBlocked(childPath) {
+			if (isSensitiveConfigName(name) && !isNonSecretConfigPath(childPath)) || configReadIsBlocked(childPath) {
 				out[name] = redactedConfigValue
 				continue
 			}

@@ -139,7 +139,8 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model (e.g. 'openrouter'). Pins model resolution to this provider instead of inferring one from the slug.",
 			},
-			"fallback_models": fallbackModelsParameters(),
+			"fallback_models":  fallbackModelsParameters(),
+			"reasoning_effort": effortParameter(),
 			"heartbeat": map[string]any{
 				"type":        "string",
 				"description": "Proactive scheduling instructions (written to HEARTBEAT.md)",
@@ -1054,8 +1055,9 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "New personality/instructions (overwrites SOUL.md)",
 			},
-			"model":           map[string]any{"type": "string", "description": "New primary model slug"},
-			"fallback_models": fallbackModelsParameters(),
+			"model":            map[string]any{"type": "string", "description": "New primary model slug"},
+			"fallback_models":  fallbackModelsParameters(),
+			"reasoning_effort": effortParameter(),
 			"provider": map[string]any{
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",
