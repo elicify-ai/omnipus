@@ -264,7 +264,9 @@ func TestT11_StartAllowed_DatasetD2(t *testing.T) {
 			n:    13,
 			name: d2TelegramName,
 			inst: func() config.ChannelInstanceConfig {
-				return t11Instance(t, d2TelegramName, t11Workspace, t11Agent, true, "agent_may_start", "-100/45")
+				inst := t11Instance(t, d2TelegramName, t11Workspace, t11Agent, true, "agent_may_start", "-100/45")
+				inst.Type = "telegram"
+				return inst
 			},
 			avail:   Availability{State: AvailabilityRunning},
 			chat:    "-100/45",
