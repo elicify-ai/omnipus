@@ -34,6 +34,8 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -255,8 +257,76 @@ func TestT07_CredentialSavedNotSaved_SavedReferenceStillNamesR(t *testing.T) {
 }
 
 func TestT07_MultiSecretSecondStoreFailureNeedsSeam(t *testing.T) {
-	// S-47 shape 2: the implementation branch adds the package-level
-	// configureStoreCredential seam. It is absent on this pre-change base;
-	// directly naming it here would make the RED pack fail to compile.
-	t.Fatal("BLOCKED: configureStoreCredential exists only on the implementation branch, not this pre-change base; required by S-47 shape 2 / R3-MAJ-004 A / FR-056. Reconcile the seam into the authoring base before replacing this fatal with the real second-store failure case")
+	// S-47 shape 2 / FR-056: Slack's bot token is durably stored before the
+	// app-token write fails. Fault only the vault-write boundary, never the
+	// Configure handler or its classification of cumulative durable changes.
+	f := t02Fixture(t)
+	const botRef, appRef = "channel_slack_bot_token", "channel_slack_app_token"
+	const botSecret, appSecret = "qa-t07-bot-token-B", "qa-t07-app-token-B"
+	beforeDisk, err := os.ReadFile(f.f1277.configPath)
+	require.NoError(t, err)
+	beforeLive := f.al.GetConfig()
+	beforeA, beforeB := f.f1277.authorizedProbes.Load(), f.f1277.connectProbes.Load()
+	peer, exists := f.svc.ChannelManager.GetChannel("line.healthy")
+	require.True(t, exists, "instrument: a running peer detects an unwanted restart")
+	for _, ref := range []string{botRef, appRef} {
+		_, err = f.store.Get(ref)
+		require.Equal(t, &credentials.NotFoundError{Name: ref}, err, "instrument: neither request credential exists before the save")
+	}
+
+	logs := captureSlogWarn(t)
+	// Positive log control: an empty/misdirected capture must not prove that
+	// the failure path omitted secrets.
+	slog.Info("t07 credential-store capture instrument")
+	require.Contains(t, logs.String(), "t07 credential-store capture instrument")
+	previousStore := configureStoreCredential
+	t.Cleanup(func() { configureStoreCredential = previousStore })
+	var attempted []string
+	configureStoreCredential = func(a *restAPI, ref, secret string) error {
+		attempted = append(attempted, ref)
+		if ref == appRef {
+			return errors.New("t07 scripted second credential-store failure")
+		}
+		return previousStore(a, ref, secret) // real encrypted, durable write
+	}
+
+	rec := f.do(http.MethodPut, "/api/v1/channels/slack/configure",
+		`{"bot_token":"`+botSecret+`","app_token":"`+appSecret+`"}`)
+	require.Equal(t, []string{botRef, appRef}, attempted, "S-47 shape 2: the failing write follows the accepted write")
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	body := t07ErrorBody(t, rec)
+	requireWireCode(t, body, "credential_saved_not_saved", "S-47 second-secret failure")
+	require.Equal(t,
+		"The credential was saved, but the configuration change was not: nothing else was applied. "+
+			"The connection keeps its previous token until it next restarts; whether that restart picks the new value up "+
+			"depends on the credential reference the saved configuration holds (see below). Save again to retry — "+
+			"a successful re-save is the general recovery.",
+		body["error"], "S-47/FR-057: exact truthful reference-conditional partial-save text")
+	require.NotContains(t, rec.Body.String(), "could_not_save")
+	require.NotContains(t, rec.Body.String(), "nothing changed")
+
+	// Open the actual encrypted file afresh: a successful in-memory Set alone
+	// cannot prove S-47's durable partial outcome.
+	reopened := credentials.NewStore(filepath.Join(f.f1277.home, "credentials.json"))
+	require.NoError(t, credentials.Unlock(reopened))
+	t.Cleanup(reopened.Close)
+	stored, err := reopened.Get(botRef)
+	require.NoError(t, err)
+	require.Equal(t, botSecret, stored, "S-47: the bot token is durably accepted")
+	_, err = reopened.Get(appRef)
+	require.Equal(t, &credentials.NotFoundError{Name: appRef}, err, "S-47: the failed app-token write stores nothing")
+	afterDisk, err := os.ReadFile(f.f1277.configPath)
+	require.NoError(t, err)
+	require.Equal(t, beforeDisk, afterDisk, "S-47: the configuration file is byte-for-byte unchanged")
+	require.Same(t, beforeLive, f.al.GetConfig(), "S-47: no live configuration was published")
+	afterPeer, exists := f.svc.ChannelManager.GetChannel("line.healthy")
+	require.True(t, exists)
+	require.Same(t, peer, afterPeer, "S-47: no reload replaces the running peer")
+	require.Equal(t, beforeA, f.f1277.authorizedProbes.Load(), "S-47: no A restart probe")
+	require.Equal(t, beforeB, f.f1277.connectProbes.Load(), "S-47: no B restart probe")
+	require.Contains(t, logs.String(), "rest: configure channel failed", "instrument: actual production failure log was captured")
+	for _, secret := range []string{botSecret, appSecret, issue1277HealthyAccess, issue1277ConnectAccess} {
+		require.NotContains(t, rec.Body.String(), secret, "FR-053: no credential plaintext in the response")
+		require.NotContains(t, logs.String(), secret, "FR-053: no credential plaintext in captured production logs")
+	}
 }
