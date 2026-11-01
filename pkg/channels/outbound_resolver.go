@@ -8,6 +8,11 @@ import "context"
 // TargetErrLookupUnavailable.
 type OutboundTargetResult struct {
 	Code TargetErrorCode
+	// Reason is the T-9 refusal-specific reason when the refusal has one (a
+	// DM or group-DM channel, a channel the bot cannot see); empty means the
+	// code's catalog reason. In-process only: the writer copies it into the
+	// contract's target_errors[].reason after safe-echo sanitizing.
+	Reason string
 }
 
 // OutboundTargetResolver is implemented by a running adapter that can check

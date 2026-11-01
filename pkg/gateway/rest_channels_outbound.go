@@ -32,6 +32,8 @@ const (
 	// maxItems; outboundErrorMaxLen its error maxLength.
 	outboundMaxTargetErrors = 10
 	outboundErrorMaxLen     = 500
+	// outboundReasonMaxLen is target_errors[].reason's maxLength.
+	outboundReasonMaxLen = 120
 	// outboundHintLen is the number of safe-echo characters a target hint
 	// keeps before "...".
 	outboundHintLen = 20
@@ -133,7 +135,9 @@ func invalidTargetsRejection(errs []channels.TargetError) *outboundRejectionErro
 	items := make([]item, 0, min(len(errs), outboundMaxTargetErrors))
 	for _, e := range errs[:min(len(errs), outboundMaxTargetErrors)] {
 		it := item{Code: gen.ChannelOutboundRejectionTargetErrorsCode(e.Code), Index: e.Index, Target: outboundTargetHint(e.Raw)}
-		if reason, ok := outboundTargetReasons[e.Code]; ok {
+		if reason := truncateSafeEcho(e.Reason, outboundReasonMaxLen); reason != "" {
+			it.Reason = &reason
+		} else if reason, ok := outboundTargetReasons[e.Code]; ok {
 			it.Reason = &reason
 		}
 		items = append(items, it)
@@ -281,6 +285,7 @@ func (a *restAPI) lookUpDiscordTargets(ctx context.Context, id string, added []s
 		default:
 			refusal := rawIndex[target]
 			refusal.Code = res.Code
+			refusal.Reason = res.Reason
 			refused = append(refused, refusal)
 		}
 	}

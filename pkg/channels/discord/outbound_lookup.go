@@ -109,7 +109,26 @@ func (c *DiscordChannel) CachedPostableChannel(id string) bool {
 type discordTarget struct {
 	person bool                     // true: a user (start opens the DM); false: a postable channel
 	code   channels.TargetErrorCode // non-empty: refused
+	reason string                   // T-9 refusal-specific reason; empty: the code's catalog reason
 	cause  error                    // the call error behind a refusal, for the log
+}
+
+// The T-9 refusal-specific reasons (normative texts).
+const (
+	reasonUnpostableKind = "this kind of Discord channel cannot receive a posted message; " +
+		"use a text channel, announcement channel or thread id"
+	reasonUseUserID    = "use the person's user id instead"
+	reasonBotCannotSee = "the bot cannot see this channel"
+)
+
+// unsupportedKind is the refusal of a channel kind a message cannot be
+// posted to: DM and group-DM channels point at the person's user id instead.
+func unsupportedKind(kind discordgo.ChannelType) discordTarget {
+	reason := reasonUnpostableKind
+	if kind == discordgo.ChannelTypeDM || kind == discordgo.ChannelTypeGroupDM {
+		reason = reasonUseUserID
+	}
+	return discordTarget{code: channels.TargetErrUnsupportedChannelKind, reason: reason}
 }
 
 // resolveTarget runs T-9 steps 1–3 for a bare Discord id: the local cache,
@@ -121,7 +140,7 @@ func (c *DiscordChannel) resolveTarget(ctx context.Context, id string) discordTa
 			if supportedStartChannel(cached.Type) {
 				return discordTarget{}
 			}
-			return discordTarget{code: channels.TargetErrUnsupportedChannelKind}
+			return unsupportedKind(cached.Type)
 		}
 	}
 	channel, err := wrappedCall(ctx, func(options ...discordgo.RequestOption) (*discordgo.Channel, error) {
@@ -132,13 +151,13 @@ func (c *DiscordChannel) resolveTarget(ctx context.Context, id string) discordTa
 		if supportedStartChannel(channel.Type) {
 			return discordTarget{}
 		}
-		return discordTarget{code: channels.TargetErrUnsupportedChannelKind}
+		return unsupportedKind(channel.Type)
 	case err == nil:
 		return discordTarget{code: channels.TargetErrLookupUnavailable, cause: errors.New("empty channel response")}
 	case restErrorIs(err, http.StatusNotFound, discordgo.ErrCodeUnknownChannel):
 		// Not a channel: try a person (step 3).
 	case restErrorIs(err, http.StatusForbidden, discordgo.ErrCodeMissingAccess):
-		return discordTarget{code: channels.TargetErrNotFound, cause: err}
+		return discordTarget{code: channels.TargetErrNotFound, reason: reasonBotCannotSee, cause: err}
 	default:
 		return discordTarget{code: channels.TargetErrLookupUnavailable, cause: err}
 	}
@@ -166,7 +185,7 @@ func (c *DiscordChannel) ResolveOutboundTarget(ctx context.Context, canonical st
 			"target": canonical, "code": string(target.code), "error": target.cause.Error(),
 		})
 	}
-	return channels.OutboundTargetResult{Code: target.code}
+	return channels.OutboundTargetResult{Code: target.code, Reason: target.reason}
 }
 
 // sendStart delivers an Operation=start message (FR-046): a postable channel

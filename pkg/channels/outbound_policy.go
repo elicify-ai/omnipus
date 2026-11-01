@@ -63,6 +63,10 @@ type TargetError struct {
 	Raw   string
 	Code  TargetErrorCode
 	Index int
+	// Reason, when set, is a refusal-specific reason chosen by the check
+	// that refused the entry (T-9: a DM channel, a channel the bot cannot
+	// see); empty means the code's catalog reason.
+	Reason string
 }
 
 // maxCanonicalTargetLen is the contract bound on a stored canonical value,
