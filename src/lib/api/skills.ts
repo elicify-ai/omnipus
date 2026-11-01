@@ -16,6 +16,7 @@ import type {
   SkillSearchResult,
   SkillMarketplaceStatus,
   SkillInstallRequest,
+  SkillCopyRequest,
   ConfigurationMutationState,
   // Slash-command harmonization (contract-first #8):
   SlashCommand,
@@ -24,11 +25,23 @@ import { request } from './http'
 import { requestConfiguration } from './configuration'
 import { uploadFiles } from './uploads'
 
+/**
+ * The 409 code POST /skills/install returns when the replaced skill has local
+ * changes and the request did not confirm replacing them (skills spec r15 §5.6).
+ */
+export const LOCAL_CHANGES_CONFIRMATION_REQUIRED = 'LOCAL_CHANGES_CONFIRMATION_REQUIRED'
+
+/**
+ * installSkillFromFile installs an uploaded SKILL.md / zip package. Pass
+ * `replaceLocalChanges` only after the person confirmed replacing a skill
+ * whose `has_local_changes` is true; the replaced state stays in its history.
+ */
 export async function installSkillFromFile(
   file: File,
   uploadContextId: string,
   revision?: string,
   signal?: AbortSignal,
+  replaceLocalChanges = false,
 ): Promise<Skill> {
   const uploaded = await uploadFiles(uploadContextId, [file], undefined, signal)
   const uploadRef = uploaded.files[0]?.ref
@@ -38,6 +51,7 @@ export async function installSkillFromFile(
   const body: SkillInstallRequest = {
     upload_id: uploadRef,
     ...(revision ? { revision } : {}),
+    ...(replaceLocalChanges ? { replace_local_changes: true } : {}),
   }
   return requestConfiguration<Skill>(
     '/skills/install',
@@ -65,12 +79,25 @@ export async function searchSkills(q: string, limit = 20): Promise<SkillSearchRe
 /**
  * installSkillBySlug installs a marketplace skill by its slug via
  * POST /api/v1/skills/install with a SkillInstallRequest body
- * ({ slug, version? }). Returns the freshly installed Skill on success.
- * The backend returns 409 when the skill is already installed and 502 when
- * the registry is unreachable.
+ * ({ slug, version?, revision?, replace_local_changes? }). Returns the freshly
+ * installed Skill on success. The backend returns 409 when the skill is
+ * already installed, when the slug is a built-in name, and — with code
+ * LOCAL_CHANGES_CONFIRMATION_REQUIRED — when a replacement would discard
+ * local changes that `replaceLocalChanges` did not confirm; 502 when the
+ * registry is unreachable.
  */
-export async function installSkillBySlug(slug: string, version?: string, revision?: string): Promise<Skill> {
-  const body: SkillInstallRequest = { slug, ...(version ? { version } : {}), ...(revision ? { revision } : {}) }
+export async function installSkillBySlug(
+  slug: string,
+  version?: string,
+  revision?: string,
+  replaceLocalChanges = false,
+): Promise<Skill> {
+  const body: SkillInstallRequest = {
+    slug,
+    ...(version ? { version } : {}),
+    ...(revision ? { revision } : {}),
+    ...(replaceLocalChanges ? { replace_local_changes: true } : {}),
+  }
   return requestConfiguration<Skill>(
     '/skills/install',
     {
@@ -145,6 +172,22 @@ export async function fetchSkills(): Promise<Skill[]> {
     }
   }
   return out
+}
+
+/**
+ * copySkill copies an installed skill (built-in or user-owned) to a new
+ * user-owned skill via POST /api/v1/skills/{name}/copy. 201 returns the new
+ * Skill; 400 invalid name, 404 missing source, 409 name taken (any letter
+ * case) or reserved; 500 carries ConfigurationMutationFailureState and is
+ * raised as ConfigurationSaveError (skills spec r15 C-4, §5.8).
+ */
+export function copySkill(id: string, newId: string): Promise<Skill> {
+  const body: SkillCopyRequest = { new_id: newId }
+  return requestConfiguration<Skill>(
+    `/skills/${encodeURIComponent(id)}/copy`,
+    { method: 'POST', body: JSON.stringify(body) },
+    SkillSchema as ZodType<Skill>,
+  )
 }
 
 export function deleteSkill(id: string, revision: string): Promise<ConfigurationMutationState> {
