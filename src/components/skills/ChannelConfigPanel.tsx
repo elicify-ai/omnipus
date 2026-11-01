@@ -19,6 +19,7 @@ import {
   fetchChannelConfig,
   configureChannel,
   enableChannel,
+  fetchChannelOutbound,
   fetchChannelRouting,
   setChannelRouting,
   fetchAgents,
@@ -33,6 +34,12 @@ import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
 import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
 import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
+import type { ChannelConfigureResponse } from '@/lib/api/generated/openapi-types'
+import {
+  availabilityText,
+  describeConfigureOutcome,
+  type ConfigureOutcomeView,
+} from './channelConfigureOutcome'
 
 // CONFIGURED_SENTINEL is the backend's redaction placeholder for stored secrets
 // (pkg/gateway/rest.go redactChannelConfig). GET responses carry it instead of
@@ -645,12 +652,12 @@ export function ChannelConfigPanel({
       }
       return configureChannel(channelId, buildSubmitPayload())
     },
-    onSuccess: () => {
+    onSuccess: (response: ChannelConfigureResponse) => {
       isDirtyRef.current = false
       setFieldErrors({})
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
-      addToast({ message: 'Configuration saved', variant: 'success' })
+      showConfigureOutcome(channelId, describeConfigureOutcome(response, 'save'))
     },
     onError: (err: unknown) => {
       if (err instanceof Error && err.message === 'Please fill in the required fields') return
@@ -667,14 +674,22 @@ export function ChannelConfigPanel({
         focusFirstInvalidField(errors)
         throw new Error('Please fill in the required fields')
       }
-      await configureChannel(targetId, buildSubmitPayload())
+      const response = await configureChannel(targetId, buildSubmitPayload())
+      // T-6c: the save outcome is shown first; enable runs only after
+      // `applied` or `no_reload_needed`.
+      const outcome = describeConfigureOutcome(response, 'save-and-enable')
+      if (panelSessionRef.current === panelSession) showConfigureOutcome(targetId, outcome)
+      if (!outcome.mayEnable) return { enabled: false }
       if (panelSessionRef.current === panelSession) setConfiguredForEnable(targetId)
       await enableChannel(targetId)
+      return { enabled: true }
     },
-    onSuccess: (_, { channelId: targetId, panelSession }) => {
+    onSuccess: ({ enabled: didEnable }, { channelId: targetId, panelSession }) => {
       if (panelSessionRef.current !== panelSession) return
       isDirtyRef.current = false
       setFieldErrors({})
+      // Saved but not enabled: the outcome toast already told the operator why.
+      if (!didEnable) return
       // Keep WhatsApp's viewer open; enabled is not proof of a QR or linked phone.
       const hasPairingFlow = targetId.split('.')[0] === WHATSAPP_CHANNEL_ID
       addToast({
@@ -703,6 +718,21 @@ export function ChannelConfigPanel({
       ])
     },
   })
+
+  // T-6c: show a Configure outcome. For `failed` the panel then re-reads the
+  // connection's availability and, only when that read succeeds, adds the
+  // observed state; it never claims the old settings are still running.
+  function showConfigureOutcome(targetId: string, outcome: ConfigureOutcomeView) {
+    for (const toast of outcome.toasts) addToast(toast)
+    if (!outcome.readAvailability) return
+    fetchChannelOutbound(targetId).then(
+      (read) => addToast({ message: availabilityText(read.availability), variant: 'default' }),
+      () => {
+        // T-6c appends the state only "when that read succeeds"; the failed
+        // outcome's error toast is already shown and stands on its own.
+      },
+    )
+  }
 
   function setValue(key: string, value: unknown) {
     markDirty()
