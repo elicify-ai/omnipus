@@ -55,7 +55,6 @@ func TestGroupChat1449_HTTPMessageRules(t *testing.T) {
 	})
 
 	for _, validation := range []bool{false, true} {
-		validation := validation
 		t.Run(fmt.Sprintf("validation_%t empty text is 422 and stores nothing", validation), func(t *testing.T) {
 			h.cfg.Gateway.ValidateInbound = validation
 			before := len(h.snapshot(room.Id).Entries)
