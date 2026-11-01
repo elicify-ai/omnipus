@@ -126,6 +126,10 @@ func TestOfficePreview_RetryMissingIs403AndChangedIs409(t *testing.T) {
 				require.NoError(t, os.Remove(path))
 				require.NoFileExists(t, path)
 			} else {
+				// AD-6 takes admission before reading the source. Exercise the
+				// T-66 changed-source oracle with rendering available, rather
+				// than also satisfying the independent §5.2 503 condition.
+				officeRetrySharedRenderer(t)
 				changed := officepreview.PDF(2)
 				require.NotEqual(t, officeRetryDigest(data), officeRetryDigest(changed))
 				require.NoError(t, os.WriteFile(path, changed, 0600))
