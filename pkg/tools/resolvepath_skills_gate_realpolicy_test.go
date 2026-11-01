@@ -151,10 +151,12 @@ func TestReadGate_RealPolicy_InstructionFileStillRefused(t *testing.T) {
 
 	policy := realTurnPolicy(t, home, "", false)
 
-	_, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, skillFile)
+	handle, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, skillFile)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrCarveOut)
-	assert.Contains(t, err.Error(), "foo", "refusal identifies the ungranted target")
+	assert.Nil(t, handle, "ungranted folder yields no readable handle")
+	// r15 §6.1 uses the inventory refusal, not D10's withdrawn slug redirect.
+	// The public ErrCarveOut contract is generic; it does not expose the slug.
+	assert.Same(t, ErrCarveOut, err, "exact inventory sentinel, not an unrelated read error")
 }
 
 // TestReadGate_RealPolicy_InstructionFileRefusedViaSymlinkAlias closes the

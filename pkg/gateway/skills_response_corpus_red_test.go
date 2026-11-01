@@ -35,8 +35,9 @@ func TestRestS1119_ResponseCorpus(t *testing.T) {
 	}()
 	for _, leg := range []string{"install-cleanup", "install-partial", "copy-partial", "delete-rollback", "delete-rollback-failed"} {
 		t.Run(leg, func(t *testing.T) {
-			api, cleanup := newTestRestAPI(t)
-			defer cleanup()
+			// Marketplace gating is unchanged by r15; pipeline fault cases need
+			// the real enabled config, not newTestRestAPI's disabled default.
+			api := newTestRestAPIWithClawHub(t, true, "")
 			root := filepath.Join(api.homePath, "skills")
 			slug := "x"
 			rev := ""
@@ -61,6 +62,7 @@ func TestRestS1119_ResponseCorpus(t *testing.T) {
 			schema := "ConfigurationMutationFailureState"
 			switch leg {
 			case "install-cleanup", "install-partial":
+				require.True(t, api.marketplaceEnabled(), "enabled marketplace is a fixture prerequisite")
 				api.skillRegistry = &fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0"}}
 				method, path, query = http.MethodPost, "/api/v1/skills/install", ""
 				raw, err := json.Marshal(map[string]any{"slug": "x", "revision": rev, "replace_local_changes": true})

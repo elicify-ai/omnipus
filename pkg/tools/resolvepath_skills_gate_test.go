@@ -70,9 +70,9 @@ func skillGatePolicy(t *testing.T, home string, folders []string) fspolicy.FSPol
 	return policy
 }
 
-// TestReadGate_RegistrySkillRefusedViaFileTool (test 45, FR-057) — ADR-072
-// D10 Part A: a file-tool read of an installed registry skill file
-// ($OMNIPUS_HOME/skills/<slug>/SKILL.md) is refused.
+// TestReadGate_RegistrySkillRefusedViaFileTool preserves the ungranted
+// negative from test 45, FR-057. r15 §6.1 makes the whole ungranted registry
+// folder protected; the filename no longer selects a special redirect.
 func TestReadGate_RegistrySkillRefusedViaFileTool(t *testing.T) {
 	home := realTempDir(t)
 	t.Setenv(config.EnvHome, home)
@@ -157,15 +157,10 @@ func TestReadGate_MountProjectSkillReadable(t *testing.T) {
 	assert.Contains(t, string(data), "deploy")
 }
 
-// TestReadGate_RegistrySkillBundledFileReadable (test 48a, FR-061a/061b,
-// D10.3) — D10.3's narrowed Part A gates a registry skill's INSTRUCTION file
-// specifically, not its whole directory: a bundled sibling file (a helper
-// script, template, or reference file the skill's own SKILL.md tells the
-// agent to read or run) stays ordinarily readable via the file tool, even
-// for a skill in the acting agent's loadable set (r15 §6.1). This is a deliberate,
-// accepted cost (an author could hide instructions in a bundled file) traded
-// against the alternative, which breaks the ordinary "run the script next to
-// me" shape of a real skill.
+// TestReadGate_RegistrySkillBundledFileReadable preserves test 48a's helper
+// usability intent at r15 §6.1's supported boundary: the loadable set admits
+// the whole skill folder, including helpers. An ungranted helper no longer
+// has the unconditional read permission of the superseded D10.3 rule.
 func TestReadGate_RegistrySkillBundledFileReadable(t *testing.T) {
 	home := realTempDir(t)
 	t.Setenv(config.EnvHome, home)

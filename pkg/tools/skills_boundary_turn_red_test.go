@@ -149,25 +149,50 @@ func TestSkillsBoundary_InventoryWinsEveryEnclosingAuthority(t *testing.T) {
 	base, err := ResolveTurnFSPolicy(ctx, agentHome, true)
 	require.NoError(t, err)
 	path := filepath.Join(home, "skills", "other", "helper.md")
+	control := filepath.Join(home, "ordinary-control.txt")
+	require.NoError(t, os.WriteFile(control, []byte("ENCLOSING-MOUNT-CONTROL\n"), 0o600))
+	require.True(t, fspolicy.IsCarveOut(control, base), "control starts outside every base allowance")
 	for _, authority := range []string{"mount", "operator-path-grant", "setup-root", "workdir"} {
 		t.Run(authority, func(t *testing.T) {
 			pol := base
+			var validationCategory string
 			switch authority {
 			case "mount":
 				pol.AllowedRoots = []string{home}
-				pol.HomeGuard.Allow = append(pol.HomeGuard.Allow, fspolicy.AllowRoot{Path: home, Writable: true})
+				pol.HomeGuard.Allow = append(append([]fspolicy.AllowRoot(nil), base.HomeGuard.Allow...), fspolicy.AllowRoot{Path: home, Writable: true})
 			case "operator-path-grant":
 				pol.PathGrants = []fspolicy.PathGrant{{Path: home, Access: fspolicy.PathGrantAccessRead | fspolicy.PathGrantAccessWrite}}
+				validationCategory = "PathGrants entry"
 			case "setup-root":
 				pol.SetupRoots = []string{home}
+				validationCategory = "SetupRoots entry"
 			case "workdir":
 				pol.WorkDir = home
+				validationCategory = "WorkDir"
+			}
+			// §6.1 inventory precedence is supplementary for malformed policies:
+			// FSPolicy.Validate rejects these enclosing grants before resolution.
+			assert.True(t, fspolicy.IsCarveOut(path, pol), "inventory must veto the ungranted skill under %s", authority)
+			wantErr := ErrCarveOut
+			if validationCategory != "" {
+				require.ErrorContains(t, pol.Validate(), validationCategory)
+				wantErr = ErrPathInvalid
+			} else {
+				require.NoError(t, pol.Validate(), "valid mount reaches the inventory decision")
+				h, controlErr := ResolvePath(ctx, pol, "read_file", "mount-control", FSOpRead, control)
+				require.NoError(t, controlErr, "enclosing mount must actually admit an ordinary file")
+				require.NotNil(t, h)
+				b, readErr := h.ReadFile()
+				require.NoError(t, h.Close())
+				require.NoError(t, readErr)
+				assert.Equal(t, "ENCLOSING-MOUNT-CONTROL\n", string(b))
 			}
 			handle, err := ResolvePath(ctx, pol, "read_file", "boundary-call", FSOpRead, path)
 			if handle != nil {
 				require.NoError(t, handle.Close())
 			}
-			assert.ErrorIs(t, err, ErrCarveOut, "inventory must veto ordinary ungranted skill even under %s", authority)
+			assert.Nil(t, handle, "refusal must not expose a handle under %s", authority)
+			assert.ErrorIs(t, err, wantErr, "enclosing authority cannot admit an ungranted skill under %s", authority)
 		})
 	}
 }

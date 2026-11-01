@@ -6,7 +6,9 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -78,7 +81,10 @@ func runSkillAuthoringLoop(t *testing.T, home string, provider *testutil.Scenari
 	require.True(t, ok, "real workspace membership control")
 	_, _, err = workspace.CreateMount(home, wsID, "enclosing", filepath.Dir(home))
 	require.NoError(t, err)
-	loop.WireSysagentDeps(&systools.Deps{Home: home, GetCfg: func() *config.Config { return cfg }, SkillWriter: skills.NewSkillWriter(filepath.Join(home, "skills")), SkillsLoader: skills.NewSkillsLoader("", filepath.Join(home, "skills"), "")})
+	loop.WireSysagentDeps(&systools.Deps{Home: home, GetCfg: func() *config.Config { return cfg }, SkillWriter: skills.NewSkillWriter(filepath.Join(home, "skills")), SkillsLoader: skills.NewSkillsLoader("", filepath.Join(home, "skills"), ""), ResolveToolPolicy: loop.ResolveRegisteredToolPolicy})
+	policy, current := loop.ResolveRegisteredToolPolicy("mia", "edit_skill")
+	require.True(t, current, "real gateway policy callback resolves the live actor")
+	require.Equal(t, "ask", policy, "reader and writer share actual editor authority")
 	loop.SetToolApprover(approver)
 	final, err := loop.ProcessDirectAs(context.Background(), "mia", "perform the scripted skill changes", t.Name())
 	require.NoError(t, err)
@@ -89,7 +95,9 @@ func authoringCall(t *testing.T, p *testutil.ScenarioProvider, name string, args
 	t.Helper()
 	raw, err := json.Marshal(args)
 	require.NoError(t, err)
-	p.WithToolCall(name, string(raw))
+	// WithToolCall reuses <name>-0; consecutive writes need distinct IDs
+	// so both actual results remain independently observable.
+	p.WithToolCalls([]providers.ToolCall{{ID: name + "-" + strconv.Itoa(p.Remaining()), Function: &providers.FunctionCall{Name: name, Arguments: string(raw)}}})
 }
 
 func authoringResult(t *testing.T, p *testutil.ScenarioProvider, id string) string {
@@ -205,8 +213,11 @@ func TestSkillAuthoring_ConsentFlow_DenyBlocksExecute(t *testing.T) {
 				changed := original + "\nChanged after approval.\n"
 				p := testutil.NewScenario()
 				if operation == "edit" {
-					validSkillFixture(t, root, "consent", "A consent fixture")
-					original = string(wu3ReadFile(t, path))
+					// No separator blank line: the projected body is unambiguous;
+					// this consent test does not invent a whitespace-trimming rule.
+					original = "---\nname: consent\ndescription: A consent fixture\n---\nBody of consent.\n"
+					require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+					require.NoError(t, os.WriteFile(path, []byte(original), 0o644))
 					authoringCall(t, p, "ToolSearch", map[string]any{"names": []any{"get_skill"}})
 					authoringCall(t, p, "get_skill", map[string]any{"id": "consent", "fields": []any{"instructions"}})
 				}
@@ -218,6 +229,13 @@ func TestSkillAuthoring_ConsentFlow_DenyBlocksExecute(t *testing.T) {
 				p.WithText("done")
 				recorder := &skillDecisionRecorder{allow: allow}
 				runSkillAuthoringLoop(t, home, p, recorder)
+				if operation == "edit" {
+					var read map[string]any
+					require.NoError(t, json.Unmarshal([]byte(authoringResult(t, p, "get_skill-1")), &read))
+					require.NotContains(t, read, "error", "edit fixture must first observe the real skill")
+					require.Equal(t, "consent", read["id"], "§5.2 identity key identifies the actual observed skill")
+					require.Equal(t, "Body of consent.\n", read["instructions"], "§5.2 returns exact fixture body without frontmatter")
+				}
 				require.Len(t, recorder.requests, 1, "exactly one ordinary approval, no second ritual")
 				assert.Equal(t, "write_file", recorder.requests[0].ToolName)
 				assert.Equal(t, args, recorder.requests[0].Args)
