@@ -78,6 +78,27 @@ func t13Fixture(t *testing.T, platform, state, policy string, targets []string) 
 	return f, adapter
 }
 
+// S-22 changes a previously configured connection without re-entering its token.
+// Other writer rows need no credential, so keep this precondition local to S-22.
+func t13ConfiguredTelegramFixture(t *testing.T) *wu6Fixture {
+	t.Helper()
+	f, _ := t13Fixture(t, "telegram", "disabled", "reply_only", []string{})
+	const ref = "QA_T13_TELEGRAM_TOKEN"
+	const token = "qa-t13-synthetic-telegram-token"
+	require.NoError(t, f.store.Set(ref, token))
+	require.NoError(t, f.al.MutateConfig(func(cfg *config.Config) error {
+		inst := cfg.Channels["telegram"]
+		inst.TokenRef = ref
+		cfg.Channels["telegram"] = inst
+		return config.SaveConfig(f.f1277.configPath, cfg)
+	}))
+	stored, err := f.store.Get(ref)
+	require.NoError(t, err, "instrument: omitted Configure token is already stored")
+	require.Equal(t, token, stored)
+	require.Equal(t, ref, f.al.GetConfig().Channels["telegram"].TokenRef)
+	return f
+}
+
 type t13SavedState struct {
 	disk []byte
 	live *config.Config

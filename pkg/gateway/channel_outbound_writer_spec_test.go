@@ -157,7 +157,7 @@ func TestT13_Writer_ForumAdditionRefusedForBothPoliciesAndCannotPolluteLaterFlip
 }
 
 func TestT13_Writer_ConfigureInvalidatesTheConflictTokenThenFreshReadCanCommit(t *testing.T) {
-	f, _ := t13Fixture(t, "telegram", "disabled", "reply_only", []string{})
+	f := t13ConfiguredTelegramFixture(t)
 	r1 := t14Read(t, f, "telegram").Revision
 	configured := t14Request(t, f, http.MethodPut, "/api/v1/channels/telegram/configure", `{"allow_from":["qa-new-sender"]}`, true)
 	require.Equal(t, http.StatusOK, configured.Code, "S-22: real Configure establishes concurrent connection change: %s", configured.Body.String())
