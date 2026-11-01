@@ -236,7 +236,7 @@ func TestCreate_ValidSlugBoundaries(t *testing.T) {
 				}
 				entries, readErr := os.ReadDir(root)
 				require.NoError(t, readErr)
-				var names []string
+				names := make([]string, 0, len(entries))
 				for _, entry := range entries {
 					names = append(names, entry.Name())
 				}

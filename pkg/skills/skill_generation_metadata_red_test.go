@@ -34,8 +34,8 @@ func TestGenerationMetadata_ExcludedFromRevisionCaptureRestoreAndSecretScan(t *t
 	}
 	result, v2 := commitWrite(t, root, "foo", "notes.md", "safe note\n", rev)
 	for _, id := range []string{v1, v2} {
-		raw, err := os.ReadFile(filepath.Join(SkillHistoryRoot(root), "foo", "versions", id+".json"))
-		require.NoError(t, err)
+		raw, readErr := os.ReadFile(filepath.Join(SkillHistoryRoot(root), "foo", "versions", id+".json"))
+		require.NoError(t, readErr)
 		var manifest map[string]any
 		require.NoError(t, json.Unmarshal(raw, &manifest))
 		files, ok := manifest["files"].([]any)

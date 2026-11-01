@@ -98,16 +98,27 @@ func TestSensitiveNamedValues_OAuthSubValues(t *testing.T) {
 // fails closed with SECRET_CHECK_UNAVAILABLE.
 // Traces to: skills-spec-r15.md §7.4, S-4.5.
 func TestSensitiveNamedValues_LockedStore(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("OMNIPUS_HOME", home)
-	store := NewStore(filepath.Join(home, "credentials.json"))
+	unlocked := newUnlockedStoreWith(t, [2]string{"LOCKED_REF", "synthetic-locked-value"})
+	require.Equal(t, map[string]string{"LOCKED_REF": "synthetic-locked-value"}, namedValuesIndex(t, unlocked),
+		"fixture control: the persisted encrypted entry is readable before locking")
+	path := unlocked.Path()
+	require.FileExists(t, path, "a locked existing store is distinct from a missing file")
+	unlocked.Close()
+	require.True(t, unlocked.IsLocked(), "the fixture released its key")
+	store := NewStore(path)
+	require.True(t, store.IsLocked(), "reopening the persisted store does not unlock it")
+	require.True(t, store.Exists(), "the new locked handle still has an existing store")
+	before, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
 
 	pairs, err := store.SensitiveNamedValues()
-	require.Error(t, err, "RED: the scaffold returns an error for the wrong reason")
+	require.Error(t, err, "an existing store without its key must refuse enumeration")
 	assert.True(t, errors.Is(err, ErrStoreLocked),
 		"a locked store refuses with ErrStoreLocked (the save check maps it to SECRET_CHECK_UNAVAILABLE), got: %v", err)
 	assert.Nil(t, pairs, "no values leak from a locked store")
+	after, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, before, after, "a refused read never changes the encrypted store")
 }
 
 // TestSensitiveNamedValues_DamagedEntryScopes (S-4.5 leg 3).
@@ -158,10 +169,13 @@ func TestSensitiveNamedValues_MissingStoreFile(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("OMNIPUS_HOME", home)
 	store := NewStore(filepath.Join(home, "credentials.json"))
+	require.True(t, store.IsLocked(), "no key was supplied, but no encrypted data exists either")
+	require.NoFileExists(t, store.Path(), "fixture control: the file is absent")
 
 	pairs, err := store.SensitiveNamedValues()
 	require.NoError(t, err, "a missing store file is an allowed empty enumeration")
 	assert.Empty(t, pairs, "no values without a store file")
+	assert.NoFileExists(t, store.Path(), "read-only enumeration does not create a store")
 }
 
 // unmarshalStoreFile/marshalStoreFile wrap the JSON round-trip for the

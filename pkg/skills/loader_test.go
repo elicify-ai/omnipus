@@ -203,7 +203,7 @@ func TestListSkillsSeparatesIDFromDisplayName(t *testing.T) {
 func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
 	tmp := t.TempDir()
 	dest := filepath.Join(tmp, "skills")
-	_, err := SeedDefaults(dest)
+	_, err := SyncBuiltins(dest, nil)
 	require.NoError(t, err)
 
 	sl := NewSkillsLoader(filepath.Join(tmp, "ws"), dest, "")

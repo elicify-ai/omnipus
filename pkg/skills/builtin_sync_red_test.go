@@ -115,28 +115,35 @@ func ageDir(t *testing.T, dir string, at time.Time) {
 	require.NoError(t, os.Chtimes(dir, at, at))
 }
 
-// seededGrants models N agents holding one name; RemoveGrant clears them.
+// seededGrants models the roster edge, with independent per-agent grant lists.
+// Only RemoveGrant is exposed to production (§8.2); tests inspect final state.
 type seededGrants struct {
-	seeded  map[string][]string // skill key -> agent ids
+	seeded  map[string][]string // agent id -> grant names
 	removed []string
-	failOn  string // remove of this name fails (S-7.9 uses install failure instead)
 }
+
+var _ GrantEditor = (*seededGrants)(nil)
 
 func newSeededGrants(name string, agents ...string) *seededGrants {
 	g := &seededGrants{seeded: map[string][]string{}}
-	g.seeded[strings.ToLower(name)] = agents
+	for _, agent := range agents {
+		g.seeded[agent] = []string{name, "keep-" + agent}
+	}
 	return g
 }
 
 func (g *seededGrants) RemoveGrant(name string) error {
-	key := strings.ToLower(name)
-	g.removed = append(g.removed, key)
-	delete(g.seeded, key)
+	g.removed = append(g.removed, strings.ToLower(name))
+	for agent, names := range g.seeded {
+		kept := make([]string, 0, len(names))
+		for _, grant := range names {
+			if !strings.EqualFold(grant, name) {
+				kept = append(kept, grant)
+			}
+		}
+		g.seeded[agent] = kept
+	}
 	return nil
-}
-
-func (g *seededGrants) holders(name string) []string {
-	return g.seeded[strings.ToLower(name)]
 }
 
 // TestSyncBuiltins_StartupMatrix (S-7.1 + D-6 rows for a current built-in):
@@ -258,7 +265,10 @@ func TestSyncBuiltins_EditedUnstampedOverwritten_NoCustomCopy(t *testing.T) {
 		"the replaced folder carries a fresh generation stamp (§8.2 r15)")
 	_, err = os.Stat(filepath.Join(root, "plan-custom"))
 	assert.True(t, os.IsNotExist(err), "no <slug>-custom copy is kept (F-28)")
-	assert.Len(t, grants.holders("plan"), 2, "a current built-in's grants are untouched")
+	assert.Equal(t, map[string][]string{
+		"agent-a": {"plan", "keep-agent-a"},
+		"agent-b": {"plan", "keep-agent-b"},
+	}, grants.seeded, "a current built-in's complete grant lists are untouched")
 	assert.Empty(t, grants.removed, "no grant removal for a current built-in")
 }
 
@@ -334,19 +344,28 @@ func TestRetireBuiltins_StampedFolderDeleted_GrantRemoved(t *testing.T) {
 	for i := range agents {
 		agents[i] = "agent-" + string(rune('a'+i))
 	}
-	grants := newSeededGrants("handoff", agents...)
+	grants := newSeededGrants("HaNdOfF", agents...)
+	want := map[string][]string{"non-holder": {"unrelated-skill"}}
+	grants.seeded["non-holder"] = []string{"unrelated-skill"}
+	for _, agent := range agents {
+		require.Equal(t, []string{"HaNdOfF", "keep-" + agent}, grants.seeded[agent], "fixture holder %s", agent)
+		want[agent] = []string{"keep-" + agent}
+	}
 	report := &SyncReport{}
 
 	require.NoError(t, RetireBuiltins(root, grants, report),
 		"RED: RetireBuiltins not implemented on the baseline")
 
-	assert.Empty(t, grants.holders("handoff"), "the name is removed from all 12 agents")
+	assert.Contains(t, grants.removed, "handoff", "the contractual removal was requested by skill key")
+	assert.Equal(t, want, grants.seeded, "all 12 holders lose only the retired grant; non-holders stay unchanged")
 	_, statErr := os.Stat(handoffDir)
 	assert.True(t, os.IsNotExist(statErr), "the stamped retired folder is deleted")
-	require.Len(t, report.Retired, 1, "one retirement outcome reported")
-	assert.Equal(t, "handoff", report.Retired[0].Slug)
-	assert.True(t, report.Retired[0].FolderDeleted, "folder deleted reported (skill.builtin_retired)")
-	assert.Len(t, report.Retired[0].AgentsChanged, 12, "all 12 agents changed")
+	outcome := findRetirement(report.Retired, "handoff")
+	require.NotNil(t, outcome, "the stamped-folder retirement is reported before dereferencing it")
+	assert.True(t, outcome.FolderDeleted, "folder deleted reported (skill.builtin_retired)")
+	assert.False(t, outcome.Kept, "the stamped folder was deleted, not kept")
+	// RemoveGrant returns only an error: no agent-count claim can be derived
+	// through this seam. The exact roster-state assertion above proves removal.
 }
 
 // TestRetireBuiltins_DanglingNameRemoved (S-7.7): no summarize folder; the
@@ -354,14 +373,29 @@ func TestRetireBuiltins_StampedFolderDeleted_GrantRemoved(t *testing.T) {
 // Traces to: skills-spec-r15.md §8.4 (no-folder row), S-7.7.
 func TestRetireBuiltins_DanglingNameRemoved(t *testing.T) {
 	root := t.TempDir()
-	grants := newSeededGrants("summarize", "agent-a")
+	grants := newSeededGrants("SuMmArIzE", "agent-a", "agent-b")
+	require.Equal(t, map[string][]string{
+		"agent-a": {"SuMmArIzE", "keep-agent-a"},
+		"agent-b": {"SuMmArIzE", "keep-agent-b"},
+	}, grants.seeded, "both agents start with the dangling grant")
 	report := &SyncReport{}
 
 	require.NoError(t, RetireBuiltins(root, grants, report),
 		"RED: RetireBuiltins not implemented on the baseline")
-	assert.Empty(t, grants.holders("summarize"), "dangling retired name removed from grants")
-	assert.Len(t, report.Retired, 1)
-	assert.False(t, report.Retired[0].FolderDeleted, "no folder existed to delete")
+	assert.Contains(t, grants.removed, "summarize", "absent folders still trigger removal")
+	assert.Equal(t, map[string][]string{
+		"agent-a": {"keep-agent-a"},
+		"agent-b": {"keep-agent-b"},
+	}, grants.seeded, "every dangling holder loses only the retired name")
+	assert.NoDirExists(t, filepath.Join(root, "summarize"), "retirement never creates the absent folder")
+	// §8.4 requires the grant side effect, not a report entry for an absent
+	// folder. Inspect any emitted entry without assuming one or indexing it.
+	for _, outcome := range report.Retired {
+		if strings.EqualFold(outcome.Slug, "summarize") {
+			assert.False(t, outcome.FolderDeleted, "no folder existed to delete")
+			assert.False(t, outcome.Kept, "no unstamped folder existed to keep")
+		}
+	}
 }
 
 // TestRetireBuiltins_UnstampedFolderKept (S-7.8): an unstamped retired folder
@@ -377,9 +411,12 @@ func TestRetireBuiltins_UnstampedFolderKept(t *testing.T) {
 		"RED: RetireBuiltins not implemented on the baseline")
 
 	assert.FileExists(t, filepath.Join(summarizeDir, "SKILL.md"), "the unstamped folder is untouched")
-	assert.Len(t, grants.holders("summarize"), 1, "the grant is untouched")
-	require.Len(t, report.Retired, 1)
-	assert.True(t, report.Retired[0].Kept, "reported kept (skill.builtin_retired_kept, once per start)")
+	assert.Equal(t, map[string][]string{"agent-a": {"summarize", "keep-agent-a"}}, grants.seeded, "every grant is untouched")
+	assert.NotContains(t, grants.removed, "summarize", "no removal was requested for the unstamped folder")
+	outcome := findRetirement(report.Retired, "summarize")
+	require.NotNil(t, outcome, "the kept-folder outcome exists before dereferencing it")
+	assert.True(t, outcome.Kept, "reported kept (skill.builtin_retired_kept, once per start)")
+	assert.False(t, outcome.FolderDeleted, "the kept folder was not reported deleted")
 }
 
 // TestRetireBuiltins_SkippedWhenABuiltinInstallFailed (S-7.9): a current
@@ -414,7 +451,8 @@ func TestRetireBuiltins_SkippedWhenABuiltinInstallFailed(t *testing.T) {
 	assert.FileExists(t, filepath.Join(summarizeDir, "SKILL.md"),
 		"retirement skipped: the stamped retired folder is untouched")
 	assert.Empty(t, report.Retired, "no retirement outcome recorded when a current built-in failed")
-	assert.Len(t, grants.holders("summarize"), 1, "no grant removal when retirement is skipped")
+	assert.Equal(t, map[string][]string{"agent-a": {"summarize", "keep-agent-a"}}, grants.seeded, "no grant changes when retirement is skipped")
+	assert.Empty(t, grants.removed, "skipped retirement never calls the editor")
 }
 
 // findOutcome returns the outcome for slug, or nil.
@@ -427,8 +465,13 @@ func findOutcome(outcomes []BuiltinOutcome, slug string) *BuiltinOutcome {
 	return nil
 }
 
-// errorMentionsNotImplemented reports whether err is (or wraps) the RED
-// scaffold sentinel — the expected baseline failure for unimplemented APIs.
-func errorMentionsNotImplemented(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "RED scaffold")
+// findRetirement selects only the named fact; the one-method editor cannot
+// certify how many other names had grants or must produce report entries.
+func findRetirement(outcomes []RetiredOutcome, slug string) *RetiredOutcome {
+	for i := range outcomes {
+		if strings.EqualFold(outcomes[i].Slug, slug) {
+			return &outcomes[i]
+		}
+	}
+	return nil
 }

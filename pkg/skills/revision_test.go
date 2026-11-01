@@ -4,54 +4,57 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestReviewedSkillMutationsRejectStaleRevisionWithoutWrites(t *testing.T) {
-	w := NewSkillWriter(t.TempDir())
-	if _, _, err := w.CreateSkillReviewed("release", validFor("release")); err != nil {
-		t.Fatal(err)
-	}
-	reviewed, err := w.SkillRevision("release")
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := validFor("release") + "\nFirst writer.\n"
-	if _, _, _, err = w.EditSkillReviewed("release", first, false, reviewed); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(filepath.Join(w.Root(), "release", "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, err = w.EditSkillReviewed("release", validFor("release")+"\nStale writer.\n", false, reviewed); !errors.Is(err, ErrRevisionConflict) {
-		t.Fatalf("stale edit err=%v", err)
-	}
-	after, err := os.ReadFile(filepath.Join(w.Root(), "release", "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(after) != string(before) {
-		t.Fatal("stale edit changed persisted bytes")
-	}
+// createAuthoredSkill keeps registry fixtures on the real r15 §7.1 pipeline.
+func createAuthoredSkill(t *testing.T, root, slug, content string) PublishOutcome {
+	t.Helper()
+	out, err := ApplyChange(root, ChangeRequest{Kind: KindCreate, Slug: slug,
+		Content: []byte(content), Expect: Expectation{Absent: true},
+		Actor: ChangeActor{Kind: "person", Tool: "write_file"}})
+	require.NoError(t, err, "fixture creation must commit before the tested mutation")
+	require.Equal(t, PersistenceComplete, out.PersistenceStatus)
+	require.Equal(t, content, readFile(t, filepath.Join(root, slug, "SKILL.md")))
+	require.Equal(t, out.Revision, readLiveRevision(t, filepath.Join(root, slug)))
+	return out
 }
 
+// §7.3/§15 E-2: preserve the stale-writer safety intent at the one pipeline.
+func TestReviewedSkillMutationsRejectStaleRevisionWithoutWrites(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	created := createAuthoredSkill(t, root, "release", validFor("release"))
+	first := validFor("release") + "\nFirst writer.\n"
+	committed, _ := commitWrite(t, root, "release", "SKILL.md", first, created.Revision)
+	beforeHistory := manifestIDs(t, SkillHistoryRoot(root), "release")
+	out, err := ApplyChange(root, ChangeRequest{Kind: KindEdit, Slug: "release", Path: "SKILL.md",
+		Content: []byte(validFor("release") + "\nStale writer.\n"), Expect: Expectation{Revision: created.Revision}})
+	require.ErrorIs(t, err, ErrSkillChanged)
+	assert.Contains(t, err.Error(), "skill 'release' changed since you read it (now "+committed.Revision[:8]+" by agent-a); read it again with get_skill, Skill or read_file")
+	assert.Equal(t, PersistenceNone, out.PersistenceStatus)
+	assert.Equal(t, first, readFile(t, filepath.Join(root, "release", "SKILL.md")), "stale edit changes no byte")
+	assert.Equal(t, beforeHistory, manifestIDs(t, SkillHistoryRoot(root), "release"), "no refused-write version")
+}
+
+// §15 E-1: independent concurrent callers share no writer instance.
 func TestReviewedCreateRequiresAbsenceAndConcurrentWritersHaveOneWinner(t *testing.T) {
-	w1 := NewSkillWriter(t.TempDir())
-	w2 := NewSkillWriter(w1.Root())
+	root := filepath.Join(t.TempDir(), "skills")
 	start := make(chan struct{})
 	errs := make(chan error, 2)
 	var wg sync.WaitGroup
-	for _, w := range []*SkillWriter{w1, w2} {
+	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		go func(writer *SkillWriter) {
+		go func() {
 			defer wg.Done()
 			<-start
-			_, _, err := writer.CreateSkillReviewed("race", validFor("race"))
+			_, err := ApplyChange(root, ChangeRequest{Kind: KindCreate, Slug: "race",
+				Content: []byte(validFor("race")), Expect: Expectation{Absent: true}})
 			errs <- err
-		}(w)
+		}()
 	}
 	close(start)
 	wg.Wait()
@@ -61,191 +64,166 @@ func TestReviewedCreateRequiresAbsenceAndConcurrentWritersHaveOneWinner(t *testi
 		switch {
 		case err == nil:
 			wins++
-		case errors.Is(err, ErrAlreadyExists):
+		case errors.Is(err, ErrSkillExists):
 			conflicts++
+			assert.Contains(t, err.Error(), "skill 'race' already exists; read it first")
 		default:
 			t.Fatalf("unexpected create error: %v", err)
 		}
 	}
-	if wins != 1 || conflicts != 1 {
-		t.Fatalf("wins=%d conflicts=%d", wins, conflicts)
-	}
+	assert.Equal(t, 1, wins, "exactly one expected-absence caller commits")
+	assert.Equal(t, 1, conflicts, "the other caller gets only SKILL_EXISTS")
+	assert.Equal(t, validFor("race"), readFile(t, filepath.Join(root, "race", "SKILL.md")))
+	assert.Len(t, manifestIDs(t, SkillHistoryRoot(root), "race"), 1, "only the winner records a creation")
 }
 
+// §7.3/§15 E-12: a bad revision cannot delete; the current one can.
 func TestReviewedRemoveRequiresCurrentRevision(t *testing.T) {
-	w := NewSkillWriter(t.TempDir())
-	_, revision, err := w.CreateSkillReviewed("cleanup", validFor("cleanup"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = w.RemoveSkillReviewed("cleanup", "missing-review"); !errors.Is(err, ErrRevisionConflict) {
-		t.Fatalf("wrong revision err=%v", err)
-	}
-	if _, err = os.Stat(filepath.Join(w.Root(), "cleanup", "SKILL.md")); err != nil {
-		t.Fatalf("conflict removed skill: %v", err)
-	}
-	if err = w.RemoveSkillReviewed("cleanup", revision); err != nil {
-		t.Fatal(err)
-	}
+	root := filepath.Join(t.TempDir(), "skills")
+	created := createAuthoredSkill(t, root, "cleanup", validFor("cleanup"))
+	_, err := ApplyChange(root, ChangeRequest{Kind: KindDelete, Slug: "cleanup", Expect: Expectation{Revision: "missing-review"}})
+	require.ErrorIs(t, err, ErrSkillChanged)
+	assert.Equal(t, validFor("cleanup"), readFile(t, filepath.Join(root, "cleanup", "SKILL.md")), "conflict preserves the exact skill")
+	out, err := ApplyChange(root, ChangeRequest{Kind: KindDelete, Slug: "cleanup", Expect: Expectation{Revision: created.Revision}})
+	require.NoError(t, err)
+	assert.Equal(t, PersistenceComplete, out.PersistenceStatus)
+	assert.NoDirExists(t, filepath.Join(root, "cleanup"))
+	ids := manifestIDs(t, SkillHistoryRoot(root), "cleanup")
+	require.Len(t, ids, 2, "create and deletion both recorded")
+	assert.Equal(t, "delete_skill", manifestField(t, SkillHistoryRoot(root), "cleanup", ids[0], "kind"))
 }
 
-func TestPublishStagedSkillRequiresExplicitCurrentRevisionAndPreservesAssets(t *testing.T) {
-	root := t.TempDir()
-	w := NewSkillWriter(root)
-	_, _, err := w.CreateSkillReviewed("package", validFor("package"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	asset := filepath.Join(root, "package", "scripts", "helper.py")
-	if err = os.MkdirAll(filepath.Dir(asset), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(asset, []byte("old"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	reviewed, err := w.SkillRevision("package")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	makeStage := func(body, helper string) string {
-		stage := filepath.Join(root, ".staging", body)
-		if mkdirErr := os.MkdirAll(filepath.Join(stage, "scripts"), 0o755); mkdirErr != nil {
-			t.Fatal(mkdirErr)
-		}
-		if writeErr := os.WriteFile(filepath.Join(stage, "SKILL.md"), []byte(validFor("package")+"\n"+body), 0o644); writeErr != nil {
-			t.Fatal(writeErr)
-		}
-		if writeErr := os.WriteFile(filepath.Join(stage, "scripts", "helper.py"), []byte(helper), 0o644); writeErr != nil {
-			t.Fatal(writeErr)
-		}
-		return stage
-	}
-	if _, err = PublishStagedSkill(root, "package", makeStage("without-review", "bad"), ""); !errors.Is(err, ErrRevisionConflict) {
-		t.Fatalf("blind replacement err=%v", err)
-	}
-	if got, _ := os.ReadFile(asset); string(got) != "old" {
-		t.Fatalf("blind replacement changed asset: %q", got)
-	}
-	next, err := PublishStagedSkill(root, "package", makeStage("reviewed", "new"), reviewed)
-	if err != nil || next.Revision == reviewed {
-		t.Fatalf("next=%q err=%v", next, err)
-	}
-	if got, _ := os.ReadFile(asset); string(got) != "new" {
-		t.Fatalf("replacement lost staged asset: %q", got)
-	}
+func stageReviewedPackage(t *testing.T, root, body, helper string) string {
+	t.Helper()
+	stage := filepath.Join(root, ".staging", body)
+	require.NoError(t, os.MkdirAll(filepath.Join(stage, "scripts"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stage, "SKILL.md"), []byte(validFor("package")+"\n"+body), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(stage, "scripts", "helper.py"), []byte(helper), 0o644))
+	return stage
 }
 
-func TestPublishStagedSkillReportsSuccessfulPublishWhenBackupCleanupFails(t *testing.T) {
-	root := t.TempDir()
-	w := NewSkillWriter(root)
-	_, reviewed, err := w.CreateSkillReviewed("package", validFor("package"))
-	if err != nil {
-		t.Fatal(err)
+// §§7.2–7.3: replacing a staged package needs an explicit current revision;
+// all staged assets, not only SKILL.md, are published together.
+func TestApplyChange_InstallReplaceRequiresCurrentRevisionAndPreservesAssets(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	created := createAuthoredSkill(t, root, "package", validFor("package"))
+	withAsset, _ := commitWrite(t, root, "package", "scripts/helper.py", "old", created.Revision)
+	before := manifestIDs(t, SkillHistoryRoot(root), "package")
+	for _, tc := range []struct {
+		name   string
+		expect Expectation
+		code   error
+	}{
+		{"without-review", Expectation{}, ErrInvalidInput},
+		{"stale-review", Expectation{Revision: created.Revision}, ErrSkillChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, Slug: "package",
+				StagedDir: stageReviewedPackage(t, root, tc.name, "bad"), Expect: tc.expect})
+			require.ErrorIs(t, err, tc.code)
+			assert.Equal(t, PersistenceNone, out.PersistenceStatus)
+			assert.Equal(t, "old", readFile(t, filepath.Join(root, "package", "scripts", "helper.py")))
+			assert.Equal(t, validFor("package"), readFile(t, filepath.Join(root, "package", "SKILL.md")))
+			assert.Equal(t, before, manifestIDs(t, SkillHistoryRoot(root), "package"))
+		})
 	}
-	stage := filepath.Join(root, ".staging", "replacement")
-	if err = os.MkdirAll(stage, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(stage, "SKILL.md"), []byte(validFor("package")+"\nreplacement\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	originalRemove := removePublishedBackup
-	removePublishedBackup = func(string) error { return errors.New("cleanup refused") }
-	t.Cleanup(func() { removePublishedBackup = originalRemove })
-
-	outcome, err := PublishStagedSkill(root, "package", stage, reviewed)
-	if err != nil {
-		t.Fatalf("published replacement reported as failed: %v", err)
-	}
-	if outcome.Revision == "" || outcome.Revision == reviewed || outcome.PersistenceStatus != "complete" || outcome.ActivationStatus != "active" {
-		t.Fatalf("outcome=%+v", outcome)
-	}
-	if outcome.Warning == "" || len(outcome.ChangedFields) != 1 || outcome.ChangedFields[0] != "installed" {
-		t.Fatalf("missing cleanup warning/state: %+v", outcome)
-	}
-	got, readErr := os.ReadFile(filepath.Join(root, "package", "SKILL.md"))
-	if readErr != nil || !strings.Contains(string(got), "replacement") {
-		t.Fatalf("published bytes missing: %q err=%v", got, readErr)
-	}
+	stage := stageReviewedPackage(t, root, "reviewed", "new")
+	next, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, Slug: "package", StagedDir: stage,
+		Expect: Expectation{Revision: withAsset.Revision}})
+	require.NoError(t, err)
+	assert.Equal(t, PersistenceComplete, next.PersistenceStatus)
+	assert.NotEqual(t, withAsset.Revision, next.Revision)
+	assert.Equal(t, validFor("package")+"\nreviewed", readFile(t, filepath.Join(root, "package", "SKILL.md")))
+	assert.Equal(t, "new", readFile(t, filepath.Join(root, "package", "scripts", "helper.py")))
 }
 
-func TestPublishStagedSkillReportsFailedRestoreWithoutClaimingPublication(t *testing.T) {
-	root := t.TempDir()
-	w := NewSkillWriter(root)
-	_, reviewed, err := w.CreateSkillReviewed("package", validFor("package"))
-	if err != nil {
-		t.Fatal(err)
+// §7.6 class 3: cleanup failure never misreports a committed replacement.
+func TestApplyChange_ReportsSuccessfulPublishWhenSwapCleanupFails(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	created := createAuthoredSkill(t, root, "package", validFor("package"))
+	stage := stageReviewedPackage(t, root, "replacement", "helper")
+	previous := FaultSwapRemove
+	calls := []string{}
+	FaultSwapRemove = func(path string) error { calls = append(calls, path); return errors.New("cleanup refused") }
+	t.Cleanup(func() { FaultSwapRemove = previous })
+	outcome, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, Slug: "package", StagedDir: stage,
+		Expect: Expectation{Revision: created.Revision}})
+	require.NoError(t, err, "committed replacement is successful despite cleanup failure")
+	assert.Equal(t, []string{filepath.Join(root, ".swap", "package")}, calls, "fault fired on the actual backup disposal")
+	assert.NotEmpty(t, outcome.Revision)
+	assert.NotEqual(t, created.Revision, outcome.Revision)
+	assert.Equal(t, PersistenceComplete, outcome.PersistenceStatus)
+	assert.Equal(t, ActivationActive, outcome.ActivationStatus)
+	assert.Equal(t, []string{"installed"}, outcome.ChangedFields)
+	assert.Contains(t, outcome.Warning, "cleanup is incomplete: cleanup refused")
+	assert.Equal(t, validFor("package")+"\nreplacement", readFile(t, filepath.Join(root, "package", "SKILL.md")))
+	assert.Equal(t, "helper", readFile(t, filepath.Join(root, "package", "scripts", "helper.py")))
+	assert.Len(t, manifestIDs(t, SkillHistoryRoot(root), "package"), 2)
+	FaultSwapRemove = previous
+	require.NoError(t, RecoverInterrupted(root, SkillHistoryRoot(root)))
+	assert.NoDirExists(t, filepath.Join(root, ".swap", "package"))
+	assert.Equal(t, validFor("package")+"\nreplacement", readFile(t, filepath.Join(root, "package", "SKILL.md")), "restart keeps the committed replacement")
+}
+
+// §7.6 class 1b/§9.3: both failed renames are observable and restart restores
+// the predecessor. No missing live folder may be claimed as a publication.
+func TestApplyChange_ReportsFailedPutBackWithoutClaimingPublication(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	created := createAuthoredSkill(t, root, "package", validFor("package"))
+	before := manifestIDs(t, SkillHistoryRoot(root), "package")
+	require.Len(t, before, 1)
+	stage := stageReviewedPackage(t, root, "replacement", "helper")
+	previousRename, previousPutBack := renamePublishedSkill, FaultPutBackRename
+	var publishCalls, putBackCalls int
+	publishErr, restoreErr := errors.New("publish rename refused"), errors.New("restore rename refused")
+	renamePublishedSkill = func(oldpath, newpath string) error {
+		require.Equal(t, filepath.Join(root, "package"), newpath)
+		publishCalls++
+		return publishErr
 	}
-	stage := filepath.Join(root, ".staging", "replacement")
-	if err = os.MkdirAll(stage, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(stage, "SKILL.md"), []byte(validFor("package")+"\nreplacement\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	originalRename := renamePublishedSkill
-	renames := 0
-	publishErr := errors.New("publish rename refused")
-	restoreErr := errors.New("restore rename refused")
-	renamePublishedSkill = func(oldPath, newPath string) error {
-		renames++
-		if renames == 1 {
-			return os.Rename(oldPath, newPath)
-		}
-		if renames == 2 {
-			return publishErr
-		}
+	FaultPutBackRename = func(oldpath, newpath string) error {
+		assert.Equal(t, filepath.Join(root, ".swap", "package"), oldpath)
+		assert.Equal(t, filepath.Join(root, "package"), newpath)
+		putBackCalls++
 		return restoreErr
 	}
-	t.Cleanup(func() { renamePublishedSkill = originalRename })
-
-	outcome, err := PublishStagedSkill(root, "package", stage, reviewed)
-	if err == nil || !errors.Is(err, publishErr) || !errors.Is(err, restoreErr) {
-		t.Fatalf("err=%v", err)
-	}
-	if outcome.Revision != "" {
-		t.Fatalf("unavailable live revision must be omitted: %+v", outcome)
-	}
-	if outcome.PersistenceStatus != "partial" || outcome.ActivationStatus != "not_attempted" {
-		t.Fatalf("failed restore must report partial/not_attempted: %+v", outcome)
-	}
-	if len(outcome.ChangedFields) != 1 || outcome.ChangedFields[0] != "installed" {
-		t.Fatalf("failed restore must identify the changed live package: %+v", outcome)
-	}
-	if outcome.ErrorStage != PublicationErrorStageRestorePrevious {
-		t.Fatalf("error stage=%q, want %q", outcome.ErrorStage, PublicationErrorStageRestorePrevious)
-	}
-	if outcome.Message != "replacement publication failed and the previous package could not be restored; no live package is available" {
-		t.Fatalf("unexpected safe message: %q", outcome.Message)
-	}
+	t.Cleanup(func() { renamePublishedSkill, FaultPutBackRename = previousRename, previousPutBack })
+	outcome, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, Slug: "package", StagedDir: stage,
+		Expect: Expectation{Revision: created.Revision}})
+	require.ErrorIs(t, err, publishErr)
+	require.ErrorIs(t, err, restoreErr)
+	require.ErrorIs(t, err, ErrSkillPartiallySaved)
+	assert.Equal(t, 1, publishCalls)
+	assert.Equal(t, 1, putBackCalls)
+	assert.Empty(t, outcome.Revision, "no fabricated live revision when the folder is unavailable")
+	assert.Equal(t, PersistencePartial, outcome.PersistenceStatus)
+	assert.Equal(t, ActivationNotAttempted, outcome.ActivationStatus)
+	assert.Equal(t, []string{"installed"}, outcome.ChangedFields)
+	assert.Equal(t, PublicationErrorStageRestorePrevious, outcome.ErrorStage)
+	assert.Contains(t, outcome.Message, "replacement publication failed and the previous package could not be restored; no live package is available")
+	assert.Contains(t, outcome.Message, "The previous state is version "+before[0]+"; restore it.")
+	assert.NoDirExists(t, filepath.Join(root, "package"))
+	assert.Equal(t, validFor("package"), readFile(t, filepath.Join(root, ".swap", "package", "SKILL.md")))
+	assert.Equal(t, before, manifestIDs(t, SkillHistoryRoot(root), "package"), "failed publication commits no replacement version")
+	renamePublishedSkill, FaultPutBackRename = previousRename, previousPutBack
+	require.NoError(t, RecoverInterrupted(root, SkillHistoryRoot(root)))
+	assert.Equal(t, validFor("package"), readFile(t, filepath.Join(root, "package", "SKILL.md")))
+	assert.NoDirExists(t, filepath.Join(root, ".swap", "package"))
 }
 
-func TestPublishStagedSkillRejectsInvalidStageBeforeMovingPublishedSkill(t *testing.T) {
-	root := t.TempDir()
-	w := NewSkillWriter(root)
-	_, reviewed, err := w.CreateSkillReviewed("package", validFor("package"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(filepath.Join(root, "package", "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
+// §7.2/class 1: invalid instructions are refused before moving the live tree.
+func TestApplyChange_RejectsInvalidStageBeforeMovingPublishedSkill(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	created := createAuthoredSkill(t, root, "package", validFor("package"))
 	stage := filepath.Join(root, ".staging", "invalid")
-	if err = os.MkdirAll(stage, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	outcome, err := PublishStagedSkill(root, "package", stage, reviewed)
-	if err == nil || !strings.Contains(err.Error(), "verify staged skill") {
-		t.Fatalf("err=%v", err)
-	}
-	if outcome.Revision != "" {
-		t.Fatalf("invalid stage claimed revision: %+v", outcome)
-	}
-	after, readErr := os.ReadFile(filepath.Join(root, "package", "SKILL.md"))
-	if readErr != nil || string(after) != string(before) {
-		t.Fatalf("published skill changed: %q err=%v", after, readErr)
-	}
+	require.NoError(t, os.MkdirAll(stage, 0o755))
+	outcome, err := ApplyChange(root, ChangeRequest{Kind: KindInstallReplace, Slug: "package", StagedDir: stage,
+		Expect: Expectation{Revision: created.Revision}})
+	require.ErrorIs(t, err, ErrSaveCheckFailed)
+	assert.Contains(t, err.Error(), "the change to 'package' was not saved:")
+	assert.Empty(t, outcome.Revision)
+	assert.Equal(t, PersistenceNone, outcome.PersistenceStatus)
+	assert.Equal(t, validFor("package"), readFile(t, filepath.Join(root, "package", "SKILL.md")))
+	assert.NoDirExists(t, filepath.Join(root, ".swap", "package"), "validation precedes the live-to-swap move")
+	assert.Len(t, manifestIDs(t, SkillHistoryRoot(root), "package"), 1)
 }

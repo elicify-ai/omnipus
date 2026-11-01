@@ -329,7 +329,7 @@ func TestDelete_ManifestFails_PutBackAlsoFails_Class1bDel2(t *testing.T) {
 		}
 		return nil
 	}
-	FaultPutBackRename = func(old, new string) error { putbackFired = true; return errors.New("rename failed") }
+	FaultPutBackRename = func(oldpath, newpath string) error { putbackFired = true; return errors.New("rename failed") }
 	defer func() {
 		FaultManifestWrite = nil
 		FaultPutBackRename = nil
@@ -524,7 +524,7 @@ func TestRestoreIntoAbsence_ManifestFails_Class2CreateIi(t *testing.T) {
 	before := manifestIDs(t, SkillHistoryRoot(root), "foo")
 	var fired bool
 	FaultManifestWrite = func(string) error {
-		if _, err := os.Stat(filepath.Join(root, "foo", "SKILL.md")); err == nil {
+		if _, statErr := os.Stat(filepath.Join(root, "foo", "SKILL.md")); statErr == nil {
 			fired = true
 			return errors.New("disk full")
 		}
