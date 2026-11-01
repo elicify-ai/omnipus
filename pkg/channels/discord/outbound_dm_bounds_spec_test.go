@@ -227,7 +227,8 @@ func TestT24b_DMOpen_ReloadJoinRequiresTheRealWorkerCancellationBarrier(t *testi
 		t09HTTPResponse{Status: 200, Body: `{"id":"999","type":1}`},
 	)
 	manager, mb, lifecycle := t24Manager(t, adapter)
-	person, admitted, joined := make(chan string, 1), make(chan string, 8), make(chan string, 2)
+	person, admitted := make(chan string, 1), make(chan string, 8)
+	joined := make(chan channels.WorkerJoinObservation, 2)
 	locks, dmEntered := make(chan string, 2), make(chan struct{})
 	lateFinished := make(chan struct{})
 	var lateOnce, dmOnce sync.Once
@@ -253,9 +254,11 @@ func TestT24b_DMOpen_ReloadJoinRequiresTheRealWorkerCancellationBarrier(t *testi
 		admitted <- call
 	})
 	manager.SetReloadWriteLockHookForTest(func(stage string) { locks <- stage })
-	manager.SetWorkerJoinHookForTest(func(instance, phase string) {
-		if instance == "discord" {
-			joined <- phase // only signal while Reload holds the real write lock
+	// Registration is complete before Reload: no other writer can make the
+	// nonblocking lock probe report a pending writer rather than Reload's lock.
+	manager.SetWorkerJoinObservationHookForTest(func(observation channels.WorkerJoinObservation) {
+		if observation.Instance == "discord" {
+			joined <- observation // passive snapshot only; no Manager call or log I/O
 		}
 	})
 	t.Cleanup(func() {
@@ -270,7 +273,7 @@ func TestT24b_DMOpen_ReloadJoinRequiresTheRealWorkerCancellationBarrier(t *testi
 		default:
 		}
 		manager.SetReloadWriteLockHookForTest(nil)
-		manager.SetWorkerJoinHookForTest(nil)
+		manager.SetWorkerJoinObservationHookForTest(nil)
 	})
 	msg := t09StartMessage(t, "333", "QA late DM must not arrive")
 	msg.AgentID, msg.WorkspaceID = "mia", "ws-t24"
@@ -289,9 +292,18 @@ func TestT24b_DMOpen_ReloadJoinRequiresTheRealWorkerCancellationBarrier(t *testi
 		require.Equal(t, want, t24ReceiveUntil(t, bound, locks, "instrument: actual Reload did not reach its write-lock stages"))
 	}
 	for _, want := range []string{"joining", "joined"} {
-		require.Equal(t, want, t24ReceiveUntil(t, bound, joined, "S-89 phase2: actual worker join stalled behind DM admission"))
+		observation := t24ReceiveUntil(t, bound, joined, "S-89 phase2: actual worker join stalled behind DM admission")
+		require.Equal(t, "discord", observation.Instance)
+		require.Equal(t, want, observation.Phase)
+		require.True(t, observation.WriteLockHeld, "S-24/B-01: Reload holds the manager write lock at %s", want)
+		if want == "joined" {
+			require.True(t, observation.OldWorkerDone, "S-89/F-6a: joined must follow the OLD text worker's exit, before generation replacement")
+			require.True(t, observation.OldMediaWorkerDone, "S-89/F-6a: joined must follow the OLD media worker's exit, before generation replacement")
+		}
 	}
 	require.NoError(t, t24ReceiveUntil(t, bound, reloaded, "S-89 phase2: actual Reload did not finish within the DM bound"))
+	// Keep the actual Send failed row check outside the passive hook. The old
+	// worker cannot exit before its synchronous failure logging has returned.
 	t24RequireAdapterError(t, logPath)
 	followUp := make(chan bool, 1)
 	participants.Add(1)

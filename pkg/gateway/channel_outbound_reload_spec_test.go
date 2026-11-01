@@ -11,6 +11,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,11 +29,13 @@ func TestT29_ReloadAndDequeue_RealWriteLockInterleavingCannotDeadlockOrSendRevok
 			<-release
 		}
 	})
-	locks, joins := make(chan string, 2), make(chan string, 2)
+	locks, joins := make(chan string, 2), make(chan channels.WorkerJoinObservation, 2)
 	manager.SetReloadWriteLockHookForTest(func(stage string) { locks <- stage }) // only signal under m.mu
-	manager.SetWorkerJoinHookForTest(func(instance, phase string) {
-		if instance == "discord" {
-			joins <- phase // actual old worker, while Reload holds m.mu
+	// Registration is complete before Reload; no competing registration writer
+	// can make the lock probe look held while Reload has released it.
+	manager.SetWorkerJoinObservationHookForTest(func(observation channels.WorkerJoinObservation) {
+		if observation.Instance == "discord" {
+			joins <- observation // passive snapshot only; no Manager call or log I/O
 		}
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -41,7 +44,7 @@ func TestT29_ReloadAndDequeue_RealWriteLockInterleavingCannotDeadlockOrSendRevok
 		releaseOnce.Do(func() { close(release) })
 		manager.SetBeforeDequeueStartCheckHookForTest(nil)
 		manager.SetReloadWriteLockHookForTest(nil)
-		manager.SetWorkerJoinHookForTest(nil)
+		manager.SetWorkerJoinObservationHookForTest(nil)
 	})
 	delivered := make(chan string, 4)
 	adapter.send = func(_ context.Context, msg bus.OutboundMessage) error { delivered <- msg.Content; return nil }
@@ -72,8 +75,11 @@ func TestT29_ReloadAndDequeue_RealWriteLockInterleavingCannotDeadlockOrSendRevok
 		}
 	}
 	select {
-	case phase := <-joins:
-		require.Equal(t, "joining", phase, "instrument: Reload now holds m.mu waiting for this exact paused worker")
+	case observation := <-joins:
+		require.Equal(t, "discord", observation.Instance)
+		require.Equal(t, "joining", observation.Phase, "instrument: Reload now holds m.mu waiting for this exact paused worker")
+		require.True(t, observation.WriteLockHeld, "S-24/B-01: the old worker join begins under Reload's write lock")
+		require.False(t, observation.OldWorkerDone, "instrument: the captured OLD text worker is still paused at M2, so completion is not a constant true")
 	case <-bound.Done():
 		t.Fatal("instrument: actual Reload never began the paused worker's join")
 	}
@@ -93,8 +99,12 @@ func TestT29_ReloadAndDequeue_RealWriteLockInterleavingCannotDeadlockOrSendRevok
 		"instrument: actual live policy is revoked while Reload is still joining M2")
 	releaseOnce.Do(func() { close(release) })
 	select {
-	case phase := <-joins:
-		require.Equal(t, "joined", phase, "S-24: the worker exited without acquiring Reload's write lock")
+	case observation := <-joins:
+		require.Equal(t, "discord", observation.Instance)
+		require.Equal(t, "joined", observation.Phase, "S-24: the worker exited without acquiring Reload's write lock")
+		require.True(t, observation.WriteLockHeld, "S-24/B-01: the old worker join completes under Reload's write lock")
+		require.True(t, observation.OldWorkerDone, "S-24/F-6a: joined must follow the captured OLD text worker's exit, before generation replacement")
+		require.True(t, observation.OldMediaWorkerDone, "S-24/F-6a: joined must follow the captured OLD media worker's exit, before generation replacement")
 	case <-bound.Done():
 		t.Fatal("S-24: M2 dequeue check deadlocked against Reload's write lock")
 	}
