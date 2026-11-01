@@ -53,7 +53,7 @@ func TestCapRED_PlanEngine_ConcurrentTickAdmissionOwnTuples(t *testing.T) {
 		if !hasSource {
 			return
 		}
-		a, max, reliable, at, _ := source.CapSnapshot()
+		a, limit, reliable, at, _ := source.CapSnapshot()
 		if at.IsZero() {
 			return
 		} // A read before the first publication is legitimate.
@@ -62,7 +62,7 @@ func TestCapRED_PlanEngine_ConcurrentTickAdmissionOwnTuples(t *testing.T) {
 		if n%2 == 0 {
 			want = 9
 		}
-		capRedAssert(t, "PS13 snapshot is one complete counting-call tuple", []any{a, max, reliable}, []any{want, 16, true})
+		capRedAssert(t, "PS13 snapshot is one complete counting-call tuple", []any{a, limit, reliable}, []any{want, 16, true})
 		if at.Before(last) {
 			t.Errorf("PS13 snapshot regressed from %s to %s", last, at)
 		}
@@ -74,8 +74,8 @@ func TestCapRED_PlanEngine_ConcurrentTickAdmissionOwnTuples(t *testing.T) {
 			read()
 			capRedAssert(t, "PS13 each admission and each tick counted independently", calls.Load(), int32(48))
 			if hasSource {
-				a, max, r, at, tick := source.CapSnapshot()
-				capRedAssert(t, "PS13 latest own observation wins", []any{a, max, r, at}, []any{9, 16, true, t0.Add(48 * time.Second)})
+				a, limit, r, at, tick := source.CapSnapshot()
+				capRedAssert(t, "PS13 latest own observation wins", []any{a, limit, r, at}, []any{9, 16, true, t0.Add(48 * time.Second)})
 				if tick.IsZero() {
 					t.Error("PS13 tick did not publish its own pass-end time")
 				}

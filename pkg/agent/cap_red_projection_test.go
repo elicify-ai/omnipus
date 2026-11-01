@@ -138,13 +138,13 @@ func TestCapRED_PlanWaitingMembers_BoundedRealCollector(t *testing.T) {
 				t.Errorf("member id missing/duplicated: %#v", list)
 			}
 			seen[id] = true
-			copy := map[string]any{}
+			evidence := map[string]any{}
 			for k, v := range m {
 				if k != "task_id" {
-					copy[k] = v
+					evidence[k] = v
 				}
 			}
-			capRedAssertWaiting(t, copy, "task_semaphore", "configured", 1, 1, false)
+			capRedAssertWaiting(t, evidence, "task_semaphore", "configured", 1, 1, false)
 		}
 	}
 	for _, r := range rows {
@@ -195,8 +195,8 @@ func TestCapRED_SteeredTaskWait_VisibleWhileInProgress(t *testing.T) {
 			}
 			tk := capRedTask(t, al, "main-wait", task.StatusNext, planID)
 			isolated := false
-			if _, err := GetTaskStore(al).Update(tk.ID, task.Patch{RunIsolated: &isolated}); err != nil {
-				t.Fatal(err)
+			if _, updateErr := GetTaskStore(al).Update(tk.ID, task.Patch{RunIsolated: &isolated}); updateErr != nil {
+				t.Fatal(updateErr)
 			}
 			wireSteerCompletionDeps(t, al)
 			repairInbox := capRedBlockInbox(t, al)
@@ -204,8 +204,8 @@ func TestCapRED_SteeredTaskWait_VisibleWhileInProgress(t *testing.T) {
 			high = true
 			// S22d/e: force a real shared Deliver Append failure. The roster
 			// must remain truthful even though the parent did not get a notice.
-			if err := te.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
-				t.Fatalf("real main-owned queued launch: %v", err)
+			if executeErr := te.ExecuteTask(context.Background(), tk.ID, nil); executeErr != nil {
+				t.Fatalf("real main-owned queued launch: %v", executeErr)
 			}
 			repairInbox()
 			capRedAssert(t, "S22d/e actual failed notice emits one warning", capRedWarnCount(logs()), 1)
@@ -226,15 +226,15 @@ func TestCapRED_SteeredTaskWait_VisibleWhileInProgress(t *testing.T) {
 				if !yes || len(list) != 1 {
 					t.Errorf("missing one waiting_runs entry: %#v", row)
 				} else {
-					m := list[0].(map[string]any)
+					m := capRedValue[map[string]any](t, "real waiting_runs entry", list[0])
 					capRedAssert(t, "member id", m["task_id"], tk.ID)
-					copy := map[string]any{}
+					evidence := map[string]any{}
 					for k, v := range m {
 						if k != "task_id" {
-							copy[k] = v
+							evidence[k] = v
 						}
 					}
-					capRedAssertWaiting(t, copy, "steered", "memory_pressure", 2, 8, true)
+					capRedAssertWaiting(t, evidence, "steered", "memory_pressure", 2, 8, true)
 				}
 			}
 			for _, r := range rows {

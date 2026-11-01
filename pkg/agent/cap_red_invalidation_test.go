@@ -28,17 +28,18 @@ func TestCapRED_TaskWaitingProjection_AllStatusPredicatesAndDelete(t *testing.T)
 			}
 			row := capRedFindRow(t, capRedRoster(t, al, testHarnessWorkspaceMembershipID), "task", tk.ID)
 			capRedAssertWaiting(t, row["waiting"], "task_semaphore", "configured", 1, 1, false)
-			if status == "delete" {
+			switch status {
+			case "delete":
 				if _, err := GetTaskStore(al).Delete(tk.ID); err != nil {
 					t.Fatal(err)
 				}
-			} else if status == task.StatusBlocked {
+			case task.StatusBlocked:
 				dependency := capRedTask(t, al, "unmet-dependency", task.StatusNext, "")
 				deps := []string{dependency.ID}
 				if _, err := GetTaskStore(al).Update(tk.ID, task.Patch{BlockedBy: &deps}); err != nil {
 					t.Fatal(err)
 				}
-			} else {
+			default:
 				if _, err := GetTaskStore(al).Update(tk.ID, task.Patch{Status: &status}); err != nil {
 					t.Fatal(err)
 				}
@@ -178,7 +179,8 @@ func TestCapRED_PlanWaitingProjection_BlockStopDelete(t *testing.T) {
 			}
 			row := capRedFindRow(t, capRedRoster(t, al, testHarnessWorkspaceMembershipID), "plan", p.ID)
 			capRedAssert(t, "live plan has own refused member", row["waiting_member_count"], float64(1))
-			if state == "delete" {
+			switch state {
+			case "delete":
 				stopped := plan.StateFailed
 				if _, err := ps.Update(p.ID, plan.Patch{State: &stopped}); err != nil {
 					t.Fatal(err)
@@ -186,12 +188,12 @@ func TestCapRED_PlanWaitingProjection_BlockStopDelete(t *testing.T) {
 				if err := ps.Delete(p.ID); err != nil {
 					t.Fatal(err)
 				}
-			} else if state == "blocked" {
+			case "blocked":
 				reason := plan.PausedReasonOwnerDisabled
 				if _, err := ps.Update(p.ID, plan.Patch{PausedReason: &reason}); err != nil {
 					t.Fatal(err)
 				}
-			} else {
+			default:
 				if _, err := ps.Update(p.ID, plan.Patch{State: &state}); err != nil {
 					t.Fatal(err)
 				}

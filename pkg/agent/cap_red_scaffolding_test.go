@@ -32,7 +32,7 @@ func capRedAcquire(t *testing.T, ds *DispatchSemaphore) capRedDecision {
 	d := capRedDecision{granted: out[0].Bool(), occupancy: -999, limit: -999, cause: "MISSING_DECISION_EVIDENCE"}
 	if len(out) == 2 {
 		if !out[1].IsNil() {
-			d.release = out[1].Interface().(func())
+			d.release = capRedValue[func()](t, "real legacy release", out[1].Interface())
 		}
 		return d
 	}
@@ -40,9 +40,9 @@ func capRedAcquire(t *testing.T, ds *DispatchSemaphore) capRedDecision {
 		t.Fatalf("CAP-B2 TryAcquire returned %d values, want full six-value decision", len(out))
 	}
 	d.occupancy, d.limit, d.cause = int(out[1].Int()), int(out[2].Int()), out[3].String()
-	d.observed = out[4].Interface().(time.Time)
+	d.observed = capRedValue[time.Time](t, "real semaphore ObservedAt", out[4].Interface())
 	if !out[5].IsNil() {
-		d.release = out[5].Interface().(func())
+		d.release = capRedValue[func()](t, "real decision release", out[5].Interface())
 	}
 	d.complete = true
 	return d
@@ -80,12 +80,12 @@ func capRedRelease(t *testing.T, g *steerAdmission, claim executionClaim) []stee
 		if !out[1].Bool() {
 			return nil
 		}
-		return []steerQueueEntry{out[0].Interface().(steerQueueEntry)}
+		return []steerQueueEntry{capRedValue[steerQueueEntry](t, "real legacy promotion", out[0].Interface())}
 	}
 	if len(out) != 1 {
 		t.Fatalf("CAP-B1 releaseExecution has %d return values, want ordered batch", len(out))
 	}
-	return out[0].Interface().([]steerQueueEntry)
+	return capRedValue[[]steerQueueEntry](t, "real promotion batch", out[0].Interface())
 }
 func capRedIDs(entries []steerQueueEntry) []string {
 	ids := make([]string, len(entries))
@@ -98,6 +98,14 @@ func capRedMemory(t *testing.T, high, ok *bool) {
 	t.Helper()
 	restore := config.SetMemoryProviderForTest(func() (bool, bool) { return *high, *ok }, func() (uint64, bool) { return 1 << 30, *ok })
 	t.Cleanup(restore)
+}
+func capRedValue[T any](t *testing.T, label string, value any) T {
+	t.Helper()
+	actual, ok := value.(T)
+	if !ok {
+		t.Fatalf("%s has type %T, want %s", label, value, reflect.TypeFor[T]())
+	}
+	return actual
 }
 func capRedAssert(t *testing.T, label string, got, want any) {
 	t.Helper()

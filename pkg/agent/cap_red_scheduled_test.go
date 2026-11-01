@@ -47,7 +47,7 @@ func capRedCronWithRealSeam(t *testing.T) (*cron.CronService, *capRedScheduledRu
 	} else {
 		t.Error("CAP-B9 RED: cron.NewCronService has no required LaneLimitFunc; real memory seam cannot be wired")
 	}
-	cs := ctor.Call(args)[0].Interface().(*cron.CronService)
+	cs := capRedValue[*cron.CronService](t, "real cron constructor", ctor.Call(args)[0].Interface())
 	runner := &capRedScheduledRunner{entered: make(chan string, 20), release: make(chan struct{})}
 	cs.SetRunner(runner)
 	clock := &fakePlanClock{now: time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)}
@@ -184,7 +184,8 @@ func TestCapRED_ScheduledLane_PressureWaitsBothEntryPaths(t *testing.T) {
 				high, ok := !unverifiable, !unverifiable
 				capRedMemory(t, &high, &ok)
 				cs, runner := capRedCronWithRealSeam(t)
-				ids := []string{capRedScheduledJob(t, cs, 0), capRedScheduledJob(t, cs, 1)}
+				ids := make([]string, 2, 3)
+				ids[0], ids[1] = capRedScheduledJob(t, cs, 0), capRedScheduledJob(t, cs, 1)
 				later := time.Date(2026, 10, 31, 20, 2, 0, 0, time.UTC).UnixMilli()
 				third, err := cs.AddJobFull(cron.JobSpec{Name: "cap-third", AgentID: "owner", Message: "hold", Schedule: cron.CronSchedule{Kind: "at", AtMS: &later}})
 				if err != nil {
@@ -242,7 +243,7 @@ func TestCapRED_ScheduledLane_PressureWaitsBothEntryPaths(t *testing.T) {
 					t.Fatal("third handler neither entered nor emitted required wait evidence")
 				}
 				held, _ := runner.releases.Load(ids[0])
-				close(held.(chan struct{}))
+				close(capRedValue[chan struct{}](t, "real scheduled handler release", held))
 				got := capRedScheduledEntries(t, runner, 1)
 				capRedAssert(t, "handler return releases lane", got, []string{ids[2]})
 				select {

@@ -51,7 +51,7 @@ func capRedDispatchObservation(t *testing.T, d steer.DispatchResult) time.Time {
 		t.Error("CAP-B1 RED: DispatchResult does not carry its decision ObservedAt")
 		return time.Time{}
 	}
-	return field.Interface().(time.Time)
+	return capRedValue[time.Time](t, "real dispatch ObservedAt", field.Interface())
 }
 func capRedStoredQueueTime(t *testing.T, g *steerAdmission, sid string) time.Time {
 	t.Helper()
@@ -66,7 +66,7 @@ func capRedStoredQueueTime(t *testing.T, g *steerAdmission, sid string) time.Tim
 			t.Error("CAP-B1 RED: queue entry has no immutable ObservedAt")
 			return time.Time{}
 		}
-		return at.Interface().(time.Time)
+		return capRedValue[time.Time](t, "real queued ObservedAt", at.Interface())
 	}
 	t.Errorf("no queued entry for %s", sid)
 	return time.Time{}

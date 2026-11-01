@@ -56,7 +56,7 @@ func capRedAdmissionView(t *testing.T, al *AgentLoop, claim executionClaim, reso
 		}
 		v := capRedView{present: out[1].Bool()}
 		if resolve && !out[2].IsNil() {
-			v.err = out[2].Interface().(error)
+			v.err = capRedValue[error](t, "real resolver error", out[2].Interface())
 		}
 		if !v.present {
 			return v
@@ -67,7 +67,7 @@ func capRedAdmissionView(t *testing.T, al *AgentLoop, claim executionClaim, reso
 		v.occupancy = int(s.FieldByName("Occupancy").Int())
 		v.limit = int(s.FieldByName("Limit").Int())
 		v.cause = s.FieldByName("Cause").String()
-		v.at = s.FieldByName("ObservedAt").Interface().(time.Time)
+		v.at = capRedValue[time.Time](t, "real view ObservedAt", s.FieldByName("ObservedAt").Interface())
 		return v
 	}
 	t.Errorf("CAP-B10 RED: real %s(full claim) is absent; no resolver or view was substituted", name)

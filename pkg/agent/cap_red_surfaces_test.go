@@ -63,15 +63,6 @@ func capRedTask(t *testing.T, al *AgentLoop, id string, status task.Status, plan
 	}
 	return tk
 }
-func capRedRunTool(t *testing.T, al *AgentLoop, taskID string) map[string]any {
-	t.Helper()
-	inst, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
-	if !ok {
-		t.Fatal("SETUP missing agent")
-	}
-	ctx := tools.WithAgentID(tools.WithWorkspaceID(context.Background(), testHarnessWorkspaceMembershipID), testDefaultAgentID)
-	return capRedToolJSON(t, inst.Tools.Execute(ctx, "run_task", map[string]any{"task_id": taskID}))
-}
 
 func TestCapRED_RunTask_QueuedDisclosure(t *testing.T) {
 	for _, tc := range []struct {

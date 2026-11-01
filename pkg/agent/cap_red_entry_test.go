@@ -159,7 +159,7 @@ func capRedMarkerOrder(t *testing.T, file, name, prepare, body string) {
 	if prep == token.NoPos || run == token.NoPos {
 		t.Fatalf("real %s preparation/body sites missing", name)
 	}
-	if mark == token.NoPos || !(prep < mark && mark < run) {
+	if mark == token.NoPos || prep >= mark || mark >= run {
 		t.Errorf("CAP-B10/S49d real %s must mark its full claim after %s and before %s; source positions prepare=%d marker=%d body=%d", name, prepare, body, prep, mark, run)
 	}
 }

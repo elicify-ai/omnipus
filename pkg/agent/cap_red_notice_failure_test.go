@@ -39,7 +39,7 @@ func TestCapRED_CapNotice_ConveyedEpisodeDoesNotSuppressLater(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.SplitN(result.ForLLM, "\n", 2)[0]), &obj); err != nil {
 		t.Fatal(err)
 	}
-	sid := obj["session_id"].(string)
+	sid := capRedValue[string](t, "delegate session_id", obj["session_id"])
 	capRedAssert(t, "S51 first conveyed episode suppressed", len(capRedInbox(t, al, parent, sid)), 0)
 	high, ok = false, false
 	al.drainSteerQueue(holders[0])

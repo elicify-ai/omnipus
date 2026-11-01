@@ -35,8 +35,8 @@ func TestCapRED_AdmissionView_TaskWorkerBeforeCallerReturns(t *testing.T) {
 		t.Fatal(err)
 	}
 	claim := executionClaim{SessionID: child.SessionID, Generation: child.Generation, RunID: freshRunID(), BootSeq: al.bootEpochFor()}
-	if err := stampAdmissionExecution(ls, child.SessionID, child.Generation, claim.RunID, claim.BootSeq, rec.ExecutionID); err != nil {
-		t.Fatal(err)
+	if stampErr := stampAdmissionExecution(ls, child.SessionID, child.Generation, claim.RunID, claim.BootSeq, rec.ExecutionID); stampErr != nil {
+		t.Fatal(stampErr)
 	}
 	capRedAssert(t, "real task admission granted", capRedSteer(t, al.steerAdmission(), claim.SessionID, claim.Generation, claim.RunID, claim.BootSeq).granted, true)
 	rec, err = commitSteeredExecutionState(ls, claim, session.LifecycleRunning, "")
@@ -44,8 +44,8 @@ func TestCapRED_AdmissionView_TaskWorkerBeforeCallerReturns(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := task.StatusInProgress
-	if _, err := te.store.Update(tk.ID, task.Patch{Status: &state, SessionID: &child.SessionID}); err != nil {
-		t.Fatal(err)
+	if _, updateErr := te.store.Update(tk.ID, task.Patch{Status: &state, SessionID: &child.SessionID}); updateErr != nil {
+		t.Fatal(updateErr)
 	}
 	g := al.steerAdmission()
 	g.entryMu.Lock()

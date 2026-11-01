@@ -96,7 +96,7 @@ func TestCapRED_RunTask_UnreadableLifecycleIsAnError(t *testing.T) {
 	}
 	ctx := tools.WithAgentID(context.Background(), "planner-agent")
 	first := capRedToolJSON(t, inst.Tools.Execute(ctx, "run_task", map[string]any{"task_id": tk.ID}))
-	sid := first["session_id"].(string)
+	sid := capRedValue[string](t, "run_task session_id", first["session_id"])
 	path := filepath.Join(al.GetSessionLifecycleStore().Dir(), sid+".jsonl")
 	original, err := os.ReadFile(path)
 	if err != nil {
