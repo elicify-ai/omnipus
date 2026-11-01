@@ -1904,7 +1904,7 @@ func (s *Store) AdvanceUnblocked(id string) (*Task, error) {
 // waiting. promoted is false (and the task unchanged) when it was not inbox
 // or is held.
 func (s *Store) PromoteInboxIfReleased(id string) (t *Task, promoted bool, err error) {
-	if err := validateID(id); err != nil {
+	if err = validateID(id); err != nil {
 		return nil, false, err
 	}
 	mu := s.lock.Get(id)

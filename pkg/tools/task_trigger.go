@@ -119,7 +119,7 @@ func TriggerFromArg(raw any) (*task.Trigger, error) {
 
 func optionalInt64(cfg map[string]any, key string) (*int64, error) {
 	if _, present := cfg[key]; !present {
-		return nil, nil
+		return nil, nil //nolint:nilnil // An absent optional key is no value, not an error.
 	}
 	v, err := getInt64Arg(cfg, key, 0)
 	if err != nil {
@@ -131,7 +131,7 @@ func optionalInt64(cfg map[string]any, key string) (*int64, error) {
 func optionalString(cfg map[string]any, key string) (*string, error) {
 	raw, present := cfg[key]
 	if !present {
-		return nil, nil
+		return nil, nil //nolint:nilnil // An absent optional key is no value, not an error.
 	}
 	s, ok := raw.(string)
 	if !ok {
