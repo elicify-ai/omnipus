@@ -83,7 +83,6 @@ func NewWeixinChannel(
 		messageBus,
 		cfg.AllowFrom,
 		channels.WithMaxMessageLength(4000),
-		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
 
 	return &WeixinChannel{

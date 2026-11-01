@@ -116,7 +116,6 @@ func NewGoogleChatChannel(
 
 	base := channels.NewBaseChannel("google-chat", cfg, b, cfg.AllowFrom,
 		channels.WithGroupTrigger(cfg.GroupTrigger),
-		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
 
 	ch := &GoogleChatChannel{
