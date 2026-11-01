@@ -48,8 +48,8 @@ func TestSkillWriteAudit_NormalMutationCompletePayload(t *testing.T) {
 	require.NotEmpty(t, paths, "real logger wrote audit bytes")
 	committed := []audit.Entry{}
 	for _, p := range paths {
-		f, err := os.Open(p)
-		require.NoError(t, err)
+		f, openErr := os.Open(p)
+		require.NoError(t, openErr)
 		scan := bufio.NewScanner(f)
 		for scan.Scan() {
 			var row audit.Entry

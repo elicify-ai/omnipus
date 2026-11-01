@@ -119,19 +119,21 @@ func TestExtractFrontmatter(t *testing.T) {
 			frontmatter := sl.extractFrontmatter(tc.content)
 			assert.NotEmpty(t, frontmatter, "Frontmatter should be extracted for %s line endings", tc.lineEndingType)
 
-			// Parse YAML to get name and description (parseSimpleYAML now handles all line ending types)
-			yamlMeta := sl.parseSimpleYAML(frontmatter)
+			// FR-002 removes the old parser helper. Exercise the loader metadata
+			// boundary with the original bytes, retaining every line-ending case.
+			yamlMeta := sl.parseSkillMetadata(filepath.Join("test-skill", "SKILL.md"), []byte(tc.content))
+			require.NotNil(t, yamlMeta)
 			assert.Equal(
 				t,
 				tc.expectedName,
-				yamlMeta["name"],
+				yamlMeta.Name,
 				"Name should be correctly parsed from frontmatter with %s line endings",
 				tc.lineEndingType,
 			)
 			assert.Equal(
 				t,
 				tc.expectedDesc,
-				yamlMeta["description"],
+				yamlMeta.Description,
 				"Description should be correctly parsed from frontmatter with %s line endings",
 				tc.lineEndingType,
 			)

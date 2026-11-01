@@ -80,7 +80,7 @@ func pageIDs(t *testing.T, page map[string]any) []string {
 	t.Helper()
 	rows, ok := page["items"].([]any)
 	require.True(t, ok)
-	ids := []string{}
+	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		m, ok := row.(map[string]any)
 		require.True(t, ok)

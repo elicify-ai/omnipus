@@ -117,7 +117,6 @@ func TestSkillListTool_PureManagementListAndSelectedDetailAreUnfiltered(t *testi
 	if detail["id"] != "release" || detail["revision"] != entry["revision"] {
 		t.Fatalf("detail/list snapshot identity mismatch: %#v vs %#v", detail, entry)
 	}
-
 }
 
 func TestSkillListTool_ManagementRejectsTraversalUnknownAndSymlinkEscape(t *testing.T) {

@@ -527,8 +527,8 @@ func TestGetSkill_LockedReadCoherence(t *testing.T) {
 	wait:
 		for {
 			select {
-			case err := <-done:
-				t.Fatalf("writer crossed paused read: %v", err)
+			case writeErr := <-done:
+				t.Fatalf("writer crossed paused read: %v", writeErr)
 			case <-deadline.C:
 				t.Fatal("writer never reached registry-lock wait")
 			default:
