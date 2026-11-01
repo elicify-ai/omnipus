@@ -68,7 +68,9 @@ func TestWU25CreateAgent_InvalidVisualsExplainChoicesAndWriteNothing(t *testing.
 			h := newWU25Harness(t)
 			before := wu25Snapshot(t, h.home)
 			args := wu25CreateArgs("Refused Visual", "Main")
-			args["heartbeat"] = "Must not be persisted."
+			// AG-06 retires heartbeat; use a legal sibling so its refusal
+			// cannot mask the visual error this test is intended to exercise.
+			args["soul"] = "Must not be persisted."
 			args[tc.field] = tc.value
 			result := h.call(t, "create_agent", args)
 			require.True(t, result.IsError, "R1: invalid %s %s must be refused, got %s", tc.field, tc.name, result.ForLLM)

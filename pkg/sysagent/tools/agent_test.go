@@ -689,30 +689,22 @@ func TestConcurrentRESTAndSysagentConfigWrite(t *testing.T) {
 	}
 }
 
-// TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass verifies that
-// system.agent.create and system.agent.update write content-only to SOUL.md
-// and HEARTBEAT.md (no extra frontmatter injection, no extra files).
-//
-// This locks the content-only invariant per issue #240: the create/update paths
-// are the canonical write path for soul/heartbeat content. agent.write_metadata
-// must not change this — both paths must produce byte-for-byte identical content
-// on disk.
-//
-// Traces to: issue #240 regression lock A.
+// TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass preserves issue
+// #240's exact content-only SOUL create/update invariant: no frontmatter
+// injection or extra files. r17 AG-06 removes heartbeat from create_agent;
+// its former write path is intentionally not a creation fixture anymore.
 func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 	// Fixture keyed by the id the name produced before ids became generated UUIDs.
 	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, home := newTestDepsWithHome(t)
 
 	soulContent := "You are a focused research assistant."
-	heartbeatContent := "Check in every morning at 9am."
 
 	createTool := systools.NewAgentCreateTool(deps)
 	result := createTool.Execute(context.Background(), map[string]any{
 		"name":        "Content Only Bot",
 		"description": "A content-only research assistant",
 		"soul":        soulContent,
-		"heartbeat":   heartbeatContent,
 		"model":       "test/model",
 		"color":       "#6E8BA8",
 	})
@@ -728,14 +720,6 @@ func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 	}
 	if string(soulOnDisk) != soulContent {
 		t.Errorf("SOUL.md content mismatch:\ngot:  %q\nwant: %q", string(soulOnDisk), soulContent)
-	}
-
-	hbOnDisk, err := os.ReadFile(filepath.Join(wsPath, "HEARTBEAT.md"))
-	if err != nil {
-		t.Fatalf("read HEARTBEAT.md: %v", err)
-	}
-	if string(hbOnDisk) != heartbeatContent {
-		t.Errorf("HEARTBEAT.md content mismatch:\ngot:  %q\nwant: %q", string(hbOnDisk), heartbeatContent)
 	}
 
 	// Update soul — verify SOUL.md still content-only (no frontmatter injection).
