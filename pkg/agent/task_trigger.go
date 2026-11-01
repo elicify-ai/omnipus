@@ -1016,7 +1016,20 @@ func (s *TaskTriggerScheduler) OnTaskDeleted(taskID string) {
 // (Scheduler rule 7) except a successful dispatch, which returns
 // cron.ErrRunHandedOff so its job is kept until the run settles (6b U2b,
 // task_trigger_once_settle.go).
+//
+// The owed fire of a crashed one-time trigger is first held until the task
+// executor's session plane is wired (holdBootOwedFire,
+// task_trigger_boot_hold.go); it then runs through runScheduledFire exactly
+// like any other fire.
 func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (string, error) {
+	if s.holdBootOwedFire(ctx, job) {
+		return "", cron.ErrRunHandedOff
+	}
+	return s.runScheduledFire(ctx, job)
+}
+
+// runScheduledFire is RunScheduled's body: one fire of job, dispatched now.
+func (s *TaskTriggerScheduler) runScheduledFire(ctx context.Context, job *cron.CronJob) (string, error) {
 	taskID := job.Payload.Message
 	if taskID == "" {
 		slog.Warn("task_trigger: RunScheduled called with empty task ID in payload",

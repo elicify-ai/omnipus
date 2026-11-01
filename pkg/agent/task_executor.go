@@ -71,6 +71,10 @@ type TaskExecutor struct {
 	// mainResolver answers which (workspace, agent) pairs own a visible main
 	// (session-core U6, D-U6.1); nil leaves every run ISOLATED.
 	mainResolver MainSessionResolver
+	// planeWaiters are boot-owed trigger fires held until the session plane
+	// (launcher, lifecycle store, main resolver) is wired
+	// (task_trigger_boot_hold.go). Guarded by mu.
+	planeWaiters []func()
 	mu           sync.Mutex
 	running      map[string]*taskSlot
 	// dispatchSema is the ONLY concurrency gate on task dispatch. It bounds
@@ -218,10 +222,16 @@ type TaskExecutor struct {
 
 // SetSessionLauncher installs ADR-091's single session launch/dispatch
 // primitive. StartTaskNow is its task-front consumer.
+// It is one of the three session-plane parts a held boot-owed fire waits for
+// (releaseSessionPlaneWaiters).
 func (te *TaskExecutor) SetSessionLauncher(launcher steer.SessionLauncher) {
-	if te != nil {
-		te.launcher = launcher
+	if te == nil {
+		return
 	}
+	te.mu.Lock()
+	te.launcher = launcher
+	te.mu.Unlock()
+	te.releaseSessionPlaneWaiters()
 }
 
 // newTaskExecutor creates a TaskExecutor over the unified task store.
@@ -350,6 +360,7 @@ func (te *TaskExecutor) SetLifecycleStore(ls *session.LifecycleStore) {
 	te.mu.Lock()
 	te.lifecycleStore = ls
 	te.mu.Unlock()
+	te.releaseSessionPlaneWaiters()
 }
 
 // getLifecycleStore returns the installed lifecycle store (nil if unset),
