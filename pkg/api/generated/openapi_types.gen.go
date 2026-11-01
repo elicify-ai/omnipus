@@ -15723,15 +15723,15 @@ type ChannelConfigureResponse struct {
 	// ApplyNote Present whenever a reload was attempted (every outcome except no_reload_needed): "A connection restart was attempted; other connections and scheduled services may have paused briefly while it ran."
 	ApplyNote *string `json:"apply_note,omitempty"`
 
-	// ApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason has its short text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+	// ApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
 	ApplyOutcome ChannelConfigureResponseApplyOutcome `json:"apply_outcome"`
 
-	// ApplyReason Present for applied_not_running (the availability reason) and failed (the error's short text). Never a secret.
+	// ApplyReason Present for applied_not_running (the availability reason) and failed (a fixed, secret-free phrase, never the raw error text). For failed, use "the configuration reload failed; details are in the server log", or, when the applied/current predicate reaches the pending-disposal leg, "the previous connection did not finish shutting down; the next save retries it". A config-changing save uses the reload phrase because the applied-hash check precedes the disposal check. An identical save with matching applied settings while a disposal remains pending uses the disposal phrase. Error details stay in the server log. Never a secret.
 	ApplyReason          *string                `json:"apply_reason,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
-// ChannelConfigureResponseApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason has its short text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+// ChannelConfigureResponseApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
 type ChannelConfigureResponseApplyOutcome string
 
 // ChannelCreateRequest Request body for POST /channels — creates a new channel instance. The instance key is derived as "<type>.<slug>" (ADR-029 FR-017).
