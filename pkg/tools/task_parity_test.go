@@ -218,19 +218,10 @@ func TestUpdateTask_PromptAndGoalSync(t *testing.T) {
 	})
 
 	t.Run("1.13 two interleaved writers: goal prompt equals the CURRENT persisted task prompt", func(t *testing.T) {
-		store, gs := parityStorePair(t)
-		tk := parityTask(t, store, "agent-a", "agent-b", "ws-a", task.StatusInbox, true)
-		tool := NewTaskUpdateTool(store)
-
-		_ = gs
-		_ = tk
-		_ = tool
-		// The old fixture let B finish while A held the coordination lock;
-		// that deadlocks a conforming implementation. The required schedule
-		// is A held -> B demonstrably queued -> release A -> join both.
-		// No shared REST/tool ordering boundary or injectable in-lock seam
-		// exists at dbdd1da6a. Do not invent a hook in production during RED.
-		t.Fatal("BLOCKED: shared REST/tool task-write + goal-sync ordering boundary and its in-lock fixture seam not implemented — required by §7.2 TK-03 / scenario 1.13; assert B queued before releasing A, then task and goal both Beta[:4000]")
+		// The new shared production writer exposes a real post-persistence,
+		// pre-goal callback. The barrier and queue observer are test-owned.
+		// B must be observed waiting before A is released, never joined first.
+		testT8PromptWriteOrder(t)
 	})
 }
 

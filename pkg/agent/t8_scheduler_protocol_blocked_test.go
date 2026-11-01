@@ -2,11 +2,34 @@ package agent
 
 // Commissioning failures, NOT behavioral RED. r17 requires deterministic
 // schedules at these exact ordering boundaries and a persisted delivery marker.
-// These fixtures are not bound in this pack. This is NOT proof that every
-// usable process-edge seam is absent: real filesystem replacement failures can
-// exercise cron saves, and existing re-arm/SpawnReset seams remain available.
-// Do not invent a hook or move a pause under a lock that a concurrent writer
-// needs. The single T8 test author owns the remaining fixture reconciliation.
+// The exact barriers below are not bound in this pack. N-2 overlap map:
+//   - 1.14: TestT8GoalSync_WriteFailureDoesNotStrandSchedule establishes the
+//     real goal-write fault, but its latest run stops at rejected prompt.
+//     1.15: TestT8ScheduleSync_RealCronSaveFailureAfterAppend establishes the
+//     cron-save fault; rejected trigger stops its latest run before the
+//     de-arm/re-arm assertions. Those assertions already exist: do not author
+//     duplicate fixtures or credit their unexecuted reconciliation aftermath.
+//   - 18.25/18.26: TestT8Scheduler_StaleProducerCannotRestoreClearedTrigger
+//     executes old-snapshot notification after clear/replacement. It does not
+//     pause the terminal/recovery producer before its ordering boundary.
+//   - 18.31/18.32/18.34: TestT8TaskTrigger_PendingLaneWaitProtectsPlan drives
+//     actual lane occupancy, pending ownership and plan/drain observations;
+//     TestT8CronDispatch_OriginalIDSettlement drives cron settlement. Neither
+//     is the exact collector-unlock/two-job/pre-marker interleave below.
+//   - 18.33a/b1/c and 18.36:
+//     TestT8DeliveryMarker_SettledInvalidationAndIdenticalSave already contains
+//     the settled-marker clear/replacement/identical-save/sweep sequences.
+//     Its failed marker prerequisite does NOT execute the later assertions.
+//   - 18.40a-c: TestTaskTrigger_ReloadKeepsLiveScheduler_ProductionPath in
+//     pkg/gateway drives real reload with overdue and damaged-store cases;
+//     queued dispatch and collection-save fault are distinct remainders.
+// Execution receipts and per-sub-claim limits are recorded in the T8 RED
+// traceability report. A neighbour being executable is not a product PASS.
+// This is NOT proof that every usable process-edge seam is absent: real
+// filesystem replacement failures exercise cron saves, and existing
+// re-arm/SpawnReset seams remain available. Do not invent a hook or move a
+// pause under a lock that a concurrent writer needs. The single T8 test
+// author owns the remaining fixture reconciliation.
 import "testing"
 
 func TestTaskTrigger_ReconciliationOrderingAndPartialFailure(t *testing.T) {

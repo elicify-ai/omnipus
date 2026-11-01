@@ -48,7 +48,7 @@ func TestT8Readers_ProductionRegistryStillReadsTaskAfterGatewayReload(t *testing
 	require.NoError(t, err)
 	t.Cleanup(func() { stopAndCleanupServices(rs, 5*time.Second, false) })
 	rs.loadConfigForSwap = newReloadConfigLoader(path, home, creds, rs)
-	tk := &task.Task{Title: "read after actual reload", Prompt: "stored instruction", Action: task.ActionLLM, Status: task.StatusInbox, AgentID: "mia", CreatedBy: "mia", CreatedByAgentID: "mia"}
+	tk := &task.Task{Title: "read after actual reload", Prompt: "stored instruction", Action: task.ActionLLM, Status: task.StatusInbox, AgentID: "mia", WorkspaceID: testHarnessWorkspaceMembershipID, CreatedBy: "mia", CreatedByAgentID: "mia"}
 	require.NoError(t, agent.GetTaskStore(al).Create(tk))
 	provider := providers.LLMProvider(&restMockProvider{})
 	require.NoError(t, handleConfigReload(context.Background(), al, cfg, &provider, rs, msgBus, true), "instrument: real running gateway reload completed")

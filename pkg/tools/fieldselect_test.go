@@ -146,7 +146,7 @@ func t8EncodedLen(t *testing.T, v any) int {
 func t8SchemaProps(t *testing.T, v any) []string {
 	t.Helper()
 	rt := reflect.TypeOf(v)
-	require.Equal(t, reflect.Ptr, rt.Kind(), "pass a pointer to the generated struct")
+	require.Equal(t, reflect.Pointer, rt.Kind(), "pass a pointer to the generated struct")
 	path := filepath.Join("..", "..", "contracts", "components", "schemas", rt.Elem().Name()+".yaml")
 	data, err := os.ReadFile(path)
 	require.NoError(t, err, "read the source schema, not a second hand-maintained property list")
@@ -196,9 +196,6 @@ func t8FieldSelectParseCases(t *testing.T) {
 	t.Helper()
 	t.Run("parse: fields missing, empty, wrong type, non-string items (20.1, 20.2)", func(t *testing.T) {
 		for _, spec := range []FieldSpec{t8SpecAgent(), t8SpecPreview(), t8SpecTask(), t8SpecPlan(), t8SpecGoal()} {
-			want := fmt.Sprintf(
-				`fields is required for %s: pass ["all"] or one or more of: %s`,
-				spec.Object, strings.Join(spec.Valid, ", "))
 			for name, args := range map[string]map[string]any{
 				"missing":            {},
 				"empty array":        {"fields": []any{}},
@@ -210,7 +207,8 @@ func t8FieldSelectParseCases(t *testing.T) {
 				require.Nil(t, selected, "%s/%s: no names may be selected on refusal", spec.Object, name)
 				require.NotNil(t, errRes, "%s/%s: fields=%v must be refused", spec.Object, name, args["fields"])
 				assert.True(t, errRes.IsError, "%s/%s: refusal must be an error result", spec.Object, name)
-				assert.Equal(t, want, errRes.ForLLM,
+				assert.Equal(t, fmt.Sprintf(`fields is required for %s: pass ["all"] or one or more of: %s`,
+					spec.Object, strings.Join(spec.Valid, ", ")), errRes.ForLLM,
 					"%s/%s: the required-fields text is byte-for-byte (§7.13)", spec.Object, name)
 			}
 		}
@@ -229,13 +227,13 @@ func t8FieldSelectParseCases(t *testing.T) {
 			{t8SpecGoal(), "prompt"},
 		}
 		for _, tc := range cases {
-			want := fmt.Sprintf(`unknown field "nope" for %s. Valid: all, %s`,
-				tc.spec.Object, strings.Join(tc.spec.Valid, ", "))
 			selected, errRes := t8ValidateFieldsArg(t, map[string]any{"fields": []any{tc.val, "nope"}}, tc.spec)
 			require.Nil(t, selected)
 			require.NotNil(t, errRes)
 			assert.True(t, errRes.IsError)
-			assert.Equal(t, want, errRes.ForLLM, "%s: unknown-field text is byte-for-byte", tc.spec.Object)
+			assert.Equal(t, fmt.Sprintf(`unknown field "nope" for %s. Valid: all, %s`,
+				tc.spec.Object, strings.Join(tc.spec.Valid, ", ")), errRes.ForLLM,
+				"%s: unknown-field text is byte-for-byte", tc.spec.Object)
 		}
 	})
 
@@ -252,11 +250,10 @@ func t8FieldSelectParseCases(t *testing.T) {
 		}
 		for _, tc := range cases {
 			for _, name := range tc.answers {
-				want := fmt.Sprintf(`unknown field %q for %s. Valid: all, %s`,
-					name, tc.spec.Object, strings.Join(tc.spec.Valid, ", "))
 				_, errRes := t8ValidateFieldsArg(t, map[string]any{"fields": []any{name}}, tc.spec)
 				require.NotNil(t, errRes, "%s: %q must not be selectable", tc.spec.Object, name)
-				assert.Equal(t, want, errRes.ForLLM)
+				assert.Equal(t, fmt.Sprintf(`unknown field %q for %s. Valid: all, %s`,
+					name, tc.spec.Object, strings.Join(tc.spec.Valid, ", ")), errRes.ForLLM)
 			}
 		}
 	})
@@ -305,7 +302,6 @@ func t8FieldSelectParseCases(t *testing.T) {
 		require.NotNil(t, errRes)
 		assert.Equal(t, generic, errRes.ForLLM)
 	})
-
 }
 
 func t8FieldSelectProjectionCases(t *testing.T) {
@@ -356,7 +352,6 @@ func t8FieldSelectProjectionCases(t *testing.T) {
 		require.Nil(t, out["maybe_null"], "a carried null stays null")
 		assert.Equal(t, "value", out["filled"])
 	})
-
 }
 
 func t8FieldSelectCutCases(t *testing.T) {
@@ -493,7 +488,6 @@ func t8FieldSelectCutCases(t *testing.T) {
 		assert.Equal(t, []string{"paused_reason"}, t8StringSlice(t, out["truncated_fields"]))
 		assert.Equal(t, paused[:8000]+t8CutMarker(50000), out["paused_reason"])
 	})
-
 }
 
 func t8FieldSelectOversizeCases(t *testing.T) {
@@ -757,7 +751,7 @@ func t8FieldsEnum(t *testing.T, params map[string]any) []string {
 	require.True(t, ok, "fields.items must declare the enum (FR-184)")
 	enumList, ok := enumRaw.([]any)
 	require.True(t, ok)
-	var out []string
+	out := make([]string, 0, len(enumList))
 	for _, v := range enumList {
 		s, ok := v.(string)
 		require.True(t, ok, "enum entries must be strings")
@@ -835,7 +829,7 @@ func setString(t *testing.T, obj any, field, value string) {
 	rv := reflect.ValueOf(obj).Elem()
 	f := rv.FieldByName(field)
 	require.True(t, f.IsValid(), "field %s does not exist on %T — regenerate check", field, obj)
-	require.Equal(t, reflect.Ptr, f.Kind(), "field %s must be a *string", field)
+	require.Equal(t, reflect.Pointer, f.Kind(), "field %s must be a *string", field)
 	require.Equal(t, reflect.String, f.Type().Elem().Kind())
 	f.Set(reflect.ValueOf(&value))
 }

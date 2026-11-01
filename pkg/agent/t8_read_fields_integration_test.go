@@ -214,9 +214,12 @@ func TestT8ReadFields_RealOversizeArraysAndSmallerRetry(t *testing.T) {
 	t.Run("20.8b plan DoD never cut", func(t *testing.T) {
 		f := t8ReadLoop(t)
 		p := f.plan(t, "array-plan", "reader-a", "reader-a", "agent", testHarnessWorkspaceMembershipID)
-		var dod []task.AcceptanceCriterion
-		for i := range 30 {
-			dod = append(dod, task.AcceptanceCriterion{Kind: task.KindProse, Text: fmt.Sprintf("%02d ", i) + strings.Repeat("D", 1990), Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "reader-a"}})
+		// AcceptanceCriterionInput.text allows at most 1,000 characters. Fifty
+		// valid 1,000-character items exceed the r17 48,000-character result
+		// limit without making the stored-array fixture itself invalid.
+		dod := make([]task.AcceptanceCriterion, 0, 50)
+		for i := range 50 {
+			dod = append(dod, task.AcceptanceCriterion{Kind: task.KindProse, Text: fmt.Sprintf("%02d ", i) + strings.Repeat("D", 997), Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "reader-a"}})
 		}
 		p, err := f.ps.Update(p.ID, plan.Patch{DoD: &dod})
 		require.NoError(t, err)

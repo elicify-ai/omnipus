@@ -144,7 +144,7 @@ func TestParityGuard_RecursiveMutationFixtures(t *testing.T) {
 	toolPaths := t8SchemaLeaves(schema, "")
 	sort.Strings(toolPaths)
 	require.Equal(t, want, toolPaths)
-	var rows []t8ParityRow
+	rows := make([]t8ParityRow, 0, len(want)*2)
 	for _, side := range []string{"REST", "tool"} {
 		for _, path := range want {
 			rows = append(rows, t8ParityRow{side: side, path: path, operation: "both"})

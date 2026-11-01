@@ -2,10 +2,12 @@ package gateway
 
 import "testing"
 
-// Oracle: r17 §3.6–3.11. These rows need the Settings path/preset
-// authority, absent at the contract pin. They deliberately fail rather than
-// exercising the older per-agent CLIPath/PATH fallback as if it were T8.
-// No process-spawn, argv, audit or safety claim is verified by these fatals.
+// Oracle: r17 §3.6–3.11. The Settings authority was absent at the contract
+// pin; real Settings endpoint/path tests now execute in this pack. These
+// remaining dispatch/read integration fixtures are still unbound. They
+// deliberately fail rather than exercising the older per-agent CLIPath/PATH
+// fallback as if it were T8. This is not a claim the Settings endpoint is
+// still missing. No process-spawn, argv, audit or safety claim is verified.
 func TestSpawnSettings_MissingAuthorityPrerequisites(t *testing.T) {
 	for _, row := range []struct{ id, want string }{
 		{"6.7", "get_agent resolves Settings path and omits program_warning and SOUL"},
@@ -22,7 +24,7 @@ func TestSpawnSettings_MissingAuthorityPrerequisites(t *testing.T) {
 		{"9.19", "preset uses the same quoted-argument parsing as cli_args"},
 	} {
 		t.Run(row.id, func(t *testing.T) {
-			t.Fatalf("BLOCKED: sandbox.third_party_agents.clis Settings path/preset authority not implemented — required by r17 §3 / %s: %s", row.id, row.want)
+			t.Fatalf("BLOCKED: Settings-bound dispatch/read integration fixture not bound — required by r17 §3 / %s: %s; real endpoint coverage is separate", row.id, row.want)
 		})
 	}
 }

@@ -80,9 +80,13 @@ func TestTaskFields_D1_Boundaries(t *testing.T) {
 			case "priority":
 				assert.Equal(t, tc.value, got.Priority)
 			case "tags":
-				want := []string{}
-				for _, v := range tc.value.([]any) {
-					want = append(want, v.(string))
+				values, ok := tc.value.([]any)
+				require.True(t, ok, "the tags fixture must be an array")
+				want := make([]string, 0, len(values))
+				for _, v := range values {
+					value, ok := v.(string)
+					require.True(t, ok, "the tags fixture must contain strings")
+					want = append(want, value)
 				}
 				assert.Equal(t, want, got.Tags)
 			}

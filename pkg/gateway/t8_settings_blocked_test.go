@@ -194,7 +194,9 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 				}
 				if tc.kind == "workspace-middle" {
 					ws := seedLibraryWorkspace(t, f.api, "T8 middle link")
-					middle := filepath.Join(workDir(f.api, ws), "middle")
+					workspaceDir := workDir(f.api, ws)
+					require.NoError(t, os.MkdirAll(workspaceDir, 0o755), "fixture: materialize the workspace that owns the middle link")
+					middle := filepath.Join(workspaceDir, "middle")
 					require.NoError(t, os.Symlink(target, middle))
 					target = middle
 					at = middle

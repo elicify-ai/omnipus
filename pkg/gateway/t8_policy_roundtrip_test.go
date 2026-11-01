@@ -27,6 +27,13 @@ func TestT8Permissions_PersonToolsAndGlobalScreensRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		cfg.Agents.List = append(cfg.Agents.List, custom)
 		require.NoError(t, config.SaveConfig(api.configPath(), cfg))
+		// Persisting a custom entity does not register its runtime instance.
+		// Use the actual create path's registry wiring before the Tools GET;
+		// an unrelated unregistered-agent 404 is not screens-save evidence.
+		_, err = api.agentLoop.UpsertAgentFast(cfg, custom.ID)
+		require.NoError(t, err, "fixture: register the real persisted custom agent")
+		_, registered := api.agentLoop.GetRegistry().GetAgent(custom.ID)
+		require.True(t, registered, "instrument: Tools GET can resolve the custom agent")
 		before, err := store.ReadState(custom.ID)
 		require.NoError(t, err)
 		get := httptest.NewRecorder()
