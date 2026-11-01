@@ -6686,6 +6686,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/composer/ComposerEffortChip.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/composer/TokenCounter.tsx",
       "lane": 3
     },

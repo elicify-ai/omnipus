@@ -1064,6 +1064,34 @@
       "path": "src/components/chat/composer/ComposerMenu.tsx",
       "syntax": "<button>",
       "count": 1
+    },
+    {
+      "fingerprint": "80ddcbf7ba6ce8432b80b1d8e2d1ccd9eeaf80e0a5215db7bde029a6bad68551",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/chat/composer/ComposerEffortChip.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "count": 1
+    },
+    {
+      "fingerprint": "cf53cacc8d4e60a8a57f9fd6d49617cf994bdb02b25757b041de503ae97a3553",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/DefaultModelCard.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "count": 1
+    },
+    {
+      "fingerprint": "68e34537c1f2226ece77b37925e9b6a9668d0055bcd5fd4c62e8bb158a8e0a93",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/RemoveProviderDialog.tsx",
+      "syntax": "import { QuietEffortLine } from \"src/components/ui/model-effort-picker\"",
+      "count": 1
+    },
+    {
+      "fingerprint": "fd1100fae3f63e56d728868d90a621afba10a3396ba0b54241eccd71d8aeef87",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/routes/onboarding.tsx",
+      "syntax": "import { QuietEffortLine } from \"src/components/ui/model-effort-picker\"",
+      "count": 1
     }
   ]
 }

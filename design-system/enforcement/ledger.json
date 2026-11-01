@@ -1368,6 +1368,42 @@
       "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Relocate `import { FormError } from \"src/components/ui/FormError\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
       "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "80ddcbf7ba6ce8432b80b1d8e2d1ccd9eeaf80e0a5215db7bde029a6bad68551",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/chat/composer/ComposerEffortChip.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 3: Chat, sessions and conversation surfaces",
+      "replacement": "Relocate `import { EffortControl } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "cf53cacc8d4e60a8a57f9fd6d49617cf994bdb02b25757b041de503ae97a3553",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/DefaultModelCard.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Relocate `import { EffortControl } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "68e34537c1f2226ece77b37925e9b6a9668d0055bcd5fd4c62e8bb158a8e0a93",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/RemoveProviderDialog.tsx",
+      "syntax": "import { QuietEffortLine } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Relocate `import { QuietEffortLine } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "fd1100fae3f63e56d728868d90a621afba10a3396ba0b54241eccd71d8aeef87",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/routes/onboarding.tsx",
+      "syntax": "import { QuietEffortLine } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 1: Workspace board, list, graph and task/plan controls",
+      "replacement": "Relocate `import { QuietEffortLine } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
     }
   ],
   "exceptions": [

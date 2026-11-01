@@ -506,7 +506,9 @@
         "ModelEffortPicker",
         "EffortControlProps",
         "RECAP_OFF_NOT_SENDABLE_TEXT",
-        "EffortControl"
+        "EffortControl",
+        "QuietEffortLineProps",
+        "QuietEffortLine"
       ],
       "publicExports": [],
       "publicTypes": []
