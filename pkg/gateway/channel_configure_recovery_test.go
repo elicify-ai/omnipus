@@ -13,9 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/stretchr/testify/require"
 )
@@ -271,5 +273,169 @@ func TestT02b_CaseG_StaleBundleInterleaving_NeedsCapturePauseSeam(t *testing.T) 
 }
 
 func TestT02b_DuringCaptureInterleaving_RequiresAffectedReferenceReadPause(t *testing.T) {
-	t.Fatal("BLOCKED: a pause after the affected credential reference read but before remaining bundle reads finish is not implemented — required by R8-MIN-001 / FR-050 leg 5. S-88 g's adapter-Stop barrier and the implementation's rebuild hook are after-capture only")
+	// R8-MIN-001: pause INSIDE the final ResolveAll, after A's Get and before
+	// a distinct later reference. The unused union SecretRef guarantees that
+	// later read within this same instance, independent of map traversal order;
+	// the real LINE constructor still consumes its actual access-token ref.
+	const laterRef = "QA_T02B_LATER_CAPTURE_REFERENCE"
+	f := t02BootFixture(t, func(base *issue1277Fixture) {
+		inst := base.cfg.Channels["line.healthy"]
+		inst.SecretRef = laterRef
+		base.cfg.Channels["line.healthy"] = inst
+		require.NoError(t, base.store.Set(laterRef, "qa-t02b-later-reference-value"))
+	})
+	mgr := f.svc.ChannelManager
+	status, first := t02bConfigure(t, f, "line.healthy", `{"channel_access_token":"`+issue1277HealthyAccess+`"}`)
+	require.Equal(t, http.StatusOK, status, first)
+	t02bRequireOutcome(t, first, "applied", "during-capture: establish A under the selected reference")
+	ref := f.al.GetConfig().Channels["line.healthy"].ChannelAccessTokenRef
+	require.Equal(t, "channel_line.healthy_channel_access_token", ref)
+	_, pending := mgr.PendingApplication("line.healthy")
+	require.False(t, pending, "instrument: A's completed application acknowledged its own write")
+	require.Same(t, f.api.credStore, f.svc.credStore, "instrument: Configure and capture use the SAME real vault")
+	beforeDisk, err := os.ReadFile(f.f1277.configPath)
+	require.NoError(t, err)
+	beforeA, beforeB := f.f1277.authorizedProbes.Load(), f.f1277.connectProbes.Load()
+
+	entered, resume := make(chan struct{}), make(chan struct{})
+	storeEntered, resumeStore := make(chan struct{}), make(chan struct{})
+	reloadDone, writeDone := make(chan struct{}), make(chan struct{})
+	var pauseOnce, releaseOnce, storeOnce, releaseStoreOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(resume) }) }
+	releaseStore := func() { releaseStoreOnce.Do(func() { close(resumeStore) }) }
+	var finalReadsArmed, affectedRead, laterRead, finalCaptured atomic.Bool
+	previousLoader := f.svc.loadConfigForSwap
+	previousStoreHook := configureStoreCredential
+	previousReadHook := credentials.ResolveAllReadHookForTest
+	previousCaptureHook := reloadCredentialCaptureHook
+	dir := filepath.Dir(f.f1277.configPath)
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	var reloadErr error
+	var rec *httptest.ResponseRecorder
+	reloadStarted, writeStarted := false, false
+	t.Cleanup(func() {
+		releaseStore()
+		release()
+		if reloadStarted {
+			<-reloadDone
+		}
+		if writeStarted {
+			<-writeDone
+		}
+		// Join before restoring hooks, permissions or fixture dependencies.
+		configureStoreCredential = previousStoreHook
+		credentials.ResolveAllReadHookForTest = previousReadHook
+		reloadCredentialCaptureHook = previousCaptureHook
+		f.svc.loadConfigForSwap = previousLoader
+		require.NoError(t, os.Chmod(dir, info.Mode().Perm()))
+	})
+	// Delegate every real reread unchanged. Only the swap-time reread holds
+	// configMu; the initial manual-reload read does not. The B request below
+	// parks before its store, not while holding configMu. This selects the
+	// final capture without assuming a fixed capture count.
+	f.svc.loadConfigForSwap = func() (*config.Config, error) {
+		cfg, loadErr := previousLoader()
+		if loadErr == nil {
+			if f.api.configMu.TryLock() {
+				f.api.configMu.Unlock()
+			} else {
+				finalReadsArmed.Store(true)
+			}
+		}
+		return cfg, loadErr
+	}
+	credentials.ResolveAllReadHookForTest = func(readRef string) {
+		if !finalReadsArmed.Load() {
+			return
+		}
+		if readRef == ref {
+			pauseOnce.Do(func() {
+				affectedRead.Store(true)
+				close(entered)
+				<-resume
+			})
+		} else if affectedRead.Load() && readRef == laterRef {
+			laterRead.Store(true)
+		}
+	}
+	reloadCredentialCaptureHook = func(stage string) {
+		if stage == "captured" && finalReadsArmed.Swap(false) {
+			finalCaptured.Store(true)
+		}
+	}
+	// Configure's validation reads config under configMu before it stores.
+	// Start it before reload takes that lock, then pause only its actual store
+	// boundary. Release the real B write only once the final resolver has A.
+	configureStoreCredential = func(a *restAPI, name, secret string) error {
+		if name == ref && secret == issue1277ConnectAccess {
+			storeOnce.Do(func() { close(storeEntered) })
+			<-resumeStore
+		}
+		return previousStoreHook(a, name, secret)
+	}
+	writeStarted = true
+	go func() {
+		rec = f.do(http.MethodPut, "/api/v1/channels/line.healthy/configure",
+			`{"channel_access_token":"`+issue1277ConnectAccess+`"}`)
+		close(writeDone)
+	}()
+	select {
+	case <-storeEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("instrument: B request never reached the real credential-store boundary")
+	}
+	mgr.RequestRestart("line.healthy", "", f.al.GetConfig())
+	reloadStarted = true
+	go func() {
+		_, reloadErr = f.api.triggerReloadAndWaitOutcome()
+		close(reloadDone)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("instrument: final bundle capture never paused immediately after reading the affected reference")
+	}
+	require.True(t, affectedRead.Load())
+	require.False(t, laterRead.Load(), "R8-MIN-001: the distinct later reference has not yet been read")
+	require.False(t, finalCaptured.Load(), "R8-MIN-001: this is not an after-capture barrier")
+	releaseStore()
+	versionB := t02WaitPending(t, mgr, "line.healthy")
+	require.Positive(t, versionB, "instrument: Configure advanced a real non-secret marker for B")
+	storedB, err := f.api.credStore.Get(ref)
+	require.NoError(t, err)
+	require.Equal(t, issue1277ConnectAccess, storedB, "B is accepted by the same vault while capture still holds A")
+	// Only NOW remove config-directory write permission: the vault has already
+	// stored B, and Configure is waiting for the final capture's config lock.
+	// No second vault or manual copy of B is used to manufacture recovery.
+	require.NoError(t, os.Chmod(dir, 0o500))
+	release()
+	<-reloadDone
+	<-writeDone
+	require.NoError(t, os.Chmod(dir, info.Mode().Perm()))
+	require.NoError(t, reloadErr, "the older A-based rebuild completes successfully")
+	require.True(t, laterRead.Load(), "instrument: the same final ResolveAll resumed and read the distinct later reference")
+	require.True(t, finalCaptured.Load(), "instrument: capture completed only after the during-read write")
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	requireWireCode(t, t07ErrorBody(t, rec), "credential_saved_not_saved", "during-capture: B stored, configuration write failed")
+	afterDisk, err := os.ReadFile(f.f1277.configPath)
+	require.NoError(t, err)
+	require.Equal(t, beforeDisk, afterDisk, "the failed B request did not change public configuration")
+	require.Greater(t, f.f1277.authorizedProbes.Load(), beforeA, "the older rebuilt adapter actually authenticates using A")
+	require.Equal(t, beforeB, f.f1277.connectProbes.Load(), "the older rebuild has not applied B")
+	retainedVersion, pending := mgr.PendingApplication("line.healthy")
+	require.True(t, pending, "FR-050/R8-MIN-001: an A-based rebuild must not acknowledge B read during capture")
+	require.Equal(t, versionB, retainedVersion, "the exact newer B marker survives the older rebuild")
+
+	status, body := t02bConfigure(t, f, "line.healthy", `{}`)
+	require.Equal(t, http.StatusOK, status, body)
+	t02bRequireOutcome(t, body, "applied", "R8-MIN-001: unchanged token-free save must apply pending B")
+	require.Greater(t, f.f1277.connectProbes.Load(), beforeB, "the recovery adapter actually authenticates using durable B")
+	_, pending = mgr.PendingApplication("line.healthy")
+	require.False(t, pending, "only the B-consuming rebuild may now acknowledge B")
+	afterB := f.f1277.connectProbes.Load()
+	status, body = t02bConfigure(t, f, "line.healthy", `{}`)
+	require.Equal(t, http.StatusOK, status, body)
+	t02bRequireOutcome(t, body, "no_reload_needed", "current control after B application")
+	require.Equal(t, afterB, f.f1277.connectProbes.Load(), "an already-current adapter is not restarted")
 }
