@@ -177,10 +177,8 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) (res *
 	} else {
 		skills.RecordSeen(session, target, out.Revision) // the session's own committed change (§7.3)
 	}
+	// The pipeline already wrote the §5.4 copy text (once) into out.Message.
 	message := out.Message
-	if req.action == "copy" {
-		message = fmt.Sprintf("Created '%s' as your own copy of '%s'. No agent is granted it yet; grant it to the agents that should use it. (%s)", req.to, req.skill, out.Message)
-	}
 	fields := map[string]any{
 		"success":            true,
 		"action":             req.action,
