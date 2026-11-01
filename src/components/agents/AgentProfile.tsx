@@ -1,14 +1,10 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   X,
-  CaretDown,
   Sparkle,
   Lightning,
-  ArrowUp,
-  ArrowDown,
   Warning,
-  Lock,
   WarningCircle,
   Brain,
 } from '@phosphor-icons/react'
@@ -53,6 +49,7 @@ import {
   updateAgent,
   updateWorkspace,
   fetchProviders,
+  fetchConfig,
   fetchActivity,
   fetchSkills,
   testAgentRunner,
@@ -72,7 +69,7 @@ import { isProviderUsable } from '@/lib/providerStatus'
 import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
-import type { AgentColor as AgentColorValue, AgentFigure, AgentRole, FallbackModel, FallbackModelPair } from '@/lib/api/generated/openapi-types'
+import type { AgentColor as AgentColorValue, AgentFigure, AgentRole, FallbackModelPair } from '@/lib/api/generated/openapi-types'
 import { agentKindFlags } from '@/lib/agentKind'
 import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
@@ -80,22 +77,14 @@ import { buildExecutorPreviewRequest } from '@/hooks/useCommandPreview'
 import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
 import { CONTEXT_WINDOW_SOURCE_LABEL } from '@/components/settings/ContextSection'
 import { buildAgentUpdate } from './agentDraft'
+import { AgentFallbackModels, isCompleteFallback, type FallbackEntry } from './AgentFallbackModels'
+import { EffortControl } from '@/components/ui/model-effort-picker'
+import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
+import { findServedRow } from '@/lib/effort/servedReasoning'
+import { useEffortSwitch, type EffortPair } from '@/lib/effort/useEffortSwitch'
 import { ToolIterationLimitField } from './ToolIterationLimitField'
 import { useGlobalToolIterationLimit } from '@/hooks/useGlobalToolIterationLimit'
 import { useToolIterationLimitRefusal } from './useToolIterationLimitRefusal'
-
-/**
- * Editor's fallback entry — `FallbackModel` (the read shape) with `provider`
- * narrowed to a string. `''` marks an INCOMPLETE entry: a legacy fallback
- * saved without its provider (issue #1340). It is shown as incomplete and is
- * never sent; the editor itself only ever creates full pairs.
- */
-type FallbackEntry = FallbackModel & { provider: string }
-
-/** A fallback is a (provider, model) pair — never a model alone (#1340, founder rule). */
-function isCompleteFallback(entry: FallbackEntry): boolean {
-  return entry.provider.trim() !== '' && entry.model.trim() !== ''
-}
 
 /**
  * Echo-race fix, item 3 (belt-and-braces): true when the currently focused
@@ -373,6 +362,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Paired with model via onPairChange on the ModelSelector. Empty = resolve
   // via default provider (back-compat with pre-O3 agents).
   const [primaryProvider, setPrimaryProvider] = useState('')
+  // Effort of the primary model (FR-029): '' = Not set (an agent riding the
+  // default model then inherits the default model's effort).
+  const [reasoningEffort, setReasoningEffort] = useState('')
+  // A model-and-effort commit is a save (no confirm step, P-Q4 A): bumping
+  // this saves at once after the committed values have rendered.
+  const [immediateSaveTick, setImmediateSaveTick] = useState(0)
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
   const [selectedFigure, setSelectedFigure] = useState<AgentFigure>('Omnipus')
   const [selectedRole, setSelectedRole] = useState<AgentRole>('general')
@@ -602,6 +597,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setModel(agent.model ?? '')
     // O3 two-field: hydrate the explicit provider routing key.
     setPrimaryProvider(agent.provider ?? '')
+    setReasoningEffort(agent.reasoning_effort ?? '')
     setSelectedColor(agent.color)
     setSelectedFigure(agent.figure ?? 'Omnipus')
     setSelectedRole(agent.role ?? 'general')
@@ -682,6 +678,61 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_path, executor.cli_args, ownToolIterationLimit ?? undefined)
     : undefined
 
+  // ── Effort of the primary model (effort-levels-spec-r10.md FR-019, FR-029,
+  // FR-047, FR-053, S-86) ─────────────────────────────────────────────────
+  // An agent with no model of its own rides the default model: its chip then
+  // describes the default model and, while its own effort is Not set, shows
+  // the default model's effort as what it inherits.
+  const { data: appConfig } = useQuery({ queryKey: ['config'], queryFn: fetchConfig, enabled: isOpen })
+  const effortCatalogQuery = useQuery({ ...providersCatalogQueryOptions(), enabled: isOpen })
+  const effortCatalog = effortCatalogQuery.data
+  const defaultModelPair = appConfig?.agents?.defaults?.default_model
+  const ridesDefaultModel = model.trim() === ''
+  const primaryEffortSlot = {
+    provider: ridesDefaultModel
+      ? (defaultModelPair?.provider ?? '')
+      : (primaryProvider || resolveUniqueModelProvider(usableProviders, model)),
+    model: ridesDefaultModel ? (defaultModelPair?.model ?? '') : model,
+    effort: reasoningEffort,
+  }
+  const primaryEffortInherit = ridesDefaultModel ? (defaultModelPair?.reasoning_effort ?? '') : undefined
+  const effortEditable = isFieldEditable('reasoning_effort')
+  const [primaryEffortNote, setPrimaryEffortNote] = useState<string | null>(null)
+  const effortLookup = useCallback(
+    (pair: EffortPair) => findServedRow(effortCatalog, pair.provider, pair.model),
+    [effortCatalog],
+  )
+  // One model-and-effort commit: both land together and save at once.
+  const commitPrimaryModelEffort = useCallback((pair: EffortPair, effort: string, note: string | null) => {
+    isDirtyRef.current = true
+    setModel(pair.model)
+    setPrimaryProvider(pair.provider)
+    setReasoningEffort(effort)
+    setPrimaryEffortNote(note)
+    setImmediateSaveTick((tick) => tick + 1)
+  }, [])
+  const primaryEffortSwitch = useEffortSwitch({
+    value: primaryEffortSlot,
+    inherit: primaryEffortInherit,
+    lookup: effortLookup,
+    onCommit: commitPrimaryModelEffort,
+    ready: effortCatalogQuery.status === 'success',
+  })
+
+  function setFallbackEffort(modelSlug: string, effort: string) {
+    markDirty()
+    setFallbackModels((prev) =>
+      prev.map((f) => {
+        if (f.model !== modelSlug) return f
+        const next: FallbackEntry = { ...f }
+        if (effort !== '') next.reasoning_effort = effort
+        else delete next.reasoning_effort
+        return next
+      }),
+    )
+    setImmediateSaveTick((tick) => tick + 1)
+  }
+
   const formData = useMemo(() => {
     // Spec-4 FR-4.1: subagent_3p agents run inside an external CLI, so many
     // Omnipus-native fields are irrelevant or explicitly rejected by the
@@ -719,8 +770,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // unpaired is re-sent, and the save does not fail on it. The editor
       // says so until the person completes or removes that entry.
       ...(fallbackModels.every(isCompleteFallback)
-        ? { fallback_models: fallbackModels.map((entry): FallbackModelPair => ({ model: entry.model, provider: entry.provider })) }
+        ? {
+            fallback_models: fallbackModels.map((entry): FallbackModelPair => ({
+              model: entry.model,
+              provider: entry.provider,
+              ...(entry.reasoning_effort ? { reasoning_effort: entry.reasoning_effort } : {}),
+            })),
+          }
         : {}),
+      // FR-029: sent only when it differs from the stored value ("" clears it).
+      reasoning_effort: reasoningEffort !== (agent?.reasoning_effort ?? '') ? reasoningEffort : undefined,
       model_params: { temperature, max_tokens: maxTokens },
       soul,
       // ADR-052 FR-039: "Allowed on all agents" per AgentUpdateRequest.yaml —
@@ -781,7 +840,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       executor,
     }
   }, [
-    agent?.type, name, description, model, primaryProvider, selectedColor, selectedFigure, selectedRole, fallbackModels,
+    agent?.type, agent?.reasoning_effort, reasoningEffort, name, description, model, primaryProvider, selectedColor, selectedFigure, selectedRole, fallbackModels,
     temperature, maxTokens, soul, memoryEnabled, voice,
     maxToolIterationsEdit, contextWindowOverride,
     agentSkills, executor,
@@ -1099,6 +1158,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const saveStatusRef = useRef(saveStatus)
   saveStatusRef.current = saveStatus
 
+  // A committed model/effort change saves at once (P-Q4 A, FR-054): this runs
+  // after the render that put the committed values into `formData`.
+  useEffect(() => {
+    if (immediateSaveTick === 0) return
+    saveAgentNow()
+  }, [immediateSaveTick])
+
   // Item 1 (MERGE-BLOCKER — sheet-close data loss): AgentProfile is mounted
   // at the route level and does NOT unmount when the sheet closes (only
   // `editAgentId` flips to null) — so useAutoSave's own unmount-flush never
@@ -1348,7 +1414,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // Section panels shared by desktop Tabs and mobile Accordion.
   // basics panel
-  const basicsPanel = (
+  // Rendered by both the tab layout and the narrow-screen accordion; only the
+  // active layout carries the effort chip, so its popover and live region
+  // exist once (the hidden copy stays mounted for layout switches).
+  const renderBasicsPanel = (activeLayout: boolean) => (
     <div className="space-y-[var(--space-4)]">
 
           {/* Identity — always rendered; read-only for locked (core) agents */}
@@ -1437,6 +1506,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 provider catalogue. Selection is limited to real models, so an
                 unresolvable slug cannot be saved here and the inline
                 "unresolved" warning can no longer occur. */
+            <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+            <div className="min-w-0 flex-1">
             <ModelSelector
               models={availableModels}
               value={model}
@@ -1445,8 +1516,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               // ONE provider serves the slug — an ambiguous legacy value shows
               // no chosen row instead of a first-listed guess.
               valueProvider={primaryProvider || resolveUniqueModelProvider(usableProviders, model)}
-              onChange={(v) => { markDirty(); setModel(v) }}
-              onPairChange={({ provider: p }) => { setPrimaryProvider(p) }}
+              // With an editable effort the pick runs the model-switch
+              // transaction (map the effort, or wait on the blocked step);
+              // otherwise the model alone changes, as before.
+              onChange={effortEditable ? primaryEffortSwitch.selectorHandlers.onChange : (v) => { markDirty(); setModel(v) }}
+              onPairChange={effortEditable ? primaryEffortSwitch.selectorHandlers.onPairChange : ({ provider: p }) => { setPrimaryProvider(p) }}
+              triggerTestId="agent-model-trigger"
               placeholder="Provider default"
               providerGroups={providerGroups}
               constrainToCatalog
@@ -1459,6 +1534,23 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               emptyCatalogHint="Connect a provider in Settings to pick a model"
               disabled={!isFieldEditable('model')}
             />
+            </div>
+            {effortEditable && activeLayout && (primaryEffortSlot.model !== '' || primaryEffortSwitch.pending !== null) && (
+              <EffortControl
+                scope="agent-primary"
+                value={primaryEffortSlot}
+                inherit={primaryEffortInherit}
+                contextName={`Effort for ${primaryEffortSlot.model}`}
+                pendingSwitch={primaryEffortSwitch.pending}
+                onSwitchComplete={primaryEffortSwitch.completePending}
+                onSwitchCancel={primaryEffortSwitch.cancelPending}
+                cancelFocusTarget={() => document.querySelector<HTMLElement>('[data-testid="agent-model-trigger"]')}
+                note={primaryEffortNote}
+                announcement={primaryEffortSwitch.announcement}
+                onChange={(effort) => commitPrimaryModelEffort({ provider: primaryProvider, model }, effort, null)}
+              />
+            )}
+            </div>
             )}
             {/* Sampling parameters — collapsed disclosure. Operator decision
                 2026-07-03: editable for locked core agents too (model,
@@ -1510,177 +1602,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               CONSOLIDATED into this single copy — testids keep the
               `-basics` suffix since this is now the only surface. */}
           {!isExternalAgent && (
-          <section className="space-y-[var(--space-2-5)]">
-            <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Fallback models</p>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
-            {!isFieldEditable('fallback_models') ? (
-              <div
-                data-testid="fallback-summary-locked-basics"
-                className="space-y-[var(--space-2)] p-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
-              >
-                <div className="flex items-center gap-[var(--space-2)] text-[var(--color-muted)]">
-                  <Lock size={12} weight="fill" aria-hidden="true" />
-                  <p className="text-[length:var(--type-caption-size)]">
-                    Locked: fallback models are inherited from the locked core config.
-                  </p>
-                </div>
-                {fallbackModels.length === 0 ? (
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No fallback chain configured.</p>
-                ) : (
-                  <ol className="space-y-[var(--space-1)]" data-testid="fallback-summary-locked-basics-list">
-                    {fallbackModels.map((entry, idx) => (
-                      <li
-                        key={entry.model}
-                        className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]"
-                      >
-                        <span className="text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
-                        <span
-                          data-testid={`fallback-summary-provider-${entry.model}`}
-                          className="inline-flex items-center px-[var(--space-1)] rounded text-[length:var(--type-caption-size)] font-semibold"
-                          style={{
-                            backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
-                            color: 'var(--color-accent)',
-                            border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
-                          }}
-                        >
-                          {entry.provider || '—'}
-                        </span>
-                        <span data-testid={`fallback-summary-model-${entry.model}`}>{entry.model}</span>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-            ) : (
-              <div className="flex flex-wrap gap-[var(--space-1)] p-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
-                {fallbackModels.map((entry, idx) => {
-                  // #1340: '' = an incomplete legacy entry (saved without its provider).
-                  const providerMissing = entry.provider === ''
-                  const providerLabel = providerMissing
-                    ? 'No provider'
-                    : (usableProviders.find((p) => p.id === entry.provider)?.display_name
-                        ?? usableProviders.find((p) => p.id === entry.provider)?.name
-                        ?? entry.provider)
-                  return (
-                    <span
-                      key={entry.model}
-                      data-testid={`fallback-chip-model-${entry.model}`}
-                      className="inline-flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
-                    >
-                      <span
-                        data-testid={`fallback-chip-provider-${entry.model}`}
-                        className="inline-flex items-center px-[var(--space-1)] rounded text-[length:var(--type-caption-size)] font-semibold"
-                        style={{
-                          backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
-                          color: 'var(--color-accent)',
-                          border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
-                        }}
-                      >
-                        {providerLabel}
-                      </span>
-                      <span className="relative inline-block">
-                        <select tabIndex={0}
-                          data-testid={`fallback-provider-select-${entry.model}`}
-                          aria-label={`Provider for fallback ${entry.model}`}
-                          value={entry.provider}
-                          disabled={!isFieldEditable('fallback_models')}
-                          onChange={(e) => { markDirty(); setFallbackProvider(entry.model, e.target.value) }}
-                          className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-[var(--space-1)] pr-[var(--space-2-5)] py-0 text-[length:var(--type-caption-size)] focus-visible:border-[var(--color-accent)] rounded cursor-pointer"
-                        >
-                          {/* No empty choice (#1340): an incomplete entry shows a
-                              placeholder it can only leave by choosing a provider. */}
-                          {providerMissing && (
-                            <option value="" disabled data-testid={`fallback-provider-option-placeholder-${entry.model}`}>Choose provider</option>
-                          )}
-                          {usableProviders.map((p) => (
-                            <option
-                              key={p.id}
-                              value={p.id}
-                              data-testid={`fallback-provider-option-${p.id}-${entry.model}`}
-                            >
-                              {p.display_name ?? p.name ?? p.id}
-                            </option>
-                          ))}
-                        </select>
-                        <CaretDown
-                          size={9}
-                          className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)]"
-                          aria-hidden="true"
-                        />
-                      </span>
-                      <span>{entry.model}</span>
-                      <IconButton
-                        variant="ghost"
-                        size="sm"
-                        data-testid={`fallback-chip-up-${entry.model}`}
-                        aria-label={`Move fallback ${entry.model} up`}
-                        disabled={!isFieldEditable('fallback_models') || idx === 0}
-                        onClick={() => { markDirty(); moveFallback(entry.model, -1) }}
-                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-                      >
-                        <ArrowUp size={10} />
-                      </IconButton>
-                      <IconButton
-                        variant="ghost"
-                        size="sm"
-                        data-testid={`fallback-chip-down-${entry.model}`}
-                        aria-label={`Move fallback ${entry.model} down`}
-                        disabled={!isFieldEditable('fallback_models') || idx === fallbackModels.length - 1}
-                        onClick={() => { markDirty(); moveFallback(entry.model, 1) }}
-                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-                      >
-                        <ArrowDown size={10} />
-                      </IconButton>
-                      <IconButton
-                        variant="ghost"
-                        size="sm"
-                        data-testid={`fallback-chip-remove-${entry.model}`}
-                        aria-label={`Remove fallback ${entry.model}`}
-                        disabled={!isFieldEditable('fallback_models')}
-                        onClick={() => { markDirty(); removeFallback(entry.model) }}
-                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-                      >
-                        <X size={10} />
-                      </IconButton>
-                      {providerMissing && (
-                        <span
-                          data-testid={`fallback-chip-warning-${entry.model}`}
-                          className="inline-flex items-center gap-[var(--space-0-5)] text-[var(--color-warning)]"
-                        >
-                          <Warning size={11} weight="fill" aria-hidden="true" />
-                          Incomplete — choose a provider or remove it
-                        </span>
-                      )}
-                    </span>
-                  )
-                })}
-                <div className="min-w-[220px] flex-1">
-                  {/* UAT model-catalog fix: fallbacks must be real catalogue
-                      models, so this picker is constrained too. */}
-                  <ModelSelector
-                    models={availableModels}
-                    value=""
-                    onChange={(v) => { markDirty(); addFallbackFromSelector(v) }}
-                    // H6: the grouped pick's exact provider overrides the
-                    // first-wins lookup — see addFallbackFromSelector.
-                    onPairChange={({ model: m, provider: p }) => { markDirty(); addFallbackFromSelector(m, p) }}
-                    placeholder="Add fallback…"
-                    providerGroups={providerGroups}
-                    triggerTestId="fallback-add-trigger"
-                    itemTestIdPrefix="fallback-add-item-"
-                    constrainToCatalog
-                    emptyCatalogHint="Connect a provider to add fallbacks"
-                    disabled={!isFieldEditable('fallback_models')}
-                  />
-                </div>
-              </div>
-            )}
-            {isFieldEditable('fallback_models') && fallbackModels.some((entry) => !isCompleteFallback(entry)) && (
-              <p data-testid="fallback-incomplete-notice" className="mt-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]">
-                A fallback without a provider is not used, and fallback changes are not saved until every fallback has a provider.
-              </p>
-            )}
-          </section>
+            <AgentFallbackModels
+              fallbackModels={fallbackModels}
+              editable={isFieldEditable('fallback_models')}
+              usableProviders={usableProviders}
+              availableModels={availableModels}
+              providerGroups={providerGroups}
+              onAdd={(m, p) => { markDirty(); addFallbackFromSelector(m, p) }}
+              onRemove={(m) => { markDirty(); removeFallback(m) }}
+              onMove={(m, direction) => { markDirty(); moveFallback(m, direction) }}
+              onSetProvider={(m, p) => { markDirty(); setFallbackProvider(m, p) }}
+              onSetEffort={setFallbackEffort}
+            />
           )}
 
     </div>
@@ -2526,7 +2459,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             tab below; for native workers (no external-cli selected) the
             whole thing is inherited from the caller so it is shown as a
             read-only summary in Advanced. */}
-        <TabsContent value="basics" className="space-y-[var(--space-4)]">{basicsPanel}</TabsContent>
+        <TabsContent value="basics" className="space-y-[var(--space-4)]">{renderBasicsPanel(smAndUp)}</TabsContent>
 
         {/* ── PERSONALITY TAB ────────────────────────────────────────────
             BehaviorFields (SOUL.md / Task prompt + Voice), and the
@@ -2584,7 +2517,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden" aria-hidden={smAndUp ? true : undefined}>
         <AccordionItem value="basics">
           <AccordionTrigger data-testid="accordion-basics" className="font-headline">Basics</AccordionTrigger>
-          <AccordionContent>{basicsPanel}</AccordionContent>
+          <AccordionContent>{renderBasicsPanel(!smAndUp)}</AccordionContent>
         </AccordionItem>
         <AccordionItem value="personality">
           <AccordionTrigger data-testid="accordion-personality" className="font-headline">Personality</AccordionTrigger>
