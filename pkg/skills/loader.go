@@ -17,12 +17,15 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/skillname"
 )
 
-var namePattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
+// namePattern and MaxNameLength are the shared skill name grammar
+// (pkg/skillname — the one source, CK14).
+var namePattern = regexp.MustCompile(skillname.Pattern)
 
 const (
-	MaxNameLength        = 64
+	MaxNameLength        = skillname.MaxLength
 	MaxDescriptionLength = 1024
 )
 
@@ -35,7 +38,7 @@ const (
 // before ever consulting the shelf-resolution model, without duplicating the
 // pattern (spec FR-021/Dataset B).
 func ValidSlug(s string) bool {
-	return s != "" && len(s) <= MaxNameLength && namePattern.MatchString(s)
+	return skillname.Valid(s)
 }
 
 // SkillMetadata holds parsed SKILL.md frontmatter fields.

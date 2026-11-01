@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/skillname"
 )
 
 // This file evaluates the #1284 home guard (amendment §2 D1/D4/D5):
@@ -89,7 +91,7 @@ func inventoryDenies(home, cleanPath string, policy FSPolicy) bool {
 // skills root.
 func skillPathDenied(skillsRoot, cleanPath string, guard HomeGuard) bool {
 	first := firstComponentUnder(skillsRoot, cleanPath)
-	if first == "" || strings.HasPrefix(first, ".") || !validSkillSlug(first) {
+	if first == "" || strings.HasPrefix(first, ".") || !skillname.Valid(first) {
 		return true
 	}
 	if guard.SkillsReadAll {
@@ -111,31 +113,6 @@ func firstComponentUnder(root, cleanPath string) string {
 		return ""
 	}
 	return strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
-}
-
-// validSkillSlug mirrors skills.ValidSlug (the Agent Skills name rule:
-// letters, digits and single hyphens, at most 64 characters). fspolicy
-// cannot import pkg/skills; TestSkillsBoundary_RegistryControlEntriesRefused
-// pins the shared cases.
-func validSkillSlug(s string) bool {
-	if s == "" || len(s) > 64 || s[0] == '-' || s[len(s)-1] == '-' {
-		return false
-	}
-	prevHyphen := false
-	for _, r := range s {
-		switch {
-		case r == '-':
-			if prevHyphen {
-				return false
-			}
-			prevHyphen = true
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			prevHyphen = false
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // allowedUnderHome reports whether an explicit allowance re-admits cleanPath:
