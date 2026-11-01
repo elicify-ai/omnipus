@@ -119,6 +119,29 @@ When the configured model is unavailable and a fallback model answers, a quiet n
 
 The notice stays in saved history, after the answer. Each unavailable/answering model pair is noted once per chat; repeated turns using the same pair do not add duplicate notices. If the unavailable model has been retired, the notice also says **Pick a new model in the agent's settings.**
 
+### Choosing a model and its effort
+
+Some models can think before they answer, and many let you choose how hard: their **effort**. Next to the model button above the message box sits an **effort chip**. It offers what the chosen model supports, and nothing else:
+
+| Choice | What it means |
+|---|---|
+| **Not set: Agent's setting: …** | The chat follows the agent's own effort setting (or the default model's, when the agent uses the default model). The chip has a dashed outline. |
+| **Provider default** | Omnipus sends no effort setting; the provider decides. |
+| **Off**, **Low**, **High**, **Max**, … | The levels this model offers, in the provider's order. A model that only switches thinking on or off offers **Off** and **On**. Levels a model does not offer are not shown (for example, DeepSeek V4.1 Flash has no **Medium**). |
+
+- A model that thinks but whose effort Omnipus can't change shows a muted **Effort** chip; hover or focus it to read **Omnipus can't change effort for this model.** A model that does not think shows no chip.
+- While the model list is loading, the chip shows the saved value as text. If the list fails to load, an error appears with **Retry**.
+- When the chat follows the agent's setting and this model does not offer it, the chip says what is sent instead, for example **Agent's setting: High, sent as Low here**, with an amber dot.
+- **Switching models** keeps your effort when the new model offers it. Otherwise the nearest level is used (ties go to the lower level) and a short note with a **Change** link says so, for example **Effort set to Low. {model} doesn't offer Medium.**
+- **Off on a model that can't turn thinking off:** the switch waits. The effort list opens with the nearest level marked; pick a level to finish switching, or press **Escape** to keep the previous model. When the new model has no level Omnipus can send, choose **Let the provider decide** or **Cancel**. The same applies when the chat follows an agent setting of Off.
+- Your effort choice is kept per chat in this browser, together with the chat's model choice: it survives a reload and starts again at **Not set** when you open a different chat.
+
+**The `/effort` command.** Type `/effort` in the message box to see the current effort and the choices for this chat's model. `/effort high` (or any offered level, `on` or `off`) sets the effort for this conversation only; the chip then reads, for example, **Max, set for this conversation**, with a gold dot. `/effort default` lets the provider decide; `/effort reset` returns to the agent's setting. A value the model does not offer changes nothing and lists the choices; `/effort off` on a model that can't turn thinking off replies **{model} can't turn reasoning off.** On the web the command is handled in your browser: it sends no message to the agent and never changes the agent's settings. In messenger conversations the same command changes only that conversation. Effort isn't available in `omnipus run` yet.
+
+**After an answer.** When the request carried exactly the effort you chose, nothing extra appears. When it differs, a quiet note under the answer says what was sent and why, for example **Sent as Low: {model} doesn't offer Medium.**, **Effort not sent: {model} can't turn reasoning off.**, **{provider} rejected the effort setting for {model}. Sent without effort.**, **Effort not sent: {provider} rejected it earlier.** or **Your config's extra_body sent reasoning_effort=high instead.** The note is the same after a reload, however the history is loaded. Hover or focus the model name under an answer to see its statistics: **Effort: High** and **Thinking: 120 tokens (reported by the provider)**, or **Thinking: not reported** when the provider gave no count (a reported zero shows as 0). Answers saved before this feature show no statistics. [Troubleshooting](troubleshooting.md) explains each note.
+
+**Elsewhere.** The same effort chip appears for an agent's model and each fallback on the agent's profile, for the default model in **Settings → Providers**, and for the recap model and each recap fallback in **Settings → Memory**, where Off is the recommended default. A recap model saved before Omnipus recorded its provider asks you to choose the provider before it offers effort. Onboarding and the new-default step of **Remove provider** show one quiet line, **Effort: Provider default. Change now**; the choice is saved together with the model. **Usage** shows output and thinking tokens per model, labelled **reported by the provider**, or **Thinking tokens: not reported**. Thinking tokens are part of output and are never added to the total.
+
 ### Opening a saved chat
 
 Saved messages load quietly and appear together when loading finishes. Old tool calls and status changes do not play through as if the agent were working again. Opening a chat, switching to another chat, or refreshing the page brings you to the latest messages at the bottom. If you scroll up while a chat is loading, Omnipus keeps your reading position instead of pulling you back down.
