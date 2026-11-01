@@ -32,6 +32,11 @@ type u2bAsyncWorker struct {
 	release     chan struct{}
 	enteredOnce sync.Once
 	releaseOnce sync.Once
+	// holdCancellation, set before the run starts, makes Chat ignore the
+	// turn's cancellation until release. It exists so a fixture can order a
+	// Stop's own task write ahead of the cancelled turn's settlement instead
+	// of racing it (R8); it never changes what the provider answers.
+	holdCancellation bool
 }
 
 func newU2bAsyncWorker() *u2bAsyncWorker {
@@ -46,6 +51,13 @@ func (w *u2bAsyncWorker) Chat(
 	ctx context.Context, msgs []providers.Message, tools []providers.ToolDefinition, model string, opts map[string]any,
 ) (*providers.LLMResponse, error) {
 	w.enteredOnce.Do(func() { close(w.entered) })
+	if w.holdCancellation {
+		<-w.release
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return w.LLMProvider.Chat(ctx, msgs, tools, model, opts)
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()

@@ -12,9 +12,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -1975,5 +1977,163 @@ func TestU2bBootReplay_OwedFireAgentGone_SessionRunNotAdopted(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, task.StatusInProgress, running.Status,
 		"instrument: the settle refused before writing any disposition")
+	p2.stop()
+}
+
+// TestU2bBootReplay_HeldFireAgentGone_EndsPairedGoalRecord is addendum-17 R8,
+// the behavioural guard for the task-terminal -> goal-terminal hook in
+// pkg/agent/task_trigger_boot_hold.go::saveUnstartedFireFailed (cut
+// 3129aa1a3). That function is a terminal task writer — it writes
+// task.StatusFailed — so GOAL-FR-015/FR-027/FR-028 require it to end the
+// task's paired goal record, exactly like failTask; the shared mapper
+// pkg/tools/task.go::GoalStateForTerminalTask says a failed task that was NOT
+// stopped by a user ends that record `exhausted`, and
+// TerminalGoalReasonForTask stamps "owning task reached failed: <result>".
+//
+// The literal R2/W5b2 crash image cannot observe the hook. At the next
+// physical boot ReconcileInterruptedTasks runs BEFORE any settle, and its
+// recoverInterruptedTask already terminates the paired record of the
+// in-progress task it resets; a never-dispatched task's record is only
+// `defining`, which TerminateTaskGoalRecord legitimately leaves untouched;
+// and a run-button Stop today settles Failed with NO cancel reason, which the
+// mapper reads as goal-terminal — the record is already exhausted before any
+// settle. The one real-flow shape that hands the settle an ACTIVE record is
+// the plan/board Cancel path (PlanEngine.StopTask): cancelMemberLocked writes
+// failed(stopped_by_user), the ONE disposition MAJ-003 keeps goal-active, and
+// the stopped turn's later settlement then loses the task's status CAS
+// (completeTaskWithResult's UpdateIfStatus), so its own outcome — and its goal
+// hook — never runs. Re-queuing that task and letting a held fire settle it
+// with its agent gone makes saveUnstartedFireFailed the record's first
+// terminal writer.
+//
+// Construction (real flows only):
+//  1. boot 1: a real fire starts — the production dispatch activates the
+//     paired record (GOAL-FR-012) — and PlanEngine.StopTask (the board/plan
+//     Cancel action) ends the task failed(stopped_by_user). The worker's
+//     provider call holds the cancelled turn until the Stop's write has
+//     landed, so the settlement deterministically loses the CAS instead of
+//     racing it; the run is closed as failed.
+//  2. boot 2, unwired with the plane expected: recovery skips the failed
+//     task; the normal-path edit re-queues it (failed -> next, which clears
+//     the Stop's cancel reason, so the settle's Failed write is not the
+//     goal-non-terminal stopped_by_user disposition) and reschedules it once.
+//  3. that fire is held (plane expected, not wired); the assignee leaves the
+//     registry; the late wiring releases the settle
+//     (settleMissingAgentFire -> recordUnstartedFireFailure ->
+//     saveUnstartedFireFailed), which is the record's first terminal writer.
+//
+// Oracles (GOAL-FR-015/027/028 via the mapper named above): the task is
+// Failed with the settle's reason, the job is removed (the R2 settle
+// contract), and the paired record is `exhausted` carrying the mapper's
+// terminal reason. Instruments prove the record was ACTIVE after the Stop,
+// after boot 2's recovery and immediately before the release, so a green
+// here can never come from a record that was already terminal. The CHECK
+// mutant — delete the terminateTaskGoalRecord call in
+// saveUnstartedFireFailed — leaves the record ACTIVE and dies on the
+// exhausted assertion.
+func TestU2bBootReplay_HeldFireAgentGone_EndsPairedGoalRecord(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	worker.holdCancellation = true // the Stop's task write must land before the settlement
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	require.Equal(t, generated.GoalStateActive, readTaskGoal(t, fire.taskID).State,
+		"instrument: the real dispatch activated the paired goal record (GOAL-FR-012)")
+
+	// The plan/board Cancel action: PlanEngine.StopTask is the person-Stop
+	// entry point that writes failed(stopped_by_user) — the disposition the
+	// shared mapper refuses to make goal-terminal (MAJ-003).
+	previousRegistry := currentVerifierSessionRegistry()
+	t.Cleanup(func() { SetVerifierSessionRegistry(previousRegistry) })
+	engine := NewPlanEngine(p1.loop, plan.New(filepath.Join(p1.home, "plans")), p1.loop.taskStore, p1.loop.taskExecutor)
+	stopped, err := engine.StopTask(context.Background(), fire.taskID, "uat-person", "system")
+	require.NoError(t, err)
+	require.Equal(t, task.StatusFailed, stopped.Status)
+	require.Equal(t, task.CancelReasonStoppedByUser, stopped.CancelReason,
+		"instrument: the Stop writes the one cancel reason MAJ-003 keeps goal-active")
+	require.Equal(t, generated.GoalStateActive, readTaskGoal(t, fire.taskID).State,
+		"instrument: MAJ-003 — a Stop is not an adjudication; the record stays ACTIVE")
+
+	worker.complete() // release the cancelled turn; its settlement loses the CAS by construction
+	u2bAsyncJoin(t, "person-stopped MAIN execution and settlement", p1.loop.taskExecutor.wg.Wait)
+	afterStop, err := p1.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err)
+	require.Equal(t, task.StatusFailed, afterStop.Status)
+	require.Equal(t, task.CancelReasonStoppedByUser, afterStop.CancelReason,
+		"instrument: the settlement's status write was dropped; the Stop's outcome stands")
+	require.Equal(t, generated.GoalStateActive, readTaskGoal(t, fire.taskID).State,
+		"instrument: nothing has ended the record — the failed run was closed by the Stop's outcome")
+	stoppedRun := p1.runs(t, fire.taskID)
+	require.Len(t, stoppedRun, 1)
+	require.Equal(t, task.StatusFailed, stoppedRun[0].Status,
+		"instrument: the stopped run is CLOSED failed, so the settle below opens its own failed-run record")
+	require.NotNil(t, stoppedRun[0].EndedAt)
+	p1.stop()
+
+	// Boot 2: the plane is expected but not wired, so the fresh fire below is
+	// held. Recovery only resets in_progress claims, so the stopped task's
+	// record is untouched.
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	expectSessionPlaneLikeTheGateway(t, p2)
+	p2.physicalBoot(t)
+	require.Equal(t, generated.GoalStateActive, readTaskGoal(t, fire.taskID).State,
+		"instrument: boot recovery leaves the stopped task's goal ACTIVE")
+
+	// The normal-path edit that arms the next fire: failed -> next re-queues
+	// the task and clears the Stop's cancel reason (pkg/task.Store.updateLocked
+	// clears CancelReason on any non-Failed status write), and the new once
+	// trigger replaces the settled job.
+	next := task.StatusNext
+	fireAt := p2.clock.Now().Add(time.Minute).UnixMilli()
+	trigger := &task.Trigger{Type: task.TriggerOnce, Config: task.TriggerConfig{AtMs: &fireAt}}
+	queued, err := p2.loop.taskStore.Update(fire.taskID, task.Patch{Status: &next, Trigger: &trigger})
+	require.NoError(t, err)
+	require.Empty(t, queued.CancelReason,
+		"instrument: the re-queue clears the Stop's cancel reason, so a later Failed write is goal-terminal")
+	p2.loop.NotifyTaskUpserted(queued)
+	require.Len(t, p2.storedJobs(t, fire.taskID), 1, "instrument: the new once job is durably armed")
+
+	// The fire comes due before the plane is wired: held.
+	p2.clock.Advance(2 * time.Minute)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.Len(t, p2.storedJobs(t, fire.taskID), 1, "instrument: the fire is held")
+
+	// The assignee stops existing, exactly as R2's fixture does.
+	held, err := p2.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err)
+	require.True(t, p2.loop.GetRegistry().RemoveAgent(held.AgentID),
+		"instrument: the assignee is removed from the registry")
+	require.Equal(t, generated.GoalStateActive, readTaskGoal(t, fire.taskID).State,
+		"instrument: nothing else has ended the record by the time the settle starts")
+
+	// The audit window opens here, so only the settle's rows are captured.
+	readAudit := swapAuditLogger(t, p2.loop)
+
+	// The late wiring releases the held fire; its agent is gone, so the settle
+	// records the failed run and fails the task — the record's first terminal
+	// writer.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "real task execution", p2.loop.taskExecutor.wg.Wait)
+
+	settled, err := p2.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err)
+	require.Equal(t, task.StatusFailed, settled.Status, "R8: the settle ends the task Failed")
+	require.Empty(t, settled.CancelReason,
+		"R8: the settle's Failed write carries no stopped_by_user cancel reason")
+	require.NotEmpty(t, settled.Result, "instrument: the settle records its reason as the result")
+	require.Empty(t, p2.storedJobs(t, fire.taskID), "R8: the settled fire's job is removed")
+	require.True(t, auditRowNamesTaskAtWarn(readAudit(), fire.taskID),
+		"instrument: the settle's WARN audit entry names the task")
+
+	ended := readTaskGoal(t, fire.taskID)
+	require.NotNil(t, ended)
+	require.Equal(t, generated.GoalStateExhausted, ended.State,
+		"R8: a failed task that was not stopped by a user ends its paired goal record `exhausted` "+
+			"(tools.GoalStateForTerminalTask, GOAL-FR-015/027/028) — saveUnstartedFireFailed must call the hook")
+	require.Equal(t, "owning task reached failed: "+settled.Result, ended.TerminalReason,
+		"R8: the record carries the mapper's terminal reason — the settle's own reason is short enough "+
+			"that tools.TerminalGoalReasonForTask's 2000-rune truncation cannot engage")
 	p2.stop()
 }

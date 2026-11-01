@@ -85,6 +85,9 @@ var knownStatusWriters = []statusWriter{
 	// restAPI.reconcileStuckTasks, which now delegates here; 6b review I2).
 	{where: "pkg/agent.recoverInterruptedTask", mustHook: true},
 	{where: "pkg/tools.taskUpdateToolExecute.buildPatchFields", mustHook: true},
+	// 6b U2b: a held fire whose agent is gone ends the task Failed
+	// (GOAL-FR-015/027/028), exactly like failTask.
+	{where: "pkg/agent.TaskExecutor.saveUnstartedFireFailed", mustHook: true},
 
 	// ---- the one classified exemption that REACHES a terminal status -----
 	// MAJ-003/D8.10 (sub-agent control-plane ADR): a user Stop is not an
