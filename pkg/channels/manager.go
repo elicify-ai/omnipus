@@ -2079,6 +2079,9 @@ func (m *Manager) wirePairingAttemptsLocked(instanceID string, ch Channel) {
 
 // ChannelRevision returns name's configuration revision in cfg (its config
 // hash): what a pairing admission binds to and its start must match (M14).
+// It is the adapter-view hash (FR-015): an outbound-only change does not move
+// it. The user-facing FR-088 conflict token, which includes outbound, is
+// config.ChannelConfigRevision.
 func ChannelRevision(cfg *config.Config, name string) string {
 	return toChannelHashes(cfg)[name]
 }

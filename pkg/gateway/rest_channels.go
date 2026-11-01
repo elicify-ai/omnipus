@@ -157,44 +157,7 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		action := parts[1]
-		switch action {
-		case "enable":
-			if r.Method != http.MethodPut {
-				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			a.enableChannel(w, r, channelID)
-		case "disable":
-			if r.Method != http.MethodPut {
-				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			a.disableChannel(w, channelID)
-		case "configure":
-			if r.Method != http.MethodPut {
-				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			a.configureChannel(w, r, channelID)
-		case "test":
-			if r.Method != http.MethodPost {
-				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			a.testChannel(w, channelID)
-		case "routing":
-			switch r.Method {
-			case http.MethodGet:
-				a.getChannelRouting(w, channelID)
-			case http.MethodPut:
-				a.setChannelRouting(w, r, channelID)
-			default:
-				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			}
-		default:
-			jsonErr(w, http.StatusNotFound, "unknown channel action")
-		}
+		a.handleChannelAction(w, r, channelID, parts[1])
 		return
 	}
 
@@ -335,6 +298,61 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, channels)
+}
+
+// handleChannelAction routes /api/v1/channels/{id}/{action} (split from
+// HandleChannels to keep that function within its size and complexity budgets).
+func (a *restAPI) handleChannelAction(w http.ResponseWriter, r *http.Request, channelID, action string) {
+	switch action {
+	case "enable":
+		if r.Method != http.MethodPut {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.enableChannel(w, r, channelID)
+	case "disable":
+		if r.Method != http.MethodPut {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.disableChannel(w, channelID)
+	case "configure":
+		if r.Method != http.MethodPut {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.configureChannel(w, r, channelID)
+	case "test":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.testChannel(w, channelID)
+	case "routing":
+		switch r.Method {
+		case http.MethodGet:
+			a.getChannelRouting(w, channelID)
+		case http.MethodPut:
+			a.setChannelRouting(w, r, channelID)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	case "outbound":
+		// FR-021 / FR-022: the read is authenticated like the other
+		// channel reads; the write is admin-gated (RequireNotBypass).
+		switch r.Method {
+		case http.MethodGet:
+			a.getChannelOutbound(w, channelID)
+		case http.MethodPut:
+			a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
+				a.putChannelOutbound(w, r, channelID)
+			})(w, r)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	default:
+		jsonErr(w, http.StatusNotFound, "unknown channel action")
+	}
 }
 
 // applyDegradedOverlay marks entries in channelList as degraded when the
@@ -1235,6 +1253,25 @@ var channelFilesystemPathFields = []string{
 	"service_account_file", // Google Chat
 }
 
+// configureProtectedKeys are the instance fields /configure refuses, with
+// their 400 texts, in check order (FR-023, S-34).
+var configureProtectedKeys = []struct{ name, refusal string }{
+	{"outbound", "outbound cannot be set via configure; use PUT /api/v1/channels/{id}/outbound"},
+	{"workspace_id", "workspace_id cannot be set via configure; use PUT /api/v1/channels/{id}/routing"},
+	{"identity", "identity cannot be set via configure; use PUT /api/v1/channels/{id}/routing"},
+}
+
+// configureProtectedKeyRefusal returns the 400 text for the first protected
+// field any key of updates binds to (any letter case, Unicode folding), or "".
+func configureProtectedKeyRefusal(updates map[string]any) string {
+	for _, protected := range configureProtectedKeys {
+		if len(foldedKeys(updates, protected.name)) > 0 {
+			return protected.refusal
+		}
+	}
+	return ""
+}
+
 // configureChannel handles PUT /api/v1/channels/{id}/configure.
 // Merges the request body fields into the channel's config section (does not overwrite absent fields).
 // Returns the updated channel config with credential fields redacted.
@@ -1273,15 +1310,19 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	//      path here turns a later delete into arbitrary-directory deletion. These
 	//      paths are operator/deployment concerns, not UI-settable config — strip
 	//      them so the derived-default path is always used.
-	if _, present := updates["workspace_id"]; present {
-		jsonErr(w, http.StatusBadRequest,
-			"workspace_id cannot be set via configure; use PUT /api/v1/channels/{id}/routing")
+	//
+	// FR-023: every spelling encoding/json would bind to a protected field is
+	// refused (folded like jsonFoldKey), and so is outbound, which only the
+	// dedicated writer PUT /channels/{id}/outbound may change.
+	if refusal := configureProtectedKeyRefusal(updates); refusal != "" {
+		jsonErr(w, http.StatusBadRequest, refusal)
 		return
 	}
-	if _, present := updates["identity"]; present {
-		jsonErr(w, http.StatusBadRequest,
-			"identity cannot be set via configure; use PUT /api/v1/channels/{id}/routing")
-		return
+	// FR-023: the Configure response's own outcome keys are never config.
+	for _, name := range []string{"apply_outcome", "apply_reason", "apply_note"} {
+		for _, key := range foldedKeys(updates, name) {
+			delete(updates, key)
+		}
 	}
 	// Filesystem-path fields (grep of config.ChannelInstanceConfig for path-typed
 	// fields: session_store_path [WhatsApp], crypto_database_path [Matrix],
