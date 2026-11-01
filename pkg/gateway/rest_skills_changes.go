@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
@@ -102,7 +101,7 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, r *http.Request, name strin
 	out, err := skills.ApplyChange(root, skills.ChangeRequest{
 		Kind: skills.KindDelete, Slug: name, Expect: skills.Expectation{Revision: revision},
 		Actor:  personActor("rest-delete"),
-		Grants: newSkillGrantEditor(agentstore.New(a.homePath), nil),
+		Grants: newDeleteGrantEditor(a.homePath),
 	})
 	if err != nil {
 		writeSkillChangeFailure(w, name, out, err)

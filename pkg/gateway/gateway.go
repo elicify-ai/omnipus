@@ -1423,6 +1423,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		RegistryManager:   rc.sysRegistryManager,
 		SkillInstaller:    rc.sysSkillInstaller,
 		SkillWriter:       rc.sysSkillWriter,
+		SkillGrants:       newDeleteGrantEditor(rc.homePath),
 		ResolveToolPolicy: rc.agentLoop.ResolveRegisteredToolPolicy,
 		GodModeActive:     func() bool { return agent.GodModeActive(rc.agentLoop.GetConfig()) },
 		// ADR-057 U9 changed ListAllSessions' signature to

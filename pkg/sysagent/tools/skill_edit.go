@@ -152,7 +152,8 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) (res *
 	case "delete_file":
 		change.Kind, change.Path = skills.KindDeleteFile, req.path
 	case "delete":
-		change.Kind = skills.KindDelete
+		// Founder Q-S3: the same best-effort grant hygiene as the REST delete.
+		change.Kind, change.Grants = skills.KindDelete, t.deps.SkillGrants
 	case "restore":
 		change.Kind, change.Version = skills.KindRestore, req.version
 	}

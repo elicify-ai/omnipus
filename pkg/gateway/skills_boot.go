@@ -137,6 +137,14 @@ func newSkillGrantEditor(store *agentstore.Store, cfg *config.Config) *skillGran
 	return &skillGrantEditor{store: store, cfg: cfg, changed: map[string]map[string]struct{}{}}
 }
 
+// newDeleteGrantEditor is the grant editor both skill-delete paths (REST
+// DELETE and edit_skill action=delete) hand to the pipeline: founder Q-S3's
+// best-effort removal from every stored agent record. Live in-memory agents
+// keep the row until their next persist; SD-30 makes it inert meanwhile.
+func newDeleteGrantEditor(homePath string) *skillGrantEditor {
+	return newSkillGrantEditor(agentstore.New(homePath), nil)
+}
+
 // RemoveGrant implements skills.GrantEditor. Idempotent.
 func (e *skillGrantEditor) RemoveGrant(name string) error {
 	key := skills.SkillKey(name)
