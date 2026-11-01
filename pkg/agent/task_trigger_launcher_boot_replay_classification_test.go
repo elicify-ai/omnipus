@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1726,7 +1727,9 @@ func TestU2bBootReplay_OrdinaryHeldFire_EditBeforeWiring_EditWins(t *testing.T) 
 // run is never adopted, and every later settle refuses with "run ... is
 // still open" (pkg/agent/task_trigger_boot_hold.go::recordUnstartedFireFailure's
 // !created branch). The task never reaches its required Failed disposition
-// with its failed run.
+// with its failed run. The one-shot close failure is injected through the
+// developer's test-only seam SetHeldFireCloseRunHookForTest (nil in
+// production), set at boot 2 and removed before the settle boot.
 //
 // Oracles (chief W5 b2 + S2 rulings: a failed run is recorded and the job
 // removed only after Failed is saved; nothing is silently lost):
@@ -1758,32 +1761,103 @@ func TestU2bBootReplay_HeldFireAgentGone_CloseFailsOnce_OrphanRunSettledAtNextBo
 	require.True(t, p2.loop.GetRegistry().RemoveAgent(held.AgentID),
 		"instrument: the assignee is removed from the registry")
 
-	// HERE the row must make the settle's CloseRun fail exactly once, with
-	// the OpenRun before it succeeding, and then let the store recover. No
-	// real-store state and no existing seam can do that:
-	t.Fatal("BLOCKED: no real-store failure makes the settle's CloseRun fail while its " +
-		"OpenRun succeeds — the two writes are the SAME primitive (pkg/task/run_store.go::" +
-		"appendRunRecord: scan the runs dir, then rewrite the day file atomically via " +
-		"writeFileAtomicFn, whose only injection point is an unexported pkg/task package " +
-		"variable unreachable from pkg/agent), so every store state that stops the close " +
-		"stops the open first: OpenRun runs first and dies at its own scan or append (an " +
-		"unwritable runs dir or an unreadable day file fails both identically, and the " +
-		"scans are equally tolerant — foldRunsLocked and findOpenRunLocked skip unreadable " +
-		"files and malformed lines alike). OpenRun and CloseRun are adjacent calls in " +
-		"pkg/agent/task_trigger_boot_hold.go::recordUnstartedFireFailure with no " +
-		"interleaving point between them: the existing seam SetHeldFireBeforeRunHookForTest " +
-		"fires before runScheduledFire, not between the writes, and a concurrent chmod from " +
-		"another goroutine is a nondeterministic race no test may depend on. CHECK proved " +
-		"the defect itself on a mutant tree (/workspace/logs/6b-fix/check/de28ca874/" +
-		"fault-close-once.log: one transient CloseRun failure after a successful OpenRun) — " +
-		"that fault injection is a production mutation, which the RED author may not make. " +
-		"Required seam: a test-only, nil-in-production hook in pkg/agent that fails exactly " +
-		"the settle's close once — for example SetHeldFireCloseRunHookForTest(fn func() " +
-		"error), invoked by recordUnstartedFireFailure after its successful OpenRun and " +
-		"before store.CloseRun, whose non-nil error is returned in CloseRun's place; the " +
-		"row then removes the hook (the store recovers) and asserts the oracles in this " +
-		"row's doc comment. Required by addendum-15 R6 (CHECK's fault-close-once: the " +
-		"orphaned in_progress run of an already-Failed task is never adopted — recovery " +
-		"scans only in-progress tasks — and every later settle refuses with \"run ... is " +
-		"still open\").")
+	// The audit window opens here, so only the release's rows are captured.
+	readAudit := swapAuditLogger(t, p2.loop)
+
+	// The fault, through the developer's test-only seam: the settle's close
+	// write fails EXACTLY ONCE. The hook self-removes after returning the
+	// error, so the store recovers for every later close (t.Cleanup is the
+	// safety net). A non-nil hook result is used as the CloseRun error and
+	// CloseRun itself is not called, so the just-opened run stays open —
+	// exactly the crash-between-the-two-writes shape.
+	SetHeldFireCloseRunHookForTest(func() error {
+		SetHeldFireCloseRunHookForTest(nil) // one-shot: the store recovers
+		return errors.New("R6: the failed run's close write fails once")
+	})
+	t.Cleanup(func() { SetHeldFireCloseRunHookForTest(nil) })
+
+	// Wire the plane: the release settles against the missing agent — the
+	// failed run's OPEN write succeeds, its CLOSE write fails once, and the
+	// settle keeps the job (never removed while the required disposition has
+	// not landed).
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release with a one-shot close failure", p2.loop.taskExecutor.wg.Wait)
+
+	kept := p2.storedJobs(t, fire.taskID)
+	require.Len(t, kept, 1,
+		"R6: the job must be KEPT while the failed run's close did not land")
+	require.True(t, kept[0].Enabled, "R6: the kept job stays enabled for the next boot")
+	require.True(t, auditRowNamesTaskAtWarn(readAudit(), fire.taskID),
+		"R6: a WARN audit entry naming the task must record the failed close")
+
+	// The fire's failed run exists and is OPEN — the orphan the next boot
+	// must adopt.
+	boot2Runs := p2.runs(t, fire.taskID)
+	require.Len(t, boot2Runs, 2,
+		"instrument: boot 1's abandoned run plus the settle's opened run exist")
+	var orphanRunID string
+	for i := range boot2Runs {
+		if boot2Runs[i].RunID != fire.run.RunID {
+			orphanRunID = boot2Runs[i].RunID
+			require.Equal(t, task.StatusInProgress, boot2Runs[i].Status,
+				"instrument: the one-shot close failure leaves the fire's run open")
+			require.Nil(t, boot2Runs[i].EndedAt,
+				"instrument: the open run carries no close timestamp")
+		}
+	}
+	require.NotEmpty(t, orphanRunID, "instrument: the settle's opened run is identified")
+
+	p2.stop()
+
+	// The next boot, the store healthy: the debt settles exactly once — by
+	// adopting the open run, not refusing it. Built as bootU2bLauncherProcess
+	// builds one, by hand, so the assignee can be absent from THIS boot's
+	// registry before its drain reaches the retained job (a fresh boot
+	// re-registers every configured agent, so the boot-2 removal does not
+	// carry across boots).
+	p3 := newU2bLauncherProcess(t, home, clk, completedWorkerForU2b())
+	settleBootTask, err := p3.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err, "instrument: the task survives into the settle boot")
+	require.True(t, p3.loop.GetRegistry().RemoveAgent(settleBootTask.AgentID),
+		"instrument: the assignee is absent from the settle boot's registry too")
+	p3.physicalBoot(t)
+	p3.runDueAndJoin(t)
+
+	// The orphaned open run must come back CLOSED as the fire's failed run.
+	boot3Runs := p3.runs(t, fire.taskID)
+	var adopted *task.TaskRun
+	for i := range boot3Runs {
+		if boot3Runs[i].RunID == orphanRunID {
+			adopted = &boot3Runs[i]
+			break
+		}
+	}
+	require.NotNil(t, adopted, "R6: the fire's opened run survives to the settle boot")
+	require.Equal(t, task.StatusFailed, adopted.Status,
+		"R6: the orphaned open run must be CLOSED as the fire's failed run at the healthy "+
+			"next boot — on a tree whose later settles refuse with \"run ... is still open\", "+
+			"the run stays in_progress forever and the fire is never settled")
+	require.NotNil(t, adopted.EndedAt, "R6: the adopted run carries its close timestamp")
+
+	// No run left open for the task, and the fire has exactly one failed run:
+	// the settle must adopt the open run, not open a second failed run for it.
+	for i := range boot3Runs {
+		require.NotEqual(t, task.StatusInProgress, boot3Runs[i].Status,
+			"R6: no run may stay open for the task after the settle boot")
+	}
+	require.Len(t, boot3Runs, 2,
+		"R6: exactly one failed run exists for this fire (plus boot 1's abandoned run) — "+
+			"the settle must adopt the open run, not open a second failed run for it")
+
+	after, err := p3.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err, "R6: the task survives the settle")
+	require.Equal(t, task.StatusFailed, after.Status, "R6: the task is Failed")
+	require.Empty(t, p3.storedJobs(t, fire.taskID),
+		"R6: the job is removed only once the failed disposition has landed")
+	p3.runDueAndJoin(t)
+	require.Len(t, p3.runs(t, fire.taskID), 2, "R6: another tick adds nothing")
+	p3.stop()
+	p4 := bootU2bLauncherProcess(t, home, clk)
+	require.Len(t, p4.runs(t, fire.taskID), 2, "R6: a further boot adds nothing")
+	p4.stop()
 }
