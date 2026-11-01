@@ -57,6 +57,49 @@ func (m *Manager) SetWorkerJoinHookForTest(fn func(instance, phase string)) {
 	m.workerJoinHook.Store(&fn)
 }
 
+// WorkerJoinObservation is what the worker-join observation hook receives
+// at each join stage of Reload (spec S-24, B-01). Every flag is read from
+// real state at the moment the stage fires, without blocking.
+type WorkerJoinObservation struct {
+	Instance string
+	Phase    string // "joining" or "joined"
+	// WriteLockHeld: a non-blocking m.mu.TryRLock failed, so a writer holds
+	// m.mu (or waits for it). Reload is single-flight and RegisterChannel is
+	// the only other writer, so in a test that registers nothing during the
+	// reload this is true only while Reload really holds the write lock. A
+	// successful probe releases its read lock at once.
+	WriteLockHeld bool
+	// OldWorkerDone / OldMediaWorkerDone: the OLD generation's w.done and
+	// w.mediaDone, captured before Reload replaces them, are closed (a
+	// non-blocking receive succeeds), i.e. that worker goroutine has exited.
+	OldWorkerDone      bool
+	OldMediaWorkerDone bool
+}
+
+// SetWorkerJoinObservationHookForTest installs fn, called at the same two
+// points as the worker-join hook ("joining", "joined") with a
+// WorkerJoinObservation. The probes run only while fn is installed. fn has
+// the same limits as the worker-join hook: it runs where Reload may hold the
+// write lock, so it must only record or signal, never block or call the
+// Manager.
+func (m *Manager) SetWorkerJoinObservationHookForTest(fn func(WorkerJoinObservation)) {
+	if fn == nil {
+		m.workerJoinObservationHook.Store(nil)
+		return
+	}
+	m.workerJoinObservationHook.Store(&fn)
+}
+
+// writeLockHeldProbe reports whether a writer holds (or waits for) m.mu,
+// without blocking.
+func (m *Manager) writeLockHeldProbe() bool {
+	if m.mu.TryRLock() {
+		m.mu.RUnlock()
+		return false
+	}
+	return true
+}
+
 func (m *Manager) observeBeforeDequeueStart(msg bus.OutboundMessage) {
 	if fn := m.beforeDequeueStartHook.Load(); fn != nil {
 		(*fn)(msg)
@@ -69,8 +112,30 @@ func (m *Manager) observeReloadWriteLock(stage string) {
 	}
 }
 
-func (m *Manager) observeWorkerJoin(instance, phase string) {
+// observeWorkerJoin reports one join stage; done and mediaDone are the old
+// generation's completion channels (never replaced before "joined").
+func (m *Manager) observeWorkerJoin(instance, phase string, done, mediaDone <-chan struct{}) {
 	if fn := m.workerJoinHook.Load(); fn != nil {
 		(*fn)(instance, phase)
+	}
+	if fn := m.workerJoinObservationHook.Load(); fn != nil {
+		(*fn)(WorkerJoinObservation{
+			Instance:           instance,
+			Phase:              phase,
+			WriteLockHeld:      m.writeLockHeldProbe(),
+			OldWorkerDone:      isClosed(done),
+			OldMediaWorkerDone: isClosed(mediaDone),
+		})
+	}
+}
+
+// isClosed reports, without blocking, whether ch is closed. The channels it
+// is used on are only ever closed, never sent on.
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
 	}
 }

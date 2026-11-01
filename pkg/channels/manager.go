@@ -139,9 +139,10 @@ type Manager struct {
 	// start checks (FR-044, SetPolicySource); read lock-free.
 	policySource atomic.Pointer[func() *config.Config]
 	// Test-only observation points (manager_test_hooks.go); nil in production.
-	beforeDequeueStartHook atomic.Pointer[func(msg bus.OutboundMessage)]
-	reloadWriteLockHook    atomic.Pointer[func(stage string)]
-	workerJoinHook         atomic.Pointer[func(instance, phase string)]
+	beforeDequeueStartHook    atomic.Pointer[func(msg bus.OutboundMessage)]
+	reloadWriteLockHook       atomic.Pointer[func(stage string)]
+	workerJoinHook            atomic.Pointer[func(instance, phase string)]
+	workerJoinObservationHook atomic.Pointer[func(WorkerJoinObservation)]
 	// returnRefusalObserver is told about answers the return-route check refused.
 	returnRefusalObserver atomic.Pointer[ReturnRefusalObserver]
 	secrets               credentials.SecretBundle // resolved plaintext secrets; never written to env
