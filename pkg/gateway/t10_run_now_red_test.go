@@ -43,11 +43,18 @@ func t10TaskEntry(t *testing.T, kind string, override ...providers.LLMProvider) 
 	path := filepath.Join(api.homePath, "cron", "jobs.json")
 	cs := cron.NewCronService(path)
 	ctor := reflect.ValueOf(agent.NewTaskTriggerScheduler)
+	require.Equal(t, 3, ctor.Type().NumIn(), "temporary constructor binding changed; retain real-entry assertions")
+	require.Equal(t, 1, ctor.Type().NumOut())
+	require.Equal(t, reflect.TypeOf((*agent.TaskTriggerScheduler)(nil)), ctor.Type().Out(0))
 	first := reflect.ValueOf(path)
 	if ctor.Type().In(0) == reflect.TypeOf(cs) {
 		first = reflect.ValueOf(cs)
 	}
-	scheduler := ctor.Call([]reflect.Value{first, reflect.ValueOf(api.taskStore), reflect.ValueOf(api.taskExecutor)})[0].Interface().(*agent.TaskTriggerScheduler)
+	args := []reflect.Value{first, reflect.ValueOf(api.taskStore), reflect.ValueOf(api.taskExecutor)}
+	for i, arg := range args {
+		require.True(t, arg.Type().AssignableTo(ctor.Type().In(i)), "bind real scheduler argument %d, not a fake implementation", i)
+	}
+	scheduler := ctor.Call(args)[0].Interface().(*agent.TaskTriggerScheduler)
 	scheduler.SetClock(clk)
 	require.NoError(t, scheduler.Start())
 	api.agentLoop.SetTaskTriggerScheduler(scheduler)
@@ -62,6 +69,9 @@ func t10TaskEntry(t *testing.T, kind string, override ...providers.LLMProvider) 
 		trigger = fmt.Sprintf(`{"type":"recurring","config":{"rrule":"FREQ=DAILY;COUNT=3","dtstart_ms":%d,"tz":"UTC"}}`, at)
 	}
 	body := fmt.Sprintf(`{"title":"T10 real entry","prompt":"Produce the complete T10 report.","workspace_id":%q,"agent_id":"mia","action":"llm","trigger":%s,`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`, ws, trigger)
+	if kind == "none" {
+		body = strings.Replace(body, `"trigger":`+trigger+`,`, "", 1)
+	}
 	w := httptest.NewRecorder()
 	api.HandleTasks(w, httptest.NewRequest("POST", "/api/v1/tasks", strings.NewReader(body)))
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
@@ -83,7 +93,7 @@ func t10TaskEntry(t *testing.T, kind string, override ...providers.LLMProvider) 
 		}
 		return ids
 	})
-	if kind != "manual" {
+	if kind == "once" || kind == "recurring" {
 		jobs := t10ReadTaskJobs(t, path, id)
 		require.Len(t, jobs, 1, "real creation notification must arm exactly one registration")
 		require.NotNil(t, jobs[0].State.NextRunAtMS)
@@ -271,7 +281,7 @@ func TestT10_RunNowExplicitEligibilityAndDearmedRegistration(t *testing.T) {
 			before := t10ReadTaskJobs(t, f.path, f.id)
 			w := t10RunRequest(f, occurrence)
 			if strings.Contains(variant, "refused") {
-				assert.Contains(t, []int{http.StatusBadRequest, http.StatusConflict}, w.Code, w.Body.String())
+				t10AssertRunRefused(t, w)
 				if w.Code == http.StatusAccepted {
 					t10AwaitCompletedRuns(t, f, 1)
 				}
@@ -313,7 +323,7 @@ func TestT10_RunNowAdmissionAndT8Dependencies(t *testing.T) {
 		{"D6-17-E0-task-level", "same O2 queued state refuses no-occurrence run-now before E4; settled-past and no-armed ordinary controls still dispatch"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			t.Fatalf("BLOCKED: needs T8 backend plus cap-visibility admission seam — %s: %s; bind actual production hooks, never CronService.RunNow as a substitute", row.name, row.oracle)
+			t10AdmissionRow(t, row.name)
 		})
 	}
 }
@@ -322,12 +332,36 @@ func TestT10_RunNowAdmissionAndT8Dependencies(t *testing.T) {
 func TestT10_RunNowMarkerProgressionExactInstants(t *testing.T) {
 	for _, variant := range []string{"physical-restart", "reconcile", "identical-save", "genuine-trigger-edit", "final-COUNT"} {
 		t.Run(variant, func(t *testing.T) {
-			t.Fatal("BLOCKED: needs T8 backend and trigger-aware consumption: consume Monday 2026-11-02T14:00:00Z; marker MUST be Tuesday 2026-11-03T09:00:00Z; boot/reconcile Monday 23:00 first arms Wednesday 2026-11-04T09:00:00Z, identical save preserves, edit clears, final COUNT retires — S-H.7. No test-only progression implementation.")
+			t10MarkerProgression(t, variant)
 		})
 	}
 }
 
 // Traces to: schedules-t10-spec-r6.md lines 936–941; TDD 21, D-6.13.
 func TestT10_CancelledCallerPreAdmissionBinding(t *testing.T) {
-	t.Fatal("BLOCKED: bind actual caller cancellation at the unified pre-admission boundary, then prove original automatic fire survives; a cancelled-context/error-only assertion cannot establish no consumption — S-H.10/D-6.13")
+	f := t10TaskEntry(t, "once")
+	before := t10ReadTaskJobs(t, f.path, f.id)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := httptest.NewRecorder()
+	f.api.HandleTasks(w, httptest.NewRequest("POST", "/api/v1/tasks/"+f.id+"/runs", strings.NewReader(`{}`)).WithContext(ctx))
+	t10AssertRunRefused(t, w)
+	if w.Code == http.StatusAccepted {
+		t10AwaitCompletedRuns(t, f, 1)
+	}
+	rows, err := f.api.taskStore.ListRuns(f.id)
+	require.NoError(t, err)
+	require.Empty(t, rows, "cancelled caller must not open a run before admission")
+	assert.Equal(t, before, t10ReadTaskJobs(t, f.path, f.id))
+	t10AssertConsumptionMarker(t, f, nil)
+	f.clk.advance(time.UnixMilli(f.at).Sub(f.clk.Now()))
+	f.s.RunDueJobs(f.clk.Now())
+	f.s.WaitForLane()
+	automatic := t10AwaitCompletedRuns(t, f, 1)
+	assert.Equal(t, task.RunKindScheduled, automatic[0].Kind, "positive control: original automatic occurrence survives")
+	f.s.RunDueJobs(f.clk.Now())
+	f.s.WaitForLane()
+	rows, err = f.api.taskStore.ListRuns(f.id)
+	require.NoError(t, err)
+	assert.Len(t, rows, 1)
 }

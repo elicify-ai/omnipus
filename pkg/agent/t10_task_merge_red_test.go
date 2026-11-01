@@ -60,7 +60,9 @@ func TestT10_TaskOccurrenceFailureUsesNextBoundaryNotBackoff(t *testing.T) {
 			s, store, clk, _ := newTriggerSchedulerForTest(t)
 			calls := 0
 			s.dispatch = func(context.Context, string, *int64) error { calls++; return cause }
-			at := clk.Now().Add(time.Hour).UnixMilli()
+			// Exact on-second recurrence fixture, like r6's scheduled instants;
+			// this control tests next-boundary/no-backoff, not fractional DTSTART rounding.
+			at := clk.Now().Truncate(time.Second).Add(time.Hour).UnixMilli()
 			rule, tz := "FREQ=DAILY;COUNT=3", "UTC"
 			v := &task.Task{ID: "failure-next-boundary", Title: "failed dispatch", AgentID: "mia", WorkspaceID: "ws-test", Status: task.StatusInbox, Trigger: &task.Trigger{Type: task.TriggerRecurring, Config: task.TriggerConfig{Rrule: &rule, DtstartMs: &at, Tz: &tz}}}
 			require.NoError(t, store.Create(v))
@@ -79,7 +81,8 @@ func TestT10_TaskOccurrenceFailureUsesNextBoundaryNotBackoff(t *testing.T) {
 }
 
 // Traces to: schedules-t10-spec-r6.md lines 617, 624, 1312; TDD 18, FR-23.
-// Explicit dependency declarations — NOT implemented behavioral coverage.
+// Needs T8 backend. Every row now drives production objects and has real
+// state/dispatch/persistence assertions; missing process-edge hooks fail loudly.
 func TestT10_InheritedT8OwnershipAndWaiting(t *testing.T) {
 	for _, tc := range []struct{ id, oracle string }{
 		{"12b-18.11-18.14", "tool-created future once/recurring stays inbox; no early turn/session; manual control drains"},
@@ -97,6 +100,6 @@ func TestT10_InheritedT8OwnershipAndWaiting(t *testing.T) {
 		{"12f-18.39", "real boot load-first aborts on damaged file byte-identically before reconcile/activate"},
 		{"12f-18.40", "same scheduler across real config reload; overdue/queued/save-failure/rearm/damaged-disk variants preserve original attempt"},
 	} {
-		t.Run(tc.id, func(t *testing.T) { t10NeedsT8(t, tc.id, tc.oracle) })
+		t.Run(tc.id, func(t *testing.T) { t10InheritedT8Row(t, tc.id) })
 	}
 }

@@ -121,6 +121,17 @@ func TestT10_CreatorNoticeScheduledLifecycleDependencies(t *testing.T) {
 		{"D7-8-delivered-held-then-dispatched", "no notice while held; after dependency release and actual completion, same creator notice once"},
 		{"D7-11-run-now-consumption", "real trigger-aware run-now commits at admission then completes and fans out once"},
 	} {
-		t.Run(tc.id, func(t *testing.T) { t10NeedsT8(t, tc.id, tc.oracle) })
+		t.Run(tc.id, func(t *testing.T) {
+			switch tc.id {
+			case "D7-7-skipped-no-run":
+				t10SkippedNoticeBaseline(t)
+			case "D7-8-delivered-held-then-dispatched":
+				t10CreatorScheduledLifecycle(t, false)
+			case "D7-11-run-now-consumption":
+				t10CreatorScheduledLifecycle(t, true)
+			default:
+				t.Fatalf("unbound creator lifecycle %s", tc.id)
+			}
+		})
 	}
 }

@@ -160,9 +160,12 @@ func TestReload_DoesNotRestartEngineOrStrandRunning(t *testing.T) {
 	defer func() { release(); cs.Stop(); cs.WaitForLane() }()
 	interval := int64(60000)
 	spec := cron.JobSpec{Name: "reload-held", AgentID: "mia", Message: "held-heartbeat", Schedule: cron.CronSchedule{Kind: "every", EveryMS: &interval}}
-	t10GatewayKind(t, &spec, "heartbeat")
+	// Seed a typed persisted fixture on the pre-T10 engine. Kind-at-creation is
+	// checked independently; it must not prevent exercising the real reload bug.
 	j, err := cs.AddJobFull(spec)
 	require.NoError(t, err)
+	j.Payload.Kind = "heartbeat"
+	require.NoError(t, cs.UpdateJob(j))
 	clk.advance(time.Minute)
 	cs.RunDueJobs(clk.Now())
 	var runctx context.Context
@@ -198,5 +201,50 @@ func TestReload_DoesNotRestartEngineOrStrandRunning(t *testing.T) {
 
 // Traces to: schedules-t10-spec-r6.md lines 638–643; TDD 9b. Binding gap, not coverage.
 func TestT10_BootReconciliationsFinishBeforeFirstCollection(t *testing.T) {
-	t.Fatal("BLOCKED: production pre-activation hook is absent; bind restoration/task/loop/heartbeat completion and first-collection barriers before asserting exact order — S-B.4, FR-03; a hand-copied boot sequence would not test gateway wiring")
+	st := t10BootStage(t)
+	t10SeedRecurringTask(t, st)
+	var mu sync.Mutex
+	events := []string{}
+	collectKinds := map[string]int{}
+	collected := make(chan struct{})
+	var first sync.Once
+	// Missing hook is a binding prerequisite only. The callback observes the
+	// REAL gateway boot, never supplies a replacement boot implementation.
+	observer, ok := any(st).(interface {
+		SetSchedulerBootObserverForTest(func(string, *cron.CronService))
+	})
+	if !ok {
+		t.Fatal("BLOCKED: pre-activation boot observer not implemented — S-B.4/FR-03; bind equivalent real stage/first-collection hooks")
+	}
+	observer.SetSchedulerBootObserverForTest(func(stage string, cs *cron.CronService) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, stage)
+		if stage == "first_collection" {
+			first.Do(func() {
+				for _, j := range cs.ListJobs(true) {
+					collectKinds[j.Payload.Kind]++
+				}
+				close(collected)
+			})
+		}
+	})
+	defer observer.SetSchedulerBootObserverForTest(nil)
+	_, stop, err := st.startSchedulers()
+	require.NoError(t, err)
+	require.False(t, stop)
+	select {
+	case <-collected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("real first collection was not observed after successful boot")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, events, 7, "every real boot phase once; no-op observer cannot pass")
+	assert.Equal(t, []string{"checked_load", "clear_running"}, events[:2])
+	assert.ElementsMatch(t, []string{"task_reconciled", "loop_reconciled", "heartbeat_reconciled"}, events[2:5], "spec requires all reconcilers before activation, not a relative order between them")
+	assert.Equal(t, []string{"activate", "first_collection"}, events[5:])
+	assert.Equal(t, 1, collectKinds["task"], "first collection sees real reconciled task, not an empty boot")
+	assert.NotNil(t, st.runningServices.TaskTrigger)
+	assert.NotNil(t, st.runningServices.LoopScheduler)
 }

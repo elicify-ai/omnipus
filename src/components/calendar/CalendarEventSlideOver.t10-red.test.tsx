@@ -87,11 +87,11 @@ describe('T10 #1243 editor save request (transport characterization, not backend
     open(null, undefined, { status: running ? 'in_progress' : 'inbox', trigger: { type: 'recurring', config: { rrule, dtstart_ms: future, tz: 'UTC' } } })
     await screen.findByLabelText(/title/i)
     if (ends === 'After N') {
-      fireEvent.click(await screen.findByRole('button', { name: 'After', exact: true }))
+      fireEvent.click(await screen.findByRole('button', { name: /^After$/ }))
       fireEvent.change(screen.getByLabelText('Number of occurrences'), { target: { value: '7' } })
     } else if (ends === 'Does not repeat') {
       fireEvent.click(screen.getByRole('combobox', { name: 'Repeat' }))
-      fireEvent.click(await screen.findByRole('option', { name: 'Does not repeat', exact: true }))
+      fireEvent.click(await screen.findByRole('option', { name: /^Does not repeat$/ }))
     }
     const save = screen.getByRole('button', { name: /^Save$/i })
     await waitFor(() => expect(save).not.toBeDisabled())

@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/require"
 )
 
 func t10LoopRecovery(t *testing.T, s *LoopScheduler) error {
@@ -27,24 +29,32 @@ func t10NewLoop(t *testing.T, path string, al *AgentLoop) *LoopScheduler {
 	ctor := reflect.ValueOf(NewLoopScheduler)
 	// T10 changes constructor ownership. This compatibility is TEST-ONLY and
 	// handles the existing path constructor and the specified injected engine.
+	require.Equal(t, 2, ctor.Type().NumIn(), "constructor binding changed; retain shared-store behavioral assertions when rebinding")
 	first := reflect.ValueOf(path)
 	if ctor.Type().In(0) == reflect.TypeOf((*cron.CronService)(nil)) {
 		first = reflect.ValueOf(cron.NewCronService(path))
 	}
+	require.True(t, first.Type().AssignableTo(ctor.Type().In(0)), "constructor binding requires an explicit update, not a reflection panic")
+	require.True(t, reflect.TypeOf(al).AssignableTo(ctor.Type().In(1)))
+	require.Equal(t, 1, ctor.Type().NumOut(), "bind actual constructor result")
+	require.Equal(t, reflect.TypeOf((*LoopScheduler)(nil)), ctor.Type().Out(0))
 	return ctor.Call([]reflect.Value{first, reflect.ValueOf(al)})[0].Interface().(*LoopScheduler)
 }
 
-func t10NeedsT8(t *testing.T, scenario, assertion string) {
+// Hook adapters are prerequisites, not test implementations. Bind equivalent
+// production process-edge hooks when supplied; NEVER replace them with no-ops.
+func t10PostTurnGate(t *testing.T, s *LoopScheduler, hook func()) {
 	t.Helper()
-	t.Fatalf("BLOCKED: needs T8 backend (tool-parity-spec-r17.md TK-30, tests 12b–12f; t8-rebase-note-6b-replay.md applies): %s — %s. No substitute implementation or passing claim.", scenario, assertion)
+	r, ok := any(s).(interface{ SetPostTurnTestHook(func()) })
+	if !ok {
+		t.Fatal("BLOCKED: post-ProcessScheduled/pre-mutation hook not implemented — S-B.8/D-3b.14–15")
+	}
+	r.SetPostTurnTestHook(hook)
+	t.Cleanup(func() { r.SetPostTurnTestHook(nil) })
 }
 
-func t10PostTurnGate(t *testing.T) {
+func t10FailSingleRecoveryWrite(t *testing.T, s any, hook func(string, session.MetaPatch) error) func() {
 	t.Helper()
-	t.Fatal("BLOCKED: deterministic pause AFTER ProcessScheduled returns, BEFORE session post-turn mutations is not exposed; S-B.8/D-3b.14–15 requires this exact interleaving, not a provider-before-return approximation")
-}
-
-func t10FailSingleRecoveryWrite(t *testing.T) {
-	t.Helper()
-	t.Fatal("BLOCKED: single session loop-identity write failure injector is not exposed; S-B.9/D-3b.7/17 must distinguish one failed repair from a successful fallback clear")
+	_ = s // Caller supplies its real store; interception is the existing filesystem edge.
+	return t10InterceptLoopWrites(t, hook)
 }

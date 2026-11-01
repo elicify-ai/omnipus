@@ -1,8 +1,8 @@
 package cron
 
 // RED scaffolding only. These adapters never implement a scheduler, dispatcher,
-// admission policy, or persistence. Bind the two unbound adapters to production
-// seams when those seams exist, then delete their Fatal branches. A BLOCKED
+// admission policy, or persistence. Bind equivalent production registration
+// when it exists; memory measurements already use the real config seam. A BLOCKED
 // result is a failure, not evidence that the assertions below it ran.
 
 import (
@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 type t10Clock struct {
@@ -42,14 +44,33 @@ func t10Spec(t *testing.T, kind string) JobSpec {
 	return spec
 }
 
-func t10InstallHandlers(t *testing.T, _ *CronService, _ map[string]ScheduledRunner) {
+func t10InstallHandlers(t *testing.T, cs *CronService, handlers map[string]ScheduledRunner) {
 	t.Helper()
-	t.Fatal("BLOCKED: merged engine kind-dispatch registration is not implemented; bind this RED adapter to the production dispatcher — T10-FR-01/22, S-A.2/S-A.4")
+	registry, ok := any(cs).(interface {
+		RegisterKindHandler(string, ScheduledRunner) error
+	})
+	if !ok {
+		t.Fatal("BLOCKED: merged engine kind-dispatch registration is not implemented; bind equivalent production registry — T10-FR-01/22, S-A.2/S-A.4")
+	}
+	for _, kind := range []string{"heartbeat", "loop", "task"} {
+		if err := registry.RegisterKindHandler(kind, handlers[kind]); err != nil {
+			t.Fatalf("register real %s handler: %v", kind, err)
+		}
+	}
 }
 
-func t10InstallMemoryProvider(t *testing.T, _ *CronService, _ string) {
+func t10InstallMemoryProvider(t *testing.T, _ *CronService, state string) {
 	t.Helper()
-	t.Fatal("BLOCKED: injected shared memory-admission seam (cap-visibility fix round) is not available; do not implement a test-only gate — T10-FR-07, S-D.2–S-D.4")
+	// This existing process-edge hook is shared with real admission consumers.
+	// It supplies measurements, never an admission decision or a test-only gate.
+	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) {
+		return state == "pressure", state != "unmeasurable"
+	}, func() (uint64, bool) {
+		if state == "healthy" {
+			return 16 << 30, true
+		}
+		return 0, state != "unmeasurable"
+	}))
 }
 
 func t10Await[T any](t *testing.T, ch <-chan T) T {

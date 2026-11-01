@@ -45,16 +45,16 @@ describe('T10 schedule-bearing task panel', () => {
     open(type)
     const selector = await screen.findByRole('combobox', { name: 'Status' })
     fireEvent.click(selector)
-    expect.soft(screen.queryByRole('option', { name: 'Next', exact: true })).not.toBeInTheDocument()
-    expect.soft(screen.queryByRole('option', { name: 'In Progress', exact: true })).not.toBeInTheDocument()
+    expect.soft(screen.queryByRole('option', { name: /^Next$/ })).not.toBeInTheDocument()
+    expect.soft(screen.queryByRole('option', { name: /^In Progress$/ })).not.toBeInTheDocument()
   })
 
   // Traces to: schedules-t10-spec-r6.md lines 985–990, 1304; D-11.9 manual control.
   it('ordinary manual task retains both existing status routes', async () => {
     open('manual')
     fireEvent.click(await screen.findByRole('combobox', { name: 'Status' }))
-    expect(await screen.findByRole('option', { name: 'Next', exact: true })).toBeVisible()
-    expect(screen.getByRole('option', { name: 'In Progress', exact: true })).toBeVisible()
+    expect(await screen.findByRole('option', { name: /^Next$/ })).toBeVisible()
+    expect(screen.getByRole('option', { name: /^In Progress$/ })).toBeVisible()
   })
 
   // Traces to: schedules-t10-spec-r6.md lines 959–965, 1302; TDD 21/25, D-11.7.

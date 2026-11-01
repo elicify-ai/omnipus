@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
+	"gopkg.in/yaml.v3"
 )
 
 const t10Bearer = "t10-red-test-fixture-bearer"
@@ -140,6 +142,59 @@ func TestT10_TimerFailureStillReachesNotificationsREST(t *testing.T) {
 // Traces to: schedules-t10-spec-r6.md lines 854–858, 867–871; TDD 16, D-5.12.
 func TestT10_NoScheduleWireTypesOrConsumers(t *testing.T) {
 	root := filepath.Clean("../..")
+	t.Run("inline-OpenAPI-schemas", func(t *testing.T) {
+		data, err := os.ReadFile(filepath.Join(root, "contracts/openapi.yaml"))
+		require.NoError(t, err)
+		var doc struct {
+			Components struct {
+				Schemas map[string]any `yaml:"schemas"`
+			} `yaml:"components"`
+		}
+		require.NoError(t, yaml.Unmarshal(data, &doc))
+		require.Contains(t, doc.Components.Schemas, "Task", "positive control: loaded the real schema map")
+		for name := range doc.Components.Schemas {
+			assert.False(t, strings.HasPrefix(name, "Schedule"), "retired inline schema %s", name)
+		}
+	})
+	t.Run("gateway-consumers-and-capacity-wiring", func(t *testing.T) {
+		entries, err := os.ReadDir(".")
+		require.NoError(t, err)
+		files, selectors := 0, 0
+		for _, entry := range entries {
+			if !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			files++
+			f, err := parser.ParseFile(token.NewFileSet(), entry.Name(), nil, 0)
+			require.NoError(t, err)
+			generatedAliases := map[string]bool{}
+			for _, imp := range f.Imports {
+				path, err := strconv.Unquote(imp.Path.Value)
+				require.NoError(t, err)
+				if path != "github.com/elicify-ai/omnipus/pkg/api/generated" {
+					continue
+				}
+				alias := "generated"
+				if imp.Name != nil {
+					alias = imp.Name.Name
+				}
+				generatedAliases[alias] = true
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok {
+					selectors++
+					assert.NotEqual(t, "SetMaxConcurrentRuns", sel.Sel.Name, "removed capacity wiring in %s", entry.Name())
+					assert.NotEqual(t, "HandleAutomations", sel.Sel.Name, "retired handler wiring in %s", entry.Name())
+					if id, ok := sel.X.(*ast.Ident); ok && generatedAliases[id.Name] {
+						assert.False(t, strings.HasPrefix(sel.Sel.Name, "Schedule"), "retired generated consumer %s.%s in %s", id.Name, sel.Sel.Name, entry.Name())
+					}
+				}
+				return true
+			})
+		}
+		require.Positive(t, files)
+		require.Positive(t, selectors, "AST scanner must see real selectors before trusting absence")
+	})
 	for _, dir := range []string{"contracts/components/schemas", "pkg/api/generated", "src/lib/api/generated"} {
 		t.Run(dir, func(t *testing.T) {
 			seen := 0

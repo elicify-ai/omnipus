@@ -71,7 +71,10 @@ func TestT10_NotDispatchedDiagnosticsStayOutOfEveryUserSink(t *testing.T) {
 				chat = append(chat, entry.Content)
 			}
 			for name, text := range map[string]string{"task result": fresh.Result, "goal record": string(goalJSON), "chat outcome/transcript": strings.Join(chat, "\n")} {
-				assert.Contains(t, strings.ToLower(text), "could not be started", name+" must carry the plain user explanation")
+				assert.NotEmpty(t, strings.TrimSpace(text), name+" must carry a user explanation, not silently erase the failure")
+				if tc.plain {
+					assert.Contains(t, text, tc.cause, name+" preserves an already-plain explanation")
+				}
 				assert.NotContains(t, text, registered, name+" must never contain a registered secret")
 				assert.NotContains(t, text, ErrTaskRunNotDispatched.Error(), name+" must not render the raw error wrapper")
 				if !tc.plain {

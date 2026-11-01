@@ -4,7 +4,11 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,11 +25,15 @@ import (
 type t10LoopProvider struct {
 	calls   atomic.Int32
 	failure error
+	onChat  func(context.Context)
 }
 
 func (p *t10LoopProvider) GetDefaultModel() string { return "test-model" }
-func (p *t10LoopProvider) Chat(_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+func (p *t10LoopProvider) Chat(ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
 	p.calls.Add(1)
+	if p.onChat != nil {
+		p.onChat(ctx)
+	}
 	if p.failure != nil {
 		return nil, p.failure
 	}
@@ -40,6 +48,7 @@ type t10LoopFixture struct {
 	sid   string
 	inst  *AgentInstance
 	p     *t10LoopProvider
+	path  string
 }
 
 func t10LoopSetup(t *testing.T, worker bool) *t10LoopFixture {
@@ -53,12 +62,13 @@ func t10LoopSetup(t *testing.T, worker bool) *t10LoopFixture {
 	store, sid := newGoalTestSession(t, al, "native-agent")
 	inst, ok := al.GetRegistry().GetAgent("native-agent")
 	require.True(t, ok)
-	ls := t10NewLoop(t, filepath.Join(t.TempDir(), "cron", "jobs.json"), al)
+	path := filepath.Join(t.TempDir(), "cron", "jobs.json")
+	ls := t10NewLoop(t, path, al)
 	clk := newTriggerFakeClock()
 	ls.SetClock(clk)
 	al.SetLoopScheduler(ls)
 	t.Cleanup(func() { ls.Stop(); ls.WaitForLane() })
-	return &t10LoopFixture{al, ls, clk, store, sid, inst, p}
+	return &t10LoopFixture{al, ls, clk, store, sid, inst, p, path}
 }
 func (f *t10LoopFixture) command(t *testing.T, text string) {
 	t.Helper()
@@ -204,6 +214,21 @@ func TestLoopBootReconcile_OwnershipAndCrashWindows(t *testing.T) {
 				}
 				assert.Equal(t, int32(2), f.p.calls.Load(), "at least TWO intervals, not a plausible one-shot that stalls")
 			}
+			if tc.count == maxRuns-1 {
+				// D-3b.9 is an execution bound, not only a recovered job shape.
+				require.NoError(t, f.ls.Start())
+				require.NotNil(t, jobs[0].State.NextRunAtMS)
+				f.clk.Advance(time.UnixMilli(*jobs[0].State.NextRunAtMS).Sub(f.clk.Now()))
+				f.ls.RunDueJobs(f.clk.Now())
+				f.ls.WaitForLane()
+				assert.Equal(t, int32(1), f.p.calls.Load(), "last permitted step must actually execute")
+				assert.Empty(t, f.meta(t).LoopMode, "saved limit is exhausted after exactly one more step")
+				assert.Empty(t, t10SessionLoopJobs(f.ls, f.sid))
+				f.clk.Advance(24 * time.Hour)
+				f.ls.RunDueJobs(f.clk.Now())
+				f.ls.WaitForLane()
+				assert.Equal(t, int32(1), f.p.calls.Load(), "no step beyond the saved limit")
+			}
 			for _, stopFirst := range []bool{false, true} {
 				if stopFirst {
 					f.command(t, "/loop stop")
@@ -224,10 +249,60 @@ func TestT10_LoopRevokedCallbackHasNoPostTurnEffects(t *testing.T) {
 		t.Run(variant, func(t *testing.T) {
 			f := t10LoopSetup(t, false)
 			f.command(t, "/loop old")
-			t10PostTurnGate(t)
-			// Binding gap, NOT behavioral coverage: this row must remain FAIL
-			// until the actual post-return interleave and state/frame/job oracle
-			// are implemented. No snapshot-equals-itself assertion is an oracle.
+			one := 1
+			require.NoError(t, f.store.SetMeta(f.sid, session.MetaPatch{LoopMaxRuns: &one}))
+			old, ok := f.ls.cs.GetJob(f.meta(t).LoopJobID)
+			require.True(t, ok)
+			entered, release := make(chan struct{}), make(chan struct{})
+			var gate sync.Once
+			t10PostTurnGate(t, f.ls, func() { gate.Do(func() { close(entered); <-release }) })
+			done := make(chan error, 1)
+			go func() { _, err := f.ls.RunScheduled(context.Background(), &old); done <- err }()
+			var unblock sync.Once
+			t.Cleanup(func() { unblock.Do(func() { close(release) }) })
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("post-return hook never reached; no-op turn cannot satisfy this test")
+			}
+			assert.Equal(t, int32(1), f.p.calls.Load(), "old turn completed, not cancelled")
+			if variant == "stop-then-start" {
+				f.command(t, "/loop stop")
+			}
+			f.command(t, "/loop replacement")
+			before := *f.meta(t)
+			jobs := t10SessionLoopJobs(f.ls, f.sid)
+			require.Len(t, jobs, 1)
+			require.NotEqual(t, old.ID, jobs[0].ID)
+			sub := f.al.SubscribeEvents(32)
+			defer f.al.UnsubscribeEvents(sub.ID)
+			unblock.Do(func() { close(release) })
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("old callback failed to settle")
+			}
+			after := *f.meta(t)
+			assert.Equal(t, before.LoopRunCount, after.LoopRunCount)
+			assert.Equal(t, before.LoopLastActivityAt, after.LoopLastActivityAt)
+			assert.Equal(t, before.LoopJobID, after.LoopJobID)
+			assert.Equal(t, before.LoopNextDelayMS, after.LoopNextDelayMS)
+			assert.Equal(t, before.LoopMode, after.LoopMode, "stale run-cap brake cannot stop replacement")
+			assert.Equal(t, jobs, t10SessionLoopJobs(f.ls, f.sid), "no stale successor chain")
+			for len(sub.C) > 0 {
+				e := <-sub.C
+				assert.NotEqual(t, EventKindLoopStatusChanged, e.Kind, "revoked callback must publish no loop frame")
+			}
+			// Positive continuation: a no-op runner cannot pass only the negative assertions.
+			require.NoError(t, f.ls.Start())
+			require.NotNil(t, jobs[0].State.NextRunAtMS)
+			f.clk.Advance(time.UnixMilli(*jobs[0].State.NextRunAtMS).Sub(f.clk.Now()))
+			f.ls.RunDueJobs(f.clk.Now())
+			f.ls.WaitForLane()
+			assert.Equal(t, int32(2), f.p.calls.Load())
+			assert.Equal(t, 1, f.meta(t).LoopRunCount)
+			assert.Len(t, t10SessionLoopJobs(f.ls, f.sid), 1)
 		})
 	}
 }
@@ -257,7 +332,69 @@ func TestT10_LoopRecoveryPersistenceFailures(t *testing.T) {
 		t.Run(row, func(t *testing.T) {
 			f := t10LoopSetup(t, false)
 			f.command(t, "/loop persistent")
-			t10FailSingleRecoveryWrite(t)
+			m := f.meta(t)
+			// Force identity repair: metadata still names J1, latest J2 survives.
+			_, err := f.ls.AddOneShot("native-agent", f.sid, 600000)
+			require.NoError(t, err)
+			if row == "D3b-13-removal-before-persist" {
+				for _, j := range t10SessionLoopJobs(f.ls, f.sid) {
+					require.True(t, f.ls.RemoveJob(j.ID))
+				}
+			}
+			path := filepath.Join(f.store.BaseDir(), f.sid, "loop.json")
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+			injected := errors.New("T10 loop recovery identity persistence failed")
+			writes, failures := 0, 0
+			sustained := strings.Contains(row, "sustained") || strings.Contains(row, "repeat")
+			restore := t10FailSingleRecoveryWrite(t, f.store, func(sid string, p session.MetaPatch) error {
+				if sid != f.sid {
+					return nil
+				}
+				writes++
+				if sustained || (p.LoopJobID != nil && failures == 0) {
+					failures++
+					return injected
+				}
+				return nil // a fallback stop WOULD succeed in single-fault rows
+			})
+			bootErr := t10LoopRecovery(t, f.ls)
+			require.Error(t, bootErr, "no-op reconciliation cannot pass a failed required write")
+			assert.Contains(t, bootErr.Error(), f.sid)
+			assert.ErrorIs(t, bootErr, injected)
+			assert.Positive(t, failures, "real persistence edge must have been reached")
+			assert.Empty(t, t10SessionLoopJobs(f.ls, f.sid), "failed selected/created job must be removed")
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "no stopped-state fallback or partial identity")
+			assert.Equal(t, m.LoopMode, f.meta(t).LoopMode)
+			assert.Equal(t, m.LoopJobID, f.meta(t).LoopJobID)
+			assert.Zero(t, f.p.calls.Load())
+			if sustained {
+				again := t10LoopRecovery(t, f.ls)
+				require.Error(t, again)
+				assert.Contains(t, again.Error(), f.sid)
+				bytes, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, before, bytes)
+				assert.Empty(t, t10SessionLoopJobs(f.ls, f.sid))
+			}
+			restore()
+			require.Positive(t, writes)
+			require.NoError(t, t10LoopRecovery(t, f.ls), "next boot retries durable active metadata")
+			jobs := t10SessionLoopJobs(f.ls, f.sid)
+			require.Len(t, jobs, 1)
+			assert.Equal(t, jobs[0].ID, f.meta(t).LoopJobID)
+			assert.Equal(t, m.LoopMode, f.meta(t).LoopMode)
+			assert.NotEqual(t, m.LoopJobID, jobs[0].ID)
+			// Successful recovery must lead to actual progress, not just no errors.
+			require.NoError(t, f.ls.Start())
+			require.NotNil(t, jobs[0].State.NextRunAtMS)
+			f.clk.Advance(time.UnixMilli(*jobs[0].State.NextRunAtMS).Sub(f.clk.Now()))
+			f.ls.RunDueJobs(f.clk.Now())
+			f.ls.WaitForLane()
+			assert.Equal(t, int32(1), f.p.calls.Load())
+			assert.Equal(t, m.LoopRunCount+1, f.meta(t).LoopRunCount)
 		})
 	}
 }
@@ -283,11 +420,9 @@ func TestLoopRunner_G5Protections(t *testing.T) {
 			assert.Zero(t, f.p.calls.Load(), "G5 owner refusal must happen before any agent turn")
 		})
 	}
-	for _, scenario := range []string{"S-F.4-child-cleanup-success", "S-F.4-child-cleanup-error", "S-F.5-audit-job-identity"} {
-		t.Run(scenario, func(t *testing.T) {
-			t.Fatal("BLOCKED: real loop process-tracker/audit harness not bound — " + scenario + "; no nil/no-error-only assertion substitutes for child termination or an audit record")
-		})
-	}
+	t.Run("S-F.4-child-cleanup-success", func(t *testing.T) { t10LoopChildCleanup(t, false) })
+	t.Run("S-F.4-child-cleanup-error", func(t *testing.T) { t10LoopChildCleanup(t, true) })
+	t.Run("S-F.5-audit-job-identity", t10LoopAuditIdentity)
 }
 
 // Traces to: schedules-t10-spec-r6.md lines 652–658; D-3b.5/6, FR-05(d).

@@ -123,18 +123,21 @@ func TestT10_LoadDropLoggingNamesEveryJobExactlyOnce(t *testing.T) {
 	defer slog.SetDefault(old)
 	cs, _, _ := t10Seed(t, "agent_turn", "unknown", "", "heartbeat")
 	t10Start(t, cs)
-	for _, id := range []string{"agent_turn-0", "unknown-1", "-2"} {
-		count := 0
-		for _, line := range strings.Split(logs.String(), "\n") {
-			if strings.Contains(line, id) {
-				var record map[string]any
-				require.NoError(t, json.Unmarshal([]byte(line), &record))
-				assert.Contains(t, []any{"WARN", "ERROR"}, record["level"])
-				count++
-			}
+	counts := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if line == "" {
+			continue
 		}
-		assert.Equal(t, 1, count, "one loud load-drop record must name %s", id)
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &record))
+		id, _ := record["job_id"].(string)
+		if id == "agent_turn-0" || id == "unknown-1" || id == "-2" {
+			assert.Contains(t, []any{"WARN", "ERROR"}, record["level"])
+			counts[id]++
+		}
 	}
+	assert.Equal(t, map[string]int{"agent_turn-0": 1, "unknown-1": 1, "-2": 1}, counts,
+		"one loud structured job_id record per dropped job; message repetitions are irrelevant")
 }
 
 // Traces to: schedules-t10-spec-r6.md lines 587, 601; TDD 3.
@@ -184,7 +187,14 @@ func TestScheduledAdmission_MemoryGoverned(t *testing.T) {
 			for i := range kinds {
 				kinds[i] = []string{"heartbeat", "task", "loop"}[i%3]
 			}
+			if tc.name == "D2-5-burst" {
+				kinds = []string{"task", "task", "task", "task", "heartbeat", "loop"}
+			}
 			cs, clk, _ := t10Seed(t, kinds...)
+			var logs t10LogBuffer
+			prior := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			defer slog.SetDefault(prior)
 			t10InstallMemoryProvider(t, cs, tc.state)
 			entered := make(chan string, tc.n)
 			release := make(chan struct{})
@@ -208,10 +218,19 @@ func TestScheduledAdmission_MemoryGoverned(t *testing.T) {
 			}
 			assert.Len(t, got, tc.want)
 			if tc.want < tc.n {
-				select {
-				case id := <-entered:
-					t.Errorf("memory floor bypassed by %s", id)
-				default:
+				// Wait for a real admission decision, not an immediate select/default
+				// that can pass simply because the third goroutine has not run yet.
+				assert.Eventually(t, func() bool {
+					return len(entered) > 0 || len(t10MemoryWaits(t, &logs)) == tc.n-tc.want
+				}, time.Second, time.Millisecond, "queued work must report memory, once per wait")
+				assert.Empty(t, entered, "memory floor admits exactly two while both handlers are held")
+				waits := t10MemoryWaits(t, &logs)
+				assert.Len(t, waits, tc.n-tc.want)
+				for _, id := range got {
+					assert.NotContains(t, waits, id, "already admitted work is not preempted")
+				}
+				for id, n := range waits {
+					assert.Equal(t, 1, n, "one operator line per memory wait: %s", id)
 				}
 			}
 			unblock()
@@ -221,6 +240,13 @@ func TestScheduledAdmission_MemoryGoverned(t *testing.T) {
 			}
 			sort.Strings(got)
 			assert.Len(t, got, tc.n, "queued work must eventually execute, not disappear")
+			if tc.want < tc.n {
+				waits := t10MemoryWaits(t, &logs)
+				assert.Len(t, waits, tc.n-tc.want)
+				for id, n := range waits {
+					assert.Equal(t, 1, n, "wait %s must not log repeatedly before/after release", id)
+				}
+			}
 			for _, j := range cs.ListJobs(true) {
 				assert.Equal(t, "actual-"+j.ID, j.SessionID)
 				assert.Len(t, j.State.History, 1)

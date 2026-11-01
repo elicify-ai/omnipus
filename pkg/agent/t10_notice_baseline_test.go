@@ -5,13 +5,49 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Characterization required by TDD 20: run the real overlap/skip path.
+func t10SkippedNoticeBaseline(t *testing.T) {
+	f := t10NoticeSetup(t, "parent-agent", "starter", false)
+	s := NewTaskTriggerScheduler(filepath.Join(t.TempDir(), "cron", "jobs.json"), f.al.taskStore, f.al.taskExecutor)
+	clk := newTriggerFakeClock()
+	s.SetClock(clk)
+	require.NoError(t, s.Start())
+	defer func() { s.Stop(); s.WaitForLane() }()
+	at := clk.Now().Truncate(time.Second).Add(time.Hour).UnixMilli()
+	rule, tz := "FREQ=DAILY;COUNT=3", "UTC"
+	trigger := &task.Trigger{Type: task.TriggerRecurring, Config: task.TriggerConfig{Rrule: &rule, DtstartMs: &at, Tz: &tz}}
+	fresh, err := f.al.taskStore.Update(f.task.ID, task.Patch{Trigger: &trigger})
+	require.NoError(t, err)
+	s.OnTaskUpserted(fresh)
+	clk.Advance(time.Hour)
+	s.RunDueJobs(clk.Now())
+	s.WaitForLane()
+	rows, err := f.al.taskStore.ListRuns(f.task.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "positive control: real scheduler recorded an overlap skip, not an unexecuted callback")
+	skips := 0
+	for _, r := range rows {
+		if r.Status == task.StatusSkipped {
+			skips++
+			assert.Equal(t, &at, r.OccurrenceMs)
+			assert.Empty(t, r.SessionID)
+		}
+	}
+	assert.Equal(t, 1, skips)
+	for _, address := range f.main {
+		assert.Empty(t, f.drain(t, address), "skipped occurrence never delivers a completion notice")
+	}
+}
 
 type t10NoticeFixture struct {
 	al       *AgentLoop
@@ -22,7 +58,7 @@ type t10NoticeFixture struct {
 	resolver *u6FakeMainResolver
 }
 
-func t10NoticeSetup(t *testing.T, creator, starter string, foreign bool) *t10NoticeFixture {
+func t10NoticeSetup(t *testing.T, creator, starter string, foreign bool, noRun ...bool) *t10NoticeFixture {
 	t.Helper()
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	al, lc, inbox, _ := newDeliverTestLoop(t)
@@ -64,9 +100,12 @@ func t10NoticeSetup(t *testing.T, creator, starter string, foreign bool) *t10Not
 		require.NoError(t, te.store.Create(tk))
 	} // Human username intentionally collides with an agent ID.
 	recipients := te.captureRunRecipients(context.Background(), tk, &session.InitiatedBy{AgentID: starter})
-	run := te.openRun(tk.ID, &occurrence, task.RunKindScheduled, child, recipients...)
-	require.NotNil(t, run, "real stored run must open")
-	require.LessOrEqual(t, len(run.recipients), 2)
+	var run *activeRun
+	if len(noRun) == 0 || !noRun[0] {
+		run = te.openRun(tk.ID, &occurrence, task.RunKindScheduled, child, recipients...)
+		require.NotNil(t, run, "real stored run must open")
+		require.LessOrEqual(t, len(run.recipients), 2)
+	}
 	return &t10NoticeFixture{al, inbox, tk, run, main, resolver}
 }
 func (f *t10NoticeFixture) drain(t *testing.T, recipient string) []string {
@@ -101,6 +140,21 @@ func (f *t10NoticeFixture) assertStoredRun(t *testing.T, status task.Status, res
 // PASSING baseline is mandatory. This uses REAL OpenRun + CAS completion +
 // stored run + real upward deliverer/inbox, not direct nil-run completion.
 func TestTaskTerminalNotice_CharacterizationBeforeCreatorDelta(t *testing.T) {
+	t.Run("nil-run-terminal-callback-delivers-nothing", func(t *testing.T) {
+		f := t10NoticeSetup(t, "parent-agent", "starter", false, true)
+		assert.True(t, f.al.taskExecutor.completeTaskWithResult(f.task, f.task.SessionID, task.StatusInProgress, true, "nil-run result", nil))
+		current, err := f.al.taskStore.Get(f.task.ID)
+		require.NoError(t, err)
+		assert.Equal(t, task.StatusDone, current.Status)
+		assert.Equal(t, "nil-run result", current.Result, "positive control: callback actually completed the task")
+		rows, err := f.al.taskStore.ListRuns(f.task.ID)
+		require.NoError(t, err)
+		assert.Empty(t, rows)
+		for _, address := range f.main {
+			assert.Empty(t, f.drain(t, address), "nil-run callback owes no result notice")
+		}
+	})
+	t.Run("real-skipped-occurrence-delivers-nothing", t10SkippedNoticeBaseline)
 	for _, tc := range []struct {
 		name         string
 		success      bool
