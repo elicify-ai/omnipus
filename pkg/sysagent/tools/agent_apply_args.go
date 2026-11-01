@@ -26,6 +26,8 @@ var agentUpdateArgNames = map[string]struct{}{
 	"memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
 	"agent_md": {}, // AGENT.md (#1064), written beside the record
+	// r17 §3.9 ExecutorConfigUpdate: external-CLI worker settings only.
+	"env_overrides": {}, "env_overrides_remove": {}, "cli_args": {},
 }
 
 // permissionFieldNames are the capability fields only set_agent_permissions
@@ -50,7 +52,7 @@ var agentCreateArgNames = map[string]struct{}{
 	"name": {}, "description": {}, "soul": {}, "model": {}, "color": {},
 	"figure": {}, "role": {}, // visual identity (#1303); defaults resolved in validate
 	"agent_type": {}, "cli": {}, "env_overrides": {}, "cli_args": {}, "provider": {}, "fallback_models": {},
-	"heartbeat": {}, "max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
+	"max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
 	"tool_policy_changes": {}, "memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
 	workspaceIDParam: {}, // destination workspace (FR-040), not an agent field
@@ -69,7 +71,7 @@ func mutationFieldNames(args map[string]any) []string {
 	fields := make([]string, 0, len(args))
 	for name := range args {
 		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" ||
-			name == "heartbeat" || name == "agent_md" || name == workspaceIDParam {
+			name == "agent_md" || name == workspaceIDParam {
 			continue
 		}
 		fields = append(fields, name)

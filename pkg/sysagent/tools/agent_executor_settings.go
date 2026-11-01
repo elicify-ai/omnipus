@@ -16,13 +16,14 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // nativeRuntimeRefusalText is the r17 §3.9 reason the executor settings are
 // not editable on a native agent.
-const nativeRuntimeRefusalText = "Only external-CLI workers have a runtime environment."
+const nativeRuntimeRefusalText = thirdpartycli.NativeRuntimeRefusalText
 
 // executorInvalid wraps a refusal so the model sees the exact rule text.
 func executorInvalid(message string) *tools.ToolResult {
@@ -52,20 +53,20 @@ func decodeEnvOverrides(args map[string]any) (env map[string]string, present boo
 }
 
 // decodeCLIArgs reads a cli_args argument (one string), checked against the
-// EX-04 length limit.
-func decodeCLIArgs(args map[string]any) (*string, error) {
+// EX-04 length limit. present is false when the argument is absent.
+func decodeCLIArgs(args map[string]any) (value string, present bool, err error) {
 	raw, present := args["cli_args"]
 	if !present {
-		return nil, nil
+		return "", false, nil
 	}
 	s, ok := raw.(string)
 	if !ok {
-		return nil, fmt.Errorf("cli_args must be a string")
+		return "", true, fmt.Errorf("cli_args must be a string")
 	}
 	if err := thirdpartycli.ValidateCLIArgs(s); err != nil {
-		return nil, err
+		return "", true, err
 	}
-	return &s, nil
+	return s, true, nil
 }
 
 // validateExecutorSettings checks create_agent's env_overrides and cli_args
@@ -84,17 +85,19 @@ func (ac *agentCreateToolExecute) validateExecutorSettings() *tools.ToolResult {
 	if err != nil {
 		return executorInvalid(err.Error())
 	}
-	if err := thirdpartycli.ValidateEnvOverrides(env); err != nil {
+	if err = thirdpartycli.ValidateEnvOverrides(env); err != nil {
 		return executorInvalid(err.Error())
 	}
-	cliArgs, err := decodeCLIArgs(ac.args)
+	cliArgs, argsPresent, err := decodeCLIArgs(ac.args)
 	if err != nil {
 		return executorInvalid(err.Error())
 	}
 	if len(env) > 0 {
 		ac.execEnv = env
 	}
-	ac.execCLIArgs = cliArgs
+	if argsPresent {
+		ac.execCLIArgs = &cliArgs
+	}
 	return nil
 }
 
@@ -192,3 +195,105 @@ func setCLIArgsOutcome(block *gen.AgentExecutorSettingsResult, cli, raw string) 
 // emptyLike returns an empty, non-nil slice of s's element type with room
 // for n elements, so an empty outcome list encodes as [] rather than null.
 func emptyLike[E any](_ []E, n int) []E { return make([]E, 0, n) }
+
+// executorUpdateArgNames are update_agent's executor settings arguments
+// (r17 §3.9 ExecutorConfigUpdate): kind, cli and cli_path are not among them,
+// so the generic unknown-argument check refuses those by name.
+var executorUpdateArgNames = []string{"env_overrides", "env_overrides_remove", "cli_args"}
+
+// executorUpdateSent reports whether args carries any executor setting.
+func executorUpdateSent(args map[string]any) bool {
+	for _, name := range executorUpdateArgNames {
+		if _, ok := args[name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// executorRecordFields maps the executor arguments onto the record field
+// "executor" the agent role matrix (agentmutation.ValidateFields) knows.
+func executorRecordFields(fields []string) []string {
+	out := make([]string, 0, len(fields))
+	executor := false
+	for _, f := range fields {
+		switch f {
+		case "env_overrides", "env_overrides_remove", "cli_args":
+			if !executor {
+				out = append(out, "executor")
+				executor = true
+			}
+		default:
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// executorRefusalError is an executor-settings refusal whose message is a
+// rule text returned to the model unchanged.
+type executorRefusalError string
+
+func (e executorRefusalError) Error() string { return string(e) }
+
+// decodeEnvRemove reads env_overrides_remove: a list of names.
+func decodeEnvRemove(args map[string]any) (names []string, present bool, err error) {
+	raw, present := args["env_overrides_remove"]
+	if !present {
+		return nil, false, nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, true, fmt.Errorf("env_overrides_remove must be a list of names")
+	}
+	names = make([]string, 0, len(list))
+	for _, v := range list {
+		s, ok := v.(string)
+		if !ok {
+			return nil, true, fmt.Errorf("env_overrides_remove must be a list of names")
+		}
+		names = append(names, s)
+	}
+	return names, true, nil
+}
+
+// applyExecutorUpdate applies update_agent's executor settings to a, inside
+// the store mutation on fresh state (r17 EX-02..EX-04, FR-061): the env merge
+// and remove list through the shared thirdpartycli.MergeEnvOverrides, and
+// cli_args replaced. Only an external-CLI worker has a runtime environment.
+// sent is false (and the block nil) when no executor setting was sent.
+func applyExecutorUpdate(a *config.AgentConfig, args map[string]any) (block *gen.AgentExecutorSettingsResult, sent bool, err error) {
+	if !executorUpdateSent(args) {
+		return nil, false, nil
+	}
+	if !a.IsExternalCLIWorker() {
+		return nil, true, executorRefusalError(nativeRuntimeRefusalText)
+	}
+	ex := a.Subagents.Executor
+	set, setSent, err := decodeEnvOverrides(args)
+	if err != nil {
+		return nil, true, executorRefusalError(err.Error())
+	}
+	remove, removeSent, err := decodeEnvRemove(args)
+	if err != nil {
+		return nil, true, executorRefusalError(err.Error())
+	}
+	cliArgs, argsSent, err := decodeCLIArgs(args)
+	if err != nil {
+		return nil, true, executorRefusalError(err.Error())
+	}
+	block = &gen.AgentExecutorSettingsResult{}
+	if setSent || removeSent {
+		merged, out, mergeErr := thirdpartycli.MergeEnvOverrides(ex.EnvOverrides, set, remove)
+		if mergeErr != nil {
+			return nil, true, executorRefusalError(mergeErr.Error())
+		}
+		ex.EnvOverrides = merged
+		setEnvOutcome(block, out.Added, out.Replaced, out.Removed, out.AbsentRemoved)
+	}
+	if argsSent {
+		ex.CLIArgs = cliArgs
+		setCLIArgsOutcome(block, ex.CLI, cliArgs)
+	}
+	return block, true, nil
+}

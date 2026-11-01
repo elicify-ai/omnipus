@@ -43,6 +43,10 @@ const (
 		"in Settings → Third-party agents."
 )
 
+// NativeRuntimeRefusalText is the r17 §3.9 reason the executor settings are
+// not editable on an agent that is not an external-CLI worker.
+const NativeRuntimeRefusalText = "Only external-CLI workers have a runtime environment."
+
 // ExecutorFieldRefusal returns the §3.11/§7.11 refusal text for an executor
 // property a client may not send, or "" for any other property.
 func ExecutorFieldRefusal(field string) string {
@@ -57,11 +61,11 @@ func ExecutorFieldRefusal(field string) string {
 	return ""
 }
 
-// refusalText is an error whose message is a normative sentence that must be
+// refusalError is an error whose message is a normative sentence that must be
 // returned byte for byte (including its closing full stop).
-type refusalText string
+type refusalError string
 
-func (r refusalText) Error() string { return string(r) }
+func (r refusalError) Error() string { return string(r) }
 
 // ValidateEnvName checks one env_overrides name: the pattern, the length and
 // the reserved OMNIPUS_ prefix.
@@ -96,7 +100,7 @@ func ValidateEnvOverrides(env map[string]string) error {
 		value := env[name]
 		if value == EnvMask {
 			// The §7.11 text ends with a full stop, byte for byte.
-			return refusalText(fmt.Sprintf(
+			return refusalError(fmt.Sprintf(
 				"env_overrides value for %q is the masked placeholder; send the real value or leave the name out.", name))
 		}
 		if utf8.RuneCountInString(value) > maxEnvValChars {
@@ -130,7 +134,7 @@ func MergeEnvOverrides(stored, set map[string]string, remove []string) (map[stri
 	sort.Strings(removeSorted)
 	for _, name := range removeSorted {
 		if _, both := set[name]; both {
-			return nil, out, refusalText(fmt.Sprintf("env_overrides and env_overrides_remove both name %q.", name))
+			return nil, out, refusalError(fmt.Sprintf("env_overrides and env_overrides_remove both name %q.", name))
 		}
 	}
 	merged := make(map[string]string, len(stored)+len(set))

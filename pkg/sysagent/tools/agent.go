@@ -148,10 +148,6 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"description": "Explicit provider routing key for the primary model (e.g. 'openrouter'). Pins model resolution to this provider instead of inferring one from the slug.",
 			},
 			"fallback_models": fallbackModelsParameters(),
-			"heartbeat": map[string]any{
-				"type":        "string",
-				"description": "Proactive scheduling instructions (written to HEARTBEAT.md)",
-			},
 			"max_tool_iterations": map[string]any{
 				"type":        "integer",
 				"minimum":     1,
@@ -354,9 +350,6 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if r0, stop := refuseManagementGrants(ac.args); stop {
 		return r0, true
 	}
-	if _, _, err := parseOptionalHeartbeat(ac.args); err != nil {
-		return fieldErrorResult(err), true
-	}
 	ac.id = newAgentID(ac.name)
 	if err := validateID(ac.id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
@@ -486,9 +479,8 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 
 // persistAndJoin persists the agent and its workspace files, then joins the contextual workspace when present.
 //
-// Three of the early-return (stop=true) branches below — default-singleton
-// write failure, InitAgentHome failure, and the HEARTBEAT.md write failure —
-// run AFTER agentstore.CreateState has already durably saved the entity
+// The early-return (stop=true) branches below — default-singleton write
+// failure and InitAgentHome failure — run AFTER agentstore.CreateState has already durably saved the entity
 // record. None of them call Deps.NotifyAgentCreated, and that is intentional,
 // not a gap: returning stop=true here means Execute never reaches
 // publishAndRespond(), so publishAgentActivation() never runs and the agent
@@ -547,20 +539,8 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 		return createHomePartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), err), true
 	}
 
-	heartbeat, _, hbErr := parseOptionalHeartbeat(ac.args)
-	if hbErr != nil {
-		return fieldErrorResult(hbErr), true
-	}
-	if strings.TrimSpace(heartbeat) != "" {
-		hbPath := filepath.Join(omnipusHome, "agents", ac.finalID, "HEARTBEAT.md")
-		if err := os.WriteFile(hbPath, []byte(heartbeat), 0o600); err != nil {
-			// No NotifyAgentCreated here either — same reason: durable, not
-			// yet listable (see this function's doc comment).
-			slog.Error("sysagent: create_agent: HEARTBEAT.md write failed after entity save",
-				"id", ac.finalID, "error", err)
-			return createHeartbeatPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), err), true
-		}
-	}
+	// r17 AG-06 / FR-134 (#1064): create_agent takes no heartbeat — heartbeats
+	// are a workspace feature; a heartbeat argument is an unknown field.
 
 	// ADR-046 P1 (FR-007/008, US-3 AS-2/AS-3): agents are metadata — creating
 	// one must NOT auto-add it to any global roster. If this call is running
@@ -812,18 +792,6 @@ func createSaveFailedResult(id string, mutation agentstore.MutationResult, err e
 	return tools.ErrorResult(successJSON(body))
 }
 
-func parseOptionalHeartbeat(args map[string]any) (string, bool, error) {
-	raw, present := args["heartbeat"]
-	if !present {
-		return "", false, nil
-	}
-	s, ok := raw.(string)
-	if !ok {
-		return "", true, fieldErr("heartbeat", "heartbeat must be a string")
-	}
-	return s, true, nil
-}
-
 func createHomePartialResult(id, revision string, fields []string, err error) *tools.ToolResult {
 	return changeErrorWithOutcome(map[string]any{
 		"id":                 id,
@@ -839,26 +807,10 @@ func createHomePartialResult(id, revision string, fields []string, err error) *t
 		[]string{"agent home folder", "workspace membership", "live activation"}))
 }
 
-func createHeartbeatPartialResult(id, revision string, fields []string, err error) *tools.ToolResult {
-	return changeErrorWithOutcome(map[string]any{
-		"id":                 id,
-		"code":               "SAVE_FAILED",
-		"message":            "agent was saved but HEARTBEAT.md could not be written. Read current state before retrying.",
-		"persistence_status": agentstore.PersistencePartial,
-		"activation_status":  agentstore.ActivationNotAttempted,
-		"revision":           revision,
-		"changed_fields":     fields,
-		"error_stage":        "heartbeat",
-		"detail":             err.Error(),
-	}, partlySaved("the agent record was saved but HEARTBEAT.md could not be written: "+err.Error(), "",
-		[]string{"HEARTBEAT.md", "workspace membership", "live activation"}))
-}
-
 // createJoinSeedPartialResult is the U5A-FIX-R1 / N3 truthful partial-failure
 // result for a creation-in-context whose MEMBERSHIP landed but whose ordinary
 // self-delegation row could not be seeded. It follows the same shape as the
-// other create_agent partial results (createHomePartialResult /
-// createHeartbeatPartialResult): the entity and (here) the workspace membership
+// other create_agent partial results (createHomePartialResult): the entity and (here) the workspace membership
 // are already durably written, so this is a partial success that must NOT be
 // dressed up as the ordinary "metadata_only" success — that status would say
 // the agent belongs to no team when it is in fact a member, and would hide the
@@ -1023,14 +975,30 @@ func NewAgentUpdateTool(d *Deps) *AgentUpdateTool { return &AgentUpdateTool{deps
 func (t *AgentUpdateTool) Name() string           { return "update_agent" }
 func (t *AgentUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentUpdateTool) Description() string {
-	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Omnipus, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their skills are editable. An existing agent's per-agent tool policies and connector (MCP) assignments are changed with set_agent_permissions, never update_agent. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type."
+	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Omnipus, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their skills are editable. An existing agent's per-agent tool policies and connector (MCP) assignments are changed with set_agent_permissions, never update_agent. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli cannot change after creation; create a new agent for a different type or CLI. An external worker's program is set by a person in Settings → Third-party agents, never here. An external worker's env_overrides merge into its stored environment (env_overrides_remove removes names) and cli_args replaces its extra flags; the result lists environment names by outcome, never values."
 }
 
 func (t *AgentUpdateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":          map[string]any{"type": "string", "description": "Agent ID to update"},
+			"id": map[string]any{"type": "string", "description": "Agent ID to update"},
+			"env_overrides": map[string]any{
+				"type":                 "object",
+				"additionalProperties": map[string]any{"type": "string"},
+				"description": "External-CLI workers only. MERGE into the stored environment: each name is added or its value replaced; " +
+					"names not sent are kept; {} changes nothing. Same limits as create; the read mask is not a valid value.",
+			},
+			"env_overrides_remove": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"maxItems":    64,
+				"description": "External-CLI workers only. Names to remove; a name that is not stored is reported as absent_removed, not refused. A name both set and removed is refused.",
+			},
+			"cli_args": map[string]any{
+				"type":        "string",
+				"description": "External-CLI workers only. Replacement extra flags as one string (at most 4,096 characters), stored as typed.",
+			},
 			"revision":    map[string]any{"type": "string", "description": "Opaque revision returned by get_agent"},
 			"name":        map[string]any{"type": "string"},
 			"description": map[string]any{"type": "string"},

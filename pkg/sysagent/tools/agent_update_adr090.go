@@ -11,6 +11,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
@@ -59,12 +60,14 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 		}
 	}
 	newRevision := revision
+	var executorBlock *gen.AgentExecutorSettingsResult
 	if len(fields) > 0 {
-		result, refusal := t.mutateRecord(store, id, revision, fields, args)
+		result, block, refusal := t.mutateRecord(store, id, revision, fields, args)
 		if refusal != nil {
 			return refusal
 		}
 		newRevision = result.Revision
+		executorBlock = block
 	} else if refusal := checkRevisionUnchanged(store, id, revision); refusal != nil {
 		return refusal
 	}
@@ -91,35 +94,63 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 	if _, hasVoice := args["voice"]; hasVoice && message == "" {
 		message = "voice is persisted; playback is inactive in this release"
 	}
-	return changeSuccess(map[string]any{
+	out := map[string]any{
 		"id":                 id,
 		"revision":           newRevision,
 		"persistence_status": agentstore.PersistenceComplete,
 		"activation_status":  activation,
 		"changed_fields":     durable,
 		"message":            message,
-	}, updateVerdict(activation, message))
+	}
+	if executorBlock != nil {
+		// r17 K-9/EX-07: names by outcome, argv and dropped_at_run, and the
+		// program status; never an environment value.
+		if cli, ok := externalCLIOf(store, id); ok {
+			if warning := executorProgramWarning(t.deps, cli); warning != "" {
+				executorBlock.ProgramWarning = &warning
+			}
+		}
+		out["executor"] = executorBlock
+	}
+	return changeSuccess(out, updateVerdict(activation, message))
+}
+
+// externalCLIOf reads the saved agent's external CLI, if it has one.
+func externalCLIOf(store *agentstore.Store, id string) (string, bool) {
+	state, err := store.ReadState(id)
+	if err != nil || state.Agent == nil || !state.Agent.IsExternalCLIWorker() {
+		return "", false
+	}
+	return state.Agent.Subagents.Executor.CLI, true
 }
 
 // mutateRecord applies the record and SOUL.md fields under the store's
 // revision check. A refusal or failure comes back as the tool result.
 func (t *AgentUpdateTool) mutateRecord(store *agentstore.Store, id, revision string, fields []string,
 	args map[string]any,
-) (agentstore.MutationResult, *tools.ToolResult) {
+) (agentstore.MutationResult, *gen.AgentExecutorSettingsResult, *tools.ToolResult) {
 	// An absent soul is a normal "field not supplied" case, not an error: the
 	// pointer stays nil and MutateState leaves the persisted soul untouched.
 	var soul *string
 	if raw, present := args["soul"]; present {
 		v, ok := raw.(string)
 		if !ok || strings.TrimSpace(v) == "" {
-			return agentstore.MutationResult{}, fieldErrorResult(fieldErr("soul", "soul must be a nonblank string"))
+			return agentstore.MutationResult{}, nil, fieldErrorResult(fieldErr("soul", "soul must be a nonblank string"))
 		}
 		soul = &v
 	}
 	known := knownToolPolicies(t.deps)
 	inv := t.deps.currentInventory()
+	var executorBlock *gen.AgentExecutorSettingsResult
 	result, mutateErr := store.MutateState(id, revision, func(a *config.AgentConfig) error {
-		if err := agentmutation.ValidateFields(*a, fields); err != nil {
+		// The executor settings are checked first so a native agent gets the
+		// r17 §3.9 reason rather than a generic role-matrix refusal.
+		block, _, err := applyExecutorUpdate(a, args)
+		if err != nil {
+			return err
+		}
+		executorBlock = block
+		if err := agentmutation.ValidateFields(*a, executorRecordFields(fields)); err != nil {
 			return err
 		}
 		// #904 D10/D15: read the global in force INSIDE the closure, under
@@ -133,9 +164,9 @@ func (t *AgentUpdateTool) mutateRecord(store *agentstore.Store, id, revision str
 		return applyAgentToolArgs(a, args, known, inv, t.deps.agentDefaults())
 	}, soul)
 	if mutateErr != nil {
-		return result, t.mutateErrorResult(id, result, mutateErr)
+		return result, nil, t.mutateErrorResult(id, result, mutateErr)
 	}
-	return result, nil
+	return result, executorBlock, nil
 }
 
 // updateVerdict is update_agent's FR-030 verdict from the existing read-back:
@@ -274,7 +305,10 @@ func missingMetadata(writes []agentMetadataWrite, written []string) []string {
 
 func (t *AgentUpdateTool) mutateErrorResult(id string, result agentstore.MutationResult, mutateErr error) *tools.ToolResult {
 	var fe *agentmutation.FieldError
+	var refusal executorRefusalError
 	switch {
+	case errors.As(mutateErr, &refusal):
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", refusal.Error(), ""))
 	case errors.Is(mutateErr, entity.ErrNotFound):
 		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND", fmt.Sprintf("No agent with ID %q", id), "Use list_agents"))
 	case errors.Is(mutateErr, agentstore.ErrInvalidRevision):
