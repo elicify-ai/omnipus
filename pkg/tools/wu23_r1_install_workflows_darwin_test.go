@@ -127,6 +127,17 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	if _, err := skills.SyncBuiltins(registryRoot, nil); err != nil {
 		t.Fatal(err)
 	}
+	// The generic protected-path fixture seeds a non-JSON actor placeholder.
+	// Replace only that exact test sentinel before creating the real record;
+	// Create must still reject a pre-existing actual agent, not overwrite one.
+	actorRecord := filepath.Join(f.Home, "entities", "agents", "self.json")
+	placeholder, placeholderErr := os.ReadFile(actorRecord)
+	if placeholderErr != nil || string(placeholder) != fixture.Sentinel {
+		t.Fatalf("expected only the protected-fixture actor sentinel before grant setup: %v", placeholderErr)
+	}
+	if removeErr := os.Remove(actorRecord); removeErr != nil {
+		t.Fatal(removeErr)
+	}
 	store := agentstore.New(f.Home)
 	agentCfg := config.AgentConfig{ID: "self", Home: f.AgentHome, Skills: []string{"elicify-docx"}, Tools: &config.AgentToolsCfg{}}
 	agentCfg.Tools.Builtin.Policies = map[string]config.ToolPolicy{"bash": config.ToolPolicyAllow, "edit_skill": config.ToolPolicyDeny}
