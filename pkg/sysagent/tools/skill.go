@@ -193,19 +193,30 @@ func (t *SkillListTool) executeManagement(wsID, session string) *tools.ToolResul
 		seen[key] = struct{}{}
 		items = append(items, managedSkill{info: projectSkill.SkillInfo, origin: "project", sharedImpact: "workspace_members", mount: projectSkill.MountName})
 	}
+	// List and get_skill must agree (skills spec r15 §5): a project row comes
+	// only from the checked project shelf above, and every other row is a
+	// skill get_skill reads. A loader row is labelled by where it lives: its
+	// folder directly under the registry root is a user skill whatever the
+	// loader tier reported; the loader's pre-D4.1 "workspace" tier outside
+	// the registry is no r15 shelf (get_skill cannot read it), so it is not
+	// listed — and never as "project".
+	registryRoot, _ := skillsRootOf(t.deps)
 	for _, info := range t.deps.SkillsLoader.ListSkills() {
 		key := strings.ToLower(info.ID)
 		if _, exists := seen[key]; exists {
 			continue
 		}
-		seen[key] = struct{}{}
 		origin, impact := info.Source, "all_agents"
-		switch origin {
-		case "global":
+		switch {
+		case origin == "builtin":
+		case registryRoot != "" && filepath.Clean(filepath.Dir(filepath.Dir(info.Path))) == filepath.Clean(registryRoot):
 			origin = "user"
-		case "workspace":
-			origin, impact = "project", "workspace_members"
+		case origin == "global":
+			origin = "user"
+		default:
+			continue
 		}
+		seen[key] = struct{}{}
 		items = append(items, managedSkill{info: info, origin: origin, sharedImpact: impact})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].info.ID < items[j].info.ID })
