@@ -1716,3 +1716,74 @@ func TestU2bBootReplay_OrdinaryHeldFire_EditBeforeWiring_EditWins(t *testing.T) 
 	require.Equal(t, runs, p2.runs(t, queued.ID), "R5: at most one run per the new schedule")
 	p2.stop()
 }
+
+// TestU2bBootReplay_HeldFireAgentGone_CloseFailsOnce_OrphanRunSettledAtNextBoot
+// is addendum-15 R6 (CHECK's fault-close-once finding on de28ca874): a held
+// fire whose agent is gone records its failed run in two writes — OpenRun
+// then CloseRun. When the CLOSE write fails once (or the process crashes
+// between the two), the run stays open (in_progress) forever: boot recovery
+// only scans tasks in progress and this task is already Failed, so the open
+// run is never adopted, and every later settle refuses with "run ... is
+// still open" (pkg/agent/task_trigger_boot_hold.go::recordUnstartedFireFailure's
+// !created branch). The task never reaches its required Failed disposition
+// with its failed run.
+//
+// Oracles (chief W5 b2 + S2 rulings: a failed run is recorded and the job
+// removed only after Failed is saved; nothing is silently lost):
+//   - after boot 2: the job is kept; an audit WARN names the task;
+//   - after the next boot (store healthy): exactly one failed run for this
+//     fire, CLOSED (not in_progress); no run left open for the task; the
+//     task is Failed; the job removed; a further boot adds nothing.
+func TestU2bBootReplay_HeldFireAgentGone_CloseFailsOnce_OrphanRunSettledAtNextBoot(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID), "instrument: the fire is held")
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"instrument: only boot 1's abandoned run exists — the held fire has not run")
+
+	// The assignee stops existing, exactly as R2's fixture does.
+	held, err := p2.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err)
+	require.True(t, p2.loop.GetRegistry().RemoveAgent(held.AgentID),
+		"instrument: the assignee is removed from the registry")
+
+	// HERE the row must make the settle's CloseRun fail exactly once, with
+	// the OpenRun before it succeeding, and then let the store recover. No
+	// real-store state and no existing seam can do that:
+	t.Fatal("BLOCKED: no real-store failure makes the settle's CloseRun fail while its " +
+		"OpenRun succeeds — the two writes are the SAME primitive (pkg/task/run_store.go::" +
+		"appendRunRecord: scan the runs dir, then rewrite the day file atomically via " +
+		"writeFileAtomicFn, whose only injection point is an unexported pkg/task package " +
+		"variable unreachable from pkg/agent), so every store state that stops the close " +
+		"stops the open first: OpenRun runs first and dies at its own scan or append (an " +
+		"unwritable runs dir or an unreadable day file fails both identically, and the " +
+		"scans are equally tolerant — foldRunsLocked and findOpenRunLocked skip unreadable " +
+		"files and malformed lines alike). OpenRun and CloseRun are adjacent calls in " +
+		"pkg/agent/task_trigger_boot_hold.go::recordUnstartedFireFailure with no " +
+		"interleaving point between them: the existing seam SetHeldFireBeforeRunHookForTest " +
+		"fires before runScheduledFire, not between the writes, and a concurrent chmod from " +
+		"another goroutine is a nondeterministic race no test may depend on. CHECK proved " +
+		"the defect itself on a mutant tree (/workspace/logs/6b-fix/check/de28ca874/" +
+		"fault-close-once.log: one transient CloseRun failure after a successful OpenRun) — " +
+		"that fault injection is a production mutation, which the RED author may not make. " +
+		"Required seam: a test-only, nil-in-production hook in pkg/agent that fails exactly " +
+		"the settle's close once — for example SetHeldFireCloseRunHookForTest(fn func() " +
+		"error), invoked by recordUnstartedFireFailure after its successful OpenRun and " +
+		"before store.CloseRun, whose non-nil error is returned in CloseRun's place; the " +
+		"row then removes the hook (the store recovers) and asserts the oracles in this " +
+		"row's doc comment. Required by addendum-15 R6 (CHECK's fault-close-once: the " +
+		"orphaned in_progress run of an already-Failed task is never adopted — recovery " +
+		"scans only in-progress tasks — and every later settle refuses with \"run ... is " +
+		"still open\").")
+}
