@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 func TestRestExternalCreate_SoulContract(t *testing.T) {
@@ -51,7 +52,7 @@ func TestRestExternalCreate_SoulContract(t *testing.T) {
 			state, err := agentstore.New(api.homePath).ReadState(created.Id)
 			require.NoError(t, err, "201 must identify a durably created protected agent")
 			require.NotNil(t, state.Agent)
-			assert.Equal(t, "subagent_3p", string(state.Agent.Type))
+			assert.Equal(t, config.AgentTypeWorker, state.Agent.Type)
 			assert.Equal(t, "T8 external worker", state.Agent.Name)
 			assert.Empty(t, state.Soul, "the real stored worker has no SOUL instruction content")
 			require.NotNil(t, state.Agent.Subagents)
