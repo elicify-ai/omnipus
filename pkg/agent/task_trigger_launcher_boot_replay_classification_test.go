@@ -540,7 +540,7 @@ func TestU2bBootReplay_UserStoppedTask_LateWiredBoot_IsNeverReplayed(t *testing.
 // before the plane is wired must keep its job, and the next physical boot must
 // replay it exactly once — with a persisted runtime classification and a real
 // outcome. Oracle: rows-rerun.md U2b-crash (exactly 2 runs, replay executing),
-// and the fix's own contract (task_trigger_boot_hold.go::runHeldBootOwedFire:
+// and the fix's own contract (task_trigger_boot_hold.go::runHeldFire:
 // a stop before the wiring leaves the debt for the next boot).
 func TestU2bBootReplay_HeldFire_SchedulerStopsFirst_KeptAndReplayedOnceAtNextBoot(t *testing.T) {
 	home, clk := t.TempDir(), newTriggerFakeClock()
@@ -877,14 +877,14 @@ func TestU2bBootReplay_DrainHold_ResolverUnwiredWindow_TickWaits_ThenRunsAsMainC
 // is addendum-12 C1b: the same executor holds an owed fire, the SCHEDULER
 // stops while the fire is still held, and only THEN is the plane wired — so
 // the released callback (pkg/agent/task_trigger_boot_hold.go::
-// runHeldBootOwedFire) takes its stop-first branch. C1 never wired that
+// runHeldFire) takes its stop-first branch. C1 never wired that
 // executor, so the branch never executed there and a mutant that removes
 // the branch's early return survives it. Oracles: the released fire does
 // not run on this boot; the job stays as durable debt (kept, enabled, with
 // its Running flag — the next boot's replay marker); the next physical boot
 // replays it exactly once, with a persisted classification, as a real MAIN
 // child. The row depends on the stop-keeps-job early return at the top of
-// runHeldBootOwedFire ("The job keeps its Running flag: the next physical
+// runHeldFire ("The job keeps its Running flag: the next physical
 // boot replays it.").
 func TestU2bBootReplay_HeldFire_SchedulerStoppedThenPlaneWired_KeptForNextBoot(t *testing.T) {
 	home, clk := t.TempDir(), newTriggerFakeClock()
@@ -947,7 +947,7 @@ func TestU2bBootReplay_HeldFire_SchedulerStoppedThenPlaneWired_KeptForNextBoot(t
 // real trigger change through the normal update path (task store Update with
 // a new once AtMs, then NotifyTaskUpserted, exactly as the fixture arms the
 // original) — and only then is the plane wired, releasing the held callback
-// into pkg/agent/task_trigger_boot_hold.go::runHeldBootOwedFire's superseded
+// into pkg/agent/task_trigger_boot_hold.go::runHeldFire's superseded
 // branch. C2 caught a deletion later with the task-not-found guard, so a
 // mutant that removes the superseded check survived it; the edit path is the
 // only state that reaches that branch, because the edit's registration
@@ -1032,7 +1032,7 @@ func TestU2bBootReplay_HeldFire_TriggerEditedWhileHeld_Superseded_OldFireNeverRu
 // is addendum-12 W4, found by the developer while writing the docs and
 // decided by this row: an ORDINARY scheduled fire — not an owed boot replay,
 // not a queued Next task — whose time comes due after the scheduler starts
-// but before the session plane is wired. Only holdBootOwedFire and
+// but before the session plane is wired. Only holdFire and
 // CheckQueuedTasks wait for the plane; pkg/agent/task_trigger.go::RunScheduled
 // does not, so a due ordinary fire dispatched in the window ran isolated and
 // unclassified. Oracle: the fire due in the unwired window creates no run
@@ -1125,7 +1125,7 @@ func rsauditJSON(v any) string {
 
 // TestU2bBootReplay_HeldFire_TransientReadError_JobKept_Audited_ReplayedAtNextBoot
 // is addendum-12 W5 case (a), the chief's exact oracle. The defect
-// (pkg/agent/task_trigger_boot_hold.go::runHeldBootOwedFire's error branch):
+// (pkg/agent/task_trigger_boot_hold.go::runHeldFire's error branch):
 // when runScheduledFire returns any error other than cron.ErrRunHandedOff —
 // here store.Get failing with a non-not-found decode error before any run is
 // created — it logs the error and ALWAYS calls RemoveJob, so the owed replay
@@ -1300,4 +1300,355 @@ func TestU2bBootReplay_HeldFire_AgentGone_FailedRunRecorded_JobRemoved(t *testin
 	p3.runDueAndJoin(t)
 	require.Len(t, p3.runs(t, fire.taskID), 2, "W5(b2): no replay at the next boot")
 	p3.stop()
+}
+
+// TestU2bBootReplay_HeldFireAudit_BoundedReason_NoStoragePath is
+// addendum-13 R1 (security-lead S1): the WARN audit row a held fire writes
+// when it cannot start must carry the task id and a BOUNDED reason, and must
+// never carry a filesystem path of the store — the raw error (which
+// pkg/task's run-store reads wrap with the full directory) may go to the
+// ordinary log only. The trigger is S1's own scenario: the assignee is gone
+// and the failed-run recording fails at its run-history read, whose error
+// names the runs directory. Oracle event: task.trigger.fire_not_started
+// (audit.EventTaskTriggerFireNotStarted) at WARN severity.
+func TestU2bBootReplay_HeldFireAudit_BoundedReason_NoStoragePath(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID), "instrument: the fire is held")
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"instrument: only boot 1's abandoned run exists — the held fire has not run")
+
+	readAudit := swapAuditLogger(t, p2.loop)
+
+	// The assignee stops existing while the fire is held (store-level
+	// assignee change, no trigger notification — the W5(b2) technique).
+	ghost := "retired-agent"
+	_, err := p2.loop.taskStore.Update(fire.taskID, task.Patch{AgentID: &ghost})
+	require.NoError(t, err)
+
+	// The failed-run recording then fails at its run-history read, with a
+	// real store error that names the runs directory: the task's runs dir is
+	// made unreadable for the release.
+	runsDir := filepath.Join(home, "tasks", fire.taskID, "runs")
+	require.NoError(t, os.Chmod(runsDir, 0o000), "instrument: the runs dir is unreadable")
+
+	// Wire the plane: the release hits the missing agent and the unreadable
+	// run history.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release against a missing agent and an unreadable run history", p2.loop.taskExecutor.wg.Wait)
+	require.NoError(t, os.Chmod(runsDir, 0o755), "restore: the runs dir is readable again")
+
+	rows := readAudit()
+	var auditRow map[string]any
+	for _, r := range rows {
+		if r["event"] == "task.trigger.fire_not_started" {
+			auditRow = r
+			break
+		}
+	}
+	require.NotNil(t, auditRow,
+		"R1: the held fire's failure must be audited as task.trigger.fire_not_started")
+	require.Equal(t, "WARN", auditRow["severity"], "R1: the audit entry is a warning")
+	rowJSON := rsauditJSON(auditRow)
+	require.Contains(t, rowJSON, fire.taskID, "R1: the audit row names the task")
+	require.NotContains(t, rowJSON, home,
+		"R1: the audit row must carry a bounded reason, never a filesystem path of the "+
+			"store — the raw error (here the run-store read error naming the runs directory) "+
+			"belongs in the ordinary log only")
+	kept := p2.storedJobs(t, fire.taskID)
+	require.Len(t, kept, 1, "instrument: the unreadable-run-history failure keeps the job as debt")
+	p2.stop()
+}
+
+// TestU2bBootReplay_HeldFireAgentGone_TaskUpdateFails_JobKept_SettledAtNextBoot
+// is addendum-13 R2 (security-lead S2): the agent is gone; recording the
+// failed run succeeds, but updating the task to Failed fails. The required
+// behaviour: the job is KEPT (never removed while the required persistence
+// has not succeeded), an audit WARN names the task, and after the store
+// recovers the next boot settles the debt exactly once — one new failed run,
+// the task ending Failed. The update failure is real and targeted: the
+// tasks directory is made read-only, so the task file's atomic write (which
+// creates its temp file in that directory) fails, while the already-created
+// runs directory stays writable and the failed-run recording succeeds.
+func TestU2bBootReplay_HeldFireAgentGone_TaskUpdateFails_JobKept_SettledAtNextBoot(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID), "instrument: the fire is held")
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"instrument: only boot 1's abandoned run exists — the held fire has not run")
+
+	readAudit := swapAuditLogger(t, p2.loop)
+
+	// The assignee stops existing, and the task store's directory goes
+	// read-only: the failed-run recording (inside the existing runs dir)
+	// succeeds, the task-file update fails.
+	ghost := "retired-agent"
+	_, err := p2.loop.taskStore.Update(fire.taskID, task.Patch{AgentID: &ghost})
+	require.NoError(t, err)
+	tasksDir := filepath.Join(home, "tasks")
+	require.NoError(t, os.Chmod(tasksDir, 0o555), "instrument: the task store dir is read-only")
+
+	// Wire the plane: the release records the failed run but cannot persist
+	// the task's failed disposition.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release against a missing agent and a read-only task store", p2.loop.taskExecutor.wg.Wait)
+	require.NoError(t, os.Chmod(tasksDir, 0o755), "restore: the task store recovers")
+
+	kept := p2.storedJobs(t, fire.taskID)
+	require.Len(t, kept, 1,
+		"R2: the job must be KEPT while the task's failed disposition could not be persisted — "+
+			"removing it loses the owed fire with no retained retry")
+	require.True(t, kept[0].Enabled, "R2: the kept job stays enabled for the next boot")
+	require.True(t, kept[0].State.Running, "R2: the job keeps its Running flag — the next boot's replay marker")
+	require.True(t, auditRowNamesTaskAtWarn(readAudit(), fire.taskID),
+		"R2: a WARN audit entry naming the task must record the unpersisted failure")
+
+	p2.stop()
+	// The next boot, the store recovered: the debt settles exactly once.
+	p3 := bootU2bLauncherProcess(t, home, clk)
+	runs := p3.runs(t, fire.taskID)
+	require.Len(t, runs, 3,
+		"R2: the next boot settles the retained debt exactly once — boot 1's abandoned run, "+
+			"the recorded failed run, and the settle's own failed run")
+	var settled *task.TaskRun
+	for i := range runs {
+		if runs[i].RunID != fire.run.RunID && runs[i].Status == task.StatusFailed && settled == nil {
+			settled = &runs[i]
+			break
+		}
+	}
+	require.NotNil(t, settled, "R2: the settle records a failed run")
+	after, err := p3.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err, "R2: the task survives the settle")
+	require.Equal(t, task.StatusFailed, after.Status, "R2: the task ends Failed")
+	require.Empty(t, p3.storedJobs(t, fire.taskID), "R2: the settled job is removed")
+	p3.runDueAndJoin(t)
+	require.Len(t, p3.runs(t, fire.taskID), 3, "R2: another tick adds nothing")
+	p3.stop()
+	p4 := bootU2bLauncherProcess(t, home, clk)
+	require.Len(t, p4.runs(t, fire.taskID), 3, "R2: a further boot adds nothing")
+	p4.stop()
+}
+
+// TestU2bBootReplay_HeldFireReplacedWhileUnwired_ReplacementRuns_OldFireNever_DebtSurvives
+// is addendum-13 R3 (security-lead S3): fire A is held; a trigger edit
+// replaces its job with B; B comes due BEFORE the plane is wired, so B is
+// held too; then the plane is wired. The marker is task-level, so on a tree
+// where release eligibility is not bound to the held job, A sees B's marker
+// and dispatches although A's job was deleted, consuming the marker; B's
+// callback then removes B as "superseded". Oracles: exactly one fire runs —
+// B's; A never dispatches; B's job survives as debt (not removed as
+// superseded) so the interrupted B run replays at the next boot. The worker
+// of the unwired boot is a held one, so the released fire is interrupted at
+// the boot's end — which is what makes the debt observable: A never had a
+// job after the edit, so a surviving debt with its replay can only be B's.
+// The edit re-queues the terminal-failed task in the same update (C2b's
+// shape): a trigger-only edit on a terminal once-task is swallowed by the
+// terminal-once removal instead of registering B.
+func TestU2bBootReplay_HeldFireReplacedWhileUnwired_ReplacementRuns_OldFireNever_DebtSurvives(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	// Boot 2: the plane is EXPECTED (so an ordinary fire is held too), and
+	// the worker is held, so the released fire stays mid-run until the boot
+	// ends.
+	unwiredWorker := newU2bAsyncWorker()
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, unwiredWorker)
+	expectSessionPlaneLikeTheGateway(t, p2)
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID), "instrument: fire A is held")
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"instrument: only boot 1's abandoned run exists — fire A has not run")
+
+	// The trigger edit replaces A's job with B, at a still future time. The
+	// edit also re-queues the task (failed → next) in the SAME update, exactly
+	// as C2b does: a terminal once-task loses its job on a trigger-only edit
+	// (the terminal-once rule removes it outright instead of re-arming), so
+	// the realistic edit here is re-queue + reschedule together — the
+	// normal-path update that reaches replaceJobLocked and registers B.
+	next := task.StatusNext
+	newAt := p2.clock.Now().Add(time.Minute).UnixMilli()
+	newTrigger := &task.Trigger{Type: task.TriggerOnce, Config: task.TriggerConfig{AtMs: &newAt}}
+	edited, err := p2.loop.taskStore.Update(fire.taskID, task.Patch{Status: &next, Trigger: &newTrigger})
+	require.NoError(t, err)
+	p2.loop.NotifyTaskUpserted(edited)
+	editedJobs := p2.storedJobs(t, fire.taskID)
+	require.Len(t, editedJobs, 1, "instrument: the edit leaves exactly B's job")
+	require.NotEqual(t, fire.jobID, editedJobs[0].ID, "instrument: B is a different job from A")
+
+	// B comes due BEFORE the plane is wired: B is held too.
+	p2.clock.Advance(2 * time.Minute)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane for B", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "B's held handoff", p2.loop.taskExecutor.wg.Wait)
+	require.Empty(t, p2.runs(t, fire.taskID)[1:],
+		"instrument: no new run while unwired — both fires are held")
+	heldBeforeWire := p2.storedJobs(t, fire.taskID)
+	require.Len(t, heldBeforeWire, 1, "instrument: B's job is the tracked one while held")
+
+	// Wire the plane in production order: exactly one held fire may run.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "the released fire's provider call", func() { <-unwiredWorker.entered })
+
+	// The boot ends with the released fire mid-run: interrupted.
+	p2.stop()
+
+	// The debt must survive as B's job, never removed as superseded.
+	require.Len(t, p2.storedJobs(t, fire.taskID), 1,
+		"R3: the interrupted fire's debt must survive the release — on a tree where A "+
+			"consumed B's marker and B was removed as superseded, nothing is left to replay")
+
+	// The next boot replays the surviving debt exactly once.
+	p3 := bootU2bLauncherProcess(t, home, clk)
+	runs := p3.runs(t, fire.taskID)
+	require.Len(t, runs, 3,
+		"R3: the next boot replays the surviving debt exactly once — boot 1's abandoned run, "+
+			"the interrupted released run, and the replay")
+	var replay *task.TaskRun
+	for i := range runs {
+		if runs[i].RunID != fire.run.RunID && runs[i].Status == task.StatusDone && replay == nil {
+			replay = &runs[i]
+			break
+		}
+	}
+	require.NotNil(t, replay, "R3: the replay executes to a real outcome")
+	rec, err := p3.loop.GetSessionLifecycleStore().Load(replay.SessionID)
+	require.NoError(t, err, "R3: the replay carries a persisted runtime classification")
+	require.NotNil(t, rec)
+	p3.requireMainChild(t, fire.taskID, replay.SessionID)
+	require.Equal(t, u2bAsyncEvidence, replay.Result, "R3: the replay judged its real result")
+	require.Empty(t, p3.storedJobs(t, fire.taskID), "the replayed fire's job is settled")
+	p3.runDueAndJoin(t)
+	require.Len(t, p3.runs(t, fire.taskID), 3, "another tick adds no replay")
+	p3.stop()
+	p4 := bootU2bLauncherProcess(t, home, clk)
+	require.Len(t, p4.runs(t, fire.taskID), 3, "a further boot adds nothing")
+	p4.stop()
+}
+
+// TestU2bBootReplay_HeldFireDeletedBetweenReads_OneAuditedWarning is
+// addendum-13 R4 (security-lead S4): the task is deleted after the release
+// has started but before the run is created — between runHeldFire's
+// classification read and runScheduledFire's re-read. Oracle: no run, the
+// job removed, and exactly ONE WARN audit row naming the task with reason
+// task_deleted (the inner deletion branches currently remove-and-nil without
+// any warning).
+func TestU2bBootReplay_HeldFireDeletedBetweenReads_OneAuditedWarning(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID), "instrument: the fire is held")
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"instrument: only boot 1's abandoned run exists — the held fire has not run")
+
+	// The deletion must land between runHeldFire's classification read and
+	// runScheduledFire's re-read (the real row would then swap in the audit
+	// logger, delete at the interleaving point, wire, and assert). No
+	// deterministic interleaving point exists:
+	t.Fatal("BLOCKED: no deterministic interleaving point exists between runHeldFire's " +
+		"classification read (pkg/agent/task_trigger_boot_hold.go) and runScheduledFire's " +
+		"re-read (pkg/agent/task_trigger.go) — the two reads are adjacent in the release " +
+		"callback with only in-memory steps between (marker check, registry check), " +
+		"pkg/task's Store is a concrete type with no test hook (its only injection point is " +
+		"the unexported writeFileAtomicFn package variable, unreachable from pkg/agent), and " +
+		"releaseSessionPlaneWaiters runs queued callbacks strictly in order, so a second " +
+		"waiter can never run between the two reads. Required seam: a test hook on the task " +
+		"store read path (or an equivalent scheduler-level hook) that can run a deletion " +
+		"between the two reads. Required by addendum-13 R4 (S4: a deletion in that window is " +
+		"removed-and-nil without the required WARN audit).")
+}
+
+// TestU2bBootReplay_OrdinaryHeldFire_EditBeforeWiring_EditWins is
+// addendum-13 R5, the developer's open point: an ORDINARY (not owed) held
+// fire whose trigger is edited before the plane is wired. Oracle: the edit
+// wins — no run from the old schedule — and exactly one run happens at the
+// new schedule's time.
+func TestU2bBootReplay_OrdinaryHeldFire_EditBeforeWiring_EditWins(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	expectSessionPlaneLikeTheGateway(t, p2) // an ordinary fire is held only while the plane is expected
+	p2.physicalBoot(t)
+
+	queued := newCompletionContractTask(t, p2.loop, "native-agent", "U2b ordinary held fire R5")
+	fireAt := clk.Now().Add(time.Minute).UnixMilli()
+	trigger := &task.Trigger{Type: task.TriggerOnce, Config: task.TriggerConfig{AtMs: &fireAt}}
+	stored, err := p2.loop.taskStore.Update(queued.ID, task.Patch{Trigger: &trigger})
+	require.NoError(t, err)
+	p2.loop.NotifyTaskUpserted(stored)
+	require.Len(t, p2.storedJobs(t, queued.ID), 1, "instrument: the ordinary once job is armed")
+
+	// The fire comes due while unwired and is held.
+	clk.Advance(2 * time.Minute)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "the held ordinary fire's handoff", p2.loop.taskExecutor.wg.Wait)
+	require.Empty(t, p2.runs(t, queued.ID), "instrument: the ordinary fire is held, not dispatched")
+
+	// The trigger is edited before the wiring: a new once time.
+	newAt := p2.clock.Now().Add(time.Minute).UnixMilli()
+	newTrigger := &task.Trigger{Type: task.TriggerOnce, Config: task.TriggerConfig{AtMs: &newAt}}
+	edited, err := p2.loop.taskStore.Update(queued.ID, task.Patch{Trigger: &newTrigger})
+	require.NoError(t, err)
+	p2.loop.NotifyTaskUpserted(edited)
+
+	// Wire the plane: the old held fire must not run — the edit wins.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release after the trigger edit", p2.loop.taskExecutor.wg.Wait)
+	require.Empty(t, p2.runs(t, queued.ID),
+		"R5: the edited-over held fire must never run — the edit wins")
+
+	// Exactly one run happens, at the new schedule's time.
+	p2.clock.Advance(2 * time.Minute)
+	p2.runDueAndJoin(t)
+	runs := p2.runs(t, queued.ID)
+	require.Len(t, runs, 1, "R5: exactly one run, at the new schedule's time")
+	p2.requireMainChild(t, queued.ID, runs[0].SessionID)
+	rec, err := p2.loop.GetSessionLifecycleStore().Load(runs[0].SessionID)
+	require.NoError(t, err, "R5: the new fire's run carries a persisted runtime classification")
+	require.NotNil(t, rec)
+	require.Equal(t, task.StatusDone, runs[0].Status, "R5: the new fire executes to a real outcome")
+	require.Empty(t, p2.storedJobs(t, queued.ID), "R5: the fired once job is settled")
+	p2.runDueAndJoin(t)
+	require.Equal(t, runs, p2.runs(t, queued.ID), "R5: at most one run per the new schedule")
+	p2.stop()
 }
