@@ -109,7 +109,9 @@ func TestSkillsPartialAbsence_ActualRestartRESTGrantReadAndDelete(t *testing.T) 
 					require.NoError(t, createErr, "BLOCKED: committed content prerequisite — r15 S-11.17")
 					rows := crashVersionRows(t, home)
 					require.Len(t, rows, 1)
-					contentID = rows[0]["id"].(string)
+					var contentIDOK bool
+					contentID, contentIDOK = rows[0]["id"].(string)
+					require.True(t, contentIDOK, "committed content manifest has a string version id")
 					inst = partialRecoveryGrant(t, rc, home)
 					loaded := crashActualSkill(t, inst, ctx)
 					require.False(t, loaded.IsError)
@@ -123,7 +125,9 @@ func TestSkillsPartialAbsence_ActualRestartRESTGrantReadAndDelete(t *testing.T) 
 					require.Len(t, before, 2)
 					for _, row := range before {
 						if row["kind"] == "delete_skill" {
-							deletionID = row["id"].(string)
+							var deletionIDOK bool
+							deletionID, deletionIDOK = row["id"].(string)
+							require.True(t, deletionIDOK, "committed deletion manifest has a string version id")
 						}
 					}
 					require.NotEmpty(t, deletionID, "real delete committed its head")
@@ -225,9 +229,13 @@ func partialRecoveryVerifyRestart(t *testing.T, home, operation string, before [
 		require.True(t, ok)
 		items, ok := versions["items"].([]any)
 		require.True(t, ok)
-		var ids []string
+		ids := make([]string, 0, len(items))
 		for _, item := range items {
-			ids = append(ids, item.(map[string]any)["id"].(string))
+			version, versionOK := item.(map[string]any)
+			require.True(t, versionOK, "version page item is an object")
+			id, idOK := version["id"].(string)
+			require.True(t, idOK, "version page item has a string id")
+			ids = append(ids, id)
 		}
 		assert.Contains(t, ids, contentID)
 		assert.Contains(t, ids, deletionID, "retained does not mean restorable")

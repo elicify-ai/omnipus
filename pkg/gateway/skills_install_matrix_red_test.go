@@ -6,6 +6,7 @@ package gateway
 // an outside edit is deliberately NOT activated before the request. Refusals
 // preserve the exact live bytes; successes really replace and retain history.
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -25,12 +26,22 @@ func t9ManifestFiles(t *testing.T, root, slug string) []string {
 	return paths
 }
 
+// The network fixture serves one canonical package, x, even when queried as X.
+// A registry query's letter case must not manufacture invalid frontmatter for
+// the case-twin publication row; the real handler still resolves the live slug.
+type t9CanonicalInstallRegistry struct{ fakeSkillRegistry }
+
+func (f *t9CanonicalInstallRegistry) DownloadAndInstall(ctx context.Context, _ string, version, targetDir string) (*skills.InstallResult, error) {
+	return f.fakeSkillRegistry.DownloadAndInstall(ctx, "x", version, targetDir)
+}
+
 func TestRestInstall_ExpectationAndLocalConfirmationMatrix(t *testing.T) {
 	for _, state := range []string{"absent", "installed-current", "installed-stale", "installed-missing-revision", "managed-edit-refused", "managed-edit-confirmed", "outside-undetected-refused", "outside-undetected-confirmed", "restored-install-refused", "case-twin-replacement"} {
 		t.Run(state, func(t *testing.T) {
-			api, cleanup := newTestRestAPI(t)
-			defer cleanup()
-			api.skillRegistry = &fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0"}}
+			api := newTestRestAPIWithClawHub(t, true, "")
+			require.True(t, api.agentLoop.GetConfig().Tools.Skills.Marketplaces[0].Enabled,
+				"the revision/consent matrix needs an enabled marketplace, not its 409 configuration gate")
+			api.skillRegistry = &t9CanonicalInstallRegistry{fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0"}}}
 			root := filepath.Join(api.homePath, "skills")
 			rev := ""
 			if state != "absent" {
@@ -90,8 +101,8 @@ func TestRestInstall_ExpectationAndLocalConfirmationMatrix(t *testing.T) {
 				require.Equal(t, want, w.Code, "%s: %s", state, w.Body.String())
 			}
 			if want != http.StatusOK || state == "installed-missing-revision" {
-				raw, err := os.ReadFile(filepath.Join(root, "x", "SKILL.md"))
-				require.NoError(t, err)
+				raw, readErr := os.ReadFile(filepath.Join(root, "x", "SKILL.md"))
+				require.NoError(t, readErr)
 				assert.Equal(t, before, raw, "refused replacement changed no live instruction bytes")
 				if strings.HasSuffix(state, "-refused") {
 					assert.Contains(t, w.Body.String(), "LOCAL_CHANGES_CONFIRMATION_REQUIRED")
@@ -116,8 +127,8 @@ func TestRestInstall_ExpectationAndLocalConfirmationMatrix(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, "---\nname: x\ndescription: Use this installed test skill when requested.\n---\n\nBody.\n", string(raw))
 			if state == "case-twin-replacement" {
-				_, err := os.Stat(filepath.Join(root, "X"))
-				assert.True(t, os.IsNotExist(err), "never creates a second case-twin folder")
+				_, statErr := os.Stat(filepath.Join(root, "X"))
+				assert.True(t, os.IsNotExist(statErr), "never creates a second case-twin folder")
 			}
 			manifests := t9ManifestFiles(t, root, "x")
 			require.NotEmpty(t, manifests, "successful install commits real history")

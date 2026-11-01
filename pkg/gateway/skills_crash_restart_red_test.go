@@ -229,7 +229,9 @@ func crashVerifyRestart(t *testing.T, home, operation string) {
 	assert.Equal(t, crashSkillMD(want), string(body))
 	assert.NoDirExists(t, filepath.Join(home, "skills", ".swap", "foo"), "actual startup disposed/recovered the interrupted swap")
 	assert.Contains(t, inst.ContextBuilder.BuildSystemPromptWithCache(), want, "first real menu reflects recovered live state")
-	ctx := tools.WithTranscriptSessionID(tools.WithAgentID(context.Background(), inst.ID), receipt["session"].(string))
+	sessionID, sessionOK := receipt["session"].(string)
+	require.True(t, sessionOK, "actual crash receipt includes its string session id")
+	ctx := tools.WithTranscriptSessionID(tools.WithAgentID(context.Background(), inst.ID), sessionID)
 	edit := systools.NewSkillEditTool(deps)
 	unread := edit.Execute(ctx, map[string]any{"action": "delete_file", "skill": "foo", "path": "notes.md"})
 	assert.True(t, unread.IsError)
@@ -237,7 +239,9 @@ func crashVerifyRestart(t *testing.T, home, operation string) {
 	fresh := crashActualSkill(t, inst, ctx)
 	require.False(t, fresh.IsError)
 	rows := crashVersionRows(t, home)
-	before := int(receipt["versions_before"].(float64))
+	versionsBefore, countOK := receipt["versions_before"].(float64)
+	require.True(t, countOK, "actual crash receipt includes its numeric history count")
+	before := int(versionsBefore)
 	if operation != "delete" {
 		require.Len(t, rows, before+1, "next actual load records exactly one external_change, not a phantom committed mutation")
 		var detections []map[string]any

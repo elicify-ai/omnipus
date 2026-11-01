@@ -5,7 +5,6 @@ package gateway
 // prevents clearing a turn-policy base from pretending to undo Landlock.
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,21 +59,29 @@ func TestSkillsNoKernel_ActualChildWriteThenLoadDetection(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(crashSkillMD("DESCRIPTION-A")), 0o644))
 	const generation = "11111111-2222-3333-4444-555555555555"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".omnipus-identity"), []byte(generation+"\n"), 0o644))
-	_, err := agentstore.New(home).Update("agent-a", func(a *config.AgentConfig) error { a.Skills = []string{"foo"}; return nil })
+	// This row concerns an explicitly authorized child, not Auto's headless
+	// approval refusal. Persist the real two-layer policy before actual boot;
+	// do not inject a settled-approval marker or replace the bash tool.
+	cfg.Sandbox.ToolPolicies["bash"] = string(config.ToolPolicyAllow)
+	updated, err := agentstore.New(home).Update("agent-a", func(a *config.AgentConfig) error {
+		a.Skills = []string{"foo"}
+		if a.Tools == nil {
+			a.Tools = &config.AgentToolsCfg{}
+		}
+		if a.Tools.Builtin.Policies == nil {
+			a.Tools.Builtin.Policies = map[string]config.ToolPolicy{}
+		}
+		a.Tools.Builtin.Policies["bash"] = config.ToolPolicyAllow
+		return nil
+	})
 	require.NoError(t, err)
-	path := filepath.Join(home, "entities", "agents", "agent-a.json")
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
-	var record map[string]any
-	require.NoError(t, json.Unmarshal(raw, &record))
-	record["skill_grants"] = map[string]string{"foo": generation}
-	raw, err = json.Marshal(record)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path, raw, 0o600))
-	require.NoError(t, json.Unmarshal(raw, &cfg.Agents.List[0]))
+	require.Equal(t, generation, updated.SkillGrants["foo"], "real grant persistence binds the observed folder")
+	cfg.Agents.List[0] = *updated
 	cfg.Sandbox.Mode = config.SandboxMode(mode)
 	require.NoError(t, config.SaveConfig(filepath.Join(home, "config.json"), cfg))
 	rc, inst, _ := crashBoot(t, home)
+	require.Equal(t, string(config.ToolPolicyAllow), rc.agentLoop.ResolveApprovalToolPolicy(inst.ID, "bash"),
+		"the real booted shell policy must authorize this child independently of kernel mode")
 	applied, err := applySandbox(SandboxApplyOptions{Cfg: rc.cfg, HomePath: home, Backend: sandbox.NewFallbackBackend(), GetEnv: func(string) string { return "" }})
 	require.NoError(t, err)
 	require.Equal(t, sandbox.Mode(mode), applied.Mode, "actual off/fallback boot, not a caller-made unconfined policy")
@@ -89,10 +96,18 @@ func TestSkillsNoKernel_ActualChildWriteThenLoadDetection(t *testing.T) {
 	require.Positive(t, before, "the initial real load established a baseline, not fabricated history")
 	exe, err := os.Executable()
 	require.NoError(t, err)
+	// Keep the ordinary executable-path guard enabled. Authorize execution by
+	// placing the real native child inside the agent's existing working dir.
+	workDir, err := agentWorkspacePath(rc.cfg, inst.ID, "", home)
+	require.NoError(t, err)
+	childPath := filepath.Join(workDir, filepath.Base(exe))
+	nativeChild, err := os.ReadFile(exe)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(childPath, nativeChild, 0o700))
 	t.Setenv("OMNIPUS_CHILD_SKILLS_UNCONFINED_HOME", home)
-	quoted := "'" + strings.ReplaceAll(exe, "'", "'\\''") + "'"
+	quoted := "'" + strings.ReplaceAll(childPath, "'", "'\\''") + "'"
 	if runtime.GOOS == "windows" {
-		quoted = "& '" + strings.ReplaceAll(exe, "'", "''") + "'"
+		quoted = "& '" + strings.ReplaceAll(childPath, "'", "''") + "'"
 	} // actual bash tool uses PowerShell on Windows
 	command := quoted + " -test.run=^TestSkillsNoKernel_ActualChildWriteThenLoadDetection$ -- --skills-unconfined-probe"
 	bash, ok := inst.Tools.Get("bash")
