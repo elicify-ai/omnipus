@@ -25,6 +25,10 @@ type SendOrigin struct {
 	// Dispatch checks for it rather than re-deriving the verdict — see
 	// bus.OutboundMessage.OwnershipChecked for why re-deriving is wrong.
 	OwnershipChecked bool
+	// Operation is the tool decision FR-043 records: SendOperationChecked
+	// for a non-start send the tool checked, SendOperationStart for a start
+	// that passed T-3. Dispatch re-checks a start.
+	Operation string
 }
 
 type SendCallback func(channel, chatID, content string, origin SendOrigin) error
@@ -54,6 +58,10 @@ type MessageTool struct {
 	// main session addressing a connector. The ordinary send form is refused
 	// there: a main reaches a connector ONLY by reply_to (FR-028).
 	mainConnectorGuard func(sessionID, channel string) bool
+
+	// startPolicy, when set, classifies starts (T-4) and runs T-3 for them
+	// (message_start.go). Nil keeps today's behaviour.
+	startPolicy StartPolicy
 }
 
 func NewMessageTool() *MessageTool {
@@ -162,6 +170,8 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	turnChannel, turnChat := ToolChannel(ctx), ToolChatID(ctx)
 	channel, _ := args["channel"].(string)
 	chatID, _ := args["chat_id"].(string)
+	// T-4 step 2 reads the raw arguments, before the turn fills them in.
+	explicitTarget := channel != "" && chatID != ""
 
 	if channel == "" {
 		channel = turnChannel
@@ -190,10 +200,12 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// reply_to. The ordinary form - default destination or explicit channel -
 	// is refused before any ownership decision or send, so it can never leave
 	// a main without a captured return route.
-	if t.mainConnectorGuard != nil && channel != "" && t.mainConnectorGuard(ToolTranscriptSessionID(ctx), channel) {
+	// FR-042: with a start policy wired, a main naming both channel and
+	// chat_id explicitly goes on to the start check instead.
+	if t.mainConnectorGuard != nil && channel != "" && t.mainConnectorGuard(ToolTranscriptSessionID(ctx), channel) &&
+		(t.startPolicy == nil || !explicitTarget) {
 		return &ToolResult{
-			ForLLM: "in your main conversation a connector is reached only by replying to a request: call " +
-				"send_message with reply_to=<request id> and your answer as content. Nothing was sent.",
+			ForLLM:  t.mainConnectorReplyOnlyText(),
 			IsError: true,
 			Err:     ErrMainConnectorReplyOnly,
 		}
@@ -208,8 +220,13 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return denied
 	}
 
-	if denied := t.denyUnownedTarget(channel, chatID, turnChannel, turnChat, workspaceID, actingAgent); denied != nil {
-		return denied
+	// T-4 step 5: a start is decided by T-3 (which includes the binding), not
+	// by the ownership rule of an ordinary send.
+	start := t.isStart(ctx, channel, chatID, turnChannel, turnChat)
+	if !start {
+		if denied := t.denyUnownedTarget(channel, chatID, turnChannel, turnChat, workspaceID, actingAgent); denied != nil {
+			return denied
+		}
 	}
 
 	if channel == "" {
@@ -231,11 +248,15 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	if t.sendCallback == nil {
 		return &ToolResult{ForLLM: "Message sending not configured", IsError: true}
 	}
+	if start {
+		return t.executeStart(channel, chatID, content, workspaceID, actingAgent)
+	}
 
 	// Ownership has now been decided for this message. Dispatch verifies that
 	// a decision was made rather than re-making it with less context
 	// (ADR-065 FR-7).
-	origin := SendOrigin{AgentID: actingAgent, WorkspaceID: workspaceID, OwnershipChecked: true}
+	origin := SendOrigin{AgentID: actingAgent, WorkspaceID: workspaceID, OwnershipChecked: true,
+		Operation: SendOperationChecked}
 	if err := t.sendCallback(channel, chatID, content, origin); err != nil {
 		return &ToolResult{
 			ForLLM:  fmt.Sprintf("sending message: %v", err),
