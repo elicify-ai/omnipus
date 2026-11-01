@@ -234,7 +234,7 @@ func t8KillStartedOnceProcess(t *testing.T, dir string) {
 		}
 	})
 	ready := filepath.Join(dir, "ready.json")
-	started := assert.Eventually(t, func() bool { _, err := os.Stat(ready); return err == nil }, cancelTestTurnStartDeadline, 10*time.Millisecond, "crash child must publish its actual started/open run receipt")
+	started := assert.Eventually(t, func() bool { _, statErr := os.Stat(ready); return statErr == nil }, cancelTestTurnStartDeadline, 10*time.Millisecond, "crash child must publish its actual started/open run receipt")
 	if !started {
 		output, readErr := os.ReadFile(log.Name())
 		t.Fatalf("crash process did not establish the required open run: log_error=%v\n%s", readErr, output)

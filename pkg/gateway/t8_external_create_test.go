@@ -36,8 +36,8 @@ func TestRestExternalCreate_SoulContract(t *testing.T) {
 			if withSoul {
 				require.Equal(t, http.StatusBadRequest, w.Code, "12.1: %s", w.Body.String())
 				assert.Contains(t, w.Body.String(), "soul")
-				after, err := filepath.Glob(pattern)
-				require.NoError(t, err)
+				after, globErr := filepath.Glob(pattern)
+				require.NoError(t, globErr)
 				assert.Equal(t, before, after, "a refused create leaves the protected agent inventory unchanged")
 				return
 			}
