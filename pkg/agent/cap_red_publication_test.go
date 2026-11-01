@@ -12,7 +12,9 @@ import (
 type capRedConfigSource interface {
 	ConfigSnapshot() (*config.Config, uint64)
 }
-type capRedCapacityApplier interface{ ApplyConfiguredCapacity(uint64, int) }
+type capRedCapacityApplier interface {
+	ApplyConfiguredCapacity(generation uint64, value int)
+}
 
 func TestCapRED_ConfigPublication_GenerationMonotonic(t *testing.T) {
 	high, ok := false, true

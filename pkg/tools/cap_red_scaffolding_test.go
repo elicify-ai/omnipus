@@ -26,13 +26,13 @@ func capRedWireObservation(t *testing.T, tool *PlanExecuteTool, source JobCapSna
 	t.Helper()
 	// Match the existing ListJobsTool injection shape, not a fake PlanExecuteTool.
 	if setter, ok := any(tool).(interface {
-		SetCapSnapshotSource(func() JobCapSnapshotSource)
+		SetCapSnapshotSource(source func() JobCapSnapshotSource)
 	}); ok {
 		setter.SetCapSnapshotSource(func() JobCapSnapshotSource { return source })
 	} else {
 		t.Error("CAP-A1 RED: execute_plan has no snapshot-source injection seam; real Execute still asserted below")
 	}
-	if clock, ok := any(tool).(interface{ SetNow(func() time.Time) }); ok {
+	if clock, ok := any(tool).(interface{ SetNow(now func() time.Time) }); ok {
 		clock.SetNow(func() time.Time { return now })
 	} else {
 		t.Error("CAP-A1 RED: execute_plan has no deterministic clock seam; age must be derived at read time")

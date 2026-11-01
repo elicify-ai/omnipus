@@ -100,7 +100,11 @@ func capRedNewLane(t *testing.T, initial int) *capRedLaneFixture {
 	} else {
 		t.Error("CAP-B9 RED: NewCronService lacks its required LaneLimitFunc constructor argument")
 	}
-	f.cs = ctor.Call(args)[0].Interface().(*CronService)
+	service, valid := ctor.Call(args)[0].Interface().(*CronService)
+	if !valid || service == nil {
+		t.Fatal("real NewCronService constructor did not return a service")
+	}
+	f.cs = service
 	f.cs.SetRunner(f.runner)
 	if err := f.cs.startNoLoop(); err != nil {
 		t.Fatal(err)
@@ -256,7 +260,11 @@ func TestCapRED_Cron_LaneReleaseRechecksLowerLimitAndDrainsRecovery(t *testing.T
 				// The limit is consulted under this SAME lane mutex. Reacquiring it is a
 				// completion barrier for the comparison, not a stopwatch as an oracle.
 				f.cs.mu.Lock()
+				running := f.cs.running
 				f.cs.mu.Unlock()
+				if !running {
+					t.Fatal("service stopped before the release comparison completed")
+				}
 				select {
 				case id := <-f.runner.entered:
 					t.Errorf("S57a premature grant after completion %d: %s", i+1, f.names[id])

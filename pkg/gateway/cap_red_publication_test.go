@@ -17,7 +17,9 @@ import (
 type capRedGatewayConfigSource interface {
 	ConfigSnapshot() (*config.Config, uint64)
 }
-type capRedGatewayCapacityApplier interface{ ApplyConfiguredCapacity(uint64, int) }
+type capRedGatewayCapacityApplier interface {
+	ApplyConfiguredCapacity(generation uint64, value int)
+}
 
 func TestCapRED_SettingsPUT_AppliesPublishedGeneration(t *testing.T) {
 	restore := config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 1 << 30, true })
@@ -73,7 +75,7 @@ func TestCapRED_SettingsPUT_AppliesPublishedGeneration(t *testing.T) {
 			t.Errorf("Settings did not record its applied generation: stale/equal replay restored %d, want 2", got)
 		}
 	}
-	if _, retired := any(te).(interface{ ResizeDispatchSema(int) }); retired {
+	if _, retired := any(te).(interface{ ResizeDispatchSema(capacity int) }); retired {
 		t.Error("CAP-B12 RED: retired unversioned ResizeDispatchSema is still callable")
 	}
 }
