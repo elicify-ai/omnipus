@@ -158,8 +158,9 @@ func TestCapRED_SteerQueue_NewcomerDispatchesOlderRealBodies(t *testing.T) {
 	inst, _ := al.GetRegistry().GetAgent(testDefaultAgentID)
 	inst.Provider = p
 	t.Cleanup(func() { close(p.release) })
-	al.GetConfig().Performance.MaxParallelAgents = 2
+	al.GetConfig().Performance.MaxParallelAgents = 8
 	capRedFillSteer(t, al.steerAdmission(), 2)
+	high = true // S32: the initial bound of two is live memory, not configured two.
 	parent := newTestSteeringSession(t, al, testHarnessWorkspaceMembershipID)
 	launcher := NewSteerLauncher(al)
 	launch := func(label string) steer.LaunchResult {
@@ -177,7 +178,7 @@ func TestCapRED_SteerQueue_NewcomerDispatchesOlderRealBodies(t *testing.T) {
 		}
 		capRedAssert(t, "older entry actually queued", d.State, steer.DispatchQueued)
 	}
-	al.GetConfig().Performance.MaxParallelAgents = 8
+	high = false // Recovery without Resize or a completion is itself admission.
 	fresh := launch("CAP_BODY_new")
 	if _, err := launcher.Dispatch(context.Background(), fresh.SessionID, fresh.Generation); err != nil {
 		t.Fatal(err)

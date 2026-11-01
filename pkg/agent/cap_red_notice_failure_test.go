@@ -31,7 +31,7 @@ func TestCapRED_CapNotice_ConveyedEpisodeDoesNotSuppressLater(t *testing.T) {
 	parent := newTestSteeringSession(t, al, testHarnessWorkspaceMembershipID)
 	ctx := tools.WithAgentID(tools.WithWorkspaceID(tools.WithTranscriptSessionID(context.Background(), parent), testHarnessWorkspaceMembershipID), testDefaultAgentID)
 	high = true
-	result := delegateToolFor(t, al).Execute(ctx, map[string]any{"action": "run", "agent_id": testDefaultAgentID, "task": "hold", "label": "same-parent"})
+	result := capRedDelegateTool(t, al).Execute(ctx, map[string]any{"action": "run", "agent_id": testDefaultAgentID, "task": "hold", "label": "same-parent"})
 	if result == nil || result.IsError {
 		t.Fatalf("real delegate failed: %+v", result)
 	}
@@ -186,7 +186,7 @@ func TestCapRED_CapNotice_AppendFailureIsVisibleAndBounded(t *testing.T) {
 					t.Fatal("S52 memory-limited wait incorrectly disappeared on a release above the floor")
 				}
 				at := capRedStoredQueueTime(t, gate, child.SessionID)
-				delegateToolFor(t, al).SetClock(func() time.Time { return at.Add(500 * time.Millisecond) })
+				capRedDelegateTool(t, al).SetClock(func() time.Time { return at.Add(500 * time.Millisecond) })
 				text := capRedStatus(t, al, parent, child.SessionID)
 				want := fmt.Sprintf("Admission: this child has a turn waiting to start. At its last check (just now) the lane allowed %d delegated turns at a time (%d in use then): the machine was low on memory. Queue position %d. list_jobs shows current state.", limit, occupancy, position)
 				start := strings.Index(text, "Admission:")

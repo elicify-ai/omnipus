@@ -13,11 +13,17 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/plan"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+func capRedDelegateTool(t *testing.T, al *AgentLoop) *tools.DelegateTool {
+	t.Helper()
+	dt := delegateToolFor(t, al)
+	dt.SetSessionLauncher(NewSteerLauncher(al))
+	return dt
+}
 
 func capRedInbox(t *testing.T, al *AgentLoop, parent, child string) []generated.SessionMessage {
 	t.Helper()
@@ -116,7 +122,7 @@ func TestCapRED_Delegate_QueuedSentenceAndClosedJSON(t *testing.T) {
 			high, ok = tc.high, tc.ok
 			parent := newTestSteeringSession(t, al, testHarnessWorkspaceMembershipID)
 			ctx := tools.WithAgentID(tools.WithWorkspaceID(tools.WithTranscriptSessionID(context.Background(), parent), testHarnessWorkspaceMembershipID), testDefaultAgentID)
-			result := delegateToolFor(t, al).Execute(ctx, map[string]any{"action": "run", "agent_id": testDefaultAgentID, "task": "hold this work", "label": "capacity-child"})
+			result := capRedDelegateTool(t, al).Execute(ctx, map[string]any{"action": "run", "agent_id": testDefaultAgentID, "task": "hold this work", "label": "capacity-child"})
 			if result == nil || result.IsError {
 				t.Fatalf("real delegate failed: %+v", result)
 			}
@@ -241,7 +247,8 @@ func TestCapRED_CapNotice_TwoCauseCyclesKeepEpisodeIdentity(t *testing.T) {
 		if strings.Contains(last.MessageId, "memory_") {
 			t.Errorf("cause transition leaked into id: %s", last.MessageId)
 		}
-		expected := fmt.Sprintf("Cap notice: at %s your plan member %q had a turn waiting to start. The lane allowed 2 delegated turns at a time then (%d in use): %s.", last.CreatedAt.UTC().Format(time.RFC3339), tk.Title, 8-i-1, step.cause)
+		decisionAt := capRedStoredQueueTime(t, al.steerAdmission(), stored.SessionID)
+		expected := fmt.Sprintf("Cap notice: at %s your plan member %q had a turn waiting to start. The lane allowed 2 delegated turns at a time then (%d in use): %s.", decisionAt.UTC().Format(time.RFC3339), tk.Title, 8-i-1, step.cause)
 		capRedAssert(t, "each episode describes its own current refusal", last.Text, expected)
 	}
 }
@@ -269,7 +276,7 @@ func TestCapRED_DelegateStatus_DatedAfterRecoveryNoEvent(t *testing.T) {
 	}
 	high.Store(false)
 	al.GetConfig().Performance.MaxParallelAgents = 16
-	tool := delegateToolFor(t, al)
+	tool := capRedDelegateTool(t, al)
 	tool.SetClock(func() time.Time { return at.Add(120 * time.Second) })
 	before := readings.Load()
 	text := capRedStatus(t, al, parent, child.SessionID)

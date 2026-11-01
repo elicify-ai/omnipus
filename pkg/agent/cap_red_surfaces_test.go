@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -28,6 +30,33 @@ func capRedToolJSON(t *testing.T, result *tools.ToolResult) map[string]any {
 }
 func capRedTask(t *testing.T, al *AgentLoop, id string, status task.Status, planID string) *task.Task {
 	t.Helper()
+	// Use the loop's real stores, not a second lifecycle directory. The general
+	// steering fixture does not wire these executor dependencies at gateway boot.
+	te := GetTaskExecutor(al)
+	te.SetLifecycleStore(al.GetSessionLifecycleStore())
+	te.SetSessionLauncher(NewSteerLauncher(al))
+	// The general steering fixture omits task completion permission. Seed the
+	// shipped permission in this task fixture, as newPlanToolWiringTestLoop does,
+	// so an admitted real worker can reach its model rather than fail readiness.
+	inst, exists := al.GetRegistry().GetAgent(testDefaultAgentID)
+	if !exists {
+		t.Fatal("task fixture agent missing")
+	}
+	var policy tools.ToolPolicyCfg
+	if current := inst.LoadToolPolicy(); current != nil {
+		policy = *current
+	}
+	policy.Policies = maps.Clone(policy.Policies)
+	policy.GlobalPolicies = maps.Clone(policy.GlobalPolicies)
+	if policy.Policies == nil {
+		policy.Policies = make(map[string]config.ToolPolicy)
+	}
+	if policy.GlobalPolicies == nil {
+		policy.GlobalPolicies = make(map[string]config.ToolPolicy)
+	}
+	policy.Policies["goal_claim"] = config.ToolPolicyAllow
+	policy.GlobalPolicies["goal_claim"] = config.ToolPolicyAllow
+	inst.StoreToolPolicy(&policy)
 	tk := &task.Task{ID: id, Title: "CAP test task", Prompt: "Stay running until released", AgentID: testDefaultAgentID, WorkspaceID: testHarnessWorkspaceMembershipID, Status: status, PlanID: planID, RunIsolated: true}
 	if err := GetTaskStore(al).Create(tk); err != nil {
 		t.Fatal(err)
@@ -231,7 +260,7 @@ func capRedLaunchChild(t *testing.T, al *AgentLoop, parent, label string) steer.
 func capRedStatus(t *testing.T, al *AgentLoop, parent, sid string) string {
 	t.Helper()
 	ctx := tools.WithTranscriptSessionID(context.Background(), parent)
-	result := delegateToolFor(t, al).Execute(ctx, map[string]any{"action": "status", "session_id": sid})
+	result := capRedDelegateTool(t, al).Execute(ctx, map[string]any{"action": "status", "session_id": sid})
 	if result == nil || result.IsError {
 		t.Fatalf("real delegate status failed: %+v", result)
 	}

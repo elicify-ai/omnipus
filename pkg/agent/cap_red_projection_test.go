@@ -198,11 +198,17 @@ func TestCapRED_SteeredTaskWait_VisibleWhileInProgress(t *testing.T) {
 			if _, err := GetTaskStore(al).Update(tk.ID, task.Patch{RunIsolated: &isolated}); err != nil {
 				t.Fatal(err)
 			}
+			wireSteerCompletionDeps(t, al)
+			repairInbox := capRedBlockInbox(t, al)
+			logs := capRedLogs(t)
 			high = true
-			// Deliver is intentionally unwired: the fallback roster must stand alone.
+			// S22d/e: force a real shared Deliver Append failure. The roster
+			// must remain truthful even though the parent did not get a notice.
 			if err := te.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 				t.Fatalf("real main-owned queued launch: %v", err)
 			}
+			repairInbox()
+			capRedAssert(t, "S22d/e actual failed notice emits one warning", capRedWarnCount(logs()), 1)
 			stored, err := GetTaskStore(al).Get(tk.ID)
 			if err != nil {
 				t.Fatal(err)

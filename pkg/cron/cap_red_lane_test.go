@@ -3,6 +3,7 @@ package cron
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"path/filepath"
 	"reflect"
@@ -104,7 +105,7 @@ func capRedNewLane(t *testing.T, initial int) *capRedLaneFixture {
 	if err := f.cs.startNoLoop(); err != nil {
 		t.Fatal(err)
 	}
-	previous := slog.Default()
+	previous, writer := slog.Default(), log.Writer()
 	slog.SetDefault(slog.New(f.logs))
 	t.Cleanup(func() {
 		f.runner.mu.RLock()
@@ -126,6 +127,7 @@ func capRedNewLane(t *testing.T, initial int) *capRedLaneFixture {
 			}
 		}
 		slog.SetDefault(previous)
+		log.SetOutput(writer)
 	})
 	return f
 }

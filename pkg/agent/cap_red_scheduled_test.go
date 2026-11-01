@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"path/filepath"
 	"reflect"
@@ -128,8 +129,9 @@ func TestCapRED_ScheduledLane_HealthyTwelveThroughRealSeam(t *testing.T) {
 					}(id)
 				}
 			} else {
-				cs.SetClock(&fakePlanClock{now: time.Date(2026, 10, 31, 20, 1, 1, 0, time.UTC)})
-				cs.RunDueJobs()
+				now := time.Date(2026, 10, 31, 20, 1, 1, 0, time.UTC)
+				cs.SetClock(&fakePlanClock{now: now})
+				cs.RunDueJobs(now)
 			}
 			// The fixture cleanup releases before joining every synchronous caller,
 			// including the RED path where the ninth handler never entered.
@@ -190,9 +192,13 @@ func TestCapRED_ScheduledLane_PressureWaitsBothEntryPaths(t *testing.T) {
 				}
 				ids = append(ids, third.ID)
 				records := make(chan slog.Record, 8)
-				prior := slog.Default()
-				slog.SetDefault(slog.New(capRedScheduleObserver{base: prior.Handler(), records: records}))
-				t.Cleanup(func() { slog.SetDefault(prior) })
+				prior, writer := slog.Default(), log.Writer()
+				// A default slog handler writes through log.Default. Forwarding to
+				// it after SetDefault redirects log back here and deadlocks. Keep
+				// the actual output writer as the process-edge sink instead.
+				sink := slog.NewTextHandler(writer, &slog.HandlerOptions{Level: slog.LevelDebug})
+				slog.SetDefault(slog.New(capRedScheduleObserver{base: sink, records: records}))
+				t.Cleanup(func() { slog.SetDefault(prior); log.SetOutput(writer) })
 				start := func(id string) {
 					runner.callers.Add(1)
 					go func() {
@@ -210,11 +216,13 @@ func TestCapRED_ScheduledLane_PressureWaitsBothEntryPaths(t *testing.T) {
 					start(ids[2])
 				} else {
 					// Drive the real scheduler, with only two jobs due in the first event.
-					cs.SetClock(&fakePlanClock{now: time.Date(2026, 10, 31, 20, 1, 1, 0, time.UTC)})
-					cs.RunDueJobs()
+					now := time.Date(2026, 10, 31, 20, 1, 1, 0, time.UTC)
+					cs.SetClock(&fakePlanClock{now: now})
+					cs.RunDueJobs(now)
 					capRedScheduledEntries(t, runner, 2)
-					cs.SetClock(&fakePlanClock{now: time.Date(2026, 10, 31, 20, 2, 1, 0, time.UTC)})
-					cs.RunDueJobs()
+					now = time.Date(2026, 10, 31, 20, 2, 1, 0, time.UTC)
+					cs.SetClock(&fakePlanClock{now: now})
+					cs.RunDueJobs(now)
 				}
 				select {
 				case id := <-runner.entered:
