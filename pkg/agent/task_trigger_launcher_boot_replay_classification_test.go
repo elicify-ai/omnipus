@@ -1861,3 +1861,119 @@ func TestU2bBootReplay_HeldFireAgentGone_CloseFailsOnce_OrphanRunSettledAtNextBo
 	require.Len(t, p4.runs(t, fire.taskID), 2, "R6: a further boot adds nothing")
 	p4.stop()
 }
+
+// TestU2bBootReplay_OwedFireAgentGone_SessionRunNotAdopted is addendum-16
+// R7, the guard for the settle's adoption shape check (d1e8e8f22): the
+// settle adopts an open run ONLY when it has the shape the settle itself
+// writes (scheduled, no session, no occurrence). The CHECK's shape-wide
+// mutant — adopt ANY open run — must die here: a real, session-backed run
+// that is still in_progress is never the settle's.
+//
+// Pre-state (chief's row spec): the settle for an owed fire whose agent is
+// gone finds an open run of this task that is NOT its own failed-run record
+// — a real run with a session, still in_progress, from a dispatch that
+// really started. Reached through real flows only: boot recovery first
+// (dead process's claim reset, its run closed), then the calendar's Run now
+// (TaskExecutor.StartOccurrenceRun — the real API entry point) dispatching
+// the task as a MAIN child with its real session, held at its first
+// provider call so its run stays open; the assignee then leaves the
+// registry; the boot's owed fire runs unheld (the plane is fully wired, as
+// in production's steady state) and settles against the missing agent.
+//
+// Oracles (chief's rulings: S2 — never remove the job unless Failed was
+// saved; exactly one failed run per fire):
+//   - that run is never closed or relabelled by the settle (its status,
+//     session and EndedAt are unchanged by the settle);
+//   - no second failed run is minted on top of it;
+//   - the job is kept, not removed, while the settle cannot record its
+//     failed run;
+//   - an audit WARN names the task.
+func TestU2bBootReplay_OwedFireAgentGone_SessionRunNotAdopted(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	// Boot 2: the full plane (production's steady state after its late
+	// wiring), so the owed fire runs unheld and the Run-now dispatch below
+	// really starts. Recovery runs first, exactly as at a real boot.
+	runNowWorker := newU2bAsyncWorker() // held: the Run-now run stays OPEN
+	p2 := newU2bLauncherProcess(t, home, clk, runNowWorker)
+	p2.physicalBoot(t)
+
+	// A real dispatch that really started: the calendar's Run now, held at
+	// its first provider call so its run is still open when the settle runs.
+	require.NoError(t, p2.loop.taskExecutor.StartOccurrenceRun(context.Background(), fire.taskID, nil))
+	u2bAsyncJoin(t, "the Run-now run's provider call", func() { <-runNowWorker.entered })
+
+	liveRunID, liveSession := "", ""
+	runsAfterRunNow := p2.runs(t, fire.taskID)
+	require.Len(t, runsAfterRunNow, 2,
+		"instrument: the crashed dispatch's abandoned run plus the Run-now dispatch's run")
+	for i := range runsAfterRunNow {
+		if runsAfterRunNow[i].RunID != fire.run.RunID {
+			liveRunID = runsAfterRunNow[i].RunID
+			liveSession = runsAfterRunNow[i].SessionID
+			require.Equal(t, task.StatusInProgress, runsAfterRunNow[i].Status,
+				"instrument: the Run-now run is still in progress")
+			require.Nil(t, runsAfterRunNow[i].EndedAt,
+				"instrument: the Run-now run carries no close timestamp")
+		}
+	}
+	require.NotEmpty(t, liveRunID, "instrument: the Run-now run is identified")
+	require.NotEmpty(t, liveSession,
+		"instrument: the Run-now dispatch really started — its run carries a real session")
+	for i := range runsAfterRunNow {
+		if runsAfterRunNow[i].RunID == liveRunID {
+			require.Equal(t, task.RunKindManual, runsAfterRunNow[i].Kind,
+				"instrument: a Run-now run, not the settle's own scheduled record")
+		}
+	}
+
+	// The assignee stops existing, exactly as R2's fixture does.
+	held, err := p2.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err)
+	require.True(t, p2.loop.GetRegistry().RemoveAgent(held.AgentID),
+		"instrument: the assignee is removed from the registry")
+
+	// The audit window opens here, so only the settle's rows are captured.
+	readAudit := swapAuditLogger(t, p2.loop)
+
+	// The owed fire runs unheld against the missing agent: its settle must
+	// find the live Run-now run and refuse it, never adopt it.
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+
+	kept := p2.storedJobs(t, fire.taskID)
+	require.Len(t, kept, 1,
+		"R7: the job is KEPT while the settle cannot record its failed run")
+	require.True(t, auditRowNamesTaskAtWarn(readAudit(), fire.taskID),
+		"R7: an audit WARN entry names the task")
+
+	afterRuns := p2.runs(t, fire.taskID)
+	require.Len(t, afterRuns, 2,
+		"R7: no second failed run is minted on top of the live run — the settle found an open "+
+			"run that is not its own failed-run record and must refuse it")
+	var after *task.TaskRun
+	for i := range afterRuns {
+		if afterRuns[i].RunID == liveRunID {
+			after = &afterRuns[i]
+		}
+	}
+	require.NotNil(t, after, "R7: the live Run-now run survives the settle")
+	require.Equal(t, task.StatusInProgress, after.Status,
+		"R7: the settle must never close or relabel another flow's live run")
+	require.Nil(t, after.EndedAt, "R7: the live run's EndedAt is unchanged by the settle")
+	require.Equal(t, liveSession, after.SessionID,
+		"R7: the live run's session is unchanged by the settle")
+
+	// The Run-now flow still owns the task: the settle saved nothing.
+	running, err := p2.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err)
+	require.Equal(t, task.StatusInProgress, running.Status,
+		"instrument: the settle refused before writing any disposition")
+	p2.stop()
+}
