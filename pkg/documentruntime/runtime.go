@@ -15,10 +15,9 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
-	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
-const ManifestRevision = "687242a67612744c88aa1c6b4ac0a56a5537cde3"
+const ManifestRevision = "9a72262121d67efd465dc1a2575a642f81a6b685"
 const FinalizeCommand = "omnipus-document-runtime finalize"
 
 var (
@@ -92,22 +91,36 @@ func ChildEnvironment(base []string, layout Layout) []string {
 			break
 		}
 	}
-	return append(out, "PATH="+pathValue, "PYTHONPATH="+filepath.Join(layout.Lib, "python"), "NODE_PATH="+filepath.Join(layout.Lib, "node_modules"), "OMNIPUS_DOCUMENT_SKILLS="+layout.Skills, "XDG_CACHE_HOME="+layout.Cache, "HOME="+layout.Cache, "TMPDIR="+layout.Cache, "OSL_SOCKET_PATH=.")
+	return append(out, "PATH="+pathValue, "PYTHONPATH="+filepath.Join(layout.Lib, "python"), "NODE_PATH="+filepath.Join(layout.Lib, "node_modules"), "XDG_CACHE_HOME="+layout.Cache, "HOME="+layout.Cache, "TMPDIR="+layout.Cache, "OSL_SOCKET_PATH=.")
 }
 
 func InstallProbe(layout Layout, manifest Manifest) error {
+	if err := installProbeFiles(layout, manifest.Revision); err != nil {
+		return err
+	}
+	return writeManifest(layout, manifest)
+}
+
+// probeDir is the folder the compiled probe is installed into.
+func probeDir(layout Layout) string {
+	return filepath.Join(layout.Lib, "python", "omnipus_document_probe")
+}
+
+// installProbeFiles creates the layout's folders and writes the compiled
+// probe into probeDir.
+func installProbeFiles(layout Layout, revision string) error {
 	if layout.Prefix == "" || !filepath.IsAbs(layout.Prefix) {
 		return errors.New("document prefix must be absolute")
 	}
-	if manifest.Revision != filepath.Base(layout.Prefix) {
+	if revision != filepath.Base(layout.Prefix) {
 		return errors.New("manifest revision does not match prefix")
 	}
-	for _, dir := range []string{layout.Bin, filepath.Join(layout.Lib, "python"), filepath.Join(layout.Lib, "node_modules"), layout.Skills, layout.Cache} {
+	for _, dir := range []string{layout.Bin, filepath.Join(layout.Lib, "python"), filepath.Join(layout.Lib, "node_modules"), layout.Cache} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	target := filepath.Join(layout.Lib, "python", "omnipus_document_probe")
+	target := probeDir(layout)
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return err
 	}
@@ -121,6 +134,11 @@ func InstallProbe(layout Layout, manifest Manifest) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// writeManifest publishes the manifest atomically, assets sorted by path.
+func writeManifest(layout Layout, manifest Manifest) error {
 	sort.Slice(manifest.Assets, func(i, j int) bool { return manifest.Assets[i].Path < manifest.Assets[j].Path })
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -139,19 +157,6 @@ func IsDocumentSkill(id string) bool {
 		}
 	}
 	return false
-}
-
-func InstallEmbeddedSkills(layout Layout) error {
-	for _, id := range DocumentSkillIDs {
-		dest := filepath.Join(layout.Skills, id)
-		if _, err := os.Stat(dest); err == nil {
-			continue
-		}
-		if err := skills.ExportEmbeddedPackage(id, dest); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func VerifyAssets(prefix string, assets []Asset) error {

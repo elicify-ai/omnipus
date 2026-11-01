@@ -56,5 +56,8 @@ func (al *AgentLoop) loadSkillActivation(
 	shelf := skills.SkillShelf(res.Shelf)
 	audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, res.Slug,
 		audit.SkillCallModeLoad, audit.SkillCallOutcomeLoaded, string(shelf))
-	return tools.SkillLoadOutcome{Status: tools.SkillLoadLoaded, Content: res.Content, Shelf: shelf, CanonicalSlug: res.Slug}
+	return tools.SkillLoadOutcome{
+		Status: tools.SkillLoadLoaded, Content: res.Content, Shelf: shelf, CanonicalSlug: res.Slug,
+		Folder: filepath.Dir(resolved.Path),
+	}
 }

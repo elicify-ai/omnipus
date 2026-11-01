@@ -82,6 +82,10 @@ type SkillLoadOutcome struct {
 	// Message is the refusal text, populated only when Status ==
 	// SkillLoadRefused.
 	Message string
+	// Folder is the loaded skill's folder (the registry, built-in or project
+	// folder it was served from), populated only when Status ==
+	// SkillLoadLoaded. Document-skill guidance names it (r15 §11).
+	Folder string
 }
 
 // SkillSearchDoc is one entry of the corpus SkillTool's search mode ranks
@@ -249,7 +253,7 @@ func (t *SkillTool) execLoad(ctx context.Context, name string) *ToolResult {
 	case SkillLoadLoaded:
 		content := outcome.Content
 		if t.documentRuntime != nil && documentruntime.IsDocumentSkill(name) {
-			content = appendDocumentRuntimeGuidance(ctx, content, name, *t.documentRuntime)
+			content = appendDocumentRuntimeGuidance(ctx, content, outcome.Folder, *t.documentRuntime)
 		}
 		return SilentResult(content)
 	case SkillLoadDenied:

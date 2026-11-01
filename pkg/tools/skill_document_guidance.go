@@ -30,15 +30,23 @@ import (
 // The former FR-011 Admin handoff, parent routing, finalization guidance, and
 // the retired structured-dependency request format are deliberately gone: the
 // generic tool encodes no packages, and no caller is handed an invented hop.
-func appendDocumentRuntimeGuidance(_ context.Context, content, skillName string, layout documentruntime.Layout) string {
-	root := filepath.Join(layout.Skills, skillName)
+//
+// Skills spec r15 §11: the package root is the skill's own folder (folder,
+// the registry folder $OMNIPUS_HOME/skills/<slug> the load served it from) —
+// there is no second copy under the document toolchain prefix.
+func appendDocumentRuntimeGuidance(_ context.Context, content, folder string, layout documentruntime.Layout) string {
 	probe := strings.Join(documentruntime.ProbeArgv(layout), " ")
 	var b strings.Builder
 	b.WriteString(content)
 	b.WriteString("\n\n## Omnipus runtime location\n")
-	b.WriteString("Resolve every relative knowledge/ and scripts/ reference above under this authorized absolute package root: `")
-	b.WriteString(root)
-	b.WriteString("`. The document probe command is `")
+	if folder != "" {
+		b.WriteString("Resolve every relative knowledge/ and scripts/ reference above under this skill's folder: `")
+		b.WriteString(filepath.Clean(folder))
+		b.WriteString("`.")
+	} else {
+		b.WriteString("Resolve every relative knowledge/ and scripts/ reference above under the skill folder named on the header's folder: line.")
+	}
+	b.WriteString(" The document probe command is `")
 	b.WriteString(probe)
 	b.WriteString("`.")
 	b.WriteString("\n\n## Omnipus document runtime\n")

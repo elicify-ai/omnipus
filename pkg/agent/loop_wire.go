@@ -1535,6 +1535,7 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 								Content:       content,
 								Shelf:         resolved.Shelf,
 								CanonicalSlug: resolved.Slug,
+								Folder:        filepath.Dir(resolved.Path),
 							}
 						}
 						// Resolved but the file vanished or became unreadable
