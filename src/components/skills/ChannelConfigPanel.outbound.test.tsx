@@ -368,6 +368,83 @@ describe('T-30 per-code conflict handling — S-81', () => {
 })
 
 describe('T-30 indexed errors and T-30b actual section decoder — S-81/S-83', () => {
+  it('S-81 / FR-026: a blank line keeps the refused entry on its visible textarea line', async () => {
+    // Chief ruling Q1 A (2026-11-01): request index 1 is visible line 3,
+    // because blank textarea lines count even though they are not targets.
+    const reason = 'this entry is a username'
+    writeStatus = 400
+    writeBody = RejectionSchema.parse({
+      code: 'invalid_targets', error: 'invalid targets',
+      target_errors: [{ index: 1, target: '@alice', code: 'username_not_allowed', reason }],
+    })
+    renderPanel()
+    await loaded()
+    await submit('111\n\n@alice')
+    await waitFor(() => expect(messages()).toContain(reason))
+    expect(writes).toEqual([{ policy: 'agent_may_start', targets: ['111', '@alice'], expected_revision: 't30-before' }])
+    const reasonLines = [...new Set(screen.getAllByRole('alert')
+      .flatMap((alert) => [alert, ...alert.querySelectorAll('*')])
+      .flatMap((element) => (element.textContent ?? '').split('\n'))
+      .filter((line) => line.includes(reason)))]
+    // Assert the association, not a particular punctuation or wrapper tag.
+    expect(reasonLines, 'request index 1 must identify visible textarea line 3')
+      .toEqual(expect.arrayContaining([expect.stringMatching(/(?:^|\D)3(?:\D|$)/)]))
+    expect(reasonLines, 'request index + 1 would incorrectly identify blank line 2')
+      .not.toEqual(expect.arrayContaining([expect.stringMatching(/(?:^|\D)2(?:\D|$)/)]))
+    expect(targetsField()).toHaveValue('111\n\n@alice')
+  })
+
+  it('S-81 / FR-026: a corrected second save clears old per-line refusals and notice while pending and after success', async () => {
+    const oldNotice = 'QA first save was refused'
+    const oldReason = 'this entry is a username'
+    writeStatus = 400
+    writeBody = RejectionSchema.parse({
+      code: 'invalid_targets', error: oldNotice,
+      target_errors: [{ index: 1, target: '@alice', code: 'username_not_allowed', reason: oldReason }],
+    })
+    const client = renderPanel()
+    await loaded()
+    await submit('111\n@alice')
+    await waitFor(() => expect(screen.getByText(oldNotice, { exact: true })).toBeVisible())
+    expectIndexedErrors([{ index: 1, reason: oldReason }]) // prove both old displays actually existed
+    const corrected = WriteSchema.parse({
+      outbound: { policy: 'agent_may_start', targets: ['discord:111', 'discord:333'] }, revision: 't30-second-save',
+    })
+    let resolveSecond!: (response: Response) => void
+    const secondResponse = new Promise<Response>((resolve) => { resolveSecond = resolve })
+    fetchMock.mockImplementationOnce(async (input, init) => {
+      expect(input).toBe('/api/v1/channels/discord.qa/outbound')
+      expect(init?.method).toBe('PUT')
+      expect(init?.credentials).toBe('include')
+      writes.push(UpdateSchema.parse(JSON.parse(String(init?.body))))
+      return secondResponse // external HTTP edge: keep the real mutation pending
+    })
+    try {
+      fireEvent.change(targetsField(), { target: { value: '111\n333' } })
+      await act(async () => { fireEvent.click(ownSave()) })
+      await waitFor(() => expect(writes).toHaveLength(2))
+      expect(client.getMutationCache().getAll().at(-1)?.state.status).toBe('pending')
+      expect(ownSave()).toBeDisabled()
+      expect(messages()).not.toContain(oldReason)
+      expect(screen.queryByText(oldNotice, { exact: true })).not.toBeInTheDocument()
+      expect(targetsField()).toHaveValue('111\n333')
+    } finally {
+      // Release even after an assertion fails; no unresolved HTTP work may leak
+      // into the next case. This is cleanup, not a product-error fallback.
+      await act(async () => { resolveSecond(new Response(JSON.stringify(corrected), { status: 200, headers: { 'Content-Type': 'application/json' } })) })
+    }
+    await waitFor(() => expect(client.getMutationCache().getAll().at(-1)?.state.status).toBe('success'))
+    expect(ownSave()).toBeEnabled()
+    expect(messages()).not.toContain(oldReason)
+    expect(screen.queryByText(oldNotice, { exact: true })).not.toBeInTheDocument()
+    expect(targetsField()).toHaveValue('111\n333')
+    expect(client.getQueryData(['channel-outbound', 'discord.qa'])).toEqual({ ...readBody, ...corrected })
+    expect(writes).toEqual([
+      { policy: 'agent_may_start', targets: ['111', '@alice'], expected_revision: 't30-before' },
+      { policy: 'agent_may_start', targets: ['111', '333'], expected_revision: 't30-before' },
+    ])
+  })
+
   it('maps by request index, not duplicate hint or response order, and counts omitted errors', async () => {
     const errors = [
       { index: 7, target: 'same hint', code: 'invalid_id', reason: 'eighth entry is invalid' },
