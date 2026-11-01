@@ -159,7 +159,7 @@ func (s *TaskTriggerScheduler) runHeldFire(ctx context.Context, job *cron.CronJo
 		// job and dropped the tracking.
 		slog.Warn("task_trigger: held scheduled fire not started: the task was deleted",
 			"task_id", taskID, "job_id", job.ID)
-		s.executor.auditHeldFireNotStarted(ctx, taskID, job.ID, heldFireTaskDeleted, err)
+		s.executor.auditHeldFireNotStarted(ctx, taskID, job.ID, heldFireTaskDeleted)
 		return
 	}
 	if err != nil {
@@ -197,7 +197,7 @@ func (s *TaskTriggerScheduler) keepHeldFire(ctx context.Context, taskID, jobID, 
 	s.mu.Unlock()
 	slog.Error("task_trigger: held scheduled fire could not start; kept for the next boot",
 		"task_id", taskID, "job_id", jobID, "reason", reason, "error", err)
-	s.executor.auditHeldFireNotStarted(ctx, taskID, jobID, reason, err)
+	s.executor.auditHeldFireNotStarted(ctx, taskID, jobID, reason)
 }
 
 // settleMissingAgentFire settles a fire whose task's agent is gone: a failed
@@ -215,7 +215,7 @@ func (s *TaskTriggerScheduler) settleMissingAgentFire(ctx context.Context, t *ta
 	}
 	slog.Warn("task_trigger: scheduled fire not started: its agent is gone; failed run recorded",
 		"task_id", t.ID, "job_id", jobID, "agent_id", t.AgentID)
-	s.executor.auditHeldFireNotStarted(ctx, t.ID, jobID, heldFireAgentMissing, errors.New(reason))
+	s.executor.auditHeldFireNotStarted(ctx, t.ID, jobID, heldFireAgentMissing)
 	s.cs.RemoveJob(jobID)
 }
 
@@ -250,7 +250,7 @@ func (s *TaskTriggerScheduler) settleOwedFireOfMissingAgent(ctx context.Context,
 func (s *TaskTriggerScheduler) dropDeletedHeldFire(ctx context.Context, taskID, jobID string, err error) {
 	slog.Warn("task_trigger: held scheduled fire not started: the task was deleted",
 		"task_id", taskID, "job_id", jobID, "error", err)
-	s.executor.auditHeldFireNotStarted(ctx, taskID, jobID, heldFireTaskDeleted, err)
+	s.executor.auditHeldFireNotStarted(ctx, taskID, jobID, heldFireTaskDeleted)
 	s.OnTaskDeleted(taskID)
 	s.cs.RemoveJob(jobID)
 }
@@ -271,17 +271,16 @@ const (
 )
 
 // auditHeldFireNotStarted writes the WARN audit entry for a held fire that
-// did not start.
-func (te *TaskExecutor) auditHeldFireNotStarted(ctx context.Context, taskID, jobID, reason string, err error) {
+// did not start. The entry carries the ids and one fixed reason code only;
+// the underlying error, which can name server paths, goes to the ordinary
+// log at the call site, never to the audit log.
+func (te *TaskExecutor) auditHeldFireNotStarted(ctx context.Context, taskID, jobID, reason string) {
 	if te.agentLoop == nil {
 		slog.Error("task_trigger: no agent loop, audit entry for a held fire not written",
 			"task_id", taskID, "job_id", jobID, "reason", reason)
 		return
 	}
 	fields := map[string]any{"task_id": taskID, "job_id": jobID, "reason": reason}
-	if err != nil {
-		fields["error"] = err.Error()
-	}
 	audit.Emit(ctx, te.agentLoop.AuditLogger(), audit.EventTaskTriggerFireNotStarted, audit.SeverityWarn, fields)
 }
 
