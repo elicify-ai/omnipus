@@ -1,28 +1,14 @@
 package channels
 
-// outbound_hash_test.go — T-18, the hash/revision split (channels-spec-r8
-// T-18, FR-015, FR-088 row "FR-088 revision", S-23's unit half; mutation-list
-// entry "include Outbound in toChannelHashes → S-23 fails").
+// T-18, FR-015 and S-23: lifecycle comparisons use the adapter view, while
+// the user-facing FR-088 conflict token includes outbound. Accepted Q8 names
+// those two APIs: ChannelRevision is the pairing/adapter-view hash;
+// config.ChannelConfigRevision is the whole-instance conflict token.
 //
-// Oracle (spec, "Persisted configuration" table):
-//   - the RESTART hash (toChannelHashes) compares the ADAPTER VIEW
-//     (config.ChannelAdapterView — the instance with Outbound cleared): a
-//     list-only save locks no pairing order, stamps no generation, restarts
-//     nothing (FR-015, M-01);
-//   - the FR-088 revision token (ChannelRevision) stays computed over the
-//     whole instance INCLUDING Outbound — it is deliberately NOT the adapter
-//     view: a concurrent outbound change must make another save stale (409).
-//
-// Today both are the same function (ChannelRevision = toChannelHashes()[name]
-// and the hash marshals the whole instance), so:
-//   - the equality row (restart hash ignores a list-only change) FAILS — RED;
-//   - the difference row (the revision token moves on an outbound-only
-//     change) PASSES today and guards the fix's direction: an implementation
-//     that "fixes" the hash by dropping Outbound from the revision token
-//     fails this row.
-//
-// The integration half — adapter identity, generation, fingerprint and the
-// active pairing across a real reload — is T-18b (S-23), a separate file.
+// Oracles come from the spec's "Persisted configuration" table, not observed
+// hash values: adding outbound or changing its targets moves only the conflict
+// token. A connection-field change still moves the adapter-view hash.
+// The real reload/pairing lifecycle boundary is T-18b, in a separate file.
 
 import (
 	"testing"
@@ -71,13 +57,11 @@ func TestT18_ToChannelHashes_ListOnlyOutboundChangeDoesNotMoveTheRestartHash(t *
 		"T-18: the adapter view still sees non-outbound changes")
 }
 
-func TestT18_ChannelRevision_OutboundChangeMovesTheConflictToken(t *testing.T) {
-	// FR-088: the revision token is deliberately NOT the adapter view — an
-	// outbound-only change must move it so a concurrent save turns stale
-	// (409). Passes today (the token marshals the whole instance); it fails
-	// any fix that drops Outbound from the token.
-	noOutbound := ChannelRevision(t18Config(false), "discord")
-	withOutbound := ChannelRevision(t18Config(true), "discord")
+func TestT18_ChannelConfigRevision_OutboundChangeMovesTheConflictToken(t *testing.T) {
+	// FR-088 / accepted Q8: this is the conflict token, not the pairing hash.
+	// An outbound-only save must make a concurrent save stale (409).
+	noOutbound := config.ChannelConfigRevision(t18Config(false), "discord")
+	withOutbound := config.ChannelConfigRevision(t18Config(true), "discord")
 
 	require.NotEqual(t, noOutbound, withOutbound,
 		"T-18/FR-088: an outbound-only change must move the revision token, "+
@@ -88,10 +72,33 @@ func TestT18_ChannelRevision_OutboundChangeMovesTheConflictToken(t *testing.T) {
 	alteredInst := altered.Channels["discord"]
 	alteredInst.Outbound.Targets = []string{"discord:999"}
 	altered.Channels["discord"] = alteredInst
-	require.NotEqual(t, withOutbound, ChannelRevision(altered, "discord"),
+	require.NotEqual(t, withOutbound, config.ChannelConfigRevision(altered, "discord"),
 		"T-18/FR-088: a target-list change moves the revision token")
+}
 
-	// Unknown instance: empty revision, not a crash.
+func TestT18_ChannelRevision_OutboundOnlyChangePreservesThePairingToken(t *testing.T) {
+	// FR-015 / Persisted configuration: the pairing token must not move on
+	// an outbound-only save, otherwise an active pairing would be interrupted.
+	noOutbound := ChannelRevision(t18Config(false), "discord")
+	withOutbound := ChannelRevision(t18Config(true), "discord")
+	require.Equal(t, noOutbound, withOutbound,
+		"T-18/FR-015: adding only outbound must preserve the pairing token")
+
+	altered := t18Config(true)
+	alteredInst := altered.Channels["discord"]
+	alteredInst.Outbound.Targets = []string{"discord:999"}
+	altered.Channels["discord"] = alteredInst
+	require.Equal(t, withOutbound, ChannelRevision(altered, "discord"),
+		"T-18/FR-015: changing only targets must preserve the pairing token")
+
+	// Positive control: a genuine connection change still invalidates pairing.
+	alteredInst.AllowFrom = []string{"new-user"}
+	altered.Channels["discord"] = alteredInst
+	require.NotEqual(t, withOutbound, ChannelRevision(altered, "discord"),
+		"T-18/FR-015: the pairing token must still detect a connection-field change")
+
+	// Preserve the original unknown-instance adapter-revision control. It is
+	// not a claim about the config API's separate absent conflict token.
 	require.Empty(t, ChannelRevision(t18Config(true), "no-such-instance"),
-		"FR-088: an unknown instance has no revision")
+		"T-18: an unknown instance has no adapter revision")
 }
