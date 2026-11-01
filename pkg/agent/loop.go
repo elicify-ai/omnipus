@@ -743,6 +743,10 @@ func NewAgentLoop(
 	provider providers.LLMProvider,
 ) (*AgentLoop, error) {
 	nal := &newAgentLoop{cfg: cfg, msgBus: msgBus, provider: provider}
+	// Parse the provider catalog once at construction: every request's
+	// effort plan reads it, and a first parse inside the recap's one overall
+	// time limit would spend that budget before the first call (S-97).
+	_ = providers.ProviderCatalog()
 
 	// CONV saved-chat cutover boot step (architect Q10/Q11): convert any
 	// pre-cutover saved chat in the shared archive BEFORE registry/per-agent
