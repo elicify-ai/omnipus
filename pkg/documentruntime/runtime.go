@@ -47,7 +47,7 @@ type Manifest struct {
 	Platforms          []string      `json:"platforms"`
 }
 
-type Layout struct{ Prefix, Bin, Lib, Skills, Manifest, Cache string }
+type Layout struct{ Prefix, Bin, Lib, Manifest, Cache string }
 
 func ResolveLayout(dataRoot, revision, workerID string) (Layout, error) {
 	if !filepath.IsAbs(dataRoot) {
@@ -60,7 +60,7 @@ func ResolveLayout(dataRoot, revision, workerID string) (Layout, error) {
 		return Layout{}, errors.New("document worker ID must be a bounded path-safe identifier")
 	}
 	prefix := filepath.Join(filepath.Clean(dataRoot), "toolchains", "documents", revision)
-	return Layout{Prefix: prefix, Bin: filepath.Join(prefix, "bin"), Lib: filepath.Join(prefix, "lib"), Skills: filepath.Join(prefix, "skills"), Manifest: filepath.Join(prefix, "manifest.json"), Cache: filepath.Join(filepath.Clean(dataRoot), "cache", "documents", workerID)}, nil
+	return Layout{Prefix: prefix, Bin: filepath.Join(prefix, "bin"), Lib: filepath.Join(prefix, "lib"), Manifest: filepath.Join(prefix, "manifest.json"), Cache: filepath.Join(filepath.Clean(dataRoot), "cache", "documents", workerID)}, nil
 }
 
 func WorkerSandboxRules(layout Layout) (readExec []string, writable []string) {
