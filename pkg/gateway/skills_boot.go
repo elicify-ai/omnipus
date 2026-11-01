@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
@@ -28,6 +29,24 @@ import (
 // wiring point can emit it (§8.5 audit-delivery rule). One-shot per start:
 // the replay clears it.
 var skillsBootReport skills.SyncReport
+
+// errSkillSecretStoreMissing is the secret check's answer when the gateway
+// has no credential store to read: the check cannot run, so every skill change
+// is refused SECRET_CHECK_UNAVAILABLE (§7.4 fail closed).
+var errSkillSecretStoreMissing = errors.New("credential store not available")
+
+// wireSkillSecretCheck connects the skills save check (§7.4) to the gateway's
+// credential store. A nil store fails closed: the provider answers an error, so
+// SECRET_CHECK_UNAVAILABLE fires instead of an unchecked commit.
+func wireSkillSecretCheck(store *credentials.Store) {
+	if store == nil {
+		skills.SecretValuesProvider = func() ([]credentials.NamedValue, error) {
+			return nil, errSkillSecretStoreMissing
+		}
+		return
+	}
+	skills.SecretValuesProvider = store.SensitiveNamedValues
+}
 
 // bootSkills is the start-up step (§8.5). It never stops the gateway: the
 // caller logs a returned error and the step is retried at the next start.

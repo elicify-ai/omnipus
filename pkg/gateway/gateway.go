@@ -603,6 +603,9 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 	if rc.err != nil {
 		return rc.err, true
 	}
+	// Skills secret check (skills spec r15 §7.4): every skill change is
+	// checked against the stored secret values from this store.
+	wireSkillSecretCheck(rc.credStore)
 
 	// #155: derive the audit-chain HMAC key from the master key and
 	// install it process-wide BEFORE constructing the agent loop. The
