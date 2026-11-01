@@ -34,9 +34,11 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import {
   installSkillFromFile,
   installSkillBySlug,
+  LOCAL_CHANGES_CONFIRMATION_REQUIRED,
   searchSkills,
   fetchSkillMarketplaceStatus,
   fetchSkills,
@@ -54,6 +56,8 @@ interface SkillBrowserProps {
 
 interface PendingInstall {
   file: File
+  /** Installed skill id this file would replace (the file name without extension). */
+  skillId: string
   /** Revision of the installed skill shown when this file was selected. */
   revision?: string
   /** Detected capabilities extracted from SKILL.md frontmatter (best-effort). */
@@ -77,6 +81,21 @@ function extractCapabilities(text: string): string[] {
     .split('\n')
     .map((l) => l.replace(/^\s*-\s*/, '').trim())
     .filter(Boolean)
+}
+
+/**
+ * A reinstall waiting for the person to confirm replacing local changes
+ * (skills spec r15 §13, FR-070). `proceed` repeats the install with
+ * replace_local_changes set.
+ */
+interface LocalChangesConfirm {
+  slug: string
+  proceed: () => void
+}
+
+/** True when a 409 refused a replacement only because local changes were not confirmed. */
+function isLocalChangesRefusal(err: unknown): boolean {
+  return isApiError(err) && err.status === 409 && err.code === LOCAL_CHANGES_CONFIRMATION_REQUIRED
 }
 
 /** useDebouncedValue returns `value` after it has been stable for `delayMs`. */
@@ -138,6 +157,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
 
   const [isInstalling, setIsInstalling] = useState(false)
   const [pendingInstall, setPendingInstall] = useState<PendingInstall | null>(null)
+  const [localChangesConfirm, setLocalChangesConfirm] = useState<LocalChangesConfirm | null>(null)
 
   // ── Search state ──────────────────────────────────────────────────────────
   const [query, setQuery] = useState('')
@@ -150,6 +170,11 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
     queryFn: fetchSkills,
     enabled: open,
   })
+  // Skill names ignore letter case (r15 §5.13): installing `foo` over `Foo`
+  // replaces `Foo`, so the replacement's revision and local-changes flag come
+  // from that row.
+  const findInstalled = (id: string) =>
+    installedSkills.find((skill) => skill.id.toLowerCase() === id.toLowerCase())
 
   // If a search/install returns 409 mid-session (the marketplace was disabled
   // after the dialog opened), flip to file-only locally so we stop offering a
@@ -163,6 +188,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
       installAbortRef.current?.abort()
       installAbortRef.current = null
       setPendingInstall(null)
+      setLocalChangesConfirm(null)
       setIsInstalling(false)
       setQuery('')
       setInstalledSlugs(new Set())
@@ -228,18 +254,28 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
 
   const { mutate: doInstallBySlug, variables: installingSlug, isPending: isSlugInstalling } =
     useMutation({
-      mutationFn: ({ slug, version }: { slug: string; version?: string }) =>
-        installSkillBySlug(
-          slug,
-          version,
-          installedSkills.find((skill) => skill.id === slug)?.revision,
-        ),
+      mutationFn: ({ slug, version, replaceLocalChanges }: { slug: string; version?: string; replaceLocalChanges?: boolean }) => {
+        const revision = findInstalled(slug)?.revision
+        return replaceLocalChanges
+          ? installSkillBySlug(slug, version, revision, true)
+          : installSkillBySlug(slug, version, revision)
+      },
       onSuccess: (_skill, { slug }) => {
         setInstalledSlugs((prev) => new Set(prev).add(slug))
         queryClient.invalidateQueries({ queryKey: ['skills'] })
         addToast({ message: `Skill "${slug}" installed successfully.`, variant: 'success' })
       },
-      onError: (err: unknown, { slug }) => {
+      onError: (err: unknown, { slug, version }) => {
+        // The server found local changes this page did not know about (for
+        // example an outside edit recorded at install time): ask, then retry
+        // with the confirmation.
+        if (isLocalChangesRefusal(err)) {
+          setLocalChangesConfirm({
+            slug,
+            proceed: () => doInstallBySlug({ slug, version, replaceLocalChanges: true }),
+          })
+          return
+        }
         // A 409 whose body mentions "marketplace" means the marketplace was
         // disabled mid-session — downgrade to file-only and use a clear message
         // distinct from the "already installed" 409.
@@ -249,7 +285,11 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
           return
         }
         let msg: string
-        if (isApiError(err) && err.status === 409) {
+        if (isApiError(err) && err.status === 409 && err.code) {
+          // A coded refusal (BUILTIN_NAME_RESERVED, SKILL_CHANGED, …) carries
+          // its own exact text (r15 §5.10).
+          msg = err.userMessage
+        } else if (isApiError(err) && err.status === 409) {
           msg = `Skill "${slug}" is already installed.`
         } else if (isApiError(err) && err.status === 502) {
           msg = 'Skill registry is unavailable, try again.'
@@ -288,31 +328,41 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
     }
     if (selection !== fileSelectionRef.current || !open) return
     const skillId = file.name.slice(0, file.name.lastIndexOf('.'))
-    const revision = installedSkills.find((skill) => skill.id === skillId)?.revision
-    setPendingInstall({ file, capabilities, revision })
+    const revision = findInstalled(skillId)?.revision
+    setPendingInstall({ file, skillId, capabilities, revision })
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
-  async function handleConfirmInstall() {
+  async function handleConfirmInstall(replaceLocalChanges = false) {
     if (!pendingInstall || isInstalling) return
-    const { file, revision } = pendingInstall
+    const { file, skillId, revision } = pendingInstall
+    const askToReplace = () => setLocalChangesConfirm({
+      slug: findInstalled(skillId)?.id ?? skillId,
+      proceed: () => void handleConfirmInstall(true),
+    })
+    if (!replaceLocalChanges && findInstalled(skillId)?.has_local_changes) {
+      askToReplace()
+      return
+    }
     const controller = new AbortController()
     installAbortRef.current = controller
     setIsInstalling(true)
     try {
-      await installSkillFromFile(
-        file,
-        activeSessionId ?? generateId(),
-        revision,
-        controller.signal,
-      )
+      const uploadContextId = activeSessionId ?? generateId()
+      if (replaceLocalChanges) {
+        await installSkillFromFile(file, uploadContextId, revision, controller.signal, true)
+      } else {
+        await installSkillFromFile(file, uploadContextId, revision, controller.signal)
+      }
       if (controller.signal.aborted) return
       setPendingInstall(null)
       queryClient.invalidateQueries({ queryKey: ['skills'] })
       addToast({ message: `Skill "${file.name}" installed successfully.`, variant: 'success' })
     } catch (err: unknown) {
       if (controller.signal.aborted) return
-      if (isApiError(err) && err.status === 409) {
+      if (isLocalChangesRefusal(err)) {
+        askToReplace()
+      } else if (isApiError(err) && err.status === 409) {
         addToast({
           message: 'This installed skill changed after you reviewed it. Close and reopen the browser before replacing it.',
           variant: 'error',
@@ -343,6 +393,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
     installAbortRef.current = null
     setIsInstalling(false)
     setPendingInstall(null)
+    setLocalChangesConfirm(null)
   }
 
   return (
@@ -460,9 +511,16 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
                         size="sm"
                         variant={installed ? 'outline' : 'default'}
                         disabled={installed || rowInstalling}
-                        onClick={() =>
+                        onClick={() => {
+                          if (findInstalled(r.slug)?.has_local_changes) {
+                            setLocalChangesConfirm({
+                              slug: r.slug,
+                              proceed: () => doInstallBySlug({ slug: r.slug, version: r.version, replaceLocalChanges: true }),
+                            })
+                            return
+                          }
                           doInstallBySlug({ slug: r.slug, version: r.version })
-                        }
+                        }}
                         className="shrink-0 gap-[var(--space-1)]"
                         data-testid={`skill-install-${r.slug}`}
                       >
@@ -625,6 +683,20 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
         </DialogContent>
       </Dialog>
 
+      {/* Reinstall over local changes (r15 §13, FR-070) */}
+      <ConfirmDialog
+        open={localChangesConfirm !== null}
+        onOpenChange={(o) => { if (!o) setLocalChangesConfirm(null) }}
+        title="Replace local changes?"
+        description={`'${localChangesConfirm?.slug ?? ''}' has local changes. Reinstalling replaces them; they stay in the version history.`}
+        confirmLabel="Replace"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          const confirmed = localChangesConfirm
+          setLocalChangesConfirm(null)
+          confirmed?.proceed()
+        }}
+      />
     </>
   )
 }
