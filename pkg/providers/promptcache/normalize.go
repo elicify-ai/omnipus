@@ -107,7 +107,50 @@ func NormalizeUsage(providerID string, raw []byte) (protocoltypes.UsageInfo, err
 		return protocoltypes.UsageInfo{}, errors.New("total token counts exceed the supported integer range")
 	}
 	u.TotalTokens = total
+	u.ReasoningTokens = reasoningCount(fields, u.CompletionTokens)
 	return u, nil
+}
+
+// reasoningCount reads the reported reasoning-token count (effort-levels
+// spec FR-024): chat completions' completion_tokens_details.reasoning_tokens
+// or the Responses form output_tokens_details.reasoning_tokens. nil when no
+// count was reported (absent is never 0); a reported zero stays 0. The count
+// is a subset of the output, so an over-report is capped at the output count.
+// It is never added to any total.
+func reasoningCount(fields map[string]json.RawMessage, output int) *int {
+	for _, details := range []string{"completion_tokens_details", "output_tokens_details"} {
+		n, ok := usageCountPresent(fields, details, "reasoning_tokens")
+		if !ok {
+			continue
+		}
+		n = min(n, output)
+		return &n
+	}
+	return nil
+}
+
+// usageCountPresent is usageCount that also reports whether the path held a
+// valid non-negative integer.
+func usageCountPresent(fields map[string]json.RawMessage, path ...string) (int, bool) {
+	for i, key := range path {
+		raw, ok := fields[key]
+		if !ok {
+			return 0, false
+		}
+		if i == len(path)-1 {
+			n, err := strconv.Atoi(string(raw))
+			if err != nil || n < 0 {
+				return 0, false
+			}
+			return n, true
+		}
+		var nested map[string]json.RawMessage
+		if json.Unmarshal(raw, &nested) != nil {
+			return 0, false
+		}
+		fields = nested
+	}
+	return 0, false
 }
 
 // addUsageCounts checks before adding so an overflow cannot become accounting.

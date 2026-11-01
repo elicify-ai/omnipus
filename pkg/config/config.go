@@ -603,6 +603,9 @@ type FallbackModel struct {
 	// "openai"). Distinct from any "provider/" prefix embedded in Model —
 	// Provider is the credential/endpoint selection key.
 	Provider string `json:"provider,omitempty"`
+	// ReasoningEffort is this fallback's own stored effort (effort-levels spec
+	// FR-021, FR-029). A chat or conversation value never reaches a fallback.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // FallbackModelSlice is the JSON wire shape for an agent's fallback chain.
@@ -618,6 +621,12 @@ type AgentConfig struct {
 	Description string            `json:"description,omitempty"`
 	Home        string            `json:"workspace,omitempty"`
 	Model       *AgentModelConfig `json:"model,omitempty"`
+	// ReasoningEffort is the agent primary model's stored effort
+	// (effort-levels spec FR-029): "" = Not set (an agent riding the default
+	// model inherits the default's effort), "provider_default", a catalog
+	// level name, "on" or "off". Written with the model pair in the same
+	// config write; REST writers never check it against the catalog.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// MaxToolIterations caps the LLM/tool rounds PER TURN for this agent
 	// (one chat message, board task, or heartbeat run = one turn; the turn
 	// pauses at the cap and can be continued). This is the agent's OWN value:
@@ -1049,6 +1058,29 @@ type AgentDefaults struct {
 	// own Provider so the fallback can route through a different provider than
 	// the primary.
 	RecapFallbackModels FallbackModelSlice `json:"recap_fallback_models,omitempty"`
+
+	// RecapProvider is the recap model's provider (#1291, effort-levels spec
+	// FR-063), so its catalog row can be found.
+	RecapProvider string `json:"recap_provider,omitempty" env:"OMNIPUS_AGENTS_DEFAULTS_RECAP_PROVIDER"`
+
+	// RecapReasoningEffort is the recap model's own effort; absent or "" means
+	// Off (FD-19, FR-072), never "inherit".
+	RecapReasoningEffort string `json:"recap_reasoning_effort,omitempty"`
+
+	// Recap limits (effort-levels spec "Recap limits", FD-20, FD-23, FR-074).
+	// Each is read through its getter (recap_limits.go), which returns the
+	// default when the key is missing (or 0, except RecapStreamRetries where 0
+	// is a valid choice) and clamps an out-of-range saved value in memory.
+	RecapMaxOutputTokens            int  `json:"recap_max_output_tokens,omitempty"`
+	RecapInputTokens                int  `json:"recap_input_tokens,omitempty"`
+	RecapSummaryWords               int  `json:"recap_summary_words,omitempty"`
+	RecapListItems                  int  `json:"recap_list_items,omitempty"`
+	RecapFallbackContextChars       int  `json:"recap_fallback_context_chars,omitempty"`
+	RecapTimeoutSeconds             int  `json:"recap_timeout_seconds,omitempty"`
+	RecapStreamRetries              *int `json:"recap_stream_retries,omitempty"`
+	RecapRetryPauseMs               int  `json:"recap_retry_pause_ms,omitempty"`
+	RecapCharsPerToken              int  `json:"recap_chars_per_token,omitempty"`
+	BootstrapRecapMinSpacingSeconds int  `json:"bootstrap_recap_min_spacing_seconds,omitempty"`
 }
 
 // DefaultModel is the persisted (provider, model) pair at
@@ -1062,6 +1094,9 @@ type AgentDefaults struct {
 type DefaultModel struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	// ReasoningEffort is the default model's stored effort (effort-levels spec
+	// FR-029); an agent primary that rides the default model inherits it.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // ChannelIdentity identifies whether an inbound connection acts on behalf of an
@@ -1092,12 +1127,11 @@ type ChannelInstanceConfig struct {
 	WorkspaceID string `json:"workspace_id,omitempty"`
 
 	// --- Common per-channel fields shared across multiple channel types ---
-	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	Typing             TypingConfig        `json:"typing,omitempty"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id,omitempty"`
-	Proxy              string              `json:"proxy,omitempty"`
+	AllowFrom    FlexibleStringSlice `json:"allow_from,omitempty"`
+	GroupTrigger GroupTriggerConfig  `json:"group_trigger,omitempty"`
+	Typing       TypingConfig        `json:"typing,omitempty"`
+	Placeholder  PlaceholderConfig   `json:"placeholder,omitempty"`
+	Proxy        string              `json:"proxy,omitempty"`
 	// token_ref is used by Telegram (bot token ref) and Weixin (account token ref).
 	TokenRef string `json:"token_ref,omitempty"`
 	// base_url is used by Telegram (API base URL) and Weixin (WeChat base URL).
@@ -1434,8 +1468,7 @@ type ModelConfig struct {
 	// call that keeps streaming, however slowly, is never cut. Applies to the
 	// streaming providers only; non-streaming calls stay under RequestTimeout.
 	StreamStallTimeout int            `json:"stream_stall_timeout,omitempty"`
-	ThinkingLevel      string         `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
-	ExtraBody          map[string]any `json:"extra_body,omitempty"`     // Additional fields to inject into request body
+	ExtraBody          map[string]any `json:"extra_body,omitempty"` // Additional fields to inject into request body
 
 	// APIKeyRef references a named credential in credentials.json (e.g. "ANTHROPIC_API_KEY").
 	// At runtime the system resolves the reference, decrypts the value, and injects it
