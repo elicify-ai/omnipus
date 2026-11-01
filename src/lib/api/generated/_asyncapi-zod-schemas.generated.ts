@@ -12,6 +12,7 @@ export const HistoryEntryOrigin = z
   .object({
     position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
     entry_id: z.string().min(1).optional(),
+    turn_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -126,6 +127,16 @@ export const RoomDeliveryState = z
   })
   .strict();
 
+export const MediaPart = z
+  .object({
+    type: z.enum(["image", "audio", "video", "file"]),
+    url: z.string().min(1),
+    filename: z.string().min(1),
+    content_type: z.string().min(1),
+    caption: z.string().optional(),
+  })
+  .strict();
+
 export const RoomEntry = z
   .object({
     id: z.string().min(1).max(128),
@@ -134,6 +145,7 @@ export const RoomEntry = z
     client_message_id: z.string().min(1).max(128).optional(),
     author: RoomEntryAuthor,
     text: z.string().max(5242880),
+    attachments: z.array(MediaPart).max(16).optional(),
     addressees: z.array(z.string().min(1).max(128)),
     after_pause: z.boolean(),
     deliveries: z.array(RoomDeliveryState),
@@ -198,6 +210,7 @@ export const RoomMetaFrame = z
     read_only_reason: z.string().min(1).max(200).optional(),
     allocated_cost_micro_usd: z.number().int().min(0),
     allocated_cost_unpriced: z.boolean(),
+    invitation_context_status: z.enum(["generating", "ready", "unavailable"]).optional(),
   })
   .strict();
 
@@ -450,6 +463,14 @@ export const ToolResultRef = z
   })
   .strict();
 
+export const HistoryResultPreview = z
+  .object({
+    _history_preview: z.literal(true),
+    original_size_bytes: z.number().int().min(51201),
+    preview: z.string().max(4096),
+  })
+  .strict();
+
 export const DelegationFailure = z
   .object({
     error: z.literal("delegation_denied"),
@@ -632,6 +653,7 @@ export const ReplayMessageFrame = z
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
     content: z.string(),
+    content_original_size_bytes: z.number().int().min(65537).optional(),
     role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
     reply_to_message_id: z.string().min(1).optional(),
@@ -789,16 +811,6 @@ export const LibraryChangedFrame = z
   })
   .strict();
 
-export const MediaPart = z
-  .object({
-    type: z.enum(["image", "audio", "video", "file"]),
-    url: z.string().min(1),
-    filename: z.string().min(1),
-    content_type: z.string().min(1),
-    caption: z.string().optional(),
-  })
-  .strict();
-
 export const MediaFrame = z
   .object({
     history_origin: HistoryEntryOrigin.optional(),
@@ -858,6 +870,8 @@ export const AskUserQuestionCard = z
     card_id: z.string().min(1),
     session_id: z.string().min(1),
     agent_id: z.string(),
+    room_ref: RoomRef.optional(),
+    origin_label: z.string().min(1).max(200).optional(),
     status: z.enum(["pending", "answered", "cancelled"]),
     created_at: z.string(),
     default_safe_at: z.string().optional(),
@@ -1588,9 +1602,10 @@ export const SessionHistoryPageInfo = z
     row_count: z.number().int().min(0),
     source_group_count: z.number().int().min(0).max(100),
     soft_byte_budget: z.number().int().min(1),
+    byte_ceiling: z.number().int().min(1),
     projected_bytes: z.number().int().min(0),
     byte_budget_exceeded: z.boolean(),
-    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget"]),
+    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget", "byte_ceiling"]),
     budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
     first_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
     last_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),

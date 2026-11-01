@@ -177,6 +177,7 @@ type SessionDetail = {
         row_count: number;
         source_group_count: number;
         soft_byte_budget: number;
+        byte_ceiling: number;
         projected_bytes: number;
         byte_budget_exceeded: boolean;
         stop_reason:
@@ -185,7 +186,8 @@ type SessionDetail = {
           | "clear"
           | "end"
           | "range_end"
-          | "byte_budget";
+          | "byte_budget"
+          | "byte_ceiling";
         budget_override?: ("height_floor" | "atomic_group") | undefined;
         first_position?: string | undefined;
         last_position?: string | undefined;
@@ -248,6 +250,7 @@ type Message = {
   view_membership?: ("chat" | "model" | "both") | undefined;
   role?: ("user" | "assistant" | "system") | undefined;
   content?: string | undefined;
+  content_original_size_bytes?: number | undefined;
   summary?: string | undefined;
   timestamp: string;
   tokens?: number | undefined;
@@ -387,6 +390,7 @@ type Message = {
           | {
               position: string;
               entry_id?: string | undefined;
+              turn_id?: string | undefined;
             }
           | undefined;
         type: "subagent_end";
@@ -536,6 +540,7 @@ type HelperEvent = {
 type history_origin = {
   position: string;
   entry_id?: string | undefined;
+  turn_id?: string | undefined;
 };
 type subagent_start = {
   history_origin?: history_origin | undefined;
@@ -618,6 +623,7 @@ type subagent_end = {
     | {
         position: string;
         entry_id?: string | undefined;
+        turn_id?: string | undefined;
       }
     | undefined;
   type: "subagent_end";
@@ -657,6 +663,7 @@ type page_info = {
   row_count: number;
   source_group_count: number;
   soft_byte_budget: number;
+  byte_ceiling: number;
   projected_bytes: number;
   byte_budget_exceeded: boolean;
   stop_reason:
@@ -665,7 +672,8 @@ type page_info = {
     | "clear"
     | "end"
     | "range_end"
-    | "byte_budget";
+    | "byte_budget"
+    | "byte_ceiling";
   budget_override?: ("height_floor" | "atomic_group") | undefined;
   first_position?: string | undefined;
   last_position?: string | undefined;
@@ -723,6 +731,7 @@ type LibraryEntry = {
   is_knowledge_base?: boolean | undefined;
   is_text_editable: boolean;
   preview_profile?: ("workspace" | "mail_restricted") | undefined;
+  chat_copy?: boolean | undefined;
   preview_scripts_allowed?: boolean | undefined;
 };
 type LibraryEntryMount = {
@@ -3462,6 +3471,33 @@ type agent = {
   workspace_id: string;
   agent_id: string;
 };
+type Room = {
+  id: string;
+  workspace_id: string;
+  kind: "team" | "squad" | "adhoc";
+  name: string;
+  members: Array<string>;
+  muted: Array<string>;
+  paused: boolean;
+  generation: number;
+  origin_session_id?: string | undefined;
+  read_only_reason?: string | undefined;
+  hidden: boolean;
+  allocated_cost_micro_usd: number;
+  allocated_cost_unpriced: boolean;
+  needs_attention: boolean;
+  invitation_context_status?: RoomInvitationStatus | undefined;
+  invitation_context?: RoomInvitationContext | undefined;
+};
+type RoomInvitationStatus = "generating" | "ready" | "unavailable";
+type RoomInvitationContext = {
+  status: RoomInvitationStatus;
+  text?: string | undefined;
+  author_agent_id: string;
+  generated_at?: string | undefined;
+  cost_micro_usd?: number | undefined;
+  cost_unpriced?: boolean | undefined;
+};
 type AgentDependencyList = {
   agent_id: string;
   dependencies: Array<AgentDependency>;
@@ -3904,6 +3940,7 @@ export const history_origin: z.ZodType<history_origin> = z.object({
     .max(47)
     .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
   entry_id: z.string().min(1).optional(),
+  turn_id: z.string().min(1).optional(),
 });
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
@@ -3937,6 +3974,7 @@ export const Message: z.ZodType<Message> = z.object({
   view_membership: z.enum(["chat", "model", "both"]).optional(),
   role: z.enum(["user", "assistant", "system"]).optional(),
   content: z.string().optional(),
+  content_original_size_bytes: z.number().int().gte(65537).optional(),
   summary: z.string().optional(),
   timestamp: z.string().datetime({ offset: true }),
   tokens: z.number().int().gte(0).optional(),
@@ -4086,6 +4124,7 @@ export const Message: z.ZodType<Message> = z.object({
             .max(47)
             .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
           entry_id: z.string().min(1).optional(),
+          turn_id: z.string().min(1).optional(),
         })
         .optional(),
       type: z.literal("subagent_end"),
@@ -4213,6 +4252,7 @@ export const subagent_end: z.ZodType<subagent_end> = z.object({
         .max(47)
         .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
       entry_id: z.string().min(1).optional(),
+      turn_id: z.string().min(1).optional(),
     })
     .optional(),
   type: z.literal("subagent_end"),
@@ -4265,6 +4305,7 @@ export const SessionDetail: z.ZodType<SessionDetail> = z.object({
       row_count: z.number().int().gte(0),
       source_group_count: z.number().int().gte(0).lte(100),
       soft_byte_budget: z.number().int().gte(1),
+      byte_ceiling: z.number().int().gte(1),
       projected_bytes: z.number().int().gte(0),
       byte_budget_exceeded: z.boolean(),
       stop_reason: z.enum([
@@ -4274,6 +4315,7 @@ export const SessionDetail: z.ZodType<SessionDetail> = z.object({
         "end",
         "range_end",
         "byte_budget",
+        "byte_ceiling",
       ]),
       budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
       first_position: z
@@ -4352,6 +4394,7 @@ export const page_info: z.ZodType<page_info> = z.object({
   row_count: z.number().int().gte(0),
   source_group_count: z.number().int().gte(0).lte(100),
   soft_byte_budget: z.number().int().gte(1),
+  byte_ceiling: z.number().int().gte(1),
   projected_bytes: z.number().int().gte(0),
   byte_budget_exceeded: z.boolean(),
   stop_reason: z.enum([
@@ -4361,6 +4404,7 @@ export const page_info: z.ZodType<page_info> = z.object({
     "end",
     "range_end",
     "byte_budget",
+    "byte_ceiling",
   ]),
   budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
   first_position: z
@@ -5634,7 +5678,11 @@ export const ActivityEvent: z.ZodType<ActivityEvent> = z
   })
   .passthrough();
 export const uploadFiles_Body = z
-  .object({ session_id: z.string(), files: z.array(z.instanceof(File)) })
+  .object({
+    session_id: z.string(),
+    workspace_id: z.string(),
+    files: z.array(z.instanceof(File)),
+  })
   .partial()
   .passthrough();
 export const UploadedFile: z.ZodType<UploadedFile> = z.object({
@@ -6259,6 +6307,7 @@ export const MediaLibraryEntry = z.object({
   source: z.enum(["user_upload", "tool_output"]),
   refcount: z.number().int().gte(0).optional(),
   last_refcount_seen_at: z.string().datetime({ offset: true }).optional(),
+  library_path: z.string().min(1).optional(),
   status: z.enum(["available", "stranded"]),
 }).strict();
 export const MediaAttachmentRequest = z.object({
@@ -6292,6 +6341,7 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   is_knowledge_base: z.boolean().optional(),
   is_text_editable: z.boolean(),
   preview_profile: z.enum(["workspace", "mail_restricted"]).optional(),
+  chat_copy: z.boolean().optional(),
   preview_scripts_allowed: z.boolean().optional(),
 });
 export const LibraryContentResponse = z.object({
@@ -7498,7 +7548,22 @@ export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
 export const SecretOptionsUpdateRequest = z.object({
   available_in_channel_turns: z.boolean(),
 });
-export const Room = z.object({
+export const RoomInvitationStatus = z.enum([
+  "generating",
+  "ready",
+  "unavailable",
+]);
+export const RoomInvitationContext: z.ZodType<RoomInvitationContext> = z.object(
+  {
+    status: RoomInvitationStatus,
+    text: z.string().min(1).max(4096).optional(),
+    author_agent_id: z.string().min(1).max(128),
+    generated_at: z.string().datetime({ offset: true }).optional(),
+    cost_micro_usd: z.number().int().gte(0).optional(),
+    cost_unpriced: z.boolean().optional(),
+  }
+);
+export const Room: z.ZodType<Room> = z.object({
   id: z.string().min(1).max(128),
   workspace_id: z.string().min(1).max(128),
   kind: z.enum(["team", "squad", "adhoc"]),
@@ -7513,6 +7578,8 @@ export const Room = z.object({
   allocated_cost_micro_usd: z.number().int().gte(0),
   allocated_cost_unpriced: z.boolean(),
   needs_attention: z.boolean(),
+  invitation_context_status: RoomInvitationStatus.optional(),
+  invitation_context: RoomInvitationContext.optional(),
 });
 export const RoomCreateRequest = z.object({
   kind: z.enum(["squad", "adhoc"]),
@@ -7535,7 +7602,8 @@ export const RoomHistoryResponse = z.object({
 }).strict();
 export const RoomMessageRequest = z.object({
   client_message_id: z.string().min(1).max(128),
-  text: z.string().min(1).max(5242880),
+  text: z.string().min(0).max(65536),
+  media: z.array(z.string()).max(16).optional(),
   mentions: z.array(z.string().min(1).max(128)).max(256),
 });
 export const KnowledgeMountConflictError = z.object({
@@ -10649,6 +10717,8 @@ Includes session_start events from all agent stores and task lifecycle events.
     path: "/library/:workspace_id/entries",
     alias: "deleteLibraryEntry",
     description: `Deletes the file or directory at the given workspace-relative path. Deleting a directory removes it and everything under it. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at path.
+
+Chat copies (#1449 D26, FR-086): deleting a file that has an associated chat copy (LibraryEntry.chat_copy; the media entry whose library_path names this file, in the same workspace) also deletes that chat copy, bytes and media entry. Deleting a directory does so for every associated file inside it. Retention owners (session reference counts, group retention) never block an explicit deletion, and nothing recreates a deleted copy. Order: chat copy first, Library file last, so a failure leaves the entry listed and a repeat completes the work; a chat copy that is already gone counts as removed. 204 when both are removed; 500 ErrorResponse &quot;could not delete &lt;name&gt; completely&quot; when either removal failed (the Library file is then still present). Every chat that showed the file then shows it as unavailable. Deleting a group never deletes files (D19).
 `,
     requestFormat: "json",
     parameters: [
@@ -11516,7 +11586,7 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
     method: "post",
     path: "/library/:workspace_id/rename",
     alias: "renameLibraryEntry",
-    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; within this single workspace&#x27;s work tree (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id &#x3D;&#x3D; to_workspace_id &#x3D;&#x3D; {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if &quot;to&quot; begins with a &quot;..&quot; segment anywhere in the path (rejected outright as a sanity check — such a name isn&#x27;t a traversal, but this package&#x27;s hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot; OR &quot;to&quot;&#x27;s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at &quot;to&quot;.
+    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; within this single workspace&#x27;s work tree (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id &#x3D;&#x3D; to_workspace_id &#x3D;&#x3D; {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if &quot;to&quot; begins with a &quot;..&quot; segment anywhere in the path (rejected outright as a sanity check — such a name isn&#x27;t a traversal, but this package&#x27;s hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot; OR &quot;to&quot;&#x27;s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at &quot;to&quot;. A rename keeps a file&#x27;s chat-copy association (#1449 D26): the media entry&#x27;s library_path follows the file.
 `,
     requestFormat: "json",
     parameters: [
@@ -11675,7 +11745,7 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
     method: "post",
     path: "/library/copy",
     alias: "copyLibraryEntry",
-    description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;cp&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+    description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;cp&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. A copy is a new file with no chat-copy association (#1449 D26): deleting the copy removes only the copy.
 `,
     requestFormat: "json",
     parameters: [
@@ -11723,7 +11793,7 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
     method: "post",
     path: "/library/move",
     alias: "moveLibraryEntry",
-    description: `Moves the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id &#x3D;&#x3D; to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;mv&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+    description: `Moves the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id &#x3D;&#x3D; to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;mv&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. Chat copies (#1449 D26): a move inside one workspace keeps a file&#x27;s chat-copy association (the media entry&#x27;s library_path follows the file). A move to another workspace drops it: the moved file becomes an ordinary file there and its chat copy stays in the original workspace.
 `,
     requestFormat: "json",
     parameters: [
@@ -14677,7 +14747,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/sessions/:id/messages",
     alias: "getSessionMessages",
-    description: `Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; bytes alone cannot underfill the floor. An individual group&#x27;s drawn weight may exceed the row target or 100. No lifetime read/rebuild, 503/preparing state or full-history fallback.
+    description: `Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; the soft budget alone cannot underfill the floor. An individual group&#x27;s drawn weight may exceed the row target or 100. A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason byte_ceiling) may stop below min_rows; the first group is always whole. Tool results over 51,200 encoded bytes are shown as a HistoryResultPreview and ordinary message text over 65,536 UTF-8 bytes as a preview with content_original_size_bytes; getSessionHistoryEntry returns the full occurrence (chat-history paging spec, &quot;Amendment 2026-10-27 (founder, #1452 D2)&quot;). No lifetime read/rebuild, 503/preparing state or full-history fallback.
 `,
     requestFormat: "json",
     parameters: [
@@ -14759,6 +14829,62 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 500,
         description: `Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly &quot;This conversation&#x27;s history could not be loaded.&quot; A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress.
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/sessions/:id/messages/:history_position",
+    alias: "getSessionHistoryEntry",
+    description: `Returns the full public projection of exactly one saved history occurrence, addressed by the same opaque same-session history_position a history page carries (chat-history paging spec, &quot;Amendment 2026-10-27 (founder, #1452 D2)&quot;, A2.1/A2.2). It is the same reduction as the page reader after tool-call effects, cancellation and disposition, with display shortening off, at the server&#x27;s current read cut: the response never carries a HistoryResultPreview marker and never carries content_original_size_bytes. It never returns the private archive envelope or a pre-correction value, and the read writes nothing (archive, positions, index, tool_results/ and model context are unchanged). It is a position-addressed read, not a UI navigation destination, an around selector or a message-ID resolver. Authorization is identical to getSessionMessages and is applied in the same order before any position work: the registered auth wrapper (valid cookie, configured user bearer or CLI bearer; invalid or revoked credentials refused), session-ID syntax, main-session eligibility, then session existence/metadata. No new per-user ownership rule is introduced. Refusal checks run in this precedence order: 401, 400 invalid session ID, 404 &quot;session not found&quot;, 400 &quot;invalid history position&quot;, 404 &quot;history position not found&quot;, 410 &quot;history entry expired&quot;. This order does not override the storage-primary rule shared with getSessionMessages: a cleanup storage failure combined with cancellation, an unknown position or any selector error is the sanitized storage 500, never 404 or 410.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "history_position",
+        type: "Path",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+      },
+    ],
+    response: Message,
+    errors: [
+      {
+        status: 400,
+        description: `ErrorResponse.error is exactly &quot;invalid session ID&quot; for a malformed session ID (checked before any session lookup), or exactly &quot;invalid history position&quot; for a malformed, blank, badly encoded, wrong-version or non-47-character position (checked only after the session refusals below).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `ErrorResponse.error is exactly &quot;session not found&quot; for a missing session store, session metadata that does not exist, or a main session the caller is not eligible to read, checked before any position work (also when the position is malformed). Otherwise exactly &quot;history position not found&quot; for an unknown or foreign well-formed position; there is no foreign lookup, and a foreign session&#x27;s expired position is also unknown here.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 410,
+        description: `ErrorResponse.error is exactly &quot;history entry expired&quot;: a same-session position proven expired by its retention tombstone, including a sweep during the read. No content and no other metadata. A corrupt or missing index is never reported as expiry; it is the 500 below.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The existing sanitized errors, all recoverable by retry: session metadata that exists but cannot be read (corruption, permission or I/O) and an unreadable workspace record during the main-session eligibility check use the fixed redacted session-storage error; a required index that is unavailable after the bounded reconciliation check uses exactly &quot;Session history is unavailable. Retry after the operator restores its index.&quot;; other required storage/projection failures, including a cleanup storage failure combined with cancellation, an unknown position or a selector error, use the fixed redacted session-storage error.
 `,
         schema: ErrorResponse,
       },
@@ -16000,10 +16126,9 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "post",
     path: "/upload",
     alias: "uploadFiles",
-    description: `Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.
-Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.
-session_id may be supplied as a query parameter or as a form field before the file parts.
-Returns HTTP 201 on success.
+    description: `Streams multipart file uploads. Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory. Returns HTTP 201 on success.
+
+Two destinations. With workspace_id (query parameter, or a form field before the file parts) each file is stored in that workspace&#x27;s media library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25, FR-016): the chat copy in workspaces/&lt;id&gt;/media/ (returned as a media://workspace/&lt;id&gt;/&lt;uuid&gt; ref) and the Library file under the workspace&#x27;s .library folder; no session is used or created. When both workspace_id and session_id are given, workspace_id routes to the library and session_id is ignored. When the workspace library is unavailable the request fails with 503 and never falls back to the session path. Without workspace_id, session_id (query parameter or form field) is required and files go to ~/.omnipus/uploads/{session_id}/ (legacy path).
 `,
     requestFormat: "form-data",
     parameters: [
@@ -16016,6 +16141,11 @@ Returns HTTP 201 on success.
         name: "session_id",
         type: "Query",
         schema: z.string().optional(),
+      },
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string().min(1).max(128).optional(),
       },
     ],
     response: UploadFilesResponse,
@@ -16033,6 +16163,12 @@ Returns HTTP 201 on success.
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `The workspace media library is unavailable (workspace_id given). Nothing was stored and no session path was used instead.
+`,
         schema: ErrorResponse,
       },
     ],
@@ -17863,6 +17999,7 @@ export const HistoryEntryOrigin = z
   .object({
     position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
     entry_id: z.string().min(1).optional(),
+    turn_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -17977,6 +18114,16 @@ export const RoomDeliveryState = z
   })
   .strict();
 
+export const MediaPart = z
+  .object({
+    type: z.enum(["image", "audio", "video", "file"]),
+    url: z.string().min(1),
+    filename: z.string().min(1),
+    content_type: z.string().min(1),
+    caption: z.string().optional(),
+  })
+  .strict();
+
 export const RoomEntry = z
   .object({
     id: z.string().min(1).max(128),
@@ -17985,6 +18132,7 @@ export const RoomEntry = z
     client_message_id: z.string().min(1).max(128).optional(),
     author: RoomEntryAuthor,
     text: z.string().max(5242880),
+    attachments: z.array(MediaPart).max(16).optional(),
     addressees: z.array(z.string().min(1).max(128)),
     after_pause: z.boolean(),
     deliveries: z.array(RoomDeliveryState),
@@ -18049,6 +18197,7 @@ export const RoomMetaFrame = z
     read_only_reason: z.string().min(1).max(200).optional(),
     allocated_cost_micro_usd: z.number().int().min(0),
     allocated_cost_unpriced: z.boolean(),
+    invitation_context_status: z.enum(["generating", "ready", "unavailable"]).optional(),
   })
   .strict();
 
@@ -18314,6 +18463,14 @@ export const ToolResultRef = z
   })
   .strict();
 
+export const HistoryResultPreview = z
+  .object({
+    _history_preview: z.literal(true),
+    original_size_bytes: z.number().int().min(51201),
+    preview: z.string().max(4096),
+  })
+  .strict();
+
 export const DelegationFailure = z
   .object({
     error: z.literal("delegation_denied"),
@@ -18496,6 +18653,7 @@ export const ReplayMessageFrame = z
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
     content: z.string(),
+    content_original_size_bytes: z.number().int().min(65537).optional(),
     role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
     reply_to_message_id: z.string().min(1).optional(),
@@ -18653,16 +18811,6 @@ export const LibraryChangedFrame = z
   })
   .strict();
 
-export const MediaPart = z
-  .object({
-    type: z.enum(["image", "audio", "video", "file"]),
-    url: z.string().min(1),
-    filename: z.string().min(1),
-    content_type: z.string().min(1),
-    caption: z.string().optional(),
-  })
-  .strict();
-
 export const MediaFrame = z
   .object({
     history_origin: HistoryEntryOrigin.optional(),
@@ -18722,6 +18870,8 @@ export const AskUserQuestionCard = z
     card_id: z.string().min(1),
     session_id: z.string().min(1),
     agent_id: z.string(),
+    room_ref: RoomRef.optional(),
+    origin_label: z.string().min(1).max(200).optional(),
     status: z.enum(["pending", "answered", "cancelled"]),
     created_at: z.string(),
     default_safe_at: z.string().optional(),
@@ -19452,9 +19602,10 @@ export const SessionHistoryPageInfo = z
     row_count: z.number().int().min(0),
     source_group_count: z.number().int().min(0).max(100),
     soft_byte_budget: z.number().int().min(1),
+    byte_ceiling: z.number().int().min(1),
     projected_bytes: z.number().int().min(0),
     byte_budget_exceeded: z.boolean(),
-    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget"]),
+    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget", "byte_ceiling"]),
     budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
     first_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
     last_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),

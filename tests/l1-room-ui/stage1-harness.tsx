@@ -2,7 +2,7 @@
 // or feature switch is mocked. Only HTTP/WebSocket and browser APIs are doubled.
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router'
+import { createMemoryHistory, createRouter, RouterProvider, type RouterHistory } from '@tanstack/react-router'
 import { vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import type {
@@ -189,8 +189,9 @@ async function completeSetupAttaches(socket: TestSocket) {
 }
 
 // not-wire-format: test-server reply ownership, not a gateway request option.
-export async function mountStage1App(path = MAIN_PATH, options: { initialAttachResponse?: 'empty' | 'caller' } = {}) {
-  const history = createMemoryHistory({ initialEntries: [path] })
+export async function mountStage1App(path = MAIN_PATH, options: { initialAttachResponse?: 'empty' | 'caller'; history?: RouterHistory } = {}) {
+  // Default callers retain memory history; a browser-history caller owns its teardown.
+  const history = options.history ?? createMemoryHistory({ initialEntries: [path] })
   const router = createRouter({ routeTree, history, defaultPendingMinMs: 0 })
   await act(async () => { await router.load() })
   const mounted = render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>)

@@ -151,7 +151,18 @@ type approvalOrigin struct {
 	RoomRef *generated.RoomRef
 	// Class ranks the origin for the "inputs consumed" rule below.
 	Class originClass
+	// none marks "no input yet" (the start of a fold), distinct from the
+	// zero value, which is an input with no label: a message typed in the
+	// agent's own chat, a task, an automatic wake.
+	none bool
+	// mixed: the step consumed inputs from more than one source, so its
+	// cards carry no group reference (#1449 D23, D28). Sticky.
+	mixed bool
 }
+
+// noApprovalOrigin is the empty fold start: merging any origin into it
+// yields that origin unchanged.
+var noApprovalOrigin = approvalOrigin{none: true}
 
 // originClass ranks a turn's origins. Spec §6.18: a turn's origin is the set
 // of inputs it consumed, and any consumed channel-person input makes it
@@ -171,12 +182,82 @@ const (
 )
 
 // mergeApprovalOrigin returns the origin a turn carries after it consumed
-// next, under the precedence rule above.
+// next. The LABEL follows the precedence rule above. The GROUP REFERENCE
+// follows #1449 D23 and D28 (founder, 2026-10-28): a card appears in a group
+// only when the step that raised it answers that one group and nothing else.
+// The reference survives only when both sides are requests of the same group;
+// any other input (a message typed in the agent's own chat, a channel
+// message, a task, another agent's message, a request of a second group)
+// drops it for good, and the card stays in the agent's own chat.
 func mergeApprovalOrigin(current, next approvalOrigin) approvalOrigin {
-	if next.Label == "" || next.Class <= current.Class {
+	if next.none {
 		return current
 	}
-	return next
+	if current.none {
+		return next
+	}
+	out := current
+	if next.Label != "" && next.Class > current.Class {
+		out.Label, out.Class = next.Label, next.Class
+	}
+	sameGroup := !current.mixed && !next.mixed && current.RoomRef != nil && next.RoomRef != nil &&
+		current.RoomRef.RoomId == next.RoomRef.RoomId
+	if sameGroup {
+		out.RoomRef = current.RoomRef
+	} else {
+		out.RoomRef, out.mixed = nil, true
+	}
+	return out
+}
+
+// approvalProvenance is currentApprovalOrigin in the shape a tool can carry
+// (#1449 C-I6): the group reference (a copy) and the label.
+func (ts *turnState) approvalProvenance() (*generated.RoomRef, string) {
+	o := ts.currentApprovalOrigin()
+	return o.roomRefCopy(), o.Label
+}
+
+// Metadata keys of a question resume that carries the question's group
+// origin (#1449 C-I6). Only the gateway's resume dispatcher sets them, from
+// the server-held pending set; inbound client frames never carry metadata.
+const (
+	resumeRoomIDKey      = "resume_room_id"
+	resumeRoomNameKey    = "resume_room_name"
+	resumeRequestIDKey   = "resume_room_request_id"
+	resumeOriginLabelKey = "resume_origin_label"
+)
+
+// StampResumeProvenance records a question's provenance on its resume
+// message so the resumed turn carries the same origin.
+func StampResumeProvenance(msg *bus.InboundMessage, ref *generated.RoomRef, label string) {
+	if msg == nil || ref == nil || ref.RoomId == "" || ref.RequestId == "" {
+		return
+	}
+	if msg.Metadata == nil {
+		msg.Metadata = map[string]string{}
+	}
+	msg.Metadata[resumeRoomIDKey] = ref.RoomId
+	msg.Metadata[resumeRoomNameKey] = ref.RoomName
+	msg.Metadata[resumeRequestIDKey] = ref.RequestId
+	msg.Metadata[resumeOriginLabelKey] = label
+}
+
+// resumeProvenance is the origin a question resume carries.
+func resumeProvenance(msg bus.InboundMessage) (approvalOrigin, bool) {
+	m := msg.Metadata
+	if m == nil || m[resumeRoomIDKey] == "" || m[resumeRequestIDKey] == "" {
+		return approvalOrigin{}, false
+	}
+	label := m[resumeOriginLabelKey]
+	if label == "" {
+		label = "for group " + m[resumeRoomNameKey]
+	}
+	return approvalOrigin{
+		Class: originRoom, Label: label,
+		RoomRef: &generated.RoomRef{
+			RoomId: m[resumeRoomIDKey], RoomName: m[resumeRoomNameKey], RequestId: m[resumeRequestIDKey], Role: "request",
+		},
+	}, true
 }
 
 // roomRefCopy returns a copy of the room reference (nil when none), so an
@@ -206,6 +287,9 @@ func (o approvalOrigin) roomRefCopy() *generated.RoomRef {
 // user, an automatic wake) gets no origin; so does a request capture that
 // cannot be read (logged).
 func (al *AgentLoop) turnApprovalOrigin(msg bus.InboundMessage, sessionID string) approvalOrigin {
+	if o, ok := resumeProvenance(msg); ok {
+		return o
+	}
 	if isConnectorChannel(msg.Channel) {
 		person := strings.TrimSpace(msg.Sender.DisplayName)
 		if person == "" {

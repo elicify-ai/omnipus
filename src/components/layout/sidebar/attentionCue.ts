@@ -3,13 +3,17 @@ import { useEffect, useState } from 'react'
 export type AttentionMotion = 'loop' | 'static'
 
 export function readAttentionMotion(): AttentionMotion {
-  if (typeof window === 'undefined') return 'loop'
+  // #1449: the group page draws this cue too; an environment without
+  // matchMedia (embedded views, test doubles) keeps the default loop
+  // instead of failing the whole page.
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'loop'
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'static' : 'loop'
 }
 
 export function useAttentionMotion(): AttentionMotion {
   const [motion, setMotion] = useState<AttentionMotion>(readAttentionMotion)
   useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return undefined
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
     const apply = () => setMotion(mq.matches ? 'static' : 'loop')
     apply()

@@ -26,8 +26,9 @@ import type {
   Message as WireMessage,
 } from '@/lib/api/generated/openapi-types'
 import type { SubagentEndFrame, SubagentMessageFrame, SubagentStartFrame, SubagentStateFrame } from '@/lib/api/generated/asyncapi-types'
-import { ApiSchemaError, _recordApiSchemaError, request } from './http'
-import { historyProtocolError, validateHistoryPage } from './history-validation'
+import { _recordApiSchemaError, request } from './http'
+import { historyProtocolError, historySchemaError, validateHistoryPage, withoutHistoryBody } from './history-validation'
+import { carriesHistoryPreviewKey, isMalformedHistoryPreview } from '../historyPreview'
 import type { HistoryPosition, SessionHistoryReadOptions, SessionDetailReadOptions, SessionHistoryPage, SessionHistoryEntry, SessionDetail, AvailableSessionDetail, UnavailableSessionDetail } from './history-types'
 export type { HistoryPosition, SessionHistoryPageInfo, SessionHistoryMetadata, SessionHistoryEntry, SessionHistoryPage, SessionHistoryQuery, SessionHistoryReadOptions, SessionDetailReadOptions, SessionDetail, AvailableSessionDetail, UnavailableSessionDetail } from './history-types'
 import type { UserDeliveryState } from '../userDeliveryState'
@@ -228,6 +229,12 @@ export type ProviderFallbackNoteMarker = { // not-wire-format: SPA display metad
 
 interface MessageBase { // not-wire-format
   historyPosition?: HistoryPosition
+  /**
+   * #1452 D2 A2.2: the wire `content_original_size_bytes` — present only when
+   * `content` is a read-time display preview of a longer ordinary chat
+   * message (the exact UTF-8 size of the full text).
+   */
+  contentOriginalSizeBytes?: number
   id: string
   session_id?: string
   content: string
@@ -259,6 +266,12 @@ interface MessageBase { // not-wire-format
   model?: string
   /** Generated classifications whose thread visibility is gated by Verbose chat. */
   type?: Extract<WireMessage['type'], 'judge_verdict' | 'context_window_notice' | 'provider_fallback'>
+  /**
+   * #1452 S11a: a saved source that ends a turn segment although it may look
+   * like ordinary text (a recorded `terminal_outcome` sentence or a
+   * `turn_canceled` entry). Client-local classification, never sent.
+   */
+  historyBoundary?: 'turn_canceled' | 'terminal_outcome'
   /** See ProviderFallbackNoteMarker. Set on live, replayed and REST-loaded fallback notes. */
   providerFallbackNote?: ProviderFallbackNoteMarker
   /** The verdict payload when `type === 'judge_verdict'` (wire `Message.verdict`, same shape as the live `JudgeVerdictFrame` push minus the `type`/`session_id` discriminator fields). */
@@ -502,8 +515,12 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
   /** PF=A: recorded facts of a `type: provider_fallback` note (generated Message fields). */
   unavailable_model?: WireMessage['unavailable_model']
   unavailable_code?: WireMessage['unavailable_code']
+  /** #1452 S11a: a turn's distinct terminal outcome sentence (generated Message field). */
+  terminal_outcome?: WireMessage['terminal_outcome']
   role?: 'user' | 'assistant' | 'system'
   content?: string
+  /** #1452 D2: present only when `content` is a display preview (generated Message field). */
+  content_original_size_bytes?: WireMessage['content_original_size_bytes']
   summary?: string
   timestamp: string
   /** Generated wire correlation id (`Message.client_message_id`) — present on saved user entries. */
@@ -694,6 +711,10 @@ function rawToMessage(raw: RawMessage): Message {
   }
   const role = raw.role ?? 'assistant'
   const baseStatus = raw.status === 'ok' ? ('done' as const) : raw.status
+  // #1452 S11a: a cancellation entry or a turn's terminal outcome ends the
+  // turn segment; nothing else in the normalized row says so.
+  const boundary = raw.type === 'turn_canceled' ? { historyBoundary: 'turn_canceled' as const }
+    : raw.terminal_outcome === true ? { historyBoundary: 'terminal_outcome' as const } : {}
   // #3: construct the correct discriminated variant based on role.
   // Tool calls only appear on assistant messages per the wire schema, so the
   // cast here is correct and the compiler accepts it once role is narrowed.
@@ -728,6 +749,8 @@ function rawToMessage(raw: RawMessage): Message {
       // the renderer's contract, never parsed as markup.
       ...(raw.participant ? { participant: raw.participant } : {}),
       ...(raw.room_ref ? { roomRef: raw.room_ref } : {}),
+      ...(raw.content_original_size_bytes !== undefined ? { contentOriginalSizeBytes: raw.content_original_size_bytes } : {}),
+      ...boundary,
     } satisfies UserMessage
   }
   if (role === 'system') {
@@ -761,6 +784,7 @@ function rawToMessage(raw: RawMessage): Message {
       // the fallback for scope=plan (no session_id) and for a cold-only
       // load with no live WS connection.
       ...(raw.type === 'judge_verdict' && raw.verdict ? { type: 'judge_verdict' as const, verdict: raw.verdict } : {}),
+      ...boundary,
     } satisfies SystemMessage
   }
   // role === 'assistant' (default)
@@ -792,6 +816,7 @@ function rawToMessage(raw: RawMessage): Message {
     // (never on persisted wire messages) so this branch guards for undefined only.
     status: (baseStatus === 'done' || baseStatus === 'error' || baseStatus === 'interrupted') ? baseStatus : 'done',
     tool_calls: raw.tool_calls?.map(rawToToolCall),
+    ...(raw.content_original_size_bytes !== undefined ? { contentOriginalSizeBytes: raw.content_original_size_bytes } : {}),
     ...(raw.turn_id ? { turnId: raw.turn_id } : {}),
     ...(modelField ? { model: modelField } : {}),
     ...(raw.truncated ? { truncated: true as const, truncationReason } : {}),
@@ -801,6 +826,7 @@ function rawToMessage(raw: RawMessage): Message {
     ...(raw.reply_to_message_id ? { replyToMessageId: raw.reply_to_message_id } : {}),
     ...(raw.reply_to_participant ? { replyToParticipant: raw.reply_to_participant } : {}),
     ...(raw.room_ref ? { roomRef: raw.room_ref } : {}),
+    ...boundary,
   } satisfies AssistantMessage
 }
 
@@ -1129,13 +1155,24 @@ function placeholderMessage(raw: unknown, position: string): SystemMessage {
 // A single rate-limited dev toast summarises the drop (maybeDevToast is
 // throttled per key, so a burst of bad items in one response doesn't spam
 // the UI); production gets the existing _recordApiSchemaError telemetry.
+// The generic wire Message makes the notice payload optional; Q33 requires it
+// on classified diagnostics. #1452 D2 A2.2: a tool result carrying the
+// reserved `_history_preview` key must be a valid marker (generated schema
+// plus the 4,096-byte rule), otherwise the item is malformed.
+function historyMessageSchema() {
+  return WireMessageSchema
+    .refine(
+      (message) => message.type !== 'context_window_notice' || message.context_window_notice !== undefined,
+      { message: 'Context window notice is missing its diagnostic payload.', path: ['context_window_notice'] },
+    )
+    .refine(
+      (message) => !(message.tool_calls ?? []).some(call => isMalformedHistoryPreview(call.result)),
+      { message: 'Tool result carries an invalid history preview marker.', path: ['tool_calls'] },
+    )
+}
+
 function parseWireMessageList(items: WireMessage[], endpoint: string): SessionHistoryEntry[] {
-  // The generic wire Message makes this payload optional; Q33 requires it
-  // on classified diagnostics. Preserve the existing visible-error path.
-  const messageSchema = WireMessageSchema.refine(
-    (message) => message.type !== 'context_window_notice' || message.context_window_notice !== undefined,
-    { message: 'Context window notice is missing its diagnostic payload.', path: ['context_window_notice'] },
-  )
+  const messageSchema = historyMessageSchema()
   const messages: SessionHistoryEntry[] = []
   let dropped = 0
   let firstIssue: string | undefined
@@ -1171,9 +1208,39 @@ export async function fetchSessionMessages(sessionId: string, options?: SessionH
   // A generated-schema transform keeps staged item validation inside the
   // transport's validated path, rather than emitting an unchecked-read warning.
   const schema = z.unknown().transform(raw => validateHistoryPage(raw, sessionId, endpoint))
-  const page = await request<ReturnType<typeof validateHistoryPage>>(path, options?.signal ? { signal: options.signal } : undefined, schema as ZodType<ReturnType<typeof validateHistoryPage>>)
-  if (!page) historyProtocolError(endpoint, ['entries'], page)
+  const page = await withoutHistoryBody(endpoint, request<ReturnType<typeof validateHistoryPage>>(path, options?.signal ? { signal: options.signal } : undefined, schema as ZodType<ReturnType<typeof validateHistoryPage>>))
+  if (!page) historyProtocolError(endpoint, ['entries'])
   return { ...page, entries: parseWireMessageList(page.entries, endpoint) }
+}
+
+/**
+ * #1452 D2 A2.2 `getSessionHistoryEntry`: the full public projection of one
+ * saved occurrence. Anything that is not exactly that occurrence's full
+ * projection (schema failure, another position, a preview marker or a
+ * shortened text) is a protocol error, which the display treats as a
+ * recoverable failure.
+ */
+export async function fetchSessionHistoryEntry(sessionId: string, position: HistoryPosition, signal?: AbortSignal): Promise<SessionHistoryEntry> {
+  const path = `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(position)}`
+  const endpoint = `GET /api/v1/sessions/${encodeURIComponent(sessionId)}/messages/{history_position}`
+  const full = historyMessageSchema().refine(
+    (message) => message.history_position === position && message.content_original_size_bytes === undefined &&
+      !(message.tool_calls ?? []).some(call => carriesHistoryPreviewKey(call.result)),
+    { message: 'Response is not the full projection of the requested occurrence.' },
+  )
+  // Validated inside the transport's schema step, so a rejection is counted
+  // there once and its error never holds the saved entry (SEC-3).
+  const schema = z.unknown().transform((raw) => {
+    const parsed = full.safeParse(raw)
+    if (!parsed.success) {
+      _recordApiSchemaError(endpoint, parsed.error.issues.length)
+      throw historySchemaError(endpoint, parsed.error.issues)
+    }
+    return parsed.data
+  })
+  const message = await withoutHistoryBody(endpoint, request(path, signal ? { signal } : undefined, schema as unknown as ZodType<WireMessage>))
+  if (!message) historyProtocolError(endpoint, ['message'])
+  return { ...rawToMessage(message as RawMessage), historyPosition: position }
 }
 
 export function isSessionHistoryAvailable(detail: SessionDetail): detail is AvailableSessionDetail {
@@ -1184,32 +1251,32 @@ export async function fetchSessionDetail(sessionId: string, options?: SessionDet
   const path = `/sessions/${encodeURIComponent(sessionId)}`
   const endpoint = `GET /api/v1${path}`
   const schema = z.unknown().transform(raw => normalizeSessionDetail(raw, sessionId, endpoint))
-  const detail = await request<SessionDetail>(path, options?.signal ? { signal: options.signal } : undefined, schema as ZodType<SessionDetail>)
-  if (!detail) historyProtocolError(endpoint, ['session'], detail)
+  const detail = await withoutHistoryBody(endpoint, request<SessionDetail>(path, options?.signal ? { signal: options.signal } : undefined, schema as ZodType<SessionDetail>))
+  if (!detail) historyProtocolError(endpoint, ['session'])
   return detail
 }
 
 function normalizeSessionDetail(raw: unknown, sessionId: string, endpoint: string): SessionDetail {
-  if (!raw || typeof raw !== 'object') historyProtocolError(endpoint, ['session'], raw)
+  if (!raw || typeof raw !== 'object') historyProtocolError(endpoint, ['session'])
   // Generated detail validation sees the real identity/state/metadata, but item
   // validation is staged so one malformed public row has a visible placeholder.
   const source = raw as Record<string, unknown>
   const parsed = WireSessionDetailSchema.safeParse({ ...source, ...('messages' in source ? { messages: [] } : {}) })
   if (!parsed.success) {
     _recordApiSchemaError(endpoint, parsed.error.issues.length)
-    throw new ApiSchemaError(endpoint, parsed.error.issues, raw)
+    throw historySchemaError(endpoint, parsed.error.issues)
   }
   const detail = parsed.data
-  if (detail.session.id !== sessionId) historyProtocolError(endpoint, ['session', 'id'], raw)
+  if (detail.session.id !== sessionId) historyProtocolError(endpoint, ['session', 'id'])
   const base = { session: rawToSession(detail.session), ...(detail.agent_removed !== undefined ? { agent_removed: detail.agent_removed } : {}) }
   if (detail.history_state.status === 'unavailable') {
     for (const key of ['messages', 'page_info', 'has_earlier', 'has_later', 'next_before', 'next_after']) {
-      if (Object.hasOwn(source, key)) historyProtocolError(endpoint, [key], raw)
+      if (Object.hasOwn(source, key)) historyProtocolError(endpoint, [key])
     }
-    if (!detail.history_state.reason || !detail.history_state.message) historyProtocolError(endpoint, ['history_state'], raw)
+    if (!detail.history_state.reason || !detail.history_state.message) historyProtocolError(endpoint, ['history_state'])
     return { ...base, history_state: detail.history_state } as UnavailableSessionDetail
   }
-  if (detail.history_state.reason !== undefined || detail.history_state.message !== undefined) historyProtocolError(endpoint, ['history_state'], raw)
+  if (detail.history_state.reason !== undefined || detail.history_state.message !== undefined) historyProtocolError(endpoint, ['history_state'])
   const { entries, session_id, ...metadata } = validateHistoryPage({
     session_id: sessionId, entries: source.messages,
     ...Object.fromEntries(['page_info', 'has_earlier', 'has_later', 'next_before', 'next_after'].filter(key => Object.hasOwn(source, key)).map(key => [key, source[key]])),

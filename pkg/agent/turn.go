@@ -464,6 +464,10 @@ type turnState struct {
 	// Last streamer used during this turn. Finalized once at turn end
 	// to send the "done" frame, preventing premature done signals mid-turn.
 	lastStreamer bus.Streamer
+	// stopShown is the text the last provider attempt streamed before a
+	// user Stop claim that the answer does not hold yet (#1534, see
+	// stop_turn_end.go). Guarded by mu.
+	stopShown string
 
 	// Transcript recording fields (nil transcriptStore disables recording)
 	transcriptSessionID string
@@ -1885,7 +1889,7 @@ func (ts *turnState) currentApprovalOrigin() approvalOrigin {
 // (a joined steering message or a held group request). Approvals already
 // raised keep their label; later ones carry the merged origin.
 func (ts *turnState) noteConsumedOrigin(o approvalOrigin) {
-	if ts == nil || o.Label == "" {
+	if ts == nil || o.none {
 		return
 	}
 	ts.approvalOriginMu.Lock()
