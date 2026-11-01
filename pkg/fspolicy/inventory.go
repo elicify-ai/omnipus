@@ -151,13 +151,12 @@ func IsSkillInstructionLeaf(name string) bool {
 // re-admits for every turn without per-turn context (amendment §2 D3):
 //
 //	media  (A3) — downloaded media and attachment staging, read-only
-//	skills (A7) — bundled skill helper files, read-only, FILE TOOLS ONLY;
-//	              instruction files stay behind the skills gate in
-//	              pkg/tools/resolvepath.go, and spawned children keep the
-//	              whole-directory kernel deny (CoversChildOnlySecretPath)
+//
+// skills is not a base entry (skills spec r15 §6.1 item 3): the registry
+// shelf is readable per turn through HomeGuard.SkillFolders /
+// SkillsReadAll only (inventoryDenies' skills rule, allowedUnderHome).
 var BaseAllowRelative = []string{
 	"media",
-	"skills",
 }
 
 // HomeGlobPrefixes returns the protected basename prefixes that live directly
