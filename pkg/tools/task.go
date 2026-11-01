@@ -13,6 +13,7 @@ import (
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
@@ -747,6 +748,7 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Due date/time in RFC 3339 format (optional)",
 			},
+			"trigger": triggerParameter("When the task runs (optional; omit or manual to run it now)."),
 			"parent_task_id": map[string]any{
 				"type":        "string",
 				"description": "ID of the parent task (optional) — set when this is a subtask of another task",
@@ -1020,6 +1022,8 @@ type taskCreateToolExecute struct {
 	wsID string
 	// wsResolved is true once wsID/foreign hold the resolved target.
 	wsResolved bool
+	// trigger is the validated optional trigger (task_trigger.go).
+	trigger *task.Trigger
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -1122,6 +1126,9 @@ func (tc *taskCreateToolExecute) validateRequest() (*ToolResult, bool) {
 			Policy:        DenyTrustSet,
 			TargetAgentID: tc.agentID,
 		}), true
+	}
+	if r0, stop := tc.applyCreateTrigger(); stop {
+		return r0, true
 	}
 
 	// FR-6/D5 strict criteria enforcement (ADR-049, SD-A7, review r1 major
@@ -1290,7 +1297,9 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	// chooses local pickup under its own policy — the creator is not the
 	// starter, parent or recipient (FR-048/BDD-08.5).
 	landingStatus := task.StatusNext
-	if foreign {
+	if foreign || scheduledTrigger(tc.trigger) {
+		// r17 TK-30: a once/recurring trigger lands the scheduler-owned
+		// waiting state, never next; only its occurrence releases it.
 		landingStatus = task.StatusInbox
 	}
 	// Owner attribution (DEL-23 "preserve ... owner"): the retired sysagent
@@ -1323,6 +1332,7 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 		Status:          landingStatus,
 		DelegationDepth: tc.childDepth,
 		Criteria:        tc.criteria,
+		Trigger:         tc.trigger,
 	}
 	// A FOREIGN delivery carries no link back to the creator (FR-048/049): not
 	// its session or call, not its chat (the finished task's result text is
@@ -1499,10 +1509,28 @@ type TaskUpdateTool struct {
 	// planStore backs plan_id attach / re-parent validation (r17 TK-11). A nil
 	// store fails closed (ValidateTaskPlanMembership); detaching needs none.
 	planStore *plan.Store
+	// scheduleReconciler re-arms the live trigger scheduler under the task's
+	// coordination lock after a trigger write (r17 TK-30); see
+	// SetScheduleReconciler. Nil means no live scheduler is wired.
+	scheduleReconciler ScheduleReconciler
+	// auditLogger receives the shared trigger audit event (r17 TK-30).
+	auditLogger *audit.Logger
 }
 
 func NewTaskUpdateTool(store *task.Store) *TaskUpdateTool {
 	return &TaskUpdateTool{store: store}
+}
+
+// SetScheduleReconciler installs reconciliation step 3 for trigger writes
+// (r17 TK-30). fn runs with the task's coordination lock held.
+func (t *TaskUpdateTool) SetScheduleReconciler(fn ScheduleReconciler) {
+	t.scheduleReconciler = fn
+}
+
+// SetAuditLogger installs the audit logger the shared trigger audit writes
+// to (registry injection, auditLoggerAware).
+func (t *TaskUpdateTool) SetAuditLogger(logger *audit.Logger) {
+	t.auditLogger = logger
 }
 
 // SetGoalMaxRoundsFn installs the live Settings -> Performance goal-round
@@ -1676,6 +1704,7 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Due date/time in RFC 3339 format",
 			},
+			"trigger": triggerParameter("Change when the task runs; {type: \"manual\", config: {}} removes the schedule."),
 			"agent_id": map[string]any{
 				"type":        "string",
 				"description": "ID of the agent to reassign the task to",
@@ -1810,6 +1839,10 @@ type taskUpdateToolExecute struct {
 	dodProvided      bool
 	updated          *task.Task
 	goalSyncWarning  string
+	// triggerSent is true when this call carries a trigger (task_trigger.go).
+	triggerSent bool
+	// scheduleSyncWarning is the scheduler reconciliation failure, if any.
+	scheduleSyncWarning string
 }
 
 func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -2034,6 +2067,9 @@ func (tu *taskUpdateToolExecute) buildPatchFields() (*ToolResult, bool) {
 	if res, stop := tu.applyOrganisationFields(); stop {
 		return res, true
 	}
+	if res, stop := tu.applyTriggerField(); stop {
+		return res, true
+	}
 
 	// Priority (1-5). Shared range-check with create_task/create_task_in_
 	// workspace/REST (task.ValidatePriority) — see its doc comment.
@@ -2183,7 +2219,7 @@ func (tu *taskUpdateToolExecute) buildJudgedContract() (*ToolResult, bool) {
 func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	if len(tu.updatedFields) == 0 {
 		return ErrorResult(
-			"no updatable fields provided (supply at least one of status, result, artifacts, title, description, prompt, tags, run_isolated, priority, due, clear_due, agent_id, blocked_by, plan_id, write_set, stream, is_join, criteria, dod, max_attempts, clear_max_attempts)",
+			"no updatable fields provided (supply at least one of status, result, artifacts, title, description, prompt, tags, run_isolated, priority, due, clear_due, trigger, agent_id, blocked_by, plan_id, write_set, stream, is_join, criteria, dod, max_attempts, clear_max_attempts)",
 		), true
 	}
 
@@ -2202,7 +2238,12 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	// GOAL-FR-029/FR-030: the criteria/dod change lands on the task record
 	// (dual-write) and then on the paired goal record — creating one if this
 	// is a legacy task's first-ever criteria/dod (see SyncTaskGoalRecord).
-	req := TaskWriteRequest{Patch: tu.patch}
+	req := TaskWriteRequest{Patch: tu.patch, Prior: tu.triggerSent}
+	if tu.triggerSent {
+		// r17 TK-30: every update that carries a trigger reconciles the live
+		// scheduler under the same lock hold (step 3).
+		req.ReconcileSchedule = tu.t.scheduleReconciler
+	}
 	if tu.detachResets {
 		req.RetryWithoutStatus = DetachStatusRefused
 	}
@@ -2225,6 +2266,15 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 		slog.Error("update_task: failed to sync paired goal record",
 			"task_id", tu.taskID, "error", gErr)
 		tu.goalSyncWarning = gErr.Error()
+	}
+	if out.ScheduleErr != nil {
+		slog.Error("update_task: saved task but could not re-arm its schedule",
+			"task_id", tu.taskID, "error", out.ScheduleErr)
+		tu.scheduleSyncWarning = out.ScheduleErr.Error()
+	}
+	if tu.triggerSent && out.Prior != nil {
+		AuditTriggerChange(tu.t.auditLogger, tu.callerID, tu.taskID,
+			out.Prior.Trigger, out.Updated.Trigger, out.Prior.Status, out.Updated.Status)
 	}
 
 	// GOAL-FR-015/FR-027/FR-028 (review finding C1): this tool is one of the
@@ -2296,6 +2346,13 @@ func (tu *taskUpdateToolExecute) respond() *ToolResult {
 		// must see that explicitly rather than assume both landed together.
 		resultPayload["goal_sync_warning"] = "the change was saved on the task, but its paired goal " +
 			"record could not be updated: " + tu.goalSyncWarning
+	}
+	if tu.scheduleSyncWarning != "" {
+		// r17 TK-30 / §7.11: the trigger was saved and stays authoritative,
+		// but the live schedule could not be re-armed; no stale job is left.
+		resultPayload["schedule_sync_warning"] = "the trigger was saved on the task, but its schedule " +
+			"could not be re-armed (" + tu.scheduleSyncWarning + "); the saved trigger stays authoritative — " +
+			"re-save the schedule or restart the gateway"
 	}
 	encoded, mErr := json.Marshal(resultPayload)
 	if mErr != nil {

@@ -884,6 +884,9 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 		taskUpdate.SetPlanStore(rw.rs.al.GetPlanStore())
 		taskUpdate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(rw.rs.al) })
 		taskUpdate.SetAssigneeReadinessChecker(rw.rs.al.TaskAssigneeCannotFinish)
+		// r17 TK-30: a trigger write reconciles the live scheduler under the
+		// task's coordination lock (reconciliation step 3).
+		taskUpdate.SetScheduleReconciler(rw.rs.al.ReconcileTaskScheduleLocked)
 		taskUpdate.SetOnComplete(func(t *task.Task) {
 			if rw.rs.al.taskExecutor != nil {
 				rw.rs.al.taskExecutor.onTaskComplete(t)

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -1357,6 +1358,11 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 				return nil, true, err
 			}
 		}
+		// r17 TK-30: the write that changes the trigger invalidates the
+		// delivery marker atomically; an identical re-save keeps it.
+		if !reflect.DeepEqual(su.t.Trigger, newTrigger) {
+			su.t.LastDeliveredAtMs = nil
+		}
 		su.t.Trigger = newTrigger
 	}
 	if su.patch.Due != nil {
@@ -1790,7 +1796,9 @@ func (s *Store) recomputeBlockedStateLocked(t *Task) {
 	switch {
 	case anyUnmet && t.Status == StatusNext:
 		t.Status = StatusBlocked
-	case !anyUnmet && t.Status == StatusBlocked:
+	case !anyUnmet && t.Status == StatusBlocked && !TriggerHoldsPromotion(t, time.Now()):
+		// r17 TK-30: a task whose trigger has not released it stays waiting;
+		// only the scheduler's fire at the occurrence releases it.
 		t.Status = StatusNext
 	}
 }
@@ -1803,6 +1811,17 @@ func (s *Store) recomputeBlockedStateLocked(t *Task) {
 // to spawn a fresh run for once/recurring triggers. Takes the per-task
 // lock once internally.
 func (s *Store) SpawnReset(id string) (*Task, error) {
+	return s.SpawnResetForOccurrence(id, nil)
+}
+
+// SpawnResetForOccurrence is SpawnReset for a scheduler delivery: when
+// occurrenceMs is non-nil, the same write records it as the task's
+// scheduler-delivery marker (r17 TK-30), so the reset and the delivery can
+// never be observed apart. The caller holds the task's coordination lock and
+// has validated the occurrence against the fresh persisted trigger. The marker
+// is written even when the task is already running (the overlap guard): the
+// occurrence was delivered, the run is simply not restarted.
+func (s *Store) SpawnResetForOccurrence(id string, occurrenceMs *int64) (*Task, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
@@ -1814,7 +1833,17 @@ func (s *Store) SpawnReset(id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	if occurrenceMs != nil {
+		v := *occurrenceMs
+		t.LastDeliveredAtMs = &v
+	}
 	if t.Status == StatusInProgress {
+		if occurrenceMs != nil {
+			t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			if err := s.write(t); err != nil {
+				return nil, err
+			}
+		}
 		return nil, ErrAlreadyRunning
 	}
 	t.Status = StatusNext
@@ -1858,11 +1887,43 @@ func (s *Store) AdvanceUnblocked(id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t.Status != StatusBlocked {
+	if t.Status != StatusBlocked || TriggerHoldsPromotion(t, time.Now()) {
+		// r17 TK-30 (deletion-driven promotion): a task still awaiting its
+		// trigger stays waiting exactly as a completed predecessor leaves it.
 		return t, nil
 	}
 	next := StatusNext
 	return s.updateLocked(id, Patch{Status: &next, allowBlockedSet: true})
+}
+
+// PromoteInboxIfReleased moves an `inbox` task to `next` — the plan engine's
+// automatic member promotion — unless its trigger still holds it (r17 TK-30).
+// The status and the trigger are read under the task's lock in the same
+// critical section as the write, never from a caller-side snapshot, so a
+// trigger attached between a plan pass's list and this call keeps the task
+// waiting. promoted is false (and the task unchanged) when it was not inbox
+// or is held.
+func (s *Store) PromoteInboxIfReleased(id string) (t *Task, promoted bool, err error) {
+	if err := validateID(id); err != nil {
+		return nil, false, err
+	}
+	mu := s.lock.Get(id)
+	mu.Lock()
+	defer mu.Unlock()
+
+	cur, err := s.load(id)
+	if err != nil {
+		return nil, false, err
+	}
+	if cur.Status != StatusInbox || TriggerHoldsPromotion(cur, time.Now()) {
+		return cur, false, nil
+	}
+	next := StatusNext
+	updated, err := s.updateLocked(id, Patch{Status: &next})
+	if err != nil {
+		return nil, false, err
+	}
+	return updated, true, nil
 }
 
 // Exists reports whether a task with id exists on disk.

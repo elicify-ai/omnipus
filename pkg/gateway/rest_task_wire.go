@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -440,56 +439,6 @@ func toWireTrigger(tr *task.Trigger) *struct {
 		Config gen.Task_Trigger_Config `json:"config"`
 		Type   gen.TaskTriggerType     `json:"type"`
 	}{Config: cfg, Type: gen.TaskTriggerType(tr.Type)}
-}
-
-// legacyTimingKeysMessage reports the removed trigger keys (session-core DEL-19
-// / C-TIMING) found in a trigger config's undeclared properties. The wire
-// schema keeps `config` open, so a client that still sends `every_ms` or
-// `cron_expr` is not rejected by decoding; it is refused here, by name, instead
-// of being accepted and silently never firing. Empty means none present.
-func legacyTimingKeysMessage(extra map[string]any) string {
-	var found []string
-	for _, key := range []string{"every_ms", "cron_expr"} {
-		if _, ok := extra[key]; ok {
-			found = append(found, key)
-		}
-	}
-	if len(found) == 0 {
-		return ""
-	}
-	return "trigger config." + strings.Join(found, ", config.") +
-		" is no longer supported; use a recurring trigger with config.rrule"
-}
-
-// buildTrigger constructs an internal trigger from its primitive parts. The
-// three generated request structs (Task/TaskCreateRequest/TaskUpdateRequest) each
-// have their own anonymous trigger type with an identically-shaped config, so
-// the callers decompose them and pass the primitives here.
-func buildTrigger(
-	kind string,
-	atMs *int64,
-	rrule *string,
-	dtstartMs *int64,
-	tz *string,
-) *task.Trigger {
-	tr := &task.Trigger{Type: task.TriggerType(kind)}
-	if atMs != nil {
-		v := *atMs
-		tr.Config.AtMs = &v
-	}
-	if rrule != nil {
-		v := *rrule
-		tr.Config.Rrule = &v
-	}
-	if dtstartMs != nil {
-		v := *dtstartMs
-		tr.Config.DtstartMs = &v
-	}
-	if tz != nil {
-		v := *tz
-		tr.Config.Tz = &v
-	}
-	return tr
 }
 
 // toWireCriteria converts internal acceptance criteria to the gen.Task.Criteria

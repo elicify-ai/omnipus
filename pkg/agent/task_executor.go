@@ -1947,6 +1947,18 @@ func (al *AgentLoop) NotifyTaskUpserted(t *task.Task) {
 	}
 }
 
+// ReconcileTaskScheduleLocked is reconciliation step 3 of the shared task
+// write (tools.WriteTaskReconciled, r17 TK-30): it brings the live trigger
+// scheduler in line with t's persisted trigger. The caller holds t's
+// coordination lock. A nil scheduler (tests, early boot) is a no-op success.
+func (al *AgentLoop) ReconcileTaskScheduleLocked(t *task.Task) error {
+	s := al.taskTriggerScheduler()
+	if s == nil || t == nil {
+		return nil
+	}
+	return s.ReconcileTaskLocked(t.ID)
+}
+
 // NotifyTaskDeleted removes the task's time-trigger cron job after a delete.
 // Nil-safe — a no-op when no scheduler is wired (tests).
 func (al *AgentLoop) NotifyTaskDeleted(taskID string) {

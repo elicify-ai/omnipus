@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -921,11 +920,11 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Trigger != nil {
-		if msg := legacyTimingKeysMessage(req.Trigger.Config.AdditionalProperties); msg != "" {
+		if msg := task.LegacyTimingKeysMessage(req.Trigger.Config.AdditionalProperties); msg != "" {
 			jsonErr(w, http.StatusBadRequest, msg)
 			return
 		}
-		t.Trigger = buildTrigger(
+		t.Trigger = task.BuildTrigger(
 			string(req.Trigger.Type),
 			req.Trigger.Config.AtMs,
 			req.Trigger.Config.Rrule,
@@ -970,10 +969,8 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.auditTask("task.create", t.ID)
-	// FR-022: no-op today (a freshly-created task has no prior trigger to
-	// diff against) — see auditTriggerChange's doc comment for why this
-	// call site stays in place regardless.
-	a.auditTriggerChange(t.ID, nil, t.Trigger)
+	// FR-022's trigger audit (tools.AuditTriggerChange) records a CHANGE of an
+	// existing trigger; a freshly created task has none to diff against.
 	a.emitTaskStatus(t)
 	// Register the task's time trigger (once/recurring) so it actually
 	// fires; a no-op for manual/heartbeat tasks.
@@ -1005,6 +1002,9 @@ type taskPatch struct {
 	// synchronisation failures of the reconciled write (applyUpdate).
 	goalDefinitionErr error
 	goalPromptErr     error
+	// scheduleErr is the scheduler reconciliation failure of the reconciled
+	// write (r17 TK-30 step 3); the trigger was saved.
+	scheduleErr error
 }
 
 // handleTaskPatch handles PATCH /api/v1/tasks/{id}.
@@ -1122,11 +1122,11 @@ func (tp *taskPatch) validate() bool {
 // trigger carries a removed key (every_ms, cron_expr).
 func (tp *taskPatch) buildTimingPatch() bool {
 	if tp.req.Trigger != nil {
-		if msg := legacyTimingKeysMessage(tp.req.Trigger.Config.AdditionalProperties); msg != "" {
+		if msg := task.LegacyTimingKeysMessage(tp.req.Trigger.Config.AdditionalProperties); msg != "" {
 			jsonErr(tp.w, http.StatusBadRequest, msg)
 			return true
 		}
-		tr := buildTrigger(
+		tr := task.BuildTrigger(
 			string(tp.req.Trigger.Type),
 			tp.req.Trigger.Config.AtMs,
 			tp.req.Trigger.Config.Rrule,
@@ -1473,6 +1473,12 @@ func (tp *taskPatch) applyUpdate() bool {
 			return tp.a.syncTaskGoalRecord(updated, tp.criteriaProvided, tp.patchDoD, tp.dodProvided)
 		}
 	}
+	if tp.a.agentLoop != nil {
+		// r17 TK-30 step 3: a changed/added/removed trigger or a move to a
+		// terminal status (re)registers or removes the task's job, under the
+		// same lock hold as the write.
+		req.ReconcileSchedule = tp.a.agentLoop.ReconcileTaskScheduleLocked
+	}
 	out, err := tools.WriteTaskReconciled(tp.a.taskStore, tp.id, req)
 	if err == nil {
 		if out.StatusDropped {
@@ -1480,6 +1486,7 @@ func (tp *taskPatch) applyUpdate() bool {
 		}
 		tp.updated, tp.priorForUpdate = out.Updated, out.Prior
 		tp.goalDefinitionErr, tp.goalPromptErr = out.GoalDefinitionErr, out.GoalPromptErr
+		tp.scheduleErr = out.ScheduleErr
 	}
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
@@ -1545,6 +1552,16 @@ func (tp *taskPatch) syncGoalRecord() bool {
 		jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
 			"task %q was updated but its goal record could not be updated. "+
 				"Check disk space and permissions, then retry. Details are in the server log.", tp.id))
+		return true
+	}
+	// r17 TK-30 / §7.11 schedule_not_armed: the trigger was saved and stays
+	// authoritative; the reconciler already removed any stale job.
+	if tp.scheduleErr != nil {
+		slog.Error("rest: task update: saved task but could not re-arm its schedule",
+			"id", tp.id, "error", tp.scheduleErr)
+		jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
+			"task %q was saved but its schedule could not be re-armed. The saved trigger stays "+
+				"authoritative; re-save the schedule or restart the gateway. Details are in the server log.", tp.id))
 		return true
 	}
 	return false
@@ -1724,14 +1741,18 @@ func (tp *taskPatch) finish() {
 		// FR-022: audit a recurrence-trigger change (legacy→RRULE or
 		// RRULE→RRULE) — no-ops on a title-only edit (byte-identical
 		// trigger, FR-024) or a non-recurring new trigger.
-		tp.a.auditTriggerChange(tp.id, tp.priorTriggerForAudit, tp.updated.Trigger)
+		// The shared implementation update_task also uses (r17 TK-30); a
+		// person is the actor here, so no agent id is recorded.
+		priorStatus := tp.preUpdateStatus
+		if tp.priorForUpdate != nil {
+			priorStatus = tp.priorForUpdate.Status
+		}
+		tools.AuditTriggerChange(tp.a.auditor, "", tp.id, tp.priorTriggerForAudit, tp.updated.Trigger,
+			priorStatus, tp.updated.Status)
 	}
 	tp.a.emitTaskStatus(tp.updated)
-	// Re-sync the task's time trigger: a changed/added/removed trigger or a move
-	// to a terminal status (re)registers or removes its cron job.
-	if tp.a.agentLoop != nil {
-		tp.a.agentLoop.NotifyTaskUpserted(tp.updated)
-	}
+	// The task's time trigger was reconciled with the live scheduler inside
+	// the reconciled write (applyUpdate, step 3).
 	tp.a.writeWireTask(tp.w, http.StatusOK, *tp.updated)
 }
 
@@ -2001,56 +2022,6 @@ func (a *restAPI) auditTask(event, id string) {
 		Details:  map[string]any{"id": id},
 	}); err != nil {
 		slog.Error("rest: task audit log failed", "event", event, "error", err)
-	}
-}
-
-// auditTriggerChange implements FR-022: every save that CHANGES a task's
-// recurrence trigger to a new `recurring` (RRULE) rule
-// emits an audit entry recording the task id, the prior trigger, and the
-// new trigger — covering both the US-5.3 legacy→RRULE conversion and an
-// RRULE→RRULE rule change (FR-024's "re-anchor" case) alike, so a change
-// that moves every future fire is reconstructible after the fact.
-//
-// Deliberately scoped narrower than "every trigger patch":
-//   - priorTrigger == nil never fires. On task CREATE there is no prior
-//     trigger to diff against — "changes a recurrence trigger" presupposes
-//     one existed. (handleTaskCreate still calls this — with priorTrigger
-//     always nil today — so every trigger-touching write path is
-//     uniformly covered by one hook; the guard makes that call a
-//     documented no-op rather than a spurious audit entry.)
-//   - newTrigger.Type != task.TriggerRecurring never fires — FR-022 is
-//     scoped to recurrence trigger changes, not e.g. a save that flips a
-//     task to `manual`/`once`.
-//   - a byte-identical trigger never fires — this is FR-024's title-only
-//     edit ("Save MUST preserve the trigger byte-identical when no
-//     recurrence or time field was touched"), which must NOT read as a
-//     rule change.
-//
-// Best-effort: log failures are recorded but never surfaced to the caller,
-// matching auditTask's existing behavior.
-func (a *restAPI) auditTriggerChange(taskID string, priorTrigger, newTrigger *task.Trigger) {
-	if priorTrigger == nil || newTrigger == nil {
-		return
-	}
-	if newTrigger.Type != task.TriggerRecurring {
-		return
-	}
-	if reflect.DeepEqual(*priorTrigger, *newTrigger) {
-		return
-	}
-	if a.auditor == nil {
-		return
-	}
-	if err := a.auditor.Log(&audit.Entry{
-		Event:    "task.trigger.recurrence_changed",
-		Decision: audit.DecisionAllow,
-		Details: map[string]any{
-			"task_id":       taskID,
-			"prior_trigger": priorTrigger,
-			"new_trigger":   newTrigger,
-		},
-	}); err != nil {
-		slog.Error("rest: task trigger recurrence-change audit log failed", "task_id", taskID, "error", err)
 	}
 }
 
