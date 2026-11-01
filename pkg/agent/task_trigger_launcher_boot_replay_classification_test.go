@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -801,4 +803,501 @@ func TestU2bBootReplay_DrainHold_HalfWiredWindow_NoIsolatedRun_MainChildAfterWir
 	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
 	u2bAsyncJoin(t, "drain tick 3", p2.loop.taskExecutor.wg.Wait)
 	require.Equal(t, runs, p2.runs(t, queued.ID), "W2: the drained task is never dispatched twice")
+}
+
+// TestU2bBootReplay_DrainHold_ResolverUnwiredWindow_TickWaits_ThenRunsAsMainChild
+// is addendum-12 W3, and is the only drain row whose intermediate tick lands
+// PAST the launcher and the executor's lifecycle store but BEFORE the main
+// resolver — the exact state that distinguishes the fix's three-term
+// plane-wired condition (pkg/agent/task_trigger_boot_hold.go::
+// sessionPlaneWiredLocked: launcher AND lifecycleStore AND mainResolver)
+// from a two-term one. W1's window has nothing wired and W2's wiring helper
+// completes launcher, store and resolver in one step, so neither can see a
+// two-term regression; this row's tick can. Oracle: with the plane marked
+// expected and the resolver still unwired, the drain dispatches nothing — in
+// particular no isolated run (with the store wired, a dispatched run would
+// classify fine and complete Done, silently losing its main parent). Then
+// the resolver is wired LAST (production order), the next tick dispatches
+// exactly one run as a MAIN child (requireMainChild evidence, which also
+// proves the persisted classification), executing to Done; a further tick
+// adds nothing; the task is not left queued. The row's failability is
+// proven by CHECK's mutant (b) ("drop mainResolver from the plane-wired
+// condition"), aimed at sessionPlaneWiredLocked's mainResolver term.
+func TestU2bBootReplay_DrainHold_ResolverUnwiredWindow_TickWaits_ThenRunsAsMainChild(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	p1 := newU2bLauncherProcess(t, home, clk, completedWorkerForU2b())
+	queued := newCompletionContractTask(t, p1.loop, "native-agent", "U2b drain W3 task")
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	expectSessionPlaneLikeTheGateway(t, p2) // the gateway marks the plane expected before the schedulers start
+	// Production order, stopped one wire short: stores, then the executor's
+	// lifecycle store + launcher — the main resolver deliberately NOT yet.
+	wireEnforcementOnly(t, p2)
+	installTestSessionLauncher(t, p2.loop)
+	require.NotNil(t, GetTaskExecutor(p2.loop).getLifecycleStore(), "state: the executor's store is wired")
+	require.NotNil(t, GetTaskExecutor(p2.loop).launcher, "state: the launcher is wired")
+	require.Nil(t, GetTaskExecutor(p2.loop).mainResolver, "state: the main resolver is NOT wired yet")
+	p2.physicalBoot(t)
+
+	// Drain tick 1: launcher and store wired, resolver not (the W3 window).
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "drain tick 1 with the resolver unwired", p2.loop.taskExecutor.wg.Wait)
+	require.Empty(t, p2.runs(t, queued.ID),
+		"W3: the drain must dispatch nothing until the main resolver is wired too — "+
+			"a run here classified and completed but went isolated, losing its main parent")
+
+	// The resolver LAST, completing the plane exactly as buildRESTAPI does.
+	p2.loop.taskExecutor.SetMainSessionResolver(&u6FakeMainResolver{elig: map[[2]string]string{
+		{"default", "native-agent"}: p2.mainID,
+	}})
+
+	// Drain tick 2, after full wiring.
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "drain tick 2 after full wiring", p2.loop.taskExecutor.wg.Wait)
+
+	runs := p2.runs(t, queued.ID)
+	require.Len(t, runs, 1, "W3: exactly one run, dispatched after the plane is fully wired")
+	p2.requireMainChild(t, queued.ID, runs[0].SessionID) // classification + real launcher parentage + task origin
+	require.Equal(t, task.StatusDone, runs[0].Status, "W3: the drained task executes to a real outcome")
+	require.Equal(t, u2bAsyncEvidence, runs[0].Result)
+	tk, err := p2.loop.taskStore.Get(queued.ID)
+	require.NoError(t, err)
+	require.Equal(t, task.StatusDone, tk.Status, "W3: the task is not left stuck in queued")
+
+	// Tick 3 adds nothing.
+	p2.loop.taskExecutor.CheckQueuedTasks(context.Background())
+	u2bAsyncJoin(t, "drain tick 3", p2.loop.taskExecutor.wg.Wait)
+	require.Equal(t, runs, p2.runs(t, queued.ID), "W3: the drained task is never dispatched twice")
+}
+
+// TestU2bBootReplay_HeldFire_SchedulerStoppedThenPlaneWired_KeptForNextBoot
+// is addendum-12 C1b: the same executor holds an owed fire, the SCHEDULER
+// stops while the fire is still held, and only THEN is the plane wired — so
+// the released callback (pkg/agent/task_trigger_boot_hold.go::
+// runHeldBootOwedFire) takes its stop-first branch. C1 never wired that
+// executor, so the branch never executed there and a mutant that removes
+// the branch's early return survives it. Oracles: the released fire does
+// not run on this boot; the job stays as durable debt (kept, enabled, with
+// its Running flag — the next boot's replay marker); the next physical boot
+// replays it exactly once, with a persisted classification, as a real MAIN
+// child. The row depends on the stop-keeps-job early return at the top of
+// runHeldBootOwedFire ("The job keeps its Running flag: the next physical
+// boot replays it.").
+func TestU2bBootReplay_HeldFire_SchedulerStoppedThenPlaneWired_KeptForNextBoot(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	// Boot 2: unwired, the owed fire is held (its job kept with Running).
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID), "instrument: the fire is held")
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"instrument: only boot 1's abandoned run exists — the held fire has not run")
+
+	// The scheduler stops while the fire is still held; the executor is NOT
+	// stopped and not yet wired.
+	p2.scheduler.Stop()
+	// THEN the plane is wired late, in production order: the release runs the
+	// held callback now, and it must take the stop-first branch.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release after wiring on a stopped scheduler", p2.loop.taskExecutor.wg.Wait)
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"C1b: a held fire released after the scheduler stopped must not run on this boot — "+
+			"only boot 1's abandoned run may exist")
+	kept := p2.storedJobs(t, fire.taskID)
+	require.Len(t, kept, 1, "C1b: the stop-first branch keeps the held fire's job as durable debt")
+	require.True(t, kept[0].Enabled, "C1b: the kept job stays enabled for the next boot")
+	require.True(t, kept[0].State.Running, "C1b: the job keeps its Running flag — the next boot's replay marker")
+	p2.stop()
+
+	// Boot 3, fully wired steady state: the debt replays exactly once.
+	p3 := bootU2bLauncherProcess(t, home, clk)
+	runs := p3.runs(t, fire.taskID)
+	original, replay := requireU2bAsyncReplay(t, fire, runs)
+	require.Equal(t, "abandoned: gateway restarted mid-execution", original.Result)
+	rec, err := p3.loop.GetSessionLifecycleStore().Load(replay.SessionID)
+	require.NoError(t, err, "C1b: the next boot's replay must carry a persisted runtime classification")
+	require.NotNil(t, rec)
+	p3.requireMainChild(t, fire.taskID, replay.SessionID)
+	require.Empty(t, p3.storedJobs(t, fire.taskID), "the replayed fire's job is settled")
+	p3.runDueAndJoin(t)
+	require.Equal(t, runs, p3.runs(t, fire.taskID), "another tick adds no replay")
+	p3.stop()
+	p4 := bootU2bLauncherProcess(t, home, clk)
+	require.Equal(t, runs, p4.runs(t, fire.taskID), "a further boot adds nothing")
+	after, err := p4.loop.taskStore.Get(fire.taskID)
+	require.NoError(t, err, "C1b: the task is not deleted")
+	require.Equal(t, task.StatusDone, after.Status)
+	p4.stop()
+}
+
+// TestU2bBootReplay_HeldFire_TriggerEditedWhileHeld_Superseded_OldFireNeverRuns
+// is addendum-12 C2b: the held owed fire's trigger is EDITED while held — a
+// real trigger change through the normal update path (task store Update with
+// a new once AtMs, then NotifyTaskUpserted, exactly as the fixture arms the
+// original) — and only then is the plane wired, releasing the held callback
+// into pkg/agent/task_trigger_boot_hold.go::runHeldBootOwedFire's superseded
+// branch. C2 caught a deletion later with the task-not-found guard, so a
+// mutant that removes the superseded check survived it; the edit path is the
+// only state that reaches that branch, because the edit's registration
+// (pkg/agent/task_trigger.go::replaceJobLocked) deletes the bootOwedFire
+// marker the branch tests. Oracles: the old held fire never runs; the old
+// job is gone and exactly the edited trigger's job remains; the edited
+// trigger then fires on its own new time, exactly once, as a real MAIN child
+// with a persisted classification.
+func TestU2bBootReplay_HeldFire_TriggerEditedWhileHeld_Superseded_OldFireNeverRuns(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	// Boot 2: unwired, the owed fire is held.
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID), "instrument: the fire is held")
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"instrument: only boot 1's abandoned run exists — the held fire has not run")
+
+	// EDIT the trigger while held — a real trigger change through the normal
+	// update path. The task is terminal here (boot 1's crash reconciled it to
+	// failed), and OnTaskUpserted's terminal branch de-arms a terminal
+	// once-task on a trigger-only edit, so the trigger change rides the same
+	// normal-path update that re-queues the task — exactly what a person does
+	// when re-scheduling a failed task: set it back to queued with a new once
+	// time.
+	next := task.StatusNext
+	newAt := p2.clock.Now().Add(time.Minute).UnixMilli()
+	newTrigger := &task.Trigger{Type: task.TriggerOnce, Config: task.TriggerConfig{AtMs: &newAt}}
+	edited, err := p2.loop.taskStore.Update(fire.taskID, task.Patch{Status: &next, Trigger: &newTrigger})
+	require.NoError(t, err)
+	require.Equal(t, task.StatusNext, edited.Status, "instrument: the edit re-queues the failed task")
+	p2.loop.NotifyTaskUpserted(edited)
+	editedJobs := p2.storedJobs(t, fire.taskID)
+	require.Len(t, editedJobs, 1, "C2b: the edit leaves exactly the edited trigger's job")
+	require.NotEqual(t, fire.jobID, editedJobs[0].ID, "C2b: the new job replaces the held one, not the same job")
+
+	// Wire the plane: the released callback must take the superseded branch
+	// and remove the old job — never run the old fire.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release after the trigger edit", p2.loop.taskExecutor.wg.Wait)
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"C2b: the superseded held fire must never run — the edit wins; "+
+			"only boot 1's abandoned run may exist")
+
+	// The edited trigger fires on its own new schedule, exactly once.
+	p2.clock.Advance(2 * time.Minute)
+	p2.runDueAndJoin(t)
+	runs := p2.runs(t, fire.taskID)
+	require.Len(t, runs, 2, "C2b: the edited trigger fires exactly once, at its own new time")
+	// Run ordering is not guaranteed — identify the new fire's run by its
+	// identity, exactly as requireU2bAsyncReplay does.
+	var newFire task.TaskRun
+	for _, r := range runs {
+		if r.RunID != fire.run.RunID {
+			newFire = r
+			break
+		}
+	}
+	require.NotEqual(t, fire.run.RunID, newFire.RunID, "C2b: the edited trigger's fire is a distinct run")
+	p2.requireMainChild(t, fire.taskID, newFire.SessionID)
+	rec, err := p2.loop.GetSessionLifecycleStore().Load(newFire.SessionID)
+	require.NoError(t, err, "C2b: the edited trigger's run carries a persisted runtime classification")
+	require.NotNil(t, rec)
+	require.Equal(t, task.StatusDone, newFire.Status, "C2b: the edited trigger's fire executes to a real outcome")
+	require.Equal(t, u2bAsyncEvidence, newFire.Result, "C2b: the edited trigger's fire judged its real result")
+	require.Empty(t, p2.storedJobs(t, fire.taskID), "C2b: the fired once job is settled")
+	p2.runDueAndJoin(t)
+	require.Equal(t, runs, p2.runs(t, fire.taskID), "C2b: at most one run per the trigger's own time")
+	p2.stop()
+}
+
+// TestU2bBootReplay_OrdinaryScheduledFire_UnwiredWindow_WaitsForPlane_ThenRunsOnce
+// is addendum-12 W4, found by the developer while writing the docs and
+// decided by this row: an ORDINARY scheduled fire — not an owed boot replay,
+// not a queued Next task — whose time comes due after the scheduler starts
+// but before the session plane is wired. Only holdBootOwedFire and
+// CheckQueuedTasks wait for the plane; pkg/agent/task_trigger.go::RunScheduled
+// does not, so a due ordinary fire dispatched in the window ran isolated and
+// unclassified. Oracle: the fire due in the unwired window creates no run
+// (and can therefore never record the wired enforcement's refusal,
+// "session has no persisted runtime classification", as its outcome); after
+// the plane is wired in production order, exactly one run exists — a real
+// MAIN child (requireMainChild evidence, which also proves the persisted
+// classification) whose result is the judged evidence, never the refusal
+// text — executing to Done; a further tick adds nothing. The fire control is
+// the scheduler's own fake clock and RunDueJobs, the same control the
+// TestTaskTrigger / TestTriggerScheduler tests use — no bypass of
+// RunScheduled. Expected RED on 931d7bc6d: the window tick dispatches (the
+// no-run oracle fails), which is the gap the developer's RunScheduled fix
+// closes.
+func TestU2bBootReplay_OrdinaryScheduledFire_UnwiredWindow_WaitsForPlane_ThenRunsOnce(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	expectSessionPlaneLikeTheGateway(t, p2) // the gateway marks the plane expected before the schedulers start
+	p2.physicalBoot(t)
+
+	// A fresh one-time task, armed through the normal update path, its fire
+	// still in the future at boot — an ordinary scheduled fire, nothing owed.
+	queued := newCompletionContractTask(t, p2.loop, "native-agent", "U2b ordinary scheduled fire W4")
+	fireAt := clk.Now().Add(time.Minute).UnixMilli()
+	trigger := &task.Trigger{Type: task.TriggerOnce, Config: task.TriggerConfig{AtMs: &fireAt}}
+	stored, err := p2.loop.taskStore.Update(queued.ID, task.Patch{Trigger: &trigger})
+	require.NoError(t, err)
+	p2.loop.NotifyTaskUpserted(stored)
+	require.Len(t, p2.storedJobs(t, queued.ID), 1, "instrument: the ordinary once job is armed")
+	require.Nil(t, GetTaskExecutor(p2.loop).getLifecycleStore(), "state: no store is wired in the window")
+	require.Nil(t, GetTaskExecutor(p2.loop).launcher, "state: no launcher is wired in the window")
+	require.Nil(t, GetTaskExecutor(p2.loop).mainResolver, "state: no main resolver is wired in the window")
+
+	// The fire comes due IN the unwired window, through the real
+	// RunScheduled path.
+	clk.Advance(2 * time.Minute)
+	p2.runDueAndJoin(t)
+	require.Empty(t, p2.runs(t, queued.ID),
+		"W4: an ordinary scheduled fire due in the unwired window must wait for the session "+
+			"plane like the drain and the owed fires — dispatched here it ran isolated and "+
+			"without its runtime classification")
+
+	// Wire in production order: stores, executor store + launcher, resolver
+	// LAST. Then a tick: exactly one run, judged, classified, a MAIN child.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	p2.runDueAndJoin(t)
+	runs := p2.runs(t, queued.ID)
+	require.Len(t, runs, 1, "W4: exactly one run, after the plane is fully wired")
+	p2.requireMainChild(t, queued.ID, runs[0].SessionID) // classification + real launcher parentage + task origin
+	rec, err := p2.loop.GetSessionLifecycleStore().Load(runs[0].SessionID)
+	require.NoError(t, err, "W4: the fire's run carries a persisted runtime classification")
+	require.NotNil(t, rec)
+	require.Equal(t, task.StatusDone, runs[0].Status, "W4: the fire executes to a real outcome")
+	require.Equal(t, u2bAsyncEvidence, runs[0].Result,
+		"W4: the outcome is the judged evidence — never the wired enforcement's refusal text")
+
+	// Another tick adds nothing.
+	p2.runDueAndJoin(t)
+	require.Equal(t, runs, p2.runs(t, queued.ID), "W4: the fire is never dispatched twice")
+	p2.stop()
+}
+
+// auditRowNamesTaskAtWarn reports whether rows contain an audit entry whose
+// severity is WARN, whose event name is a REGISTERED audit event
+// (audit.IsValidEventName — the row deliberately does not pin a new event's
+// name), and whose payload names the given task id anywhere in its JSON.
+func auditRowNamesTaskAtWarn(rows []map[string]any, taskID string) bool {
+	for _, r := range rows {
+		if sev, _ := r["severity"].(string); sev != "WARN" {
+			continue
+		}
+		evt, _ := r["event"].(string)
+		if evt == "" || !audit.IsValidEventName(audit.EventName(evt)) {
+			continue
+		}
+		if strings.Contains(rsauditJSON(r), taskID) {
+			return true
+		}
+	}
+	return false
+}
+
+func rsauditJSON(v any) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// TestU2bBootReplay_HeldFire_TransientReadError_JobKept_Audited_ReplayedAtNextBoot
+// is addendum-12 W5 case (a), the chief's exact oracle. The defect
+// (pkg/agent/task_trigger_boot_hold.go::runHeldBootOwedFire's error branch):
+// when runScheduledFire returns any error other than cron.ErrRunHandedOff —
+// here store.Get failing with a non-not-found decode error before any run is
+// created — it logs the error and ALWAYS calls RemoveJob, so the owed replay
+// is lost silently: no run, no failed TaskRun, no job for the next boot, and
+// the engine cannot record it because the callback already returned
+// ErrRunHandedOff. Required behaviour: a transient pre-start error (the task
+// and its agent still exist) KEEPS the owed job, creates no run, writes a
+// WARN audit entry naming the task, and the next boot — the task readable
+// again — replays it exactly once with the persisted classification. The
+// read failure is real, not a bypass: the task's own store file is corrupted
+// (a genuine decode error through the concrete *task.Store), then restored.
+func TestU2bBootReplay_HeldFire_TransientReadError_JobKept_Audited_ReplayedAtNextBoot(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID), "instrument: the fire is held")
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"instrument: only boot 1's abandoned run exists — the held fire has not run")
+
+	readAudit := swapAuditLogger(t, p2.loop)
+
+	// The transient read failure, through the store's real seam: the task's
+	// own file corrupts so store.Get fails with a non-not-found decode error.
+	taskFile := filepath.Join(home, "tasks", fire.taskID+".json")
+	originalFile, err := os.ReadFile(taskFile)
+	require.NoError(t, err, "instrument: the task's store file exists")
+	require.NoError(t, os.WriteFile(taskFile, []byte("{ corrupted for W5 case (a)"), 0o644))
+
+	// Wire the plane: the released held fire hits the unreadable task.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release against an unreadable task", p2.loop.taskExecutor.wg.Wait)
+
+	// The task is readable again from here on.
+	require.NoError(t, os.WriteFile(taskFile, originalFile, 0o644), "restore: the transient error clears")
+	kept := p2.storedJobs(t, fire.taskID)
+	require.Len(t, kept, 1,
+		"W5(a): a transient read error must not consume the owed fire — the job stays as durable debt")
+	require.True(t, kept[0].Enabled, "W5(a): the kept job stays enabled for the next boot")
+	require.True(t, kept[0].State.Running, "W5(a): the job keeps its Running flag — the next boot's replay marker")
+	require.Len(t, p2.runs(t, fire.taskID), 1, "W5(a): no run is created for an unreadable task")
+	require.True(t, auditRowNamesTaskAtWarn(readAudit(), fire.taskID),
+		"W5(a): a WARN audit entry naming the task must record the failed fire attempt")
+
+	p2.stop()
+	// The next boot, the task readable again: the debt replays exactly once.
+	p3 := bootU2bLauncherProcess(t, home, clk)
+	runs := p3.runs(t, fire.taskID)
+	originalRun, replay := requireU2bAsyncReplay(t, fire, runs)
+	require.Equal(t, "abandoned: gateway restarted mid-execution", originalRun.Result)
+	rec, err := p3.loop.GetSessionLifecycleStore().Load(replay.SessionID)
+	require.NoError(t, err, "W5(a): the next boot's replay carries a persisted runtime classification")
+	require.NotNil(t, rec)
+	p3.requireMainChild(t, fire.taskID, replay.SessionID)
+	require.Empty(t, p3.storedJobs(t, fire.taskID), "the replayed fire's job is settled")
+	p3.runDueAndJoin(t)
+	require.Equal(t, runs, p3.runs(t, fire.taskID), "another tick adds no replay")
+	p3.stop()
+}
+
+// TestU2bBootReplay_HeldFire_TaskDeletedBeforeRelease_JobRemoved_Audited_NoReplay
+// is addendum-12 W5 case (b1): the task is deleted (the real production path:
+// store Delete plus NotifyTaskDeleted, as C2 does) before the held fire is
+// released. Required behaviour: the job is removed, a WARN audit entry names
+// the deleted task's id, and no replay happens at the next boot.
+func TestU2bBootReplay_HeldFire_TaskDeletedBeforeRelease_JobRemoved_Audited_NoReplay(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID), "instrument: the fire is held")
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"instrument: only boot 1's abandoned run exists — the held fire has not run")
+
+	readAudit := swapAuditLogger(t, p2.loop)
+
+	// The task is deleted before the held fire is released.
+	_, err := p2.loop.taskStore.Delete(fire.taskID)
+	require.NoError(t, err)
+	p2.loop.NotifyTaskDeleted(fire.taskID)
+	require.Empty(t, p2.storedJobs(t, fire.taskID), "instrument: the deletion removes the job")
+
+	// Wire the plane: the release must handle the deleted task audibly.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release against a deleted task", p2.loop.taskExecutor.wg.Wait)
+
+	require.Len(t, p2.runs(t, fire.taskID), 1, "W5(b1): no run exists for a deleted task")
+	require.Empty(t, p2.storedJobs(t, fire.taskID), "W5(b1): the job is removed")
+	require.True(t, auditRowNamesTaskAtWarn(readAudit(), fire.taskID),
+		"W5(b1): a WARN audit entry naming the deleted task's id must record the dropped held fire")
+
+	p2.stop()
+	p3 := bootU2bLauncherProcess(t, home, clk)
+	p3.runDueAndJoin(t)
+	require.Len(t, p3.runs(t, fire.taskID), 1, "W5(b1): no replay at the next boot")
+	p3.stop()
+}
+
+// TestU2bBootReplay_HeldFire_AgentGone_FailedRunRecorded_JobRemoved is
+// addendum-12 W5 case (b2): the task exists but its AGENT is gone when the
+// held fire is released. Required behaviour: a FAILED run is recorded in the
+// task's run history (visible to the user — a task-level failed status with
+// no run record is exactly the silent loss this row forbids), and then the
+// job is removed; no replay at the next boot. The disappearance is modeled as
+// a store-level assignee change to an agent the registry does not know,
+// deliberately WITHOUT a trigger notification: NotifyTaskUpserted would
+// re-arm the trigger job and supersede the held fire — a different case —
+// while the scheduler's job and the owed marker must stay untouched here.
+func TestU2bBootReplay_HeldFire_AgentGone_FailedRunRecorded_JobRemoved(t *testing.T) {
+	home, clk := t.TempDir(), newTriggerFakeClock()
+	worker := newU2bAsyncWorker()
+	p1 := newU2bLauncherProcess(t, home, clk, worker)
+	fire := p1.fireStarted(t, worker)
+	image := u2bAsyncSnapshot(t, home)
+	p1.stop()
+	u2bAsyncRestore(t, home, image)
+
+	p2 := newU2bUnwiredLauncherProcess(t, home, clk, completedWorkerForU2b())
+	p2.physicalBoot(t)
+	p2.scheduler.RunDueJobs(p2.clock.Now())
+	u2bAsyncJoin(t, "cron dispatch lane", p2.scheduler.WaitForLane)
+	u2bAsyncJoin(t, "boot-2 execution, whatever the boot decided", p2.loop.taskExecutor.wg.Wait)
+	require.NotEmpty(t, p2.storedJobs(t, fire.taskID), "instrument: the fire is held")
+	require.Len(t, p2.runs(t, fire.taskID), 1,
+		"instrument: only boot 1's abandoned run exists — the held fire has not run")
+
+	// The assignee stops existing while the fire is held.
+	ghost := "retired-agent"
+	_, err := p2.loop.taskStore.Update(fire.taskID, task.Patch{AgentID: &ghost})
+	require.NoError(t, err)
+
+	// Wire the plane: the release must record the failure, not lose it.
+	wireLikeTheGatewayLatesWiresIt(t, p2)
+	u2bAsyncJoin(t, "release against a vanished agent", p2.loop.taskExecutor.wg.Wait)
+
+	runs := p2.runs(t, fire.taskID)
+	require.Len(t, runs, 2,
+		"W5(b2): the released fire's failure must be RECORDED as a failed run in the task's "+
+			"history (the abandoned boot-1 run plus the new failure); a failed task without a "+
+			"run record is the silent loss this row forbids")
+	var failedRun *task.TaskRun
+	for i := range runs {
+		if runs[i].RunID != fire.run.RunID && runs[i].Status == task.StatusFailed {
+			failedRun = &runs[i]
+			break
+		}
+	}
+	require.NotNil(t, failedRun, "W5(b2): the recorded failure is a failed run distinct from boot 1's")
+	require.Empty(t, p2.storedJobs(t, fire.taskID),
+		"W5(b2): the job is removed after the failure is recorded")
+
+	p2.stop()
+	p3 := bootU2bLauncherProcess(t, home, clk)
+	p3.runDueAndJoin(t)
+	require.Len(t, p3.runs(t, fire.taskID), 2, "W5(b2): no replay at the next boot")
+	p3.stop()
 }
