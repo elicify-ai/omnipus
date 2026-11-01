@@ -17,7 +17,7 @@ func TestCapRED_RetiredSchedulesKeyIgnoredAndDropped(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv(EnvHome, home)
 			path := filepath.Join(home, "config.json")
-			input := fmt.Sprintf(`{"schedules":{"max_concurrent_runs":%d}}`, n)
+			input := fmt.Sprintf(`{"version":1,"schedules":{"max_concurrent_runs":%d}}`, n)
 			if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -25,8 +25,8 @@ func TestCapRED_RetiredSchedulesKeyIgnoredAndDropped(t *testing.T) {
 			if err != nil {
 				t.Fatalf("retired schedule key must not prevent boot configuration load: %v", err)
 			}
-			if err := SaveConfig(path, cfg); err != nil {
-				t.Fatalf("save after retired key: %v", err)
+			if saveErr := SaveConfig(path, cfg); saveErr != nil {
+				t.Fatalf("save after retired key: %v", saveErr)
 			}
 			bytes, err := os.ReadFile(path)
 			if err != nil {

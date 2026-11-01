@@ -205,6 +205,8 @@ func TestCapRED_SessionWorker_RefusalNamesCause(t *testing.T) {
 }
 
 func TestCapRED_ExecuteTask_RefusalNamesCause(t *testing.T) {
+	// CAP-B5 governs the sentinel itself, not only the decided refusal wrapper.
+	capRedAssert(t, "CAP-B5 sentinel exact text", ErrDispatchCapReached.Error(), "task dispatch is at its limit")
 	for _, tc := range []struct {
 		id        string
 		cap, held int
