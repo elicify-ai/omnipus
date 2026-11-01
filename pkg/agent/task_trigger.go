@@ -1017,12 +1017,12 @@ func (s *TaskTriggerScheduler) OnTaskDeleted(taskID string) {
 // cron.ErrRunHandedOff so its job is kept until the run settles (6b U2b,
 // task_trigger_once_settle.go).
 //
-// The owed fire of a crashed one-time trigger is first held until the task
-// executor's session plane is wired (holdBootOwedFire,
-// task_trigger_boot_hold.go); it then runs through runScheduledFire exactly
-// like any other fire.
+// A fire that comes due before the gateway has wired the task executor's
+// session plane, and the owed fire of a crashed one-time trigger, is first
+// held until the plane is wired (holdFire, task_trigger_boot_hold.go); it
+// then runs through runScheduledFire exactly like any other fire.
 func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (string, error) {
-	if s.holdBootOwedFire(ctx, job) {
+	if s.holdFire(ctx, job) {
 		return "", cron.ErrRunHandedOff
 	}
 	return s.runScheduledFire(ctx, job)

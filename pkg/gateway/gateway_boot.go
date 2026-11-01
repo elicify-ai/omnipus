@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -367,6 +368,10 @@ func setupAndStartServices(
 		return runningServices, err
 	}
 
+	if hook := afterStartSchedulersHookForTest.Load(); hook != nil {
+		(*hook)(stg.agentLoop)
+	}
+
 	if runningServices, stop, err := stg.setupMediaAndChannels(); stop {
 		return runningServices, err
 	}
@@ -414,6 +419,23 @@ func (stg *setupAndStartServicesState) prepareTaskTrigger() error {
 		return fmt.Errorf("error preparing task trigger scheduler: %w", err)
 	}
 	return nil
+}
+
+// afterStartSchedulersHookForTest, when set, runs inside setupAndStartServices
+// right after startSchedulers returns and before setupMediaAndChannels: the
+// window in which the schedulers run and the task executor's session plane is
+// not yet wired. Nil in production; set only by tests through
+// SetAfterStartSchedulersHookForTest.
+var afterStartSchedulersHookForTest atomic.Pointer[func(*agent.AgentLoop)]
+
+// SetAfterStartSchedulersHookForTest installs fn as the hook run right after
+// startSchedulers returns (nil removes it). For tests only.
+func SetAfterStartSchedulersHookForTest(fn func(al *agent.AgentLoop)) {
+	if fn == nil {
+		afterStartSchedulersHookForTest.Store(nil)
+		return
+	}
+	afterStartSchedulersHookForTest.Store(&fn)
 }
 
 // startSchedulers constructs and starts the gateway's cron-backed scheduling and drain services in boot order.
