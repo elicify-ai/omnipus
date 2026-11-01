@@ -1,11 +1,11 @@
 // r15 §5.6/§13, FR-052/070, S-9.3. Real browser component and slug install
 // HTTP adapter; only fetch and the other API edges are replaced. File upload
 // is a separate API edge here. These tests do not claim server history proof.
-// C-1 is not present yet: explicit runtime list data below exercises the new
-// component behavior without migrating old typed fixtures or inventing a type.
+// C-1 is present (2038b3bff): list fixtures carry the required generated
+// has_local_changes field; no parallel wire type or generated-type edits.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -80,11 +80,11 @@ async function chooseSlug(slug = 'web-search', changed = true) {
 }
 
 async function confirmation(slug: string) {
-  const dialog = await screen.findByRole('alertdialog', { name: 'Replace local changes?', exact: true })
-  expect(within(dialog).getByText(question(slug), { exact: true })).toBeInTheDocument()
-  expect(within(dialog).getByRole('button', { name: 'Replace', exact: true })).toBeEnabled()
-  expect(within(dialog).getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled()
-  return within(dialog)
+  // §13 fixes the question and buttons, not a dialog title or ARIA role.
+  expect(await screen.findByText(question(slug), { exact: true })).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Replace' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
+  return screen
 }
 
 function requestBody(index: number) {
@@ -99,8 +99,8 @@ describe('SkillBrowser — local changes confirmation, r15 S-9.3', () => {
     const user = await chooseSlug('web-search')
     const dialog = await confirmation('web-search')
     expect(network).not.toHaveBeenCalled()
-    await user.click(dialog.getByRole('button', { name: 'Cancel', exact: true }))
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    await user.click(dialog.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByText(question('web-search'), { exact: true })).not.toBeInTheDocument())
     expect(network).not.toHaveBeenCalled()
     expect(installSkillFromFile).not.toHaveBeenCalled()
     expect(screen.getByTestId('skill-install-web-search')).toBeEnabled()
@@ -110,11 +110,11 @@ describe('SkillBrowser — local changes confirmation, r15 S-9.3', () => {
     const user = await chooseSlug('pdf-reader')
     const dialog = await confirmation('pdf-reader')
     expect(network).not.toHaveBeenCalled()
-    await user.click(dialog.getByRole('button', { name: 'Replace', exact: true }))
+    await user.click(dialog.getByRole('button', { name: 'Replace' }))
     await waitFor(() => expect(network).toHaveBeenCalledTimes(1))
     expect(requestBody(0)).toEqual({ slug: 'pdf-reader', version: '2.0.0', revision, replace_local_changes: true })
     expect(await screen.findByText('Installed', { exact: true })).toBeInTheDocument()
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.queryByText(question('pdf-reader'), { exact: true })).not.toBeInTheDocument()
     expect(addToast).toHaveBeenCalledExactlyOnceWith({ message: 'Skill "pdf-reader" installed successfully.', variant: 'success' })
   })
 
@@ -125,8 +125,8 @@ describe('SkillBrowser — local changes confirmation, r15 S-9.3', () => {
     expect(network).toHaveBeenCalledTimes(1)
     expect(requestBody(0)).toEqual({ slug: 'web-search', version: '2.0.0', revision })
     expect(addToast).not.toHaveBeenCalled()
-    await user.click(dialog.getByRole('button', { name: action, exact: true }))
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    await user.click(dialog.getByRole('button', { name: action }))
+    await waitFor(() => expect(screen.queryByText(question('web-search'), { exact: true })).not.toBeInTheDocument())
     if (action === 'Cancel') {
       expect(network).toHaveBeenCalledTimes(1)
       expect(screen.getByTestId('skill-install-web-search')).toBeEnabled()
@@ -167,8 +167,8 @@ describe('SkillBrowser — local changes confirmation, r15 S-9.3', () => {
     const dialog = await confirmation('web-search')
     expect(installSkillFromFile).not.toHaveBeenCalled()
     expect(network).not.toHaveBeenCalled()
-    await user.click(dialog.getByRole('button', { name: action, exact: true }))
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    await user.click(dialog.getByRole('button', { name: action }))
+    await waitFor(() => expect(screen.queryByText(question('web-search'), { exact: true })).not.toBeInTheDocument())
     if (action === 'Cancel') {
       expect(installSkillFromFile).not.toHaveBeenCalled()
       expect(screen.getByTestId('skill-install-confirm-dialog')).toBeInTheDocument()

@@ -41,6 +41,7 @@ func TestSkillListTool_ManagementRequiresComposedReadAndWriterPolicies(t *testin
 	writeManagementSkill(t, root, "release", "# Release\nSafe body.\n")
 	deps, _ := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", root, "")
+	deps.SkillWriter = skills.NewSkillWriter(root)
 	tool := systools.NewSkillListTool(deps)
 	ctx := tools.WithAgentID(context.Background(), "ava")
 
@@ -52,7 +53,7 @@ func TestSkillListTool_ManagementRequiresComposedReadAndWriterPolicies(t *testin
 		{"ask read and ask writer permits discovery", map[string]string{"list_skills": "ask", "edit_skill": "ask"}, true},
 		{"denied read refuses", map[string]string{"list_skills": "deny", "edit_skill": "allow"}, false},
 		{"malformed read verdict refuses", map[string]string{"list_skills": "", "edit_skill": "allow"}, false},
-		{"all writers denied refuses", map[string]string{"list_skills": "allow", "create_agent": "deny", "update_agent": "deny", "create_skill": "deny", "edit_skill": "deny"}, false},
+		{"all writers denied refuses", map[string]string{"list_skills": "allow", "create_agent": "deny", "update_agent": "deny", "edit_skill": "deny"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,47 +68,56 @@ func TestSkillListTool_ManagementRequiresComposedReadAndWriterPolicies(t *testin
 		})
 	}
 
-	allowManagement(deps, map[string]string{"list_skills": "allow", "edit_skill": "allow"})
+	allowManagement(deps, map[string]string{"list_skills": "allow", "get_skill": "allow", "edit_skill": "allow"})
 	if result := tool.Execute(context.Background(), map[string]any{"scope": "management"}); !result.IsError {
 		t.Fatalf("missing actor must fail closed: %s", result.ForLLM)
 	}
 }
 
-func TestSkillListTool_ManagementNamedInspectionIsSanitizedAndUnfiltered(t *testing.T) {
+func TestSkillListTool_PureManagementListAndSelectedDetailAreUnfiltered(t *testing.T) {
 	root := t.TempDir()
 	writeManagementSkill(t, root, "release", "# Release\nSafe body.\n")
 	deps, cfg := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", root, "")
+	deps.SkillWriter = skills.NewSkillWriter(root)
 	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{ID: "ava", Skills: []string{}})
-	allowManagement(deps, map[string]string{"list_skills": "allow", "edit_skill": "ask"})
+	allowManagement(deps, map[string]string{"list_skills": "allow", "get_skill": "allow", "edit_skill": "ask"})
 
-	result := systools.NewSkillListTool(deps).Execute(
-		tools.WithAgentID(context.Background(), "ava"),
-		map[string]any{"scope": "management", "name": "release"},
-	)
+	ctx := readCtx("ava")
+	listed := systools.NewSkillListTool(deps).Execute(ctx, map[string]any{"scope": "management"})
+	payload := parseSuccess(t, listed.ForLLM)
+	entries, ok := payload["skills"].([]any)
+	if !ok || len(entries) != 1 {
+		t.Fatalf("want one unfiltered management row: %s", listed.ForLLM)
+	}
+	entry, ok := entries[0].(map[string]any)
+	if !ok {
+		t.Fatalf("not a row: %s", listed.ForLLM)
+	}
+	if entry["origin"] != "user" || entry["shared_impact"] != "all_agents" || entry["revision"] == "" {
+		t.Fatalf("missing management metadata: %#v", entry)
+	}
+	if _, present := entry["content"]; present {
+		t.Fatalf("§5.3 list must not carry content: %s", listed.ForLLM)
+	}
+	// §5.2 replaces named inspection; only requested instructions are returned.
+	result := systools.NewGetSkillTool(deps).Execute(ctx, map[string]any{"id": "release", "fields": []any{"instructions"}})
 	if result.IsError {
 		t.Fatal(result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, "Safe body.") || strings.Contains(result.ForLLM, "description: managed release") {
-		t.Fatalf("expected body with frontmatter stripped: %s", result.ForLLM)
+		t.Fatalf("frontmatter must be stripped: %s", result.ForLLM)
 	}
-	for _, forbidden := range []string{root, filepath.Join(root, "release"), "\"path\""} {
+	for _, forbidden := range []string{root, filepath.Join(root, "release"), `"path"`} {
 		if strings.Contains(result.ForLLM, forbidden) {
-			t.Fatalf("response disclosed filesystem data %q: %s", forbidden, result.ForLLM)
+			t.Fatalf("unrequested filesystem data %q: %s", forbidden, result.ForLLM)
 		}
 	}
-	payload := parseSuccess(t, result.ForLLM)
-	entries, entriesOK := payload["skills"].([]any)
-	if !entriesOK {
-		t.Fatalf("skills=%T %v, want array", payload["skills"], payload["skills"])
+	detail := parseSuccess(t, result.ForLLM)
+	if detail["id"] != "release" || detail["revision"] != entry["revision"] {
+		t.Fatalf("detail/list snapshot identity mismatch: %#v vs %#v", detail, entry)
 	}
-	entry, entryOK := entries[0].(map[string]any)
-	if !entryOK {
-		t.Fatalf("skills[0]=%T %v, want object", entries[0], entries[0])
-	}
-	if entry["origin"] != "user" || entry["shared_impact"] != "all_agents" || entry["revision"] == "" {
-		t.Fatalf("response lacks management metadata: %#v", entry)
-	}
+
 }
 
 func TestSkillListTool_ManagementRejectsTraversalUnknownAndSymlinkEscape(t *testing.T) {
@@ -125,7 +135,8 @@ func TestSkillListTool_ManagementRejectsTraversalUnknownAndSymlinkEscape(t *test
 	}
 	deps, _ := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", root, "")
-	allowManagement(deps, map[string]string{"list_skills": "allow", "create_skill": "allow"})
+	deps.SkillWriter = skills.NewSkillWriter(root)
+	allowManagement(deps, map[string]string{"list_skills": "allow", "edit_skill": "allow", "get_skill": "allow"})
 	tool := systools.NewSkillListTool(deps)
 	ctx := tools.WithAgentID(context.Background(), "ava")
 
@@ -138,8 +149,17 @@ func TestSkillListTool_ManagementRejectsTraversalUnknownAndSymlinkEscape(t *test
 			t.Fatalf("invalid arguments accepted: %#v => %s", args, got.ForLLM)
 		}
 	}
-	got := tool.Execute(ctx, map[string]any{"scope": "management", "name": "escaped"})
-	if !got.IsError || strings.Contains(got.ForLLM, "SECRET_TOKEN") || strings.Contains(got.ForLLM, outside) {
+	removed := tool.Execute(ctx, map[string]any{"scope": "management", "name": "escaped"})
+	code, msg := errorBlock(t, removed)
+	if code != "INVALID_INPUT" || msg != "name was removed from list_skills; use get_skill with id and fields" {
+		t.Fatalf("wrong removed-name remedy: %s", removed.ForLLM)
+	}
+	got := systools.NewGetSkillTool(deps).Execute(ctx, map[string]any{"id": "escaped", "fields": []any{"instructions"}})
+	code, msg = errorBlock(t, got)
+	// §5.10 intentionally identifies the link target to an authorized reader;
+	// confidentiality protects its bytes, not the operator's repair path.
+	want := "skill 'escaped' cannot be served: its instruction file is a symlink to '" + outside + "', which is not a regular file captured with the skill (outside the skill, Omnipus control metadata, or missing or not a plain file); fix the instruction file outside Omnipus and try again"
+	if !got.IsError || code != "SKILL_INSTRUCTION_UNRESOLVED" || msg != want || strings.Contains(got.ForLLM, "SECRET_TOKEN") {
 		t.Fatalf("symlink escape was not safely refused: %s", got.ForLLM)
 	}
 }
@@ -181,19 +201,30 @@ func TestSkillListTool_ManagementIncludesMountedProjectAndRefusesCollision(t *te
 	if listed.IsError || !strings.Contains(listed.ForLLM, "\"origin\": \"project\"") || !strings.Contains(listed.ForLLM, "\"shared_impact\": \"workspace_members\"") {
 		t.Fatalf("mounted project inventory missing: %s", listed.ForLLM)
 	}
+	// §5.3 has no named list. Keep collision detection at the real project
+	// lookup boundary; get_skill is deliberately installed-registry-only (§5.2).
+	_, collisions, err := skills.LookupProjectSkillChecked([]skills.ProjectMount{{Name: "a", Root: mountA}, {Name: "b", Root: mountB}}, "deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collisions) != 1 || len(collisions[0].Locations) != 2 {
+		t.Fatalf("project ambiguity was lost: %#v", collisions)
+	}
 	inspected := tool.Execute(ctx, map[string]any{"scope": "management", "name": "deploy"})
-	if !inspected.IsError || !strings.Contains(inspected.ForLLM, "AMBIGUOUS") || strings.Contains(inspected.ForLLM, mountA) || strings.Contains(inspected.ForLLM, mountB) {
-		t.Fatalf("collision was not sanitized and refused: %s", inspected.ForLLM)
+	code, msg := errorBlock(t, inspected)
+	if code != "INVALID_INPUT" || msg != "name was removed from list_skills; use get_skill with id and fields" || strings.Contains(inspected.ForLLM, mountA) || strings.Contains(inspected.ForLLM, mountB) {
+		t.Fatalf("withdrawn inspection must refuse without path disclosure: %s", inspected.ForLLM)
 	}
 }
 
-func TestSkillListTool_ManagementContentAndRevisionShareMutationLock(t *testing.T) {
+func TestGetSkill_ManagementContentAndRevisionShareMutationLock(t *testing.T) {
 	root := t.TempDir()
 	writeManagementSkill(t, root, "release", "old body\n")
 	deps, _ := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", root, "")
-	allowManagement(deps, map[string]string{"list_skills": "allow", "edit_skill": "allow"})
-	tool := systools.NewSkillListTool(deps)
+	deps.SkillWriter = skills.NewSkillWriter(root)
+	allowManagement(deps, map[string]string{"list_skills": "allow", "get_skill": "allow", "edit_skill": "allow"})
+	tool := systools.NewGetSkillTool(deps)
 	ctx := tools.WithAgentID(context.Background(), "ava")
 
 	locked := make(chan struct{})
@@ -211,7 +242,7 @@ func TestSkillListTool_ManagementContentAndRevisionShareMutationLock(t *testing.
 	<-locked
 	resultCh := make(chan *tools.ToolResult, 1)
 	go func() {
-		resultCh <- tool.Execute(ctx, map[string]any{"scope": "management", "name": "release"})
+		resultCh <- tool.Execute(ctx, map[string]any{"id": "release", "fields": []any{"instructions"}})
 	}()
 	select {
 	case result := <-resultCh:
@@ -223,20 +254,14 @@ func TestSkillListTool_ManagementContentAndRevisionShareMutationLock(t *testing.
 	if result.IsError || !strings.Contains(result.ForLLM, "new body") || strings.Contains(result.ForLLM, "old body") {
 		t.Fatalf("management read did not return the published snapshot: %s", result.ForLLM)
 	}
-	wantRevision, err := skills.NewSkillWriter(root).SkillRevision("release")
+	// §7.3 uses ContentRevision, not the withdrawn writer revision format.
+	wantRevision, err := skills.ContentRevision(filepath.Join(root, "release"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	payload := parseSuccess(t, result.ForLLM)
-	entries, entriesOK := payload["skills"].([]any)
-	if !entriesOK {
-		t.Fatalf("skills=%T %v, want array", payload["skills"], payload["skills"])
-	}
-	entry, entryOK := entries[0].(map[string]any)
-	if !entryOK {
-		t.Fatalf("skills[0]=%T %v, want object", entries[0], entries[0])
-	}
-	if entry["revision"] != wantRevision {
-		t.Fatalf("content/revision snapshot mismatch: got %v want %s", entry["revision"], wantRevision)
+
+	if payload["revision"] != wantRevision {
+		t.Fatalf("content/revision snapshot mismatch: got %v want %s", payload["revision"], wantRevision)
 	}
 }

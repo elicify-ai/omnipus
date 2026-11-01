@@ -1,28 +1,31 @@
 // Omnipus — System Agent Skill Authoring Tool Tests
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
-
 package systools_test
 
 import (
 	"context"
-	"os"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
-	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func validSkill(name string) string {
 	return "---\nname: " + name + "\ndescription: A valid authored skill with a long enough description to pass.\n---\n\n# " + name + "\n\nDoes the thing.\n"
 }
 
-// newAuthoringDeps wires a Deps with a SkillWriter rooted at a temp global dir
-// and a SkillsLoader spanning an optional builtin dir.
 func newAuthoringDeps(t *testing.T, globalDir, builtinDir string) *systools.Deps {
 	t.Helper()
 	deps, _ := newTestDeps(t)
@@ -31,264 +34,201 @@ func newAuthoringDeps(t *testing.T, globalDir, builtinDir string) *systools.Deps
 	return deps
 }
 
-// TestSkillCreateTool_WritesAndVersions verifies system.skill.create writes a
-// real SKILL.md and that a subsequent system.skill.edit snapshots the prior
-// version (consent-gated + versioned; the consent gate is the loop approval
-// hook, exercised by policy "ask" — here we verify the write/versioning path).
-func TestSkillCreateTool_WritesAndVersions(t *testing.T) {
-	globalDir := t.TempDir()
-	deps := newAuthoringDeps(t, globalDir, "")
-
-	create := systools.NewSkillCreateTool(deps)
-	res := create.Execute(context.Background(), map[string]any{
-		"name":    "my-skill",
-		"content": validSkill("my-skill"),
-	})
-	m := parseSuccess(t, res.ForLLM)
-	if m["action"] != "created" {
-		t.Fatalf("expected action=created, got %v (resp=%s)", m["action"], res.ForLLM)
+// This helper invokes the supported real reader; it never manufactures a
+// revision or injects the loop's approval marker. Only the policy edge is fake.
+func observeSkillForMutation(t *testing.T, deps *systools.Deps, ctx context.Context, slug string) context.Context {
+	t.Helper()
+	if deps.ResolveToolPolicy == nil {
+		deps.ResolveToolPolicy = func(_, _ string) (string, bool) { return "allow", true }
 	}
-	if _, err := os.Stat(filepath.Join(globalDir, "my-skill", "SKILL.md")); err != nil {
-		t.Fatalf("SKILL.md not written: %v", err)
-	}
-
-	// Edit it — should snapshot the prior version.
-	edit := systools.NewSkillEditTool(deps)
-	revision, err := deps.SkillWriter.SkillRevision("my-skill")
-	if err != nil {
-		t.Fatal(err)
-	}
-	editRes := edit.Execute(context.Background(), map[string]any{
-		"name":     "my-skill",
-		"content":  "---\nname: my-skill\ndescription: Edited description that is also long enough to be valid here.\n---\n\n# my-skill\n\nEdited.\n",
-		"revision": revision,
-	})
-	em := parseSuccess(t, editRes.ForLLM)
-	if em["action"] != "edited" {
-		t.Fatalf("expected action=edited, got %v (resp=%s)", em["action"], editRes.ForLLM)
-	}
-	w := skills.NewSkillWriter(globalDir)
-	vers, err := w.ListVersions("my-skill")
-	if err != nil || len(vers) != 1 {
-		t.Fatalf("expected 1 version snapshot, got %d err=%v", len(vers), err)
-	}
+	result := systools.NewGetSkillTool(deps).Execute(ctx, map[string]any{"id": slug, "fields": []any{"instructions"}})
+	wu3Success(t, result)
+	return ctx
 }
 
-// TestSkillEditTool_BuiltinOverride verifies that editing a built-in via the
-// tool creates a user override and does not mutate the built-in.
-func TestSkillEditTool_BuiltinOverride(t *testing.T) {
-	globalDir := t.TempDir()
-	builtinDir := t.TempDir()
-
-	bdir := filepath.Join(builtinDir, "plan")
-	if err := os.MkdirAll(bdir, 0o755); err != nil {
-		t.Fatal(err)
+// Only the model and the human decision are fakes. File tools, composition,
+// dispatch, persisted enclosing mount, change pipeline and history are real.
+func runSkillAuthoringLoop(t *testing.T, home string, provider *testutil.ScenarioProvider, approver agent.PolicyApprover) {
+	t.Helper()
+	t.Setenv(config.EnvHome, home)
+	t.Setenv(config.EnvBuiltinSkills, t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Home = filepath.Join(home, "agents")
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "scripted-model"}
+	cfg.Agents.Defaults.MaxToolIterations = 20
+	cfg.Sandbox.AutoApprove = false
+	policies := map[string]config.ToolPolicy{}
+	for _, name := range []string{"write_file", "read_file", "ToolSearch", "get_skill"} {
+		cfg.Sandbox.ToolPolicies[name] = "allow"
+		policies[name] = config.ToolPolicyAllow
 	}
-	builtin := validSkill("plan")
-	if err := os.WriteFile(filepath.Join(bdir, "SKILL.md"), []byte(builtin), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	deps := newAuthoringDeps(t, globalDir, builtinDir)
-	revision, err := skills.NewSkillWriter(builtinDir).SkillRevision("plan")
-	if err != nil {
-		t.Fatal(err)
-	}
-	edit := systools.NewSkillEditTool(deps)
-	res := edit.Execute(context.Background(), map[string]any{
-		"name":     "plan",
-		"content":  "---\nname: plan\ndescription: An overridden plan skill customized by the user for this test.\n---\n\n# plan\n\nOverride.\n",
-		"revision": revision,
-	})
-	m := parseSuccess(t, res.ForLLM)
-	if m["action"] != "override_created" {
-		t.Fatalf("expected action=override_created, got %v (resp=%s)", m["action"], res.ForLLM)
-	}
-
-	// Built-in unchanged.
-	after, _ := os.ReadFile(filepath.Join(bdir, "SKILL.md"))
-	if string(after) != builtin {
-		t.Errorf("built-in was mutated in place")
-	}
-	// Override written under global dir.
-	if _, err := os.Stat(filepath.Join(globalDir, "plan", "SKILL.md")); err != nil {
-		t.Errorf("override not written to global dir: %v", err)
-	}
+	cfg.Sandbox.ToolPolicies["edit_skill"] = "ask"
+	policies["edit_skill"] = config.ToolPolicyAsk
+	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Name: "Mia", Home: filepath.Join(home, "agents", "mia"), Tools: &config.AgentToolsCfg{Builtin: config.AgentBuiltinToolsCfg{Policies: policies}}}}
+	require.NoError(t, agentstore.New(home).Create("mia", &cfg.Agents.List[0]))
+	require.NoError(t, config.SaveConfig(filepath.Join(home, "config.json"), cfg))
+	// NewAgentLoop does not seed workspace membership; persist the real fixture.
+	require.NoError(t, workspace.SaveRecord(home, workspace.Workspace{ID: "authoring", Name: "Authoring", Status: "active", CoreTeam: []string{"mia"}}))
+	mb := bus.NewMessageBus()
+	t.Cleanup(mb.Close)
+	loop, err := agent.NewAgentLoop(cfg, mb, provider)
+	require.NoError(t, err)
+	t.Cleanup(loop.Close)
+	wsID, ok := workspace.FindForAgent(home, "mia")
+	require.True(t, ok, "real workspace membership control")
+	_, _, err = workspace.CreateMount(home, wsID, "enclosing", filepath.Dir(home))
+	require.NoError(t, err)
+	loop.WireSysagentDeps(&systools.Deps{Home: home, GetCfg: func() *config.Config { return cfg }, SkillWriter: skills.NewSkillWriter(filepath.Join(home, "skills")), SkillsLoader: skills.NewSkillsLoader("", filepath.Join(home, "skills"), "")})
+	loop.SetToolApprover(approver)
+	final, err := loop.ProcessDirectAs(context.Background(), "mia", "perform the scripted skill changes", t.Name())
+	require.NoError(t, err)
+	require.Equal(t, "done", final)
 }
 
-// TestSkillCreateTool_TraversalRejected verifies path-traversal names are
-// rejected with INVALID_INPUT and nothing is written.
-func TestSkillCreateTool_TraversalRejected(t *testing.T) {
-	globalDir := t.TempDir()
-	deps := newAuthoringDeps(t, globalDir, "")
-	create := systools.NewSkillCreateTool(deps)
+func authoringCall(t *testing.T, p *testutil.ScenarioProvider, name string, args map[string]any) {
+	t.Helper()
+	raw, err := json.Marshal(args)
+	require.NoError(t, err)
+	p.WithToolCall(name, string(raw))
+}
 
-	res := create.Execute(context.Background(), map[string]any{
-		"name":    "../escape",
-		"content": validSkill("escape"),
-	})
-	em := parseError(t, res.ForLLM)
-	errBlock, _ := em["error"].(map[string]any)
-	if errBlock == nil || errBlock["code"] != "INVALID_INPUT" {
-		t.Fatalf("expected INVALID_INPUT for traversal, got %s", res.ForLLM)
+func authoringResult(t *testing.T, p *testutil.ScenarioProvider, id string) string {
+	t.Helper()
+	for _, m := range p.LastMessages() {
+		if m.Role == "tool" && m.ToolCallID == id {
+			return m.Content
+		}
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(globalDir), "escape")); err == nil {
-		t.Errorf("traversal escaped the skills root")
+	t.Fatalf("missing actual tool result %s", id)
+	return ""
+}
+
+type skillDecisionRecorder struct {
+	allow    bool
+	requests []agent.PolicyApprovalReq
+}
+
+func (r *skillDecisionRecorder) RequestApproval(_ context.Context, req agent.PolicyApprovalReq) (bool, string, bool) {
+	r.requests = append(r.requests, req)
+	if r.allow {
+		return true, "", false
 	}
+	return false, "user", false
 }
 
-// TestSkillCreateTool_OversizeRejected verifies an oversize SKILL.md is rejected.
-func TestSkillCreateTool_OversizeRejected(t *testing.T) {
-	globalDir := t.TempDir()
-	deps := newAuthoringDeps(t, globalDir, "")
-	create := systools.NewSkillCreateTool(deps)
-
-	oversize := "---\nname: big\ndescription: ok and long enough to be valid for this test indeed.\n---\n\n# big\n\n" +
-		strings.Repeat("A", skills.MaxSkillMarkdownBytes+1)
-	res := create.Execute(context.Background(), map[string]any{"name": "big", "content": oversize})
-	em := parseError(t, res.ForLLM)
-	errBlock, _ := em["error"].(map[string]any)
-	if errBlock == nil || errBlock["code"] != "INVALID_INPUT" {
-		t.Fatalf("expected INVALID_INPUT for oversize, got %s", res.ForLLM)
-	}
+// r15 §§5.5/5.11 replace the retired create/content-edit verbs: both writes
+// go through the real loop and each resulting state is retained. Restoration
+// proves the first state's bytes are recoverable, not merely a version count.
+func TestSkillFileAuthoring_WritesAndVersions(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "omnipus")
+	root := filepath.Join(home, "skills")
+	path := filepath.Join(root, "my-skill", "SKILL.md")
+	original := validSkill("my-skill")
+	edited := original + "\nEdited.\n"
+	p := testutil.NewScenario()
+	authoringCall(t, p, "write_file", map[string]any{"path": path, "content": original})
+	authoringCall(t, p, "write_file", map[string]any{"path": path, "content": edited, "overwrite": true})
+	p.WithText("done")
+	approver := &skillDecisionRecorder{allow: true}
+	runSkillAuthoringLoop(t, home, p, approver)
+	require.Len(t, approver.requests, 2, "one ordinary card for each composed skill write")
+	assert.Contains(t, authoringResult(t, p, "write_file-0"), "saved as skill version ")
+	assert.Contains(t, authoringResult(t, p, "write_file-1"), "saved as skill version ")
+	assert.Equal(t, edited, string(wu3ReadFile(t, path)))
+	obs, err := skills.ObserveSkill(root, "my-skill", skills.VersionQuery{Want: true, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, obs.Versions, 2, "create and edit each record resulting state (§5.11)")
+	assert.Equal(t, "edit", obs.Versions[0].Kind)
+	assert.Equal(t, "create", obs.Versions[1].Kind)
+	deps := newAuthoringDeps(t, root, "")
+	ctx := observeSkillForMutation(t, deps, readCtx("editor"), "my-skill")
+	wu3Success(t, systools.NewSkillEditTool(deps).Execute(ctx, map[string]any{"action": "restore", "skill": "my-skill", "version": obs.Versions[1].ID}))
+	assert.Equal(t, original, string(wu3ReadFile(t, path)), "the entire creation snapshot remains recoverable")
 }
 
-// TestSkillCreateTool_NilWriter_ReturnsNotAvailable verifies the nil-dep guard.
-func TestSkillCreateTool_NilWriter_ReturnsNotAvailable(t *testing.T) {
-	deps, _ := newTestDeps(t) // no SkillWriter
-	create := systools.NewSkillCreateTool(deps)
-	res := create.Execute(context.Background(), map[string]any{"name": "x", "content": validSkill("x")})
-	em := parseError(t, res.ForLLM)
-	errBlock, _ := em["error"].(map[string]any)
-	if errBlock == nil || errBlock["code"] != "NOT_AVAILABLE" {
-		t.Fatalf("expected NOT_AVAILABLE, got %s", res.ForLLM)
-	}
+// §5.4/§8.2 supersede implicit built-in overrides: explicit copy, no mutation
+// or history for the original. The copy has the declared name transform.
+func TestSkillEditTool_BuiltinReadOnlyRequiresExplicitCopy(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	_, err := skills.SyncBuiltins(root, nil)
+	require.NoError(t, err)
+	original := wu3ReadFile(t, filepath.Join(root, "plan", "SKILL.md"))
+	deps := newAuthoringDeps(t, root, "")
+	ctx := observeSkillForMutation(t, deps, readCtx("editor"), "plan")
+	result := systools.NewSkillEditTool(deps).Execute(ctx, map[string]any{"action": "delete", "skill": "plan"})
+	body := wu3Error(t, result, "BUILTIN_READ_ONLY")
+	assert.Equal(t, "'plan' is a built-in skill. Built-in skills are read-only and are replaced with the shipped version on every Omnipus update, so this change was not saved. Copy it first: edit_skill action=copy skill=plan to=<new-name>, then edit the copy and grant it to the agents that should use it.", body["message"])
+	wu3Success(t, systools.NewSkillEditTool(deps).Execute(ctx, map[string]any{"action": "copy", "skill": "plan", "to": "my-plan"}))
+	assert.Equal(t, strings.Replace(string(original), "name: plan", "name: my-plan", 1), string(wu3ReadFile(t, filepath.Join(root, "my-plan", "SKILL.md"))))
+	assert.Equal(t, original, wu3ReadFile(t, filepath.Join(root, "plan", "SKILL.md")))
+	assert.NoDirExists(t, filepath.Join(skills.SkillHistoryRoot(root), "plan"))
 }
 
-// recordingApprover is a ToolApprover that records the request and returns a
-// caller-configured verdict, simulating the ws_approval user decision.
-type recordingApprover struct {
-	verdict agent.ApprovalVerdict
-	got     *agent.ToolApprovalRequest
+func TestSkillCopyTool_TraversalRejected(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	validSkillFixture(t, root, "source", "A copy source")
+	deps := newAuthoringDeps(t, root, "")
+	deps.ResolveToolPolicy = func(_, _ string) (string, bool) { return "allow", true }
+	result := systools.NewSkillEditTool(deps).Execute(readCtx("editor"), map[string]any{"action": "copy", "skill": "source", "to": "../escape"})
+	wu3Error(t, result, "INVALID_INPUT")
+	assert.NoDirExists(t, filepath.Join(filepath.Dir(root), "escape"))
+	assert.Equal(t, "---\nname: source\ndescription: A copy source\n---\n\nBody of source.\n", string(wu3ReadFile(t, filepath.Join(root, "source", "SKILL.md"))))
 }
 
-func (r *recordingApprover) ApproveTool(
-	_ context.Context,
-	req *agent.ToolApprovalRequest,
-) (agent.ApprovalDecision, error) {
-	r.got = req.Clone()
-	return agent.ApprovalDecision{Verdict: r.verdict, Reason: "test"}, nil
+// §7.2 rejects an oversized creation before persistence. This uses the real
+// pipeline, not the removed tool or a test-owned validation wrapper.
+func TestSkillAuthoringPipeline_OversizeRejected(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	content := validSkill("big") + strings.Repeat("A", skills.MaxSkillMarkdownBytes+1)
+	out, err := skills.ApplyChange(root, skills.ChangeRequest{Kind: skills.KindCreate, Slug: "big", Content: []byte(content), Expect: skills.Expectation{Absent: true}})
+	require.ErrorIs(t, err, skills.ErrSaveCheckFailed)
+	assert.Equal(t, skills.PersistenceNone, out.PersistenceStatus)
+	assert.NoDirExists(t, filepath.Join(root, "big"))
 }
 
-// TestSkillAuthoring_ConsentFlow_DenyBlocksExecute verifies the FR-12 tool-layer
-// consent flow for system.skill.create/edit end-to-end at the hook level:
-//
-//	tool call → policy "ask" → HookManager.ApproveTool
-//	→ ToolApprovalRequest (carries tool name + args) → user Deny
-//	→ ApprovalDecision not approved → Execute MUST NOT run.
-//
-// The agent loop wires this gate (loop.go:5501 calls ApproveTool for every
-// dispatched tool). Here we exercise the gate in isolation against a real
-// HookManager and assert a Deny verdict suppresses the write — proving the
-// consent path is live, not just declared.
+func TestSkillCopyTool_NilDeps_ReturnsNotAvailable(t *testing.T) {
+	result := systools.NewSkillEditTool(nil).Execute(context.Background(), map[string]any{"action": "copy", "skill": "source", "to": "own-copy"})
+	wu3Error(t, result, "NOT_AVAILABLE")
+}
+
+// This replaces the old test-owned conditional dispatch with actual loop
+// enforcement. Both create and edit must stay byte-identical after Deny; the
+// approved counterparts must write, proving a blanket refusal cannot pass.
 func TestSkillAuthoring_ConsentFlow_DenyBlocksExecute(t *testing.T) {
-	globalDir := t.TempDir()
-	deps := newAuthoringDeps(t, globalDir, "")
-
-	create := systools.NewSkillCreateTool(deps)
-	edit := systools.NewSkillEditTool(deps)
-
-	args := map[string]any{"name": "denied-skill", "content": validSkill("denied-skill")}
-
-	for _, tc := range []struct {
-		name  string
-		tool  string
-		setup func(t *testing.T) // ensures the target skill exists for the Allow-leg sanity check
-		exec  func() *tools.ToolResult
-	}{
-		{
-			name: "create",
-			tool: "system.skill.create",
-			setup: func(t *testing.T) {
-				// nothing — create makes it fresh. Clear any leftover.
-				_ = os.RemoveAll(filepath.Join(globalDir, "denied-skill"))
-			},
-			exec: func() *tools.ToolResult {
-				return create.Execute(context.Background(), args)
-			},
-		},
-		{
-			name: "edit",
-			tool: "system.skill.edit",
-			setup: func(t *testing.T) {
-				// Edit requires an existing skill; create it directly via the
-				// writer so the tool-under-test stays the edit tool.
-				if _, err := deps.SkillWriter.CreateSkill("denied-skill", validSkill("denied-skill")); err != nil {
-					t.Fatalf("setup CreateSkill: %v", err)
+	for _, operation := range []string{"create", "edit"} {
+		for _, allow := range []bool{false, true} {
+			t.Run(operation+"/"+map[bool]string{false: "deny", true: "allow"}[allow], func(t *testing.T) {
+				home := filepath.Join(t.TempDir(), "omnipus")
+				root := filepath.Join(home, "skills")
+				path := filepath.Join(root, "consent", "SKILL.md")
+				original := validSkill("consent")
+				changed := original + "\nChanged after approval.\n"
+				p := testutil.NewScenario()
+				if operation == "edit" {
+					validSkillFixture(t, root, "consent", "A consent fixture")
+					original = string(wu3ReadFile(t, path))
+					authoringCall(t, p, "ToolSearch", map[string]any{"names": []any{"get_skill"}})
+					authoringCall(t, p, "get_skill", map[string]any{"id": "consent", "fields": []any{"instructions"}})
 				}
-				revision, err := deps.SkillWriter.SkillRevision("denied-skill")
-				if err != nil {
-					t.Fatalf("setup revision: %v", err)
+				args := map[string]any{"path": path, "content": changed}
+				if operation == "edit" {
+					args["overwrite"] = true
 				}
-				args["revision"] = revision
-			},
-			exec: func() *tools.ToolResult {
-				return edit.Execute(context.Background(), args)
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// Clean slate, then ensure the preconditions for the Allow leg.
-			_ = os.RemoveAll(filepath.Join(globalDir, "denied-skill"))
-
-			hm := agent.NewHookManager(nil)
-			approver := &recordingApprover{verdict: agent.VerdictDeny}
-			if err := hm.Mount(agent.NamedHook("test-deny", approver)); err != nil {
-				t.Fatalf("MountHook: %v", err)
-			}
-
-			// Simulate the loop's pre-execution approval gate: it builds a
-			// ToolApprovalRequest from the dispatched tool call and consults the
-			// hook manager before invoking Execute.
-			decision := hm.ApproveTool(context.Background(), &agent.ToolApprovalRequest{
-				Tool:      tc.tool,
-				Arguments: args,
+				authoringCall(t, p, "write_file", args)
+				p.WithText("done")
+				recorder := &skillDecisionRecorder{allow: allow}
+				runSkillAuthoringLoop(t, home, p, recorder)
+				require.Len(t, recorder.requests, 1, "exactly one ordinary approval, no second ritual")
+				assert.Equal(t, "write_file", recorder.requests[0].ToolName)
+				assert.Equal(t, args, recorder.requests[0].Args)
+				if allow {
+					assert.Equal(t, changed, string(wu3ReadFile(t, path)))
+				} else if operation == "edit" {
+					assert.Equal(t, original, string(wu3ReadFile(t, path)))
+				} else {
+					assert.NoFileExists(t, path)
+				}
 			})
-			if decision.IsApproved() {
-				t.Fatalf("expected Deny verdict from hook, got approved")
-			}
-			if approver.got == nil || approver.got.Tool != tc.tool {
-				t.Fatalf("approver did not receive %s request: %+v", tc.tool, approver.got)
-			}
-			if got, _ := approver.got.Arguments["name"].(string); got != "denied-skill" {
-				t.Fatalf("approval request missing args: %+v", approver.got.Arguments)
-			}
-
-			// Denied → the loop skips Execute entirely. Mirror that: do NOT call
-			// exec(), and assert nothing was written by the tool.
-			if _, err := os.Stat(filepath.Join(globalDir, "denied-skill", "SKILL.md")); err == nil {
-				t.Fatalf("skill was written despite Deny verdict — consent gate is not enforced")
-			}
-
-			// Sanity: an Allow verdict would let the write proceed. Re-mount with
-			// allow and confirm Execute succeeds (the write path itself works).
-			tc.setup(t)
-			hm2 := agent.NewHookManager(nil)
-			allow := &recordingApprover{verdict: agent.VerdictAllow}
-			if err := hm2.Mount(agent.NamedHook("test-allow", allow)); err != nil {
-				t.Fatalf("MountHook(allow): %v", err)
-			}
-			dec2 := hm2.ApproveTool(context.Background(), &agent.ToolApprovalRequest{
-				Tool: tc.tool, Arguments: args,
-			})
-			if !dec2.IsApproved() {
-				t.Fatalf("expected Allow verdict, got denied")
-			}
-			// Only on approval do we (the loop) invoke Execute.
-			res := tc.exec()
-			if res.IsError {
-				t.Fatalf("expected successful execute after Allow, got: %s", res.ForLLM)
-			}
-		})
+		}
 	}
 }

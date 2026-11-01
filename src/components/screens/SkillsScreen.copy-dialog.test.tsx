@@ -10,7 +10,11 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Skill } from '@/lib/api/generated/openapi-types'
 
-const { copySkillMock } = vi.hoisted(() => ({ copySkillMock: vi.fn() }))
+const { copySkillMock, addToast } = vi.hoisted(() => ({ copySkillMock: vi.fn(), addToast: vi.fn() }))
+vi.mock('@/store/ui', () => ({
+  useUiStore: (selector?: (state: { addToast: typeof addToast }) => unknown) =>
+    selector ? selector({ addToast }) : { addToast },
+}))
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -27,6 +31,7 @@ import { fetchSkills } from '@/lib/api'
 import { SkillsScreen } from './SkillsScreen'
 
 const planSkill: Skill = {
+  has_local_changes: false,
   id: 'plan',
   name: 'plan',
   description: 'Plan before acting.',
@@ -81,7 +86,8 @@ describe('SkillsScreen — S-6.4 built-in copy flow', () => {
     expect(screen.getByText('Your copy will not update with Omnipus. Grant it to agents in their settings.')).toBeInTheDocument()
     await user.clear(input)
     await user.type(input, 'my-plan')
-    const ownCopy: Skill = { ...planSkill, id: 'my-plan', name: 'my-plan', source: 'global', description: 'own copy' }
+    // §9.2: a copy is authored (kind=create), not an unchanged installation.
+    const ownCopy: Skill = { ...planSkill, id: 'my-plan', name: 'my-plan', source: 'global', description: 'own copy', has_local_changes: true }
     copySkillMock.mockImplementation(async () => {
       vi.mocked(fetchSkills).mockResolvedValue([planSkill, ownCopy])
       return ownCopy
@@ -92,6 +98,11 @@ describe('SkillsScreen — S-6.4 built-in copy flow', () => {
     await screen.findByText('my-plan')
     await waitFor(() => expect(vi.mocked(fetchSkills).mock.calls.length).toBeGreaterThan(1))
     expect(screen.getByRole('button', { name: 'Remove my-plan' })).toBeInTheDocument()
+    // §13 fixes the complete success text, including the no-grants reminder.
+    await waitFor(() => expect(addToast).toHaveBeenCalledExactlyOnceWith({
+      message: "Created 'my-plan'. No agent is granted it yet; grant it to others in their settings.",
+      variant: 'success',
+    }))
   })
 
   // r15 §5.13/§13: validation is live, blocks submission and recovers when the
@@ -120,9 +131,9 @@ describe('SkillsScreen — S-6.4 built-in copy flow', () => {
     const existing: Skill = { ...planSkill, id: 'My-Plan', name: 'My-Plan', source: 'global', verified: false }
     vi.mocked(fetchSkills).mockResolvedValue([planSkill, existing])
     await renderSkillsScreen()
-    await user.click(screen.getByRole('button', { name: 'Make a copy of plan', exact: true }))
+    await user.click(screen.getByRole('button', { name: 'Make a copy of plan' }))
     const input = await screen.findByLabelText('Name of your copy')
-    const submit = screen.getByRole('button', { name: 'Create copy', exact: true })
+    const submit = screen.getByRole('button', { name: 'Create copy' })
     expect(submit).toBeEnabled()
     await user.clear(input)
     await user.type(input, name)
@@ -145,12 +156,12 @@ describe('SkillsScreen — S-6.4 built-in copy flow', () => {
   it.each([1, 2, 63, 64])('accepts a valid %i-character name without a constant validation error', async (length) => {
     const user = userEvent.setup()
     await renderSkillsScreen()
-    await user.click(screen.getByRole('button', { name: 'Make a copy of plan', exact: true }))
+    await user.click(screen.getByRole('button', { name: 'Make a copy of plan' }))
     const input = await screen.findByLabelText('Name of your copy')
     await user.clear(input)
     await user.type(input, 'A'.repeat(length)) // §5.13: min, min+1, max-1, max.
     expect(input).toHaveValue('A'.repeat(length))
-    expect(screen.getByRole('button', { name: 'Create copy', exact: true })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Create copy' })).toBeEnabled()
     for (const error of [invalidMessage, takenMessage, builtinMessage]) {
       expect(screen.queryByText(error, { exact: true })).not.toBeInTheDocument()
     }

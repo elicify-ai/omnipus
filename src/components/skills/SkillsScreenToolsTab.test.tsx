@@ -34,6 +34,7 @@ import { fetchTools, fetchSkills, type Skill } from '@/lib/api'
 import { SkillsScreen } from '@/components/screens/SkillsScreen'
 
 const builtinSkill: Skill = {
+  has_local_changes: false,
   revision: '0'.repeat(64),
   id: 'builtin-1',
   name: 'system-skill',
@@ -46,6 +47,7 @@ const builtinSkill: Skill = {
 }
 
 const communitySkill: Skill = {
+  has_local_changes: false,
   revision: '0'.repeat(64),
   id: 'community-1',
   name: 'community-skill',
@@ -214,6 +216,8 @@ describe('SkillsScreen — Installed Skills source badge & delete gating', () =>
     await screen.findByText('community-skill')
     expect(screen.getByText('Community')).toBeInTheDocument()
     expect(screen.queryByText('Built-in · read-only', { exact: true })).not.toBeInTheDocument()
+    // Catch the legacy short badge too, without matching the Built-in Tools tab.
+    expect(screen.queryByText(/^\s*built-in\s*$/i)).not.toBeInTheDocument()
     // Delete button present for community/user-installed skills.
     expect(
       screen.getByRole('button', { name: /Remove community-skill/i })
@@ -221,8 +225,8 @@ describe('SkillsScreen — Installed Skills source badge & delete gating', () =>
   })
 
   // r15 §13 / FR-070: a constant false hides a required badge; a constant
-  // true marks the unchanged control too. These are runtime API-edge data,
-  // not a migration of the typed Skill fixtures while contract C-1 is absent.
+  // true marks the unchanged control too. C-1 is present: typed base fixtures
+  // are clean, with explicit required-field overrides for the changed control.
   it.each(['global', 'workspace'] as const)(
     'shows Changed locally only on the changed %s row', async (source) => {
       const changed = { ...communitySkill, id: 'changed-one', name: 'changed-one', source, has_local_changes: true }

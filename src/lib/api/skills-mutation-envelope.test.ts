@@ -11,7 +11,7 @@ import * as skills from './skills'
 const revision = 'fdd9b7afa7635d0f8028957f85c713170c8083e2aebf37ee45677f2e05881eda'
 const state = { revision, activation_status: 'active', persistence_status: 'complete', changed_fields: ['skills'], message: 'saved' }
 const failure = { revision, activation_status: 'not_attempted', persistence_status: 'none', changed_fields: [], error_stage: 'manifest_write', message: 'not saved' }
-const copied: Skill = { id: 'plan-copy', name: 'plan-copy', description: 'own copy', source: 'global', status: 'active', verified: false, version: '0.0.0', revision }
+const copied: Skill = { has_local_changes: true, id: 'plan-copy', name: 'plan-copy', description: 'own copy', source: 'global', status: 'active', verified: false, version: '0.0.0', revision }
 
 beforeEach(() => {
   document.cookie = 'csrf=skills-test-token; path=/'
@@ -70,7 +70,8 @@ describe('skills mutation envelopes and real request paths', () => {
     expect(getApiSchemaErrorCount()).toBe(1)
   })
   it('installSkillBySlug forwards replace_local_changes and returns actual response data (S-9.3)', async () => {
-    const installed = { ...copied, id: 'x', name: 'x' }
+    // A completed install replaces local changes; unlike the copy base, it is clean.
+    const installed = { ...copied, id: 'x', name: 'x', has_local_changes: false }
     const network = reply({ ...installed, ...state })
     // Test the new optional argument without a compile-time dependency on a
     // missing production signature. This is a function boundary, not a wire type.

@@ -2,13 +2,10 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package tools — ADR-072 (skill activation and loading) D10 (skill read
-// gate) and D6.1.1 (write-path audit hook) tests. Traces to
-// docs/internal/specs/skill-activation-and-loading-spec.md §"Feature: Gated
-// skill reads" and §"Feature: Silent habit and observability" (the write-
-// audit scenario), and to ADR-072 §"D10 — Skill content is readable only
-// through the tool" / §"D6.1.1 — The write audit belongs at the path
-// resolver, not the authoring tool".
+// Package tools — skills r15 §6.1 whole-folder authority and ADR-072
+// D6.1.1 project write-audit regressions. r15 supersedes D10's historical
+// instruction-only distinction. This suite supplies a resolver policy;
+// the real-policy sibling derives it from persisted turn inputs.
 
 package tools
 
@@ -17,6 +14,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,6 +23,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
@@ -54,6 +53,23 @@ func realTempDir(t *testing.T) string {
 	return resolved
 }
 
+// Supplementary resolver fixture for r15 §6.1's whole-folder authority.
+// This does not claim real turn wiring (the real-policy sibling does that).
+func skillGatePolicy(t *testing.T, home string, folders []string) fspolicy.FSPolicy {
+	t.Helper()
+	policy := confinedPolicy(t, realTempDir(t))
+	policy.HomeGuard = fspolicy.BaseHomeGuard(home)
+	guard := reflect.ValueOf(&policy.HomeGuard).Elem()
+	field := guard.FieldByName("SkillFolders")
+	all := guard.FieldByName("SkillsReadAll")
+	if !field.IsValid() || !all.IsValid() {
+		t.Fatal("BLOCKED: HomeGuard skill authority fields not implemented — required by r15 §6.1")
+	}
+	field.Set(reflect.ValueOf(folders))
+	all.SetBool(false)
+	return policy
+}
+
 // TestReadGate_RegistrySkillRefusedViaFileTool (test 45, FR-057) — ADR-072
 // D10 Part A: a file-tool read of an installed registry skill file
 // ($OMNIPUS_HOME/skills/<slug>/SKILL.md) is refused.
@@ -63,12 +79,12 @@ func TestReadGate_RegistrySkillRefusedViaFileTool(t *testing.T) {
 
 	skillFile := writeGateTestSkillFile(t, filepath.Join(home, "skills"), "foo", "Use when doing foo")
 
-	policy := confinedPolicy(t, realTempDir(t))
+	policy := skillGatePolicy(t, home, []string{})
 
 	handle, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, skillFile)
 	require.Error(t, err)
 	require.Nil(t, handle)
-	assert.ErrorIs(t, err, ErrCarveOut, "a registry skill file must classify as D10 Part A's carve-out-shaped denial")
+	assert.ErrorIs(t, err, ErrCarveOut, "r15 §6.1: an ungranted registry folder remains denied")
 }
 
 // TestReadGate_SkillToolStillLoads (test 46, FR-061) — ADR-072 D10: "the
@@ -90,7 +106,7 @@ func TestReadGate_SkillToolStillLoads(t *testing.T) {
 	require.True(t, ok, "the Skill tool's loader must still find the skill")
 	assert.Contains(t, content, "instructions-marker")
 
-	policy := confinedPolicy(t, realTempDir(t))
+	policy := skillGatePolicy(t, home, []string{})
 	_, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, skillFile)
 	require.Error(t, err, "the file tool must still be refused for the identical path the Skill tool just loaded")
 }
@@ -146,7 +162,7 @@ func TestReadGate_MountProjectSkillReadable(t *testing.T) {
 // specifically, not its whole directory: a bundled sibling file (a helper
 // script, template, or reference file the skill's own SKILL.md tells the
 // agent to read or run) stays ordinarily readable via the file tool, even
-// for a skill the acting agent is NOT granted. This is a deliberate,
+// for a skill in the acting agent's loadable set (r15 §6.1). This is a deliberate,
 // accepted cost (an author could hide instructions in a bundled file) traded
 // against the alternative, which breaks the ordinary "run the script next to
 // me" shape of a real skill.
@@ -159,10 +175,10 @@ func TestReadGate_RegistrySkillBundledFileReadable(t *testing.T) {
 	helperPath := filepath.Join(skillDir, "helper.sh")
 	require.NoError(t, os.WriteFile(helperPath, []byte("#!/bin/sh\necho bundled-helper-marker\n"), 0o755))
 
-	policy := confinedPolicy(t, realTempDir(t))
+	policy := skillGatePolicy(t, home, []string{skillDir})
 
 	handle, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, helperPath)
-	require.NoError(t, err, "a bundled sibling file must stay readable — only the instruction file is gated")
+	require.NoError(t, err, "r15 §6.1: the bundled helper belongs to the loadable folder")
 	defer handle.Close()
 
 	data, err := handle.ReadFile()
@@ -170,10 +186,9 @@ func TestReadGate_RegistrySkillBundledFileReadable(t *testing.T) {
 	assert.Contains(t, string(data), "bundled-helper-marker")
 }
 
-// TestReadGate_RegistrySkillAgentMdAlsoRefused (test 48b, FR-061c, D10.3) —
-// the narrowed Part A gates all three recognised instruction filenames
-// (SKILL.md, and the legacy AGENT.md/AGENTS.md naming this codebase's
-// custom-agent format also accepts), not only SKILL.md.
+// TestReadGate_RegistrySkillAgentMdAlsoRefused preserves the negative for
+// legacy AGENT.md. r15 §6.1 denies every leaf of an ungranted folder, not
+// just a recognized instruction filename.
 func TestReadGate_RegistrySkillAgentMdAlsoRefused(t *testing.T) {
 	home := realTempDir(t)
 	t.Setenv(config.EnvHome, home)
@@ -183,11 +198,11 @@ func TestReadGate_RegistrySkillAgentMdAlsoRefused(t *testing.T) {
 	agentMdPath := filepath.Join(skillDir, "AGENT.md")
 	require.NoError(t, os.WriteFile(agentMdPath, []byte("---\nname: foo\ndescription: legacy format\n---\n"), 0o600))
 
-	policy := confinedPolicy(t, realTempDir(t))
+	policy := skillGatePolicy(t, home, []string{})
 
 	_, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, agentMdPath)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrCarveOut, "AGENT.md is a recognised instruction filename, same as SKILL.md")
+	assert.ErrorIs(t, err, ErrCarveOut, "r15 §6.1 denies every leaf in an ungranted folder")
 }
 
 // TestReadGate_MountInstructionFileReadable (test 49, FR-060) — ADR-072 D10
@@ -268,7 +283,7 @@ func TestAudit_ProjectSkillWriteRecorded(t *testing.T) {
 	ctx = WithWorkspaceID(ctx, "ws-1")
 	ctx = WithTranscriptSessionID(ctx, "sess-1")
 
-	handle, err := ResolvePath(ctx, policy, "edit_skill", "call-1", FSOpWrite, skillFile)
+	handle, err := ResolvePath(ctx, policy, "edit_file", "call-1", FSOpWrite, skillFile)
 	require.NoError(t, err)
 	require.NoError(t, handle.WriteFile([]byte("---\nname: deploy\ndescription: updated\n---\n")))
 	require.NoError(t, handle.Close())
@@ -302,7 +317,7 @@ func TestProjectSkill_WrittenThenLoadableViaTool(t *testing.T) {
 	policy.AllowedRoots = []string{mountRoot}
 
 	newContent := "---\nname: deploy\ndescription: Use when deploying\n---\n\nUPDATED-CONTENT-MARKER\n"
-	handle, err := ResolvePath(context.Background(), policy, "edit_skill", "call-1", FSOpWrite, skillFile)
+	handle, err := ResolvePath(context.Background(), policy, "edit_file", "call-1", FSOpWrite, skillFile)
 	require.NoError(t, err)
 	require.NoError(t, handle.WriteFile([]byte(newContent)))
 	require.NoError(t, handle.Close())
@@ -342,7 +357,7 @@ func TestAudit_WriteFileToSkillPathIsAudited(t *testing.T) {
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	// "write_file" — the generic tool's own Name(), never an authoring verb
-	// like create_skill/edit_skill/remove_skill.
+	// like edit_skill actions (r15 §5.4).
 	handle, err := ResolvePath(ctx, policy, "write_file", "call-1", FSOpWrite, skillFile)
 	require.NoError(t, err)
 	require.NoError(t, handle.WriteFile([]byte("---\nname: deploy\ndescription: clobbered\n---\n")))
@@ -367,7 +382,7 @@ func TestAudit_RecordNamesPerformingTool(t *testing.T) {
 
 	ctx := WithAgentID(context.Background(), "ray")
 
-	h1, err := ResolvePath(ctx, policy, "edit_skill", "call-1", FSOpWrite, skillFile)
+	h1, err := ResolvePath(ctx, policy, "edit_file", "call-1", FSOpWrite, skillFile)
 	require.NoError(t, err)
 	require.NoError(t, h1.WriteFile([]byte("---\nname: deploy\ndescription: first\n---\n")))
 	require.NoError(t, h1.Close())
@@ -381,6 +396,6 @@ func TestAudit_RecordNamesPerformingTool(t *testing.T) {
 	require.Len(t, entries, 2)
 
 	tools := []any{entries[0]["tool"], entries[1]["tool"]}
-	assert.Contains(t, tools, "edit_skill")
+	assert.Contains(t, tools, "edit_file")
 	assert.Contains(t, tools, "write_file")
 }
