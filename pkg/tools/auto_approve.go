@@ -283,6 +283,7 @@ var autoApproveClasses = map[string]AutoApproveClass{
 
 	// System (skills)
 	"list_skills":  AutoRuns,
+	"get_skill":    AutoRuns, // skills spec r15 §10: a read
 	"create_skill": AutoAsks,
 	"edit_skill":   AutoAsks,
 	"remove_skill": AutoAsks,
