@@ -598,6 +598,12 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
   ],
 }
 
+// One shared, frozen empty list for ids with no config form (e.g. webchat).
+// A fresh `[]` per call changed identity on every render, so
+// ChannelConfigPanel's hydration effect (which depends on `fields` and sets
+// new form state) re-ran on every render and never settled.
+const NO_FIELDS: ChannelField[] = Object.freeze([]) as unknown as ChannelField[]
+
 export function getChannelFields(channelId: string): ChannelField[] {
   // CHANNEL_FIELDS is keyed by the generated ChannelId enum (drift-guard). The
   // caller passes an arbitrary string, so cast at the lookup site; an unknown id
@@ -615,5 +621,5 @@ export function getChannelFields(channelId: string): ChannelField[] {
   // so the config panel works regardless of which ID the caller holds.
   const baseType = channelId.toLowerCase().split('.')[0]
   const normalised = baseType === WHATSAPP_NATIVE_CHANNEL_ID ? 'whatsapp' : baseType
-  return CHANNEL_FIELDS[normalised as ChannelId] ?? []
+  return CHANNEL_FIELDS[normalised as ChannelId] ?? NO_FIELDS
 }

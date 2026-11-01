@@ -14,6 +14,9 @@ import {
   ChannelConfigureResponse as ChannelConfigureResponseSchema,
   ChannelConfigureError as ChannelConfigureErrorSchema,
   ChannelOutboundRead as ChannelOutboundReadSchema,
+  // Channels spec FR-026: the "Starting messages" write and its refusal.
+  ChannelOutboundWriteResponse as ChannelOutboundWriteResponseSchema,
+  ChannelOutboundRejection as ChannelOutboundRejectionSchema,
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox as MailboxSchema,
   MailboxListResponse as MailboxListResponseSchema,
@@ -30,10 +33,14 @@ import type {
   ChannelCreateResponse,
   ChannelConfigureResponse,
   ChannelOutboundRead,
+  ChannelOutboundUpdateRequest,
+  ChannelOutboundWriteResponse,
+  ChannelOutboundRejection,
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox,
   MailboxConfigureRequest,
 } from '@/lib/api/generated/openapi-types'
+import { maybeDevToast } from '../dev-toast'
 import { ApiSchemaError, _recordApiSchemaError, request } from './http'
 
 // Channel — type alias for ChannelEntry (contract-first #8).
@@ -127,6 +134,54 @@ export function fetchChannelOutbound(id: string): Promise<ChannelOutboundRead> {
     undefined,
     ChannelOutboundReadSchema as ZodType<ChannelOutboundRead>,
   )
+}
+
+// setChannelOutbound saves a connection's "Starting messages" setting through
+// its dedicated route, PUT /channels/{id}/outbound (channels spec FR-021,
+// FR-026). A refusal rejects with the real ApiError from request(); read its
+// ChannelOutboundRejection with readOutboundRejection.
+export function setChannelOutbound(id: string, body: ChannelOutboundUpdateRequest): Promise<ChannelOutboundWriteResponse> {
+  return request<ChannelOutboundWriteResponse>(
+    `/channels/${encodeURIComponent(id)}/outbound`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    ChannelOutboundWriteResponseSchema as ZodType<ChannelOutboundWriteResponse>,
+  )
+}
+
+// The statuses whose body the contract defines as ChannelOutboundRejection
+// (400, 409, 422, 502). 500 and 503 carry the ordinary ErrorResponse.
+const OUTBOUND_REJECTION_STATUSES = new Set([400, 409, 422, 502])
+
+export type OutboundRejectionRead = // not-wire-format: client-side decode result; the wire body is the generated ChannelOutboundRejection
+  | { kind: 'rejection'; rejection: ChannelOutboundRejection }
+  // The body was a rejection status but failed the generated schema (for
+  // example a string outside the safe-echo set, S-83 case 4). It is recorded
+  // as a contract violation and must not be shown.
+  | { kind: 'invalid' }
+  // Not a rejection: another status, a transport error, or a body the error
+  // decoder discarded. The caller shows the error's own userMessage.
+  | { kind: 'none' }
+
+// readOutboundRejection decodes the rejection carried by a failed
+// setChannelOutbound call, validated by its generated runtime schema.
+export function readOutboundRejection(error: unknown, id: string): OutboundRejectionRead {
+  if (!isApiErrorFn(error) || !OUTBOUND_REJECTION_STATUSES.has(error.status) || !error.body) return { kind: 'none' }
+  let raw: unknown
+  try {
+    raw = JSON.parse(error.body)
+  } catch {
+    // Not JSON at all: nothing to validate, the generic message applies.
+    return { kind: 'none' }
+  }
+  const parsed = ChannelOutboundRejectionSchema.safeParse(raw)
+  if (parsed.success) return { kind: 'rejection', rejection: parsed.data as ChannelOutboundRejection }
+  const path = `/channels/${encodeURIComponent(id)}/outbound`
+  _recordApiSchemaError(`PUT /api/v1${path}`, parsed.error.issues.length)
+  void maybeDevToast(
+    `[api] Schema mismatch: ${path} — ${parsed.error.issues[0]?.message ?? 'unknown'}`,
+    `PUT:${path}:rejection-schema`,
+  )
+  return { kind: 'invalid' }
 }
 
 // ChannelRouting — re-exported from generated openapi-types (contract-first #8).
