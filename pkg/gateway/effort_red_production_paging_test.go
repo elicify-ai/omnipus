@@ -2,7 +2,12 @@ package gateway
 
 // CHECK-01/08 / S-95: every source entry is written by an actual turn. The
 // separate canonical-byte projection fixture is NOT substituted for this test.
-// Provider JSON -> accounting -> saved snapshots -> attach/older/refresh is real.
+// Provider JSON -> accounting -> saved snapshots -> attach/older/refresh are
+// the intended real boundaries, not hand-constructed accounting fixtures.
+// INFO-2: execution currently stops at firstStream: the multi-candidate
+// callProviderOnce callback invokes Chat, bypassing runProviderAttempt and its
+// ChatStream path. Turns 2/3, real tool execution, stored snapshots, older-page
+// contributor cuts, refresh and incremental replay below are still UNREACHED.
 import (
 	"context"
 	"encoding/json"

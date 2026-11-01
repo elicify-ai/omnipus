@@ -129,11 +129,11 @@ func TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart(t *testin
 	require.Equal(t, "ok", runConversationCommand(t, al, sid, "first answer"))
 	first := ep.snapshot()
 	require.Len(t, first, 1)
-	assert.True(t, bodyCarriesEffortValue(first[0], "high"))
+	assertOpenRouterLevelBody(t, first[0], "high")
 	require.Equal(t, "ok", runConversationCommand(t, al, other.ID, "other answer"))
 	both := ep.snapshot()
 	require.Len(t, both, 2)
-	assert.True(t, bodyCarriesEffortValue(both[1], "medium"), "conversation B keeps its prior inherited value")
+	assertOpenRouterLevelBody(t, both[1], "medium") // conversation B keeps its inherited value
 	// Real runtime and store replacement before the next serving request.
 	cfg := al.GetConfig()
 	root := store.BaseDir()
@@ -147,7 +147,7 @@ func TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart(t *testin
 	require.Equal(t, "ok", runConversationCommand(t, fresh, sid, "after restart"))
 	bodies := ep.snapshot()
 	require.Len(t, bodies, 3)
-	assert.True(t, bodyCarriesEffortValue(bodies[2], "high"))
+	assertOpenRouterLevelBody(t, bodies[2], "high")
 	assert.Equal(t, "high", conversationValue(t, freshStore, sid))
 	// The serving model's capabilities change; the stored conversation High is
 	// intentionally NOT rewritten. The next real request maps it to Medium.
@@ -159,7 +159,7 @@ func TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart(t *testin
 	require.Equal(t, "ok", runConversationCommand(t, fresh, sid, "model now offers low medium"))
 	bodies = ep.snapshot()
 	require.Len(t, bodies, 4)
-	assert.True(t, bodyCarriesEffortValue(bodies[3], "medium"))
+	assertOpenRouterLevelBody(t, bodies[3], "medium")
 	assert.Equal(t, "high", conversationValue(t, freshStore, sid))
 	entries, err := freshStore.ReadTranscript(sid)
 	require.NoError(t, err)
@@ -185,7 +185,7 @@ func TestT_S2_S87_InheritedHighChangedToOffAtRuntime(t *testing.T) {
 	assert.Nil(t, conversationValue(t, store, sid), "Not set really is unset")
 	bodies := ep.snapshot()
 	require.Len(t, bodies, 1)
-	assert.True(t, bodyCarriesEffortValue(bodies[0], "high"))
+	assertOpenRouterLevelBody(t, bodies[0], "high")
 	cfg := al.GetConfig()
 	var replacement config.AgentConfig
 	raw, err := json.Marshal(cfg.Agents.List[0])

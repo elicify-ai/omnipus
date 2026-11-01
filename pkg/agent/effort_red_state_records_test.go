@@ -80,7 +80,7 @@ func TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice(t *testing.T) {
 				assert.False(t, bodyHasEffort(bodies[0]))
 				expected["reason"] = "not_supported"
 			} else {
-				assert.True(t, bodyCarriesEffortValue(bodies[0], "high"))
+				assertOpenRouterLevelBody(t, bodies[0], "high")
 				expected["sent"] = "high"
 				expected["reason"] = "mapped"
 			}

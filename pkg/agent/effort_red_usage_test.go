@@ -19,6 +19,7 @@ package agent
 // RED assertions live in the gateway transport tests (S-95/T-R2).
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -33,7 +34,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
-	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -182,35 +182,54 @@ func TestT_U1_S44_UnreportedReasoningStaysAbsent(t *testing.T) {
 	}
 }
 
-// TestT_U1_S88_FailedAttemptKeepsItsCount pins D7 row 7 through the
-// PRODUCTION attempt-booking path (CHECK-08): model A streams, reports
-// 300 output / 120 reasoning tokens, then fails mid-stream — the real
-// StreamProviderError flows through accountProviderAttempt, which books the
-// failed attempt's usage on A's own accounting entry; model B then answers
-// with 80 output and no reasoning count. The production-made entries are
-// appended through the production transcript writer and the by-model cells
-// are read from the session meta: A keeps 120, B is never credited, and the
-// sum is never 240.
+// TestT_U1_S88_FailedAttemptKeepsItsCount pins D7 row 7 at the actual HTTP
+// adapter -> attempt-booking -> durable stats boundary (CHECK-08 / INFO-2).
+// The adapter, NOT this test, constructs StreamProviderError from a real SSE
+// failure carrying 300 output / 120 reasoning tokens. A real model-B response
+// reports 80 output without reasoning. Production writers must keep A=120,
+// B absent and sum=120. The TEST drives these two adapter calls: this is NOT
+// automatic multi-candidate streamed fallback, live done or answering-entry
+// snapshot proof. The gateway S-88/S-95 tests keep that workflow loud BLOCKED.
 // Traces to: S-88, D7 row 7, FR-024, FR-036, SC-018, T-U1.
 func TestT_U1_S88_FailedAttemptKeepsItsCount(t *testing.T) {
-	_, f := newUsageFixture(t, []string{
-		`{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":10,"completion_tokens":180,"total_tokens":190}}`,
+	endpoint, f := newUsageFixture(t, []string{
+		"sse:data: {\"error\":{\"code\":\"402\",\"message\":\"billed partial attempt\"},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":300,\"total_tokens\":310,\"completion_tokens_details\":{\"reasoning_tokens\":120}}}\n\ndata: [DONE]\n\n",
+		`{"choices":[{"message":{"role":"assistant","content":"fallback answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":80,"total_tokens":85}}`,
 	})
+	streamer, ok := f.rt.activeProvider.(providers.StreamingProvider)
+	require.True(t, ok, "the actual OpenRouter adapter exposes the streaming boundary")
+	var visible []string
+	responseA, failure := streamer.ChatStream(context.Background(), f.rf.callMessages, nil, "model-a", nil,
+		func(content string) { visible = append(visible, content) }, nil)
+	require.Error(t, failure, "actual SSE provider failure must surface as an error")
+	require.Nil(t, responseA, "the failed stream is not a successful answer")
+	var providerError *common.StreamProviderError
+	require.ErrorAs(t, failure, &providerError, "the adapter creates the typed billed-stream error")
+	assert.Equal(t, "402", providerError.Code)
+	assert.Equal(t, "billed partial attempt", providerError.Message)
+	assert.Empty(t, visible, "no visible bytes: this fixture does not violate the no-fallback-after-visible-bytes guard")
+	aUsage := usageJSON(t, providerError.Usage)
+	assert.Equal(t, float64(300), aUsage["completion_tokens"])
+	assert.Equal(t, float64(120), aUsage["reasoning_tokens"], "S-88: actual failed-stream usage must retain the reported reasoning count")
+	f.rt.accountProviderAttempt("openrouter", "model-a", responseA, failure)
 
-	// Model A's failed attempt carries its billed usage on the real error type.
-	aUsage, err := promptcache.ParseUsage("openrouter", []byte(
-		`{"prompt_tokens":10,"completion_tokens":300,"total_tokens":310,"completion_tokens_details":{"reasoning_tokens":120}}`))
+	// A real second HTTP response supplies B's parsed usage. Selection/order
+	// are intentionally driven at this boundary, not by a fake fallback chain.
+	responseB, err := f.rt.activeProvider.Chat(context.Background(), f.rf.callMessages, nil, "model-b", nil)
 	require.NoError(t, err)
-	require.NotNil(t, aUsage)
-	f.rt.accountProviderAttempt("openrouter", "model-a", nil,
-		&common.StreamProviderError{Code: "provider_error", Message: "mid-stream failure", Usage: aUsage})
-
-	// Model B answers successfully without a reasoning count.
-	bUsage, err := promptcache.ParseUsage("openrouter", []byte(
-		`{"prompt_tokens":5,"completion_tokens":80,"total_tokens":85}`))
-	require.NoError(t, err)
-	f.rt.accountProviderAttempt("openrouter", "model-b",
-		&providers.LLMResponse{Content: "fallback answer", FinishReason: "stop", Usage: bUsage}, nil)
+	require.NotNil(t, responseB)
+	require.Equal(t, "fallback answer", responseB.Content, "positive control: B really answered")
+	bUsage := usageJSON(t, responseB.Usage)
+	assert.Equal(t, float64(80), bUsage["completion_tokens"])
+	assert.NotContains(t, bUsage, "reasoning_tokens", "B did not report a reasoning count")
+	f.rt.accountProviderAttempt("openrouter", "model-b", responseB, nil)
+	endpoint.mu.Lock()
+	bodies := append([]map[string]any(nil), endpoint.bodies...)
+	endpoint.mu.Unlock()
+	require.Len(t, bodies, 2, "both attempts reached the actual HTTP edge")
+	assert.Equal(t, "model-a", bodies[0]["model"])
+	assert.Equal(t, true, bodies[0]["stream"], "not a manually constructed stream error")
+	assert.Equal(t, "model-b", bodies[1]["model"])
 
 	// The production writer produced both entries.
 	f.rt.ts.mu.Lock()

@@ -86,8 +86,9 @@ func bodyEffortValues(body map[string]any) []any {
 	return out
 }
 
-// bodyCarriesEffortValue reports whether the body encodes exactly the given
-// effort value in any S-17 form.
+// bodyCarriesEffortValue is a broad negative-leak detector, not a positive
+// route-encoding oracle. A primary value is forbidden in either recognised
+// carrier on a fallback. Positive OpenRouter checks use assertOpenRouterLevelBody.
 func bodyCarriesEffortValue(body map[string]any, want string) bool {
 	for _, v := range bodyEffortValues(body) {
 		if s, ok := v.(string); ok && s == want {
@@ -503,8 +504,7 @@ func TestT_S2_S53_FallbackUsesOwnSetting(t *testing.T) {
 	// The fallback's own Max was supplied above through its agent config
 	// slot. It must reach OpenRouter as reasoning.effort, never inherit the
 	// primary/chat Medium (CHECK-03).
-	assert.True(t, bodyCarriesEffortValue(fbBodies[0], "max"),
-		"the fallback sends its own stored effort max in the OpenRouter encoding (S-53) — RED: FallbackModel.reasoning_effort cannot be stored at this head")
+	assertOpenRouterLevelBody(t, fbBodies[0], "max")
 }
 
 // TestT_S2_S51_DefaultModelEffortUsed pins S-51: an agent with no model of
@@ -542,8 +542,7 @@ func TestT_S2_S51_DefaultModelEffortUsed(t *testing.T) {
 	bodies := ep.snapshot()
 	require.NotEmpty(t, bodies)
 	// S-17: the OpenRouter levels encoding is the nested reasoning.effort.
-	assert.True(t, bodyCarriesEffortValue(bodies[0], "medium"),
-		"the default model's effort (medium) is sent in the route's encoding (S-51) — RED: the loader drops the default-model effort key, so nothing carries it")
+	assertOpenRouterLevelBody(t, bodies[0], "medium")
 }
 
 // TestT_R0_S19_ProviderDefaultSendsNothing pins S-19 (regression pin): with

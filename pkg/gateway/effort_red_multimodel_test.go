@@ -3,6 +3,13 @@ package gateway
 // CHECK-08 / S-88/S-95: HTTP stream failure → real fallback → production
 // booking/snapshot writers → live done, attach and REST → by-model cells.
 // No accounting entries or display metadata are constructed by this fixture.
+// INFO-2 production block: agentLoopRunTurn.callProviderOnce routes only its
+// single-candidate branch through runProviderAttempt (and thus ChatStream).
+// Its multi-candidate callback calls p.Chat directly. The primary's SSE error
+// branch below is therefore unreached today; the explicit stream assertion
+// fails after the real plain-HTTP fallback completes. All later reasoning
+// totals, by-model cells, live/history snapshots and no-double-booking checks
+// are coded expectations, NOT executed acceptance until that block is fixed.
 import (
 	"context"
 	"encoding/json"

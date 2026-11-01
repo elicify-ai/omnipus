@@ -150,6 +150,73 @@ async function openRecapLimits() {
 
 const saveButton = () => screen.getByRole('button', { name: /save memory settings/i })
 
+// ── C2-02 / S-60: the real Memory screen, not an explicit picker prop ────────
+
+describe('MemorySection — S-60 recap presentation', () => {
+  beforeEach(() => {
+    vi.mocked(fetchProviders).mockResolvedValue(MOCK_PROVIDERS)
+  })
+
+  // S-60 fixes this entire sentence, including its straight apostrophe, and
+  // requires exactly one copy even when more than one recap slot is present.
+  it('S-60: the exact Off recommendation appears once for model plus fallback', async () => {
+    const given = settings({
+      recap_model: 'deepseek/deepseek-v4.1-flash',
+      recap_fallback_models: [{ provider: 'openrouter', model: 'openai/gpt-6.1-sol' }],
+    })
+    vi.mocked(fetchMemorySettings).mockResolvedValue(given)
+    renderSection()
+    await screen.findByText('Memory & Recap')
+    expect(screen.getByTestId('recap-model-trigger')).toHaveTextContent('deepseek/deepseek-v4.1-flash')
+    expect(screen.getByTestId('recap-fallback-row-openai/gpt-6.1-sol')).toBeInTheDocument()
+    expect(screen.queryAllByText(
+      "We recommend Off for the recap: it keeps recaps cheap, and a recap doesn't need reasoning.",
+      { exact: true },
+    )).toHaveLength(1)
+    expect(vi.mocked(updateMemorySettings)).not.toHaveBeenCalled()
+  })
+
+  it.each(['absent', 'explicit Off'] as const)(
+    'S-60: %s effort starts Off per slot; model/chip, fallback/chip, recommendation, collapsed limits follow in order',
+    async (storage) => {
+      const given = settings({
+        recap_model: 'deepseek/deepseek-v4.1-flash',
+        recap_fallback_models: [{
+          provider: 'openrouter', model: 'openai/gpt-6.1-sol',
+          ...(storage === 'explicit Off' ? { reasoning_effort: 'off' } : {}),
+        }],
+      })
+      if (storage === 'absent') Reflect.deleteProperty(given, 'recap_reasoning_effort')
+      vi.mocked(fetchMemorySettings).mockResolvedValue(given)
+      renderSection()
+      await screen.findByText('Memory & Recap')
+      const model = screen.getByTestId('recap-model-trigger')
+      const fallback = screen.getByTestId('recap-fallback-row-openai/gpt-6.1-sol')
+      const chips = screen.queryAllByRole('button', { name: /^Effort/ })
+      expect(chips).toHaveLength(2)
+      for (const chip of chips) expect(chip).toHaveAccessibleName(/^Effort.*: Off$/)
+      const fallbackChip = within(fallback).getByRole('button', { name: /^Effort.*: Off$/ })
+      expect(fallbackChip).toBe(chips[1])
+      const recommendation = screen.getByText(
+        "We recommend Off for the recap: it keeps recaps cheap, and a recap doesn't need reasoning.",
+        { exact: true },
+      )
+      const limits = screen.getByRole('button', { name: /recap limits/i })
+      const ordered = [model, chips[0], fallback, recommendation, limits]
+      for (let i = 1; i < ordered.length; i++) {
+        expect(ordered[i - 1].compareDocumentPosition(ordered[i]) & Node.DOCUMENT_POSITION_FOLLOWING,
+          `S-60 group order: item ${i - 1} must precede item ${i}`,
+        ).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+      }
+      expect(limits).toHaveAttribute('aria-expanded', 'false')
+      for (const [label] of LIMIT_FIELDS) {
+        expect(screen.queryByRole('spinbutton', { name: label })).toBeNull()
+      }
+      expect(vi.mocked(updateMemorySettings)).not.toHaveBeenCalled()
+    },
+  )
+})
+
 // ── T-L4: the "Recap limits" area (S-82) ──────────────────────────────────────
 
 describe('MemorySection — T-L4 "Recap limits" area', () => {
