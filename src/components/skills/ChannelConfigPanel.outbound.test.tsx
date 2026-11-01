@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ApiError } from '@/lib/api-error'
+import { ApiSchemaError, getApiSchemaErrorCount } from '@/lib/api/http'
 import {
   ChannelOutboundRead as ReadSchema,
   ChannelOutboundRejection as RejectionSchema,
@@ -99,7 +100,7 @@ function renderPanel(platform = 'discord') {
   client.setQueryData(['agents'], [])
   client.setQueryData(['workspaces', { status: 'active' }], [])
   render(<QueryClientProvider client={client}>
-    <ChannelConfigPanel channelId={id} channelName={platform === 'discord' ? 'Discord' : platform === 'telegram' ? 'Telegram' : 'Slack'}
+    <ChannelConfigPanel channelId={id} channelName={platform === 'discord' ? 'Discord' : platform === 'telegram' ? 'Telegram' : platform === 'webchat' ? 'Web Chat' : 'Slack'}
       enabled={true} open={true} onOpenChange={vi.fn()} />
   </QueryClientProvider>)
   return client
@@ -191,6 +192,35 @@ describe('T-30 starting messages section — S-80', () => {
     expect(screen.queryByRole('radio', { name: 'Only answer' })).not.toBeInTheDocument()
     expect(screen.queryByRole('radio', { name: 'Answer and also start messages' })).not.toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: FIELD_LABEL })).not.toBeInTheDocument()
+    expect(reads).toBe(0) // Chief Q1 / S-80: unsupported platforms do not GET the setting.
+  })
+
+  it('webchat has a real Configure panel but no Starting messages section', async () => {
+    renderPanel('webchat')
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Configure Web Chat' })).toBeInTheDocument())
+    // A loaded Configure form, not a closed panel or a loading skeleton, is
+    // the control for this negation (T-2 nonconnector row / NB-10).
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeInTheDocument())
+    expect(screen.queryByText('Starting messages', { exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Only answer' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Answer and also start messages' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: FIELD_LABEL })).not.toBeInTheDocument()
+    expect(reads).toBe(0)
+    expect(writes).toEqual([])
+  })
+
+  it('Only answer and back preserves the exact entered list without saving', async () => {
+    renderPanel()
+    await loaded()
+    expect(targetsField()).toHaveValue('111\n222')
+    fireEvent.change(targetsField(), { target: { value: '333\n444' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Only answer' }))
+    expect(screen.getByRole('radio', { name: 'Only answer' })).toBeChecked()
+    expect(screen.queryByRole('textbox', { name: FIELD_LABEL })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: 'Answer and also start messages' }))
+    expect(screen.getByRole('radio', { name: 'Answer and also start messages' })).toBeChecked()
+    expect(targetsField()).toHaveValue('333\n444') // Spec ambiguity6 / chief Q2, not the original GET list.
+    expect(writes).toEqual([])
   })
 
   it('Telegram shows its exact help after choosing may-start', async () => {
@@ -212,6 +242,36 @@ describe('T-30 starting messages section — S-80', () => {
     expect(put?.[0]).toBe('/api/v1/channels/discord.qa/outbound')
     // The HTTP fake refuses every other endpoint, so a generic Configure save
     // cannot make this assertion green. Numeric validity remains the server's job.
+  })
+})
+
+describe('T-30 write-response contract — FR-090 / required outbound and revision', () => {
+  it('a schema-invalid 200 write records a contract violation and hydrates neither form nor cache', async () => {
+    // Contract table: revision is required even when outbound itself is valid.
+    // A different valid target makes accidental success hydration observable.
+    writeBody = { outbound: { policy: 'agent_may_start', targets: ['discord:999'] } }
+    expect(WriteSchema.safeParse(writeBody).success).toBe(false)
+    const client = renderPanel()
+    await loaded()
+    const originalRead = ReadSchema.parse(client.getQueryData(['channel-outbound', 'discord.qa']))
+    const violationsBefore = getApiSchemaErrorCount()
+    await submit('333\n444')
+    await waitFor(() => expect(client.getMutationCache().getAll()[0]?.state.status).toBe('error'))
+    const mutations = client.getMutationCache().getAll()
+    expect(mutations).toHaveLength(1)
+    const error = mutations[0].state.error
+    expect(error).toBeInstanceOf(ApiSchemaError)
+    if (!(error instanceof ApiSchemaError)) throw new Error('instrument: invalid write must retain the real contract-schema error')
+    expect(error.endpoint).toBe('PUT /api/v1/channels/discord.qa/outbound')
+    expect(error.zodIssues.map((issue) => issue.path)).toEqual([['revision']])
+    expect(error.rawBody).toEqual(writeBody)
+    expect(getApiSchemaErrorCount()).toBe(violationsBefore + 1)
+    expect(devToast).toHaveBeenCalledTimes(1)
+    expect(targetsField()).toHaveValue('333\n444')
+    expect(screen.getByRole('radio', { name: 'Answer and also start messages' })).toBeChecked()
+    expect(client.getQueryData(['channel-outbound', 'discord.qa'])).toEqual(originalRead)
+    expect(writes).toEqual([{ policy: 'agent_may_start', targets: ['333', '444'], expected_revision: 't30-before' }])
+    expect(addToast.mock.calls.filter(([toast]) => toast.variant === 'success')).toEqual([])
   })
 })
 
