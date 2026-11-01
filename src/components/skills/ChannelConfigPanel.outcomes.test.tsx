@@ -152,6 +152,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  document.cookie = 'csrf=; Max-Age=0; path=/'
   vi.clearAllMocks()
 })
 
@@ -341,10 +342,15 @@ describe('ChannelConfigPanel — Configure outcome toasts (T-6c / S-57 / FR-055)
   it('a response missing apply_outcome fails schema validation and never shows "saved"', async () => {
     // FR-055/F4: preserve this row but pass its real raw response through
     // the actual Configure client/request/schema, not an invented Error.
+    // The real state-changing request needs the same browser CSRF fixture
+    // as the wire suite; otherwise its pre-flight rejects BEFORE fetch.
+    document.cookie = 'csrf=t06-outcomes-synthetic-csrf; path=/'
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const url = input instanceof Request ? input.url : String(input)
       expect(url).toBe('/api/v1/channels/whatsapp/configure')
       expect(init?.method).toBe('PUT')
+      expect(init?.credentials).toBe('include')
+      expect(new Headers(init?.headers).get('X-CSRF-Token')).toBe('t06-outcomes-synthetic-csrf')
       return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
     vi.stubGlobal('fetch', fetchMock)
