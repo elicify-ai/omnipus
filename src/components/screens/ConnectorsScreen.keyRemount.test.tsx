@@ -25,6 +25,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 import { ChannelConfigureResponse as ChannelConfigureResponseSchema } from '@/lib/api/generated/schemas'
 
+// Temporary F5 diagnostic: write each point at entry, not a summary after
+// the awaited import/test. Absolute monotonic times also cover mock-factory
+// entry before any test-local timing state could have initialized.
+function profileStep(label: string) {
+  process.stdout.write(`KEY_REMOUNT_PROFILE ${label} now_ms=${performance.now().toFixed(1)}\n`)
+}
+
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
 vi.mock('@tanstack/react-router', () => ({
@@ -93,7 +100,10 @@ const mockFetchAgents = vi.fn()
 const mockFetchMailboxes = vi.fn()
 
 vi.mock('@/lib/api', async (importOriginal) => {
+  profileStep('api-mock-factory-enter')
+  profileStep('api-import-original-start')
   const actual = await importOriginal<typeof import('@/lib/api')>()
+  profileStep('api-import-original-complete')
   return {
     ...actual,
     fetchChannels: mockFetchChannels,
@@ -150,14 +160,19 @@ function makeClient() {
 // their lexical position), causing a TDZ ReferenceError inside the mocked
 // '@/lib/api' factory. ConnectorsScreen.test.tsx uses the same pattern.
 async function renderScreen() {
+  profileStep('dynamic-import-start')
   const { ConnectorsScreen } = await import('./ConnectorsScreen')
+  profileStep('dynamic-import-complete')
   const client = makeClient()
-  return render(
+  const result = render(
     React.createElement(QueryClientProvider, { client }, React.createElement(ConnectorsScreen)),
   )
+  profileStep('initial-render-complete')
+  return result
 }
 
 beforeEach(() => {
+  profileStep('before-each-enter')
   vi.clearAllMocks()
   addToastMock.mockReset()
   mockFetchChannels.mockResolvedValue([CHANNEL_TELEGRAM, CHANNEL_DISCORD])
@@ -173,26 +188,32 @@ beforeEach(() => {
   mockConfigureChannel.mockResolvedValue(
     ChannelConfigureResponseSchema.parse({ apply_outcome: 'no_reload_needed' }),
   )
+  profileStep('before-each-complete')
 })
 
 describe('ConnectorsScreen — switching Configure targets while the panel stays open (round-1 CRITICAL)', () => {
   it('B shows B\'s hydrated values with no dirty carryover from A when Configure is clicked on B while A is still open', async () => {
+    profileStep('body-enter')
     await renderScreen()
 
     // Open Configure on Telegram (A).
     const configureTelegramBtn = await screen.findByLabelText('Configure telegram')
+    profileStep('telegram-row-ready')
     fireEvent.click(configureTelegramBtn)
+    profileStep('telegram-open-click')
 
     // Wait for the real ChannelConfigPanel to hydrate A's stored token.
     await waitFor(() => {
       expect(screen.getByLabelText(/^Bot Token/)).toHaveValue('telegram-stored-token')
     })
+    profileStep('telegram-hydrated')
 
     // Dirty the field — type an unsaved edit into A's Bot Token, never saved.
     fireEvent.change(screen.getByLabelText(/^Bot Token/), {
       target: { value: 'A-dirty-unsaved-value' },
     })
     expect(screen.getByLabelText(/^Bot Token/)).toHaveValue('A-dirty-unsaved-value')
+    profileStep('telegram-dirtied')
 
     // Click Configure on Discord (B) WHILE the panel is still open — the
     // Configure button for the currently-open channel's OWN row is not
@@ -200,6 +221,7 @@ describe('ConnectorsScreen — switching Configure targets while the panel stays
     // clicking a different row's Configure action without ever closing A.
     const configureDiscordBtn = screen.getByLabelText('Configure discord')
     fireEvent.click(configureDiscordBtn)
+    profileStep('discord-open-click')
 
     // B must show B's real stored value — never A's dirty unsaved edit, and
     // never an empty field (which is what a botched hydration re-run would
@@ -208,6 +230,7 @@ describe('ConnectorsScreen — switching Configure targets while the panel stays
       expect(screen.getByLabelText(/^Bot Token/)).toHaveValue('discord-stored-token')
     })
     expect(screen.getByLabelText(/^Bot Token/)).not.toHaveValue('A-dirty-unsaved-value')
+    profileStep('discord-hydrated')
 
     // Saving now must submit Discord's real value, never Telegram's leaked one.
     //
@@ -225,12 +248,20 @@ describe('ConnectorsScreen — switching Configure targets while the panel stays
     // value, not Telegram's leaked one — while dropping the incidental claim
     // about hydration order. A save that never becomes possible still fails
     // here, because the wait still expires.
+    profileStep('save-wait-start')
+    let saveAttempts = 0
     await waitFor(() => {
-      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+      saveAttempts += 1
+      profileStep(`save-query-start attempt=${saveAttempts}`)
+      const saveButton = screen.getByRole('button', { name: /^Save$/ })
+      profileStep(`save-query-complete attempt=${saveAttempts}`)
+      fireEvent.click(saveButton)
+      profileStep(`save-click-complete attempt=${saveAttempts}`)
       expect(mockConfigureChannel).toHaveBeenCalled()
     })
     const [calledId, payload] = mockConfigureChannel.mock.calls[0] as [string, Record<string, unknown>]
     expect(calledId).toBe('discord')
     expect(payload['token']).toBe('discord-stored-token')
+    profileStep('discord-saved-exact-payload')
   })
 })
