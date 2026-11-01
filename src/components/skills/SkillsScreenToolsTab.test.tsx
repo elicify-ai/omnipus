@@ -195,12 +195,12 @@ describe('SkillsScreen — Built-in Tools tab overview (US-E2, #338)', () => {
 })
 
 describe('SkillsScreen — Installed Skills source badge & delete gating', () => {
-  it('built-in skill shows a "Built-in" badge and NO delete button', async () => {
+  it('built-in skill shows the exact "Built-in · read-only" badge and NO delete button', async () => {
     vi.mocked(fetchSkills).mockResolvedValueOnce([builtinSkill])
     renderScreen()
     // Default tab is "Installed Skills"; wait for the skill row to render.
     await screen.findByText('system-skill')
-    expect(screen.getByText('Built-in')).toBeInTheDocument()
+    expect(screen.getByText('Built-in · read-only', { exact: true })).toBeInTheDocument()
     expect(screen.queryByText('Community')).not.toBeInTheDocument()
     // No delete button for built-in skills.
     expect(
@@ -213,12 +213,30 @@ describe('SkillsScreen — Installed Skills source badge & delete gating', () =>
     renderScreen()
     await screen.findByText('community-skill')
     expect(screen.getByText('Community')).toBeInTheDocument()
-    expect(screen.queryByText('Built-in')).not.toBeInTheDocument()
+    expect(screen.queryByText('Built-in · read-only', { exact: true })).not.toBeInTheDocument()
     // Delete button present for community/user-installed skills.
     expect(
       screen.getByRole('button', { name: /Remove community-skill/i })
     ).toBeInTheDocument()
   })
+
+  // r15 §13 / FR-070: a constant false hides a required badge; a constant
+  // true marks the unchanged control too. These are runtime API-edge data,
+  // not a migration of the typed Skill fixtures while contract C-1 is absent.
+  it.each(['global', 'workspace'] as const)(
+    'shows Changed locally only on the changed %s row', async (source) => {
+      const changed = { ...communitySkill, id: 'changed-one', name: 'changed-one', source, has_local_changes: true }
+      const unchanged = { ...communitySkill, id: 'unchanged-one', name: 'unchanged-one', source, has_local_changes: false }
+      vi.mocked(fetchSkills).mockResolvedValueOnce([changed, unchanged])
+      renderScreen()
+      await screen.findByText('changed-one', { exact: true })
+      expect(screen.getByText('unchanged-one', { exact: true })).toBeInTheDocument()
+      expect(screen.getAllByText('Changed locally', { exact: true })).toHaveLength(1)
+      const badge = screen.getByText('Changed locally', { exact: true })
+      expect(badge.parentElement).toHaveTextContent('changed-one')
+      expect(badge.parentElement).not.toHaveTextContent('unchanged-one')
+    },
+  )
 
   it('hides the "by" author text when author is empty', async () => {
     vi.mocked(fetchSkills).mockResolvedValueOnce([builtinSkill])
