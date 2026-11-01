@@ -32,6 +32,7 @@ import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
 import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
+import { ChannelOutboundSection } from '@/components/connectors/ChannelOutboundSection'
 import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
 import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 import type { ChannelConfigureResponse } from '@/lib/api/generated/openapi-types'
@@ -608,6 +609,15 @@ export function ChannelConfigPanel({
     const editable: Record<string, unknown> = { ...(currentConfig as Record<string, unknown>) }
     delete editable.identity
     delete editable.workspace_id
+    // Channels spec FR-023 / S-34: "Starting messages" is saved only through
+    // its own route (the section below), and Configure rejects `outbound` with
+    // 400. Echoing it back would also let a form opened before a revocation
+    // restore the old grant. The apply_* keys are a Configure response's
+    // outcome, never settings.
+    delete editable.outbound
+    delete editable.apply_outcome
+    delete editable.apply_reason
+    delete editable.apply_note
 
     // SECURITY / UX: redactable (password/textarea) fields never hydrate the
     // raw "[configured]" sentinel into the form (see CONFIGURED_SENTINEL) — a
@@ -1175,6 +1185,11 @@ export function ChannelConfigPanel({
                 Save
               </Button>
             </div>
+
+            {/* Channels spec FR-026: "Starting messages" has its own Save and
+                route; the buttons above never save it. Webchat has no
+                outbound setting. */}
+            {!isWebchat && <ChannelOutboundSection channelId={channelId} channelName={channelName} />}
           </div>
         )}
       </SheetContent>
