@@ -796,3 +796,6 @@ Known12 findings in the three tools tests were repaired without changing expecte
 | **Self-check** | Reconciled251 IDs/nine removals/63 requirements against r17; rejected a missing-row copy; all30 prior source-only rows have named receipts and matching current test-file hashes. Read actual failure boundaries, Settings historical RED/current PASS and physical open-run/restart RED; retained V-2/replay exception. Final scope/lint/commit receipts are separate; no absent/stopped receipt is a pass. | Verified accounting; remaining execution and behavior explicitly Unknown |
 
 skills: elicify-test-writing, omnipus-shared-rules, omnipus-design-system.
+
+## Chief ruling: once-run OccurrenceMs (2026-11-01)
+`pkg/agent/t8_task_tool_wiring_test.go::TestTaskTrigger_ScheduledTaskNotRunEarly_ProductionWiring/once` now expects a nil `OccurrenceMs` for a once run (recurring keeps `&at`). Spec-silent conflict (r17 says nothing; released `once_fire_passes_nil` in `pkg/agent/task_run_history_test.go` requires nil) resolved by the chief. Only this one expectation changed.

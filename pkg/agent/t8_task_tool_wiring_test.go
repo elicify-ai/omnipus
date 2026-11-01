@@ -119,7 +119,11 @@ func TestTaskTrigger_ScheduledTaskNotRunEarly_ProductionWiring(t *testing.T) {
 			runs, err := al.taskStore.ListRuns(tk.ID)
 			require.NoError(t, err)
 			require.Len(t, runs, 1, "one real execution at first occurrence")
-			assert.Equal(t, &at, runs[0].OccurrenceMs, "execution belongs to scheduled instant")
+			if kind == "once" {
+				assert.Nil(t, runs[0].OccurrenceMs, "once run carries nil occurrence (released once_fire_passes_nil contract)")
+			} else {
+				assert.Equal(t, &at, runs[0].OccurrenceMs, "execution belongs to scheduled instant")
+			}
 			sched.RunDueJobs(clock.Now())
 			sched.WaitForLane()
 			al.taskExecutor.wg.Wait()
