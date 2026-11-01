@@ -93,6 +93,7 @@ func TestT02b_CaseE_ConstructionFailureCausePresent_ReportsTrueOutcome(t *testin
 	require.Equal(t, http.StatusOK, status, body)
 	t02bRequireOutcome(t, body, "applied_not_running", "S-88 e, unchanged save while missing credential remains")
 	require.Contains(t, body["apply_reason"], "line", "T-6: reason carries the failed-channel entry")
+	t02RequireFailedChannelReason(t, f, body, "line", "S-88 e")
 }
 
 func TestT02b_CaseF_ConstructionCauseRemoved_IdenticalSaveConstructsAndStarts(t *testing.T) {
@@ -135,7 +136,7 @@ func TestT02b_PositiveControl_HealthyPeerUnaffectedByDegradedInstance(t *testing
 	require.Equal(t, probes, f.f1277.authorizedProbes.Load())
 }
 
-func TestT02b_CaseB_BootTimeStartFailure_NeedsFixtureSeam(t *testing.T) {
+func TestT02b_CaseB_BootTimeStartFailure_IdenticalSaveRetriesRecordedFailure(t *testing.T) {
 	f := t02BootFixture(t, func(base *issue1277Fixture) {
 		require.NoError(t, base.store.Set(issue1277BrokenRef, "qa1277-restored-peer-secret"))
 		require.NoError(t, base.store.Set("QA1277_HEALTHY_LINE_ACCESS", issue1277UnauthorizedAccess))
@@ -153,7 +154,7 @@ func TestT02b_CaseB_BootTimeStartFailure_NeedsFixtureSeam(t *testing.T) {
 	require.NoError(t, f.svc.ChannelManager.LastStartError("line.healthy"))
 }
 
-func TestT02b_CaseC_UnfinishedTeardown_NeedsSeam(t *testing.T) {
+func TestT02b_CaseC_UnfinishedTeardown_IdenticalSaveRetriesRetainedDisposal(t *testing.T) {
 	f := t02Fixture(t)
 	fault := t02FaultStop(t, f, "line.healthy")
 	// Force disposal WITHOUT changing config: the retained applied hash is
@@ -169,13 +170,12 @@ func TestT02b_CaseC_UnfinishedTeardown_NeedsSeam(t *testing.T) {
 	require.Greater(t, fault.calls.Load(), int32(1), "the exact retained adapter was disposed again")
 }
 
-func TestT02b_CaseG_StaleBundleInterleaving_NeedsCapturePauseSeam(t *testing.T) {
+func TestT02b_CaseG_StaleBundleInterleaving_OlderRebuildCannotAcknowledgeLaterWrite(t *testing.T) {
 	f := t02Fixture(t)
 	mgr := f.svc.ChannelManager
-	reporter, ok := any(mgr).(t02PendingReporter)
-	if !ok {
-		t.Fatal("BLOCKED: Manager.PendingApplication is not implemented on this pre-change base — required by S-88 g / FR-050 leg 5")
-	}
+	// This implemented seam is a compile-time requirement, not a live BLOCKED
+	// placeholder; every marker/version assertion below remains unchanged.
+	var reporter t02PendingReporter = mgr
 	status, first := t02bConfigure(t, f, "line.healthy", `{"channel_access_token":"`+issue1277HealthyAccess+`"}`)
 	require.Equal(t, http.StatusOK, status, first)
 	t02bRequireOutcome(t, first, "applied", "S-88 g: first apply A under Configure's selected reference")

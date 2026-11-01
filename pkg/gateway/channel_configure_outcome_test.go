@@ -29,6 +29,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,6 +55,22 @@ func requireApplyOutcome(t *testing.T, body map[string]any, want string, table s
 		"%s: the Configure response must carry apply_outcome (T-6/FR-052); the field is absent entirely", table)
 	require.Equal(t, want, body["apply_outcome"],
 		"%s: apply_outcome must be %q", table, want)
+}
+
+// T-6/T-7 define this as an exact propagation invariant: Configure must copy
+// the full manager failure entry for THIS instance. The manager record is an
+// independent input to the projection, never a value read from Configure's body.
+// Constructor diagnostic wording itself is outside this test's boundary.
+func t02RequireFailedChannelReason(t *testing.T, f *wu6Fixture, body map[string]any, id, where string) {
+	t.Helper()
+	var reasons []string
+	for _, failure := range f.svc.ChannelManager.FailedChannels() {
+		if failure.Name == id {
+			reasons = append(reasons, failure.Error())
+		}
+	}
+	require.Len(t, reasons, 1, "%s: instrument must independently select exactly this instance's failed-channel record", where)
+	require.Equal(t, reasons[0], body["apply_reason"], "%s: T-6/T-7 requires the complete selected failed-channel entry", where)
 }
 
 func TestT02_OutcomeMapping_DisabledInstanceIsNoReloadNeeded(t *testing.T) {
@@ -112,6 +129,7 @@ func TestT02_OutcomeMapping_ConstructorFailureIsAppliedNotRunning(t *testing.T) 
 	status, body := t02Configure(t, f, "line", `{"allow_from":["qa1277-user"]}`)
 	require.Equal(t, http.StatusOK, status, body)
 	requireApplyOutcome(t, body, "applied_not_running", "S-52 row 5")
+	t02RequireFailedChannelReason(t, f, body, "line", "S-52 row 5")
 }
 
 func TestT02_OutcomeMapping_ScriptedOutcomesNeedSeams(t *testing.T) {
@@ -134,6 +152,8 @@ func TestT02_OutcomeMapping_ScriptedOutcomesNeedSeams(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, body)
 		requireApplyOutcome(t, body, "failed", "S-52 row 7")
 		require.NotEmpty(t, body["apply_reason"], "T-6: failure has a short reason")
+		require.Equal(t, "the configuration reload failed; details are in the server log", body["apply_reason"],
+			"T-6 amended 2026-11-01: row 7 uses the fixed secret-free reload phrase, not raw error text")
 		require.Contains(t, body, "apply_note")
 	})
 	t.Run("S52 row8 unfinished teardown", func(t *testing.T) {
@@ -143,9 +163,31 @@ func TestT02_OutcomeMapping_ScriptedOutcomesNeedSeams(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, body)
 		requireApplyOutcome(t, body, "failed", "S-52 row 8")
 		require.NotEmpty(t, body["apply_reason"], "unfinished disposal must be explained")
+		// S-52 amended row 8: "for a config-changing save, because the
+		// applied-hash leg is checked before the disposal leg".
+		require.Equal(t, "the configuration reload failed; details are in the server log", body["apply_reason"],
+			"S-52 amended row 8: changed settings use the fixed reload phrase")
 		require.Contains(t, body, "apply_note")
 		require.Greater(t, fault.calls.Load(), int32(0), "instrument: real reload reached adapter Stop")
 		require.False(t, fault.IsRunning(), "fixture's old adapter half-completed shutdown; do not claim it keeps running")
+	})
+	t.Run("S52 row8 identical save with pending disposal", func(t *testing.T) {
+		f := t02Fixture(t)
+		fault := t02FaultStop(t, f, "line.healthy")
+		// Fail a real teardown WITHOUT changing the applied settings first.
+		// Matching hash + pending disposal is the second amended row-8 case.
+		f.svc.ChannelManager.RequestRestart("line.healthy", "", f.al.GetConfig())
+		_, err := f.api.triggerReloadAndWaitOutcome()
+		require.Error(t, err, "instrument: the first real teardown is unfinished")
+		require.Greater(t, fault.calls.Load(), int32(0))
+		status, body := t02Configure(t, f, "line.healthy", `{}`)
+		require.Equal(t, http.StatusOK, status, body)
+		requireApplyOutcome(t, body, "failed", "S-52 amended row 8, identical save with matching applied settings")
+		require.Equal(t, "the previous connection did not finish shutting down; the next save retries it", body["apply_reason"],
+			"T-6/S-52 amended row 8: the pending-disposal leg uses its fixed secret-free phrase")
+		require.Contains(t, body, "apply_note")
+		require.Greater(t, fault.calls.Load(), int32(1), "the identical save actually retried the retained adapter's disposal")
+		require.False(t, fault.IsRunning())
 	})
 	t.Run("S52 row9 partial multi-connection reload", func(t *testing.T) {
 		f := t02BootFixture(t, func(base *issue1277Fixture) {
@@ -158,6 +200,8 @@ func TestT02_OutcomeMapping_ScriptedOutcomesNeedSeams(t *testing.T) {
 		status, body := t02Configure(t, f, "line.healthy", `{"allow_from":["qa1277-user"]}`)
 		require.Equal(t, http.StatusOK, status, body)
 		requireApplyOutcome(t, body, "failed", "S-52 row 9: overall reload with mixed results is failed")
+		require.Equal(t, "the configuration reload failed; details are in the server log", body["apply_reason"],
+			"T-6 amended 2026-11-01: partial reload failure uses the fixed reload phrase")
 		require.Greater(t, fault.calls.Load(), int32(0))
 		after, exists := f.svc.ChannelManager.GetChannel("line")
 		require.True(t, exists)
@@ -168,6 +212,10 @@ func TestT02_OutcomeMapping_ScriptedOutcomesNeedSeams(t *testing.T) {
 }
 
 func TestT03_TokenReplacedUnderSameReference_RestartDeliversNewToken(t *testing.T) {
+	previousCaptureHook := reloadCredentialCaptureHook
+	// Register before the fixture: restoration runs after its reload worker
+	// joins, including failure cleanup, so no active reload races hook removal.
+	t.Cleanup(func() { reloadCredentialCaptureHook = previousCaptureHook })
 	// S-51: token B stored under the same reference → RequestRestart, the
 	// rebuilt adapter's constructor received B (observed: the fixture's
 	// connect-credential probe fires), apply_outcome ≠ no_reload_needed, and
@@ -184,6 +232,15 @@ func TestT03_TokenReplacedUnderSameReference_RestartDeliversNewToken(t *testing.
 	require.Equal(t, "channel_line.healthy_channel_access_token", selectedRef)
 
 	before := f.f1277.connectProbes.Load()
+	var rebuilds atomic.Int32
+	reloadCredentialCaptureHook = func(stage string) {
+		if stage == "rebuild" {
+			rebuilds.Add(1)
+		}
+		if previousCaptureHook != nil {
+			previousCaptureHook(stage)
+		}
+	}
 	status, body := t02Configure(t, f, "line.healthy",
 		`{"channel_access_token":"`+issue1277ConnectAccess+`"}`)
 	require.Equal(t, http.StatusOK, status, body)
@@ -208,6 +265,7 @@ func TestT03_TokenReplacedUnderSameReference_RestartDeliversNewToken(t *testing.
 	// counted a bot-info probe carrying B (SC-005: 1 reload, new token live).
 	require.Greater(t, f.f1277.connectProbes.Load(), before,
 		"S-51: the rebuilt adapter must probe the platform with the new token (RequestRestart ran)")
+	require.Equal(t, int32(1), rebuilds.Load(), "SC-005: the same-reference token replacement applies B in exactly one real reload")
 
 	// FR-053/NB-8: neither the old nor the new secret value appears in the response.
 	raw, _ := json.Marshal(body)
