@@ -15,12 +15,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactElement } from 'react'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EffortControl, ModelEffortPicker, type EffortValue } from './model-effort-picker'
-import { fetchProvidersCatalog } from '@/lib/api'
-import type { ProvidersCatalog } from '@/lib/api'
+import { fetchProvidersCatalog, fetchMemorySettings, updateMemorySettings, fetchProviders } from '@/lib/api'
+import { MemorySection } from '../settings/MemorySection'
+import type { ProvidersCatalog, MemorySettings, Provider } from '@/lib/api'
 
 // ResizeObserver is required by popover primitives; jsdom does not implement
 // it (same stub as MemorySection.test.tsx).
@@ -43,6 +44,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchProvidersCatalog: vi.fn(),
+    fetchMemorySettings: vi.fn(), updateMemorySettings: vi.fn(), fetchProviders: vi.fn(),
   }
 })
 
@@ -56,7 +58,7 @@ interface MockReasoning {
 function makeCatalog(models: Record<string, MockReasoning | undefined>): ProvidersCatalog {
   return {
     schema_version: '2.0.0',
-    version: 'test',
+    version: 'v2026.10.31',
     updated_at: '2026-10-31T00:00:00Z',
     source: 'test',
     default_resize_limits: { long_edge_px: 2048, max_bytes: 10485760 },
@@ -68,6 +70,7 @@ function makeCatalog(models: Record<string, MockReasoning | undefined>): Provide
         name: 'openrouter',
         company: 'OpenRouter',
         api: 'https://openrouter.ai/api/v1',
+        protocol:'openai-compatible', protocols:[{protocol:'openai-compatible',api:'https://openrouter.ai/api/v1'}],
         tier: 'popular',
         auth_methods: ['api_key'],
         aliases: [],
@@ -127,7 +130,7 @@ describe('ModelEffortPicker — T-F1 presentation', () => {
     renderWithCatalog(
       <ModelEffortPicker value={effortValue('openai/gpt-6.1-sol', '')} inherit="high" scope="chat" />,
     )
-    await screen.findByRole('radio')
+    await screen.findAllByRole('radio')
     expect(radioNames()).toEqual([
       "Not set: Agent's setting: High",
       'Provider default',
@@ -147,7 +150,7 @@ describe('ModelEffortPicker — T-F1 presentation', () => {
     renderWithCatalog(
       <ModelEffortPicker value={effortValue('deepseek/deepseek-v4.1-flash', '')} scope="chat" />,
     )
-    await screen.findByRole('radio')
+    await screen.findAllByRole('radio')
     const names = radioNames()
     expect(names[0]).toMatch(/Not set/)
     expect(names.slice(1)).toEqual(['Provider default', 'Off', 'Low', 'High', 'Max'])
@@ -159,7 +162,7 @@ describe('ModelEffortPicker — T-F1 presentation', () => {
     renderWithCatalog(
       <ModelEffortPicker value={effortValue('minimax/minimax-m3', '')} scope="chat" />,
     )
-    await screen.findByRole('radio')
+    await screen.findAllByRole('radio')
     const names = radioNames()
     expect(names[0]).toMatch(/Not set/)
     expect(names.slice(1)).toEqual(['Provider default', 'Off', 'On'])
@@ -172,7 +175,7 @@ describe('ModelEffortPicker — T-F1 presentation', () => {
       makeCatalog({ 'dual-model': { levels: ['low', 'high'], switch: true } }),
     )
     renderWithCatalog(<ModelEffortPicker value={effortValue('dual-model', '')} scope="chat" />)
-    await screen.findByRole('radio')
+    await screen.findAllByRole('radio')
     const names = radioNames()
     expect(names[0]).toMatch(/Not set/)
     expect(names.slice(1)).toEqual(['Provider default', 'Off', 'Low', 'High'])
@@ -188,7 +191,7 @@ describe('ModelEffortPicker — T-F1 presentation', () => {
         defaultEffort="off"
       />,
     )
-    await screen.findByRole('radio')
+    await screen.findAllByRole('radio')
     expect(screen.queryByText(/Not set/)).toBeNull()
     expect(screen.getByRole('radio', { name: 'Off' })).toHaveAttribute('aria-checked', 'true')
     const names = radioNames()
@@ -245,7 +248,7 @@ describe('EffortControl — chip presentation', () => {
     )
     await expect(
       screen.findByRole('button', { name: /effort/i }),
-    ).rejects.toThrowError(/Unable to find|multiple/i)
+    ).rejects.toThrowError(/Unable to find/i)
     // ...and a model absent from the catalog (custom/local) shows no chip either.
     const { unmount } = renderWithCatalog(
       <EffortControl value={effortValue('custom-local-model', 'high')} scope="chat" />,
@@ -292,6 +295,21 @@ describe('EffortControl — chip presentation', () => {
   })
 })
 
+  async function switchFromSaved(oldModel: string, oldEffort: string, target: string, failSave = false) {
+    const user = userEvent.setup()
+    vi.mocked(updateMemorySettings).mockClear()
+    const saved = {auto_recap_enabled:true,idle_timeout_minutes:30,bootstrap_recap_enabled:false,bootstrap_recap_max_per_minute:5,recap_model:oldModel,recap_provider:'openrouter',recap_reasoning_effort:oldEffort,recap_fallback_models:[],session_days:90,memory_retros_days:180}
+    vi.mocked(fetchMemorySettings).mockResolvedValue(saved as unknown as MemorySettings)
+    vi.mocked(fetchProviders).mockResolvedValue([{id:'openrouter',name:'openrouter',display_name:'OpenRouter',status:'connected',models:['openai/gpt-6.1-sol','deepseek/deepseek-v4.1-flash','budget-only-model']}] as Provider[])
+    vi.mocked(updateMemorySettings).mockImplementation(async body=>{if(failSave)throw new Error('SAVE-FAILED-7731');return ({...saved,...body}) as unknown as MemorySettings})
+    renderWithCatalog(<MemorySection />)
+    await screen.findByText('Memory & Recap')
+    await screen.findByRole('button',{name:new RegExp('^Effort.*'+(oldEffort==='off'?'Off':'Medium'),'i')})
+    await user.click(screen.getByTestId('recap-model-trigger'))
+    await user.click(await screen.findByText(target,{exact:true}))
+    return {onChange:vi.mocked(updateMemorySettings),chip:screen.getByRole('button',{name:/^Effort/i})}
+  }
+
 // ── T-F2: blocked step and keyboard (S-10, S-11, S-73) ────────────────────────
 
 describe('EffortControl — blocked step and keyboard', () => {
@@ -301,21 +319,10 @@ describe('EffortControl — blocked step and keyboard', () => {
     vi.mocked(fetchProvidersCatalog).mockResolvedValue(CATALOG)
   })
 
-  // Renders Off on a model without Off/switch (the S-10 Given) and opens the
-  // popover. The chip is located before opening: its accessible name carries
-  // the value (S-54 pattern "<context>: <value>").
+  // Exercise the real caller's transaction, not an already-invalid target
+  // value. Only API edges are mocked; model selection and effort are real.
   async function openBlockedStep() {
-    const onChange = vi.fn()
-    renderWithCatalog(
-      <EffortControl
-        value={effortValue('openai/gpt-6.1-sol', 'off')}
-        scope="chat"
-        onChange={onChange}
-      />,
-    )
-    const chip = await screen.findByRole('button', { name: /off/i })
-    await user.click(chip)
-    return { onChange, chip }
+    return switchFromSaved('deepseek/deepseek-v4.1-flash','off','openai/gpt-6.1-sol')
   }
 
   // Traces to: effort-levels-spec-r10.md S-10 (popover stays open on the
@@ -340,7 +347,7 @@ describe('EffortControl — blocked step and keyboard', () => {
     const { onChange } = await openBlockedStep()
     await user.click(screen.getByRole('radio', { name: 'High' }))
     expect(onChange).toHaveBeenCalled()
-    expect(onChange.mock.calls[0][0]).toBe('high')
+    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'openai/gpt-6.1-sol',recap_provider:'openrouter',recap_reasoning_effort:'high'})
     expect(screen.queryAllByRole('radio')).toHaveLength(0)
     // No confirm step: nothing in the popover asks before saving (P-Q4 A).
     expect(screen.queryByRole('button', { name: /confirm|save/i })).toBeNull()
@@ -354,21 +361,23 @@ describe('EffortControl — blocked step and keyboard', () => {
     expect(onChange).not.toHaveBeenCalled()
     expect(screen.queryAllByRole('radio')).toHaveLength(0)
     expect(chip).toHaveTextContent(/off/i)
+    expect(screen.getByTestId('recap-model-trigger')).toHaveTextContent('deepseek/deepseek-v4.1-flash')
     expect(screen.getByText('Switch cancelled')).toBeInTheDocument()
+    expect(screen.getByTestId('recap-model-trigger')).toHaveFocus()
   })
 
   // Traces to: effort-levels-spec-r10.md S-11 (keyboard only: Arrow Down moves
   // the selection, Enter completes with the selected level and focus moves to
   // the effort chip).
   it('S-11: Arrow Down moves the selection and Enter commits it, returning focus to the chip', async () => {
-    const { onChange, chip } = await openBlockedStep()
+    const { onChange } = await openBlockedStep()
     expect(screen.getByRole('radio', { name: 'Low' })).toHaveFocus()
     await user.keyboard('{ArrowDown}')
     expect(screen.getByRole('radio', { name: 'Medium' })).toHaveFocus()
     await user.keyboard('{Enter}')
     expect(onChange).toHaveBeenCalled()
-    expect(onChange.mock.calls[0][0]).toBe('medium')
-    expect(chip).toHaveFocus()
+    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'openai/gpt-6.1-sol',recap_provider:'openrouter',recap_reasoning_effort:'medium'})
+    await waitFor(()=>expect(screen.getByRole('button',{name:/^Effort/i})).toHaveFocus())
   })
 
   // Traces to: effort-levels-spec-r10.md S-11 (the same step works with Space
@@ -378,46 +387,30 @@ describe('EffortControl — blocked step and keyboard', () => {
     await user.keyboard('{ArrowDown}')
     await user.keyboard(' ')
     expect(onChange).toHaveBeenCalled()
-    expect(onChange.mock.calls[0][0]).toBe('medium')
+    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'openai/gpt-6.1-sol',recap_provider:'openrouter',recap_reasoning_effort:'medium'})
   })
 
   // Traces to: effort-levels-spec-r10.md S-73 (Off to a model with nothing
   // sendable offers "Let the provider decide" and Cancel; the first stores
   // Provider default and completes the switch).
   it('S-73: Off into nothing sendable offers Let the provider decide and Cancel; deciding stores provider_default', async () => {
-    const onChange = vi.fn()
-    renderWithCatalog(
-      <EffortControl
-        value={effortValue('budget-only-model', 'off')}
-        scope="chat"
-        onChange={onChange}
-      />,
-    )
-    const chip = await screen.findByRole('button', { name: /off/i })
-    await user.click(chip)
+    const {onChange} = await switchFromSaved('deepseek/deepseek-v4.1-flash','off','budget-only-model')
     await user.click(screen.getByRole('button', { name: 'Let the provider decide' }))
     expect(onChange).toHaveBeenCalled()
-    expect(onChange.mock.calls[0][0]).toBe('provider_default')
+    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'budget-only-model',recap_provider:'openrouter',recap_reasoning_effort:'provider_default'})
     expect(screen.queryAllByRole('radio')).toHaveLength(0)
   })
 
   // Traces to: effort-levels-spec-r10.md S-73 ("Cancel or Escape keeps the
   // previous model and Off").
-  it('S-73: Cancel keeps the previous model and Off without a change', async () => {
-    const onChange = vi.fn()
-    renderWithCatalog(
-      <EffortControl
-        value={effortValue('budget-only-model', 'off')}
-        scope="chat"
-        onChange={onChange}
-      />,
-    )
-    const chip = await screen.findByRole('button', { name: /off/i })
-    await user.click(chip)
-    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+  it.each(['Cancel', 'Escape'])('S-73: %s keeps the previous model and Off without a change', async (action) => {
+    const {onChange,chip} = await switchFromSaved('deepseek/deepseek-v4.1-flash','off','budget-only-model')
+    if (action === 'Escape') await user.keyboard('{Escape}')
+    else await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onChange).not.toHaveBeenCalled()
     expect(screen.queryAllByRole('radio')).toHaveLength(0)
     expect(chip).toHaveTextContent(/off/i)
+    expect(screen.getByTestId('recap-model-trigger')).toHaveTextContent('deepseek/deepseek-v4.1-flash')
   })
 })
 
@@ -436,18 +429,25 @@ describe('EffortControl — remapped stored value shows the note with a Change l
   // the save request; the server's value renders again when the parent passes
   // it back after a failed save).
   it('S-74: a stored Medium on a no-Medium model shows the exact note with a Change link that reopens the popover', async () => {
-    renderWithCatalog(
-      <EffortControl
-        value={effortValue('deepseek/deepseek-v4.1-flash', 'medium')}
-        scope="chat"
-      />,
-    )
+    await switchFromSaved('openai/gpt-6.1-sol','medium','deepseek/deepseek-v4.1-flash')
+    await waitFor(()=>expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
     expect(
       screen.getByText("Effort set to Low. deepseek/deepseek-v4.1-flash doesn't offer Medium."),
     ).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Change' }))
-    expect(await screen.findByRole('radio', { name: 'Medium' })).toBeInTheDocument()
+    expect(await screen.findByRole('radio', { name: 'Low' })).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Medium' })).toBeNull()
     // Save-on-commit (S-57/P-Q4): no extra confirm step inside the popover.
     expect(screen.queryByRole('button', { name: /confirm|save/i })).toBeNull()
   })
+  it('S-57: failed mapped autosave restores the acknowledged old pair and Medium, focus and FormError', async()=>{
+    await switchFromSaved('openai/gpt-6.1-sol','medium','deepseek/deepseek-v4.1-flash',true)
+    await waitFor(()=>expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
+    await waitFor(()=>expect(screen.getByRole('alert')).toBeInTheDocument())
+    expect(screen.getByTestId('recap-model-trigger')).toHaveTextContent('openai/gpt-6.1-sol')
+    const chip=screen.getByRole('button',{name:/^Effort.*Medium/i})
+    expect(chip).toHaveFocus()
+    expect(screen.getByRole('alert')).toHaveTextContent(/SAVE-FAILED-7731|save.*failed/i)
+  })
+
 })

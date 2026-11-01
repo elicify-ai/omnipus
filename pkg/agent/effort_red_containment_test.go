@@ -42,6 +42,13 @@ import (
 
 const redMarker = "SENTINEL-REASONING-7731"
 
+// redDefaultResponse is the INDEPENDENT literal of the empty-answer sentinel
+// text required by the spec. It deliberately does not reference the
+// production defaultResponse constant: if the constant and its output drift
+// together, this pinned literal still detects the contract change
+// (CHECK-16).
+const redDefaultResponse = "The model returned an empty response. This may indicate a provider error or token limit."
+
 // effortScriptedProvider returns the same scripted response for every call
 // and counts calls, so retry rules are observable (S-03: 2 requests; S-85: 1).
 type effortScriptedProvider struct {
@@ -307,7 +314,7 @@ func TestT_C3_S03_NonTruncatedReasoningOnly(t *testing.T) {
 	resp, _, err := al.processMessageAsPrimaryForTest(context.Background(), containmentTurn("hello"))
 	require.NoError(t, err)
 	assert.Equal(t, 2, prov.callCount(), "exactly two provider requests: the original and one retry (S-03)")
-	assert.Equal(t, defaultResponse, resp, "the person sees exactly the unchanged sentinel text (S-03)")
+	assert.Equal(t, redDefaultResponse, resp, "the person sees exactly the unchanged sentinel text (S-03)")
 	assert.NotContains(t, resp, redMarker, "the reasoning never appears as the answer")
 
 	entries, err := store.ReadTranscript(onlySessionID(t, store))
@@ -319,7 +326,7 @@ func TestT_C3_S03_NonTruncatedReasoningOnly(t *testing.T) {
 		}
 	}
 	require.NotNil(t, answerEntry, "an assistant answer entry exists")
-	assert.Equal(t, defaultResponse, answerEntry.Content, "the saved transcript content is the sentinel")
+	assert.Equal(t, redDefaultResponse, answerEntry.Content, "the saved transcript content is the sentinel")
 	assert.NotContains(t, answerEntry.Content, redMarker, "no reasoning marker in saved content (S-03)")
 }
 
@@ -351,7 +358,7 @@ func TestT_C3_S04_SameTextOnMessengerAndParent(t *testing.T) {
 	require.NoError(t, err)
 	// The parent-visible reply (what a delegating agent receives) is the same
 	// ordinary reply text.
-	assert.Equal(t, defaultResponse, resp, "the parent receives exactly the S-03 text (S-04)")
+	assert.Equal(t, redDefaultResponse, resp, "the parent receives exactly the S-03 text (S-04)")
 	assert.NotContains(t, resp, redMarker, "no reasoning text reaches the parent")
 
 	// The messenger receives exactly the same text on its outbound frame.
@@ -366,7 +373,7 @@ func TestT_C3_S04_SameTextOnMessengerAndParent(t *testing.T) {
 		if outbound.ChatID != "s04-chat" || outbound.Channel != "telegram" {
 			continue
 		}
-		assert.Equal(t, defaultResponse, outbound.Content, "the messenger receives exactly the S-03 text (S-04)")
+		assert.Equal(t, redDefaultResponse, outbound.Content, "the messenger receives exactly the S-03 text (S-04)")
 		assert.NotContains(t, outbound.Content, redMarker, "no reasoning text reaches the messenger (S-04)")
 		break
 	}
@@ -447,11 +454,15 @@ func TestT_C2_S02_ReasoningChannelZeroTrace(t *testing.T) {
 		"REASONING_CHANNEL_ID",
 		"targetReasoningChannelID",
 	}
-	roots := []string{"pkg", "cmd", "internal", "docs/connectors"}
+	roots := []string{"pkg", "cmd", "docs/connectors"}
+	scanned := 0
 	repo := effortRepoRoot(t)
 	for _, root := range roots {
-		_ = filepath.Walk(filepath.Join(repo, root), func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
+		err := filepath.Walk(filepath.Join(repo, root), func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
 				return nil
 			}
 			if !strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, ".md") {
@@ -462,8 +473,9 @@ func TestT_C2_S02_ReasoningChannelZeroTrace(t *testing.T) {
 			}
 			data, rerr := os.ReadFile(path)
 			if rerr != nil {
-				return nil
+				return rerr
 			}
+			scanned++
 			for _, b := range banned {
 				if strings.Contains(string(data), b) {
 					t.Errorf("%s contains %q — the reasoning channel must be deleted outright (S-02, FR-017)", path, b)
@@ -471,5 +483,7 @@ func TestT_C2_S02_ReasoningChannelZeroTrace(t *testing.T) {
 			}
 			return nil
 		})
+		require.NoError(t, err, "every inventory root must be traversed")
 	}
+	require.Greater(t, scanned, 100, "instrument control: production files were scanned")
 }

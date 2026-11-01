@@ -65,6 +65,30 @@ const (
 
 // ---- helpers (tl-prefixed to stay clear of the shared harness) ----
 
+// tlPersistentDeps keeps the normal entity/session fixture, but configuration
+// saves are real disk writes (CHECK-11), not the shared harness's no-op.
+func tlPersistentDeps(t *testing.T) (*systools.Deps, *config.Config) {
+	t.Helper()
+	tlInstallEffortCatalog(t)
+	deps, cfg := newTestDeps(t)
+	deps.SaveConfigLocked = func(c *config.Config) error { return config.SaveConfig(deps.ConfigPath, c) }
+	if err := config.SaveConfig(deps.ConfigPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	return deps, cfg
+}
+
+func tlDurableValue(t *testing.T, deps *systools.Deps, key string) any {
+	t.Helper()
+	loaded, err := config.LoadConfig(deps.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := *deps
+	fresh.GetCfg = func() *config.Config { return loaded }
+	return tlConfigValue(t, tlGetConfig(t, tlRegistry(t, &fresh), key))
+}
+
 func tlRegistry(t *testing.T, deps *systools.Deps) *tools.ToolRegistry {
 	t.Helper()
 	return systools.BuildRegistry(deps)
@@ -225,7 +249,7 @@ func tlStringListContains(list []string, want string) bool {
 //
 // Traces to: effort-levels-spec-r10.md S-63
 func TestT_TL63_UpdateAgentSavesAndReadsEffort(t *testing.T) {
-	deps, _ := newTestDeps(t)
+	deps, _ := tlPersistentDeps(t)
 	reg := tlRegistry(t, deps)
 	id := tlCreateMainAgent(t, reg, "Effort Bot", tlPrimaryModel, tlPrimaryProvider, nil)
 	rev := currentAgentRevision(t, deps, id)
@@ -235,7 +259,7 @@ func TestT_TL63_UpdateAgentSavesAndReadsEffort(t *testing.T) {
 		"revision":         rev,
 		"reasoning_effort": "high",
 		"fallback_models": []any{
-			map[string]any{"provider": tlPrimaryProvider, "model": tlFallbackSwitch, "reasoning_effort": "low"},
+			map[string]any{"provider": tlPrimaryProvider, "model": tlFallbackSwitch, "reasoning_effort": "on"},
 		},
 	})
 	if res.IsError {
@@ -266,8 +290,8 @@ func TestT_TL63_UpdateAgentSavesAndReadsEffort(t *testing.T) {
 		t.Fatalf("RED: get_agent fields [fallback_models] = %#v, want exactly one entry", view["fallback_models"])
 	}
 	fb0, _ := fb[0].(map[string]any)
-	if fb0 == nil || fb0["reasoning_effort"] != "low" {
-		t.Fatalf("RED: fallback_models[0].reasoning_effort = %#v, want \"low\" — the fallback effort was dropped", fb0)
+	if fb0 == nil || fb0["reasoning_effort"] != "on" {
+		t.Fatalf("RED: fallback_models[0].reasoning_effort = %#v, want \"on\" — the fallback effort was dropped", fb0)
 	}
 
 	stored := tlReadEntityJSON(t, deps.Home, id)
@@ -282,7 +306,7 @@ func TestT_TL63_UpdateAgentSavesAndReadsEffort(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-64
 func TestT_TL64_UpdateAgentRefusesUnofferedAndOversized(t *testing.T) {
-	deps, _ := newTestDeps(t)
+	deps, _ := tlPersistentDeps(t)
 	reg := tlRegistry(t, deps)
 	id := tlCreateMainAgent(t, reg, "Offered Bot", tlPrimaryModel, tlPrimaryProvider, nil)
 	revBefore := currentAgentRevision(t, deps, id)
@@ -328,7 +352,7 @@ func TestT_TL64_UpdateAgentRefusesUnofferedAndOversized(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-66
 func TestT_TL66_CreateAgentKeepsFallbackEfforts(t *testing.T) {
-	deps, _ := newTestDeps(t)
+	deps, _ := tlPersistentDeps(t)
 	reg := tlRegistry(t, deps)
 	systools.UseNameKeyedAgentIDsForTest(t)
 	res := tlExec(t, reg, "create_agent", map[string]any{
@@ -338,8 +362,8 @@ func TestT_TL66_CreateAgentKeepsFallbackEfforts(t *testing.T) {
 		"model":       tlPrimaryModel,
 		"provider":    tlPrimaryProvider,
 		"fallback_models": []any{
-			map[string]any{"provider": tlPrimaryProvider, "model": tlFallbackSwitch, "reasoning_effort": "low"},
-			map[string]any{"provider": tlFallback2Provider, "model": tlFallbackCustom, "reasoning_effort": "high"},
+			map[string]any{"provider": tlPrimaryProvider, "model": tlFallbackSwitch, "reasoning_effort": "on"},
+			map[string]any{"provider": tlFallback2Provider, "model": tlFallbackCustom, "reasoning_effort": "provider_default"},
 		},
 	})
 	if res.IsError {
@@ -358,11 +382,11 @@ func TestT_TL66_CreateAgentKeepsFallbackEfforts(t *testing.T) {
 	}
 	fb0, _ := fb[0].(map[string]any)
 	fb1, _ := fb[1].(map[string]any)
-	if fb0 == nil || fb0["model"] != tlFallbackSwitch || fb0["reasoning_effort"] != "low" {
-		t.Fatalf("RED: fallback_models[0] = %#v, want model %q with reasoning_effort \"low\"", fb0, tlFallbackSwitch)
+	if fb0 == nil || fb0["model"] != tlFallbackSwitch || fb0["reasoning_effort"] != "on" {
+		t.Fatalf("RED: fallback_models[0] = %#v, want model %q with reasoning_effort \"on\"", fb0, tlFallbackSwitch)
 	}
-	if fb1 == nil || fb1["model"] != tlFallbackCustom || fb1["reasoning_effort"] != "high" {
-		t.Fatalf("RED: fallback_models[1] = %#v, want model %q with reasoning_effort \"high\"", fb1, tlFallbackCustom)
+	if fb1 == nil || fb1["model"] != tlFallbackCustom || fb1["reasoning_effort"] != "provider_default" {
+		t.Fatalf("RED: fallback_models[1] = %#v, want model %q with reasoning_effort \"provider_default\"", fb1, tlFallbackCustom)
 	}
 }
 
@@ -374,7 +398,7 @@ func TestT_TL66_CreateAgentKeepsFallbackEfforts(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-67
 func TestT_TL67_GetAgentEffortOptionsPerSlot(t *testing.T) {
-	deps, _ := newTestDeps(t)
+	deps, _ := tlPersistentDeps(t)
 	reg := tlRegistry(t, deps)
 	id := tlCreateMainAgent(t, reg, "Options Bot", tlPrimaryModel, tlPrimaryProvider, []any{
 		map[string]any{"provider": tlPrimaryProvider, "model": tlFallbackSwitch},
@@ -416,7 +440,7 @@ func TestT_TL67_GetAgentEffortOptionsPerSlot(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-76
 func TestT_TL76_GetAgentFieldsProjection(t *testing.T) {
-	deps, _ := newTestDeps(t)
+	deps, _ := tlPersistentDeps(t)
 	reg := tlRegistry(t, deps)
 	id := tlCreateMainAgent(t, reg, "Fields Bot", tlPrimaryModel, tlPrimaryProvider,
 		[]any{map[string]any{"provider": tlPrimaryProvider, "model": tlFallbackSwitch}})
@@ -427,7 +451,7 @@ func TestT_TL76_GetAgentFieldsProjection(t *testing.T) {
 		"revision":         rev,
 		"reasoning_effort": "high",
 		"fallback_models": []any{
-			map[string]any{"provider": tlPrimaryProvider, "model": tlFallbackSwitch, "reasoning_effort": "low"},
+			map[string]any{"provider": tlPrimaryProvider, "model": tlFallbackSwitch, "reasoning_effort": "on"},
 		},
 	})
 	if seed.IsError {
@@ -465,8 +489,8 @@ func TestT_TL76_GetAgentFieldsProjection(t *testing.T) {
 		t.Fatalf("RED: fields [all] fallback_models = %#v, want the one stored fallback", full["fallback_models"])
 	}
 	fb0, _ := fb[0].(map[string]any)
-	if fb0 == nil || fb0["reasoning_effort"] != "low" {
-		t.Fatalf("RED: fields [all] fallback_models[0] = %#v, want its reasoning_effort \"low\" included", fb0)
+	if fb0 == nil || fb0["reasoning_effort"] != "on" {
+		t.Fatalf("RED: fields [all] fallback_models[0] = %#v, want its reasoning_effort \"on\" included", fb0)
 	}
 	mc, _ := full["model_chain"].([]any)
 	if len(mc) == 0 {
@@ -499,7 +523,7 @@ func TestT_TL76_GetAgentFieldsProjection(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-77
 func TestT_TL77_ExternalCLIWorkerRefusesEffort(t *testing.T) {
-	deps, _ := newTestDeps(t)
+	deps, _ := tlPersistentDeps(t)
 	reg := tlRegistry(t, deps)
 	id := tlCreateExternalCLIWorker(t, reg, "External Bot")
 	rev := currentAgentRevision(t, deps, id)
@@ -517,7 +541,7 @@ func TestT_TL77_ExternalCLIWorkerRefusesEffort(t *testing.T) {
 		t.Fatalf("refused update changed the revision: %s -> %s", rev, revAfter)
 	}
 
-	read := tlExec(t, reg, "get_agent", map[string]any{"id": id})
+	read := tlExec(t, reg, "get_agent", map[string]any{"id": id, "fields": []any{"all"}})
 	if read.IsError {
 		t.Fatalf("test setup: get_agent failed: %s", read.ForLLM)
 	}
@@ -553,7 +577,7 @@ func TestT_TL77_ExternalCLIWorkerRefusesEffort(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-68
 func TestT_TL68_SetConfigWritesDefaultModelEffort(t *testing.T) {
-	deps, _ := newTestDeps(t)
+	deps, _ := tlPersistentDeps(t)
 	reg := tlRegistry(t, deps)
 
 	key := "agents.defaults.default_model.reasoning_effort"
@@ -564,6 +588,9 @@ func TestT_TL68_SetConfigWritesDefaultModelEffort(t *testing.T) {
 	got := tlConfigValue(t, tlGetConfig(t, reg, key))
 	if got != "max" {
 		t.Fatalf("RED: read-back of %s = %#v, want max", key, got)
+	}
+	if disk := tlDurableValue(t, deps, key); disk != "max" {
+		t.Fatalf("reopened %s=%v, want max", key, disk)
 	}
 
 	over := tlSetConfig(t, reg, key, tlEffortOverLen)
@@ -610,7 +637,7 @@ func TestT_TL83_RecapLimitKeysRoundTrip(t *testing.T) {
 	}
 	for _, row := range rows {
 		t.Run(row.key, func(t *testing.T) {
-			deps, _ := newTestDeps(t)
+			deps, _ := tlPersistentDeps(t)
 			reg := tlRegistry(t, deps)
 			key := "agents.defaults." + row.key
 
@@ -621,6 +648,9 @@ func TestT_TL83_RecapLimitKeysRoundTrip(t *testing.T) {
 			direct := tlConfigValue(t, tlGetConfig(t, reg, key))
 			if direct != row.value {
 				t.Fatalf("RED: direct read of %s = %#v, want %v", key, direct, row.value)
+			}
+			if disk := tlDurableValue(t, deps, key); disk != row.value {
+				t.Fatalf("reopened %s=%v, want %v", key, disk, row.value)
 			}
 			section := tlConfigValue(t, tlGetConfig(t, reg, "agents.defaults"))
 			secMap, ok := section.(map[string]any)
@@ -648,7 +678,7 @@ func TestT_TL83_RecapLimitKeysRoundTrip(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-83
 func TestT_TL83_RecapSummaryWordsStoresThousand(t *testing.T) {
-	deps, _ := newTestDeps(t)
+	deps, _ := tlPersistentDeps(t)
 	reg := tlRegistry(t, deps)
 	key := "agents.defaults.recap_summary_words"
 
@@ -670,7 +700,7 @@ func TestT_TL83_RecapSummaryWordsStoresThousand(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-92
 func TestT_TL92_CredentialMaskingStillWorks(t *testing.T) {
-	deps, cfg := newTestDeps(t)
+	deps, cfg := tlPersistentDeps(t)
 	cfg.Gateway.Token = "bearer-secret-value"
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
 		"telegram": {Type: "telegram", Enabled: true, TokenRef: "telegram-bot-token-ref"},
@@ -752,7 +782,7 @@ func TestT_TL92_CredentialMaskingStillWorks(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-94
 func TestT_TL94_UpdateToolNullEffortRefusedBeforeRun(t *testing.T) {
-	deps, _ := newTestDeps(t)
+	deps, _ := tlPersistentDeps(t)
 	reg := tlRegistry(t, deps)
 	id := tlCreateMainAgent(t, reg, "Null Guard Bot", tlPrimaryModel, tlPrimaryProvider, nil)
 
@@ -763,6 +793,9 @@ func TestT_TL94_UpdateToolNullEffortRefusedBeforeRun(t *testing.T) {
 	if seed.IsError {
 		t.Fatalf("RED baseline: could not store reasoning_effort high via update_agent (feature missing): %s", seed.ForLLM)
 	}
+	// Compare refusals against the acknowledged seed's revision, not the
+	// pre-seed revision (CHECK-11).
+	rev = currentAgentRevision(t, deps, id)
 
 	nullRes := tlExec(t, reg, "update_agent", map[string]any{
 		"id": id, "revision": rev, "reasoning_effort": nil,
@@ -819,7 +852,7 @@ func TestT_TL94_UpdateToolNullEffortRefusedBeforeRun(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-94
 func TestT_TL94_SetConfigNullAndCompositeRefusals(t *testing.T) {
-	deps, _ := newTestDeps(t)
+	deps, _ := tlPersistentDeps(t)
 	reg := tlRegistry(t, deps)
 
 	// Baselines (RED today: none of these keys is writable yet).
@@ -1032,7 +1065,7 @@ func TestT_TL94_SetConfigNullAndCompositeRefusals(t *testing.T) {
 //
 // Traces to: effort-levels-spec-r10.md S-94
 func TestT_TL94_AllowFromScalarToListControl(t *testing.T) {
-	deps, cfg := newTestDeps(t)
+	deps, cfg := tlPersistentDeps(t)
 	seedOwnedChannel(cfg)
 	reg := tlRegistry(t, deps)
 

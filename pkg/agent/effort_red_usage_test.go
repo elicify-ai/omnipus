@@ -20,10 +20,10 @@ package agent
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -34,6 +34,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // usageEndpoint answers each request with the next canned body (the last one
@@ -181,28 +182,83 @@ func TestT_U1_S44_UnreportedReasoningStaysAbsent(t *testing.T) {
 	}
 }
 
-// TestT_U1_S88_FailedAttemptKeepsItsCount pins D7 row 7's failed-attempt
-// carrier: the production streaming code attaches the billed usage to the
-// mid-stream failure (openai_compat sets streamErr.Usage = usage — existing
-// wiring), so at GREEN the StreamProviderError's usage keeps its reasoning
-// count from the error chunk, and the failed call's own booking entry carries
-// it while B is never credited with A's count. The usage is built through the
-// production parse (ParseUsage) from the raw error-chunk usage JSON, so this
-// test compiles at RED and flips green when the parse carries the field.
-// Traces to: S-88, D7 row 7, FR-024, SC-018, T-U1.
+// TestT_U1_S88_FailedAttemptKeepsItsCount pins D7 row 7 through the
+// PRODUCTION attempt-booking path (CHECK-08): model A streams, reports
+// 300 output / 120 reasoning tokens, then fails mid-stream — the real
+// StreamProviderError flows through accountProviderAttempt, which books the
+// failed attempt's usage on A's own accounting entry; model B then answers
+// with 80 output and no reasoning count. The production-made entries are
+// appended through the production transcript writer and the by-model cells
+// are read from the session meta: A keeps 120, B is never credited, and the
+// sum is never 240.
+// Traces to: S-88, D7 row 7, FR-024, FR-036, SC-018, T-U1.
 func TestT_U1_S88_FailedAttemptKeepsItsCount(t *testing.T) {
-	raw := `{"prompt_tokens":10,"completion_tokens":300,"total_tokens":310,"completion_tokens_details":{"reasoning_tokens":120}}`
-	u, err := promptcache.ParseUsage("openrouter", []byte(raw))
+	_, f := newUsageFixture(t, []string{
+		`{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":10,"completion_tokens":180,"total_tokens":190}}`,
+	})
+
+	// Model A's failed attempt carries its billed usage on the real error type.
+	aUsage, err := promptcache.ParseUsage("openrouter", []byte(
+		`{"prompt_tokens":10,"completion_tokens":300,"total_tokens":310,"completion_tokens_details":{"reasoning_tokens":120}}`))
 	require.NoError(t, err)
-	require.NotNil(t, u)
+	require.NotNil(t, aUsage)
+	f.rt.accountProviderAttempt("openrouter", "model-a", nil,
+		&common.StreamProviderError{Code: "provider_error", Message: "mid-stream failure", Usage: aUsage})
 
-	spe := &common.StreamProviderError{Code: "provider_error", Message: "mid-stream failure", Usage: u}
-	require.True(t, errors.Is(spe, common.ErrStreamProviderError), "the carrier matches the sentinel — PIN")
+	// Model B answers successfully without a reasoning count.
+	bUsage, err := promptcache.ParseUsage("openrouter", []byte(
+		`{"prompt_tokens":5,"completion_tokens":80,"total_tokens":85}`))
+	require.NoError(t, err)
+	f.rt.accountProviderAttempt("openrouter", "model-b",
+		&providers.LLMResponse{Content: "fallback answer", FinishReason: "stop", Usage: bUsage}, nil)
 
-	carried := usageJSON(t, spe.Usage)
-	assert.Equal(t, float64(300), carried["completion_tokens"], "the failed attempt's billed output is carried — PIN")
-	assert.Equal(t, float64(120), carried["reasoning_tokens"],
-		"the mid-stream error's usage keeps its reasoning count (S-88) — RED")
+	// The production writer produced both entries.
+	f.rt.ts.mu.Lock()
+	pending := append([]session.TranscriptEntry(nil), f.rt.ts.callAccounting.pending...)
+	f.rt.ts.mu.Unlock()
+	require.Len(t, pending, 2, "the failed attempt and the answer each book their own entry")
+	aEntry, bEntry := pending[0], pending[1]
+	require.Equal(t, "model-a", aEntry.Model)
+	require.Equal(t, "model-b", bEntry.Model)
+
+	aJSON := entryJSON(t, aEntry)
+	assert.Equal(t, float64(300), aJSON["completion_tokens"], "A's billed output is booked — PIN")
+	assert.Equal(t, float64(120), aJSON["reasoning_tokens"],
+		"A's failed call entry keeps reasoning_tokens 120 (S-88) — RED: UsageInfo has no reasoning field")
+	bJSON := entryJSON(t, bEntry)
+	assert.NotContains(t, bJSON, "reasoning_tokens",
+		"B is never credited with A's count (S-88) — PIN at baseline, must hold at GREEN")
+
+	// Persist through the production transcript writer; read the by-model
+	// cells the production stats writer produced.
+	store, err := session.NewUnifiedStore(filepath.Join(t.TempDir(), "sessions"))
+	require.NoError(t, err)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", testDefaultAgentID)
+	require.NoError(t, err)
+	for _, e := range pending {
+		require.NoError(t, store.AppendTranscriptStrict(meta.ID, e))
+	}
+	updated, err := store.GetMeta(meta.ID)
+	require.NoError(t, err)
+	cellsRaw, err := json.Marshal(updated.Stats.ByModel)
+	require.NoError(t, err)
+	var cells map[string]map[string]any
+	require.NoError(t, json.Unmarshal(cellsRaw, &cells))
+	require.Contains(t, cells, "model-a")
+	require.Contains(t, cells, "model-b")
+	assert.Equal(t, float64(300), cells["model-a"]["out"], "A's cell shows its own output")
+	assert.Equal(t, float64(120), cells["model-a"]["reasoning"],
+		"A's cell shows reasoning 120 (S-88/FR-036) — RED: ModelTokens has no reasoning cell")
+	_, bHasReasoning := cells["model-b"]["reasoning"]
+	assert.False(t, bHasReasoning,
+		"B's cell carries no reasoning figure — B is never credited (S-88/SC-018) — PIN")
+	var totalReasoning float64
+	for _, cell := range cells {
+		if r, ok := cell["reasoning"]; ok {
+			totalReasoning += r.(float64)
+		}
+	}
+	assert.Equal(t, float64(120), totalReasoning, "the cells show exactly A's 120, never 240 (SC-018)")
 }
 
 // TestT_U1_S88_ReportedZeroBeatsAbsent pins D7 row 9: a later call reporting

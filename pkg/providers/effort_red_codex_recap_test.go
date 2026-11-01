@@ -27,7 +27,7 @@ import (
 // TD-2, FR-070.
 func TestT_C5_S89_CodexRecapCarriesEffortAndNoOutputLimit(t *testing.T) {
 	opts := map[string]any{
-		"max_tokens":      4096, // recap_max_output_tokens — must NOT reach this route (TD-2)
+		"max_tokens":       4096, // recap_max_output_tokens — must NOT reach this route (TD-2)
 		"reasoning_effort": "high",
 	}
 	params := buildCodexParams(nil, nil, "gpt-6.1-sol", opts, false)
@@ -98,5 +98,26 @@ func bodyFindPath(body map[string]any, path string) (any, bool) {
 			return cur, true
 		}
 		start = idx + 1
+	}
+}
+
+// S-17/S-19: this route has one Responses builder, not a second stream builder.
+func TestT_C5_S17_S19_CodexRequestMatrix(t *testing.T) {
+	for _, effort := range []string{"high", "provider_default", ""} {
+		t.Run(effort, func(t *testing.T) {
+			params := buildCodexParams([]Message{{Role: "user", Content: "codex wire"}}, nil, "gpt-6.1-sol", map[string]any{"reasoning_effort": effort, "max_tokens": 4096}, false)
+			raw, err := json.Marshal(params)
+			require.NoError(t, err)
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(raw, &body))
+			if effort == "high" {
+				assert.Equal(t, map[string]any{"effort": "high"}, body["reasoning"])
+			} else {
+				assert.NotContains(t, body, "reasoning")
+			}
+			for _, key := range []string{"reasoning_effort", "thinking", "output_config", "max_tokens", "max_output_tokens", "max_completion_tokens"} {
+				assert.NotContains(t, body, key)
+			}
+		})
 	}
 }

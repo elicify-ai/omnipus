@@ -233,22 +233,47 @@ func TestT_S1_Mapping_S72_Inherited(t *testing.T) {
 }
 
 // TestT_S1_Mapping_InheritedStates_S86_S87_S91 pins the decision outputs for
-// the inherited-value scenarios: S-86 (the switch must check the effective
-// inherited Off - an inherited Off on a target without Off/switch is nothing
-// sendable, never silently On), S-87 (an inherited value that changed
-// elsewhere to Off sends nothing with the neutral note), S-91 (a
-// conversation's own Off after the model lost Off maps to not_supported, not
-// a mapped level). The state assembly (conversation/agent inheritance) is the
-// loop's T-S2 wiring; these pin the decision function the loop must call.
-// Traces to: S-86, S-87, S-91, MAJ-006, FR-047, R2-MAJ-002.
+// the inherited-value scenarios with EXACT expectations taken from the shared
+// D2 fixture (row 8: source off, target with levels but no Off and no switch
+// -> value empty, blocked), never an OR over acceptable outcomes.
+//   - S-86: the switch must resolve the EFFECTIVE inherited Off and block into
+//     the pick-a-level / provider-default-escape step, never silently send.
+//   - S-87: the inherited value changed elsewhere to Off sends nothing; the
+//     turn note is the pinned not_supported text.
+//   - S-91: a conversation's own Off on a model that lost Off behaves the same
+//     (identical note text per spec), while the stored value stays off
+//     (loop-side, covered by the resolution tests).
+//
+// The conversation/agent state assembly is the loop's T-S2 wiring; these pin
+// the exact decision function outputs the loop must call.
+// Traces to: S-86, S-87, S-91, MAJ-006, FR-047, R2-MAJ-002, D2 row 8.
 func TestT_S1_Mapping_InheritedStates_S86_S87_S91(t *testing.T) {
-	m86 := MapEffort("off", EffortTarget{Levels: []string{"low", "medium", "high"}, Switch: false, Reasons: true})
-	assert.True(t, m86.Blocked || m86.Value == "" || m86.NoteKind == "nothing_sendable",
-		"an inherited Off must never map onto a target without Off (S-86, MAJ-006) - RED: the scaffold returns the sentinel")
+	const model = "m1"
+	noOffTarget := EffortTarget{Levels: []string{"low", "medium", "high"}, Switch: false, Reasons: true}
 
-	_ = MapEffort("high", EffortTarget{Levels: []string{"low", "medium", "high"}, Switch: false, Reasons: true})
+	// S-86 — exact D2 row 8 outcome: blocked, nothing decided.
+	m86 := MapEffort("off", noOffTarget)
+	assert.True(t, m86.Blocked,
+		"an inherited Off on a target without Off must block into the escape step (S-86, D2 row 8) — RED: the scaffold returns the sentinel")
+	assert.Equal(t, "", m86.Value,
+		"no level is decided for an inherited Off on a target without Off (S-86, D2 row 8) — RED")
 
-	m91 := MapEffort("off", EffortTarget{Levels: []string{"none", "low", "high"}, Switch: false, Reasons: true})
-	assert.Equal(t, "not_supported", m91.NoteKind,
-		"a conversation's own Off on a model without Off maps to not_supported (S-91, path X3) - RED: scaffold sentinel")
+	// S-87 — same blocked decision at request time; nothing is sent and the
+	// pinned not_supported note is the one shown (spec: same text as S-48/S-91).
+	m87 := MapEffort("off", noOffTarget)
+	assert.True(t, m87.Blocked && m87.Value == "",
+		"the request carries no effort after the agent's effort changed to Off elsewhere (S-87) — RED")
+	assert.Equal(t, "Effort not sent: "+model+" can't turn reasoning off.",
+		EffortTurnNote("not_supported", model, "off"),
+		"S-87's turn note is the pinned not_supported text — RED: the scaffold note is a sentinel")
+
+	// S-91 — the conversation's own Off after the model changed elsewhere: the
+	// identical decision and note; the stored conversation value itself is not
+	// rewritten (loop-side contract, covered by the resolution tests).
+	m91 := MapEffort("off", noOffTarget)
+	assert.True(t, m91.Blocked && m91.Value == "",
+		"a conversation's own Off on a model without Off sends nothing (S-91, path X3) — RED")
+	assert.Equal(t, "Effort not sent: "+model+" can't turn reasoning off.",
+		EffortTurnNote("not_supported", model, "off"),
+		"S-91's note is the same pinned not_supported text (S-48/S-87/S-91 one-text rule) — RED")
 }

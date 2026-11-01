@@ -31,9 +31,13 @@ package agent
 //   S-21 — no effort records are produced, so neither turn carries one (RED).
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -65,15 +69,51 @@ func bodyHasEffort(body map[string]any) bool {
 	return false
 }
 
+// bodyEffortValues collects every effort value the body carries, in the S-17
+// encodings: the flat OpenAI-compatible key and the nested OpenRouter levels
+// form (reasoning.effort). Used to assert WHICH value a request carried, so
+// absence of one candidate's value never contradicts presence of another's.
+func bodyEffortValues(body map[string]any) []any {
+	var out []any
+	if v, ok := body[effortdialect.EffortOptionKey]; ok {
+		out = append(out, v)
+	}
+	if r, ok := body["reasoning"].(map[string]any); ok {
+		if v, ok := r["effort"]; ok {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// bodyCarriesEffortValue reports whether the body encodes exactly the given
+// effort value in any S-17 form.
+func bodyCarriesEffortValue(body map[string]any, want string) bool {
+	for _, v := range bodyEffortValues(body) {
+		if s, ok := v.(string); ok && s == want {
+			return true
+		}
+	}
+	return false
+}
+
 // rejectionEndpoint answers status when the serialised body carries an effort
 // field and 200 otherwise — the S-24 test provider.
 type rejectionEndpoint struct {
 	mu     sync.Mutex
 	bodies []map[string]any
-	// statuses: status returned while the request carries effort (first N),
-	// then 200 with effort (for the S-25 both-fail row).
+	// Statuses: the first failWithEffort requests that carry effort and the
+	// first failWithout requests that do not get a 400; every other request
+	// gets a 200. S-25 passes a large failWithout so both attempts fail
+	// regardless of encoding.
 	failWithEffort int
 	failWithout    int
+	// fail400s counts the 400s served so the ERROR BODY carries an
+	// ORDER-BASED attempt identity: the first 400 is attempt 1's message,
+	// every later 400 is attempt 2's. Effort-keyed markers cannot construct
+	// "both failed" before the feature exists (no effort is sent at RED), so
+	// identity rides on request order instead.
+	fail400s int
 }
 
 func (e *rejectionEndpoint) handler(t *testing.T) http.HandlerFunc {
@@ -92,11 +132,24 @@ func (e *rejectionEndpoint) handler(t *testing.T) http.HandlerFunc {
 			e.failWithout--
 			st = http.StatusBadRequest
 		}
+		if st == http.StatusBadRequest {
+			e.fail400s++
+		}
+		failedAttempt := e.fail400s
 		e.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(st)
 		if st == http.StatusOK {
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+		} else if st == http.StatusBadRequest {
+			// Distinct provider error messages keyed by ORDER so the test can
+			// pin WHICH attempt's failure surfaced (S-25: the original
+			// attempt's error, never a later retry's).
+			if failedAttempt == 1 {
+				_, _ = w.Write([]byte(`{"error":{"message":"attempt-1-rejection-7731","code":"400"}}`))
+			} else {
+				_, _ = w.Write([]byte(`{"error":{"message":"attempt-2-rejection-9999","code":"400"}}`))
+			}
 		}
 	}
 }
@@ -150,18 +203,51 @@ func entryJSON(t *testing.T, e session.TranscriptEntry) map[string]any {
 	return m
 }
 
+func fullEffortRequestLoop(t *testing.T, url, effort string, extra map[string]any) (*AgentLoop, *session.UnifiedStore) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	var entity config.AgentConfig
+	raw, err := json.Marshal(map[string]any{"id": testDefaultAgentID, "provider": "openrouter", "model": "primary-m", "reasoning_effort": effort})
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &entity))
+	window := 128000
+	entity.ContextWindowOverride = &window
+	cfg := &config.Config{}
+	cfg.Agents.Defaults.Home = filepath.Join(home, "workspace")
+	cfg.Agents.List = []config.AgentConfig{entity}
+	cfg.Sandbox.ToolPolicies = config.DefaultToolPolicyCeiling()
+	cfg.Providers = []*config.ModelConfig{{Provider: "openrouter", Model: "primary-m", APIBase: url, ExtraBody: extra}}
+	al, store, _ := newContainmentLoop(t, cfg, &effortScriptedProvider{content: "UNEXPECTED-FALLBACK", finish: "stop"})
+	return al, store
+}
+func fullEffortAnswer(t *testing.T, store *session.UnifiedStore) map[string]any {
+	t.Helper()
+	entries, err := store.ReadTranscript(containmentSessionID)
+	require.NoError(t, err)
+	var answer map[string]any
+	for _, e := range entries {
+		if e.Role == "assistant" && e.Content == "ok" {
+			answer = entryJSON(t, e)
+		}
+	}
+	require.NotNil(t, answer, "completed turn saved its actual answer")
+	return answer
+}
+
 // TestT_P2_S24_RejectedEffortRetriedOnce pins FR-057: a 400 to a request
 // carrying effort is retried once without it, the turn succeeds, and the two
 // requests differ only in the effort fields.
 // Traces to: S-24, D4 row 1, FR-057, SC-004.
 func TestT_P2_S24_RejectedEffortRetriedOnce(t *testing.T) {
+	captureFileLog(t)
+	installConversationCatalog(t, []string{"low", "medium", "high"}, false, true)
 	ep, url := newRejectionEndpoint(t, 1, 0)
-	f := newRejectionFixture(t, url, "", "", "high")
+	al, store := fullEffortRequestLoop(t, url, "high", nil)
 
-	resp, err := f.rt.callProviderOnce(f.rf.callMessages, nil)
+	resp, _, err := al.processMessageAsPrimaryForTest(context.Background(), containmentTurn("answer"))
 	require.NoError(t, err, "the resend without effort succeeds")
-	require.NotNil(t, resp)
-	assert.Equal(t, "ok", resp.Content)
+	assert.Equal(t, "ok", resp)
 
 	bodies := ep.snapshot()
 	require.Len(t, bodies, 2, "exactly two requests: the original and one resend (S-24)")
@@ -183,37 +269,52 @@ func TestT_P2_S24_RejectedEffortRetriedOnce(t *testing.T) {
 	// The answering entry carries the effort record {chosen high, reason
 	// rejected} and the rejection note text (FR-058); JSON-name assertion so
 	// the wire/storage shape is pinned, not a struct field.
-	entries, err := f.store.ReadTranscript(f.sessionID)
-	require.NoError(t, err)
-	var record map[string]any
-	for _, e := range entries {
-		if e.Role == "assistant" && e.Type != session.EntryTypeToolCall {
-			record = entryJSON(t, e)
-		}
-	}
-	require.NotNil(t, record)
+	record := fullEffortAnswer(t, store)
 	eff, has := record["effort"]
 	require.True(t, has, "the answering entry stores the effort record (S-24/FR-058)")
 	em, ok := eff.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "high", em["chosen"])
 	assert.Equal(t, "rejected", em["reason"])
-	assert.Nil(t, em["sent"], "nothing was sent after the successful resend (S-24)")
+	assert.NotContains(t, em, "sent", "nothing was sent after the successful resend (S-24)")
+	assert.Equal(t, map[string]any{"chosen": "high", "reason": "rejected", "provider": "openrouter", "model": "primary-m"}, em)
+	lines := []string{}
+	for _, line := range strings.Split(slogBufForTest.String(), "\n") {
+		if strings.Contains(line, "effort_rejected=true") {
+			lines = append(lines, line)
+		}
+	}
+	require.Len(t, lines, 1, "one content-free effort rejection diagnostic")
+	for _, field := range []string{"400", "openrouter", "primary-m", "high"} {
+		assert.Contains(t, lines[0], field)
+	}
+	assert.NotContains(t, lines[0], "messages")
+	assert.NotContains(t, lines[0], "attempt-1-rejection-7731", "provider response body is not copied into the diagnostic")
 }
 
 // TestT_P2_S25_FailingRetrySurfacesOriginalError pins D4 row 3: both the
-// effort request and the resend fail → the original error surfaces through
-// the normal path, with no effort wording.
+// effort request and the resend fail → the original attempt's error surfaces
+// through the normal path, with no effort wording. The endpoint identifies
+// its 400s by ORDER (attempt 1 vs attempt 2), not by effort encoding, so the
+// identity control stays constructible before the feature exists.
 // Traces to: S-25, D4 row 3, FR-057.
 func TestT_P2_S25_FailingRetrySurfacesOriginalError(t *testing.T) {
-	ep, url := newRejectionEndpoint(t, 1, 1)
+	// A large failWithout keeps EVERY attempt failing, whatever encoding the
+	// attempt carries — at GREEN both the effort request and the resend fail.
+	ep, url := newRejectionEndpoint(t, 1, 1000)
 	f := newRejectionFixture(t, url, "", "", "high")
 
 	_, err := f.rt.callProviderOnce(f.rf.callMessages, nil)
 	require.Error(t, err, "both requests failed")
 	bodies := ep.snapshot()
-	assert.Len(t, bodies, 2, "exactly two requests are made (S-25)")
+	assert.Len(t, bodies, 2, "exactly two requests are made: the original and one resend (S-25)")
 	assert.NotContains(t, err.Error(), "effort", "the surfaced error claims nothing about effort (S-25)")
+	// Identity control: the two attempts carry distinct provider messages, so
+	// surfacing attempt 2's error instead of attempt 1's is detectable.
+	assert.Contains(t, err.Error(), "attempt-1-rejection-7731",
+		"the ORIGINAL attempt's error surfaces (S-25)")
+	assert.NotContains(t, err.Error(), "attempt-2-rejection-9999",
+		"the resend's error never replaces the original (S-25)")
 }
 
 // TestT_P2_S26_RejectionRememberedUntilRestart pins FR-057: after a rejection
@@ -292,12 +393,13 @@ func TestT_P2_S28_Only400And422TriggerRetry(t *testing.T) {
 // records two attempts, never one doubled and never one dropped.
 // Traces to: S-29, FR-057, regression "per-attempt accounting".
 func TestT_P2_S29_EachAttemptAccountedSeparately(t *testing.T) {
+	installConversationCatalog(t, []string{"low", "medium", "high"}, false, true)
 	_, url := newRejectionEndpoint(t, 1, 0)
-	f := newRejectionFixture(t, url, "", "", "high")
-	_, err := f.rt.callProviderOnce(f.rf.callMessages, nil)
+	al, store := fullEffortRequestLoop(t, url, "high", nil)
+	_, _, err := al.processMessageAsPrimaryForTest(context.Background(), containmentTurn("answer"))
 	require.NoError(t, err)
 
-	entries, err := f.store.ReadTranscript(f.sessionID)
+	entries, err := store.ReadTranscript(containmentSessionID)
 	require.NoError(t, err)
 	attempts := 0
 	for _, e := range entries {
@@ -363,39 +465,46 @@ func TestT_S2_S53_FallbackUsesOwnSetting(t *testing.T) {
 	t.Cleanup(srvFail.Close)
 	fb, furl := newRejectionEndpoint(t, 0, 0)
 	cfg := &config.Config{}
-	// The fallback's own stored effort, hand-written the way the REST writer
-	// will one day store it (dropped by today's loader — the RED reason).
 	cfg.Providers = append(cfg.Providers,
 		&config.ModelConfig{Provider: "openrouter", Model: "primary-m", APIBase: srvFail.URL},
 		&config.ModelConfig{Provider: "openrouter", Model: "fb-model", APIBase: furl},
 	)
-	cfg.Agents.Defaults.RecapFallbackModels = config.FallbackModelSlice{
-		{Provider: "openrouter", Model: "fb-model"},
-	}
 	candidates := []providers.FallbackCandidate{
 		{Provider: "openrouter", Model: "primary-m"},
 		{Provider: "openrouter", Model: "fb-model"},
 	}
-	a := &AgentInstance{ID: "effort-s53", Model: "primary-m", Candidates: candidates}
+	// Seed the agent fallback slot itself (not recap_fallback_models). Use the
+	// real config decoder so today's missing field is the RED, not a missing
+	// Given. NewAgentInstance captures this actual slot in sourceConfigJSON.
+	var agentCfg config.AgentConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"effort-s53","model":"primary-m","provider":"openrouter","fallback_models":[{"provider":"openrouter","model":"fb-model","reasoning_effort":"max"}]}`), &agentCfg))
+	cfg.Agents.List = []config.AgentConfig{agentCfg}
+	a := NewAgentInstance(&agentCfg, &cfg.Agents.Defaults, cfg, &effortScriptedProvider{content: "unused", finish: "stop"})
+	require.NotNil(t, a)
+	a.Candidates = candidates
 	a.storeProviderPoolBuild(buildProviderPool(cfg, candidates, a.ID))
 	f := newRouting1340ReviewFixture(t, cfg, a)
 	f.selectProvider(t)
 	if f.rt.llmOpts == nil {
 		f.rt.llmOpts = map[string]any{}
 	}
-	f.rt.llmOpts[effortdialect.EffortOptionKey] = "medium" // primary/chat value
+	// The primary's chat/primary value is Medium (S-53's given).
+	f.rt.llmOpts[effortdialect.EffortOptionKey] = "medium"
 
 	_, err := f.rt.callProviderOnce(f.rf.callMessages, nil)
 	require.NoError(t, err)
 	fbBodies := fb.snapshot()
 	require.NotEmpty(t, fbBodies)
-	assert.False(t, bodyHasEffort(fbBodies[0]),
-		"the chat/primary value never reaches the fallback (S-53, FR-021)")
-	// The fallback's OWN effort ("max") is missing at this head: the loader
-	// drops fallback_models[].reasoning_effort, so nothing can carry it.
-	eff, has := fbBodies[0][effortdialect.EffortOptionKey]
-	require.True(t, has, "the fallback must send its own stored effort (S-53 — RED: the field cannot be stored)")
-	assert.Equal(t, "max", eff)
+	// The chat/primary value (medium) never reaches the fallback — scoped to
+	// the value, never a blanket absence, so it cannot contradict the next
+	// assertion (CHECK-03).
+	assert.False(t, bodyCarriesEffortValue(fbBodies[0], "medium"),
+		"the chat/primary value (medium) never reaches the fallback (S-53, FR-021)")
+	// The fallback's own Max was supplied above through its agent config
+	// slot. It must reach OpenRouter as reasoning.effort, never inherit the
+	// primary/chat Medium (CHECK-03).
+	assert.True(t, bodyCarriesEffortValue(fbBodies[0], "max"),
+		"the fallback sends its own stored effort max in the OpenRouter encoding (S-53) — RED: FallbackModel.reasoning_effort cannot be stored at this head")
 }
 
 // TestT_S2_S51_DefaultModelEffortUsed pins S-51: an agent with no model of
@@ -404,21 +513,37 @@ func TestT_S2_S53_FallbackUsesOwnSetting(t *testing.T) {
 // Traces to: S-51, FR-045, US-10 AS4.
 func TestT_S2_S51_DefaultModelEffortUsed(t *testing.T) {
 	ep, url := newRejectionEndpoint(t, 0, 0)
-	cfg := &config.Config{}
-	cfg.Providers = append(cfg.Providers, &config.ModelConfig{Provider: "openrouter", Model: "primary-m", APIBase: url})
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Provider: "openrouter", Model: "primary-m"}
-	a := &AgentInstance{ID: "effort-s51", Model: "primary-m", Candidates: []providers.FallbackCandidate{{Provider: "openrouter", Model: "primary-m"}}}
+	// Seed the default model's effort the only honest way available: a real
+	// config file (version 1) that carries agents.defaults.default_model with
+	// reasoning_effort medium, loaded through config.LoadConfig. Today's
+	// loader silently drops that unknown key — the RED reason.
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"version": 1,
+		"providers": [{"provider": "openrouter", "model": "primary-m", "api_base": "` + url + `"}],
+		"agents": {"defaults": {"default_model": {"provider":"openrouter", "model": "primary-m", "reasoning_effort": "medium"}}}
+	}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(raw), 0o600))
+	cfg, err := config.LoadConfig(cfgPath)
+	require.NoError(t, err, "the seeded config loads")
+	// The agent truly rides the default: its own config contains no model,
+	// provider or effort. The production constructor resolves the default.
+	agentCfg := &config.AgentConfig{ID: "effort-s51"}
+	a := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, &effortScriptedProvider{content: "unused", finish: "stop"})
+	require.NotNil(t, a)
+	require.Equal(t, "primary-m", a.Model)
 	a.storeProviderPoolBuild(buildProviderPool(cfg, a.Candidates, a.ID))
 	f := newRouting1340ReviewFixture(t, cfg, a)
 	f.selectProvider(t)
 
-	_, err := f.rt.callProviderOnce(f.rf.callMessages, nil)
+	_, err = f.rt.callProviderOnce(f.rf.callMessages, nil)
 	require.NoError(t, err)
 	bodies := ep.snapshot()
 	require.NotEmpty(t, bodies)
-	eff, present := bodies[0][effortdialect.EffortOptionKey]
-	require.True(t, present, "the default model's effort (medium) is sent (S-51 — RED: the key cannot be stored)")
-	assert.Equal(t, "medium", eff)
+	// S-17: the OpenRouter levels encoding is the nested reasoning.effort.
+	assert.True(t, bodyCarriesEffortValue(bodies[0], "medium"),
+		"the default model's effort (medium) is sent in the route's encoding (S-51) — RED: the loader drops the default-model effort key, so nothing carries it")
 }
 
 // TestT_R0_S19_ProviderDefaultSendsNothing pins S-19 (regression pin): with
@@ -442,43 +567,16 @@ func TestT_R0_S19_ProviderDefaultSendsNothing(t *testing.T) {
 // not exist yet (RED).
 // Traces to: S-20, FR-037 (extra_body wins), FR-058.
 func TestT_R0_S20_ExtraBodyOverrideRecorded(t *testing.T) {
+	installConversationCatalog(t, []string{"low", "medium", "high"}, false, true)
 	ep, url := newRejectionEndpoint(t, 0, 0)
-	cfg := &config.Config{}
-	row := &config.ModelConfig{Provider: "openrouter", Model: "primary-m", APIBase: url}
-	cfg.Providers = append(cfg.Providers, row)
-	a := &AgentInstance{ID: "effort-s20", Model: "primary-m", Candidates: []providers.FallbackCandidate{{Provider: "openrouter", Model: "primary-m"}}}
-	a.storeProviderPoolBuild(buildProviderPool(cfg, a.Candidates, a.ID))
-	f := newRouting1340ReviewFixture(t, cfg, a)
-	f.selectProvider(t)
-	// The chat chose low…
-	if f.rt.llmOpts == nil {
-		f.rt.llmOpts = map[string]any{}
-	}
-	f.rt.llmOpts[effortdialect.EffortOptionKey] = "low"
-	// …and the operator's row sets extra_body reasoning_effort=high. The
-	// ModelConfig field that carries extra_body today is ExtraBody (string
-	// map); set it the way the config loader does.
-	row.ExtraBody = map[string]any{"reasoning_effort": "high"}
-
-	_, err := f.rt.callProviderOnce(f.rf.callMessages, nil)
+	al, store := fullEffortRequestLoop(t, url, "low", map[string]any{"reasoning_effort": "high"})
+	_, _, err := al.processMessageAsPrimaryForTest(context.Background(), containmentTurn("answer"))
 	require.NoError(t, err)
 	bodies := ep.snapshot()
 	require.NotEmpty(t, bodies)
 	// extra_body is merged last and wins on a key it sets (pin).
-	merged, has := bodies[0][effortdialect.EffortOptionKey]
-	if has {
-		assert.Equal(t, "high", merged, "extra_body wins over the chat value (S-20)")
-	}
-
-	entries, err := f.store.ReadTranscript(f.sessionID)
-	require.NoError(t, err)
-	var record map[string]any
-	for _, e := range entries {
-		if e.Role == "assistant" && e.Type != session.EntryTypeToolCall {
-			record = entryJSON(t, e)
-		}
-	}
-	require.NotNil(t, record)
+	assert.Equal(t, "high", bodies[0][effortdialect.EffortOptionKey], "operator extra_body wins on the serialized body")
+	record := fullEffortAnswer(t, store)
 	eff, has := record["effort"]
 	require.True(t, has, "the override is recorded (S-20 — RED: no record)")
 	em := eff.(map[string]any)

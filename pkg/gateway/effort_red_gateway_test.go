@@ -36,7 +36,9 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -222,35 +224,47 @@ func TestT_GW_AgentNameOnlyEditKeepsStoredEffort(t *testing.T) {
 // RED today: the handler has no effort mapping or refusal at all — both
 // shapes answer 200 and persist the model change with no effort anywhere.
 func TestT_GW_AgentModelChangeWithoutEffortMappedOrBlocked(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	t.Run("model with none: saved with Off", func(t *testing.T) {
-		w := egwPutAgentField(t, api, `{"provider":"prov-a","model":"m-none"}`)
-		require.Equal(t, http.StatusOK, w.Code,
-			"the model change itself must be accepted (provider seeded below); body=%s", w.Body.String())
-		got := egwGetAgentRaw(t, api, "test-agent")
-		require.NotNil(t, got["reasoning_effort"],
-			"RED S-58: a model change to a model with none must store Off when no effort is sent — "+
-				"today no effort is written (got %v)", got["reasoning_effort"])
-	})
-
-	t.Run("levels model without switch: refused 400 with the spec sentence", func(t *testing.T) {
-		w := egwPutAgentField(t, api, `{"provider":"prov-b","model":"m-levels"}`)
-		require.Equal(t, http.StatusBadRequest, w.Code,
-			"RED S-58: a model change to a levels-only model without reasoning_effort must be refused "+
-				"with HTTP 400; today it is accepted with %d (body=%s)", w.Code, w.Body.String())
-		require.Contains(t, w.Body.String(), "can't turn reasoning off",
-			"the refusal must carry the spec sentence")
-		require.Contains(t, w.Body.String(), "m-levels",
-			"the refusal must name the target model")
-		require.Contains(t, w.Body.String(), "provider_default",
-			"the refusal must list the offered options")
-
-		// Nothing saved: the model/ provider pair stays as it was.
-		got := egwGetAgentRaw(t, api, "test-agent")
-		require.NotEqual(t, "m-levels", got["model"],
-			"nothing from the refused update may persist")
-	})
+	for _, target := range []string{"m-none", "m-levels"} {
+		t.Run(target, func(t *testing.T) {
+			api := buildExecutorTestAPI(t)
+			old := egwReadAgentEntity(t, api, "test-agent")
+			old["provider"] = "openrouter"
+			old["model"] = "m-old"
+			old["reasoning_effort"] = "off"
+			egwWriteAgentEntity(t, api, "test-agent", old)
+			cfgPath := filepath.Join(api.homePath, "config.json")
+			raw, err := os.ReadFile(cfgPath)
+			require.NoError(t, err)
+			var disk map[string]any
+			require.NoError(t, json.Unmarshal(raw, &disk))
+			disk["providers"] = []any{map[string]any{"provider": "openrouter", "model": "m-old", "api_key": "test", "api_base": "http://127.0.0.1:1"}, map[string]any{"provider": "openrouter", "model": target, "api_key": "test", "api_base": "http://127.0.0.1:1"}}
+			raw, err = json.Marshal(disk)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(cfgPath, raw, 0600))
+			cat := egwEffortCatalog(t)
+			previous := providers.ProviderCatalog()
+			providers.SetCatalog(cat)
+			t.Cleanup(func() { providers.SetCatalog(previous) })
+			api.providerCatalog = cat
+			before, err := os.ReadFile(egwAgentEntityPath(api, "test-agent"))
+			require.NoError(t, err)
+			w := egwPutAgentField(t, api, `{"provider":"openrouter","model":"`+target+`"}`)
+			if target == "m-none" {
+				require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+				after := egwGetAgentRaw(t, api, "test-agent")
+				assert.Equal(t, "m-none", after["model"])
+				assert.Equal(t, "off", after["reasoning_effort"])
+			} else {
+				require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+				var response map[string]any
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+				require.Equal(t, "m-levels can't turn reasoning off. Send reasoning_effort with one of: provider_default, low, medium, high.", response["error"])
+				after, err := os.ReadFile(egwAgentEntityPath(api, "test-agent"))
+				require.NoError(t, err)
+				assert.Equal(t, before, after, "refused pair/value is byte-identical")
+			}
+		})
+	}
 }
 
 // --- S-59 ---
@@ -483,25 +497,33 @@ func TestT_GW_OnboardingInvalidPlacementsRefused(t *testing.T) {
 			"reasoning_effort",
 		},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			withEdition(t, config.EditionHosted)
-			api, tmpDir := newAuthMethodOnboardingAPI(t)
+	for _, validation := range []bool{false, true} {
+		for _, tc := range cases {
+			t.Run(fmt.Sprintf("validate=%v/%s", validation, tc.name), func(t *testing.T) {
+				withEdition(t, config.EditionHosted)
+				api, tmpDir := newAuthMethodOnboardingAPI(t)
+				api.agentLoop.GetConfig().Gateway.ValidateInbound = validation
 
-			w := postOnboardingComplete(api, tc.body)
-			require.Equal(t, http.StatusBadRequest, w.Code,
-				"the invalid placement must be refused with HTTP 400 (got %d, body=%s)", w.Code, w.Body.String())
-			require.Contains(t, w.Body.String(), tc.expectField,
-				"the refusal must name the offending field; body=%s", w.Body.String())
+				w := postOnboardingComplete(api, tc.body)
+				require.Equal(t, http.StatusBadRequest, w.Code,
+					"the invalid placement must be refused with HTTP 400 (got %d, body=%s)", w.Code, w.Body.String())
+				require.Contains(t, w.Body.String(), tc.expectField,
+					"the refusal must name the offending field; body=%s", w.Body.String())
 
-			// Nothing persisted: no default model, no provider row, no admin
-			// change — the refusal happens before the transaction commits.
-			dm := egwDiskDefaultModel(t, tmpDir)
-			require.Nil(t, dm, "nothing may persist from a refused completion (got %v)", dm)
-			cfgRaw := diskConfig(t, tmpDir)
-			rows, _ := cfgRaw["providers"].([]any)
-			require.Empty(t, rows, "no provider row may persist from a refused completion: %v", rows)
-		})
+				// Nothing persisted: no default model, no provider row, no admin
+				// change — the refusal happens before the transaction commits.
+				dm := egwDiskDefaultModel(t, tmpDir)
+				require.Nil(t, dm, "nothing may persist from a refused completion (got %v)", dm)
+				cfgRaw := diskConfig(t, tmpDir)
+				rows, _ := cfgRaw["providers"].([]any)
+				require.Empty(t, rows, "no provider row may persist from a refused completion: %v", rows)
+				if !validation && tc.expectField == "api_key" {
+					var response map[string]any
+					require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+					assert.Equal(t, `field not allowed on provider auth_method "sign_in": json: unknown field "api_key" — see the OnboardingProviderSignIn schema`, response["error"])
+				}
+			})
+		}
 	}
 }
 
@@ -756,19 +778,19 @@ func TestT_GW_RecapLimitsStoredAndBounded(t *testing.T) {
 		// embedded inbound mirror (pkg/gateway/inboundschemas/) does not carry
 		// — it only ships MemorySettings.yaml — so validate-on answers 500
 		// "inbound schema unavailable" today instead of a 400 naming the key.
-		// The row is kept RED at 400: the spec-required end state is a 400
-		// that names the key, whether the fix lands as the new keys in the
-		// mirror or a name the mirror actually has.
+		// A missing schema is a loud BLOCKED failure, not a validation RED.
+		// Once available, require the specified 400 and unchanged GET default,
+		// whether implementation fixes the mirror or uses its existing name.
 		api := egwNewMemoryAPI(t, true)
 		body, _ := json.Marshal(map[string]any{"recap_summary_words": 501})
 		w := egwMemoryPut(t, api, string(body))
+		requireEffortMemorySchema(t, w)
 		require.Equal(t, http.StatusBadRequest, w.Code,
 			"validation on must refuse an out-of-range value with 400 (got %d, body=%s)", w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(), "recap_summary_words",
 			"the refusal must name the key; body=%s", w.Body.String())
 		got := egwMemoryGetRaw(t, api)
-		_, present := got["recap_summary_words"]
-		require.False(t, present, "nothing may be saved from the refused write (got %v)", got["recap_summary_words"])
+		require.EqualValues(t, 150, got["recap_summary_words"], "refusal preserves the shipped GET default, it does not remove the field")
 	})
 
 	t.Run("S94_memory_null_effort_refused_and_nothing_saved", func(t *testing.T) {
@@ -816,6 +838,9 @@ func TestT_GW_AgentNullEffortRefused(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, w.Code,
 			"RED S-94: PUT with reasoning_effort null must be refused with HTTP 400; today the null is "+
 				"treated as absence and the PUT answers 200 (got %d, body=%s)", w.Code, w.Body.String())
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+		require.Equal(t, `reasoning_effort must be a string; send "" to clear it`, payload["error"], "S-94 validation-off refusal must identify null, not an unknown effort field")
 		after := egwReadAgentEntity(t, api, "test-agent")
 		require.Equal(t, "high", after["reasoning_effort"],
 			"the stored value stays high after the refusal (got %v)", after["reasoning_effort"])
@@ -828,6 +853,9 @@ func TestT_GW_AgentNullEffortRefused(t *testing.T) {
 			"RED S-94: a null effort inside fallback_models[0] must be refused with HTTP 400; today the "+
 				"whole fallback row decodes without the key and the PUT answers 200 (got %d, body=%s)",
 			w.Code, w.Body.String())
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+		require.Equal(t, `reasoning_effort must be a string; send "" to clear it`, payload["error"], "S-94 nested null gets the same validation-off refusal")
 	})
 
 	t.Run("empty string clears to Not set", func(t *testing.T) {
@@ -972,53 +1000,11 @@ func TestT_GW_ChatFrameEffortMetadataBoundaries(t *testing.T) {
 // RED today: stats carries only tokens/cost/duration/session_tokens_total —
 // no effort, no reasoning_tokens.
 func TestT_GW_TurnCompletionFrameCarriesEffortMetadata(t *testing.T) {
-	handler, _, al := newTestWSHandler(t)
-	t.Cleanup(handler.Wait)
-
-	store := al.GetSessionStore()
-	require.NotNil(t, store)
-	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
-	require.NoError(t, err)
-
-	wc := &wsConn{sendCh: make(chan []byte, 64), doneCh: make(chan struct{})}
-	handler.mu.Lock()
-	handler.sessions["chat-egw-done"] = wc
-	handler.mu.Unlock()
-	handler.handleAttachSession(context.Background(), "chat-egw-done", meta.ID, nil, wc)
-
-	stAny, ok := handler.GetStreamer(context.Background(), "webchat", "chat-egw-done", meta.ID)
+	done := egwRealEffortDone(t)
+	stats, ok := done["stats"].(map[string]any)
 	require.True(t, ok)
-	st, ok := stAny.(*wsStreamer)
-	require.True(t, ok, "the webchat streamer must be the concrete *wsStreamer")
-	st.SetTurnID("turn-egw-effort")
-	st.SetMessageID("entry-egw-effort")
-	require.NoError(t, st.Finalize(context.Background(), "the answer"))
-
-	// Drain the conn until the TURN's done frame (identified by its
-	// message_id — the replay's own terminating done carries none).
-	var done map[string]any
-	deadline := time.After(10 * time.Second)
-	for done == nil {
-		select {
-		case raw := <-wc.sendCh:
-			var f map[string]any
-			require.NoError(t, json.Unmarshal(raw, &f))
-			if t, _ := f["type"].(string); t == "done" && f["message_id"] == "entry-egw-effort" {
-				done = f
-			}
-		case <-deadline:
-			t.Fatal("timed out waiting for the turn's done frame on the bound conn")
-		}
-	}
-
-	stats, _ := done["stats"].(map[string]any)
-	require.NotNil(t, stats, "the turn's done frame must carry stats: %v", done)
-	require.Contains(t, stats, "effort",
-		"RED S-15/S-75: the turn-completion frame must carry stats.effort — the effort record with "+
-			"provider/model/chosen/sent/reason (stats=%v)", stats)
-	require.Contains(t, stats, "reasoning_tokens",
-		"RED: the turn-completion frame must carry stats.reasoning_tokens — the display-only turn sum "+
-			"(stats=%v)", stats)
+	assert.Equal(t, map[string]any{"chosen": "high", "sent": "high", "provider": "openrouter", "model": "m-levels"}, stats["effort"], "actual configured High belongs to the actual serving pair")
+	assert.Equal(t, float64(120), stats["reasoning_tokens"], "real usage reports 120, not absence or fabricated zero")
 }
 
 // --- S-95 / S-21 / T-R2: history transports ---
@@ -1071,88 +1057,39 @@ func egwNewHistoryEnv(t *testing.T) *egwT7HistoryEnv {
 //
 // Traces to: effort-levels-spec-r10.md S-95, S-21, T-R2 (R3-MAJ-002)
 //
-// Shape of this RED, stated plainly: no existing seam can produce the data —
-// the archive writer (pkg/agent turn persist) does not stamp effort yet and
-// TranscriptEntry has no fields for it, so an end-to-end carried-values
-// assertion cannot even receive the input. What IS testable today, and what
-// this test pins RED, is the boundary the feature's contract commit must
-// open, in the real transports:
-//  1. the control rows drive the REAL attach and the REAL REST history
-//     endpoint over store-written entries and must keep delivering them
-//     (they pass — a regression guard for the transports themselves);
-//  2. the wire forms the feature must emit (a ReplayMessageFrame and a
-//     Message carrying effort + turn_reasoning_tokens) are validated against
-//     the contract the transports enforce — ReplayMessageFrame.yaml through
-//     the schema loader the replay tests use, and Message.yaml through the
-//     gateway's own validateBodyAgainstSchema (the exact validator
-//     historyWireMessage applies, whose failure turns an answer into the
-//     corruption placeholder, S-95's "no projected answer becomes the
-//     placeholder" row). Both refuse the fields today — RED — and both go
-//     green exactly when the contract declares them (Constraint #8 step 1).
-//  3. today's delivered frames/messages carry no effort key at all — RED for
-//     the absence itself, recorded so the carried-values equality rows
-//     (identical effort/turn sums on both transports, the page-boundary case)
-//     are written by the GREEN author on top of the landed writer seam.
+// CHECK-01: real archive bytes contain metadata before either reader opens.
+// The saved snapshot is not reconstructed from the selected page.
 func TestT_GW_HistoryTransportsCarryEffortRecord(t *testing.T) {
 	env := egwNewHistoryEnv(t)
-	store := env.api.agentLoop.GetSessionStore()
-	require.NotNil(t, store)
-	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
-	require.NoError(t, err)
-
-	// Two answering entries written through the production writer seam.
-	require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
-		ID: "entry-egw-a", Role: "assistant", AgentID: "mia",
-		Content: "answer with effort", Model: "B", Timestamp: time.Now().UTC(),
-	}))
-	require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
-		ID: "entry-egw-b", Role: "assistant", AgentID: "mia",
-		Content: "answer without effort", Model: "B", Timestamp: time.Now().UTC(),
-	}))
-
-	// The persisted effort form the feature must carry (r5 contract: the
-	// answering entry stores the snapshot; no per-call member on the entry).
-	effortRecord := map[string]any{
-		"chosen": "medium", "sent": "low", "reason": "mapped",
-		"provider": "PB", "model": "B",
-	}
-
+	sid := egwSeedHistoryMetadata(t, env)
+	effortRecord := map[string]any{"chosen": "medium", "sent": "low", "reason": "mapped", "provider": "PB", "model": "B"}
+	meta := &session.UnifiedMeta{SessionMeta: session.SessionMeta{ID: sid}}
 	t.Run("ws_attach_delivers_entries", func(t *testing.T) {
-		wc := &wsConn{sendCh: make(chan []byte, 64), doneCh: make(chan struct{})}
+		wc := &wsConn{sendCh: make(chan []byte, 128), doneCh: make(chan struct{})}
 		env.handler.mu.Lock()
 		env.handler.sessions["chat-egw-hist"] = wc
 		env.handler.mu.Unlock()
-		env.handler.handleAttachSession(context.Background(), "chat-egw-hist", meta.ID, nil, wc)
-
-		frameA := map[string]any(nil)
+		env.handler.handleAttachSession(context.Background(), "chat-egw-hist", sid, nil, wc)
+		got := map[string]map[string]any{}
 		deadline := time.After(10 * time.Second)
-		for frameA == nil {
+		for {
 			select {
 			case raw := <-wc.sendCh:
 				var f map[string]any
 				require.NoError(t, json.Unmarshal(raw, &f))
-				if f["type"] == "replay_message" && f["id"] == "entry-egw-a" {
-					frameA = f
+				if f["type"] == "replay_message" {
+					if id, ok := f["id"].(string); ok {
+						got[id] = f
+					}
+				}
+				if f["type"] == "done" {
+					egwAssertHistoryMetadata(t, got)
+					return
 				}
 			case <-deadline:
-				t.Fatal("timed out waiting for the replay_message frame for entry-egw-a")
+				t.Fatal("replay did not finish")
 			}
 		}
-		require.Contains(t, frameA["content"], "answer with effort",
-			"control: the attach transport must deliver the written entry")
-
-		// RED for the absence itself: today the delivered frame carries no
-		// effort record and no turn sum. The carried-values equality rows
-		// (identical values on both transports) are written on the landed
-		// writer seam by the GREEN author.
-		require.Nil(t, frameA["effort"],
-			"RED S-95: the WebSocket ReplayMessageFrame must carry the entry's effort record — "+
-				"today nothing projects one (frame=%v)", frameA)
-		require.Nil(t, frameA["turn_reasoning_tokens"],
-			"RED S-95: the WebSocket ReplayMessageFrame must carry turn_reasoning_tokens — "+
-				"today nothing projects one (frame=%v)", frameA)
-		require.NotContains(t, frameA, "reasoning_tokens",
-			"no per-call reasoning_tokens member may appear on a ReplayMessageFrame")
 	})
 
 	t.Run("replay_frame_contract_accepts_effort_fields", func(t *testing.T) {
@@ -1163,7 +1100,7 @@ func TestT_GW_HistoryTransportsCarryEffortRecord(t *testing.T) {
 		frame := map[string]any{
 			"type": "replay_message", "session_id": meta.ID,
 			"id": "entry-egw-a", "role": "assistant", "agent_id": "mia",
-			"content": "answer with effort", "model": "B",
+			"content": "answer with effort", "model": "B", "timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 			"effort":                effortRecord,
 			"turn_reasoning_tokens": 120,
 		}
@@ -1187,33 +1124,24 @@ func TestT_GW_HistoryTransportsCarryEffortRecord(t *testing.T) {
 	})
 
 	t.Run("rest_messages_delivers_entries", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+meta.ID+"/messages", nil)
-		r.URL.Path = "/api/v1/sessions/" + meta.ID + "/messages"
-		env.api.HandleSessions(w, r)
-		require.Equal(t, http.StatusOK, w.Code, "control: GET messages must answer 200; body=%s", w.Body.String())
-
+		w := pagingRequest(env.api, sid, "limit=20&min_rows=1")
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 		var page struct {
-			Entries []map[string]any `json:"entries"`
+			Entries    []map[string]any `json:"entries"`
+			NextBefore *string          `json:"next_before"`
 		}
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &page), "body=%s", w.Body.String())
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &page))
+		require.NotNil(t, page.NextBefore, "real latest-page cut must exclude earlier contributors")
 		byID := map[string]map[string]any{}
-		for _, e := range page.Entries {
-			id, _ := e["id"].(string)
-			byID[id] = e
+		for _, entry := range page.Entries {
+			id, _ := entry["id"].(string)
+			byID[id] = entry
 		}
-		a, ok := byID["entry-egw-a"]
-		require.True(t, ok, "control: entry-egw-a must be served (got %v)", byID)
-		require.Contains(t, a["content"], "answer with effort",
-			"control: the REST transport must deliver the written entry")
-		require.NotContains(t, a, "reasoning_tokens",
-			"no per-call reasoning_tokens member may appear on a Message")
-
-		// RED for the absence itself.
-		require.Nil(t, a["effort"],
-			"RED S-95: the REST Message must carry the entry's effort record — today nothing projects one")
-		require.Nil(t, a["turn_reasoning_tokens"],
-			"RED S-95: the REST Message must carry turn_reasoning_tokens — today nothing projects one")
+		egwAssertHistoryMetadata(t, byID)
+		// Repeat the exact persisted snapshot through a refresh, not an accumulated
+		// UI sum. Both reads use the same canonical source.
+		refresh := pagingRequest(env.api, sid, "limit=20&min_rows=1")
+		require.Equal(t, w.Body.String(), refresh.Body.String())
 	})
 
 	t.Run("rest_message_contract_accepts_effort_fields", func(t *testing.T) {
@@ -1224,7 +1152,7 @@ func TestT_GW_HistoryTransportsCarryEffortRecord(t *testing.T) {
 		// Message schema copy must accept both fields).
 		message := map[string]any{
 			"id": "entry-egw-a", "role": "assistant", "agent_id": "mia",
-			"content": "answer with effort", "model": "B",
+			"content": "answer with effort", "model": "B", "timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 			"effort":                effortRecord,
 			"turn_reasoning_tokens": 120,
 		}

@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -141,6 +142,9 @@ func runRecapAndWait(t *testing.T, al *AgentLoop, sessionID, home, agentID strin
 		data, err := os.ReadFile(pairPath)
 		return err == nil && len(strings.TrimSpace(string(data))) > 0
 	})
+	// A published file is not goroutine completion. Join the production recap
+	// writer before assertions/TempDir cleanup (false-green guidance, rule 7).
+	al.recapWG.Wait()
 }
 
 // effortRecapCfg builds a config whose recap primary and (optionally) fallback
@@ -177,16 +181,24 @@ func bodyFind(body map[string]any, path string) (any, bool) {
 
 // assertNoHardcodedRecapOff asserts the FR-070 removal: no extended_thinking
 // option and no extra_body reasoning.enabled=false anywhere in the body.
-func assertNoHardcodedRecapOff(t *testing.T, body map[string]any) {
+// allowSwitchOff selects the oracle by encoding (CHECK-04): on a
+// level-encoding model a nested reasoning.enabled=false can ONLY be the
+// removed hardcoded Off, so it is banned; on a switch-only model the RESOLVED
+// Off is exactly reasoning.enabled=false (S-18), so there only
+// extended_thinking and extra_body are banned. The earlier blanket ban made a
+// correctly resolved Off fail its own test.
+func assertNoHardcodedRecapOff(t *testing.T, body map[string]any, allowSwitchOff bool) {
 	t.Helper()
 	assert.NotContains(t, body, "extended_thinking", "the recap options no longer contain extended_thinking (S-71, FR-070)")
-	// extra_body is merged into the body by the adapter; a hardcoded
-	// reasoning.enabled=false would surface as a nested reasoning object.
-	if rv, ok := bodyFind(body, "reasoning"); ok {
-		rmap, isMap := rv.(map[string]any)
-		if isMap {
-			if en, has := rmap["enabled"]; has {
-				assert.NotEqual(t, false, en, "the recap must not send a hardcoded reasoning.enabled=false (S-71, FR-070)")
+	if !allowSwitchOff {
+		// extra_body is merged into the body by the adapter; a hardcoded
+		// reasoning.enabled=false would surface as a nested reasoning object.
+		if rv, ok := bodyFind(body, "reasoning"); ok {
+			rmap, isMap := rv.(map[string]any)
+			if isMap {
+				if en, has := rmap["enabled"]; has {
+					assert.NotEqual(t, false, en, "a level-encoding model must never receive reasoning.enabled=false — that is the removed hardcoded Off (S-71, FR-070)")
+				}
 			}
 		}
 	}
@@ -208,6 +220,7 @@ func TestT_C5_S71_RecapDefaultOffPerRoute(t *testing.T) {
 		expectPath  string // dotted path expected in the serialised body
 		expectValue any
 		expectNone  string // dotted path that must be absent
+		switchModel bool   // switch-only encoding: resolved Off IS reasoning.enabled=false
 	}{
 		{
 			name:        "openrouter levels incl none sends reasoning.effort none",
@@ -222,6 +235,7 @@ func TestT_C5_S71_RecapDefaultOffPerRoute(t *testing.T) {
 			expectPath:  "reasoning.enabled",
 			expectValue: false,
 			expectNone:  "reasoning.effort",
+			switchModel: true,
 		},
 		{
 			name:       "openrouter levels without none sends no reasoning key (blocked Off, background call)",
@@ -242,7 +256,7 @@ func TestT_C5_S71_RecapDefaultOffPerRoute(t *testing.T) {
 			bodies, _ := ep.snapshot()
 			require.NotEmpty(t, bodies, "the recap request must reach the candidate endpoint")
 			body := bodies[0]
-			assertNoHardcodedRecapOff(t, body)
+			assertNoHardcodedRecapOff(t, body, tc.switchModel)
 
 			// Default output limit (L1 = recap_max_output_tokens 2048).
 			mt, ok := bodyFind(body, "max_tokens")
@@ -296,10 +310,13 @@ func TestT_C5_S78_ConfiguredRecapEffortReachesBody(t *testing.T) {
 	// Hand-write the L2 keys the Settings screen will one day save, plus the
 	// provider rows pointing at the recording endpoint, then load through the
 	// production loader the way the loop does at boot.
-	omniHome := os.Getenv("OMNIPUS_HOME")
-	require.NotEmpty(t, omniHome)
+	// The test owns its isolated home (CHECK-02): no dependence on an
+	// OMNIPUS_HOME leaked by an earlier test in the binary.
+	omniHome := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", omniHome)
 	cfgPath := filepath.Join(omniHome, "config.json")
 	handWritten := map[string]any{
+		"version": 1,
 		"providers": []map[string]any{
 			{"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_base": ep.srv.URL},
 			{"provider": "openrouter", "model": "minimax/minimax-m3", "api_base": ep.srv.URL},
@@ -332,10 +349,140 @@ func TestT_C5_S78_ConfiguredRecapEffortReachesBody(t *testing.T) {
 	got, present := bodyFind(body, "reasoning.effort")
 	require.True(t, present, "the configured recap effort reaches the recap body (S-78)")
 	assert.Equal(t, "high", got)
-	assertNoHardcodedRecapOff(t, body)
+	assertNoHardcodedRecapOff(t, body, false)
 	mt, ok := bodyFind(body, "max_tokens")
 	require.True(t, ok)
 	assert.Equal(t, float64(2048), mt, "recap_max_output_tokens default still applies (S-78)")
+}
+
+// TestT_C5_S78_RecapFallbackServesWithItsOwnEffort forces the configured
+// recap fallback to serve: the primary endpoint refuses the recap model, so
+// the chain falls through to recap_fallback_models. The fallback's own
+// reasoning_effort ("on" — a switch value) must reach its request in the
+// switch encoding; today nothing is sent (CHECK-02: the fixture previously
+// never made the fallback serve at all).
+// Traces to: S-78, FR-072, FR-021.
+func TestT_C5_S78_RecapFallbackServesWithItsOwnEffort(t *testing.T) {
+	// The endpoint refuses the recap primary's model and serves the fallback.
+	var mu sync.Mutex
+	served := []map[string]any{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		mu.Lock()
+		served = append(served, body)
+		model, _ := body["model"].(string)
+		mu.Unlock()
+		if model == "deepseek/deepseek-v4.1-flash" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"primary-recap-down-7731"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":` + jsonQuote(recapJSONResponse) + `},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":9,"total_tokens":14}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	// The test owns its isolated home (CHECK-02): no dependence on an
+	// OMNIPUS_HOME leaked by an earlier test in the binary.
+	omniHome := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", omniHome)
+	cfgPath := filepath.Join(omniHome, "config.json")
+	handWritten := map[string]any{
+		"version": 1,
+		"providers": []map[string]any{
+			{"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_base": srv.URL},
+			{"provider": "openrouter", "model": "minimax/minimax-m3", "api_base": srv.URL},
+		},
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"recap_provider":         "openrouter",
+				"recap_model":            "deepseek/deepseek-v4.1-flash",
+				"recap_reasoning_effort": "high",
+				"recap_fallback_models": []map[string]any{{
+					"provider": "openrouter", "model": "minimax/minimax-m3", "reasoning_effort": "on",
+				}},
+			},
+		},
+	}
+	raw, err := json.Marshal(handWritten)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+	loaded, err := config.LoadConfig(cfgPath)
+	require.NoError(t, err)
+
+	prov := &effortScriptedProvider{content: "unused", finish: "stop"}
+	al, sessionID, ag, _ := buildEffortRecapLoop(t, loaded, prov)
+	runRecapAndWait(t, al, sessionID, wu21ReaimHome(ag), ag.ID)
+
+	mu.Lock()
+	bodies := append([]map[string]any(nil), served...)
+	mu.Unlock()
+	require.NotEmpty(t, bodies, "the recap chain reached the endpoint")
+	// The fallback served (the primary was refused).
+	last := bodies[len(bodies)-1]
+	model, _ := last["model"].(string)
+	require.Equal(t, "minimax/minimax-m3", model,
+		"the configured recap fallback serves after the primary is refused (S-78 given) — RED: the recap fallback chain is a configured-key path that must exist at GREEN")
+	// The fallback's own effort reaches its request in the switch encoding.
+	enabled, present := bodyFind(last, "reasoning.enabled")
+	require.True(t, present,
+		"the recap fallback carries its own effort in the switch encoding (S-53 analogue on the recap chain) — RED: the fallback's reasoning_effort member is dropped by the loader")
+	assert.Equal(t, true, enabled)
+}
+
+// TestT_C5_S80_RecapLimitEffects pins S-80's observed-value rows for the two
+// limits a serialised body can show directly (CHECK-13): the output cap and
+// the summary-words wording must come from the SETTINGS, not from today's
+// hardcoded 2048/150.
+// Traces to: S-80, S-79, FR-074, FD-20.
+func TestT_C5_S80_RecapLimitEffects(t *testing.T) {
+	ep := newRecapEndpoint(t, http.StatusOK)
+	// The test owns its isolated home (CHECK-02): no dependence on an
+	// OMNIPUS_HOME leaked by an earlier test in the binary.
+	omniHome := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", omniHome)
+	cfgPath := filepath.Join(omniHome, "config.json")
+	handWritten := map[string]any{
+		"version": 1,
+		"providers": []map[string]any{
+			{"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_base": ep.srv.URL},
+		},
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"recap_provider":          "openrouter",
+				"recap_model":             "deepseek/deepseek-v4.1-flash",
+				"recap_max_output_tokens": 4096,
+				"recap_summary_words":     80,
+			},
+		},
+	}
+	raw, err := json.Marshal(handWritten)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, raw, 0o600))
+	loaded, err := config.LoadConfig(cfgPath)
+	require.NoError(t, err)
+
+	prov := &effortScriptedProvider{content: "unused", finish: "stop"}
+	al, sessionID, ag, _ := buildEffortRecapLoop(t, loaded, prov)
+	runRecapAndWait(t, al, sessionID, wu21ReaimHome(ag), ag.ID)
+
+	bodies, _ := ep.snapshot()
+	require.NotEmpty(t, bodies)
+	body := bodies[0]
+	mt, ok := bodyFind(body, "max_tokens")
+	require.True(t, ok, "the recap body carries the output cap")
+	assert.Equal(t, float64(4096), mt,
+		"recap_max_output_tokens=4096 reaches the recap body (S-80 observed row) — RED: today's hardcoded 2048 ignores the setting")
+	rawBody, err := json.Marshal(body)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawBody), "≤ 80 words",
+		"recap_summary_words=80 reaches the recap prompt wording (S-80 observed row) — RED: today's prompt hardcodes ≤ 150 words")
+	assert.NotContains(t, string(rawBody), "≤ 150 words",
+		"the unset default wording must not survive a set summary-words value (S-80)")
 }
 
 // effortTimingProvider is the in-process primary for S-97: it records every
@@ -396,7 +543,7 @@ func TestT_L8_S97_OneOverallTimeLimit(t *testing.T) {
 		timeLimit  = 300 * time.Millisecond
 		retries    = 1
 		pause      = 200 * time.Millisecond
-		tolerance  = 75 * time.Millisecond
+		tolerance  = 50 * time.Millisecond
 		safetyWait = 2 * time.Second
 	)
 	transientErr := errors.New("streaming read error: http2: response body closed")
@@ -407,7 +554,7 @@ func TestT_L8_S97_OneOverallTimeLimit(t *testing.T) {
 		prov := &effortTimingProvider{
 			blockN:       1, // first try blocks until its deadline, then returns the transient reset
 			transientErr: transientErr,
-			blockMin:     safetyWait,
+			blockMin:     250 * time.Millisecond,
 		}
 		al, _, ag, _ := buildEffortRecapLoop(t, cfg, prov)
 
@@ -423,7 +570,7 @@ func TestT_L8_S97_OneOverallTimeLimit(t *testing.T) {
 		elapsed := time.Since(start)
 
 		calls, deadlines := prov.snapshot()
-		assert.LessOrEqual(t, len(deadlines), 1, "the injected time limit must be honoured; primary tries: %d", calls)
+		assert.Equal(t, 1, len(deadlines), "the injected time limit must be honoured; primary tries: %d", calls)
 		if len(deadlines) > 0 {
 			want := start.Add(timeLimit)
 			assert.InDelta(t, want.UnixMilli(), deadlines[0].UnixMilli(), float64(tolerance.Milliseconds()),
@@ -445,9 +592,9 @@ func TestT_L8_S97_OneOverallTimeLimit(t *testing.T) {
 		}
 		al, _, ag, _ := buildEffortRecapLoop(t, cfg, prov)
 		rr := &agentLoopRunRecap{al: al, sessionID: "s97-session2", trigger: "test", agentInst: ag, userTurns: []string{"hello"}}
-		_ = rr.callCandidatesWithTiming(timeLimit, retries, pause)
+		_ = rr.callCandidatesWithTiming(timeLimit, retries, 20*time.Millisecond)
 		calls, _ := prov.snapshot()
-		assert.GreaterOrEqual(t, calls, 2, "a pause inside the deadline lets the retry run (S-97)")
+		assert.Equal(t, 2, calls, "a pause inside the deadline lets the retry run (S-97)")
 	})
 
 	t.Run("deadline is whatever remains under the real 60s setting (allocation-only)", func(t *testing.T) {

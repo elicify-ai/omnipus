@@ -254,35 +254,12 @@ func TestT_CMD_Effort_S38_SetIsConversationScoped(t *testing.T) {
 func TestT_CMD_Effort_S39_ConversationValueSurvivesRestart(t *testing.T) {
 	reg := NewRegistry(BuiltinDefinitions())
 	effortRedLookup(t, reg, "S-39")
-
-	rt, spy := newEffortRedRuntime()
-	ex := NewExecutor(reg, rt)
-
-	// Instrument control: capture A's status before the set, so the test can
-	// see a set at all (a status that never changes proves nothing either way).
-	beforeA, _ := runEffort(t, ex, "telegram", "conv-a", "/effort")
-
-	if reply, _ := runEffort(t, ex, "telegram", "conv-a", "/effort default"); reply != wantEffortDefaultSet {
-		t.Fatalf("/effort default reply=%q, want exactly %q (S-36 row 7)", reply, wantEffortDefaultSet)
-	}
-	afterSetA, _ := runEffort(t, ex, "telegram", "conv-a", "/effort")
-	if afterSetA == beforeA {
-		t.Fatalf("conv-a status unchanged across /effort default (before=%q after=%q) — instrument control: this check cannot see the set, so the restart comparison below would be vacuous", beforeA, afterSetA)
-	}
-
-	// Restart: a fresh Registry — exactly what a gateway restart rebuilds.
-	// The conversation value must come back from the store the spec names
-	// (SessionMeta.reasoning_effort), not from the command runtime.
-	regAfter := NewRegistry(BuiltinDefinitions())
-	exAfter := NewExecutor(regAfter, rt)
-
-	afterRestartA, _ := runEffort(t, exAfter, "telegram", "conv-a", "/effort")
-	if afterRestartA != afterSetA {
-		t.Fatalf("conv-a status after restart=%q, want identical to pre-restart %q — the conversation value must survive a restart (S-39), not fall back to the agent's setting", afterRestartA, afterSetA)
-	}
-	if *spy != 0 {
-		t.Errorf("SwitchModel spy called %d times, want 0 — persistence is a conversation-scoped store write, never a model switch", *spy)
-	}
+	// The former same-Runtime restart was invalid. The durable behavioral
+	// assertion now lives at the actual owner boundary in pkg/agent's
+	// TestT_CMD_S39_RealLoopAndStoreRestartKeepsConversationEffort.
+	// This package still needs a binding to the spec's durable session carrier;
+	// no such hook exists in Runtime in the pre-change tree.
+	t.Fatal("BLOCKED: command Runtime effort/capability/session-storage binding not implemented — required by S-36/S-38/S-39/FR-023; real loop/store restart test added in pkg/agent")
 }
 
 // TestT_CMD_Effort_S40_NeverCallsSwitchModel pins S-40 exactly: with a spy on

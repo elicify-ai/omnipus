@@ -15,13 +15,13 @@
 // sentences ("{label} must be between {min} and {max}", S-82).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemorySection } from './MemorySection'
-import { fetchMemorySettings, updateMemorySettings, fetchProviders } from '@/lib/api'
-import type { MemorySettings, Provider } from '@/lib/api'
+import { fetchMemorySettings, updateMemorySettings, fetchProviders, fetchProvidersCatalog } from '@/lib/api'
+import type { MemorySettings, Provider, ProvidersCatalog } from '@/lib/api'
 
 class ResizeObserverStub {
   observe() {}
@@ -43,7 +43,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchMemorySettings: vi.fn(),
     updateMemorySettings: vi.fn(),
-    fetchProviders: vi.fn(),
+    fetchProviders: vi.fn(), fetchProvidersCatalog: vi.fn(),
   }
 })
 
@@ -59,7 +59,9 @@ const DEFAULT_SETTINGS = {
   bootstrap_recap_enabled: false,
   bootstrap_recap_max_per_minute: 5,
   recap_model: '',
-  recap_fallback_models: [] as Array<{ model: string; provider?: string }>,
+  recap_provider: 'openrouter',
+  recap_reasoning_effort: 'off',
+  recap_fallback_models: [] as Array<{ model: string; provider?: string; reasoning_effort?: string }>,
   session_days: 90,
   memory_retros_days: 180,
 }
@@ -107,6 +109,19 @@ const MOCK_PROVIDERS: Provider[] = [
     ],
   } as Provider,
 ]
+
+const RECAP_CATALOG = {
+ schema_version:'2.0.0',version:'v2026.10.31',updated_at:'2026-10-31T00:00:00Z',source:'test',served_from:'embedded',stale:false,
+ default_resize_limits:{long_edge_px:2048,max_bytes:10485760},
+ providers:[{id:'openrouter',name:'OpenRouter',company:'OpenRouter',api:'https://openrouter.ai/api/v1',protocol:'openai-compatible',protocols:[{protocol:'openai-compatible',api:'https://openrouter.ai/api/v1'}],tier:'popular',auth_methods:['api_key'],aliases:[],locality:'cloud',models:[
+  ['openai/gpt-6.1-sol',['low','medium','high']],
+  ['deepseek/deepseek-v4.1-flash',['none','low','high','max']],
+  ['google/gemini-2.5-flash',['low','medium','high']],
+  ['anthropic/claude-3.5-haiku',['low','medium','high']],
+ ].map(([id,levels])=>({id,name:id,context_window:128000,max_output_tokens:8192,input_modalities:['text'],tool_call:true,status:'active',reasoning:{levels,switch:false}}))}]
+} as unknown as ProvidersCatalog
+
+beforeEach(()=>{vi.mocked(fetchProvidersCatalog).mockResolvedValue(RECAP_CATALOG)})
 
 function settings(overrides: Partial<typeof DEFAULT_LIMITS & typeof DEFAULT_SETTINGS> = {}): MemorySettings {
   return { ...DEFAULT_SETTINGS, ...DEFAULT_LIMITS, ...overrides } as unknown as MemorySettings
@@ -236,10 +251,8 @@ describe('MemorySection — T-L4 "Recap limits" area', () => {
 
 describe('MemorySection — T-L7 recap-slot autosave with unsaved limit drafts', () => {
   beforeEach(() => {
-    vi.mocked(fetchMemorySettings).mockResolvedValue(settings({ recap_model: 'openai/gpt-6.1-sol' }))
-    vi.mocked(updateMemorySettings).mockResolvedValue(
-      settings({ recap_model: 'openai/gpt-6.1-sol' }),
-    )
+    vi.mocked(fetchMemorySettings).mockResolvedValue(settings({ recap_model: 'openai/gpt-6.1-sol',recap_provider:'openrouter',recap_reasoning_effort:'medium' }))
+    vi.mocked(updateMemorySettings).mockImplementation(async body=>settings({recap_model:'openai/gpt-6.1-sol',recap_provider:'openrouter',recap_reasoning_effort:'medium',...body}))
     vi.mocked(fetchProviders).mockResolvedValue(MOCK_PROVIDERS)
   })
 
@@ -368,4 +381,38 @@ describe('MemorySection — T-L7 recap-slot autosave with unsaved limit drafts',
     expect(input).toHaveValue(80)
     expect(screen.getByText('1 changed')).toBeInTheDocument()
   })
+  it('S-93: held fallback autosave serializes the next write as [A-prime, B-prime], never stale [A, B-prime]',async()=>{
+    const original=[{provider:'openrouter',model:'openai/gpt-6.1-sol',reasoning_effort:'medium'},{provider:'openrouter',model:'google/gemini-2.5-flash',reasoning_effort:'high'}]
+    const afterA=[{provider:'openrouter',model:'deepseek/deepseek-v4.1-flash',reasoning_effort:'low'},original[1]]
+    const final=[afterA[0],{provider:'openrouter',model:'anthropic/claude-3.5-haiku',reasoning_effort:'high'}]
+    vi.mocked(fetchMemorySettings).mockResolvedValue(settings({recap_fallback_models:original}))
+    let releaseFirst!: (value:MemorySettings)=>void
+    vi.mocked(updateMemorySettings).mockImplementationOnce(()=>new Promise(resolve=>{releaseFirst=resolve}))
+      .mockResolvedValueOnce(settings({recap_fallback_models:final}))
+    const view=renderSection()
+    await screen.findByText('Memory & Recap')
+    const rowA=screen.getByTestId('recap-fallback-row-openai/gpt-6.1-sol')
+    await user.click(within(rowA).getByRole('combobox'))
+    await user.click(await screen.findByText('deepseek/deepseek-v4.1-flash',{exact:true}))
+    await waitFor(()=>expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateMemorySettings).mock.calls[0][0]).toEqual({recap_fallback_models:afterA})
+    const pickerB=within(screen.getByTestId('recap-fallback-row-google/gemini-2.5-flash')).getByRole('combobox')
+    expect(pickerB).toBeDisabled()
+    await user.click(pickerB)
+    expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1)
+    expect(saveButton()).toBeDisabled()
+    await act(async()=>{releaseFirst(settings({recap_fallback_models:afterA}))})
+    await waitFor(()=>expect(pickerB).toBeEnabled())
+    await user.click(pickerB)
+    await user.click(await screen.findByText('anthropic/claude-3.5-haiku',{exact:true}))
+    await waitFor(()=>expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(updateMemorySettings).mock.calls[1][0]).toEqual({recap_fallback_models:final})
+    expect(vi.mocked(updateMemorySettings).mock.calls.map(([body])=>body)).not.toContainEqual({recap_fallback_models:[original[0],final[1]]})
+    view.unmount()
+    vi.mocked(fetchMemorySettings).mockResolvedValue(settings({recap_fallback_models:final}))
+    renderSection()
+    await screen.findByTestId('recap-fallback-row-deepseek/deepseek-v4.1-flash')
+    expect(screen.getByTestId('recap-fallback-row-anthropic/claude-3.5-haiku')).toBeInTheDocument()
+  })
+
 })

@@ -43,20 +43,39 @@ func remarshal(t *testing.T, v any) map[string]any {
 	return m
 }
 
-// TestT_D1_S69_ThinkingLevelKeyDeleted pins FR-056: the legacy thinking_level
-// key is deleted — an old configuration still containing it loads without
-// error, and the key survives nowhere in the loaded model row.
-// Traces to: S-69, FR-056, T-D1.
+// S-02 runtime codec control complements the source inventory in pkg/agent.
+func TestT_C2_S02_LeftoverReasoningChannelKeysAreInert(t *testing.T) {
+	// FR-017: both old on-disk keys and old environment bindings must be
+	// ignored, not retained as a quietly active destination.
+	t.Setenv("OMNIPUS_CHANNELS_TELEGRAM_REASONING_CHANNEL_ID", "old-env-destination-7731")
+	cfg := loadFromJSON(t, `{"version":1,"channels":{"telegram":{"type":"telegram","enabled":false,"reasoning_channel_id":"old-json-destination-7731"}}}`)
+	row, ok := cfg.Channels["telegram"]
+	require.True(t, ok, "instrument control: ordinary channel data loads")
+	m := remarshal(t, row)
+	assert.Equal(t, "telegram", m["type"])
+	assert.NotContains(t, m, "reasoning_channel_id", "S-02: retired destinations have no runtime config representation")
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "old-json-destination-7731")
+	assert.NotContains(t, string(raw), "old-env-destination-7731")
+}
+
+// S-69 / FR-056: the real provider row loses the deleted thinking_level key.
 func TestT_D1_S69_ThinkingLevelKeyDeleted(t *testing.T) {
 	cfg := loadFromJSON(t, `{
-		"agents": {"defaults": {"default_model": {"model": "m1", "thinking_level": "high"}}}
+		"version": 1,
+		"providers": [{"provider": "openrouter", "model": "legacy-m", "thinking_level": "high"}],
+		"agents": {"defaults": {"default_model": {"model": "legacy-m"}}}
 	}`)
 	require.NotNil(t, cfg)
+	require.NotEmpty(t, cfg.Providers, "the provider model row loads — PIN")
 
-	m := remarshal(t, cfg.Agents.Defaults.DefaultModel)
+	// The legacy key lives on the provider model row (config.ModelConfig), not
+	// on the default-model slot.
+	m := remarshal(t, cfg.Providers[0])
 	assert.NotContains(t, m, "thinking_level",
-		"the legacy thinking_level key is deleted from the model row (S-69/FR-056) — RED: the field still exists")
-	assert.Equal(t, "m1", m["model"], "the model row itself still loads — PIN")
+		"the legacy thinking_level key is deleted from the provider model row (S-69/FR-056) — RED: config.ModelConfig.ThinkingLevel still exists")
+	assert.Equal(t, "legacy-m", m["model"], "the model row itself still loads — PIN")
 }
 
 // TestT_W2_DefaultModelEffortRoundTrip pins T-W2: a configuration carrying
@@ -73,6 +92,7 @@ func TestT_W2_DefaultModelEffortRoundTrip(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := loadFromJSON(t, `{
+				"version": 1,
 				"agents": {"defaults": {"default_model": {"model": "m1", "reasoning_effort": "`+tc.effort+`"}}}
 			}`)
 			m := remarshal(t, cfg.Agents.Defaults.DefaultModel)
@@ -88,6 +108,7 @@ func TestT_W2_DefaultModelEffortRoundTrip(t *testing.T) {
 // Traces to: T-W2, S-83 (storage half), FR-073, FR-021.
 func TestT_W2_RecapEffortKeysRoundTrip(t *testing.T) {
 	cfg := loadFromJSON(t, `{
+		"version": 1,
 		"agents": {"defaults": {
 			"recap_reasoning_effort": "high",
 			"recap_max_output_tokens": 4096,
