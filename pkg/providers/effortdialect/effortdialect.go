@@ -157,9 +157,14 @@ func (t *Table) FilterServed(levels []string, hasSwitch bool, r Route) (servedLe
 }
 
 // ProtocolForCatalog maps a catalog provider's protocol and id onto the
-// encoder protocol its adapter speaks.
+// encoder protocol its adapter speaks. Azure rows carry an empty catalog
+// protocol, but the azure adapter speaks the Responses API and has no effort
+// encoder: they map to openai-responses, where no azure row exists, so the
+// served object is muted and a stored effort is recorded as not sent
+// (not_supported) instead of being dropped silently (DE-5 "no Omnipus encoder
+// for this route").
 func ProtocolForCatalog(providerID, catalogProtocol string) string {
-	if strings.EqualFold(providerID, "openai-chatgpt") {
+	if strings.EqualFold(providerID, "openai-chatgpt") || isAzureProvider(providerID) {
 		return ProtocolOpenAIResponses
 	}
 	switch strings.ToLower(catalogProtocol) {
@@ -171,6 +176,16 @@ func ProtocolForCatalog(providerID, catalogProtocol string) string {
 		return ProtocolOpenAIChat
 	}
 	return strings.ToLower(catalogProtocol)
+}
+
+// isAzureProvider reports the catalog's Azure provider ids (and the
+// azure-openai alias), which the azure Responses adapter serves.
+func isAzureProvider(providerID string) bool {
+	switch strings.ToLower(strings.TrimSpace(providerID)) {
+	case "azure", "azure-openai", "azure-cognitive-services":
+		return true
+	}
+	return false
 }
 
 // FamilyOf returns the model family the table is keyed by: the catalog base
