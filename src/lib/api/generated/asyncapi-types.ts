@@ -107,6 +107,14 @@ export interface SessionHistoryState {
   message?: string;
 }
 
+export interface EffortRecord {
+  chosen?: string;
+  sent?: string;
+  reason?: "mapped" | "provider_default" | "not_supported" | "continuation" | "rejected" | "rejected_earlier" | "extra_body";
+  provider?: string;
+  model?: string;
+}
+
 export interface RoomRef {
   room_id: string;
   room_name: string;
@@ -281,6 +289,8 @@ export interface MessageFrame {
   auto_approve?: boolean | null;
   metadata?: {
     model_name?: string;
+    provider?: string;
+    reasoning_effort?: string;
     workspace_id?: string;
     workspace_setup_kickoff?: boolean;
     [key: string]: unknown;
@@ -371,6 +381,8 @@ export interface DoneStats {
   turn_failed?: boolean;
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
+  effort?: EffortRecord;
+  reasoning_tokens?: number;
   [key: string]: unknown;
 }
 
@@ -622,6 +634,8 @@ export interface ReplayMessageFrame {
   };
   seq?: number;
   terminal_outcome?: boolean;
+  effort?: EffortRecord;
+  turn_reasoning_tokens?: number;
 }
 
 export interface ReplayErrorFrame {

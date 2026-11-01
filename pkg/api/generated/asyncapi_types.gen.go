@@ -575,9 +575,13 @@ type DoneStats struct {
 	Cost                     *float64 `json:"cost,omitempty"`
 	DuplicateToolCallIdCount *float64 `json:"duplicate_tool_call_id_count,omitempty"`
 	DurationMs               *float64 `json:"duration_ms,omitempty"`
-	FramesEmitted            *float64 `json:"frames_emitted,omitempty"`
-	OrphanCount              *float64 `json:"orphan_count,omitempty"`
-	ReplayError              *bool    `json:"replay_error,omitempty"`
+	// Effort levels spec (FR-058). The answering candidate's effort record. Absent when nothing was chosen and nothing was sent. Live-turn field: the replay-terminating done frame omits it.
+	Effort        *EffortRecord `json:"effort,omitempty"`
+	FramesEmitted *float64      `json:"frames_emitted,omitempty"`
+	OrphanCount   *float64      `json:"orphan_count,omitempty"`
+	// Effort levels spec (FR-024). Display-only turn sum of the reasoning-token counts reported by this turn's provider calls (a subset of output tokens, never booked into any statistic). Absent = no call reported a count; 0 = reported zero. Live-turn field: the replay-terminating done frame omits it.
+	ReasoningTokens *int  `json:"reasoning_tokens,omitempty"`
+	ReplayError     *bool `json:"replay_error,omitempty"`
 	// Authoritative absolute session-wide consumed-token total, with the same meaning as SessionStats.tokens_total. Present on live turn completion when authoritative usage is available; omitted on replay-terminating done frames. Omitted means unknown, never zero. Not a per-turn delta: tokens remains per-turn usage, and frames_emitted remains replay-only diagnostics.
 	SessionTokensTotal *int     `json:"session_tokens_total,omitempty"`
 	Tokens             *float64 `json:"tokens,omitempty"`
@@ -587,6 +591,15 @@ type DoneStats struct {
 	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame: narrows why truncated is true — "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a normal turn.
 	TruncationReason *string `json:"truncation_reason,omitempty"`
 	TurnFailed       *bool   `json:"turn_failed,omitempty"`
+}
+
+// EffortRecord — Effort levels spec (FR-058). The per-turn effort record of the answering candidate. Keep in sync by hand with contracts/components/schemas/EffortRecord.yaml. Never carries reasoning text or signature material.
+type EffortRecord struct {
+	Chosen   *string `json:"chosen,omitempty"`
+	Model    *string `json:"model,omitempty"`
+	Provider *string `json:"provider,omitempty"`
+	Reason   *string `json:"reason,omitempty"`
+	Sent     *string `json:"sent,omitempty"`
 }
 
 // ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
@@ -1094,6 +1107,8 @@ type ReplayMessageFrame struct {
 	// #823 catch-up redesign §4.7. Present on a replayed user entry persisted with a client-supplied id. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	Content         string  `json:"content"`
+	// Effort levels spec (FR-058). Copied from this entry's own stored effort record (answering assistant entries only). Absent when the entry has none. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
+	Effort *EffortRecord `json:"effort,omitempty"`
 	// session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and replay must retain the SAME association so the SPA joins each bubble to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier replayed message.
 	GoalId        *string             `json:"goal_id,omitempty"`
 	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
@@ -1126,7 +1141,9 @@ type ReplayMessageFrame struct {
 	TruncationReason *string `json:"truncation_reason,omitempty"`
 	// Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels, without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between). Omitted for legacy entries written before turn-id stamping landed.
 	TurnId *string `json:"turn_id,omitempty"`
-	Type   string  `json:"type"`
+	// Effort levels spec (FR-024). The stored display-only snapshot of the turn's reported reasoning-token sum, copied from the answering entry; never summed at read time. Absent = no call of the turn reported a count; 0 = reported zero.
+	TurnReasoningTokens *int   `json:"turn_reasoning_tokens,omitempty"`
+	Type                string `json:"type"`
 }
 
 // ReplayWarningFrame — Server → client duplicate tool_call_ids detected.

@@ -49,6 +49,15 @@ properties:
       agents. Send an empty string to clear it (fall back to default-provider
       resolution).
     example: "openrouter"
+  reasoning_effort:
+    type: string
+    maxLength: 32
+    description: >
+      Stored effort for the primary model (effort-levels spec FR-029):
+      "" clears it (Not set; an agent riding the default model then inherits the
+      default's effort), "provider_default", a catalog level name, "on" or "off".
+      Omitted keeps the stored value. null is refused. Not checked against the
+      catalog (FR-048).
   context_window_override:
     type: integer
     minimum: 1
