@@ -62,7 +62,7 @@ async function attemptAnIdWhereControlsRemainAvailable() {
   if (radio && !radio.hasAttribute('disabled')) fireEvent.click(radio)
   const field = screen.queryByRole('textbox', { name: 'People and groups the agent may message' })
   if (field && !field.hasAttribute('disabled')) fireEvent.change(field, { target: { value: '222' } })
-  const save = screen.queryByRole('button', { name: 'Save', exact: true })
+  const save = screen.queryByRole('button', { name: 'Save' })
   if (save && !save.hasAttribute('disabled')) await act(async () => { fireEvent.click(save) })
 }
 
