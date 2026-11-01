@@ -21,13 +21,11 @@ var ErrSteeredSessionOwnChatOnly = errors.New("steered_session_own_chat_only")
 type SendOrigin struct {
 	AgentID     string
 	WorkspaceID string
-	// OwnershipChecked marks that ADR-065's rule was applied to this send.
-	// Dispatch checks for it rather than re-deriving the verdict — see
-	// bus.OutboundMessage.OwnershipChecked for why re-deriving is wrong.
-	OwnershipChecked bool
 	// Operation is the tool decision FR-043 records: SendOperationChecked
-	// for a non-start send the tool checked, SendOperationStart for a start
-	// that passed T-3. Dispatch re-checks a start.
+	// for a non-start send ADR-065's rule was applied to (dispatch trusts it
+	// rather than re-deriving the verdict — see bus.OutboundMessage.Operation
+	// for why re-deriving is wrong), SendOperationStart for a start that
+	// passed T-3 (dispatch re-checks it).
 	Operation string
 }
 
@@ -255,8 +253,7 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// Ownership has now been decided for this message. Dispatch verifies that
 	// a decision was made rather than re-making it with less context
 	// (ADR-065 FR-7).
-	origin := SendOrigin{AgentID: actingAgent, WorkspaceID: workspaceID, OwnershipChecked: true,
-		Operation: SendOperationChecked}
+	origin := SendOrigin{AgentID: actingAgent, WorkspaceID: workspaceID, Operation: SendOperationChecked}
 	if err := t.sendCallback(channel, chatID, content, origin); err != nil {
 		return &ToolResult{
 			ForLLM:  fmt.Sprintf("sending message: %v", err),

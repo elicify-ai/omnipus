@@ -198,37 +198,33 @@ type OutboundMessage struct {
 	// In-process only: this is not a gateway/SPA wire field.
 	ProgressNotice bool `json:"-"`
 
-	// OwnershipChecked records that the send tool already applied ADR-065's
-	// ownership rule to this message. In-process only — never on the wire.
+	// Operation is the send class of channels-spec-r8 FR-040/FR-043: "" for
+	// system producers, OperationChecked when the send tool already applied
+	// ADR-065's ownership rule to a non-start send, and OperationStart for a
+	// started message (a send to a listed target that is not the turn's own
+	// conversation). In-process only — never on the wire.
 	//
-	// It exists because the tool layer decides with MORE information than
-	// dispatch has. send_message knows the turn's own conversation and lets an
-	// agent reply into it even when the instance belongs to someone else —
-	// which is exactly what keeps hand-off and delegation working, since a
-	// delegate answers inside its parent's conversation under its own
-	// identity. Dispatch sees only (instance, agent, workspace), so re-deriving
-	// the same verdict there produces FALSE REFUSALS on ordinary delegation.
-	//
-	// So dispatch does not re-decide; it checks that a decision was made. A
-	// message carrying an AgentID but not this flag reached the bus without
-	// passing the tool's check, which is precisely the "someone adds a second
-	// route later" regression FR-7 exists to catch.
-	OwnershipChecked bool `json:"-"`
-
-	// Operation is the send class of channels-spec-r8 FR-040: "" for system
-	// producers, OperationChecked for an ownership-checked send, and
-	// OperationStart for a started message (a send to a listed target that
-	// is not the turn's own conversation). Adapters that can start messages
-	// (Discord, FR-046) resolve a start's target before sending. In-process
-	// only — never on the wire. The FR-043 rename of OwnershipChecked into
-	// this field is pending; until then both exist side by side.
+	// OperationChecked exists because the tool layer decides with MORE
+	// information than dispatch has. send_message knows the turn's own
+	// conversation and lets an agent reply into it even when the instance
+	// belongs to someone else — which is exactly what keeps hand-off and
+	// delegation working, since a delegate answers inside its parent's
+	// conversation under its own identity. Dispatch sees only (instance,
+	// agent, workspace), so re-deriving the same verdict there produces FALSE
+	// REFUSALS on ordinary delegation. So dispatch does not re-decide a
+	// checked send; it checks that a decision was made. A message carrying an
+	// AgentID with Operation "" reached the bus without passing the tool's
+	// check, which is precisely the "someone adds a second route later"
+	// regression FR-7 exists to catch. OperationStart is never trusted: dispatch
+	// and dequeue re-run StartAllowed (FR-044). Adapters that can start
+	// messages (Discord, FR-046) resolve a start's target before sending.
 	Operation string `json:"-"`
 
 	// Return, when non-nil, marks this message as the answer to an admitted
 	// request, sent through the SOURCE OWNER's channel instance (session-core
 	// C-REPLY, FR-027/028). In-process only — never on the wire. The channel
 	// manager re-verifies the binding at the final send boundary (every
-	// attempt, and before a placeholder edit); OwnershipChecked and the
+	// attempt, and before a placeholder edit); Operation and the
 	// system-origin exemption do not satisfy it. AgentID/WorkspaceID on such a
 	// message name the AUTHOR (the guest), who gains no connector grant.
 	Return *ReturnRoute `json:"-"`

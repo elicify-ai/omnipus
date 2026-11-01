@@ -547,12 +547,11 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 		// common point before the wire. System-originated publishes leave
 		// these empty and are exempt by that emptiness.
 		return rw.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Channel:          channel,
-			ChatID:           chatID,
-			Content:          content,
-			AgentID:          origin.AgentID,
-			WorkspaceID:      origin.WorkspaceID,
-			OwnershipChecked: origin.OwnershipChecked,
+			Channel:     channel,
+			ChatID:      chatID,
+			Content:     content,
+			AgentID:     origin.AgentID,
+			WorkspaceID: origin.WorkspaceID,
 			// FR-043: the tool's decision; a start is re-checked at
 			// dispatch and dequeue (FR-044).
 			Operation: busOperation(origin.Operation),
