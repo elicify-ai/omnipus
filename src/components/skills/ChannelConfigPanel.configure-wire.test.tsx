@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ApiError } from '@/lib/api-error'
+import { ApiSchemaError } from '@/lib/api/http'
 import {
   ChannelConfigureError as ChannelConfigureErrorSchema,
   ChannelConfigureResponse as ChannelConfigureResponseSchema,
@@ -91,7 +92,15 @@ beforeEach(() => {
     expect(url).toMatch(/\/api\/v1\/channels\/whatsapp\/configure$/)
     expect(init?.method).toBe('PUT')
     expect(init?.credentials).toBe('include')
-    return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+    // F2: 204 has no body; the empty 200 advertises zero bytes. Both are
+    // actual HTTP-edge responses, never a fabricated decoder rejection.
+    return new Response(body === undefined ? null : JSON.stringify(body), {
+      status,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(body === undefined && status === 200 ? { 'Content-Length': '0' } : {}),
+      },
+    })
   })
   vi.stubGlobal('fetch', fetchMock)
 })
@@ -129,6 +138,17 @@ function expectNoEnableOrSuccess() {
   for (const [toast] of addToast.mock.calls) {
     expect(toast.variant).not.toBe('success')
   }
+}
+
+function expectConfigureSchemaError(client: QueryClient, rawBody: unknown) {
+  const mutations = client.getMutationCache().getAll()
+  expect(mutations).toHaveLength(1)
+  const error = mutations[0].state.error
+  expect(error).toBeInstanceOf(ApiSchemaError)
+  if (!(error instanceof ApiSchemaError)) throw new Error('instrument: Configure must retain its real ApiSchemaError')
+  expect(error.endpoint).toBe('PUT /api/v1/channels/whatsapp/configure')
+  expect(error.zodIssues.map((issue) => issue.path)).toEqual([['apply_outcome']])
+  expect(error.rawBody).toEqual(rawBody)
 }
 
 describe.each(['Save', 'Save & Enable'])('T-06 real Configure wire path — %s', (label) => {
@@ -183,6 +203,22 @@ describe.each(['Save', 'Save & Enable'])('T-06 real Configure wire path — %s',
     const client = renderPanel()
     await save(label)
     await waitFor(() => expect(client.getMutationCache().getAll().some((mutation) => mutation.state.status === 'error')).toBe(true))
+    // FR-055/F1: an exhaustive-switch throw is not schema validation.
+    expectConfigureSchemaError(client, {})
+    expect(addToast).toHaveBeenCalledTimes(1)
+    expect(addToast.mock.calls[0][0].variant).toBe('error')
+    expect(addToast.mock.calls[0][0].message).not.toMatch(/saved/i)
+    expectNoEnableOrSuccess()
+    expect(fetchAvailability).not.toHaveBeenCalled()
+  })
+
+  it.each([204, 200])('a raw empty %i is an ApiSchemaError, never Saved or enabled', async (emptyStatus) => {
+    status = emptyStatus
+    body = undefined
+    const client = renderPanel()
+    await save(label)
+    await waitFor(() => expect(client.getMutationCache().getAll().some((mutation) => mutation.state.status === 'error')).toBe(true))
+    expectConfigureSchemaError(client, undefined)
     expect(addToast).toHaveBeenCalledTimes(1)
     expect(addToast.mock.calls[0][0].variant).toBe('error')
     expect(addToast.mock.calls[0][0].message).not.toMatch(/saved/i)

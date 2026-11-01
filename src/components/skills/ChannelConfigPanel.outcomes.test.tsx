@@ -31,6 +31,8 @@ import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { configureChannel as configureChannelWire } from '@/lib/api/channels'
+import { ApiSchemaError } from '@/lib/api/http'
 
 vi.mock('@/store/ui', () => ({
   useUiStore: vi.fn(),
@@ -127,7 +129,7 @@ function renderPanel() {
       />
     </QueryClientProvider>,
   )
-  return { addToast }
+  return { addToast, client }
 }
 
 async function clickSave(label: RegExp) {
@@ -149,6 +151,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   vi.clearAllMocks()
 })
 
@@ -166,6 +169,21 @@ describe('ChannelConfigPanel — Configure outcome toasts (T-6c / S-57 / FR-055)
     expect(messages).toContain('Saved. The connection restarted with the new settings.')
     // T-6c: the apply_note must be shown alongside the applied toast.
     expect(messages.join('\n')).toContain(APPLY_NOTE.split('.')[0])
+  })
+
+  it('applied shows the exact restart-success toast before Save & Enable enables', async () => {
+    resolveConfigure({ apply_outcome: 'applied' })
+    const { addToast } = renderPanel()
+
+    await clickSave(/Save & Enable/i)
+
+    await waitFor(() => {
+      expect(addToast.mock.calls).toEqual([
+        [{ message: 'Saved. The connection restarted with the new settings.', variant: 'success' }],
+      ])
+      expect(vi.mocked(enableChannel).mock.calls).toEqual([['whatsapp']])
+    })
+    expect(addToast.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(enableChannel).mock.invocationCallOrder[0])
   })
 
   it('no_reload_needed shows exactly "Saved." (Save)', async () => {
@@ -200,12 +218,15 @@ describe('ChannelConfigPanel — Configure outcome toasts (T-6c / S-57 / FR-055)
     expect((warn![0] as { message: string }).message).toBe('Saved, but the connection is not running: 401 unauthorized.')
     expect((warn![0] as { variant: string }).variant).toBe('warning')
 
-    // Save & Enable path — enable must NOT be called (the connection already
-    // failed to start with these settings).
-    renderPanel()
+    // Save & Enable path — same exact warning, and enable must NOT be
+    // called (the connection already failed to start with these settings).
+    const { addToast: enableToast } = renderPanel()
     await clickSave(/Save & Enable/i)
     await waitFor(() => {
       expect(configureChannel).toHaveBeenCalledTimes(2)
+      expect(enableToast.mock.calls).toEqual([
+        [{ message: 'Saved, but the connection is not running: 401 unauthorized.', variant: 'warning' }],
+      ])
     })
     await act(async () => {})
     // T-6c: enable must not run after applied_not_running.
@@ -214,12 +235,15 @@ describe('ChannelConfigPanel — Configure outcome toasts (T-6c / S-57 / FR-055)
 
   it('unconfirmed shows the not-confirmed warning and "Save & Enable" does not enable', async () => {
     resolveConfigure({ apply_outcome: 'unconfirmed' })
-    renderPanel()
+    const { addToast } = renderPanel()
 
     await clickSave(/Save & Enable/i)
 
     await waitFor(() => {
       expect(configureChannel).toHaveBeenCalled()
+      expect(addToast.mock.calls).toEqual([
+        [{ message: 'Saved. The restart was not confirmed yet; check the connection status in a moment.', variant: 'warning' }],
+      ])
     })
     await act(async () => {})
     // T-6c: enable must not run after unconfirmed.
@@ -301,18 +325,37 @@ describe('ChannelConfigPanel — Configure outcome toasts (T-6c / S-57 / FR-055)
   })
 
   it('a response missing apply_outcome fails schema validation and never shows "saved"', async () => {
-    // FR-055: the generated client validates ChannelConfigureResponse; a
-    // response without apply_outcome must reject, and the panel must show
-    // the generic error toast — never a success/saved wording.
-    ;(configureChannel as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('response failed schema validation'))
-    const { addToast } = renderPanel()
+    // FR-055/F4: preserve this row but pass its real raw response through
+    // the actual Configure client/request/schema, not an invented Error.
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input)
+      expect(url).toBe('/api/v1/channels/whatsapp/configure')
+      expect(init?.method).toBe('PUT')
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.mocked(configureChannel).mockImplementationOnce(configureChannelWire)
+    const { addToast, client } = renderPanel()
 
     await clickSave(/^Save$/i)
 
     await waitFor(() => {
       expect(configureChannel).toHaveBeenCalled()
+      expect(client.getMutationCache().getAll()[0]?.state.status).toBe('error')
     })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const mutations = client.getMutationCache().getAll()
+    expect(mutations).toHaveLength(1)
+    const error = mutations[0].state.error
+    expect(error).toBeInstanceOf(ApiSchemaError)
+    if (!(error instanceof ApiSchemaError)) throw new Error('instrument: missing outcome must reach the real schema decoder')
+    expect(error.endpoint).toBe('PUT /api/v1/channels/whatsapp/configure')
+    expect(error.zodIssues.map((issue) => issue.path)).toEqual([['apply_outcome']])
+    expect(error.rawBody).toEqual({})
     await act(async () => {})
+    expect(addToast).toHaveBeenCalledTimes(1)
+    expect((addToast.mock.calls[0][0] as { variant: string }).variant).toBe('error')
+    expect(enableChannel).not.toHaveBeenCalled()
     const rendered = addToast.mock.calls.map((c) => String((c[0] as { message: string }).message)).join('\n')
     expect(rendered).not.toBe('Configuration saved')
     expect(rendered).not.toMatch(/^Saved\.$/)
