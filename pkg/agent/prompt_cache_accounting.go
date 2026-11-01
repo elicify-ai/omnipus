@@ -29,6 +29,10 @@ type turnCallAccounting struct {
 	continuationID string
 	// effort is the effort plan of the provider call in flight (FR-058).
 	effort *effortAttempt
+	// rejectedPairs holds the (provider, model) pairs whose effort field was
+	// rejected during THIS turn: later calls of the turn still carry the
+	// `rejected` reason; only later turns say `rejected_earlier` (S-26).
+	rejectedPairs map[string]struct{}
 	// reasoningSum is the display-only sum of this turn's reported
 	// reasoning-token counts; nil until a call reports one (FR-024).
 	reasoningSum *int
@@ -110,6 +114,24 @@ func (ts *turnState) setEffortAttempt(a *effortAttempt) {
 	ts.mu.Lock()
 	ts.callAccounting.effort = a
 	ts.mu.Unlock()
+}
+
+// noteEffortRejected marks a pair as having rejected effort in this turn.
+func (ts *turnState) noteEffortRejected(provider, model string) {
+	ts.mu.Lock()
+	if ts.callAccounting.rejectedPairs == nil {
+		ts.callAccounting.rejectedPairs = map[string]struct{}{}
+	}
+	ts.callAccounting.rejectedPairs[effortPairKey(provider, model)] = struct{}{}
+	ts.mu.Unlock()
+}
+
+// effortRejectedThisTurn reports whether the pair rejected effort in this turn.
+func (ts *turnState) effortRejectedThisTurn(provider, model string) bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	_, ok := ts.callAccounting.rejectedPairs[effortPairKey(provider, model)]
+	return ok
 }
 
 // callAccountingCount returns how many calls this turn has booked so far.

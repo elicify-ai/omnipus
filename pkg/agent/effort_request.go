@@ -5,6 +5,7 @@ package agent
 // "Resolution per candidate", DE-5, FR-021, FR-057, FR-058).
 
 import (
+	"encoding/json"
 	"log/slog"
 	"maps"
 	"strings"
@@ -92,6 +93,19 @@ func (a *effortAttempt) record() *generated.EffortRecord {
 }
 
 func effortStrPtr(s string) *string { return &s }
+
+// cloneReasoningDetails deep-copies the OpenRouter reasoning carrier (every
+// item byte-for-byte); nil stays nil.
+func cloneReasoningDetails(in []json.RawMessage) []json.RawMessage {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]json.RawMessage, len(in))
+	for i, item := range in {
+		out[i] = append(json.RawMessage(nil), item...)
+	}
+	return out
+}
 
 // sameEffort reports whether a sent value is the chosen setting itself
 // (Off sent as the level "none" is the same setting).
@@ -218,10 +232,22 @@ func (rt *agentLoopRunTurn) callWithEffort(
 	provider, model string,
 	call func(opts map[string]any) (*providers.LLMResponse, error),
 ) (*providers.LLMResponse, error) {
-	chosen := rt.candidateEffortChoice(provider, model, rt.isPrimaryCandidate(provider, model))
+	primary := rt.isPrimaryCandidate(provider, model)
+	if provider == "" && primary && rt.ts.agent != nil {
+		// An unpinned primary candidate (a single native client, no pool
+		// entry) still answers for the agent's configured provider: plan and
+		// record against that pair, so a reloaded note can name it (FR-058).
+		provider = rt.ts.agent.PrimaryEffortProvider
+	}
+	chosen := rt.candidateEffortChoice(provider, model, primary)
 	plan := planEffort(chosen, provider, model)
 	if plan.send != "" && rt.al.effortRejected.rejected(provider, model) {
 		plan.send, plan.reason = "", effortReasonRejectedEarlier
+		if rt.ts.effortRejectedThisTurn(provider, model) {
+			// The rejection happened in this turn: the turn's record keeps
+			// saying `rejected` (S-24/S-26); later turns say rejected_earlier.
+			plan.reason = effortReasonRejected
+		}
 	}
 	sent := &effortdialect.Sent{}
 	attempt := &effortAttempt{provider: provider, model: model, plan: plan, sent: sent}
@@ -251,6 +277,7 @@ func (rt *agentLoopRunTurn) callWithEffort(
 		return nil, err
 	}
 	rt.al.effortRejected.remember(provider, model)
+	rt.ts.noteEffortRejected(provider, model)
 	return resp2, nil
 }
 

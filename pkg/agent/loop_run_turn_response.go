@@ -866,6 +866,9 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 		Content:          rr.rq.ri.rf.response.Content,
 		ReasoningContent: rr.rq.ri.rf.response.ReasoningContent,
 		ThinkingBlocks:   append([]string(nil), rr.rq.ri.rf.response.ThinkingBlocks...),
+		// FR-013: the OpenRouter carrier rides the tool-call message so the
+		// continuation (and every reload) replays it to that route.
+		ReasoningDetails: cloneReasoningDetails(rr.rq.ri.rf.response.ReasoningDetails),
 	}
 	for _, tc := range rr.normalizedToolCalls {
 		argumentsJSON, marshalErr := json.Marshal(tc.Arguments)
