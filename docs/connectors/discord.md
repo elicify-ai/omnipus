@@ -57,5 +57,6 @@ Omnipus connects to Discord as a bot using the [discordgo](https://github.com/bw
 
 - **Capabilities.** The Discord channel implements `TypingCapable`, `PlaceholderCapable`, and `MessageEditor` — enable them via the `typing` and `placeholder` config blocks.
 - **Message length.** Discord caps individual messages at 2 000 characters; longer responses are automatically split.
+- **Ignored senders.** When `allow_from` is not empty, the bot ignores messages from anyone not on it and sends them no reply. The connector's **Configure** panel then shows one line, `Ignored <count> messages from senders not on the allowed list. Latest: <ids>`. The count runs from when the connector last started, and the ids (for example `discord:123456789012345678`) are the latest ignored senders, most recent first. To let one of them in, select and copy the id, add it to **Allow From**, and save.
 - **Group chats.** In guild text channels, use `group_trigger.mention_only: true` so the bot only responds when directly @-mentioned.
 - **Deprecated top-level `mention_only`.** `DiscordConfig` still has a top-level `mention_only` field for backward compatibility, but the channel code reads only `group_trigger.mention_only`. The top-level field is inert — leave it unset and configure under `group_trigger`.
