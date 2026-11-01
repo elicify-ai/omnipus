@@ -1568,6 +1568,9 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		providerCancel()
 		rt.ts.clearProviderCancel(providerCancel)
 	}()
+	// Issue #1478: tell the chat when the provider goes silent (provider_status).
+	providerCtx, stopSilenceWatch := rt.startProviderSilenceWatch(providerCtx)
+	defer stopSilenceWatch()
 
 	if !rt.al.beginActiveRequest() {
 		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
@@ -1608,25 +1611,12 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		// retry as one provider_retry frame from named fields only
 		// (C-2 — never an error string).
 		retryCtx := providers.WithWaitBudget(providerCtx, rt.ts.turnWaitBudgetForChain())
-		retryCtx = providers.WithRetryObserver(retryCtx, func(info providers.RetryInfo) {
-			rt.al.emitEvent(
-				EventKindProviderRetry,
-				rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-				LLMRetryPayload{
-					Attempt:     info.Attempt,
-					Reason:      info.Reason,
-					Provider:    info.Provider,
-					Model:       info.Model,
-					RetryAt:     info.RetryAt,
-					SentAt:      info.SentAt,
-					MaxAttempts: info.MaxAttempts,
-					SessionID:   string(rt.ts.routingSessionID),
-				},
-			)
-		})
+		retryCtx = providers.WithRetryObserver(retryCtx, rt.providerRetryObserver())
 		retryCtx = providers.WithStreamedBytesCheck(retryCtx, func() int64 {
 			return rt.providerCallStreamedBytes.Load()
 		})
+		// Issue #1485: per-attempt limit fits this request (see attemptTimeoutResolver).
+		retryCtx = providers.WithAttemptTimeout(retryCtx, rt.attemptTimeoutResolver(messagesForCall, toolDefsForCall))
 		// F1 (read paths): one image attach per candidate, reused across the
 		// §7.4 in-place retries of that candidate — the retry must re-send
 		// the same request, and a re-attach re-runs the authorization
@@ -1684,6 +1674,11 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					if err != nil {
 						return nil, err
 					}
+					// Issue #1435 R1: this candidate's own budget applies to
+					// ordinary inline image media too — a tighter fallback
+					// candidate must not receive the looser primary's image
+					// bytes. Request-local fit; history stays canonical.
+					m = fitOrdinaryImageMediaToBudget(m, budget)
 					if rt.providerCallAttachCache != nil {
 						rt.providerCallAttachCache[attachKey] = m
 					}
@@ -1725,6 +1720,7 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 			// at turn end, after the assistant answer — MIN-103).
 			rt.ts.queueProviderFallbackNote(fbResult.Model, fbResult.Attempts)
 		}
+		rt.noteProviderRecovered(fbResult.Retries) // #1280: "reconnected after N retries"
 		// Phase 1B FR-013: record the model that actually produced
 		// the response (may differ from the agent's primary model
 		// when a fallback candidate was used).

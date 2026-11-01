@@ -372,8 +372,12 @@ func TestFallbackRetryLoop_BothCandidatesExhaustAttempts_C8(t *testing.T) {
 	if got := counter["openrouter"]; got != 3 {
 		t.Fatalf("primary called %d times, want 3 (each candidate retried in place up to the C-8 cap)", got)
 	}
-	if got := counter["anthropic"]; got != 3 {
-		t.Fatalf("fallback called %d times, want 3", got)
+	// Issue #1280 (founder decision Q1, 2026-10-12) supersedes C-8 for the
+	// LAST candidate the chain can try: it runs the retry plan — 1 call plus
+	// 5 retries — instead of C-8's 3 total calls. The primary (an earlier
+	// candidate) keeps C-8, asserted above.
+	if got := counter["anthropic"]; got != RetryPlanMaxAttempts {
+		t.Fatalf("fallback called %d times, want %d (the last candidate runs the #1280 retry plan)", got, RetryPlanMaxAttempts)
 	}
 	if ct.IsAvailable(ModelKey("openrouter", "m-a")) || ct.IsAvailable(ModelKey("anthropic", "claude-x")) {
 		t.Fatal("neither candidate may stay available after exhausting its attempts (chain row 1)")

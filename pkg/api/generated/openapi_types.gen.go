@@ -11833,6 +11833,7 @@ const (
 	TaskOccurrenceSetOccurrenceRunsStatusDone       TaskOccurrenceSetOccurrenceRunsStatus = "done"
 	TaskOccurrenceSetOccurrenceRunsStatusFailed     TaskOccurrenceSetOccurrenceRunsStatus = "failed"
 	TaskOccurrenceSetOccurrenceRunsStatusInProgress TaskOccurrenceSetOccurrenceRunsStatus = "in_progress"
+	TaskOccurrenceSetOccurrenceRunsStatusMissed     TaskOccurrenceSetOccurrenceRunsStatus = "missed"
 	TaskOccurrenceSetOccurrenceRunsStatusSkipped    TaskOccurrenceSetOccurrenceRunsStatus = "skipped"
 )
 
@@ -11844,6 +11845,8 @@ func (e TaskOccurrenceSetOccurrenceRunsStatus) Valid() bool {
 	case TaskOccurrenceSetOccurrenceRunsStatusFailed:
 		return true
 	case TaskOccurrenceSetOccurrenceRunsStatusInProgress:
+		return true
+	case TaskOccurrenceSetOccurrenceRunsStatusMissed:
 		return true
 	case TaskOccurrenceSetOccurrenceRunsStatusSkipped:
 		return true
@@ -11875,6 +11878,7 @@ const (
 	TaskRunStatusDone       TaskRunStatus = "done"
 	TaskRunStatusFailed     TaskRunStatus = "failed"
 	TaskRunStatusInProgress TaskRunStatus = "in_progress"
+	TaskRunStatusMissed     TaskRunStatus = "missed"
 	TaskRunStatusSkipped    TaskRunStatus = "skipped"
 )
 
@@ -11886,6 +11890,8 @@ func (e TaskRunStatus) Valid() bool {
 	case TaskRunStatusFailed:
 		return true
 	case TaskRunStatusInProgress:
+		return true
+	case TaskRunStatusMissed:
 		return true
 	case TaskRunStatusSkipped:
 		return true
@@ -15376,6 +15382,9 @@ type CatalogResizeLimits struct {
 
 	// MaxBytes Maximum encoded image size in bytes.
 	MaxBytes int `json:"max_bytes"`
+
+	// MaxPatches Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+	MaxPatches *int `json:"max_patches,omitempty"`
 }
 
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
@@ -26253,7 +26262,7 @@ type TaskOccurrenceSet struct {
 		// SessionId The matched run's chat session ID.
 		SessionId string `json:"session_id"`
 
-		// Status The matched run's status.
+		// Status The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
 		Status TaskOccurrenceSetOccurrenceRunsStatus `json:"status"`
 	} `json:"occurrence_runs,omitempty"`
 
@@ -26267,7 +26276,7 @@ type TaskOccurrenceSet struct {
 	Truncated bool `json:"truncated"`
 }
 
-// TaskOccurrenceSetOccurrenceRunsStatus The matched run's status.
+// TaskOccurrenceSetOccurrenceRunsStatus The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
 type TaskOccurrenceSetOccurrenceRunsStatus string
 
 // TaskRun One execution record for a task (ADR-050 / docs/internal/specs/task-run-history-spec.md §2.1) — a purely additive record layer. Runs are append-only and event-sourced: an "open" record is written when a dispatch is claimed (`status: in_progress`, `ended_at: null`) and a "close" record carrying the SAME `run_id` is appended when it finishes (`status: done|failed`, `result`, `ended_at`). Readers fold by `run_id`, last record wins. `Task.status`/`result`/`session_id` keep their existing behaviour completely unchanged (RD2) — TaskRun is read by the calendar occurrence overlay (`occurrence_runs` on TaskOccurrenceSet, `run_counts` on DayBucket) and the task-detail run-history list. Returned by GET /tasks/{id}/runs.
@@ -26296,7 +26305,7 @@ type TaskRun struct {
 	// StartedAt RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
 	StartedAt time.Time `json:"started_at"`
 
-	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
 	Status TaskRunStatus `json:"status"`
 
 	// TaskId The task this run belongs to.
@@ -26306,7 +26315,7 @@ type TaskRun struct {
 // TaskRunKind How the run started — an automatic trigger fire, or a user Run-now.
 type TaskRunKind string
 
-// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
 type TaskRunStatus string
 
 // TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.

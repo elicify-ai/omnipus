@@ -421,8 +421,38 @@ export interface ProviderRetryEventData {
   receivedAt: string
   attempt: number
   maxAttempts: number
+  /**
+   * The retry cause the backend classified this failure under (the
+   * `provider_retry` frame's `error_code` — pkg/providers/retry_plan.go:
+   * network, rate_limited, overloaded, stream_interrupted). The indicator
+   * words the cause from this field in plain English; a missing or
+   * unrecognized code renders the generic clause, never the code text
+   * (issues #1280/#1478 wording round).
+   */
+  errorCode?: string
   previousProvider?: string
   previousModel?: string
+}
+
+/**
+ * Issues #1478/#1280 — the render state of a live `provider_status`
+ * `waiting` frame, stored per session in its OWN slot
+ * (`SessionChatState.providerStatusEvent`). Only `waiting` occupies the
+ * slot: `responding` and `recovered` clear it (the notice disappears), and
+ * `recovered` additionally appends the short recovered note and clears a
+ * stale `providerRetryEvent` (a recovered call means no retry can still be
+ * pending). `receivedAt` is the client-clock reading at reducer entry (the
+ * C-11 receipt anchor, same as ProviderRetryEventData).
+ */
+export interface ProviderStatusEventData {
+  state: 'waiting'
+  turnId: string
+  /** Server clock — the last provider activity (or the round's start). */
+  silentSince: string
+  /** Server clock — when the silence limit would end the call; absent when unknown. */
+  stallAt?: string
+  sentAt: string
+  receivedAt: string
 }
 
 /** All per-session chat state for one concurrent session. */
@@ -556,6 +586,16 @@ export interface SessionChatState {
    * Optional — see the fixture-compat note on goalStatus.
    */
   providerRetryEvent?: ProviderRetryEventData | null
+  /**
+   * Issues #1478/#1280 — the session's live `provider_status` `waiting`
+   * notice facts, or null. Written only by the `provider_status` case of
+   * slices/provider-frames.ts::handleProviderFrame: `waiting` sets it,
+   * `responding` clears it, `recovered` clears it, appends the recovered
+   * note and clears a stale `providerRetryEvent`. The parent (ChatScreen)
+   * gates the notice on the turn's streaming state like the retry
+   * indicator. Optional — see the fixture-compat note on goalStatus.
+   */
+  providerStatusEvent?: ProviderStatusEventData | null
   /**
    * provider-messages §7.4/D17 — the (unavailable, answered) model pairs for
    * which a fallback note is already visible in THIS chat (live-appended by
@@ -949,6 +989,8 @@ export interface ChatStore extends HistorySlice {
   rateLimitEvent: RateLimitEventData | null
   /** provider-messages spec §8 — foreground projection of the session's `provider_retry` slot. Optional — see the SessionChatState field's doc comment. */
   providerRetryEvent?: ProviderRetryEventData | null
+  /** Issues #1478/#1280 — foreground projection of the session's `provider_status` waiting slot. Optional — see the SessionChatState field's doc comment. */
+  providerStatusEvent?: ProviderStatusEventData | null
   /** ADR-049 D6/US-12: active session's latest `goal_status` frame, or null/undefined. Drives `GoalIndicator`. Optional — see SessionChatState.goalStatus's doc comment (fixture-compat). */
   goalStatus?: GoalStatusFrame | null
   /**
