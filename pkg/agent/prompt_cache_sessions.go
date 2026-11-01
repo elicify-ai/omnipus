@@ -16,6 +16,9 @@ type sessionPromptCache struct {
 	skills        *FrozenSkillList
 	skillSection  string
 	skillPosition int
+	// skillsGeneration is the turn generation the frozen menu was taken at
+	// (turnState.skillsMenuGeneration); a newer one refreezes it (FR-053).
+	skillsGeneration uint64
 }
 
 func (al *AgentLoop) promptCacheSession(ts *turnState) *sessionPromptCache {
@@ -113,6 +116,12 @@ func (al *AgentLoop) freezeSessionSkillMenu(ts *turnState, messages []providers.
 	state := al.promptCacheSession(ts)
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if state.skills != nil && state.skillsGeneration != ts.skillsMenuGeneration {
+		// A committed skill change since the freeze: take the menu again from
+		// this turn's freshly built prompt (FR-053).
+		state.skills = nil
+		state.skillSection = ""
+	}
 	const separator = "\n\n---\n\n"
 	parts := strings.Split(messages[0].Content, separator)
 	index := -1
@@ -142,6 +151,7 @@ func (al *AgentLoop) freezeSessionSkillMenu(ts *turnState, messages []providers.
 			remaining = rest
 		}
 		state.skills = FreezeSkillList(ts.cacheSessionID(), names)
+		state.skillsGeneration = ts.skillsMenuGeneration
 	}
 	section := state.skillSection
 	if len(state.skills.Names()) == 0 {

@@ -101,6 +101,10 @@ type ContextBuilder struct {
 	cachedSystemPrompt  string
 	cachedMemoryContext string    // rendered notes are part of the cache identity
 	cachedAt            time.Time // max observed mtime across tracked paths at cache build time
+	// cachedSkillsGeneration is skills.Generation() when the cache was built:
+	// any committed skill change bumps it, so the next turn rebuilds the
+	// "# Skills" menu (skills spec r15 FR-053) even where mtimes cannot show it.
+	cachedSkillsGeneration uint64
 
 	// existedAtCache tracks which source file paths existed the last time the
 	// cache was built. This lets sourceFilesChanged detect files that are newly
@@ -843,6 +847,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 	cb.cachedSystemPrompt = prompt
 	cb.cachedMemoryContext = longTerm
 	cb.cachedAt = baseline.maxMtime
+	cb.cachedSkillsGeneration = baseline.skillsGeneration
 	cb.existedAtCache = baseline.existed
 	cb.skillFilesAtCache = baseline.skillFiles
 
@@ -870,6 +875,7 @@ func (cb *ContextBuilder) invalidateSystemPromptCacheLocked() {
 	cb.cachedSystemPrompt = ""
 	cb.cachedMemoryContext = ""
 	cb.cachedAt = time.Time{}
+	cb.cachedSkillsGeneration = 0
 	cb.existedAtCache = nil
 	cb.skillFilesAtCache = nil
 }
@@ -906,6 +912,7 @@ type workspacePromptVariant struct {
 	cachedAt          time.Time
 	existedAtCache    map[string]bool
 	skillFilesAtCache map[string]time.Time
+	skillsGeneration  uint64 // skills.Generation() at build time (FR-053)
 	// elem is this variant's node in workspacePromptCache.lru (Value is the
 	// workspace id string), kept for O(1) move-to-back/removal.
 	elem *list.Element
@@ -987,6 +994,9 @@ func fileChangedSinceBaseline(existedAtCache map[string]bool, cachedAt time.Time
 // Caller MUST hold cb.workspacePromptCache.mu.
 func (cb *ContextBuilder) workspaceVariantStaleLocked(v *workspacePromptVariant, workspaceID string) bool {
 	if v.cachedAt.IsZero() {
+		return true
+	}
+	if v.skillsGeneration != skills.Generation() {
 		return true
 	}
 	if slices.ContainsFunc(cb.sourcePaths(), func(p string) bool {
@@ -1110,6 +1120,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCacheForWorkspace(workspaceID str
 		bytes:             len(prompt),
 		cachedAt:          baseline.maxMtime,
 		existedAtCache:    baseline.existed,
+		skillsGeneration:  baseline.skillsGeneration,
 		skillFilesAtCache: baseline.skillFiles,
 	})
 
@@ -1226,6 +1237,9 @@ type cacheBaseline struct {
 	existed    map[string]bool
 	skillFiles map[string]time.Time
 	maxMtime   time.Time
+	// skillsGeneration is read before any file is examined, so a skill
+	// change committed during the build is seen as a change next turn.
+	skillsGeneration uint64
 }
 
 // buildCacheBaseline records which tracked paths currently exist and computes
@@ -1235,6 +1249,7 @@ type cacheBaseline struct {
 // detects its recap; the legacy ("" form) baseline tracks no carry-forward
 // path at all. Called under write lock when the cache is built.
 func (cb *ContextBuilder) buildCacheBaseline(workspaceID string) cacheBaseline {
+	generation := skills.Generation()
 	skillRoots := cb.skillRoots()
 	srcPaths := cb.sourcePaths()
 
@@ -1295,7 +1310,7 @@ func (cb *ContextBuilder) buildCacheBaseline(workspaceID string) cacheBaseline {
 		maxMtime = time.Unix(1, 0)
 	}
 
-	return cacheBaseline{existed: existed, skillFiles: skillFiles, maxMtime: maxMtime}
+	return cacheBaseline{existed: existed, skillFiles: skillFiles, maxMtime: maxMtime, skillsGeneration: generation}
 }
 
 // sourceFilesChangedLocked checks whether any workspace source file has been
@@ -1307,6 +1322,9 @@ func (cb *ContextBuilder) buildCacheBaseline(workspaceID string) cacheBaseline {
 // which already holds RLock or Lock).
 func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
 	if cb.cachedAt.IsZero() {
+		return true
+	}
+	if cb.cachedSkillsGeneration != skills.Generation() {
 		return true
 	}
 
