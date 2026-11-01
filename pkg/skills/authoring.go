@@ -25,12 +25,12 @@ const MaxSkillMarkdownBytes = 256 * 1024
 const versionsDir = ".versions"
 
 // builtinMarkerFile is written into a skill's directory whenever
-// SeedDefaults (embed.go) materializes a built-in skill onto disk at boot.
+// the start-up built-in sync (builtins_sync.go) materializes a built-in skill onto disk at boot.
 //
 // UAT batch3 S68 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
 // finding #3): EditSkill used to infer "this is a genuine prior user
 // override, safe to edit in place" from mere file EXISTENCE at the writer's
-// root path. That inference is unsound in this install: SeedDefaults
+// root path. That inference is unsound in this install: the built-in sync
 // materializes every built-in skill (for example plan, interview, write-skill)
 // onto the SAME writer-root path a real override would also
 // occupy — there is no separate, untouched "factory" location existence
@@ -326,7 +326,7 @@ func (w *SkillWriter) CreateSkill(name, content string) (string, error) {
 
 // EditSkill updates an existing skill named name with new SKILL.md content.
 // The prior content — a genuine local override OR a still-pristine built-in
-// materialized by SeedDefaults (see builtinMarkerFile) — is snapshotted into
+// materialized by the built-in sync (see builtinMarkerFile) — is snapshotted into
 // .versions/ first, so it is always recoverable, before anything is
 // overwritten.
 //
@@ -366,7 +366,7 @@ func (w *SkillWriter) EditSkill(
 	}
 
 	// A file's mere presence at this writer-root path is NOT proof of a
-	// genuine prior user override — SeedDefaults materializes every
+	// genuine prior user override — the built-in sync materializes every
 	// built-in skill onto this SAME path at boot, so on a fresh install
 	// fileExists is already true for every embedded skill (plan, interview,
 	// write-skill, ...) before any user has ever touched them.

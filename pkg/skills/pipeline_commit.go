@@ -175,7 +175,7 @@ func (p *pipeline) afterPublishFailure(st *state, err error, newRev string, atte
 	}
 	bumpGeneration()
 	auditPartial(p.req, st.slug, p.req.Kind, reason)
-	return PublishOutcome{Revision: newRev, PersistenceStatus: PersistencePartial, ActivationStatus: ActivationActive, ChangedFields: []string{"installed"}, Message: text},
+	return PublishOutcome{Revision: newRev, PersistenceStatus: PersistencePartial, ActivationStatus: ActivationActive, ChangedFields: []string{"installed"}, ErrorStage: PublicationErrorStageRecordVersion, Message: text},
 		&ChangeError{Code: ErrSkillPartiallySaved, Text: text, cause: err}
 }
 

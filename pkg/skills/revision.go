@@ -24,6 +24,12 @@ const (
 	ActivationNotAttempted ActivationStatus = "not_attempted"
 
 	PublicationErrorStageRestorePrevious PublicationErrorStage = "restore_previous"
+	// PublicationErrorStageSave names a storage failure before anything was
+	// published (§7.6 class 1): nothing changed.
+	PublicationErrorStageSave PublicationErrorStage = "save"
+	// PublicationErrorStageRecordVersion names a change that is live but
+	// whose version record could not be written (§7.6 class 2 / 2-create).
+	PublicationErrorStageRecordVersion PublicationErrorStage = "record_version"
 )
 
 func (s PersistenceStatus) Valid() bool {
@@ -44,11 +50,9 @@ type PublishOutcome struct {
 	Warning           string
 }
 
-var (
-	removeStaleBackup     = os.RemoveAll
-	removePublishedBackup = os.RemoveAll
-	renamePublishedSkill  = os.Rename
-)
+// renamePublishedSkill is the pipeline's staged→live publication rename
+// (a test seam).
+var renamePublishedSkill = os.Rename
 
 var skillMutationLocks sync.Map
 
@@ -171,73 +175,4 @@ func (w *SkillWriter) RemoveSkillReviewed(name, expectedRevision string) error {
 		}
 		return w.RemoveSkill(name)
 	})
-}
-
-// PublishStagedSkill atomically publishes a fully validated package directory.
-// An empty expectedRevision is a create-only request; replacement requires the
-// exact current revision. The old directory is restored if final publication
-// fails after it has been moved aside.
-func PublishStagedSkill(root, name, stagedDir, expectedRevision string) (PublishOutcome, error) {
-	w := NewSkillWriter(root)
-	target, err := w.resolveSkillDir(name)
-	if err != nil {
-		return PublishOutcome{}, err
-	}
-	var outcome PublishOutcome
-	err = WithMutationLock(root, func() error {
-		current, currentErr := w.SkillRevision(name)
-		exists := currentErr == nil
-		if currentErr != nil && !errors.Is(currentErr, ErrNotFound) {
-			return currentErr
-		}
-		if !exists && expectedRevision != "" {
-			return fmt.Errorf("%w: reviewed %q, current resource is absent", ErrRevisionConflict, expectedRevision)
-		}
-		if exists && (expectedRevision == "" || expectedRevision != current) {
-			return fmt.Errorf("%w: reviewed %q, current %q", ErrRevisionConflict, expectedRevision, current)
-		}
-		if mkErr := os.MkdirAll(root, 0o755); mkErr != nil {
-			return mkErr
-		}
-		next, revisionErr := revisionForDir(stagedDir)
-		if revisionErr != nil {
-			return fmt.Errorf("verify staged skill: %w", revisionErr)
-		}
-		backup := target + ".replace-backup"
-		if exists {
-			if rmErr := removeStaleBackup(backup); rmErr != nil {
-				return rmErr
-			}
-			if renameErr := renamePublishedSkill(target, backup); renameErr != nil {
-				return fmt.Errorf("preserve previous skill: %w", renameErr)
-			}
-		}
-		if pubErr := renamePublishedSkill(stagedDir, target); pubErr != nil {
-			if exists {
-				if restoreErr := renamePublishedSkill(backup, target); restoreErr != nil {
-					outcome = PublishOutcome{
-						PersistenceStatus: PersistencePartial,
-						ActivationStatus:  ActivationNotAttempted,
-						ChangedFields:     []string{"installed"},
-						ErrorStage:        PublicationErrorStageRestorePrevious,
-						Message:           "replacement publication failed and the previous package could not be restored; no live package is available",
-					}
-					return errors.Join(
-						fmt.Errorf("publish staged skill: %w", pubErr),
-						fmt.Errorf("restore previous skill: %w", restoreErr),
-					)
-				}
-			}
-			return fmt.Errorf("publish staged skill: %w", pubErr)
-		}
-		warning := ""
-		if exists {
-			if cleanupErr := removePublishedBackup(backup); cleanupErr != nil {
-				warning = fmt.Sprintf("previous package cleanup is incomplete: %v", cleanupErr)
-			}
-		}
-		outcome = PublishOutcome{Revision: next, PersistenceStatus: PersistenceComplete, ActivationStatus: ActivationActive, ChangedFields: []string{"installed"}, Warning: warning}
-		return nil
-	})
-	return outcome, err
 }

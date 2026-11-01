@@ -107,6 +107,12 @@ func (e *ChangeError) Unwrap() []error {
 	return []error{e.Code}
 }
 
+// BuiltinReadOnlyError is the §5.10 BUILTIN_READ_ONLY refusal for a change to
+// the built-in skill slug.
+func BuiltinReadOnlyError(slug string) *ChangeError {
+	return &ChangeError{Code: ErrBuiltinReadOnly, Text: fmt.Sprintf("'%s' is a built-in skill. Built-in skills are read-only and are replaced with the shipped version on every Omnipus update, so this change was not saved. Copy it first: edit_skill action=copy skill=%s to=<new-name>, then edit the copy and grant it to the agents that should use it.", slug, slug)}
+}
+
 // ApplyChange is the ONE change pipeline (§0 principle 3, §7.1).
 func ApplyChange(root string, req ChangeRequest) (PublishOutcome, error) {
 	target := req.target()
@@ -119,7 +125,7 @@ func ApplyChange(root string, req ChangeRequest) (PublishOutcome, error) {
 		if creates(req) {
 			err = &ChangeError{Code: ErrBuiltinNameReserved, Text: fmt.Sprintf("'%s' is the name of a built-in skill and cannot be used for another skill. Choose a different name.", SkillKey(target))}
 		} else {
-			err = &ChangeError{Code: ErrBuiltinReadOnly, Text: fmt.Sprintf("'%s' is a built-in skill. Built-in skills are read-only and are replaced with the shipped version on every Omnipus update, so this change was not saved. Copy it first: edit_skill action=copy skill=%s to=<new-name>, then edit the copy and grant it to the agents that should use it.", target, target)}
+			err = BuiltinReadOnlyError(target)
 		}
 		auditRefusal(req, target, "builtin_read_only")
 		return refusedOutcome(), err
@@ -134,6 +140,17 @@ func ApplyChange(root string, req ChangeRequest) (PublishOutcome, error) {
 	})
 	if lockErr != nil {
 		return refusedOutcome(), lockErr
+	}
+	if errors.Is(runErr, ErrStorage) && out.ErrorStage == "" {
+		// §7.6 class 1: a storage failure before publication names its stage
+		// so a caller can render the failure envelope (C-9).
+		out.ErrorStage = PublicationErrorStageSave
+		if out.Message == "" {
+			var ce *ChangeError
+			if errors.As(runErr, &ce) {
+				out.Message = ce.Text
+			}
+		}
 	}
 	return out, runErr
 }

@@ -1,6 +1,6 @@
 package skills
 
-// Built-ins: synced at start (§8.2, replaces SeedDefaults) and retired
+// Built-ins: synced at start (§8.2, replaces the old boot-time seeding) and retired
 // (§8.4). Both run under the skills root's mutation lock and write no audit
 // lines directly: they return the facts in SyncReport so the gateway replays
 // them once the audit logger exists (§8.5).

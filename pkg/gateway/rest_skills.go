@@ -3,7 +3,6 @@
 package gateway
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -24,7 +23,10 @@ var readListedSkillRevision = func(root, id string) (string, error) {
 	return skills.NewSkillWriter(root).SkillRevision(id)
 }
 
-var publishRESTSkill = skills.PublishStagedSkill
+// publishRESTSkill, when set, replaces the install publication (a test seam
+// for response rendering). Nil in production: publication goes through
+// skills.ApplyChange (publishInstall).
+var publishRESTSkill func(root, name, stagedDir, expectedRevision string) (skills.PublishOutcome, error)
 
 // HandleSkills handles GET /api/v1/skills and POST sub-paths (search, install).
 func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +43,8 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 		a.searchSkills(w, r)
 	case r.Method == http.MethodPost && sub == "install":
 		a.installSkill(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/copy") && strings.Count(sub, "/") == 1:
+		a.HandleSkillCopy(w, r)
 	case r.Method == http.MethodDelete && sub != "":
 		a.deleteSkill(w, r, sub)
 	default:
@@ -91,6 +95,15 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 			return
 		}
 		skill.Revision = revision
+		if !isBuiltin {
+			local, localErr := readListedSkillLocalChanges(filepath.Dir(filepath.Dir(s.Path)), id)
+			if localErr != nil {
+				logsafeWarn("rest: compute skill local changes", "skill", id, "error", localErr)
+				jsonErr(w, http.StatusInternalServerError, "could not read installed skill state")
+				return
+			}
+			skill.HasLocalChanges = local
+		}
 
 		// Version: SKILL.md frontmatter when present, else a neutral default.
 		if s.Version != "" {
@@ -504,28 +517,16 @@ func (a *restAPI) publishSkillInstall(w http.ResponseWriter, req gen.SkillInstal
 	if req.Revision != nil {
 		expected = strings.TrimSpace(*req.Revision)
 	}
-	publish, err := publishRESTSkill(skillsRoot, slug, stageDir, expected)
+	replaceLocal := req.ReplaceLocalChanges != nil && *req.ReplaceLocalChanges
+	var publish skills.PublishOutcome
+	var err error
+	if publishRESTSkill != nil {
+		publish, err = publishRESTSkill(skillsRoot, slug, stageDir, expected)
+	} else {
+		slug, publish, err = publishInstall(skillsRoot, slug, stageDir, expected, replaceLocal)
+	}
 	if err != nil {
-		if errors.Is(err, skills.ErrRevisionConflict) {
-			jsonErr(w, http.StatusConflict, err.Error())
-		} else {
-			logsafeError("rest: publish skill", "skill", slug, "error", err)
-			if publish.PersistenceStatus.Valid() && publish.ActivationStatus.Valid() {
-				payload := gen.ConfigurationMutationFailureState{
-					PersistenceStatus: gen.ConfigurationMutationFailureStatePersistenceStatus(publish.PersistenceStatus),
-					ActivationStatus:  gen.ConfigurationMutationFailureStateActivationStatus(publish.ActivationStatus),
-					ChangedFields:     publish.ChangedFields,
-					ErrorStage:        string(publish.ErrorStage),
-					Message:           publish.Message,
-				}
-				if publish.Revision != "" {
-					payload.Revision = &publish.Revision
-				}
-				writeJSON(w, http.StatusInternalServerError, payload)
-			} else {
-				jsonErr(w, http.StatusInternalServerError, "could not publish skill; inspect installed skill state before retrying")
-			}
-		}
+		writeSkillChangeFailure(w, slug, publish, err)
 		return
 	}
 
@@ -559,59 +560,4 @@ func (a *restAPI) publishSkillInstall(w http.ResponseWriter, req gen.SkillInstal
 		skill.Source = &src
 	}
 	jsonOK(w, skill)
-}
-
-func (a *restAPI) deleteSkill(w http.ResponseWriter, r *http.Request, name string) {
-	if err := validateEntityID(name); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid skill name")
-		return
-	}
-	// Built-in (pre-installed/system) skills ship inside the binary's skills dir
-	// and must never be removable through the API — the frontend disables the
-	// button, but the backend is the enforcing gate. Reject with 403.
-	if a.skillSource(name) == "builtin" {
-		jsonErr(w, http.StatusForbidden, "built-in skills cannot be removed")
-		return
-	}
-	revision := strings.TrimSpace(r.URL.Query().Get("revision"))
-	if revision == "" {
-		jsonErr(w, http.StatusBadRequest, "revision is required")
-		return
-	}
-	// a.homePath (OMNIPUS_HOME) is the correct root here: ADR-046 FR-009 made
-	// install_skill target the fixed, install-wide GLOBAL skills directory
-	// ($OMNIPUS_HOME/skills, see pkg/agent.globalSkillsDir), not a per-agent
-	// workspace — so this installer's root must be a.homePath (which resolves
-	// to that same $OMNIPUS_HOME/skills once "skills" is joined on below),
-	// not any individual agent's Workspace. Routing this through a specific
-	// agent's workspace (as an earlier version of this handler did, before
-	// ADR-046) would point the installer at a directory install_skill no
-	// longer writes into, so every delete would 404 on a skill that
-	// demonstrably exists.
-	//
-	// Inject the SSRF checker (SEC-24) so that any outbound HTTP calls made by
-	// the installer (e.g. future hash verification against a registry) are
-	// protected. a.ssrfChecker is nil when SSRF is disabled; the constructor
-	// accepts nil and falls back to a plain HTTP client in that case.
-	installer, err := skills.NewSkillInstallerWithSSRF(a.homePath, "", "", a.ssrfChecker)
-	if err != nil {
-		logsafeError("rest: create skill installer for delete", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not initialize skill installer")
-		return
-	}
-	if err := installer.UninstallReviewed(name, revision); err != nil {
-		if errors.Is(err, skills.ErrRevisionConflict) {
-			jsonErr(w, http.StatusConflict, err.Error())
-			return
-		}
-		if strings.Contains(err.Error(), "not found") {
-			jsonErr(w, http.StatusNotFound, fmt.Sprintf("skill %q not found", name))
-			return
-		}
-		logsafeError("rest: delete skill", "name", name, "error", err)
-		jsonServerFailure(w, http.StatusInternalServerError, "could not remove skill", err)
-		return
-	}
-	jsonOK(w, map[string]any{"status": "removed", "name": name, "revision": revision,
-		"persistence_status": "complete", "activation_status": "active", "changed_fields": []string{"installed"}})
 }

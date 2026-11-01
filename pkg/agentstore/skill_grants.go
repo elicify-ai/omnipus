@@ -18,6 +18,7 @@ package agentstore
 // paths: the lock is not re-entrant.
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -41,6 +42,63 @@ func (s *Store) bindSkillGrants(agent *config.AgentConfig) error {
 	}
 	agent.SkillGrants = bindings
 	return nil
+}
+
+// RemoveSkillGrant removes name (by skill key) from the agent's skills list
+// and drops its binding, changing nothing else (§8.2 GrantEditor.RemoveGrant,
+// §5.6 Q-S3 grant hygiene). It does NOT rebind the remaining names and does
+// NOT take the skills mutation lock, so it is the one agent persist the
+// skills pipeline and built-in retirement may call while holding that lock.
+// changed is false (and nothing is written) when the agent holds no grant
+// for the key.
+func (s *Store) RemoveSkillGrant(id, name string) (changed bool, err error) {
+	current, err := s.Get(id)
+	if err != nil {
+		return false, err
+	}
+	if !holdsSkill(current, name) {
+		return false, nil
+	}
+	key := skills.SkillKey(name)
+	updated, err := s.inner.Update(id, func(agent *config.AgentConfig) error {
+		kept := agent.Skills[:0:0]
+		for _, granted := range agent.Skills {
+			if skills.SkillKey(granted) == key {
+				changed = true
+				continue
+			}
+			kept = append(kept, granted)
+		}
+		agent.Skills = kept
+		if _, bound := agent.SkillGrants[key]; bound {
+			changed = true
+			delete(agent.SkillGrants, key)
+		}
+		if len(agent.SkillGrants) == 0 {
+			agent.SkillGrants = nil
+		}
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("agentstore: remove skill grant %q from %q: %w", name, id, err)
+	}
+	if s.notifier != nil {
+		s.notifier.AgentUpserted(id, updated)
+	}
+	return changed, nil
+}
+
+// holdsSkill reports whether agent holds name by skill key, in its list or
+// its bindings.
+func holdsSkill(agent *config.AgentConfig, name string) bool {
+	key := skills.SkillKey(name)
+	for _, granted := range agent.Skills {
+		if skills.SkillKey(granted) == key {
+			return true
+		}
+	}
+	_, bound := agent.SkillGrants[key]
+	return bound
 }
 
 // bindingMutate wraps a caller's mutate so the wholesale binding runs on the
