@@ -60,7 +60,9 @@ func TestT33_ConfigureDuringLookupMakesTheValidatedRevisionStale(t *testing.T) {
 	pending := t33AsyncPut(t, context.Background(), f, "discord", "agent_may_start", []string{"222", "777"}, r1)
 	t33CleanupRequest(t, pending, func() { releaseOnce.Do(func() { close(release) }) })
 	t33Enter(t, entered, "instrument: first writer did not enter lookup")
-	configured := t33Await(t, t33AsyncRequest(context.Background(), f, http.MethodPut, "/api/v1/channels/discord/configure", `{"allow_from":["qa-t33-new-sender"]}`), 15*time.Second,
+	configureDone := t33AsyncRequest(context.Background(), f, http.MethodPut, "/api/v1/channels/discord/configure", `{"allow_from":["qa-t33-new-sender"]}`)
+	t33CleanupRequest(t, configureDone, func() { releaseOnce.Do(func() { close(release) }) })
+	configured := t33Await(t, configureDone, 15*time.Second,
 		"instrument: real Configure prerequisite did not finish; no stale-commit verdict")
 	require.Equal(t, http.StatusOK, configured.Code, "S-27: real allow_from-only Configure save succeeds using the stored credential: %s", configured.Body.String())
 	require.NotEqual(t, r1, t14Read(t, f, "discord").Revision, "S-27 prerequisite: Configure moved the live conflict token")

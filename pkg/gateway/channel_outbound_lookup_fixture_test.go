@@ -88,8 +88,11 @@ type t33Network struct {
 }
 
 func (n *t33Network) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Hostname() != "discord.com" {
-		return n.previous.RoundTrip(req)
+	if host := req.URL.Hostname(); host != "discord.com" {
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return n.previous.RoundTrip(req)
+		}
+		return nil, fmt.Errorf("instrument refuses unconfigured external host %q", host)
 	}
 	n.mu.Lock()
 	index := len(n.paths)
