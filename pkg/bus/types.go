@@ -161,6 +161,12 @@ type InboundMessage struct {
 	OperatorPrompt bool `json:"operator_prompt,omitempty"`
 }
 
+// OutboundMessage.Operation values (channels-spec-r8 FR-040).
+const (
+	OperationChecked = "checked"
+	OperationStart   = "start"
+)
+
 type OutboundMessage struct {
 	Channel string `json:"channel"`
 	ChatID  string `json:"chat_id"`
@@ -208,6 +214,15 @@ type OutboundMessage struct {
 	// passing the tool's check, which is precisely the "someone adds a second
 	// route later" regression FR-7 exists to catch.
 	OwnershipChecked bool `json:"-"`
+
+	// Operation is the send class of channels-spec-r8 FR-040: "" for system
+	// producers, OperationChecked for an ownership-checked send, and
+	// OperationStart for a started message (a send to a listed target that
+	// is not the turn's own conversation). Adapters that can start messages
+	// (Discord, FR-046) resolve a start's target before sending. In-process
+	// only — never on the wire. The FR-043 rename of OwnershipChecked into
+	// this field is pending; until then both exist side by side.
+	Operation string `json:"-"`
 
 	// Return, when non-nil, marks this message as the answer to an admitted
 	// request, sent through the SOURCE OWNER's channel instance (session-core
