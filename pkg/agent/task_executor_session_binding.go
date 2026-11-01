@@ -38,7 +38,7 @@ func (te *TaskExecutor) boundSessionRetryable(t *task.Task) error {
 	if t == nil || t.SessionID == "" {
 		return nil
 	}
-	ls := te.recordStore()
+	ls := te.getLifecycleStore()
 	if ls == nil {
 		// No durable record to verify against — the harness seam.
 		return nil

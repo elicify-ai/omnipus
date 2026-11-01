@@ -11,8 +11,14 @@
 // invariant refused the replay ("session has no persisted runtime
 // classification"), so the owed run never executed.
 //
+// The queued-task drain has the same window (it starts in startSchedulers and
+// ticks one second later): once the gateway has marked the plane expected
+// (ExpectSessionPlane), CheckQueuedTasks dispatches nothing until the plane is
+// fully wired, and the first tick after that dispatches the queued tasks.
+//
 // The hold applies only to a boot-owed fire (bootOwedFire) and only while the
-// plane is missing its launcher or lifecycle store; every other fire, and a
+// plane is missing its launcher or lifecycle store, or is expected and not
+// yet fully wired; every other fire, and a
 // boot-owed fire on an already wired executor, runs at once as before. A held
 // fire is released when all three parts are wired, so its mode is derived and
 // its classification minted exactly as in the steady state. While held, the
@@ -89,15 +95,53 @@ func (s *TaskTriggerScheduler) runHeldBootOwedFire(ctx context.Context, job *cro
 
 // whenSessionPlaneWired queues fn until the session plane is wired and
 // reports true, or reports false (fn not queued) when the launcher and the
-// lifecycle store are already wired.
+// lifecycle store are already wired and no full plane is still expected
+// (ExpectSessionPlane).
 func (te *TaskExecutor) whenSessionPlaneWired(fn func()) bool {
 	te.mu.Lock()
 	defer te.mu.Unlock()
-	if te.launcher != nil && te.lifecycleStore != nil {
+	if te.launcher != nil && te.lifecycleStore != nil && !te.awaitingSessionPlaneLocked() {
 		return false
 	}
 	te.planeWaiters = append(te.planeWaiters, fn)
 	return true
+}
+
+// ExpectSessionPlane marks that this executor's session plane (launcher,
+// lifecycle store, main resolver) is about to be wired: the gateway calls it
+// at boot, before startSchedulers starts the queued-task drain and the
+// trigger scheduler, because it wires the plane only afterwards (setupPlans,
+// startPlanEngine, buildRESTAPI). Until all three parts are wired, the drain
+// dispatches nothing (CheckQueuedTasks) and owed fires are held, so no run
+// starts in the wrong mode or without its runtime classification. An
+// executor never marked keeps its old behaviour: it dispatches with whatever
+// is wired.
+func (te *TaskExecutor) ExpectSessionPlane() {
+	if te == nil {
+		return
+	}
+	te.mu.Lock()
+	te.planeExpected = true
+	te.mu.Unlock()
+}
+
+// awaitingSessionPlane reports whether the session plane is expected but not
+// yet fully wired.
+func (te *TaskExecutor) awaitingSessionPlane() bool {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+	return te.awaitingSessionPlaneLocked()
+}
+
+// awaitingSessionPlaneLocked is awaitingSessionPlane for a caller holding mu.
+func (te *TaskExecutor) awaitingSessionPlaneLocked() bool {
+	return te.planeExpected && !te.sessionPlaneWiredLocked()
+}
+
+// sessionPlaneWiredLocked reports whether the launcher, the lifecycle store
+// and the main resolver are all wired. Caller holds mu.
+func (te *TaskExecutor) sessionPlaneWiredLocked() bool {
+	return te.launcher != nil && te.lifecycleStore != nil && te.mainResolver != nil
 }
 
 // releaseSessionPlaneWaiters runs every queued waiter, in order and in the
@@ -106,7 +150,7 @@ func (te *TaskExecutor) whenSessionPlaneWired(fn func()) bool {
 // (buildRESTAPI), so a held fire derives its run mode from the real resolver.
 func (te *TaskExecutor) releaseSessionPlaneWaiters() {
 	te.mu.Lock()
-	if te.launcher == nil || te.lifecycleStore == nil || te.mainResolver == nil || len(te.planeWaiters) == 0 {
+	if !te.sessionPlaneWiredLocked() || len(te.planeWaiters) == 0 {
 		te.mu.Unlock()
 		return
 	}

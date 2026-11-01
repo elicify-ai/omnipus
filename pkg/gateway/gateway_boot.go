@@ -357,6 +357,12 @@ func setupAndStartServices(
 		return nil, err
 	}
 
+	// The task executor's session plane (launcher, lifecycle store, main
+	// resolver) is wired only after the schedulers start (setupPlans,
+	// startPlanEngine, buildRESTAPI). Mark it expected so the queued-task drain
+	// and owed trigger fires wait for it instead of dispatching unwired.
+	agent.GetTaskExecutor(stg.agentLoop).ExpectSessionPlane()
+
 	if runningServices, stop, err := stg.startSchedulers(); stop {
 		return runningServices, err
 	}

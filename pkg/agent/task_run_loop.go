@@ -1102,7 +1102,7 @@ func (te *TaskExecutor) taskVerdictStillApplicable(taskID string) bool {
 // read failure (including a missing record) is an error: the caller refuses the
 // retry rather than treating unknown authority as a person's start.
 func (te *TaskExecutor) retryAuthority(t *task.Task, sessionID string) (*task.Initiator, error) {
-	ls := te.recordStore()
+	ls := te.getLifecycleStore()
 	if ls == nil {
 		return nil, nil //nolint:nilnil // No lifecycle store wired means no recorded initiator, not an error.
 	}

@@ -75,8 +75,12 @@ type TaskExecutor struct {
 	// (launcher, lifecycle store, main resolver) is wired
 	// (task_trigger_boot_hold.go). Guarded by mu.
 	planeWaiters []func()
-	mu           sync.Mutex
-	running      map[string]*taskSlot
+	// planeExpected is set by ExpectSessionPlane: the gateway will wire the
+	// session plane, so the drain waits for it (task_trigger_boot_hold.go).
+	// Guarded by mu.
+	planeExpected bool
+	mu            sync.Mutex
+	running       map[string]*taskSlot
 	// dispatchSema is the ONLY concurrency gate on task dispatch. It bounds
 	// the total number of concurrently dispatched tasks across all agents and
 	// resolves from the single central authority
@@ -372,33 +376,13 @@ func (te *TaskExecutor) getLifecycleStore() *session.LifecycleStore {
 	return te.lifecycleStore
 }
 
-// recordStore is the store every task-run lifecycle record is minted into and
-// read from: the executor's own store, or, while the gateway has not yet
-// wired it (SetLifecycleStore runs in startPlanEngine), the loop's
-// session-messaging store, the one enforceTaskRunRuntimeInvariant checks a
-// task run against. The gateway passes both the same instance, so once both
-// are wired they agree. Without this fallback a run dispatched in that boot
-// window (the queue drain starts first, in startSchedulers) was minted
-// nowhere and then refused by the already wired enforcement. Nil only when
-// neither store is wired, the harness/degraded-boot seam where enforcement
-// is off too.
-func (te *TaskExecutor) recordStore() *session.LifecycleStore {
-	if ls := te.getLifecycleStore(); ls != nil {
-		return ls
-	}
-	if te.agentLoop == nil {
-		return nil
-	}
-	return te.agentLoop.GetSessionLifecycleStore()
-}
-
 // mintTaskLifecycleRecordFor is mintTaskLifecycleRecord for a run an agent
 // started: initiatedBy (already authorized by authorizeInitiatedRun) is
 // stamped on the record so the run's later delegations and run_task /
 // execute_plan calls inherit the onward budget. nil means a person or the
 // scheduler started it.
 func (te *TaskExecutor) mintTaskLifecycleRecordFor(sessionID string, t *task.Task, initiatedBy *session.InitiatedBy) error {
-	ls := te.recordStore()
+	ls := te.getLifecycleStore()
 	if ls == nil || sessionID == "" {
 		return nil
 	}
@@ -497,7 +481,7 @@ func (te *TaskExecutor) resolveTaskRuntime(t *task.Task) (bool, error) {
 // ignored for any other target state. See each call site for its own cause
 // reasoning.
 func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.LifecycleState, failedReason string, note *session.StopNote) {
-	ls := te.recordStore()
+	ls := te.getLifecycleStore()
 	if ls == nil || sessionID == "" {
 		return
 	}
@@ -1342,7 +1326,7 @@ func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.T
 			return "", err
 		}
 		generation := 1
-		if lifecycle := te.recordStore(); lifecycle != nil {
+		if lifecycle := te.getLifecycleStore(); lifecycle != nil {
 			if rec, err := lifecycle.Load(t.SessionID); err == nil {
 				generation = rec.Generation
 			}
@@ -1845,6 +1829,14 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 	// so every task it dispatches this tick runs headless. Stamped once here,
 	// the sole call site of this method (pkg/heartbeat/task_drain.go).
 	ctx = tools.WithAutoDenyAsk(ctx, true)
+	// Boot window: the gateway starts this drain before it wires the session
+	// plane. A task dispatched now would run in the wrong mode and without its
+	// runtime classification, so it stays queued; the first tick after the
+	// plane is wired dispatches it (ExpectSessionPlane).
+	if te.awaitingSessionPlane() {
+		logger.InfoCF("task_executor", "Heartbeat: session plane not wired yet, queued tasks wait for the next tick", nil)
+		return
+	}
 	queued, err := te.store.List(task.Filter{Status: task.StatusNext})
 	if err != nil {
 		logger.WarnCF("task_executor", "Check queued tasks: list failed",

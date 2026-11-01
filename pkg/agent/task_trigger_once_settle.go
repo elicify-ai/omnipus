@@ -148,7 +148,7 @@ func (te *TaskExecutor) onceRunInterruptedByGatewayStop(taskID, taskSessionID st
 	if sched == nil || !sched.stoppingDuringOnceRun(taskID) {
 		return false
 	}
-	if ls := te.recordStore(); ls != nil && taskSessionID != "" {
+	if ls := te.getLifecycleStore(); ls != nil && taskSessionID != "" {
 		rec, err := ls.Load(taskSessionID)
 		if err != nil || rec == nil || rec.StopNote != nil {
 			return false
