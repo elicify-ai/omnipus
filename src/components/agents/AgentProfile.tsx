@@ -168,7 +168,7 @@ function ProgramSettingsLink() {
     'shrink-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline-offset-2 hover:underline'
   if (!router) {
     return (
-      <a href="/settings" data-testid="profile-program-settings-link" className={className}>
+      <a href="/settings" tabIndex={0} data-testid="profile-program-settings-link" className={className}>
         Change in Settings
       </a>
     )
