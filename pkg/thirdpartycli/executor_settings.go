@@ -137,7 +137,15 @@ func MergeEnvOverrides(stored, set map[string]string, remove []string) (map[stri
 			return nil, out, refusalError(fmt.Sprintf("env_overrides and env_overrides_remove both name %q.", name))
 		}
 	}
-	merged := make(map[string]string, len(stored)+len(set))
+	// The supplied names are checked before any merge work, so a refusal
+	// names the caller's own key and an oversized set (caller input) is
+	// refused before it sizes anything; the merged whole is checked against
+	// the entry limit last.
+	if err := ValidateEnvOverrides(set); err != nil {
+		return nil, out, err
+	}
+	// The capacity is a hint bounded by the entry limit, never by caller input.
+	merged := make(map[string]string, maxEnvEntries)
 	for name, value := range stored {
 		merged[name] = value
 	}
@@ -161,11 +169,6 @@ func MergeEnvOverrides(stored, set map[string]string, remove []string) (map[stri
 			out.Added = append(out.Added, name)
 		}
 		merged[name] = set[name]
-	}
-	// The supplied names are checked first so a refusal names the caller's
-	// own key, then the merged whole against the entry limit.
-	if err := ValidateEnvOverrides(set); err != nil {
-		return nil, out, err
 	}
 	if err := ValidateEnvOverrides(merged); err != nil {
 		return nil, out, err

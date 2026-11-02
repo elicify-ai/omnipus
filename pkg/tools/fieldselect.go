@@ -153,7 +153,9 @@ func Project(full any, spec FieldSpec, selected []string) (map[string]any, *Tool
 	if err := json.Unmarshal(raw, &object); err != nil {
 		return nil, ErrorResult(fmt.Sprintf("read %s failed: it is not an object: %v", spec.Object, err))
 	}
-	out := make(map[string]any, len(spec.Identity)+len(selected)+1)
+	// The capacity comes from the spec, never from the caller's selection: a
+	// selection may repeat a name, so its length does not bound the keys.
+	out := make(map[string]any, len(spec.Identity)+len(spec.Valid)+len(Metadata))
 	for _, id := range spec.Identity {
 		if v, ok := object[id]; ok {
 			out[id] = v

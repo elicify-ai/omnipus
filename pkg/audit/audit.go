@@ -221,6 +221,9 @@ var validEventNames = map[EventName]struct{}{
 	// gate (see cancel.go's RequestCancel doc comment for the root-cause
 	// writeup this closes).
 	EventTurnCancelBackgroundKilled: {},
+	// External-CLI spawn record (r17 §3.10), emitted by
+	// pkg/agent/external_run_program.go's auditRunSpawn.
+	EventExternalCLIRun: {},
 	// Live interactive browser panel events (ADR-038 D6).
 	EventBrowserInstanceCreated: {},
 	EventBrowserAction:          {},
