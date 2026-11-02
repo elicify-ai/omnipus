@@ -148,8 +148,10 @@ describe('T24 — recoverable earlier-history error (design D6)', () => {
     await userEvent.keyboard('{Enter}')
 
     await waitFor(() => expect(fetchRoomHistory).toHaveBeenCalledTimes(2))
-    // Same boundary — the request that failed is the one retried.
-    expect(fetchRoomHistory).toHaveBeenNthCalledWith(2, ROOM_ID, { beforeSeq: 3 })
+    // #1449 spec S-44/S-45: retry the same bounded page, including its size.
+    // Shared sizing (chat-history-paging-spec.md D5): H=400 from scrollLogToTop,
+    // unmeasured A=80, so clamp(ceil(2*400/80), 20, 100) = 20.
+    expect(fetchRoomHistory).toHaveBeenNthCalledWith(2, ROOM_ID, { beforeSeq: 3, limit: 20 })
 
     // A later valid terminal page clears error and hint.
     fetchRoomHistory.mockResolvedValueOnce(firstPage())

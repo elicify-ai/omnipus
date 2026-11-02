@@ -116,8 +116,8 @@ beforeAll(async () => { await loadRoomScreen() })
 beforeEach(() => {
   vi.clearAllMocks()
   fetchRoomHistory.mockReset()
-  // Install before resetRealStores so its missing-scrollTo stand-in does not
-  // shadow the shared layout helper's functional browser-edge scrollTo.
+  // The layout owns scrollTo on Element.prototype; resetRealStores leaves
+  // an existing implementation intact, so it cannot shadow this geometry.
   layout = installHistoryLayout()
   layout.state.height = LOG_VIEWPORT
   layout.state.rowHeight = ROW_HEIGHT
