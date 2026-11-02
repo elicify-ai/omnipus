@@ -34,7 +34,9 @@ func TestT8EnvSensitiveValues_SetThenRemoveChangesLaterFiltering(t *testing.T) {
 	state, err := store.ReadState(target.ID)
 	require.NoError(t, err)
 	const secret = "t8-artificial-sensitive-value-98765"
-	fixture := filepath.Join(cfg.Agents.Defaults.Home, "runtime-result.txt")
+	workDir := filepath.Join(home, "workspaces", testHarnessWorkspaceMembershipID, "work")
+	require.NoError(t, os.MkdirAll(workDir, 0o700))
+	fixture := filepath.Join(workDir, "runtime-result.txt")
 	require.NoError(t, os.WriteFile(fixture, []byte("ordinary result: "+secret), 0o600))
 	args, err := json.Marshal(map[string]any{"id": target.ID, "revision": state.Revision, "env_overrides": map[string]string{"TOKEN": secret}})
 	require.NoError(t, err)

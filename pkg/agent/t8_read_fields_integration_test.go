@@ -173,7 +173,7 @@ func TestT8ReadFields_RealStoredLongText(t *testing.T) {
 	t.Run("20.8 task longest cut only and stored data untouched", func(t *testing.T) {
 		f := t8ReadLoop(t)
 		tk := f.task(t, "long-task", "reader-a", "reader-a", testHarnessWorkspaceMembershipID)
-		result, prompt, description := strings.Repeat("R", 50000), strings.Repeat("P", 10000), strings.Repeat("D", 2000)
+		result, prompt, description := strings.Repeat("R ", 25000), strings.Repeat("P ", 5000), strings.Repeat("D ", 1000)
 		_, err := f.ts.Update(tk.ID, task.Patch{Result: &result, Prompt: &prompt, Description: &description})
 		require.NoError(t, err)
 		out := t8ReadObject(t, f.call(t, "reader-a", testHarnessWorkspaceMembershipID, "get_task", map[string]any{"task_id": tk.ID, "fields": []any{"result", "prompt", "description"}}))
@@ -195,7 +195,7 @@ func TestT8ReadFields_RealStoredLongText(t *testing.T) {
 		f := t8ReadLoop(t)
 		tk := f.task(t, "long-goal", "reader-a", "reader-a", testHarnessWorkspaceMembershipID)
 		g := f.taskGoal(t, tk)
-		text := strings.Repeat("L", 50000)
+		text := strings.Repeat("L ", 25000)
 		_, err := f.gs.Update(g.GoalID, func(v *goal.Goal) error { v.LatestReason = text; return nil })
 		require.NoError(t, err)
 		out := t8ReadObject(t, f.call(t, "reader-a", testHarnessWorkspaceMembershipID, "get_goal", map[string]any{"task_id": tk.ID, "fields": []any{"latest_reason"}}))

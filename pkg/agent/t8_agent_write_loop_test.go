@@ -47,6 +47,9 @@ func (a *t8DecisionRecorder) snapshot() []PolicyApprovalReq {
 func t8WireRealAgentTools(t *testing.T, al *AgentLoop, home string) {
 	t.Helper()
 	deps := &systools.Deps{Home: home, ConfigPath: filepath.Join(home, "config.json"), GetCfg: al.GetConfig, MutateConfig: al.MutateConfig, SaveConfigLocked: func(c *config.Config) error { return config.SaveConfig(filepath.Join(home, "config.json"), c) }}
+	// Publication is the production fast path: the writer's saved agent becomes
+	// the live registry agent (the same wiring gateway.go::wireSystemTools uses).
+	deps.UpsertAgentFastFunc = func(id string) error { return l11274Publish(al, home, id) }
 	deps.ToolCatalog = func() []tools.Tool { return append(systools.AllTools(deps), tools.GeneralBuiltinMetadata()...) }
 	al.WireSysagentDeps(deps)
 }

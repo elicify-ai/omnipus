@@ -23,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -118,6 +119,7 @@ func mustNewAgentLoop(
 	t.Helper()
 	ensureTestIsolatedAgentHome(t, cfg)
 	ensureTestWorkspaceMembership(t, cfg)
+	ensureTestThirdPartyPrograms(cfg)
 	al, err := NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {
 		t.Fatalf("NewAgentLoop: %v", err)
@@ -606,4 +608,25 @@ func provisionTestWorkspace(t *testing.T, workspaceID string, agentIDs ...string
 	if err := fileutil.WriteFileAtomic(filepath.Join(dir, workspaceID+".json"), data, 0o644); err != nil {
 		t.Fatalf("provisionTestWorkspace: write: %v", err)
 	}
+}
+
+// testProgramPath is an existing executable that passes the third-party
+// program checks (r17 §3.5): not world-writable, in a directory that is not
+// world-writable, and outside OMNIPUS_HOME. Runs are driven by a fake runner,
+// so the file is only validated, never launched.
+const testProgramPath = "/usr/bin/true"
+
+// ensureTestThirdPartyPrograms saves a valid program path for every CLI in
+// cfg's Settings -> Third-party agents rows, because r17 area 4 removed the
+// per-agent cli_path and an external run is refused without a saved path.
+// A test that already declares its own rows keeps them.
+func ensureTestThirdPartyPrograms(cfg *config.Config) {
+	if cfg == nil || cfg.Sandbox.ThirdPartyAgents != nil {
+		return
+	}
+	rows := map[string]config.ThirdPartyCLIConfig{}
+	for _, cli := range thirdpartycli.CLIs {
+		rows[cli] = config.ThirdPartyCLIConfig{Path: testProgramPath}
+	}
+	cfg.Sandbox.ThirdPartyAgents = &config.ThirdPartyAgentsConfig{CLIs: rows}
 }
