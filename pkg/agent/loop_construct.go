@@ -147,6 +147,8 @@ func (nal *newAgentLoop) initializeCore() {
 	// the legacy GTD tasks/ and workflow-tasks/ split was removed in Sprint 2).
 	nal.homePath = filepath.Dir(nal.cfg.AgentHomeBasePath())
 	nal.al.homePath = nal.homePath
+	// r17 SR-2: stored external-worker env values are masked from the start.
+	nal.al.bindAgentEnvSensitive(nal.cfg)
 	nal.al.taskStore = task.New(filepath.Join(nal.homePath, "tasks"))
 	nal.al.taskExecutor = newTaskExecutor(nal.al, nal.al.taskStore)
 	// Founder decision 2026-09-14: expose the running task's live progress

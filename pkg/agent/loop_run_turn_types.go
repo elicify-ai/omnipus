@@ -114,8 +114,12 @@ type agentLoopRunTurnResponse struct {
 	hasOrphanMarkup     bool
 	normalizedToolCalls []providers.ToolCall
 	argumentRefusals    []*tools.ToolResult
-	ret0                turnResult
-	ret1                error
+	// recordToolArgs[i] is the r17 SR-3 record copy of normalizedToolCalls[i]:
+	// what every record, log, event and frame carries. Execution alone uses
+	// normalizedToolCalls[i].Arguments.
+	recordToolArgs []map[string]any
+	ret0           turnResult
+	ret1           error
 }
 
 // agentLoopRunTurnTools carries the shared state of runTurn across its stages.

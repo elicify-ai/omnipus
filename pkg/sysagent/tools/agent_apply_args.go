@@ -511,6 +511,13 @@ func decodePolicyPatch(raw any) (agentmutation.ToolPolicyChanges, error) {
 // explicitly NOT claimed as safe in production (the production gateway
 // always wires both).
 func publishAgentActivation(deps *Deps, id string) (agentstore.ActivationStatus, string) {
+	// r17 SR-2: the write just saved may have set or cleared env values;
+	// the live masking set follows the stored records before anything else.
+	if deps != nil && deps.GetCfg != nil {
+		if cfg := deps.GetCfg(); cfg != nil {
+			cfg.RefreshAgentEnvSensitiveValues()
+		}
+	}
 	if deps != nil && deps.UpsertAgentFastFunc != nil {
 		if err := deps.UpsertAgentFastFunc(id); err != nil {
 			return agentstore.ActivationFailed, err.Error()

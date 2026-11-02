@@ -520,16 +520,23 @@ func (r *ToolRegistry) ExecuteWithContext(
 	asyncCallback AsyncCallback,
 ) *ToolResult {
 	tool, ok := r.Get(name)
+	logArgs := args
 	if ok {
 		// Rejected secret-shaped inputs never enter the args log below.
 		if refusal := ToolArgumentRefusal(tool, args); refusal != nil {
 			return refusal
 		}
+		// r17 SR-3: the log carries the record copy; execution keeps args.
+		recorded, err := RecordArguments(tool, args)
+		if err != nil {
+			return RedactionRefusal(tool, err)
+		}
+		logArgs = recorded
 	}
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
 			"tool": name,
-			"args": args,
+			"args": logArgs,
 		})
 
 	// Capture the registry's injected dependencies once, under a single read

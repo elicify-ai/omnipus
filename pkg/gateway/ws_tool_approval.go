@@ -35,6 +35,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // approvalChainMaxHops bounds approvalSessionContext's walk up the
@@ -196,10 +197,9 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 	// The SPA's ToolApprovalModal calls Object.keys(args) — null would crash.
 	// cloneStringAnyMap (pkg/agent/hooks.go) returns nil for empty input, so a tool
 	// invoked without parameters lands here with entry.Args == nil.
-	args := entry.Args
-	if args == nil {
-		args = map[string]any{}
-	}
+	// r17 SR-1: the frame shows the masked copy; entry.Args stays the
+	// original for execution after approval. Never nil (see above).
+	args := tools.ApprovalDisplayArguments(entry.Args)
 
 	ctx := h.approvalSessionContext(entry.SessionID)
 	frame := generated.ToolApprovalRequiredFrame{
@@ -441,10 +441,8 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string, historyState
 // required by the contract; the registry never admits an entry without a
 // turn id (approvals.go::requestApproval, D-03).
 func (h *WSHandler) pendingApprovalSnapshot(e *approvalEntry) generated.SessionStatePendingApproval {
-	args := e.Args
-	if args == nil {
-		args = map[string]any{}
-	}
+	// r17 SR-1 / 10.4: every reconnect masks exactly like the live frame.
+	args := tools.ApprovalDisplayArguments(e.Args)
 	ctx := h.approvalSessionContext(e.SessionID)
 	return generated.SessionStatePendingApproval{
 		ApprovalId:      e.ApprovalID,
