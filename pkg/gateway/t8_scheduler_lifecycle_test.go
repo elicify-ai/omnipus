@@ -122,13 +122,11 @@ func TestTaskTrigger_BootRestorationPrecedesReconciliation(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	stage := &setupAndStartServicesState{ctx: context.Background(), cfg: cfg, agentLoop: al, msgBus: msgBus, homePath: home}
-	_, stop, err := stage.startSchedulers()
-	if stage.runningServices != nil {
-		defer stopAndCleanupServices(stage.runningServices, 5*time.Second, false)
-	}
+	// 6b moved checked restoration into prepareTaskTrigger; its error is what
+	// setupAndStartServices returns to the boot caller.
+	err = stage.prepareTaskTrigger()
 	var typeErr *json.UnmarshalTypeError
 	require.ErrorAs(t, err, &typeErr, "18.39 checked restoration error must reach the production boot caller")
-	assert.True(t, stop)
 	assert.Equal(t, "string", typeErr.Value)
 	assert.Equal(t, "bool", typeErr.Type.String())
 	after, readErr := os.ReadFile(path)

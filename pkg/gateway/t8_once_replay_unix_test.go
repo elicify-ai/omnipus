@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -88,9 +89,21 @@ func t8BootOnceProcess(t *testing.T, dir string, block bool) (*agent.AgentLoop, 
 	al := mustAgentLoop(t, cfg, mb, provider)
 	rs, err := setupAndStartServices(context.Background(), cfg, credentials.SecretBundle{}, al, mb, home, newUnlockedStore(t, home), &SandboxApplyResult{}, tools.NewBuiltinRegistry(), tools.NewMCPRegistry(), false)
 	require.NoError(t, err, "instrument: the real physical gateway boot completes")
-	t.Cleanup(func() { stopAndCleanupServices(rs, 5*time.Second, false) })
+	t.Cleanup(func() { t8StopServicesOnce(rs) })
 	require.NotNil(t, rs.TaskTrigger)
 	return al, rs, provider
+}
+
+// t8StoppedServices records services already stopped: stopAndCleanupServices
+// closes channels and is not idempotent, and a test may join the services
+// explicitly before its t.Cleanup runs.
+var t8StoppedServices sync.Map
+
+func t8StopServicesOnce(rs *services) {
+	if _, loaded := t8StoppedServices.LoadOrStore(rs, struct{}{}); loaded {
+		return
+	}
+	stopAndCleanupServices(rs, 5*time.Second, false)
 }
 
 func t8WriteReplayReceipt(t *testing.T, path string, value any) {
@@ -204,7 +217,7 @@ func t8VerifyFinishedOnceNotReplayed(t *testing.T, dir string) {
 	rs.TaskTrigger.WaitForLane()
 	// Join ordinary owners before observing absence; do not leave a pending
 	// asynchronous dispatch beyond the assertion or the test's cleanup.
-	stopAndCleanupServices(rs, 5*time.Second, false)
+	t8StopServicesOnce(rs)
 	al.Close()
 	runs, err := agent.GetTaskStore(al).ListRuns(before.TaskID)
 	require.NoError(t, err)

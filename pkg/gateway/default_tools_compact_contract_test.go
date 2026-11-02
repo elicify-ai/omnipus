@@ -42,9 +42,12 @@ func defaultToolsAssertCompactContract(t *testing.T) {
 				cfg := config.DefaultConfig()
 				metadata := []tools.Tool{defaultToolsMetadata{name: permission.name, description: row.input}}
 				raw := defaultToolsInventory(t, t.TempDir(), cfg, metadata, map[string]any{"new_agent_type": "Main"})
-				want := "preview: Main | kind: main\n" + permission.name + " | " + permission.policy + " | " + row.want
-				// SPEC.md Q21=D: both Allow and Ask use the exact first-sentence/40-character contract.
-				assert.Equal(t, want, strings.TrimSuffix(raw, "\n"), "Q21=D first-sentence, whitespace and 40-character rules")
+				identity, entries := defaultToolsDecode(t, raw)
+				assert.Equal(t, map[string]any{"preview_of": "Main"}, identity)
+				require.Len(t, entries, 1)
+				require.NotNil(t, entries[0].Description)
+				// r17 7.12.1: both Allow and Ask use the exact first-sentence/40-character contract.
+				assert.Equal(t, defaultToolsEntry{Tool: permission.name, Effective: permission.policy, Description: &row.want}, entries[0], "first-sentence, whitespace and 40-character rules")
 			})
 		}
 	}
@@ -54,8 +57,10 @@ func defaultToolsAssertCompactContract(t *testing.T) {
 			cfg.Sandbox.ToolPolicies["read_file"] = "deny"
 			metadata := []tools.Tool{defaultToolsMetadata{name: "read_file", description: description}}
 			raw := defaultToolsInventory(t, t.TempDir(), cfg, metadata, map[string]any{"new_agent_type": "Main"})
-			// SPEC.md Q21=D: Deny is exactly name + policy, without a description separator or text.
-			assert.Equal(t, "preview: Main | kind: main\nread_file | deny", strings.TrimSuffix(raw, "\n"))
+			// r17 7.12.1: a deny entry carries tool and effective (override null), no description key.
+			identity, entries := defaultToolsDecode(t, raw)
+			assert.Equal(t, map[string]any{"preview_of": "Main"}, identity)
+			assert.Equal(t, []defaultToolsEntry{{Tool: "read_file", Effective: "deny"}}, entries)
 		})
 	}
 	t.Run("assigned_mcp_only_including_deny", defaultToolsAssertCompactMCP)
@@ -83,15 +88,20 @@ func defaultToolsAssertCompactMCP(t *testing.T) {
 	require.NoError(t, err)
 	metadata := []tools.Tool{otherServer, write, defaultToolsMetadata{name: "read_file", description: "Read a file."}, unassigned, read}
 	raw := defaultToolsInventory(t, home, cfg, metadata, map[string]any{"id": agent.ID})
-	header := fmt.Sprintf("agent: %s | name: %s | kind: main | revision: %s", agent.ID, agent.Name, state.Revision)
+	identity := map[string]any{"id": agent.ID, "revision": state.Revision}
 	// SPEC.md: only assigned live MCP tools join the builtin catalog. Deny is
 	// a visible policy, not grounds for omitting an assigned tool.
 	included := []tools.Tool{read, write, metadata[2]}
-	policies := defaultToolsParseCompact(t, raw, header, included)
+	policies := defaultToolsParseInventory(t, raw, identity, included)
 	assert.Equal(t, map[string]string{read.Name(): "ask", write.Name(): "deny", "read_file": "allow"}, policies)
-	rows := []string{read.Name() + " | ask | Read a document.", write.Name() + " | deny", "read_file | allow | Read a file."}
-	sort.Strings(rows)
-	assert.Equal(t, header+"\n"+strings.Join(rows, "\n"), strings.TrimSuffix(raw, "\n"), "SPEC.md exact sorted rows; no parameters or verbose metadata")
+	_, entries := defaultToolsDecode(t, raw)
+	ask := "Read a document."
+	allow := "Read a file."
+	assert.Equal(t, []defaultToolsEntry{
+		{Tool: read.Name(), Effective: "ask", Description: &ask},
+		{Tool: write.Name(), Effective: "deny", Override: ptrString("deny")},
+		{Tool: "read_file", Effective: "allow", Description: &allow},
+	}, sortedEntries(entries), "exact sorted entries; no parameters or verbose metadata")
 }
 
 func defaultToolsAssertCompactSystemHeaders(t *testing.T) {
@@ -110,9 +120,9 @@ func defaultToolsAssertCompactSystemHeaders(t *testing.T) {
 				require.NoError(t, err)
 				state, err := store.ReadState(agent.ID)
 				require.NoError(t, err)
-				header := fmt.Sprintf("agent: %s | name: %s | kind: system | revision: %s", agent.ID, agent.Name, state.Revision)
+				identity := map[string]any{"id": agent.ID, "revision": state.Revision}
 				raw := defaultToolsInventory(t, home, cfg, catalog.All(), map[string]any{"id": agent.ID})
-				policies := defaultToolsParseCompact(t, raw, header, catalog.All())
+				policies := defaultToolsParseInventory(t, raw, identity, catalog.All())
 				resolver, _ := defaultToolsPolicies(cfg, &agent)
 				for name, policy := range policies {
 					assert.Equal(t, tools.ResolveEffectivePolicy(resolver, name), policy, "system inventory/%s policy", name)
@@ -120,4 +130,14 @@ func defaultToolsAssertCompactSystemHeaders(t *testing.T) {
 			})
 		}
 	}
+}
+
+func ptrString(v string) *string { return &v }
+
+// sortedEntries returns the entries ordered by tool name (the reader already
+// sorts; this keeps the assertion independent of that for the comparison).
+func sortedEntries(in []defaultToolsEntry) []defaultToolsEntry {
+	out := append([]defaultToolsEntry(nil), in...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Tool < out[j].Tool })
+	return out
 }

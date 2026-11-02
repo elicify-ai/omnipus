@@ -39,7 +39,7 @@ func defaultToolsSpecRows(t *testing.T, catalog *tools.BuiltinRegistry) []defaul
 	}{
 		{
 			names: "AskUserQuestion send_message message_parent set_todos goal_claim " +
-				"remember recall_memory recall_conversation delegate list_agents get_agent get_agent_tools inspect_session list_jobs " +
+				"remember recall_memory recall_conversation delegate list_agents get_agent inspect_session list_jobs " +
 				"list_tasks update_task Skill ToolSearch find_skills list_skills search_web fetch_url " +
 				"read_file list_directory grep list_mounts library_list library_read write_file edit_file append_file send_file serve_web " +
 				"read_inbox search_email read_message create_email_draft list_email_attachments read_email_attachment download_email_attachment " +
@@ -92,7 +92,7 @@ func defaultToolsSpecRows(t *testing.T, catalog *tools.BuiltinRegistry) []defaul
 // channel and MCP-server families. Read-only workspace/agent/skill tools in
 // earlier Table rows are intentionally NOT classified as management tools.
 func defaultToolsAdminOnlyNames() []string {
-	return strings.Fields("create_agent update_agent delete_agent set_agent_permissions read_agent_metadata " +
+	return strings.Fields("create_agent update_agent delete_agent set_agent_permissions " +
 		"get_config set_config run_doctor get_usage create_workspace update_workspace delete_workspace " +
 		"configure_provider list_providers test_provider list_models " +
 		"enable_channel configure_channel disable_channel list_channels test_channel connect_channel " +
