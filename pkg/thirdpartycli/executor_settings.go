@@ -217,15 +217,25 @@ func AgentWritableRoots(home string, cfg *config.Config) []string {
 // checked with the same ValidateProgramPath the Settings save and the spawn
 // use.
 func ProgramWarning(cli, settingsPath string, agentWritable ...string) string {
+	_, refusal := RunProgram(cli, settingsPath, agentWritable...)
+	return refusal
+}
+
+// RunProgram is the spawn-time program decision (r17 §3.6): with no saved
+// path the refusal is NoPath; otherwise ValidateProgramPath runs again and a
+// failure is CheckFailed. On success resolvedPath is the checked file, the
+// one the driver must exec. There is no fallback to any other program.
+func RunProgram(cli, settingsPath string, agentWritable ...string) (resolvedPath, refusal string) {
 	if strings.TrimSpace(settingsPath) == "" {
-		return NoPathText(cli)
+		return "", NoPathText(cli)
 	}
-	if _, err := ValidateProgramPath(cli, settingsPath, agentWritable...); err != nil {
+	resolved, err := ValidateProgramPath(cli, settingsPath, agentWritable...)
+	if err != nil {
 		var ce *CheckError
 		if errors.As(err, &ce) {
-			return CheckFailedText(cli, ce.Check, ce.At)
+			return "", CheckFailedText(cli, ce.Check, ce.At)
 		}
-		return CheckFailedText(cli, CheckNotFound, settingsPath)
+		return "", CheckFailedText(cli, CheckNotFound, settingsPath)
 	}
-	return ""
+	return resolved, ""
 }

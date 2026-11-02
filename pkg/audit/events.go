@@ -161,6 +161,12 @@ const (
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
 
+	// EventExternalCLIRun — INFO. One external-CLI spawn (r17 §3.10): agent,
+	// CLI, entered and resolved program, agent flags the filter dropped,
+	// the person's preset as typed, and whether a preset token bypassed the
+	// filter.
+	EventExternalCLIRun = "external_cli.run"
+
 	// EventBrowserInstanceCreated — INFO. A workspace's browser instance came
 	// into existence: the first turn to resolve a browser for a given
 	// BrowsingKey established it (ADR-075 FR-027). Fires exactly ONCE per
