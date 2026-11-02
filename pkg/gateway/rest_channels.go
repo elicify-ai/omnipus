@@ -1325,6 +1325,7 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 			delete(updates, key)
 		}
 	}
+	normalizeConfigureAllowLists(updates)
 	// Filesystem-path fields (grep of config.ChannelInstanceConfig for path-typed
 	// fields: session_store_path [WhatsApp], crypto_database_path [Matrix],
 	// service_account_file [Google Chat]). Stripped, not rejected — they are not
