@@ -69,8 +69,93 @@ func bootSkills(cfg *config.Config, homePath string) (skills.SyncReport, error) 
 	for i := range report.Retired {
 		report.Retired[i].AgentsChanged = editor.agentsChanged(report.Retired[i].Slug)
 	}
+	if err := bindBuiltinGrants(root, agentstore.New(homePath), cfg); err != nil {
+		errs = append(errs, fmt.Errorf("bind built-in skill grants: %w", err))
+	}
 	skillsBootReport = report
 	return report, errors.Join(errs...)
+}
+
+// bindBuiltinGrants binds every unbound grant of a current built-in to the
+// built-in's identity stamp, in each stored agent record and in the
+// in-memory roster (UAT-1 F-5). It runs after SyncBuiltins, because the
+// roster is seeded and saved before the built-ins are installed on a fresh
+// home, so those first saves find no folder and leave the grants unbound
+// (§5.13a: an absent name persists unbound). Only built-ins are bound here:
+// their names are reserved and their stamps survive every sync, so a binding
+// can never land on a skill the grant was not made for. A user-skill grant
+// saved while its folder was absent stays unbound (SD-30).
+func bindBuiltinGrants(root string, store *agentstore.Store, cfg *config.Config) error {
+	agents, skipped, err := store.List()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	if len(skipped) > 0 {
+		errs = append(errs, fmt.Errorf("agent records that could not be read keep unbound built-in grants: %v", skipped))
+	}
+	lockErr := skills.WithMutationLock(root, func() error {
+		for i := range agents {
+			if err := bindAgentBuiltinGrants(root, store, cfg, &agents[i]); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return nil
+	})
+	if lockErr != nil {
+		errs = append(errs, lockErr)
+	}
+	return errors.Join(errs...)
+}
+
+// bindAgentBuiltinGrants binds one stored agent's unbound built-in grants on
+// disk and, when cfg is set, in the in-memory roster.
+func bindAgentBuiltinGrants(root string, store *agentstore.Store, cfg *config.Config, a *config.AgentConfig) error {
+	var names []string
+	for _, name := range a.Skills {
+		if !skills.IsBuiltin(name) {
+			continue
+		}
+		if _, bound := a.SkillGrants[skills.SkillKey(name)]; bound {
+			continue
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	bindings, err := skills.BindGrants(root, names)
+	if err != nil {
+		return fmt.Errorf("agent %q: %w", a.ID, err)
+	}
+	added, err := store.AddSkillBindings(a.ID, bindings)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && len(added) > 0 {
+		addGrantsInMemory(cfg, a.ID, added)
+	}
+	return nil
+}
+
+// addGrantsInMemory adds bindings to the in-memory roster entry of agentID
+// for keys it does not hold yet.
+func addGrantsInMemory(cfg *config.Config, agentID string, added map[string]string) {
+	for i := range cfg.Agents.List {
+		a := &cfg.Agents.List[i]
+		if a.ID != agentID {
+			continue
+		}
+		for key, gen := range added {
+			if _, bound := a.SkillGrants[key]; bound {
+				continue
+			}
+			if a.SkillGrants == nil {
+				a.SkillGrants = map[string]string{}
+			}
+			a.SkillGrants[key] = gen
+		}
+	}
 }
 
 // replayBootSkillAudit emits the boot report's facts (skill.builtin_updated,

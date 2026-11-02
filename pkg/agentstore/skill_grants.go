@@ -88,6 +88,63 @@ func (s *Store) RemoveSkillGrant(id, name string) (changed bool, err error) {
 	return changed, nil
 }
 
+// AddSkillBindings binds the given skill keys (key → generation) for agent
+// id, changing nothing else: a key is bound only when the agent's list still
+// holds the name and the record has no binding for it yet. Like
+// RemoveSkillGrant it does NOT rebind the remaining names (so a user-skill
+// grant saved while its folder was absent stays unbound, SD-30) and does NOT
+// take the skills mutation lock. It returns the bindings it added (empty,
+// and no write, when there is nothing to add).
+func (s *Store) AddSkillBindings(id string, add map[string]string) (map[string]string, error) {
+	current, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if len(missingBindings(current, add)) == 0 {
+		return map[string]string{}, nil
+	}
+	var added map[string]string
+	updated, err := s.inner.Update(id, func(agent *config.AgentConfig) error {
+		added = missingBindings(agent, add)
+		if len(added) == 0 {
+			return nil
+		}
+		if agent.SkillGrants == nil {
+			agent.SkillGrants = map[string]string{}
+		}
+		for key, gen := range added {
+			agent.SkillGrants[key] = gen
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agentstore: bind skill grants of %q: %w", id, err)
+	}
+	if len(added) > 0 && s.notifier != nil {
+		s.notifier.AgentUpserted(id, updated)
+	}
+	return added, nil
+}
+
+// missingBindings is the subset of add whose key agent's list holds and whose
+// binding the agent does not have yet.
+func missingBindings(agent *config.AgentConfig, add map[string]string) map[string]string {
+	var out map[string]string
+	for key, gen := range add {
+		if gen == "" || !holdsSkill(agent, key) {
+			continue
+		}
+		if _, bound := agent.SkillGrants[key]; bound {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[key] = gen
+	}
+	return out
+}
+
 // holdsSkill reports whether agent holds name by skill key, in its list or
 // its bindings.
 func holdsSkill(agent *config.AgentConfig, name string) bool {
