@@ -62,6 +62,24 @@ Use a plan when several tasks depend on each other and you can state a checkable
 
 After Execute, nothing further needs your approval: tasks run, are checked, and are retried on their own.
 
+### Agents reading and changing a plan
+
+An agent can read a plan with `get_plan` and change it with `update_plan`. `get_plan` returns the same plan record the web app shows; the agent names the properties it wants in `fields` (or `["all"]`), and the id and revision always come back.
+
+`update_plan` works only for the plan's owner agent or the agent that created it. Only the properties sent change:
+
+| Property | When it can change |
+|---|---|
+| Title, goal (objective), description | In any state |
+| Bounds | In any state |
+| Owner agent, Definition of Done | Only while the plan is a draft |
+
+The plan's state is not a property: agents start and stop plans with `execute_plan` and `stop_plan`, as before. Restart and delete stay with people.
+
+**Bounds** are the four per-plan limits: judge rounds (`plan_judge_max_rounds`), idle-expiry days (`idle_expiry_days`), the supervision turn time (`supervision_turn_timeout_seconds`) and supervision attempts (`supervision_max_attempts`). An agent's change merges field by field, like a change in the web app. An agent can never set a bound above the global value in Settings: if one value in the call is higher, the whole call is refused and nothing changes. A person editing in the web app is not limited this way.
+
+**Leaving a plan.** When a task is taken out of a plan (its plan is cleared) and the same change does not set a status, the task goes back to **Inbox**, so it does not start on its own outside the plan. If the task cannot move to Inbox (for example it is done or blocked), it leaves the plan and keeps its status. A status set in the same change always wins.
+
 When an **agent** runs a plan with `execute_plan`, Omnipus checks the workspace's trust lines from that agent to the assignee of every step before the plan starts; if any is missing the plan stays a draft and the reply names each assignee that was refused. Each step is checked again, against the current lines, when it is about to start, so removing a line while the plan runs makes the affected step fail with a clear reason. A plan you approve or play yourself in the web app needs no such lines.
 
 ## Definition of Done
@@ -95,7 +113,7 @@ After a correction the plan returns to running. The plan fails when its configur
 - **Restart re-runs only unfinished tasks**, each from scratch. Finished tasks and their evidence are kept.
 - **Stop is a hard cancel** — in-flight tasks, checks, and shell commands. A stopped plan never resumes on its own.
 - **Run slots follow the install-wide active-loop cap**—16 by default—shared by plans, conversation goals and recurring loops. A plan can wait at Approved and stays stoppable there.
-- **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days. A plan idle that long ends failed — but only when nothing is running: a member task in progress or waiting to start, a judge round, or an owner or supervisor turn keeps the plan alive however long it takes.
+- **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days; an agent can set a bound only up to the global value in Settings. A plan idle that long ends failed — but only when nothing is running: a member task in progress or waiting to start, a judge round, or an owner or supervisor turn keeps the plan alive however long it takes.
 - **A running plan can pause.** If its owner agent is disabled, the plan pauses and the tile shows the reason.
 - **Plan work has no time limit.** Member tasks and the supervisor's review run until they finish or you press Stop. A supervision attempt is checked against `planning.supervision_turn_timeout_seconds` (600 seconds by default, or the plan's own override), counted from when the supervisor was woken, and only once its turn has ended — a review that is still working is never cut off. A review that runs longer than that interval is judged as soon as it ends; there is no extra waiting time after it finishes.
 - **A running plan cannot be deleted.** The Clear action in a tile's menu works only on plans that are not running.
