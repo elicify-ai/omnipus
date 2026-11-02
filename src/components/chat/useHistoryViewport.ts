@@ -441,6 +441,17 @@ function observeHistoryLayout(scroller: HTMLElement, rows: () => HTMLElement[], 
   }
 }
 
+/** Release both directions' fill owners: cancel a pending frame and resolve a waiting layout. */
+function cancelHistoryFills(fills: RefObject<Record<FillDirection, FillOwner | null>>): void {
+  for (const direction of ['older', 'newer'] as const) {
+    const owner = fills.current[direction]
+    fills.current[direction] = null
+    if (owner?.frame !== null && owner?.frame !== undefined) cancelAnimationFrame(owner.frame)
+    owner?.finishLayout?.()
+    if (owner) { owner.frame = null; owner.finishLayout = null }
+  }
+}
+
 /** One signed compensation/fill owner for virtual and plain layouts. */
 export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, messages: ChatMessage[], anchorOffset?: (position: string) => number | undefined) {
   // #1449 FE-1: the normal chat's session or the group on screen.
@@ -535,15 +546,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     void requestFill(direction, initial).catch(error => logViewportReadRejection(direction, error))
   }, [requestFill])
 
-  const cancelFill = useCallback(() => {
-    for (const direction of ['older', 'newer'] as const) {
-      const owner = fills.current[direction]
-      fills.current[direction] = null
-      if (owner?.frame !== null && owner?.frame !== undefined) cancelAnimationFrame(owner.frame)
-      owner?.finishLayout?.()
-      if (owner) { owner.frame = null; owner.finishLayout = null }
-    }
-  }, [])
+  const cancelFill = useCallback(() => cancelHistoryFills(fills), [])
   useLayoutEffect(() => {
     evaluateFill.current = (direction) => {
       const scroller = scrollRef.current
