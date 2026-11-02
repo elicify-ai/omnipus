@@ -152,8 +152,8 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
       label: 'Allow From',
       type: 'list',
       required: false,
-      placeholder: '+1234567890, group_jid@g.us',
-      helpText: 'Phone numbers or JIDs. Separate ids with commas (empty = allow all)',
+      placeholder: '1234567890@s.whatsapp.net, group_jid@g.us',
+      helpText: 'WhatsApp account ids such as 1234567890@s.whatsapp.net, not phone numbers. Copy an id from the Ignored … Latest: line in this panel. Separate ids with commas (empty = allow all)',
       advanced: true,
     },
     {
