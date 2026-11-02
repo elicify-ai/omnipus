@@ -545,7 +545,7 @@ func (sl *SkillsLoader) parseSkillMetadata(skillPath string, content []byte) *Sk
 	// top-level field.
 	fm, err := parseFrontmatter(frontmatter)
 	if err != nil {
-		slog.Warn("SKILL.md: failed to parse YAML frontmatter", "error", err)
+		slog.Warn("SKILL.md: failed to parse YAML frontmatter", "error", yamlErrorSummary(err))
 	}
 	if nested, ok := fm["metadata"].(map[string]any); ok {
 		if dn, ok := nested["display_name"].(string); ok && strings.TrimSpace(dn) != "" {

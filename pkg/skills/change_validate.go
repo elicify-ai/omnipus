@@ -11,11 +11,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/pathsafe"
+
+	"gopkg.in/yaml.v3"
 )
 
 // MaxCompatibilityLength bounds the frontmatter `compatibility` field.
@@ -174,7 +177,7 @@ func validateInstruction(slug string, content []byte) string {
 	}
 	fm, err := parseFrontmatter(front)
 	if err != nil {
-		return fmt.Sprintf("the SKILL.md frontmatter is not valid YAML (%v)", err)
+		return "the SKILL.md frontmatter is not valid YAML (" + yamlErrorSummary(err) + ")"
 	}
 	name, _ := fm["name"].(string)
 	if name != slug {
@@ -212,6 +215,29 @@ func validateInstruction(slug string, content []byte) string {
 	return ""
 }
 
+// yamlLinePattern finds the line number in a yaml.v3 error message.
+// Anchored at the start so digits quoted from the input can never match.
+var yamlLinePattern = regexp.MustCompile(`^(?:yaml: )?line (\d+):`)
+
+// yamlErrorSummary is the structural part of a frontmatter parse error: the
+// line number and the error class. The parser's message itself is never
+// shown — yaml.v3 quotes scalar text from the input in it, and frontmatter is
+// skill content that has not been through the secret check yet (§7.4).
+func yamlErrorSummary(err error) string {
+	class, first := "syntax error", err.Error()
+	var typeErr *yaml.TypeError
+	if errors.As(err, &typeErr) {
+		class, first = "a value has the wrong type", ""
+		if len(typeErr.Errors) > 0 {
+			first = typeErr.Errors[0]
+		}
+	}
+	if m := yamlLinePattern.FindStringSubmatch(first); m != nil {
+		return "line " + m[1] + ": " + class
+	}
+	return class
+}
+
 // validateState runs §7.2's content checks over a whole would-be state:
 // a valid instruction file, sizes and file count.
 func validateState(slug string, entries map[string]treeEntry) *refusal {
@@ -227,7 +253,8 @@ func validateState(slug string, entries map[string]treeEntry) *refusal {
 	case instructionMissing:
 		return saveCheck("the skill has no SKILL.md; write a valid SKILL.md")
 	case instructionUnresolved:
-		return saveCheck(fmt.Sprintf("SKILL.md is a symlink to '%s', which is not a regular file of the skill", ref.target))
+		// The link target text is skill content (§7.4 scans it): never echoed.
+		return saveCheck("SKILL.md is a symlink that does not point to a regular file of the skill")
 	}
 	if reason := validateInstruction(slug, content); reason != "" {
 		return saveCheck(reason)

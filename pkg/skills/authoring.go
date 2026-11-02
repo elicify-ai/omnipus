@@ -160,7 +160,7 @@ func ValidateSkillMarkdown(expectedName, content string) error {
 		// The one shared frontmatter parser (FR-002) pulls name/description.
 		parsed, parseErr := parseFrontmatter(frontmatter)
 		if parseErr != nil {
-			slog.Warn("SKILL.md: failed to parse YAML frontmatter", "error", parseErr)
+			slog.Warn("SKILL.md: failed to parse YAML frontmatter", "error", yamlErrorSummary(parseErr))
 		}
 		fm := frontmatterFields(parsed)
 		if n := fm["name"]; n != "" {
