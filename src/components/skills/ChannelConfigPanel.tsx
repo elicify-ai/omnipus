@@ -839,10 +839,17 @@ export function ChannelConfigPanel({
     // U7: a 'list' field the user typed into is submitted as its ids
     // (string[], the Configure contract's allow_from), never as the typed
     // text; clearing it submits [] (allow all). A saved list the user did not
-    // touch is already an array and travels unchanged.
-    for (const key of editedListKeysRef.current) {
-      const typed = getNested(formValues, key)
-      if (typeof typed === 'string') payload[key] = splitIdListText(channelId, typed)
+    // touch is already an array and travels unchanged. An untouched legacy
+    // value that is not a list (an old saved string) is left out entirely,
+    // so Save never writes it back (CHECK F7); the server keeps it as stored.
+    for (const field of fields) {
+      if (field.type !== 'list') continue
+      const value = getNested(formValues, field.key)
+      if (editedListKeysRef.current.has(field.key)) {
+        if (typeof value === 'string') payload[field.key] = splitIdListText(channelId, value)
+      } else if (!Array.isArray(value)) {
+        delete payload[field.key]
+      }
     }
 
     if (!isGoogleChat) return payload
