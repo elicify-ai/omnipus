@@ -18,13 +18,15 @@ test('S-6.4: a built-in row offers Make a copy and the dialog commits plan-copy'
 
   // The built-in row: read-only badge, no delete control, and the new
   // Make a copy control.
-  const planRow = page.getByText('plan', { exact: true }).locator('xpath=ancestor::div[.//button][1]');
-  await expect(planRow).toBeVisible({ timeout: 10_000 });
+  // The row label is the display name ("Plan", from metadata.display_name; the
+  // slug is `plan`), so the row is found through its stable control, the
+  // "Make a copy of Plan" button, and the card that holds it.
+  const makeCopy = page.getByRole('button', { name: 'Make a copy of Plan', exact: true });
+  await expect(makeCopy).toBeVisible({ timeout: 10_000 });
+  const planRow = makeCopy.locator('xpath=ancestor::div[contains(@class,"items-start")][1]');
+  await expect(planRow.getByText('Plan', { exact: true })).toBeVisible();
   await expect(planRow.getByText('Built-in · read-only', { exact: true })).toBeVisible();
-  await expect(planRow.getByRole('button', { name: /Remove plan/ })).toHaveCount(0);
-
-  const makeCopy = planRow.getByRole('button', { name: /Make a copy/i });
-  await expect(makeCopy).toBeVisible();
+  await expect(planRow.getByRole('button', { name: /^Remove / })).toHaveCount(0);
   await makeCopy.click();
 
   // The copy dialog: a name field and Create copy.
@@ -36,11 +38,15 @@ test('S-6.4: a built-in row offers Make a copy and the dialog commits plan-copy'
   await copyName.fill('plan-copy');
   await dialog.getByRole('button', { name: /Create copy/i }).click();
 
-  // 201 committed: the list now shows plan-copy (a user-owned row, which
-  // itself carries a delete control).
-  const copyRow = page.getByText('plan-copy', { exact: true })
-    .locator('xpath=ancestor::div[.//button][1]');
-  await expect(copyRow).toBeVisible({ timeout: 10_000 });
-  await expect(copyRow.getByText('plan-copy', { exact: true })).toBeVisible();
-  await expect(copyRow.getByRole('button', { name: 'Remove plan-copy', exact: true })).toBeVisible();
+  // 201 committed: the list now shows the copy (a user-owned row, which
+  // itself carries a delete control). The copy's label is its own name
+  // (plan-copy) or, when the loader falls back to the document heading, "Plan"
+  // (F-2: the copy no longer carries the built-in's display_name), so the row
+  // is found by what only a user-owned row has: a Remove control.
+  const removeCopy = page.getByRole('button', { name: /^Remove (plan-copy|Plan)$/ });
+  await expect(removeCopy).toHaveCount(1, { timeout: 10_000 });
+  await expect(removeCopy).toBeVisible();
+  const copyRow = removeCopy.locator('xpath=ancestor::div[contains(@class,"items-start")][1]');
+  await expect(copyRow.getByText(/^(plan-copy|Plan)$/)).toBeVisible();
+  await expect(copyRow.getByText('Built-in · read-only', { exact: true })).toHaveCount(0);
 });
