@@ -779,8 +779,16 @@ func (t *TaskCreateTool) Description() string {
 		"If every criterion is kind=check, the assignee's effective bash policy " +
 		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +
 		"never run can never adjudicate MET). A task created in your own current workspace lands as a visible card in " +
-		"status `next` (triaged and dispatchable), never `inbox`. A task delivered to a DIFFERENT workspace " +
-		"(workspace_id) lands in `inbox` as not-started work for that workspace's team; it launches no run."
+		"status `next` (triaged and dispatchable), unless it carries a schedule. A task delivered to a DIFFERENT workspace " +
+		"(workspace_id) lands in `inbox` as not-started work for that workspace's team; it launches no run. " +
+		"Optional fields: description; tags (at most 16, each up to 64 characters, lower-cased and de-duplicated); " +
+		"run_isolated (true runs the task in its own isolated session); max_attempts (the retry limit, at least 1 and " +
+		"at most the global limit in Settings; omit it to use the global limit). Only the creating agent can later " +
+		"change prompt, criteria, dod or max_attempts. " +
+		"Schedule with trigger: {type: \"manual\", config: {}} is no schedule; {type: \"once\", config: {at_ms}} runs once; " +
+		"{type: \"recurring\", config: {rrule, dtstart_ms, tz}} repeats. A task created with a once or recurring trigger " +
+		"lands in `inbox` and waits for its occurrence. A once or recurring trigger on a task for a different workspace " +
+		"is refused."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -1717,7 +1725,14 @@ func (t *TaskUpdateTool) Description() string {
 		"Status: failed ends a task you are NOT currently running; done on a task with acceptance criteria " +
 		"is refused outside its own run (the judge decides completion there), and while a task's own run is " +
 		"in flight you cannot write its status at all — claim completion with the goal_claim tool instead " +
-		"(status \"met\" with evidence, or \"blocked\" when you cannot proceed). Only provided fields are updated."
+		"(status \"met\" with evidence, or \"blocked\" when you cannot proceed). Only provided fields are updated.\n" +
+		"Retry limit: max_attempts is at least 1 and at most the global limit in Settings; clear_max_attempts: true " +
+		"returns to the global limit (never send both). tags: at most 16, each up to 64 characters, lower-cased and " +
+		"de-duplicated. Other fields: plan_id moves the task into a draft plan (\"\" takes it out), clear_due removes the due date.\n" +
+		"Schedule with trigger: {type: \"manual\", config: {}} removes the schedule and keeps the status; " +
+		"{type: \"once\", config: {at_ms}} or {type: \"recurring\", config: {rrule, dtstart_ms, tz}} sets one. A future " +
+		"trigger moves a `next` task to `inbox` in the same save; blocked, running and finished tasks keep their " +
+		"status. A once or recurring trigger on a task in a different workspace is refused."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
