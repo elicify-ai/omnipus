@@ -64,7 +64,7 @@ After Execute, nothing further needs your approval: tasks run, are checked, and 
 
 ### Agents reading and changing a plan
 
-An agent can read a plan with `get_plan` and change it with `update_plan`. `get_plan` returns the same plan record the web app shows; the agent names the properties it wants in `fields` (or `["all"]`), and the id and revision always come back.
+An agent can read a plan with `get_plan` and change it with `update_plan`. `get_plan` returns the plan record the web app shows, narrowed to the properties the agent names in `fields` (or `["all"]`); the plan’s id always comes back. A plan read carries no revision — `update_plan` addresses the plan by `plan_id`.
 
 `update_plan` works only for the plan's owner agent or the agent that created it. Only the properties sent change:
 

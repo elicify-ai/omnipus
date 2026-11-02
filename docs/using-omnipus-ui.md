@@ -421,6 +421,8 @@ Library and Mail ask before an app-initiated close, panel switch, expansion, or 
 
 App-wide settings live behind **Settings** in the account menu, on tabs from providers and models to security, data, and chat behavior; [settings](settings.md) walks each one. Opening Settings stays on Settings, including while the app is still opening your workspace after sign-in. Your **Profile** (preferences, password, and what agents should know about you) and **Usage** (token history) are separate entries in the same menu. Settings for one workspace live in that workspace, under its name.
 
+For an external worker (Claude Code, Codex or OpenCode), the agent editor shows a read-only **Program** line: the saved program path for that worker's tool, or **Not set**. When a run would be refused, the reason appears under it, for example "This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex." You cannot change the program in the editor: change it, or the standard parameters, in **Settings → Third-party agents** (see [settings](settings.md#third-party-agents)).
+
 ## Limits and things to watch
 
 The active reader keeps at most **500 whole source groups**, plus a separate cache of at most **100 recent groups**. A source group is one saved entry with its associated tool rows; it can draw more than one row. As you browse, safe groups at the far edge leave the reader and remain reloadable. The visible anchor and focused row are protected; if safe trimming is impossible, the page waits rather than growing beyond the bound. Leaving a chat releases its loaded history and measurement/query caches, but does not stop its work or discard genuinely pending input.

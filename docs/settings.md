@@ -146,7 +146,7 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 
 ## Third-party agents
 
-**Settings → Third-party agents** decides which program runs for each external command-line tool — Claude Code, Codex and OpenCode — and which standard parameters it always gets. It applies to every external worker that uses that tool. Only a person signed in to the web app can read or change it: agents cannot, through any tool, and `set_config` refuses the whole sandbox section.
+**Settings → Third-party agents** decides which program runs for each external command-line tool — Claude Code, Codex and OpenCode — and which standard parameters it always gets. It applies to every external worker that uses that tool. Only a person signed in to the web app can change it: agents cannot, through any tool, and `set_config` refuses the whole sandbox section. An agent can read the saved program and parameters for one worker, read-only, through `get_agent` (see below); it cannot read or change the Settings section itself.
 
 Each tool has two fields:
 
@@ -157,7 +157,7 @@ Each tool has two fields:
 
 **Checks when you save.** A program path must be absolute, point at a file that exists, is a regular file and can be run by the user Omnipus runs as. The file, and the folder holding it, must not be changeable by every user on the machine, and the file must not sit in a folder agents can write to (the Omnipus data folder, any workspace folder, or any extra folder the sandbox lets agents write). A link is followed to the real file; each link's folder is checked the same way. On Windows the file must end in `.exe`, `.com`, `.cmd` or `.bat`. Standard parameters may be at most 4,096 characters, with no line breaks. If any field fails, nothing is saved and the message names the tool and the reason, for example "The program path for Codex was not saved: it must be an absolute path." Saving the same section from two browser tabs keeps the last save.
 
-**Checks on every run.** The program is checked again each time a worker starts. If no program is saved for that tool, or it no longer passes the checks, the run is refused before anything starts and the person or agent that started it sees the reason — for example "This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex." There is no fallback to a program found on the system path. The file that was checked is the file that runs.
+**Checks on every run.** The program is checked again each time a worker starts. If no program is saved for that tool, or it no longer passes the checks, the run is refused before anything starts — for a delegation, no worker session is created — and the person or agent that started it sees the reason — for example "This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex." There is no fallback to a program found on the system path. The file that was checked is the file that runs.
 
 **Standard parameters are yours, in clear.** They come after the worker's own flags, so your value wins when both set the same flag, and they are not filtered the way an agent's flags are. They are shown back and written to the audit log exactly as typed, so do not put keys or passwords in them: put secrets in the worker's own environment variables instead, which are always masked.
 
