@@ -46,11 +46,15 @@ type DiscordChannel struct {
 	botUserID  string                   // stored for mention checking
 
 	// lifecycleMu orders Start/Stop against the adapter-owned reconnect loop
-	// (reconnect.go): it guards ctx/cancel writes and the reconnecting flags,
-	// and is held across each reconnect attempt's stop check and Open.
+	// (reconnect.go): it guards ctx/cancel writes, the reconnecting flags and
+	// the gateway dialer fields. It is never held across Session.Open.
 	lifecycleMu      sync.Mutex
 	reconnecting     bool
 	reconnectPending bool
+	// dialBase is the session dialer as configured (proxy, timeouts);
+	// dialInstalled is the run-bound copy Start installs (dialer.go).
+	dialBase      *websocket.Dialer
+	dialInstalled *websocket.Dialer
 	// stopped is set by Stop before the session closes; handleMessage drops
 	// any event still in flight for a stopped adapter.
 	stopped atomic.Bool
@@ -107,6 +111,7 @@ func (c *DiscordChannel) Start(ctx context.Context) error {
 	c.lifecycleMu.Lock()
 	c.ctx, c.cancel = context.WithCancel(ctx)
 	c.stopped.Store(false)
+	c.installStoppableDialer()
 	c.lifecycleMu.Unlock()
 
 	// Get bot user ID before opening session to avoid race condition
@@ -146,8 +151,10 @@ func (c *DiscordChannel) Stop(ctx context.Context) error {
 
 	// Cancel our context so typing goroutines using c.ctx.Done() exit and the
 	// adapter-owned reconnect loop stops. This happens before Close and under
-	// lifecycleMu, so no reconnect attempt can start after it, and an attempt
-	// already in progress finishes first and is closed by the Close below.
+	// lifecycleMu, so no reconnect attempt can start after it. The cancel also
+	// closes every gateway connection the run-bound dialer made (dialer.go),
+	// so a reconnect Open stalled in its handshake fails at once and releases
+	// the session lock that the Close below needs.
 	c.lifecycleMu.Lock()
 	c.stopped.Store(true)
 	if c.cancel != nil {

@@ -25,7 +25,9 @@ const (
 // built-in loop off, and this loop runs instead. It starts on the session's
 // Disconnect event and is tied to the adapter's run context: Stop cancels
 // that context, under lifecycleMu, before closing the session, so after
-// Stop no attempt starts and a waiting loop exits.
+// Stop no attempt starts and a waiting loop exits. An attempt already in
+// Open is ended by the run-bound dialer (dialer.go), which refuses new dials
+// and closes its connections once the run context is cancelled.
 
 // onDisconnect is the session's Disconnect handler. discordgo emits the
 // event from every Close — a read or heartbeat failure, a gateway Op 7
@@ -84,12 +86,10 @@ func (c *DiscordChannel) reconnectLoop(ctx context.Context) {
 }
 
 // reconnectOnce makes one Open attempt unless the adapter was stopped. It
-// holds lifecycleMu across the stop check and Open, so Stop's cancellation
-// either precedes the attempt (no attempt) or waits for it to finish (Stop's
-// Close then closes the connection it opened).
+// does not hold lifecycleMu across Open, so Stop never waits for a stalled
+// attempt: if Stop cancels after the check, the run-bound dialer refuses or
+// closes the attempt's connection and Open fails (CHECK F3).
 func (c *DiscordChannel) reconnectOnce(ctx context.Context) (connected, stopped bool) {
-	c.lifecycleMu.Lock()
-	defer c.lifecycleMu.Unlock()
 	if ctx.Err() != nil {
 		return false, true
 	}
