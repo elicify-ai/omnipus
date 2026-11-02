@@ -158,11 +158,19 @@ func (r *historyPageRequest) Read(ctx context.Context, store *session.UnifiedSto
 	}
 	// At most historyPreparationLimit page preparations run at once in this
 	// process; others wait for a slot until their request ends, and are
-	// never refused (A2.8, founder decision 2026-10-30).
+	// never refused (A2.8, founder decision 2026-10-30). A free slot is taken
+	// first: select picks at random among ready cases, so an already
+	// cancelled request would otherwise skip the read at random, and with it
+	// a pending cleanup's storage failure, which outranks the cancellation
+	// (#1452 B69).
 	select {
 	case historyPreparationSlots <- struct{}{}:
-	case <-ctx.Done():
-		return preparedHistoryPage{}, ctx.Err()
+	default:
+		select {
+		case historyPreparationSlots <- struct{}{}:
+		case <-ctx.Done():
+			return preparedHistoryPage{}, ctx.Err()
+		}
 	}
 	defer func() { <-historyPreparationSlots }()
 	defer func() { r.memo = nil; r.media = nil; r.lifecycle = nil }()

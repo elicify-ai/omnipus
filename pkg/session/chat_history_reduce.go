@@ -277,14 +277,38 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 	streamed := func(m historyRecord, p string) (ArchiveRecord, error) {
 		return historyStreamArchive(t.ctx, dir, m, cut, "page", p, ins)
 	}
+	var before ChatHistoryReadMetrics
+	if m := historyMetrics(t.ctx); m != nil {
+		before = *m
+	}
 	out, err := historyProjectEntryWith(t, dir, cp, cut, r, cache, purpose, streamed, ins)
 	switch {
 	case errors.Is(err, errHistoryStandInUnresolved):
+		historyDiscardStreamedAttempt(historyMetrics(t.ctx), before)
 		return historyProjectEntryWith(t, dir, cp, cut, r, cache, purpose, whole, nil)
 	case errors.Is(err, errHistoryStreamUnreadable):
 		return historyUnreadableEntry(t, cp, r, cache)
 	}
 	return out, err
+}
+
+// historyDiscardStreamedAttempt recharges the archive reads of a streamed
+// projection that is rerun with whole reads as discarded work: the rerun's
+// reads are the ones the page returns, so each selected record is charged as
+// selected once and the abandoned streamed reads stay in the totals
+// (chat-history paging spec, "Content-free observability": a reread is extra
+// work, and selected counts returned source bodies).
+func historyDiscardStreamedAttempt(m *ChatHistoryReadMetrics, before ChatHistoryReadMetrics) {
+	if m == nil {
+		return
+	}
+	records := m.SelectedArchiveRecords - before.SelectedArchiveRecords + m.LookaheadArchiveRecords - before.LookaheadArchiveRecords + m.DependencyArchiveRecords - before.DependencyArchiveRecords
+	count := m.SelectedArchiveBytes - before.SelectedArchiveBytes + m.LookaheadArchiveBytes - before.LookaheadArchiveBytes + m.DependencyArchiveBytes - before.DependencyArchiveBytes
+	m.SelectedArchiveRecords, m.SelectedArchiveBytes = before.SelectedArchiveRecords, before.SelectedArchiveBytes
+	m.LookaheadArchiveRecords, m.LookaheadArchiveBytes = before.LookaheadArchiveRecords, before.LookaheadArchiveBytes
+	m.DependencyArchiveRecords, m.DependencyArchiveBytes = before.DependencyArchiveRecords, before.DependencyArchiveBytes
+	m.DiscardedArchiveRecords += records
+	m.DiscardedArchiveBytes += count
 }
 
 // historyUnreadableEntry is the fail-closed page entry of a record the
