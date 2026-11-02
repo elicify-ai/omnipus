@@ -2680,6 +2680,7 @@ type ChannelConfigureRequest = Partial<
     smtp_port: number;
     username: string;
     password: string;
+    allow_from: Array<string>;
   } & {
     [key: string]: any;
   }
@@ -8024,6 +8025,7 @@ export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
     smtp_port: z.number().int(),
     username: z.string(),
     password: z.string(),
+    allow_from: z.array(z.string()),
   })
   .partial()
   .passthrough();

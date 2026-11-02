@@ -15677,6 +15677,9 @@ type ChannelConfigureErrorCode string
 
 // ChannelConfigureRequest Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
 type ChannelConfigureRequest struct {
+	// AllowFrom Allowed sender ids for this channel instance ("Allow From"), one id per element. An empty list admits every sender. The server saves a list. For compatibility with older clients the server also accepts one string when inbound schema validation is off; it splits that string on commas (",", full-width "，") and whitespace and drops empty pieces.
+	AllowFrom *[]string `json:"allow_from,omitempty"`
+
 	// AppId Application ID (used by Slack, Discord).
 	AppId *string `json:"app_id,omitempty"`
 
@@ -29593,6 +29596,14 @@ func (a *ChannelConfigureRequest) UnmarshalJSON(b []byte) error {
 		return err
 	}
 
+	if raw, found := object["allow_from"]; found {
+		err = json.Unmarshal(raw, &a.AllowFrom)
+		if err != nil {
+			return fmt.Errorf("error reading 'allow_from': %w", err)
+		}
+		delete(object, "allow_from")
+	}
+
 	if raw, found := object["app_id"]; found {
 		err = json.Unmarshal(raw, &a.AppId)
 		if err != nil {
@@ -29715,6 +29726,13 @@ func (a *ChannelConfigureRequest) UnmarshalJSON(b []byte) error {
 func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
 	var err error
 	object := make(map[string]json.RawMessage)
+
+	if a.AllowFrom != nil {
+		object["allow_from"], err = json.Marshal(a.AllowFrom)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'allow_from': %w", err)
+		}
+	}
 
 	if a.AppId != nil {
 		object["app_id"], err = json.Marshal(a.AppId)

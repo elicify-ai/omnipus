@@ -14960,6 +14960,8 @@ export interface components {
             username?: string;
             /** @description Login password for IMAP and SMTP authentication (email channel). Stored encrypted in the credential store — never returned in GET responses. */
             password?: string;
+            /** @description Allowed sender ids for this channel instance ("Allow From"), one id per element. An empty list admits every sender. The server saves a list. For compatibility with older clients the server also accepts one string when inbound schema validation is off; it splits that string on commas (",", full-width "，") and whitespace and drops empty pieces. */
+            allow_from?: string[];
         } & {
             [key: string]: unknown;
         };
