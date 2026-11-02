@@ -36,6 +36,12 @@ import (
 // this store is rooted at (ADR-054 D2).
 const agentsSubdir = "agents"
 
+// RecordsDir is the directory holding the agent records under omnipusHome.
+// Read-only callers stat it before New, which creates it.
+func RecordsDir(omnipusHome string) string {
+	return filepath.Join(omnipusHome, "entities", agentsSubdir)
+}
+
 // accessors wires config.AgentConfig's identity/creation-timestamp fields
 // into the shape entity.Store[config.AgentConfig] needs. CreatedAt is a
 // *time.Time (nil means "never set"); entity.Accessors works in concrete
@@ -112,7 +118,7 @@ type Store struct {
 // scope); the underlying gap should still be fixed at the source for every
 // future entity kind (channels, etc.) that reuses entity.Store[T].
 func New(omnipusHome string) *Store {
-	dir := filepath.Join(omnipusHome, "entities", agentsSubdir)
+	dir := RecordsDir(omnipusHome)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		logger.WarnF("agentstore: could not pre-create entity directory (Create will retry via entity.Store's own MkdirAll)",
 			map[string]any{"dir": dir, "error": err.Error()})

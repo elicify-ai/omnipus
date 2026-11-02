@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -39,6 +40,16 @@ type turnSkillAuthority struct {
 // not break the agent's ordinary file access outside skills.
 func resolveTurnSkillAuthority(home, agentID string) turnSkillAuthority {
 	if home == "" || agentID == "" {
+		return turnSkillAuthority{}
+	}
+	// A read must not create the records directory (agentstore.New does):
+	// no directory means no persisted record, which is the same fail-closed
+	// answer as entity.ErrNotFound below.
+	if _, err := os.Stat(agentstore.RecordsDir(home)); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			logger.WarnCF("tools", "skills authority: agent records unreadable; no skill folder is readable this turn",
+				map[string]any{"agent_id": agentID, "error": err.Error()})
+		}
 		return turnSkillAuthority{}
 	}
 	rec, err := agentstore.New(home).Get(agentID)
