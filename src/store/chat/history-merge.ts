@@ -397,6 +397,38 @@ export function bindHistoryEntries(bucket: SessionChatState, entries: readonly S
 /** S8 as changed by S11: a row with parts takes its slot at its first bound position (history-fold.ts). */
 export const lastBoundOccurrence = boundDisplaySlots
 
+/**
+ * S11c J2 (6c UAT U-D1-4): a tool_call_start that arrived before the snapshot
+ * committed minted a placeholder bubble of the active turn holding only the
+ * live card. The saved open segment of that turn now trails the reader, so the
+ * card moves onto it exactly as a start arriving after the commit attaches to
+ * the trailing assistant row: owner, text-at-start snapshot and paragraph seam.
+ */
+function adoptLiveToolBubbles(bucket: SessionChatState, positioned: ChatMessage[], liveTurn: string): { bucket: SessionChatState; positioned: ChatMessage[] } | undefined {
+  const tailIndex = positioned.length - 1
+  const tail = positioned[tailIndex]
+  if (tail?.role !== 'assistant' || tail.turnId !== liveTurn) return undefined
+  const owners = bucket.toolCallOwnerMessageId ?? {}
+  const liveCalls = bucket.toolCallOrder.filter(id => bucket.toolCalls[id] && owners[id])
+  const placeholders = new Set(retainedPending(bucket).filter(row => row.role === 'assistant' && !row.historyPosition &&
+    row.turnId === liveTurn && !row.content && !row.tool_calls?.length && !row.spans?.length && liveCalls.some(id => owners[id] === row.id)).map(row => row.id))
+  if (!placeholders.size) return undefined
+  const moved = liveCalls.filter(id => placeholders.has(owners[id]))
+  const textAtToolCallStart = { ...bucket.textAtToolCallStart }
+  for (const id of moved) if (!textAtToolCallStart[id]) textAtToolCallStart[id] = tail.content ?? ''
+  const messagesById = { ...bucket.messagesById }
+  for (const id of placeholders) delete messagesById[id]
+  return {
+    bucket: {
+      ...bucket, messagesById, textAtToolCallStart,
+      messageOrder: bucket.messageOrder.filter(id => !placeholders.has(id)),
+      historyLiveOrder: bucket.historyLiveOrder?.filter(id => !placeholders.has(id)),
+      toolCallOwnerMessageId: { ...owners, ...Object.fromEntries(moved.map(id => [id, tail.id])) },
+    },
+    positioned: positioned.map((row, index) => index === tailIndex ? { ...row, pendingTextBoundary: true } : row),
+  }
+}
+
 export function applyHistoryPageToBucket(bucket: SessionChatState, page: SessionHistoryPage, action: HistoryActionKind, baseline: Record<string, ChatMessage> = bucket.messagesById, readTick?: number): Partial<SessionChatState> {
   const history = bucket.history
   const old = currentHistoryEntries(bucket)
@@ -431,10 +463,12 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   }
   // #1452 S11: every turn segment of the retained interval is one row; a
   // released position leaves only its own part (S11c).
-  const positioned = positions.map(position => byPosition.get(position)!)
+  let positioned = positions.map(position => byPosition.get(position)!)
   // S11c J2: on a latest read during an active turn, that turn's live row
   // joins its saved open segment (it trails the interval, unbound).
   const liveTurn = action === 'latest' ? bucket.activeTurnId : undefined
+  const adopted = liveTurn ? adoptLiveToolBubbles(bucket, positioned, liveTurn) : undefined
+  if (adopted) ({ bucket, positioned } = adopted)
   const liveRows = liveTurn ? retainedPending(bucket).filter(row => row.role === 'assistant' && !row.historyPosition && row.turnId === liveTurn && !positioned.some(item => item.id === row.id)) : []
   const fold = foldTurnSegments([...positioned, ...liveRows], bucket)
   const rows = fold.rows.filter(row => row.historyPosition)

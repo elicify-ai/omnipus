@@ -856,6 +856,21 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
 }
 
 /**
+ * The assistant bubble a tool_call_start mints when no assistant bubble is open.
+ * C3: behind a user row the server discarded/failed, it is a straggler from the
+ * stopped turn: done, not streaming, so it cannot back the busy flag after the
+ * result. #1452 S11c J2 (6c UAT U-D1-4): a live tool frame carries no turn id,
+ * so a live bubble takes the bucket's known active turn; a mid-turn snapshot
+ * then binds it to its saved segment instead of keeping a second, unstamped
+ * row. The straggler stays unstamped.
+ */
+function liveToolPlaceholder(draft: SessionChatState, agentId: string | undefined, tailUser: boolean): ChatMessage {
+  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: tailUser ? 'done' : 'streaming', isStreaming: !tailUser, agentId: agentId ?? useSessionStore.getState().activeAgentId ?? undefined }
+  if (!tailUser && draft.activeTurnId) ph.turnId = draft.activeTurnId
+  return ph
+}
+
+/**
  * Founder ruling 2026-10-07 (S7): this session's pending redirect is answered by
  * an error frame. Only a turn_canceled answer means the redirect stopped the
  * turn; the still-streaming bubble is then finalised as a normal answer, never
@@ -2119,7 +2134,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   // new one. Its bubble carries the tool but is NOT streaming, so
                   // it cannot back the busy flag after the result.
                   const tailUser = rawTail?.role === 'user' && (rawTail.deliveryStatus === 'discarded' || rawTail.deliveryStatus === 'failed')
-                  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: tailUser ? 'done' : 'streaming', isStreaming: !tailUser, agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined }
+                  const ph = liveToolPlaceholder(draft, frame.agent_id, tailUser)
                   draft.messagesById[ph.id] = ph
                   draft.messageOrder.push(ph.id)
                   ownerMsgId = ph.id
