@@ -1312,11 +1312,15 @@ func (su *storeUpdateLocked) applyAttemptFields() error {
 //
 // Scheduling state (3), the one shared rule for REST and update_task: a write
 // that adds or changes a trigger whose first occurrence is still in the future
-// moves a `next` task to `inbox` in the same write, so the ordinary drain
-// cannot run it before the scheduler fires it. A status the caller supplies in
-// the same patch is left to the transition rules. Untouched: a manual trigger
-// (no occurrence, state 4), an already-due occurrence (state 5), and every
-// non-`next` task (running, blocked, terminal, inbox).
+// stores `inbox` for a task that would otherwise end the write `next`, so the
+// ordinary drain cannot run it before the scheduler fires it. This holds
+// whatever status the caller supplies in the same patch: an explicit `next`
+// still ends `inbox` (the status patch is applied before this runs, so su.t
+// already carries the requested result). An explicit `inbox` stays inbox and
+// an explicit `blocked` is refused earlier (ErrBlockedNotSettable). Untouched:
+// an unchanged-trigger re-save, a manual trigger (no occurrence, state 4), an
+// already-due occurrence (state 5), and every task not ending `next`
+// (running, blocked, terminal, inbox).
 func (su *storeUpdateLocked) applyTrigger(newTrigger *Trigger) error {
 	if newTrigger != nil {
 		if err := ValidateTrigger(newTrigger); err != nil {
@@ -1328,7 +1332,7 @@ func (su *storeUpdateLocked) applyTrigger(newTrigger *Trigger) error {
 		su.t.LastDeliveredAtMs = nil
 	}
 	su.t.Trigger = newTrigger
-	if changed && su.patch.Status == nil && su.t.Status == StatusNext &&
+	if changed && su.t.Status == StatusNext &&
 		TriggerAwaitingOccurrence(su.t, time.Now()) {
 		if err := validateTransition(su.t.Status, StatusInbox, false, su.t.Trigger.IsRepeating()); err != nil {
 			return err
