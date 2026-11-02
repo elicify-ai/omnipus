@@ -71,6 +71,29 @@ func b3JoinTool(t *testing.T, i *b3ToolInvocation) {
 	}
 }
 
+// b3ShortenPublishRetryTimers replaces the shipped 5s per-attempt publish
+// timeout and 1s/2s retry backoff (pkg/agent/async_notify_retry.go) with
+// millisecond-scale values, so the delivery-budget oracles below — three REAL
+// attempts through the real finished-tool callback against a full inbound
+// queue — stop blocking ~18s per callback on wall-clock constants. The oracles
+// are unchanged: only the two timer values are scaled, the attempt budget,
+// backoff arithmetic (1 unit after attempt 1, 2 units after attempt 2) and
+// failure mode (ctx-bounded full-queue send) are untouched. Restores the
+// shipped values via t.Cleanup; LIFO ordering runs this restore AFTER the
+// test's own drain/join cleanups, so no in-flight publish survives into it.
+// RetryContract keeps the real timers and remains the owner of the
+// real-timer arithmetic.
+func b3ShortenPublishRetryTimers(t *testing.T) {
+	t.Helper()
+	prevTimeout, prevUnit := asyncNotifyPublishTimeout, asyncNotifyBackoffUnit
+	asyncNotifyPublishTimeout = 20 * time.Millisecond
+	asyncNotifyBackoffUnit = time.Millisecond
+	t.Cleanup(func() {
+		asyncNotifyPublishTimeout = prevTimeout
+		asyncNotifyBackoffUnit = prevUnit
+	})
+}
+
 func TestAsyncNotifierB3ProducerContract(t *testing.T) {
 	t.Run("LateForLLMCallbackActualIdentityAndOrigin", func(t *testing.T) { b3RealProducer(t, "b3_finished_probe", 1, false) })
 	t.Run("SameToolReverseCallbacksKeepTheirActualCallIDs", func(t *testing.T) { b3RealProducer(t, "b3_finished_probe", 2, false) })
@@ -79,6 +102,7 @@ func TestAsyncNotifierB3ProducerContract(t *testing.T) {
 }
 
 func b3RealProducer(t *testing.T, name string, count int, success bool) {
+	b3ShortenPublishRetryTimers(t)
 	calls := make([]providers.ToolCall, count)
 	for index := range calls {
 		calls[index] = providers.ToolCall{ID: fmt.Sprintf("b3-real-call-%d", index), Function: &providers.FunctionCall{Name: name, Arguments: "{}"}}

@@ -341,6 +341,8 @@ var validEventNames = map[EventName]struct{}{
 	EventMediaCascadeDelete: {},
 	// omnipus-system-agent FR-172: group-chat (room) changes. See events.go.
 	EventRoomChanged: {},
+	// 6b U2b: a held scheduled task fire that could not start. See events.go.
+	EventTaskTriggerFireNotStarted: {},
 	// ADR-092 (shell permission modes) FR-032/FR-046 typed audit events.
 	// See shell_permission_events.go for the wire shape contract.
 	EventShellModeChange:          {},

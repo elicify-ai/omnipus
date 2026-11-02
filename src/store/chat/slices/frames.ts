@@ -1953,6 +1953,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 isStreaming: false,
                 ...(clearReplayingNow ? { isReplaying: false } : {}),
                 activeTurnId: null, activeTurnAgentId: null, idleArmedToolCalls: undefined,
+                // The endTurnState write, spelled out for this spread return.
+                providerRetryEvent: null,
               }
             })
             // FR-030/031 (U10b): an errored turn ends the session's turn

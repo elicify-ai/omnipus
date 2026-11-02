@@ -46,7 +46,10 @@ async function openOlderReader() {
   await act(async () => response.resolve(json(wirePage([entry(79), entry(80)]))))
   await screen.findByText('Saved row 79', { exact: true })
   const input = screen.getByTestId('chat-input')
-  await user.type(input, DRAFT)
+  // D7a/D9 require retaining a pre-existing draft, not per-key setup.
+  // Use the real clipboard/input path; post-failure keyboard editing stays below.
+  await user.click(input)
+  await user.paste(DRAFT)
   const region = screen.getByLabelText('Conversation history', { exact: true })
   // Logical DOM scroll sentinel only: two synthetic80px rows, not pixel/UAT proof.
   fireEvent.scroll(region, { target: { scrollTop: 160 } })

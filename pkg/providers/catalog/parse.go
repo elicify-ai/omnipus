@@ -39,6 +39,10 @@ type documentDTO struct {
 type resizeLimitsDTO struct {
 	LongEdgePx int   `json:"long_edge_px"`
 	MaxBytes   int64 `json:"max_bytes"`
+	// MaxPatches is optional (issue #1435): absent (0) inherits the parent
+	// default's value so a catalog publisher can raise the patch ceiling
+	// document-wide without touching every provider row.
+	MaxPatches int `json:"max_patches"`
 }
 
 type endpointDTO struct {
@@ -200,7 +204,17 @@ func parseResizeLimits(path string, dto *resizeLimitsDTO, inherit *ResizeLimits)
 	if dto.MaxBytes <= 0 {
 		return ResizeLimits{}, invalid(path+".max_bytes", "must be positive, got %d", dto.MaxBytes)
 	}
-	return ResizeLimits{LongEdgePx: dto.LongEdgePx, MaxBytes: dto.MaxBytes}, nil
+	if dto.MaxPatches < 0 {
+		return ResizeLimits{}, invalid(path+".max_patches", "must not be negative, got %d", dto.MaxPatches)
+	}
+	// max_patches is optional: absent (0) inherits the parent default so a
+	// document-wide patch ceiling reaches every provider row that does not
+	// name its own. Zero with nothing to inherit means "no patch cap".
+	maxPatches := dto.MaxPatches
+	if maxPatches == 0 && inherit != nil {
+		maxPatches = inherit.MaxPatches
+	}
+	return ResizeLimits{LongEdgePx: dto.LongEdgePx, MaxBytes: dto.MaxBytes, MaxPatches: maxPatches}, nil
 }
 
 // isKnownRegionGroup reports whether s is one of the closed cross-region

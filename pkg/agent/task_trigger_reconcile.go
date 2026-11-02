@@ -75,10 +75,17 @@ func (s *TaskTriggerScheduler) reconcileFresh(t *task.Task, boot bool) error {
 		return nil
 	}
 	noTrigger := t.Trigger == nil || t.Trigger.Type == task.TriggerManual
+	// The owed fire of a crashed one-time trigger (6b, bootOwedFire) is kept
+	// whatever the task's status: the dead run's claim is reconciled to
+	// failed/interrupted at boot, and that status must not take away the
+	// rerun it is owed (6b review I2).
+	s.mu.Lock()
+	owed := !noTrigger && s.isBootOwedFireLocked(t)
+	s.mu.Unlock()
 	// A terminal recurring task keeps its series (a done/failed run is not the
 	// end of the series); a terminal once task is over. There is no
 	// consecutive-failure circuit breaker (operator decision, 2026-07-19).
-	if noTrigger || (task.IsTerminal(t.Status) && !t.Trigger.IsRepeating()) {
+	if noTrigger || (task.IsTerminal(t.Status) && !t.Trigger.IsRepeating() && !owed) {
 		s.OnTaskDeleted(t.ID)
 		return nil
 	}
@@ -87,10 +94,13 @@ func (s *TaskTriggerScheduler) reconcileFresh(t *task.Task, boot bool) error {
 
 	// Keep rule, decided before the replacement schedule is computed: an
 	// unchanged trigger whose registration still owns its occurrence keeps
-	// it and re-arms nothing.
+	// it and re-arms nothing. The owed fire of a crashed one-time trigger is
+	// owned by this boot even though its instant is past (6b: it runs once,
+	// at this boot, and only then).
 	s.mu.Lock()
 	current, tracked := s.taskToJob[t.ID]
-	keep := tracked && current.generation == generation && s.keepsOccurrenceLocked(current.jobID, nowMs, boot)
+	keep := tracked && current.generation == generation &&
+		(owed || s.keepsOccurrenceLocked(current.jobID, nowMs, boot))
 	s.mu.Unlock()
 	if keep {
 		return nil
@@ -201,7 +211,10 @@ type fireDecision struct {
 	occurrenceMs *int64 // the RRULE instant for the run record; nil for once
 	dispatch     bool
 	rearm        bool
-	err          error
+	// gone: the task was deleted before or during the fire; its job was
+	// removed (runScheduledFire reports errScheduledFireTaskGone).
+	gone bool
+	err  error
 }
 
 // prepareFire is the locked half of RunScheduled: it reads the task fresh
@@ -220,7 +233,7 @@ func (s *TaskTriggerScheduler) prepareFire(job *cron.CronJob) fireDecision {
 			slog.Info("task_trigger: task not found, removing orphan job", "task_id", taskID, "job_id", job.ID)
 			s.OnTaskDeleted(taskID)
 			s.cs.RemoveJob(job.ID)
-			return fireDecision{}
+			return fireDecision{gone: true}
 		}
 		// Task-unreadable exit (Scheduler rule 2e): re-arming is impossible
 		// here; the recovery sweep re-arms once the task is readable.
@@ -279,7 +292,7 @@ func (s *TaskTriggerScheduler) resetForFire(job *cron.CronJob, d fireDecision, d
 			"task_id", taskID, "job_id", job.ID)
 		s.OnTaskDeleted(taskID)
 		s.cs.RemoveJob(job.ID)
-		return fireDecision{}
+		return fireDecision{gone: true}
 	case errors.Is(err, task.ErrAlreadyRunning):
 		// Overlap guard: never stomp an in-flight run. The skip is recorded for
 		// run history; a failure to record it never blocks the re-arm.

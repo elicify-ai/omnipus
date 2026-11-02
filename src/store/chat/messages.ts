@@ -310,11 +310,15 @@ export function advanceEventTime(current: string | null, incoming: string | null
  * straggler's own result can release the busy flag; once a turn has ended
  * (or the user stopped it) a mark whose result never came would later let an
  * unrelated lone tool result blink Stop off mid-turn (R3-SPA-SFH-04).
+ * The provider-retry line retires with the turn too (6b U3c): it describes a
+ * retry of THIS turn, so a later turn shows it only after its own
+ * provider_retry frame.
  */
-export function endTurnState(draft: Pick<SessionChatState, 'activeTurnId' | 'activeTurnAgentId' | 'idleArmedToolCalls'>): void {
+export function endTurnState(draft: Pick<SessionChatState, 'activeTurnId' | 'activeTurnAgentId' | 'idleArmedToolCalls' | 'providerRetryEvent'>): void {
   draft.activeTurnId = null
   draft.activeTurnAgentId = null
   draft.idleArmedToolCalls = undefined
+  draft.providerRetryEvent = null
 }
 
 /**

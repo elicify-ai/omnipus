@@ -11221,6 +11221,11 @@ export interface components {
              * @example 5242880
              */
             max_bytes: number;
+            /**
+             * @description Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+             * @example 30000
+             */
+            max_patches?: number;
         };
         /**
          * ContextWindowNotice
@@ -14499,11 +14504,11 @@ export interface components {
                  */
                 occurrence_ms: number;
                 /**
-                 * @description The matched run's status.
+                 * @description The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
                  * @example done
                  * @enum {string}
                  */
-                status: "in_progress" | "done" | "failed" | "skipped";
+                status: "in_progress" | "done" | "failed" | "skipped" | "missed";
                 /**
                  * @description The matched run's ID (ULID).
                  * @example 01J8Z3K2R9G4S6M0N1P2Q3R4S5
@@ -14614,11 +14619,11 @@ export interface components {
              */
             occurrence_ms: number | null;
             /**
-             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
              * @example done
              * @enum {string}
              */
-            status: "in_progress" | "done" | "failed" | "skipped";
+            status: "in_progress" | "done" | "failed" | "skipped" | "missed";
             /**
              * @description Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
              * @example Found 3 anomalies in the gateway logs.
@@ -18468,7 +18473,7 @@ export interface components {
              * @enum {string}
              */
             reason?: "index_missing" | "index_inconsistent" | "catchup_limit" | "storage_error" | "projection_error";
-            /** @description Required only when unavailable. Fixed sanitized copy, never an underlying cause, path, raw position or query. For index_missing/index_inconsistent/catchup_limit: "Session history is unavailable. Retry after the operator restores its index." Other required storage/projection failures retain the fixed redacted session-storage error behavior in D11. Not a turn-ending ErrorFrame. */
+            /** @description Required only when unavailable. Fixed sanitized copy, never an underlying cause, path, raw position or query. For index_missing/index_inconsistent/catchup_limit: "This conversation's history could not be loaded." Other required storage/projection failures retain the fixed redacted session-storage error behavior in D11. Not a turn-ending ErrorFrame. */
             message?: string;
         };
         /**
@@ -19741,7 +19746,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly "Session history is unavailable. Retry after the operator restores its index." A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress. */
+            /** @description Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly "This conversation's history could not be loaded." A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress. */
             500: {
                 headers: {
                     [name: string]: unknown;
