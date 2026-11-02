@@ -282,7 +282,7 @@ func (te *TaskExecutor) finishRunTurn(
 		// session's lifecycle cancelled. A timeout is not a stop: it still breaks
 		// the run and restarts it.
 		if TranslateTurnError(turnErr).Code == CodeTurnCanceled {
-			reason := "Stopped: " + turnErrorUserText(turnErr)
+			reason := te.stoppedTurnReason(t.ID, taskSessionID, turnErr)
 			logger.InfoCF("task_executor", "task run: the worker's turn was stopped — ending the task, no attempt used, no restart",
 				map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
 			te.endTaskWithoutAttempt(t, taskSessionID, reason, run)

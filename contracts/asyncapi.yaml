@@ -89,6 +89,8 @@ channels:
         $ref: '#/components/messages/RateLimitFrame'
       ProviderRetryFrame:
         $ref: '#/components/messages/ProviderRetryFrame'
+      ProviderStatusFrame:
+        $ref: '#/components/messages/ProviderStatusFrame'
       ContextWindowNoticeFrame:
         $ref: '#/components/messages/ContextWindowNoticeFrame'
       ProviderFallbackFrame:
@@ -1263,6 +1265,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ProviderRetryFrame'
+    ProviderStatusFrame:
+      name: ProviderStatusFrame
+      title: provider_status
+      summary: Provider-call state of a running turn — waiting, responding again, or recovered after retries (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ProviderStatusFrame'
     ContextWindowNoticeFrame:
       name: ContextWindowNoticeFrame
       title: context_window_notice
@@ -2597,6 +2606,7 @@ components:
       - replay_provider_fallback
       - rate_limit
       - provider_retry
+      - provider_status
       - context_window_notice
       - provider_fallback
       - media
@@ -3370,6 +3380,12 @@ components:
         media_unsupported:
           message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
           attribution: model
+        media_too_large:
+          # Issue #1435/#1483: a provider "image too large / requires N patches" rejection is
+          # its own cause, never relabelled media_unsupported. `model` attribution: the
+          # ceiling belongs to the model; Omnipus has already resized automatically.
+          message: "An image in this conversation is too large for this model’s size limit, even after Omnipus resized it automatically. Try a smaller image, or open Verbose chat for details."
+          attribution: model
         provider_rejected:
           message: "The model declined to respond to this request. Try rephrasing it, or switch models."
           attribution: model
@@ -3489,6 +3505,7 @@ components:
             Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
           enum:
             - media_unsupported
+            - media_too_large
             - provider_rejected
             - request_too_large
             - provider_auth_failed
@@ -3633,6 +3650,12 @@ components:
         media_unsupported:
           message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
           attribution: model
+        media_too_large:
+          # Issue #1435/#1483: a provider "image too large / requires N patches" rejection is
+          # its own cause, never relabelled media_unsupported. `model` attribution: the
+          # ceiling belongs to the model; Omnipus has already resized automatically.
+          message: "An image in this conversation is too large for this model’s size limit, even after Omnipus resized it automatically. Try a smaller image, or open Verbose chat for details."
+          attribution: model
         provider_rejected:
           message: "The model declined to respond to this request. Try rephrasing it, or switch models."
           attribution: model
@@ -3752,6 +3775,7 @@ components:
             Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
           enum:
             - media_unsupported
+            - media_too_large
             - provider_rejected
             - request_too_large
             - provider_auth_failed
@@ -5246,6 +5270,63 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/ProviderRetryFrame.yaml.
+    ProviderStatusFrame:
+      title: ProviderStatusFrame
+      description: >
+        Server → client (issues #1478 and #1280). The state of the
+        model-provider call a running turn is waiting on: `waiting` (nothing
+        has arrived since silent_since; the silence limit ends the call at
+        stall_at when known), `responding` (data arrives again, or the call
+        returned, after a `waiting` notice), `recovered` (the call succeeded
+        after `retries` automatic retries). Named fields only, never provider
+        text. Keep in sync by hand with
+        contracts/components/schemas/ProviderStatusFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - turn_id
+      - state
+      - sent_at
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: provider_status
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        turn_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        state:
+          type: string
+          enum:
+          - waiting
+          - responding
+          - recovered
+        sent_at:
+          type: string
+          format: date-time
+        silent_since:
+          type: string
+          format: date-time
+        stall_at:
+          type: string
+          format: date-time
+        retries:
+          type: integer
+          minimum: 1
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/ProviderStatusFrame.yaml.
     # Shape-equal WS mirror of components/schemas/ContextWindowNotice.yaml.
     # The distinct name follows GoalOutcomeFrameOutcome: REST and WS Go types
     # share one package, and the AsyncAPI generators do not resolve file refs.
