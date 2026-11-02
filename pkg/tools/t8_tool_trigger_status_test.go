@@ -76,9 +76,14 @@ func TestT8ToolTriggerStatus_UnchangedTriggerResave_KeepsNext_TK30_3(t *testing.
 
 	trig := &task.Trigger{Type: task.TriggerOnce}
 	trig.Config.AtMs = &at
+	// Instrument, two writes: (1) the trigger alone (a changed future trigger
+	// lands inbox under the CK-4 ruling), then (2) status next WITHOUT a
+	// trigger. The task ends next with a future trigger stored.
+	_, err := store.Update(tk.ID, task.Patch{Trigger: &trig})
+	require.NoError(t, err, "instrument: write the trigger alone")
 	next := task.StatusNext
-	_, err := store.Update(tk.ID, task.Patch{Trigger: &trig, Status: &next})
-	require.NoError(t, err, "instrument: seed a trigger on a next task (explicit status skips the auto move)")
+	_, err = store.Update(tk.ID, task.Patch{Status: &next})
+	require.NoError(t, err, "instrument: set status next without a trigger")
 	seeded, err := store.Get(tk.ID)
 	require.NoError(t, err)
 	require.Equal(t, task.StatusNext, seeded.Status, "instrument: seeded next with a trigger")

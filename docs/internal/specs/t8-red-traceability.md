@@ -918,3 +918,5 @@ Logs: `/workspace/logs/t8-red/round7-ck4-rest.log`, `round7-tool.log`, `round7-c
 | CK-5 | TK-30 (3) | `pkg/tools/t8_tool_trigger_state_test.go::Matrix_TK30` rows now assert `!res.IsError` and a persisted trigger | pass |
 | Item 5 | r17 3.5 | `pkg/thirdpartycli/t8_path_dirlink_unix_test.go` helper adds `require.IsType(&CheckError{}, err)` beside `errors.As` | 7 dirlink tests pass |
 | Lint | - | `pkg/agent/t8_run_program_dirlink_test.go` variable `real` renamed `realExe` | 0 issues |
+
+Correction (setup only): the two `UnchangedTriggerResave_KeepsNext_TK30_3` controls (REST and tool) seeded the trigger and status next in ONE write, which is exactly the CK-4 input and lands inbox under the chief ruling. Setup now writes the trigger alone, then status next without a trigger, then the identical-trigger re-save; assertions unchanged. With the uncommitted CK-4 store fix in the tree all REST (`^TestT8RestTriggerState_`, `^TestT8RestTriggerStatus_`) and tool (`Matrix_TK30`, `TestT8ToolTriggerStatus_`) tests pass, exit 0 each (logs `round7-fixup-rest.log`, `round7-fixup-tool.log`).

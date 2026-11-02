@@ -100,9 +100,14 @@ func TestT8RestTriggerStatus_UnchangedTriggerResave_KeepsNext_TK30_3(t *testing.
 	ms := at.UnixMilli()
 	trig := &task.Trigger{Type: task.TriggerOnce}
 	trig.Config.AtMs = &ms
+	// Instrument, two writes: (1) the trigger alone (a changed future trigger
+	// lands inbox under the CK-4 ruling), then (2) status next WITHOUT a
+	// trigger. The task ends next with a future trigger stored.
+	_, err := api.taskStore.Update(id, task.Patch{Trigger: &trig})
+	require.NoError(t, err, "instrument: write the trigger alone")
 	next := task.StatusNext
-	_, err := api.taskStore.Update(id, task.Patch{Trigger: &trig, Status: &next})
-	require.NoError(t, err, "instrument: seed a trigger on a next task (explicit status skips the auto move)")
+	_, err = api.taskStore.Update(id, task.Patch{Status: &next})
+	require.NoError(t, err, "instrument: set status next without a trigger")
 	seeded, err := api.taskStore.Get(id)
 	require.NoError(t, err)
 	require.Equal(t, task.StatusNext, seeded.Status, "instrument: seeded next with a trigger")
