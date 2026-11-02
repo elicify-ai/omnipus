@@ -1553,6 +1553,7 @@ type Agent = {
   stats?: AgentStats | undefined;
   skill_grants?: {} | undefined;
   skills?: Array<string> | undefined;
+  stale_skill_grants?: Array<string> | undefined;
   updated_at?: string | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
@@ -4597,6 +4598,7 @@ export const Agent: z.ZodType<Agent> = z
     stats: AgentStats.optional(),
     skill_grants: z.record(z.string()).optional(),
     skills: z.array(z.string()).optional(),
+    stale_skill_grants: z.array(z.string()).optional(),
     updated_at: z.string().datetime({ offset: true }).optional(),
     voice: z.string().nullish(),
     executor: ExecutorConfig.optional(),

@@ -8740,6 +8740,13 @@ export interface components {
              */
             skills?: string[];
             /**
+             * @description Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). Computed by the server on the agent detail read (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is not listed. Omitted when empty.
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            readonly stale_skill_grants?: string[];
+            /**
              * Format: date-time
              * @description ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
              * @example 2026-06-19T12:34:56Z
