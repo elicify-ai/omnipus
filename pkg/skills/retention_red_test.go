@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -191,7 +192,7 @@ func TestRetention_SupersessionClock(t *testing.T) {
 	// Unreferenced blobs removed (rule 3): f1's blob is referenced only by
 	// v1's files[] — after v1 is pruned nothing references it.
 	_, err := os.Stat(filepath.Join(blobs, f1.SHA256))
-	assert.True(t, os.IsNotExist(err), "the blob only v1 referenced is removed")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the blob only v1 referenced is removed")
 	for _, keep := range []historyFile{f2, f3, f4} {
 		assert.FileExists(t, filepath.Join(blobs, keep.SHA256), "referenced blob kept")
 	}
@@ -252,7 +253,7 @@ func TestRetention_DeleteHeadKeepsPreDeletionState_FullWindow(t *testing.T) {
 		})
 		require.NoError(t, RetentionSweep(h, 90, false, now))
 		_, err := os.Stat(filepath.Join(h, "app"))
-		assert.True(t, os.IsNotExist(err), "the whole history directory is deleted once the delete_skill manifest itself is older than the window")
+		assert.True(t, errors.Is(err, os.ErrNotExist), "the whole history directory is deleted once the delete_skill manifest itself is older than the window")
 	})
 }
 
@@ -340,7 +341,7 @@ func TestRetention_S11_18HeadRules(t *testing.T) {
 	assert.Contains(t, ids, fixtureVersionID(3), "V3 kept (successor V4 is today)")
 	assert.Contains(t, ids, fixtureVersionID(4), "V4 newest — never removed")
 	_, err := os.Stat(filepath.Join(blobs, f1.SHA256))
-	assert.True(t, os.IsNotExist(err), "the blob only V1 referenced is removed by rule 3")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the blob only V1 referenced is removed by rule 3")
 	for _, keep := range []historyFile{f2, f4} {
 		assert.FileExists(t, filepath.Join(blobs, keep.SHA256), "blobs retained manifests reference are kept")
 	}
@@ -369,7 +370,7 @@ func TestRetention_RetainedManifestsUntouched_AfterPrune(t *testing.T) {
 	assert.Equal(t, before, after,
 		"the sweep never rewrites a retained manifest — its paths/paths_total are durable (S-5.15)")
 	_, err := os.Stat(filepath.Join(historyRoot, "app", "versions", fixtureVersionID(1)+".json"))
-	assert.True(t, os.IsNotExist(err), "V1 pruned by the same sweep")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "V1 pruned by the same sweep")
 }
 
 // fixtureVersionID uses the normative v + six digits + UTC format. Test

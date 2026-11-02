@@ -11,6 +11,7 @@ package skills
 // the baseline (SeedDefaults never overwrites, never retires, no report).
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -264,7 +265,7 @@ func TestSyncBuiltins_EditedUnstampedOverwritten_NoCustomCopy(t *testing.T) {
 	assert.True(t, uuidShape.MatchString(generationOf(t, planDir)),
 		"the replaced folder carries a fresh generation stamp (§8.2 r15)")
 	_, err = os.Stat(filepath.Join(root, "plan-custom"))
-	assert.True(t, os.IsNotExist(err), "no <slug>-custom copy is kept (F-28)")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "no <slug>-custom copy is kept (F-28)")
 	assert.Equal(t, map[string][]string{
 		"agent-a": {"plan", "keep-agent-a"},
 		"agent-b": {"plan", "keep-agent-b"},
@@ -328,7 +329,7 @@ func TestSyncBuiltins_RemovesStaleSeedStaging(t *testing.T) {
 	_, err := SyncBuiltins(root, nil)
 	require.NoError(t, err)
 	_, statErr := os.Stat(stale)
-	assert.True(t, os.IsNotExist(statErr), "stale skills/.seed-plan-123 removed at start")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "stale skills/.seed-plan-123 removed at start")
 }
 
 // TestRetireBuiltins_StampedFolderDeleted_GrantRemoved (S-7.6): a stamped
@@ -359,7 +360,7 @@ func TestRetireBuiltins_StampedFolderDeleted_GrantRemoved(t *testing.T) {
 	assert.Contains(t, grants.removed, "handoff", "the contractual removal was requested by skill key")
 	assert.Equal(t, want, grants.seeded, "all 12 holders lose only the retired grant; non-holders stay unchanged")
 	_, statErr := os.Stat(handoffDir)
-	assert.True(t, os.IsNotExist(statErr), "the stamped retired folder is deleted")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the stamped retired folder is deleted")
 	outcome := findRetirement(report.Retired, "handoff")
 	require.NotNil(t, outcome, "the stamped-folder retirement is reported before dereferencing it")
 	assert.True(t, outcome.FolderDeleted, "folder deleted reported (skill.builtin_retired)")

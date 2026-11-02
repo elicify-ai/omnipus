@@ -109,9 +109,9 @@ func TestS521_LegsABCD_AbortedCaptureCleanup(t *testing.T) {
 		_, err := copySrcToDst(t, root, "bar", "dst")
 		require.Error(t, err, "the copy's source capture aborts")
 		_, statErr := os.Stat(filepath.Join(root, "dst"))
-		assert.True(t, os.IsNotExist(statErr), "nothing created")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "nothing created")
 		_, statErr = os.Stat(filepath.Join(historyRoot, "bar"))
-		assert.True(t, os.IsNotExist(statErr),
+		assert.True(t, errors.Is(statErr, os.ErrNotExist),
 			"no history directory was created for the aborted capture (none existed)")
 	})
 
@@ -314,7 +314,7 @@ func TestS521_LegH_BuiltinSource_NoHistoryEver(t *testing.T) {
 		assert.Equal(t, PersistenceComplete, out.PersistenceStatus)
 
 		_, statErr := os.Stat(filepath.Join(historyRoot, "plan"))
-		assert.True(t, os.IsNotExist(statErr), "no system/skill-history/plan/ directory ever exists")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "no system/skill-history/plan/ directory ever exists")
 		assert.Empty(t, incomingDirs(t, filepath.Join(root, ".staging")),
 			"the copy's staging scratch is disposed in the copy's lock hold")
 	})
@@ -334,7 +334,7 @@ func TestS521_LegH_BuiltinSource_NoHistoryEver(t *testing.T) {
 		assert.Contains(t, out.Warning, "capture scratch cleanup failed",
 			"the class-3 finishing warning, byte-shape §7.6 class 3 (r10)")
 		_, statErr := os.Stat(filepath.Join(historyRoot, "plan"))
-		assert.True(t, os.IsNotExist(statErr), "still no built-in history directory")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "still no built-in history directory")
 	})
 }
 
@@ -462,7 +462,7 @@ func TestCopyProvenance(t *testing.T) {
 			"built-in 'plan' does not match its shipped version and will be replaced at the next start; copy it after the next start",
 			"byte-exact §7.2 built-in mismatch text")
 		_, statErr := os.Stat(filepath.Join(root, "plan-copy"))
-		assert.True(t, os.IsNotExist(statErr), "nothing created")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "nothing created")
 	})
 }
 
@@ -615,7 +615,7 @@ func TestS617_OversizedCopySource(t *testing.T) {
 		assert.Contains(t, err.Error(), "huge.bin", "the reason names the path and the limit")
 
 		_, statErr := os.Stat(filepath.Join(root, "dst"))
-		assert.True(t, os.IsNotExist(statErr), "no dst folder")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "no dst folder")
 		assert.Empty(t, incomingDirs(t, root), "no leftover staging temp")
 		after := snapshotHistory(t, historyRoot, "src")
 		assert.Equal(t, before, after, "no source version recorded — the aborted capture records nothing")

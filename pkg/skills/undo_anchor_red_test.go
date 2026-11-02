@@ -109,7 +109,7 @@ func TestMultiFileSequence_RecoveryFromOwnWrite1Anchor(t *testing.T) {
 	// asserted by checking that only the V1 restore produced pre-sequence bytes
 	// above and that the sequence's notes.md is gone with it.
 	_, statErr := os.Stat(filepath.Join(root, "foo", "notes.md"))
-	assert.True(t, os.IsNotExist(statErr), "restore V1 removed the whole sequence's effect")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "restore V1 removed the whole sequence's effect")
 }
 
 // TestMultiFileSequence_TwoSequences_RecoverBOnly (S-3.8 leg 2).
@@ -235,7 +235,7 @@ func TestRecreate_AfterDelete_UndoVariantNamesDeletion(t *testing.T) {
 	})
 	require.NoError(t, err)
 	_, statErr := os.Stat(filepath.Join(root, "foo"))
-	assert.True(t, os.IsNotExist(statErr), "the exact pre-sequence live state (absence) is restored")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the exact pre-sequence live state (absence) is restored")
 }
 
 // TestRecreate_AfterBrokenPredecessor_UndoNamesRepair (S-3.15 leg 1 + leg 2).
@@ -410,7 +410,7 @@ func TestUndoVariant_KeyedToCompleteRestoreGate(t *testing.T) {
 					if leg == "secret" {
 						bad = "leaked.md"
 					}
-					if _, statErr := os.Stat(filepath.Join(appDir, bad)); os.IsNotExist(statErr) {
+					if _, statErr := os.Stat(filepath.Join(appDir, bad)); errors.Is(statErr, os.ErrNotExist) {
 						return errors.New("disk full")
 					}
 					return nil

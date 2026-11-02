@@ -6,6 +6,7 @@ package skills
 // Traces to: skills-spec-r15.md §9.3, §16 US-11, §17.1 rows 19/34.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,7 +41,7 @@ func TestRecovery_SwapLiveAbsent_NonDeleteHead_PutBack(t *testing.T) {
 	assert.DirExists(t, filepath.Join(root, "app"), "renamed back to live")
 	assert.Equal(t, validSkillMD("app", "swap leftover", "leftover body"), readFile(t, filepath.Join(root, "app", "SKILL.md")))
 	_, err := os.Stat(swapDir)
-	assert.True(t, os.IsNotExist(err), "the .swap leftover is consumed by the put-back")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the .swap leftover is consumed by the put-back")
 
 	// Second restart: nothing left to do, nothing breaks.
 	require.NoError(t, RecoverInterrupted(root, historyRoot))
@@ -60,7 +61,7 @@ func TestRecovery_SwapLivePresent_Removed(t *testing.T) {
 
 	require.NoError(t, RecoverInterrupted(root, historyRoot))
 	_, err := os.Stat(filepath.Join(root, ".swap", "app"))
-	assert.True(t, os.IsNotExist(err), "the stale .swap is removed")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the stale .swap is removed")
 
 	require.NoError(t, RecoverInterrupted(root, historyRoot))
 	assert.DirExists(t, filepath.Join(root, "app"), "stays deleted: live untouched")
@@ -108,7 +109,7 @@ func TestRecovery_LegacyBackup_LivePresent_Deleted(t *testing.T) {
 	require.NoError(t, RecoverInterrupted(root, historyRoot))
 
 	_, err := os.Stat(backup)
-	assert.True(t, os.IsNotExist(err), "the legacy backup is deleted")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the legacy backup is deleted")
 	assert.FileExists(t, filepath.Join(root, "foo", "SKILL.md"), "live foo unchanged")
 	assert.FileExists(t, filepath.Join(historyRoot, "foo", "versions", fixtureVersionID(1)+".json"),
 		"history unchanged — no capture into history (F-28)")
@@ -155,9 +156,9 @@ func TestRecovery_CaptureTemporaries_RemovedAtStart(t *testing.T) {
 	require.NoError(t, RecoverInterrupted(root, historyRoot))
 
 	_, err := os.Stat(blobTemp)
-	assert.True(t, os.IsNotExist(err), "capture-blob temporary removed at start")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "capture-blob temporary removed at start")
 	_, err = os.Stat(stagingTemp)
-	assert.True(t, os.IsNotExist(err), "staging-area scratch removed at start")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "staging-area scratch removed at start")
 	assert.FileExists(t, filepath.Join(historyRoot, "app", "blobs", mkFile("SKILL.md", 96).SHA256),
 		"the committed manifest's referenced final is untouched")
 }

@@ -41,7 +41,7 @@ func TestRestore_PutsEveryFileBack_AndRoundTrips(t *testing.T) {
 	require.Len(t, v3Match, 2)
 	v3 := v3Match[1]
 	_, statErr := os.Stat(filepath.Join(appDir, "helpers.md"))
-	require.True(t, os.IsNotExist(statErr), "fixture: v3 has no helper")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "fixture: v3 has no helper")
 
 	// restore v1: every file of v1 back byte-exact (SKILL.md AND the
 	// helper), a new restore version recorded.
@@ -66,7 +66,7 @@ func TestRestore_PutsEveryFileBack_AndRoundTrips(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, validSkillMD("app", "v3", "v3 body"), readFile(t, filepath.Join(appDir, "SKILL.md")))
 	_, statErr = os.Stat(filepath.Join(appDir, "helpers.md"))
-	assert.True(t, os.IsNotExist(statErr), "restore v3 restores v3's exact state: the helper stays gone")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "restore v3 restores v3's exact state: the helper stays gone")
 }
 
 // TestRestore_DeletedSkill_ThenRecreateByOtherSession_Refused (S-5.4).

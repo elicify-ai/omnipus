@@ -97,8 +97,8 @@ func TestCreate_CaseTwin_OfUserSkill_Refused_SKILL_EXISTS(t *testing.T) {
 				"SKILL_EXISTS must name the folder that is on disk (foo), byte-exact §5.10")
 			_, statErr := os.Stat(filepath.Join(root, "Foo"))
 			_, statErr2 := os.Stat(filepath.Join(root, "FOO"))
-			assert.True(t, os.IsNotExist(statErr), "no stray Foo folder may exist after refusal")
-			assert.True(t, os.IsNotExist(statErr2), "no stray FOO folder may exist after refusal")
+			assert.True(t, errors.Is(statErr, os.ErrNotExist), "no stray Foo folder may exist after refusal")
+			assert.True(t, errors.Is(statErr2, os.ErrNotExist), "no stray FOO folder may exist after refusal")
 		})
 	}
 }
@@ -124,7 +124,7 @@ func TestBuiltinNameReserved_CaseInsensitive_AllEntryPoints(t *testing.T) {
 				"'"+strings.ToLower(target)+"' is the name of a built-in skill and cannot be used for another skill. Choose a different name.",
 				"byte-exact §5.10 BUILTIN_NAME_RESERVED text, naming the built-in slug")
 			_, statErr := os.Stat(filepath.Join(root, target))
-			assert.True(t, os.IsNotExist(statErr), "no folder created for reserved name")
+			assert.True(t, errors.Is(statErr, os.ErrNotExist), "no folder created for reserved name")
 		})
 	}
 

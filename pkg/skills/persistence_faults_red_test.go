@@ -168,7 +168,7 @@ func TestClass3_SwapRemoveOrAuditFault_SuccessWithWarning(t *testing.T) {
 		FaultSwapRemove = nil
 		require.NoError(t, RecoverInterrupted(root, SkillHistoryRoot(root)))
 		_, statErr := os.Stat(filepath.Join(root, ".swap", "app"))
-		assert.True(t, os.IsNotExist(statErr))
+		assert.True(t, errors.Is(statErr, os.ErrNotExist))
 	})
 
 	t.Run("audit write fault", func(t *testing.T) {
@@ -310,7 +310,7 @@ func TestDelete_ManifestFails_PutBackSucceeds_Class1(t *testing.T) {
 	assert.Equal(t, PersistenceNone, out.PersistenceStatus)
 	assert.DirExists(t, filepath.Join(root, "app"), "put-back restored the live folder")
 	_, statErr := os.Stat(filepath.Join(root, ".swap", "app"))
-	assert.True(t, os.IsNotExist(statErr), "no .swap leftover on the successful put-back")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "no .swap leftover on the successful put-back")
 }
 
 // TestDelete_ManifestFails_PutBackAlsoFails_Class1bDel2 (S-11.14 variant).
@@ -399,7 +399,7 @@ func TestClass1b_ReplaceSwapAndPutBackFail(t *testing.T) {
 		"the recovery version is named")
 	assert.DirExists(t, filepath.Join(root, ".swap", "app"))
 	_, statErr := os.Stat(filepath.Join(root, "app"))
-	assert.True(t, os.IsNotExist(statErr))
+	assert.True(t, errors.Is(statErr, os.ErrNotExist))
 	renamePublishedSkill, FaultPutBackRename = previousRename, nil
 	require.NoError(t, RecoverInterrupted(root, SkillHistoryRoot(root)))
 	assert.Equal(t, validSkillMD("app", "v0", "v0 body"), readFile(t, filepath.Join(root, "app", "SKILL.md")))
@@ -435,7 +435,7 @@ func TestCreateFails_AfterParentDirCreated_CleanupSucceeds(t *testing.T) {
 	assert.Equal(t, PersistenceNone, out.PersistenceStatus)
 
 	_, statErr := os.Stat(filepath.Join(root, "fresh"))
-	assert.True(t, os.IsNotExist(statErr),
+	assert.True(t, errors.Is(statErr, os.ErrNotExist),
 		"step 5's empty-directory cleanup removed the folder — live state back to absent")
 
 	// The retry is a clean create, not a SKILL_EXISTS collision.

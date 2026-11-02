@@ -66,7 +66,7 @@ func staleLoad(t *testing.T, root, slug string, bindings map[string]string) erro
 func createSkillViaPipeline(t *testing.T, root, slug, description, body string) (PublishOutcome, string) {
 	t.Helper()
 	_, statErr := os.Stat(filepath.Join(root, slug))
-	require.True(t, os.IsNotExist(statErr), "create fixture must start absent: %s", slug)
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "create fixture must start absent: %s", slug)
 	out, err := ApplyChange(root, ChangeRequest{
 		Kind:    KindCreate,
 		Slug:    slug,
@@ -115,7 +115,7 @@ func TestDelete_RemovesSkillGrant_BestEffortHygiene(t *testing.T) {
 	assert.False(t, grants.holdsGrant("foo"), "the deleted skill's permission is removed")
 	assert.True(t, grants.holdsGrant("other-skill"), "unrelated permissions are preserved")
 	_, statErr := os.Stat(fooDir)
-	assert.True(t, os.IsNotExist(statErr), "the live folder is gone")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the live folder is gone")
 }
 
 // TestDelete_GrantRemovalFails_StaleGrantCannotAuthorizeRecreation covers the
@@ -146,7 +146,7 @@ func TestDelete_GrantRemovalFails_StaleGrantCannotAuthorizeRecreation(t *testing
 		assert.Equal(t, "foo", name, "even failed hygiene targets only the deleted skill")
 	}
 	_, statErr := os.Stat(fooDir)
-	require.True(t, os.IsNotExist(statErr), "grant-storage failure cannot keep the live skill folder")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "grant-storage failure cannot keep the live skill folder")
 	assert.Empty(t, grants.removed, "the injected storage error really prevented removal")
 	assert.True(t, grants.holdsGrant("foo"), "the failed removal leaves the old grant row")
 	assert.True(t, grants.holdsGrant("other-skill"), "the unrelated grant remains intact")

@@ -59,7 +59,7 @@ func TestRestore_ReproducesNestedDotContent(t *testing.T) {
 	})
 	require.NoError(t, err, "restoring V1 passes validation")
 	_, statErr := os.Stat(filepath.Join(appDir, ".notes"))
-	assert.True(t, os.IsNotExist(statErr), "restoring V1 removes the dot-content (folder matches V1 byte-exact)")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "restoring V1 removes the dot-content (folder matches V1 byte-exact)")
 
 	// restore V2: the nested dot-file comes back byte-exact.
 	_, err = ApplyChange(root, ChangeRequest{
@@ -198,7 +198,7 @@ func TestSnapshot_RetainedNotRestorable(t *testing.T) {
 	require.NotEmpty(t, v3, "the delete committed a delete_skill manifest")
 
 	_, statErr := os.Stat(appDir)
-	assert.True(t, os.IsNotExist(statErr), "the delete removed the live folder")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the delete removed the live folder")
 
 	// restore V2 refused: the version carries no valid instruction file.
 	_, err = ApplyChange(root, ChangeRequest{
@@ -222,7 +222,7 @@ func TestSnapshot_RetainedNotRestorable(t *testing.T) {
 
 	// Both refusals leave the live state deleted.
 	_, statErr = os.Stat(appDir)
-	assert.True(t, os.IsNotExist(statErr), "the refusals leave the live state deleted")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the refusals leave the live state deleted")
 
 	// restore V1 rebuilds the pre-break state.
 	_, err = ApplyChange(root, ChangeRequest{
@@ -298,7 +298,7 @@ func TestDeleteFile_ResultingInstructionValidity(t *testing.T) {
 		require.NoError(t, err, "the validity check refuses only instruction-breaking deletions")
 		assert.Equal(t, PersistenceComplete, out.PersistenceStatus)
 		_, statErr := os.Stat(filepath.Join(appDir, "reference", "forms.md"))
-		assert.True(t, os.IsNotExist(statErr))
+		assert.True(t, errors.Is(statErr, os.ErrNotExist))
 	})
 }
 
