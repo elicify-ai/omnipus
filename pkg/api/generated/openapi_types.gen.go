@@ -15677,7 +15677,7 @@ type ChannelConfigureErrorCode string
 
 // ChannelConfigureRequest Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
 type ChannelConfigureRequest struct {
-	// AllowFrom Allowed sender ids for this channel instance ("Allow From"), one id per element. An empty list admits every sender. The server saves a list. For compatibility with older clients the server also accepts one string when inbound schema validation is off; it splits that string on commas (",", full-width "，") and, except on WhatsApp (whose ids may be phone numbers with spaces), on whitespace, trims each id and drops empty pieces. A null value is refused with 400 and nothing is saved.
+	// AllowFrom Allowed sender ids for this channel instance ("Allow From"), one id per element. An empty list admits every sender. The server saves a list. For compatibility with older clients the server also accepts one string when inbound schema validation is off; it splits that string on commas (",", full-width "，") and, except on WhatsApp, on whitespace, trims each id and drops empty pieces. WhatsApp ids are account ids (digits@s.whatsapp.net or a group JID), not phone numbers, and split on commas only. A null value is refused with 400 and nothing is saved.
 	AllowFrom *[]string `json:"allow_from,omitempty"`
 
 	// AppId Application ID (used by Slack, Discord).
