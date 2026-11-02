@@ -844,3 +844,9 @@ Still red in `pkg/gateway`:
 - TestRestCreate_KeepsFallbackModels (7.7): PRODUCTION BUG. `pkg/gateway/rest_agents_create.go` validates `fallback_models` into `pap.fallbackModels` and never writes it to the created agent; the stored agent has 0 fallbacks. Not fixed by the test author.
 - TestHistoryPageCleanupFailure_OutranksCancellationAndNotFound and TestHistoryPageMeasurement_SectionHReceipt: BLOCKED, the prebuilt `build/tools/chat-history-fixture.test` driver does not exist in this worktree.
 - TestSpawnSettings_MissingAuthorityPrerequisites rows 6.7, 6.8, 8.14, 9.9-9.14, 9.17-9.19: BLOCKED stubs, the Settings-bound dispatch fixture is not bound in the gateway package (the same behaviour is covered at the pkg/agent level by `l1_1274_saved_program_test.go`, but the gateway rows stay unbound).
+
+## currentDelegationDepth characterisation (2026-11-02)
+`pkg/agent/t8_delegation_depth_matrix_test.go` (new; complements `t8_delegation_depth_helper_test.go`; r17 US-21 AS-3, scenario 21.3 and the developer deviation "larger depth wins"):
+- TestCurrentDelegationDepth_OrderingMatrix: parent greater than context, context greater than parent, equal (2/2 and 0/0), zero root turn, missing turn state, unseeded context, with two instrument checks showing that a parent-only or context-only reading would give a wrong answer.
+- TestEnforceEdgeModeAndDepth_BoundaryRefusal: for edge caps 1, 2 and 3 and each depth source (turn state, context, both), depth cap-1 is admitted and depth cap and cap+1 are refused with `DenyDepth` and "maximum delegation depth (N) reached"; the deeper of the two sources decides at the boundary; an edge depth 0 refuses at depth 0.
+Characterisation of behaviour that already exists, so green on arrival (not RED-first). Run: log 130 (29 passing subtests), lint log 131 (0 issues). No production file touched.
