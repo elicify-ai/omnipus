@@ -131,9 +131,10 @@ func q7WaitTurn(t *testing.T, f *wu6Fixture, events agent.EventSubscription, sid
 				require.True(t, ok)
 				if end.SessionID == sid {
 					require.Equal(t, agent.TurnEndStatusCompleted, end.Status)
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					defer cancel()
-					require.True(t, f.al.WaitForActiveRequestsContext(ctx))
+					// Shutdown waits permanently close intake. Observe this completed
+					// turn here; the existing cleanup still asserts the full drain.
+					_, _, _, active := f.al.ActiveForegroundTurnInfo(sid)
+					require.False(t, active, "instrument: completed foreground turn is no longer active")
 					return
 				}
 			}
@@ -158,6 +159,20 @@ func TestQ7T22_RealTurnsAlwaysAskAndApproveOnceRepeatsIdentically(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := q7Fixture(t, "telegram", "telegram", "mia")
+			// The scripted model needs room for the full offered tool catalog and
+			// both turns' results; 128k triggers context relief and erases the
+			// provider-prompt observation. Keep the real result/save assertions.
+			modelOverrides := 0
+			require.NoError(t, f.al.MutateConfig(func(cfg *config.Config) error {
+				for i, override := range cfg.Context.ModelOverrides {
+					if override.Provider == "qa1277" && override.Model == "health-probe" {
+						cfg.Context.ModelOverrides[i].ContextWindow = 256000
+						modelOverrides++
+					}
+				}
+				return config.SaveConfig(f.f1277.configPath, cfg)
+			}))
+			require.Equal(t, 1, modelOverrides, "instrument: enlarge only the scripted model's context")
 			q7TurnPolicy(t, f, tc.global, "", tc.god, tc.auto)
 			sid := q7TurnSession(t, f)
 			// Identical no-op saves keep the same valid revision. No test-side
@@ -181,6 +196,8 @@ func TestQ7T22_RealTurnsAlwaysAskAndApproveOnceRepeatsIdentically(t *testing.T) 
 				}
 				events := q7StartTurn(t, f, sid)
 				entry := q7PendingOrFailOnTurnEnd(t, f, events, sid, callID)
+				_, _, _, active := f.al.ActiveForegroundTurnInfo(sid)
+				require.True(t, active, "instrument: foreground-turn observation sees the pending real turn")
 				require.NotEqual(t, previous, entry.ApprovalID, "FR-038: identical repeats need distinct fresh approval identities")
 				require.Equal(t, args, entry.Args)
 				previous = entry.ApprovalID
