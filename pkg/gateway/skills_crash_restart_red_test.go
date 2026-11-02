@@ -7,6 +7,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -148,7 +149,7 @@ func crashInner(t *testing.T, home, operation string) {
 		published := readErr == nil && string(body) == wantLive
 		if operation == "delete" {
 			_, swapErr := os.Stat(filepath.Join(root, ".swap", "foo", "SKILL.md"))
-			published = os.IsNotExist(readErr) && swapErr == nil
+			published = errors.Is(readErr, os.ErrNotExist) && swapErr == nil
 		}
 		if published {
 			os.Exit(skillsCrashExit)

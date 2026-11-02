@@ -15,6 +15,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -75,7 +76,7 @@ func TestRestDelete_RevisionEnvelope(t *testing.T) {
 			assert.Contains(t, m, key, "the delete envelope is the reused ConfigurationMutationState (C-6/C-9)")
 		}
 		_, statErr := os.Stat(filepath.Join(skillsDir, "x"))
-		assert.True(t, os.IsNotExist(statErr), "the live folder is gone")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "the live folder is gone")
 	})
 
 	t.Run("stale revision is 409 SKILL_CHANGED", func(t *testing.T) {

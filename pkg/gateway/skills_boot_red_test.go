@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,7 +49,7 @@ func TestBootSkills_RetiresStampedRetiredBuiltin(t *testing.T) {
 	report, err := bootSkills(cfg, home)
 	require.NoError(t, err, "RED: skills startup helper is not implemented")
 	_, err = os.Stat(filepath.Join(home, "skills", "handoff"))
-	assert.True(t, os.IsNotExist(err))
+	assert.True(t, errors.Is(err, os.ErrNotExist))
 	durable, err := agentstore.New(home).Get("agent-a")
 	require.NoError(t, err)
 	assert.NotContains(t, durable.Skills, "handoff", "the disk record, not only config cache, loses the retired grant")

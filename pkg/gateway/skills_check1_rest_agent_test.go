@@ -15,6 +15,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -122,7 +123,7 @@ func TestEditSkillDelete_AgentPathRemovesGrantThroughGatewayWiring(t *testing.T)
 	res := tool.Execute(ctx, map[string]any{"action": "delete", "skill": "ck5-doomed"})
 	require.False(t, res.IsError, "the agent delete must commit: %s", res.ForLLM)
 	_, statErr := os.Stat(filepath.Join(root, "ck5-doomed"))
-	require.True(t, os.IsNotExist(statErr), "the folder is gone")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "the folder is gone")
 
 	after, err := store.Get("coverage-main")
 	require.NoError(t, err)

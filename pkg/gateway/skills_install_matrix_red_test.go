@@ -8,6 +8,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -128,7 +129,7 @@ func TestRestInstall_ExpectationAndLocalConfirmationMatrix(t *testing.T) {
 			assert.Equal(t, "---\nname: x\ndescription: Use this installed test skill when requested.\n---\n\nBody.\n", string(raw))
 			if state == "case-twin-replacement" {
 				_, statErr := os.Stat(filepath.Join(root, "X"))
-				assert.True(t, os.IsNotExist(statErr), "never creates a second case-twin folder")
+				assert.True(t, errors.Is(statErr, os.ErrNotExist), "never creates a second case-twin folder")
 			}
 			manifests := t9ManifestFiles(t, root, "x")
 			require.NotEmpty(t, manifests, "successful install commits real history")
@@ -143,7 +144,7 @@ func TestRestInstall_ExpectationAndLocalConfirmationMatrix(t *testing.T) {
 			assert.Equal(t, kind, last["kind"])
 			assert.NotEmpty(t, last["files"], "manifest references the installed content")
 			_, err = os.Stat(filepath.Join(root, "x", ".skill-origin.json"))
-			assert.True(t, os.IsNotExist(err), "removed origin metadata writer stays removed")
+			assert.True(t, errors.Is(err, os.ErrNotExist), "removed origin metadata writer stays removed")
 			if strings.HasSuffix(state, "-confirmed") {
 				assert.GreaterOrEqual(t, len(manifests), 3, "previous changed state remains versioned")
 			}

@@ -34,5 +34,5 @@ func TestSecretCheckWiring_MissingCredentialStoreFailsClosed(t *testing.T) {
 	require.Error(t, err, "no credential store: the change must not commit unchecked")
 	assert.True(t, errors.Is(err, skills.ErrSecretCheckUnavailable), "refusal is SECRET_CHECK_UNAVAILABLE, got: %v", err)
 	_, statErr := os.Stat(filepath.Join(root, "ck1-unchecked"))
-	assert.True(t, os.IsNotExist(statErr), "nothing was written")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "nothing was written")
 }

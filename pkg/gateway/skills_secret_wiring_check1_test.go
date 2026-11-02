@@ -63,7 +63,7 @@ func TestGatewayStartup_WiresSecretCheckToCredentialStore(t *testing.T) {
 	assert.Contains(t, err.Error(), ck1SecretName, "the refusal names the secret")
 	assert.NotContains(t, err.Error(), ck1SecretValue, "the value is never echoed")
 	_, statErr := os.Stat(filepath.Join(root, "ck1-leaky"))
-	assert.True(t, os.IsNotExist(statErr), "nothing was written")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "nothing was written")
 
 	// Positive control: the same wiring lets a clean change through.
 	_, err = ck1Create(root, "ck1-clean", "no secrets here")
