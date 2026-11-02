@@ -1914,6 +1914,9 @@ func (s *Store) PromoteInboxIfReleased(id string) (t *Task, promoted bool, err e
 	if err = validateID(id); err != nil {
 		return nil, false, err
 	}
+	if hook := promoteInboxHook.Load(); hook != nil {
+		(*hook)(id)
+	}
 	mu := s.lock.Get(id)
 	mu.Lock()
 	defer mu.Unlock()

@@ -132,6 +132,10 @@ type TaskTriggerScheduler struct {
 	// Guarded by mu.
 	rearmTestHook func()
 
+	// testHooks are the producer barrier seams (task_trigger_test_hooks.go);
+	// all nil in production. Guarded by mu.
+	testHooks triggerTestHooks
+
 	// spawnResetTestHook, when set, is invoked by RunScheduled immediately
 	// before it calls store.SpawnReset (test-only seam for deterministically
 	// forcing the task-deleted-mid-fire race — F5, see
@@ -827,6 +831,9 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 	if t == nil || t.ID == "" {
 		return
 	}
+	if hook := s.currentTestHooks().upsertNotify; hook != nil {
+		hook(t.ID)
+	}
 	unlock := task.LockTaskWriteOrder(t.ID)
 	defer unlock()
 	if err := s.ReconcileTaskLocked(t.ID); err != nil {
@@ -1128,6 +1135,9 @@ func (s *TaskTriggerScheduler) RunRecoverySweep() {
 // the task's coordination lock, so a sweep snapshot taken before a completed
 // clear or replacement registers nothing.
 func (s *TaskTriggerScheduler) sweepRearm(taskID string, nowMs int64) {
+	if hook := s.currentTestHooks().sweepRearm; hook != nil {
+		hook(taskID)
+	}
 	unlock := task.LockTaskWriteOrder(taskID)
 	defer unlock()
 	t, err := s.store.Get(taskID)

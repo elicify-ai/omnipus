@@ -105,6 +105,7 @@ func WriteTaskReconciled(store *task.Store, id string, req TaskWriteRequest) (Ta
 	if err != nil {
 		return TaskWriteOutcome{}, err
 	}
+	runAfterTaskPersistHook(id)
 	if req.SyncGoalDefinition != nil {
 		out.GoalDefinitionErr = req.SyncGoalDefinition(out.Updated)
 	}

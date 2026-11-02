@@ -224,6 +224,9 @@ type fireDecision struct {
 // one write. Dispatch and the RRULE re-arm run after the lock is released.
 func (s *TaskTriggerScheduler) prepareFire(job *cron.CronJob) fireDecision {
 	taskID := job.Payload.Message
+	if hook := s.currentTestHooks().preMarkerLock; hook != nil {
+		hook(taskID, job.ID)
+	}
 	unlock := task.LockTaskWriteOrder(taskID)
 	defer unlock()
 

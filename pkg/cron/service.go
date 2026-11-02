@@ -205,6 +205,9 @@ type CronService struct {
 	store     *CronStore
 	mu        sync.RWMutex
 	running   bool
+	// testHooks are the test-only barrier seams (test_hooks.go); all nil in
+	// production. Guarded by mu.
+	testHooks cronTestHooks
 	// runWindowUsed prevents a physical-boot restore on a service reused after Stop.
 	runWindowUsed bool
 	stopChan      chan struct{}
@@ -753,6 +756,9 @@ func (cs *CronService) dispatch(jobID string, win laneWindow) {
 	// collection critical section (its only caller).
 	go func() {
 		defer cs.laneDone(win.runs)
+		if hook := cs.dispatchEntryHook(); hook != nil {
+			hook(jobID)
+		}
 		// Cleared on every exit: run finished, lane cancelled while queued,
 		// or a panic (deferred calls run while panicking, and the recover
 		// below stops the panic here).
@@ -774,6 +780,9 @@ func (cs *CronService) dispatch(jobID string, win laneWindow) {
 		}
 		defer func() { <-sem }()
 
+		if hook := cs.beforeRunHook(); hook != nil {
+			hook(jobID)
+		}
 		cs.executeJobByID(laneCtx, jobID)
 	}()
 }
@@ -1163,6 +1172,11 @@ func (cs *CronService) loadStore() error {
 }
 
 func (cs *CronService) saveStoreUnsafe() error {
+	if hook := cs.testHooks.saveStore; hook != nil {
+		if err := hook(); err != nil {
+			return err
+		}
+	}
 	data, err := json.MarshalIndent(cs.store, "", "  ")
 	if err != nil {
 		return err
