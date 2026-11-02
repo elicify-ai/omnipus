@@ -85,11 +85,19 @@ func t8NoRunReachedDriver(t *testing.T, f *l11274Fixture, id string) string {
 
 func t8Symlink(t *testing.T, link, target string) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink rows need Unix symlinks")
-	}
+	// No platform skips this row (round 6, CK-3). Windows creates a real link
+	// too; when the account may not create links (needs Developer Mode or the
+	// symlink privilege) the prerequisite fails loudly instead of the row
+	// disappearing from the run.
 	_ = os.Remove(link)
-	require.NoError(t, os.Symlink(target, link))
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Fatalf("PREREQUISITE FAILED: the run-program symlink rows (r17 9.9-9.11) need real symlinks, "+
+				"but os.Symlink(%q -> %q) failed on Windows: %v. Enable Developer Mode or grant "+
+				"SeCreateSymbolicLinkPrivilege to the test account; do not skip this row.", link, target, err)
+		}
+		require.NoError(t, err)
+	}
 }
 
 func t8SetPreset(t *testing.T, f *l11274Fixture, cli, preset string) {

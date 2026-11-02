@@ -883,3 +883,20 @@ Chief ruling A on row 9.13: spec r17 section 3.6 step 5 wins. A delegation to an
 - 9.13 (TestSpawn_ResolveCheckExec_NoFallback_ParentGetsRefusal_9_13) gained the same no-child-session assertion.
 - Result: the targeted pkg/agent run (L11274 tests plus all run-program rows, log 136) passes, so 9.13 and 8.14 are now green with the developer's fixes. pkg/agentmutation passes (log 137, 12 tests). `check-no-unsafe-error-wrap.sh` passes.
 - No weakened or removed assertion. No production file touched.
+
+## Round 6 (2026-11-02) - RED tests for CHECK findings CK-1, CK-2, CK-3
+
+Logs: `/workspace/logs/t8-red/round6-ck1-path.log`, `round6-ck1-dispatch.log`, `round6-ck2-rest.log`, `round6-ck2-tool.log`, `round6-ck3-windows-vet.log`. Report: `/workspace/logs/t8-red/closeouts/round6-report.md`. No production file touched.
+
+| Finding | Spec row | Test | Expected now |
+|---|---|---|---|
+| CK-1 | r17 3.5 | `pkg/thirdpartycli/t8_path_dirlink_unix_test.go::TestValidateProgramPath_DirectoryLink_ReturnsResolvedFile_3_5` | RED |
+| CK-1 | r17 3.6 / 9.11 | `::TestValidateProgramPath_DirectoryLinkRetargetAfterCheck_3_6` | RED |
+| CK-1 | r17 3.5 | `::TestValidateProgramPath_DirectoryLinkInWorldWritableFolder_Refused_3_5` | RED |
+| CK-1 | r17 3.5 | `::TestValidateProgramPath_DirectoryLinkIntoWorldWritableDir_Refused_3_5`, `...IntoAgentWritable_Refused_3_5` | control, passes |
+| CK-1 | r17 3.5 | `::TestValidateProgramPath_FinalLink_ReturnsTarget_Control`, `...FinalLinkToWorldWritableFile_Refused_Control` | control, passes |
+| CK-1 | r17 3.6 / 9.11 | `pkg/agent/t8_run_program_dirlink_test.go::TestSpawn_ResolveCheckExec_DirectoryLink_DriverGetsResolvedPath_9_11` | RED |
+| CK-2 | TK-30 (3) | `pkg/gateway/t8_rest_trigger_state_test.go::TestT8RestTriggerState_FutureOnce_MovesNextToInbox_TK30_3`, `...FutureRecurring_MovesNextToInbox_TK30_3` | RED |
+| CK-2 | TK-30 (3)(4)(5) | same file: `Manual_KeepsStatus_TK30_4`, `AlreadyDue_KeepsToday_TK30_5`, `Blocked_StaysBlocked_TK30_3`, `Terminal_StaysDone_TK30_3` | controls, pass |
+| CK-2 | TK-30 (3)(4)(5) | `pkg/tools/t8_tool_trigger_state_test.go::TestT8ToolTriggerState_Matrix_TK30` (5 cases) | passes (tool path is the reference) |
+| CK-3 | platform coverage | `pkg/agent/t8_run_program_rows_test.go::t8Symlink`: Windows skip removed; real link, or loud `PREREQUISITE FAILED` fatal | see report |
