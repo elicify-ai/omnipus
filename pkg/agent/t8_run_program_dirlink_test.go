@@ -16,15 +16,15 @@ import (
 
 func TestSpawn_ResolveCheckExec_DirectoryLink_DriverGetsResolvedPath_9_11(t *testing.T) {
 	f := t8RunFixture(t)
-	real := l11274Executable(t, f.home, "codex", true)
+	realExe := l11274Executable(t, f.home, "codex", true)
 	dirLink := filepath.Join(t.TempDir(), "tools")
-	t8Symlink(t, dirLink, filepath.Dir(real))
-	entered := filepath.Join(dirLink, filepath.Base(real))
+	t8Symlink(t, dirLink, filepath.Dir(realExe))
+	entered := filepath.Join(dirLink, filepath.Base(realExe))
 	f.setProgram(t, "codex", entered)
 	id, _ := t8CreateCodexWorker(t, f)
 
 	opts := t8RunOptions(t, f, id)
-	want, err := filepath.EvalSymlinks(real)
+	want, err := filepath.EvalSymlinks(realExe)
 	require.NoError(t, err)
 	assert.NotEqual(t, entered, opts.CLIPath, "the entered path through the directory link is not what runs")
 	assert.Equal(t, want, opts.CLIPath, "the driver receives the fully resolved checked file")

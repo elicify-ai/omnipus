@@ -900,3 +900,21 @@ Logs: `/workspace/logs/t8-red/round6-ck1-path.log`, `round6-ck1-dispatch.log`, `
 | CK-2 | TK-30 (3)(4)(5) | same file: `Manual_KeepsStatus_TK30_4`, `AlreadyDue_KeepsToday_TK30_5`, `Blocked_StaysBlocked_TK30_3`, `Terminal_StaysDone_TK30_3` | controls, pass |
 | CK-2 | TK-30 (3)(4)(5) | `pkg/tools/t8_tool_trigger_state_test.go::TestT8ToolTriggerState_Matrix_TK30` (5 cases) | passes (tool path is the reference) |
 | CK-3 | platform coverage | `pkg/agent/t8_run_program_rows_test.go::t8Symlink`: Windows skip removed; real link, or loud `PREREQUISITE FAILED` fatal | see report |
+
+## Round 7
+
+Chief ruling on r17 TK-30 (3): a changed future trigger on a task that would end up `next` is stored `inbox` whatever the request's status says; explicit `inbox` stays; `blocked` is engine-only (TK-14) and refused on both paths; running and terminal as today; an unchanged-trigger re-save keeps `next`.
+
+Logs: `/workspace/logs/t8-red/round7-ck4-rest.log`, `round7-tool.log`, `round7-ck5-probe.log`, `round7-ck5-rest.log`, `round7-thirdpartycli.log`, `round7-lint-*.log`. Report: `/workspace/logs/t8-red/closeouts/round7-report.md`. No production file touched.
+
+| Finding | Spec row | Test | Expected now |
+|---|---|---|---|
+| CK-4 | TK-30 (3) | `pkg/gateway/t8_rest_trigger_status_test.go::TestT8RestTriggerStatus_ExplicitNextWithFutureTrigger_StoredInbox_TK30_3`, `...InboxToNextWithFutureTrigger_StoredInbox_TK30_3` | RED (expected inbox, actual next) |
+| CK-4 | TK-30 (3) | same file: `ExplicitInbox_StaysInbox_TK30_3`, `UnchangedTriggerResave_KeepsNext_TK30_3` | controls, pass |
+| CK-4 | TK-14 | same file: `ExplicitBlocked_RefusedNothingStored_TK14` | control, passes (HTTP 400, nothing stored) |
+| CK-4 | TK-30 (3) | `pkg/tools/t8_tool_trigger_status_test.go::TestT8ToolTriggerStatus_ExplicitNextWithFutureTrigger_StoredInbox_TK30_3` | RED (expected inbox, actual next) |
+| CK-4 | TK-30 (3), TK-14 | same file: `ExplicitInbox_StaysInbox_TK30_3`, `UnchangedTriggerResave_KeepsNext_TK30_3`, `ExplicitBlocked_RefusedNothingStored_TK14` | controls, pass |
+| CK-5 | TK-30 (3) | `pkg/gateway/t8_rest_trigger_state_test.go::Blocked_StaysBlocked_TK30_3`, `Terminal_StaysDone_TK30_3` now assert HTTP 200 and the stored trigger (fixture lacked an assignee; store rule: a scheduled task must be assigned to an agent) | pass |
+| CK-5 | TK-30 (3) | `pkg/tools/t8_tool_trigger_state_test.go::Matrix_TK30` rows now assert `!res.IsError` and a persisted trigger | pass |
+| Item 5 | r17 3.5 | `pkg/thirdpartycli/t8_path_dirlink_unix_test.go` helper adds `require.IsType(&CheckError{}, err)` beside `errors.As` | 7 dirlink tests pass |
+| Lint | - | `pkg/agent/t8_run_program_dirlink_test.go` variable `real` renamed `realExe` | 0 issues |

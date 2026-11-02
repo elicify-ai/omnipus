@@ -39,8 +39,10 @@ func TestT8ToolTriggerState_Matrix_TK30(t *testing.T) {
 			tk := parityTask(t, store, "agent-a", "agent-a", "ws-a", tc.status, false)
 			res := NewTaskUpdateTool(store).Execute(parityCtx("agent-a"), map[string]any{"task_id": tk.ID, "trigger": tc.trig})
 			t.Logf("update_task result error=%v: %s", res.IsError, res.ForLLM)
+			require.False(t, res.IsError, "update_task must succeed (CK-5): %s", res.ForLLM)
 			got, err := store.Get(tk.ID)
 			require.NoError(t, err)
+			require.NotNil(t, got.Trigger, "instrument: the trigger persisted")
 			assert.Equal(t, tc.want, got.Status)
 		})
 	}

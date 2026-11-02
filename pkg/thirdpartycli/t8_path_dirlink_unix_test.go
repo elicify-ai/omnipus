@@ -50,6 +50,7 @@ func t8DirLink(t *testing.T) t8DirLinkFixture {
 func t8RequireCheck(t *testing.T, got string, err error, want string) {
 	t.Helper()
 	require.Error(t, err, "expected refusal %s; returned %q", want, got)
+	require.IsType(t, &CheckError{}, err, "r17 3.5: the error is a *CheckError directly, not wrapped")
 	var ce *CheckError
 	require.True(t, errors.As(err, &ce), "%T", err)
 	assert.Equal(t, want, ce.Check)

@@ -114,8 +114,16 @@ func TestT8RestTriggerState_Blocked_StaysBlocked_TK30_3(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, task.StatusBlocked, before.Status, "instrument: seeded blocked")
 
+	// A scheduled task needs an assignee: assign "mia" first (instrument),
+	// then PATCH only the trigger.
+	_, aerr := api.taskStore.Update("t8-blocked-1", task.Patch{AgentID: ptrString("mia")})
+	require.NoError(t, aerr, "instrument: assign a member to the blocked task")
 	w := patchTask(t, api, "t8-blocked-1", t8OnceBody(time.Now().Add(time.Hour)))
 	t.Logf("blocked PATCH answered %d", w.Code)
+	require.Equal(t, http.StatusOK, w.Code, "blocked PATCH: %s", w.Body.String())
+	stored, serr := api.taskStore.Get("t8-blocked-1")
+	require.NoError(t, serr)
+	require.NotNil(t, stored.Trigger, "instrument: the trigger persisted on the blocked task")
 	got, err := api.taskStore.Get("t8-blocked-1")
 	require.NoError(t, err)
 	assert.Equal(t, task.StatusBlocked, got.Status, "TK-30 (3): a blocked task stays blocked")
@@ -126,8 +134,15 @@ func TestT8RestTriggerState_Terminal_StaysDone_TK30_3(t *testing.T) {
 	api, wsID := t8TriggerStateAPI(t)
 	done := createTaskWithStatusViaAPI(t, api, "t8 done", wsID, "done")
 
+	// A scheduled task needs an assignee: assign "mia" on the store (instrument).
+	_, aerr := api.taskStore.Update(done.Id, task.Patch{AgentID: ptrString("mia")})
+	require.NoError(t, aerr, "instrument: assign a member to the done task")
 	w := patchTask(t, api, done.Id, t8OnceBody(time.Now().Add(time.Hour)))
 	t.Logf("terminal PATCH answered %d", w.Code)
+	require.Equal(t, http.StatusOK, w.Code, "terminal PATCH: %s", w.Body.String())
+	stored, serr := api.taskStore.Get(done.Id)
+	require.NoError(t, serr)
+	require.NotNil(t, stored.Trigger, "instrument: the trigger persisted on the terminal task")
 	got, err := api.taskStore.Get(done.Id)
 	require.NoError(t, err)
 	assert.Equal(t, task.StatusDone, got.Status, "TK-30 (3): a terminal task stays terminal")
