@@ -1044,83 +1044,11 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 		return nil, denial
 	}
 
-	// ADR-072 D10.3 (read gate, narrowed) / D6.1.1 (write audit): classify the
-	// path against the two recognised skills locations — the installed
-	// registry and any mount's project-skills subdirectory — BEFORE the
-	// ordinary in-workspace/outside-workspace dispatch below, so the gate
-	// applies uniformly regardless of which branch would otherwise handle
-	// this op and regardless of policy.Scope (matching the carve-out check
-	// just above, which is itself unconditional for the same reason).
-	//
-	// The carve-out check above does NOT cover the registry skills directory
-	// (ADR-072 D10.3 removed it from the app layer's carve-out roots so this
-	// finer gate could exist at all — see the block comment on
-	// skillsGateProjectSubdirs). This is the whole app-layer rule for skills;
-	// nothing underneath it will catch what it misses.
-	//
-	// Skills spec r15 §6.1: reads of the registry are decided by the
-	// predicate above (the loadable set, or every skill for an edit_skill
-	// holder). A registry write becomes a skill change (§5.5) carried by the
-	// returned handle; serve and exec stay refused. Project-shelf writes are
-	// left to the ordinary rules below and carry the D6.1.1 write audit.
-	//
-	// The seen record a read_file / list_directory sets is observed before
-	// the tool reads, so the content the agent sees can only be newer than
-	// the recorded revision — a later write then fails SKILL_CHANGED rather
-	// than overwriting a change the agent never saw.
-	var skillsWriteAudit *skillsWriteAuditFields
-	if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched {
-		switch rp.op {
-		case FSOpRead, FSOpList, FSOpSend:
-			// Skills spec r15 §6.1: the home-guard predicate (checked just
-			// above) already decided whether this turn may read the skill
-			// path; reads and listings of a readable skill proceed. A
-			// read_file / list_directory inside a skill folder records the
-			// session's "seen" revision (§7.3).
-			if shelf == skillShelfRegistry && rp.op != FSOpSend &&
-				(rp.toolName == "read_file" || rp.toolName == "list_directory") {
-				recordSkillSeen(rp.ctx, realAbs)
-			}
-		case FSOpWrite:
-			if shelf == skillShelfRegistry {
-				// §5.5: a write into a skill folder is a skill change. The
-				// handle delegates to the change pipeline behind the loop's
-				// composition marker (§10.1 item 7); anything else under
-				// the registry (the root, control entries) was already
-				// refused by the predicate, and a path whose real target
-				// leaves the registry is refused here.
-				target, ok := newSkillWriteTarget(rp.ctx, rp.toolName, realAbs)
-				if !ok {
-					return nil, skillsRegistryNonReadDenialError(rp.rawPath, rp.op)
-				}
-				return &PathHandle{abs: realAbs, policy: rp.policy, skillWrite: target}, nil
-			}
-			skillsWriteAudit = &skillsWriteAuditFields{
-				shelf:       shelf,
-				toolName:    rp.toolName,
-				agentID:     ToolAgentID(rp.ctx),
-				sessionID:   ToolTranscriptSessionID(rp.ctx),
-				workspaceID: ToolWorkspaceID(rp.ctx),
-			}
-		case FSOpServe:
-			// The predicate is operation-blind (§6.1 item 4): serving a
-			// readable skill folder follows the ordinary serve rules below.
-			skillsWriteAudit = &skillsWriteAuditFields{
-				shelf:       shelf,
-				toolName:    rp.toolName,
-				agentID:     ToolAgentID(rp.ctx),
-				sessionID:   ToolTranscriptSessionID(rp.ctx),
-				workspaceID: ToolWorkspaceID(rp.ctx),
-			}
-		case FSOpExec:
-			if shelf == skillShelfRegistry {
-				// A skill folder the predicate lets this turn read may also
-				// be run from (§6.1 item 4 operation-blind predicate; §5.7
-				// "run scripts with bash"; §6.2 read+execute for children).
-				// The handle never writes: exec never needs it to.
-				return &PathHandle{abs: realAbs, policy: rp.policy, readOnly: true}, nil
-			}
-		}
+	// Skills locations (ADR-072 D10.3 / D6.1.1, skills spec r15 §5.5, §6.1):
+	// see skillsGate.
+	skillsHandle, skillsWriteAudit, decided, skillsErr := rp.skillsGate(realAbs)
+	if decided {
+		return skillsHandle, skillsErr
 	}
 
 	if !isWithinWorkspace(realAbs, realWorkDir) {
@@ -1284,6 +1212,92 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 	}
 
 	return &PathHandle{root: root, rel: rel, abs: realAbs, policy: rp.policy, skillsWriteAudit: skillsWriteAudit}, nil
+}
+
+// skillsGate is the skills-location step of resolveValidatedPath, run after
+// the protected-path check and before the in/outside-workspace dispatch.
+// decided is true when the gate itself answers (a skill-change handle, a
+// read-only exec handle, or a refusal); otherwise writeAudit carries the
+// D6.1.1 write-audit fields (nil when the path is not a skills location).
+func (rp *resolvePath) skillsGate(realAbs string) (handle *PathHandle, writeAudit *skillsWriteAuditFields, decided bool, err error) {
+	// ADR-072 D10.3 (read gate, narrowed) / D6.1.1 (write audit): classify the
+	// path against the two recognised skills locations — the installed
+	// registry and any mount's project-skills subdirectory — BEFORE the
+	// ordinary in-workspace/outside-workspace dispatch below, so the gate
+	// applies uniformly regardless of which branch would otherwise handle
+	// this op and regardless of policy.Scope (matching the carve-out check
+	// just above, which is itself unconditional for the same reason).
+	//
+	// The carve-out check above does NOT cover the registry skills directory
+	// (ADR-072 D10.3 removed it from the app layer's carve-out roots so this
+	// finer gate could exist at all — see the block comment on
+	// skillsGateProjectSubdirs). This is the whole app-layer rule for skills;
+	// nothing underneath it will catch what it misses.
+	//
+	// Skills spec r15 §6.1: reads of the registry are decided by the
+	// predicate above (the loadable set, or every skill for an edit_skill
+	// holder). A registry write becomes a skill change (§5.5) carried by the
+	// returned handle; serve and exec stay refused. Project-shelf writes are
+	// left to the ordinary rules below and carry the D6.1.1 write audit.
+	//
+	// The seen record a read_file / list_directory sets is observed before
+	// the tool reads, so the content the agent sees can only be newer than
+	// the recorded revision — a later write then fails SKILL_CHANGED rather
+	// than overwriting a change the agent never saw.
+	if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched {
+		switch rp.op {
+		case FSOpRead, FSOpList, FSOpSend:
+			// Skills spec r15 §6.1: the home-guard predicate (checked just
+			// above) already decided whether this turn may read the skill
+			// path; reads and listings of a readable skill proceed. A
+			// read_file / list_directory inside a skill folder records the
+			// session's "seen" revision (§7.3).
+			if shelf == skillShelfRegistry && rp.op != FSOpSend &&
+				(rp.toolName == "read_file" || rp.toolName == "list_directory") {
+				recordSkillSeen(rp.ctx, realAbs)
+			}
+		case FSOpWrite:
+			if shelf == skillShelfRegistry {
+				// §5.5: a write into a skill folder is a skill change. The
+				// handle delegates to the change pipeline behind the loop's
+				// composition marker (§10.1 item 7); anything else under
+				// the registry (the root, control entries) was already
+				// refused by the predicate, and a path whose real target
+				// leaves the registry is refused here.
+				target, ok := newSkillWriteTarget(rp.ctx, rp.toolName, realAbs)
+				if !ok {
+					return nil, nil, true, skillsRegistryNonReadDenialError(rp.rawPath, rp.op)
+				}
+				return &PathHandle{abs: realAbs, policy: rp.policy, skillWrite: target}, nil, true, nil
+			}
+			writeAudit = &skillsWriteAuditFields{
+				shelf:       shelf,
+				toolName:    rp.toolName,
+				agentID:     ToolAgentID(rp.ctx),
+				sessionID:   ToolTranscriptSessionID(rp.ctx),
+				workspaceID: ToolWorkspaceID(rp.ctx),
+			}
+		case FSOpServe:
+			// The predicate is operation-blind (§6.1 item 4): serving a
+			// readable skill folder follows the ordinary serve rules below.
+			writeAudit = &skillsWriteAuditFields{
+				shelf:       shelf,
+				toolName:    rp.toolName,
+				agentID:     ToolAgentID(rp.ctx),
+				sessionID:   ToolTranscriptSessionID(rp.ctx),
+				workspaceID: ToolWorkspaceID(rp.ctx),
+			}
+		case FSOpExec:
+			if shelf == skillShelfRegistry {
+				// A skill folder the predicate lets this turn read may also
+				// be run from (§6.1 item 4 operation-blind predicate; §5.7
+				// "run scripts with bash"; §6.2 read+execute for children).
+				// The handle never writes: exec never needs it to.
+				return &PathHandle{abs: realAbs, policy: rp.policy, readOnly: true}, nil, true, nil
+			}
+		}
+	}
+	return nil, writeAudit, false, nil
 }
 
 // readConfinedMountHandle is the read-confined mount exception (#920,
