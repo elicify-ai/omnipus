@@ -203,7 +203,9 @@ type room struct {
 	mirrored   map[string]bool
 	turns      map[string]bool
 	seq        int64
-	deleted    bool
+	// deleted is written holding both r.mu and Service.mu (Delete); a
+	// reader holds either one.
+	deleted bool
 	// resumed: the unsent mentions found on load were handed to admission.
 	resumed bool
 	// cancels holds the approval-wait cancel of each delivery in flight.

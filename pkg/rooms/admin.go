@@ -157,8 +157,10 @@ func (s *Service) Delete(roomID, principal string) error {
 		r.rec.Deleted = false
 		return storageError("the group chat could not be deleted", err)
 	}
-	r.deleted = true
+	// deleted is read under s.mu (loadRoom) and under r.mu (every room
+	// operation), so its write holds both.
 	s.mu.Lock()
+	r.deleted = true
 	delete(s.rooms, r.rec.ID)
 	s.mu.Unlock()
 	s.deps.Audit(AuditEvent{RoomID: r.rec.ID, WorkspaceID: ws.ID, Action: "deleted", AgentIDs: r.rec.Members, Principal: principal})
