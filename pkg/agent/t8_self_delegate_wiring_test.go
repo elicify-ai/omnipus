@@ -197,7 +197,7 @@ func TestOmnipusSelfDelegate_Refusals(t *testing.T) {
 			if missingEdge {
 				assert.Contains(t, result.ForLLM, "trust_set")
 			} else {
-				assert.Contains(t, result.ForLLM, "policy: depth")
+				assert.Contains(t, result.ForLLM, "\"policy\":\"depth\"")
 			}
 			after, err := al.GetSessionLifecycleStore().List(session.LifecycleFilter{})
 			require.NoError(t, err)
