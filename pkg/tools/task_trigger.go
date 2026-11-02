@@ -28,7 +28,6 @@ import (
 	"log/slog"
 	"reflect"
 	"strings"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -184,19 +183,9 @@ func (tu *taskUpdateToolExecute) applyTriggerField() (*ToolResult, bool) {
 	tu.patch.Trigger = &tr
 	tu.triggerSent = true
 	tu.updatedFields = append(tu.updatedFields, "trigger")
-	// Scheduling state 3: a future trigger on a dispatchable task moves it to
-	// the waiting state in the same write, so the ordinary drain cannot run it
-	// early. A caller's own status choice in the same call is left to the
-	// store's transition rules.
-	if tu.patch.Status == nil && tu.existing.Status == task.StatusNext {
-		probe := *tu.existing
-		probe.Trigger = tr
-		if task.TriggerAwaitingOccurrence(&probe, time.Now()) {
-			inbox := task.StatusInbox
-			tu.patch.Status = &inbox
-			tu.newStatus = inbox
-		}
-	}
+	// Scheduling state 3 (a future trigger moves a `next` task to `inbox` in
+	// the same write) is applied by the store's trigger write, the boundary
+	// REST and update_task share (task.Store applyTrigger).
 	return nil, false
 }
 

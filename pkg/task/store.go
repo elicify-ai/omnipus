@@ -1309,16 +1309,32 @@ func (su *storeUpdateLocked) applyAttemptFields() error {
 // applyTrigger validates and sets a new trigger (nil clears it). r17 TK-30:
 // the write that changes the trigger invalidates the delivery marker
 // atomically; an identical re-save keeps it.
+//
+// Scheduling state (3), the one shared rule for REST and update_task: a write
+// that adds or changes a trigger whose first occurrence is still in the future
+// moves a `next` task to `inbox` in the same write, so the ordinary drain
+// cannot run it before the scheduler fires it. A status the caller supplies in
+// the same patch is left to the transition rules. Untouched: a manual trigger
+// (no occurrence, state 4), an already-due occurrence (state 5), and every
+// non-`next` task (running, blocked, terminal, inbox).
 func (su *storeUpdateLocked) applyTrigger(newTrigger *Trigger) error {
 	if newTrigger != nil {
 		if err := ValidateTrigger(newTrigger); err != nil {
 			return err
 		}
 	}
-	if !reflect.DeepEqual(su.t.Trigger, newTrigger) {
+	changed := !reflect.DeepEqual(su.t.Trigger, newTrigger)
+	if changed {
 		su.t.LastDeliveredAtMs = nil
 	}
 	su.t.Trigger = newTrigger
+	if changed && su.patch.Status == nil && su.t.Status == StatusNext &&
+		TriggerAwaitingOccurrence(su.t, time.Now()) {
+		if err := validateTransition(su.t.Status, StatusInbox, false, su.t.Trigger.IsRepeating()); err != nil {
+			return err
+		}
+		su.t.Status = StatusInbox
+	}
 	return nil
 }
 

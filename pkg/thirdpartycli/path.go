@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
@@ -31,51 +32,120 @@ func ValidateProgramPath(cli, enteredPath string, agentWritable ...string) (reso
 	if !isAbsolutePath(enteredPath) {
 		return fail(CheckNotAbsolute, enteredPath)
 	}
+	if check := windowsNameCheck(enteredPath); check != "" {
+		return fail(check, enteredPath)
+	}
 	roots := writableRoots(agentWritable)
-	cur, lastLink := enteredPath, ""
-	for hops := 0; ; hops++ {
-		if hops == 0 {
-			if check := windowsNameCheck(cur); check != "" {
-				return fail(check, cur)
-			}
+	final, hops, cerr := resolveChain(cli, enteredPath, roots)
+	if cerr != nil {
+		return "", cerr
+	}
+	fi, statErr := os.Lstat(final)
+	if statErr != nil {
+		return fail(CheckNotFound, final)
+	}
+	check := ""
+	if hops > 0 {
+		check = windowsNameCheck(final)
+	}
+	if check == "" {
+		check = finalFileCheck(final, fi, roots)
+	}
+	if check != "" {
+		return fail(check, final)
+	}
+	return final, nil
+}
+
+// resolveChain unfolds every symlink on the way to enteredPath's final file —
+// directory components as well as the last one — and returns that file's
+// path with no symlink left in it, plus the number of links followed. Each
+// link's containing folder (already resolved) gets the link-folder rule of
+// r17 §3.5 before the link is followed; relative targets resolve against that
+// folder; at most maxLinkHops links. A missing element is not_found at the
+// element, or at the last link followed when that link's target is missing.
+func resolveChain(cli, enteredPath string, roots []string) (string, int, error) {
+	fail := func(check, at string) (string, int, error) {
+		return "", 0, &CheckError{CLI: cli, Check: check, At: at}
+	}
+	resolved, pending := splitPath(enteredPath)
+	// fromLink counts the pending components that came from link targets,
+	// so a missing one is reported at the link that named it.
+	hops, lastLink, fromLink := 0, "", 0
+	for len(pending) > 0 {
+		comp := pending[0]
+		pending = pending[1:]
+		inTarget := fromLink > 0
+		if inTarget {
+			fromLink--
 		}
-		fi, statErr := os.Lstat(cur)
-		if statErr != nil {
-			if lastLink != "" {
+		if comp == ".." {
+			resolved = filepath.Dir(resolved)
+			continue
+		}
+		cur := filepath.Join(resolved, comp)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			if inTarget {
 				return fail(CheckNotFound, lastLink)
 			}
 			return fail(CheckNotFound, cur)
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
-			check := ""
-			if hops > 0 {
-				check = windowsNameCheck(cur)
-			}
-			if check == "" {
-				check = finalFileCheck(cur, fi, roots)
-			}
-			if check != "" {
-				return fail(check, cur)
-			}
-			return cur, nil
+			resolved = cur
+			continue
 		}
 		// A link's own mode bits are never checked (Linux reports 0777);
 		// its containing folder is.
-		if check := folderCheck(filepath.Dir(cur), roots); check != "" {
+		if check := folderCheck(resolved, roots); check != "" {
 			return fail(check, cur)
 		}
 		if hops >= maxLinkHops {
 			return fail(CheckNotFound, cur)
 		}
-		target, linkErr := os.Readlink(cur)
-		if linkErr != nil {
+		target, err := os.Readlink(cur)
+		if err != nil {
 			return fail(CheckNotFound, cur)
 		}
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(filepath.Dir(cur), target)
+		hops++
+		lastLink = cur
+		targetRoot, targetParts := splitPath(target)
+		if targetRoot != "" {
+			// Absolute, or (Windows) rooted on the current drive.
+			// A drive-relative target ("D:foo") names no fixed file.
+			if filepath.VolumeName(targetRoot) == "" {
+				targetRoot = filepath.VolumeName(resolved) + targetRoot
+			} else if !filepath.IsAbs(targetRoot) {
+				return fail(CheckNotFound, cur)
+			}
+			resolved = targetRoot
 		}
-		lastLink, cur = cur, target
+		fromLink += len(targetParts)
+		pending = append(targetParts, pending...)
 	}
+	return resolved, hops, nil
+}
+
+// isSeparator reports a path separator rune (only ASCII runes can be one).
+func isSeparator(r rune) bool { return r < utf8.RuneSelf && os.IsPathSeparator(uint8(r)) }
+
+// splitPath returns p's root (volume plus separator, for an absolute path)
+// and its components in order, without "" and "." entries. ".." stays a
+// component: it is applied only after the component before it is resolved.
+func splitPath(p string) (root string, parts []string) {
+	vol := filepath.VolumeName(p)
+	rest := p[len(vol):]
+	if rest != "" && os.IsPathSeparator(rest[0]) {
+		root = vol + string(filepath.Separator)
+	} else {
+		root = vol
+	}
+	for _, part := range strings.FieldsFunc(rest, isSeparator) {
+		if part != "." {
+			parts = append(parts, part)
+		}
+	}
+	return root, parts
 }
 
 // finalFileCheck applies the final-file and containing-folder rows of r17
