@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,7 @@ func persistSkillGrantFixture(t *testing.T, home string, agentCfg config.AgentCo
 		key := strings.ToLower(name)
 		dir := filepath.Join(home, "skills", key)
 		_, statErr := os.Stat(filepath.Join(dir, "SKILL.md"))
-		if os.IsNotExist(statErr) {
+		if errors.Is(statErr, os.ErrNotExist) {
 			require.NotContains(t, persisted.SkillGrants, key, "an absent fixture name must stay unbound")
 			continue
 		}

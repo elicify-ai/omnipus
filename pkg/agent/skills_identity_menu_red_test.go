@@ -5,6 +5,7 @@ package agent
 // replaces a resolver: the next prompt/resolution is the product observation.
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,7 +91,7 @@ func TestSD30_UnstampedLoadIsReadOnlyAndUnboundIsInert(t *testing.T) {
 	assert.False(t, ok, "unstamped and unbound matches no grant")
 	assert.NotContains(t, inst.ContextBuilder.BuildSystemPromptWithCache(), "UNSTAMPED")
 	_, err := os.Stat(filepath.Join(dir, ".omnipus-identity"))
-	assert.True(t, os.IsNotExist(err), "loader must never stamp; grant persistence owns external stamping")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "loader must never stamp; grant persistence owns external stamping")
 }
 
 func TestSkillMenu_ManagedEditVisibleOnNextTurnSameInstance(t *testing.T) {

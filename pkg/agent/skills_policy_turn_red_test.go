@@ -10,6 +10,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,7 +79,7 @@ func TestSkillPolicy_RealLoopComposesBeforeGenericApproval(t *testing.T) {
 			approver := &autoRecordingApprover{approve: true}
 			approver.onRequest = func(req PolicyApprovalReq) {
 				_, statErr := os.Stat(target)
-				assert.True(t, os.IsNotExist(statErr), "approval is requested BEFORE publication")
+				assert.True(t, errors.Is(statErr, os.ErrNotExist), "approval is requested BEFORE publication")
 				assert.Equal(t, "write_file", req.ToolName)
 				assert.Equal(t, args, req.Args, "generic original argument object, no skill-specific approval fields/text")
 				assert.Equal(t, "mia", req.AgentID)
@@ -98,7 +99,7 @@ func TestSkillPolicy_RealLoopComposesBeforeGenericApproval(t *testing.T) {
 				}
 			} else {
 				_, err := os.Stat(target)
-				assert.True(t, os.IsNotExist(err), "edit_skill deny cannot be bypassed by write_file allow")
+				assert.True(t, errors.Is(err, os.ErrNotExist), "edit_skill deny cannot be bypassed by write_file allow")
 				assert.Contains(t, result, "permission_denied")
 			}
 		})
