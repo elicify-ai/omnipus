@@ -947,3 +947,15 @@ Logs in `/workspace/logs/t8-red/r8/`; report `/workspace/logs/t8-red/closeouts/r
 | CK-9 | TK-30 | `pkg/tools/t8_tool_trigger_state_test.go::Matrix_TK30` leaves assert exact trigger type and every supplied config field (and none invented) | pass |
 
 Note: an already-due `once` trigger with no delivery marker is "held" by `task.TriggerHoldsPromotion`. The brief and the shared path require such a member to reset to `next`, so a fix must not reuse that predicate unchanged for the reset; the control pins `next`.
+
+## Round 9 (2026-11-02) - CK-10 integration test, automatic reset re-arms the trigger scheduler
+
+Oracle: r17 TK-30. A once trigger attached while a plan member is failed has no job. The automatic reset puts the member in inbox and autoResetFailedMember must then reconcile the trigger scheduler so one live job owns the occurrence and fires it. Round-8 tests use a loop-less engine and never reach that call. Logs: /workspace/logs/t8-red/r9/. Report: /workspace/logs/t8-red/closeouts/round9-report.md. No production file touched.
+
+| Finding | Spec row | Test (pkg/agent/t8_plan_failed_member_reset_scheduler_test.go) | Expected now |
+|---|---|---|---|
+| CK-10 | TK-30 | TestT8PlanCorrection_AutoReset_FutureTriggerMember_RegistersAndFires_TK30_CK10, subtests future once (append, targeted retry): zero jobs while failed, exact inbox and trigger, one job at exactly the instant, no second job on identical reconciliation, no run 1 ms early, one execution and exact delivery marker | pass; RED when the reconciliation call is removed |
+| CK-10 | TK-30 | same test, subtest future recurring: terminal recurring keeps its series job while failed, so this leaf pins one job, no duplicate, no early run, one execution, exact marker | pass; also passes under the mutation (control, not a killer) |
+| CK-10 | TK-30 | TestT8PlanCorrection_AutoReset_FutureOnceMember_SaveFault_WarnsNoStaleJob_TK30_CK10: jobs file cannot be saved; correction succeeds, member stays inbox with trigger, warning names the failure and member, no stale job, later Reconcile arms the instant | pass; RED under the mutation |
+
+Mutation (disposable clone): the ReconcileTaskScheduleLocked call in autoResetFailedMember replaced by error(nil). Both once subtests fail with: "[]" should have 1 item(s), but has 0 / exactly ONE armed job after the reset; the save-fault test fails on the missing warning.
