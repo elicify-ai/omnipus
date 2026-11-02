@@ -204,7 +204,6 @@ var allStaticToolNames = []string{
 
 	// Sysagent management tools.
 	"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
-	"read_agent_metadata",
 	"configure_provider", "list_providers", "test_provider", "list_models",
 	"run_doctor", "get_usage",
 	"add_mcp_server", "remove_mcp_server", "list_mcp_servers",
@@ -212,7 +211,7 @@ var allStaticToolNames = []string{
 	"remove_skill", "list_skills",
 	"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
 	"get_config", "set_config",
-	"create_agent", "get_agent", "get_agent_tools", "update_agent", "delete_agent",
+	"create_agent", "get_agent", "update_agent", "delete_agent",
 
 	// ADR-052 — autonomous agent plan execution: planning tools + the
 	// verifier-role-only inspect_session tool.
@@ -443,6 +442,21 @@ func coreAgentSkills(id CoreAgentID) []string {
 	default:
 		return nil
 	}
+}
+
+// missingSkills returns the names in want that have lacks, in want's order.
+func missingSkills(have, want []string) []string {
+	held := make(map[string]bool, len(have))
+	for _, name := range have {
+		held[name] = true
+	}
+	var out []string
+	for _, name := range want {
+		if !held[name] {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // HasSystemAllowsInConstructorSeed returns true if the named core agent's
@@ -698,6 +712,18 @@ func SeedConfig(cfg *config.Config) bool {
 				sc.modified = true
 			}
 		}
+		// FR-135 (#1482, tool-parity r17 §6, US-14): the core Omnipus agent's
+		// workflow skills are product-owned, not an operator choice — without
+		// them its own workflows (Add agent, Set up a team) dead-end. They are
+		// reconciled at every start: a missing current grant is added; every
+		// other entry (a person's extra skill) is kept. Other core agents are
+		// untouched (the D5.1 rule above stands for them).
+		if ca.ID == IDOmnipus {
+			if missing := missingSkills(a.Skills, coreAgentSkills(IDOmnipus)); len(missing) > 0 {
+				a.Skills = append(a.Skills, missing...)
+				sc.modified = true
+			}
+		}
 
 		// Idempotent Type re-enforcement (tamper protection). The subagent tier
 		// (worker + specialists) MUST carry Type=worker and base agents Type=core —
@@ -878,7 +904,7 @@ const SkillsMigrationDefineGoalRename = "adr080-define-goal-rename"
 // per-agent policies, not a runtime fallback or an extra permission layer.
 // The global ceiling still bounds every grant under strictest-wins.
 //
-// REST create, create_agent and get_agent_tools preview share this constructor.
+// REST create, create_agent and get_agent's new-agent preview share this constructor.
 // Worker callers apply RestrictForWorkerTier before any operator overrides.
 // Each call returns independent maps so one agent cannot change another's seed.
 //
@@ -906,7 +932,6 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"delegate":            allow,
 				"list_agents":         allow,
 				"get_agent":           allow,
-				"get_agent_tools":     allow,
 				"inspect_session":     allow,
 				"list_jobs":           allow,
 				"create_plan":         allow,

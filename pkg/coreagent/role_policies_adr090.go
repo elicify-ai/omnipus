@@ -151,7 +151,7 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 // per-agent entry — Omnipus never carries a per-agent ask, FR-022); every
 // other static tool is an explicit per-agent deny (FR-007).
 var omnipusSupportedTools = []string{
-	"list_agents", "get_agent", "get_agent_tools", "read_agent_metadata",
+	"list_agents", "get_agent",
 	"list_workspaces", "get_workspace", "list_models", "list_providers", "test_provider",
 	"list_mcp_servers", "list_channels", "test_channel", "list_skills", "find_skills",
 	"run_doctor", "get_usage", "list_secrets", "AskUserQuestion", "send_message",
@@ -165,9 +165,20 @@ var omnipusSupportedTools = []string{
 	"disable_channel", "configure_channel", "connect_channel", "connect_mailbox",
 	"set_agent_permissions", "request_secret", "select_secret_version", "remove_secret",
 	"read_conversation", "list_mailboxes", "environment_setup", "bash",
-	// r17 §16 D-7: Omnipus reads tasks (get_task); get_plan and get_goal
-	// stay denied for it.
-	"get_task",
+}
+
+// T8OmnipusGrantedTools are the task tools of the parity surface plus the
+// read tool list_jobs that Omnipus gains (r17 §7.14.2 change 1, §16 D-7): it
+// creates and schedules tasks assigned to itself and sees its running
+// helpers. They ride the ceiling (allow; delete_task ask) like every other
+// supported tool. get_plan, get_goal and update_plan stay denied for it.
+// Fresh installs only: pre-T8 records are out of scope (§7.14.7).
+var T8OmnipusGrantedTools = []string{
+	"list_tasks", "get_task", "create_task", "update_task", "run_task", "delete_task", "list_jobs",
+}
+
+func init() {
+	omnipusSupportedTools = append(omnipusSupportedTools, T8OmnipusGrantedTools...)
 }
 
 // OmnipusSupportedTools returns a copy of Omnipus's supporting set (§6.5).

@@ -506,6 +506,23 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 var retiredToolCanonicalNames = map[string]string{
 	// ADR-071 D1: load_tool -> ToolSearch (2026-08-28).
 	"load_tool": "ToolSearch",
+	// Tool-parity r17 §7.12.3: get_agent is the single agent reader
+	// (fields ["tool_permissions"], ["soul"], ["agent_md"]).
+	"get_agent_tools":     "get_agent",
+	"read_agent_metadata": "get_agent",
+}
+
+// RetiredToolCanonical returns the current replacement of a tool name retired
+// by a rename, and whether name is such a retired name. It never makes the
+// retired name callable (see retiredToolCanonicalNames).
+func RetiredToolCanonical(name string) (canonical string, ok bool) {
+	canonical, ok = retiredToolCanonicalNames[name]
+	return canonical, ok
+}
+
+// RetiredToolMessage is the tool result a call to a retired name gets.
+func RetiredToolMessage(name, canonical string) string {
+	return fmt.Sprintf("tool %q was renamed to %q — call %q instead", name, canonical, canonical)
 }
 
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
@@ -555,7 +572,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 					"tool":      name,
 					"canonical": canonical,
 				})
-			return ErrorResult(fmt.Sprintf("tool %q was renamed to %q — call %q instead", name, canonical, canonical)).
+			return ErrorResult(RetiredToolMessage(name, canonical)).
 				WithError(fmt.Errorf("tool %q was renamed to %q", name, canonical))
 		}
 		logger.ErrorCF("tool", "Tool not found",

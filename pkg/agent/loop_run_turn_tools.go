@@ -732,6 +732,9 @@ func (ex *agentLoopRunTurnToolsExecute) applyApprovalHook(tc providers.ToolCall)
 func (ex *agentLoopRunTurnToolsExecute) enforceExecutionPolicy(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
 	ex.toctouPolicy = ex.rx.rr.rq.ri.rf.rt.al.resolveToolPolicyAtExec(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.rx.rr.rq.filterTimePolicyMap)
 	if ex.toctouPolicy == "deny" {
+		if canonical, retired := tools.RetiredToolCanonical(ex.toolName); retired {
+			return ex.refuseRetiredToolName(tc, canonical)
+		}
 		// Policy flipped to deny between filter-time and exec-time.
 		// ADR-058 site 1: this branch has no approver-supplied
 		// reason at all, so it uses the fixed loop pseudo-reason
