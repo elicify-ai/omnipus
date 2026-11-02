@@ -14,6 +14,7 @@ package thirdpartycli
 // coverage of the same rows is the Windows fixtures in pkg/agent.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,8 +50,8 @@ func t8DirLink(t *testing.T) t8DirLinkFixture {
 func t8RequireCheck(t *testing.T, got string, err error, want string) {
 	t.Helper()
 	require.Error(t, err, "expected refusal %s; returned %q", want, got)
-	ce, ok := err.(*CheckError)
-	require.True(t, ok, "%T", err)
+	var ce *CheckError
+	require.True(t, errors.As(err, &ce), "%T", err)
 	assert.Equal(t, want, ce.Check)
 }
 
