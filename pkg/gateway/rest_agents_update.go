@@ -961,6 +961,13 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 		if errors.Is(updateErr, agentstore.ErrInvalidRevision) {
 			return fmt.Errorf("invalid revision: %w", updateErr)
 		}
+		// r17 FR-132 (#1295, D-10): a field error found inside the mutation
+		// (the tool-policy name rule) is a 400 naming the field; nothing was
+		// written. Only a real storage failure stays a 500.
+		var fieldErr *agentmutation.FieldError
+		if errors.As(updateErr, &fieldErr) && fieldErr.Code == agentmutation.InvalidInput && len(fieldErr.Fields) > 0 {
+			return &requestRefusalError{msg: fieldErr.Error(), field: fieldErr.Fields[0]}
+		}
 		return &configurationMutationError{Result: result, Err: fmt.Errorf("update agent entity record: %w", updateErr)}
 	}
 	// O6: heartbeat is now fully per-agent (written inside the agent-found
