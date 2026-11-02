@@ -6374,6 +6374,10 @@
       "lane": 5
     },
     {
+      "source": "src/components/agents/approvalPreviews/AgentChangeApprovalPreview.tsx",
+      "lane": 8
+    },
+    {
       "source": "src/components/agents/approvalPreviews/BashApprovalPreview.tsx",
       "lane": 8
     },
