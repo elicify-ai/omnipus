@@ -115,6 +115,12 @@ func (s *skillWriteTarget) write(data []byte) error {
 	session := s.actor.SessionID
 	req := skills.ChangeRequest{Slug: onDisk, Content: data, Actor: s.actor}
 	if present {
+		// A built-in is read-only (§7.1 step 0) and has no revision a read
+		// could record, so its refusal precedes the read precondition
+		// (UAT-1 F-3).
+		if refusal := skills.RefuseBuiltinTarget(skills.ChangeRequest{Kind: skills.KindEdit, Slug: onDisk, Path: s.rel, Actor: s.actor}); refusal != nil {
+			return refusal
+		}
 		rev, seen := skills.SeenRevision(session, onDisk)
 		if !seen {
 			return &skills.ChangeError{Code: skills.ErrSkillNotRead,

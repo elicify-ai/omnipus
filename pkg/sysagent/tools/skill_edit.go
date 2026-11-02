@@ -157,6 +157,11 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) (res *
 	case "restore":
 		change.Kind, change.Version = skills.KindRestore, req.version
 	}
+	// A built-in is read-only (§7.1 step 0) and has no revision a read could
+	// record, so its refusal precedes the read precondition (UAT-1 F-3).
+	if refusal := skills.RefuseBuiltinTarget(change); refusal != nil {
+		return editSkillFailure(session, req.skill, refusal)
+	}
 	if change.Expect == (skills.Expectation{}) {
 		expect, refusal := seenExpectation(root, session, req)
 		if refusal != nil {
