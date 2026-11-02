@@ -1106,3 +1106,13 @@ Lint (own files): pkg/tools 0 issues (`uat1-lint2-tools.log`), pkg/gateway 0 iss
 |---|---|---|---|
 | SEC3-01 read that leaves the skill folder after a skill cd | `TestShellGuardSEC3_ReadThatLeavesTheSkillFolderAfterCdIsRefused` (`pkg/tools/shell_skill_operands_uat1_f8_test.go`): `cd <f>; grep -r . ..`, `cat ../f8-granted-private/SKILL.md`, `ls ..`, `grep -r . ../`, `cat ./../f8-granted-private/SKILL.md`, with an ungranted `f8-granted-private` sibling in the fixture. Controls that must stay allowed and are asserted first: `cat SKILL.md`, `ls`, `cat ./notes.md` after the cd. Skill file bytes asserted unchanged | RED, exit=1 (`sec3-red.log`): the path guard admits all 5 operands that contain a `..` segment (empty message). The three controls pass, so the fixture and the cd rule are live; the SEC2 and F-8 tests pass at this head | Verified |
 | Rule for the developer | Any operand equal to or containing a `..` segment after a skill cd is refused. Only the path guard is asserted (the no-sandbox gate is not part of this finding's test) | n/a | n/a |
+
+## UAT run 2 round (R2-1, R2-2, R2-3, R2-4)
+
+| Req | Test | File | Red reason (logs in /workspace/logs/skills-test/) |
+|---|---|---|---|
+| R2-1 / F-10 (spec r15 §10.1, line 888) | TestRunTurn_WriteIntoSkillWithEditSkillDenied_ReasonIsSkillEditDenied (4 cases) | pkg/agent/skills_uat1_f10_edit_denied_test.go | r2-f10-red.log: write_file denials carry skill_edit_denied but the text does not name the skill; bash redirect denial has neither the reason nor an audit entry |
+| R2-2 | TestInstallSkillZipWrappedInFolder_Returns400SkillMdAtRoot (+ flat control) | pkg/gateway/skills_uat2_zip_install_test.go | r2-gateway-red2.log: 502 "server storage or configuration failed" instead of 400 naming SKILL.md at the zip root |
+| R2-4 | TestInstallSkillZip_KeepsOwnerExecBitUnderScriptsOnly | pkg/gateway/skills_uat2_zip_install_test.go | r2-gateway-red2.log: scripts/run.sh installed -rw-r--r-- |
+| R2-3 (ruling: strip `_<19 digits>`) | TestInstallSkillRepeatUploadRenamedWithTimestamp_InstallsAsOriginalSlug, TestInstallSkillRepeatUploadReplaceAfterLocalChangesWarning, TestInstallSkillUploadRefusals_AreClientErrorsNot502 | pkg/gateway/skills_uat2_zip_install_test.go, pkg/gateway/skills_uat2_upload_refusals_test.go | r2-gateway-red2.log: 502 "uploaded filename must provide a valid skill id" |
+| R2-3 unit | TestStageUploadedSkill_StripsNineteenDigitRenameSuffix, ..._StripsSuffixFromMarkdownUploadToo, ..._OnlyExactSuffixIsStrippedOthersStayRefused | pkg/skills/skills_uat2_upload_suffix_test.go | r2-skills-red.log: "uploaded filename must provide a valid skill id" (the refusal controls pass today) |
