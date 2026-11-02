@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -56,10 +57,16 @@ type pendingAllowFromText struct {
 // string is split with SplitAllowFromText for channelType, so a value an
 // older Configure saved as one string ("a, b c") self-heals on load into
 // separate ids and "" becomes the empty (allow-all) list; the text is also
-// returned so it can be re-split once the effective type is known. Every
-// other shape (a list, a number, null) decodes exactly as
-// FlexibleStringSlice does, so a saved list loads unchanged.
+// returned so it can be re-split once the effective type is known. An
+// explicit null loads as one empty id, which matches no sender, so it keeps
+// the release's deny-all meaning (chief ruling C, CHECK F4); a missing key
+// never reaches this function and keeps allowing everyone. Every other shape
+// (a list, a number) decodes exactly as FlexibleStringSlice does, so a saved
+// list loads unchanged.
 func decodeAllowFromField(raw json.RawMessage, channelType string) (FlexibleStringSlice, *string, error) {
+	if string(bytes.TrimSpace(raw)) == "null" {
+		return FlexibleStringSlice{""}, nil, nil
+	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
 		return FlexibleStringSlice(SplitAllowFromText(channelType, text)), &text, nil

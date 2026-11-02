@@ -1273,6 +1273,24 @@ func configureProtectedKeyRefusal(updates map[string]any) string {
 	return ""
 }
 
+// prepareConfigureUpdates checks and rewrites a Configure request before it is
+// merged, and returns the 400 text of the first refusal, or "". It refuses a
+// protected field (FR-023) and an allowed-sender field set to null (chief
+// ruling C: null is not a list of ids); it drops the Configure response's own
+// outcome keys, which are never config (FR-023), and saves allowed-sender
+// text as a list of ids (U7).
+func prepareConfigureUpdates(updates map[string]any, channelID string) string {
+	if refusal := configureProtectedKeyRefusal(updates); refusal != "" {
+		return refusal
+	}
+	if refusal := configureNullAllowListRefusal(updates); refusal != "" {
+		return refusal
+	}
+	dropConfigureOutcomeKeys(updates)
+	normalizeConfigureAllowLists(updates, channelID)
+	return ""
+}
+
 // configureChannel handles PUT /api/v1/channels/{id}/configure.
 // Merges the request body fields into the channel's config section (does not overwrite absent fields).
 // Returns the updated channel config with credential fields redacted.
@@ -1315,14 +1333,10 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// FR-023: every spelling encoding/json would bind to a protected field is
 	// refused (folded like jsonFoldKey), and so is outbound, which only the
 	// dedicated writer PUT /channels/{id}/outbound may change.
-	if refusal := configureProtectedKeyRefusal(updates); refusal != "" {
+	if refusal := prepareConfigureUpdates(updates, channelID); refusal != "" {
 		jsonErr(w, http.StatusBadRequest, refusal)
 		return
 	}
-	// FR-023: the Configure response's own outcome keys are never config;
-	// U7: allowed-sender text is saved as a list of ids.
-	dropConfigureOutcomeKeys(updates)
-	normalizeConfigureAllowLists(updates, channelID)
 	// Filesystem-path fields (grep of config.ChannelInstanceConfig for path-typed
 	// fields: session_store_path [WhatsApp], crypto_database_path [Matrix],
 	// service_account_file [Google Chat]). Stripped, not rejected — they are not

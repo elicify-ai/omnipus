@@ -28,6 +28,21 @@ func normalizeConfigureAllowLists(updates map[string]any, channelID string) {
 	}
 }
 
+// configureNullAllowListRefusal returns the 400 text when an allowed-sender
+// field (any key spelling encoding/json binds to it) is null, or "". A null
+// is refused rather than saved: on load it would block every sender, and
+// clearing the list to answer everyone is an empty list or empty text.
+func configureNullAllowListRefusal(updates map[string]any) string {
+	for _, name := range configureAllowListFields {
+		for _, key := range foldedKeys(updates, name) {
+			if updates[key] == nil {
+				return name + " cannot be null; send a list of ids, or an empty list to allow every sender"
+			}
+		}
+	}
+	return ""
+}
+
 // dropConfigureOutcomeKeys removes the Configure response's own outcome keys
 // (any key spelling encoding/json binds to them) from a request: they are
 // never config (FR-023).

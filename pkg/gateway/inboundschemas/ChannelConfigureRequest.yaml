@@ -70,4 +70,4 @@ properties:
       when inbound schema validation is off; it splits that string on commas
       (",", full-width "，") and, except on WhatsApp (whose ids may be phone
       numbers with spaces), on whitespace, trims each id and drops empty
-      pieces.
+      pieces. A null value is refused with 400 and nothing is saved.
