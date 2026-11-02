@@ -258,7 +258,7 @@ func (p *pipeline) runRestore() (PublishOutcome, error) {
 		m, err = st.hist.load(v)
 	}
 	if m == nil {
-		if err != nil && !os.IsNotExist(err) {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return refusedOutcome(), p.storageError(st.slug, err)
 		}
 		return refusedOutcome(), p.refuse(st, &refusal{code: ErrUnknownVersion, reason: fmt.Sprintf("unknown version %q for skill %q", v, st.slug)})
