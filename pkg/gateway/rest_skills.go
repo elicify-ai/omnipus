@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -497,6 +498,12 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		logsafeWarn("rest: skill install failed", "slug", slug, "version", version, "error", err)
+		if errors.Is(err, skills.ErrUploadRefused) {
+			// The uploaded file itself is at fault (UAT run 2 R2-2/R2-3):
+			// a client error with its reason, never a storage fault.
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		jsonServerFailure(w, http.StatusBadGateway, "could not stage skill", err)
 		return
 	}
