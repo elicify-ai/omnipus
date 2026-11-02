@@ -5,14 +5,12 @@ package tools_test
 // Its fixture PASS is NOT proof that production parity/rule tables exist.
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,6 +20,12 @@ type t8ParityRow struct{ side, path, operation, reason string }
 func t8JSONLeaves(typ reflect.Type, prefix string) []string {
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
+	}
+	// A time value marshals to one JSON string: it is a leaf, not a struct with
+	// no exported fields (which would make REST due, started_at and
+	// completed_at invisible to the instrument).
+	if typ == reflect.TypeFor[time.Time]() {
+		return []string{prefix}
 	}
 	switch typ.Kind() {
 	case reflect.Struct:
@@ -106,18 +110,6 @@ func t8Unmapped(side, operation string, paths []string, mappings []t8ParityRow, 
 	return errors
 }
 
-func TestParity_RecursivePaths_MappingAndExclusions(t *testing.T) {
-	// The request types are real generated boundaries, never handwritten wire
-	// substitutes. Reading their paths does not manufacture a mapping from them.
-	requests := []reflect.Type{reflect.TypeFor[generated.TaskCreateRequest](), reflect.TypeFor[generated.TaskUpdateRequest](), reflect.TypeFor[generated.PlanCreateRequest](), reflect.TypeFor[generated.PlanUpdateRequest](), reflect.TypeFor[generated.AgentCreateRequestMain](), reflect.TypeFor[generated.AgentCreateRequestSubagent](), reflect.TypeFor[generated.AgentCreateRequestSubagent3p](), reflect.TypeFor[generated.AgentUpdateRequest]()}
-	for _, typ := range requests {
-		t.Run(typ.Name(), func(t *testing.T) {
-			paths := t8JSONLeaves(typ, "")
-			require.NotEmpty(t, paths, "instrument must see actual generated request leaves")
-			t.Fatal("BLOCKED: shared canonical mapping/exclusion rows are not implemented — required by §7.1 FR-120/FR-125 and scenarios 13.1–13.5; no table is inferred from the current implementation")
-		})
-	}
-}
 func TestParityGuard_RecursiveMutationFixtures(t *testing.T) {
 	// These are intentionally synthetic fixture types for the guard's own
 	// self-test, NOT additional cross-boundary request types.
@@ -133,6 +125,18 @@ func TestParityGuard_RecursiveMutationFixtures(t *testing.T) {
 		Fallbacks []fallback `json:"fallback_models"`
 	}
 	want := []string{"executor.env_overrides{}", "fallback_models[].model", "title"}
+	// Time-typed fields are single leaves, plain or optional, at any depth.
+	type stamped struct {
+		Due       *time.Time `json:"due,omitempty"`
+		StartedAt time.Time  `json:"started_at"`
+		Nested    *struct {
+			CompletedAt *time.Time `json:"completed_at"`
+		} `json:"nested"`
+		Marks []time.Time `json:"marks"`
+	}
+	stampedPaths := t8JSONLeaves(reflect.TypeFor[stamped](), "")
+	sort.Strings(stampedPaths)
+	require.Equal(t, []string{"due", "marks[]", "nested.completed_at", "started_at"}, stampedPaths, "time fields must be counted as leaves")
 	paths := t8JSONLeaves(reflect.TypeFor[base](), "")
 	sort.Strings(paths)
 	require.Equal(t, want, paths)
@@ -190,14 +194,4 @@ func TestParityGuard_RecursiveMutationFixtures(t *testing.T) {
 		excluded[0].reason = " "
 		assert.Equal(t, []string{"REST create server_only: exclusion requires a reason", "unmapped REST create server_only"}, t8Unmapped("REST", "create", []string{"server_only"}, nil, excluded))
 	})
-}
-func TestRuleTable_TaskFrozenSetShared(t *testing.T) {
-	_, err := os.Stat(filepath.Join("..", "task", "store.go"))
-	require.NoError(t, err, "positive control: package source is visible")
-	_, err = os.Stat(filepath.Join("..", "task", "fieldrules.go"))
-	if os.IsNotExist(err) {
-		t.Fatal("BLOCKED: pkg/task/fieldrules.go not implemented — required by §7.1 / scenario 13.6; shared creator/frozen decisions cannot be asserted")
-	}
-	require.NoError(t, err)
-	t.Fatal("BLOCKED: shared frozen-field table test adapter is not yet bound — required by scenario 13.6; file existence alone is not parity")
 }

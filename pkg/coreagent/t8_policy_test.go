@@ -135,8 +135,9 @@ func TestToolPolicySeeds_NoRetiredNames(t *testing.T) {
 func TestSeedConfig_OmnipusSkillsReconciled(t *testing.T) {
 	cfg := t8Fresh(t)
 	// r17 §7.12.3 names these three shipped workflow grants independently.
-	// The complete current/retired list is not enumerated in the sole oracle;
-	// its missing-list case below is loud rather than implementation-derived.
+	// Retired-name removal is out of scope (chief ruling 2026-11-02, F-25:
+	// greenfield, no upgrade handling; r17 names no retired skills), so 14.1
+	// asserts only the current grants.
 	current := []string{"create-agent", "change-agent", "capability-plan"}
 	a := t8Agent(t, cfg, "omnipus")
 	a.Skills = []string{"my-extra-skill"}
@@ -147,9 +148,6 @@ func TestSeedConfig_OmnipusSkillsReconciled(t *testing.T) {
 	for _, name := range current {
 		assert.Contains(t, got, name, "14.1 current assignment")
 	}
-	t.Run("14.1 complete retired and current grant list", func(t *testing.T) {
-		t.Fatal("BLOCKED: r17 references revision 1's complete current/retired Omnipus skill lists without enumerating them — required by scenario 14.1; no implementation-derived list is used as an oracle")
-	})
 	assert.Contains(t, got, "my-extra-skill", "14.2 personal extra retained")
 	assert.Empty(t, t8Agent(t, cfg, "mia").Skills, "14.4 other agents untouched")
 	before, err := json.Marshal(cfg)

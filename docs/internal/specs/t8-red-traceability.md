@@ -850,3 +850,26 @@ Still red in `pkg/gateway`:
 - TestCurrentDelegationDepth_OrderingMatrix: parent greater than context, context greater than parent, equal (2/2 and 0/0), zero root turn, missing turn state, unseeded context, with two instrument checks showing that a parent-only or context-only reading would give a wrong answer.
 - TestEnforceEdgeModeAndDepth_BoundaryRefusal: for edge caps 1, 2 and 3 and each depth source (turn state, context, both), depth cap-1 is admitted and depth cap and cap+1 are refused with `DenyDepth` and "maximum delegation depth (N) reached"; the deeper of the two sources decides at the boundary; an edge depth 0 refuses at depth 0.
 Characterisation of behaviour that already exists, so green on arrival (not RED-first). Run: log 130 (29 passing subtests), lint log 131 (0 issues). No production file touched.
+
+## Round 4 (2026-11-02)
+
+### Item 1: parity binding and create_task fields
+- `pkg/tools/t8_parity_tables_test.go` (new): binds the recursive instrument to `task.MappingRows`, `plan.MappingRows`, `agentmutation.MappingRows`, each package's `ExcludedRows()` and `task.FrozenWhileRunningProperties()`, against the generated REST request types and the real tool schemas. Tests: TestParity_RecursivePaths_MappingAndExclusions (13.1-13.4, also stale-row check), TestParity_TablesRefuseAnUnmappedLeaf (mutation control), TestParity_ExcludedRowsCarryReasons (13.5), TestRuleTable_TaskFrozenSetShared (13.6, shared table only; REST PATCH enforcement is not asserted). Log 132. These replace the two BLOCKED stubs.
+- `pkg/tools/t8_parity_guard_test.go`: the instrument now counts a `time.Time` field as one leaf (fixture added: due, started_at, nested.completed_at, marks[]).
+- `pkg/tools/t8_create_task_fields_test.go` (new): TK-02 description (2000), TK-10 tags (normalised, 16, 64), TK-08 run_isolated, TK-05 max_attempts including the live `planning.task_max_attempts` ceiling read at every call, and all four together plus schema. Log 133, passing.
+
+### Item 2: scenario 14.1
+The 14.1 BLOCKED stub in `pkg/coreagent/t8_policy_test.go` is removed (not skipped). Dropped as out of scope under F-25 (greenfield, no upgrade handling; r17 names no retired skills). Chief ruling, option B. No production change.
+
+### Item 3: run-program rows
+The gateway stub `pkg/gateway/t8_spawn_settings_blocked_test.go` is deleted. The rows are bound in `pkg/agent/t8_run_program_rows_test.go` and `pkg/agent/runner/t8_preset_argv_test.go`. They are not in pkg/gateway because the driver seam (`newExternalDriver`) is unexported; the fixture is the real L11274 one (real config, create_agent, get_agent, delegate, Settings row), with only the CLI process edge faked. Log 135.
+- Pass: 6.7, 6.8, 9.14, 9.9, 9.10, 9.12, 9.17 (RunOptions plus the `external_cli.run` audit with `filter_bypassed_by_person_preset`; argv order in the runner test), 9.18, 9.19.
+- 9.11: observable half only (executed path is the resolved file, not the entered link). There is no production hook to swap the target between check and exec, so the swap is not exercised.
+- RED, production: 8.14 (TestCreateAgent_ExternalWorkerWithEnvAndArgs_8_14). create_agent for a codex worker with `env_overrides` and `cli_args` is refused with `INVALID_INPUT: fields cli_args, env_overrides: field is unknown or unsupported by this runtime`. Cause: `pkg/agentmutation/policy.go::knownFields` lacks `cli_args`, `env_overrides`, `env_overrides_remove` (and still lists the removed `cli_path`).
+- RED, production: 9.13 (TestSpawn_ResolveCheckExec_NoFallback_ParentGetsRefusal_9_13). The spec says the parent receives the NoPath text as the tool error. Production admits the delegation (`state: running`) and reports the refusal asynchronously as an `external_cli` error event on the child run, so the parent tool result is not an error. The comment on `reportProgramRefusal` also says "tool error". Either the spec row or production must change.
+
+### Item 4
+`check-no-unsafe-error-wrap.sh` passes (the offending stub line was removed with the stubs).
+
+### Item 5
+Untouched. No test needed changing.
