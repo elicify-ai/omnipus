@@ -25,7 +25,7 @@ import (
 //
 // Concretely this test:
 //  1. Verifies Deps has exactly one exported field of type *atomic.Pointer[Deps].
-//  2. Verifies AllTools(nil) returns exactly 35 tools (supply side intact).
+//  2. Verifies AllTools(nil) returns exactly 36 tools (supply side intact).
 //  3. Verifies a non-nil *Deps with Live wired can Load() without panicking
 //     (the reload path invariant).
 //
@@ -34,7 +34,7 @@ import (
 //	When reflected for atomic.Pointer[Deps] fields,
 //	Then at least one such field exists (FR-050 structural guarantee).
 //	When AllTools is called with a valid Deps,
-//	Then it returns == 35 tools and none panic on Name()/Description().
+//	Then it returns == 36 tools and none panic on Name()/Description().
 //
 // Traces to: FR-050 (atomic-pointer deps), FR-001/FR-002 (supply side).
 func TestRegistry_ToolDepsContract(t *testing.T) {
@@ -60,10 +60,10 @@ func TestRegistry_ToolDepsContract(t *testing.T) {
 		}
 	})
 
-	t.Run("AllTools_returns_exactly_35", func(t *testing.T) {
+	t.Run("AllTools_returns_exactly_36", func(t *testing.T) {
 		all := AllTools(nil)
-		if len(all) != 35 {
-			t.Errorf("AllTools(nil) returned %d tools; want == 32 (FR-001/FR-002; the four *_in_workspace tools retired by DEL-23; omnipus-system-agent FR-024 added set_agent_permissions)", len(all))
+		if len(all) != 36 {
+			t.Errorf("AllTools(nil) returned %d tools; want == 36 (FR-001/FR-002; the four *_in_workspace tools retired by DEL-23; omnipus-system-agent FR-024 added set_agent_permissions; channels FR-032 added set_channel_outbound)", len(all))
 		}
 		if !hasToolNamed(all, "set_agent_permissions") {
 			t.Errorf("FR-024: AllTools(nil) must include set_agent_permissions")
