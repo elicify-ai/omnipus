@@ -1096,16 +1096,22 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 		agentRec.MemoryEnabled = rp.ru.req.MemoryEnabled
 	}
 	if rp.ru.req.FallbackModels != nil {
-		fbs := make(config.FallbackModelSlice, 0, len(*rp.ru.req.FallbackModels))
-		for _, fm := range *rp.ru.req.FallbackModels {
-			provider := ""
-			if fm.Provider != nil {
-				provider = *fm.Provider
-			}
-			fbs = append(fbs, config.FallbackModel{Model: fm.Model, Provider: provider})
-		}
-		agentRec.FallbackModels = fbs
+		agentRec.FallbackModels = fallbackModelsFromWire(*rp.ru.req.FallbackModels)
 	}
+}
+
+// fallbackModelsFromWire converts validated wire fallback entries to the
+// stored form, in order (REST create and update share it, r17 §7.5 AG-03).
+func fallbackModelsFromWire(entries []gen.FallbackModel) config.FallbackModelSlice {
+	fbs := make(config.FallbackModelSlice, 0, len(entries))
+	for _, fm := range entries {
+		provider := ""
+		if fm.Provider != nil {
+			provider = *fm.Provider
+		}
+		fbs = append(fbs, config.FallbackModel{Model: fm.Model, Provider: provider})
+	}
+	return fbs
 }
 
 func (rp *restAPIUpdateAgentPersistAgent) updateToolsConfig(agentRec *config.AgentConfig) {

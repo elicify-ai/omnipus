@@ -657,6 +657,11 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	// helper that fix introduced for updateAgent; existing is nil here since
 	// this is a brand-new agent record.
 	pap.cra.ac.ModelParams = mergeAgentModelParams(nil, pap.modelParamsIn)
+	// AG-03 (#1440, r17 §7.5): the validated fallback chain is stored, not
+	// only checked; an empty list stores none.
+	if pap.fallbackModels != nil && len(*pap.fallbackModels) > 0 {
+		pap.cra.ac.FallbackModels = fallbackModelsFromWire(*pap.fallbackModels)
+	}
 	// Heartbeat is workspace-scoped (ADR-027); no per-agent heartbeat at create.
 	if pap.skills != nil && len(*pap.skills) > 0 {
 		pap.cra.ac.Skills = make([]string, len(*pap.skills))
