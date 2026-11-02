@@ -26,6 +26,9 @@ func (p *pipeline) runEdit() (PublishOutcome, error) {
 	if r := validateRelPath(rel, true); r != nil {
 		return refusedOutcome(), p.refuse(st, r)
 	}
+	if !filepath.IsLocal(rel) {
+		return refusedOutcome(), p.refuse(st, notInsideSkill(rel))
+	}
 	live := st.liveMap()
 	if other := caseFoldConflict(live, rel); other != "" {
 		return refusedOutcome(), p.refuse(st, saveCheck(fmt.Sprintf("'%s' differs from '%s' only by letter case; a skill cannot hold both", rel, other)))
@@ -150,6 +153,9 @@ func (p *pipeline) runDeleteFile() (PublishOutcome, error) {
 	if r := validateRelPath(rel, true); r != nil {
 		return refusedOutcome(), p.refuse(st, r)
 	}
+	if !filepath.IsLocal(rel) {
+		return refusedOutcome(), p.refuse(st, notInsideSkill(rel))
+	}
 	next := st.liveMap()
 	if _, ok := next[rel]; !ok {
 		return refusedOutcome(), p.refuse(st, saveCheck(fmt.Sprintf("'%s' is not a file of the skill", rel)))
@@ -254,7 +260,7 @@ func (p *pipeline) runRestore() (PublishOutcome, error) {
 	}
 	v := p.req.Version
 	var m *versionManifest
-	if _, ok := versionSeq(v); ok && !strings.ContainsAny(v, `/\`) && v != "." && v != ".." {
+	if _, ok := versionSeq(v); ok && !strings.ContainsAny(v, `/\`) && filepath.IsLocal(v) {
 		m, err = st.hist.load(v)
 	}
 	if m == nil {

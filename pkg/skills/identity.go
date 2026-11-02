@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/skillname"
 )
 
 // skillIdentityFileName holds a skill folder's generation (§5.13a SD-30): one
@@ -165,28 +166,54 @@ func BindGrants(root string, names []string) (map[string]string, error) {
 // resolveLiveFolder finds the installed folder whose skill key equals slug's
 // key. It returns the on-disk slug and whether it exists. An exact-name match
 // wins over a case twin (§5.13 already-present case twins are left alone).
+//
+// slug is joined into a path only after the skill-name check right here (one
+// path segment, no separators or dot entries); callers validate as well, but
+// every skill folder, history and version path derives from the name this
+// returns, so the containment rule sits at this one join. A name that fails
+// the check resolves only to a folder actually listed under root; if none
+// matches it is refused, never returned for a caller to build a path from.
 func resolveLiveFolder(root, slug string) (string, bool, error) {
-	if info, err := os.Lstat(filepath.Join(root, slug)); err == nil && info.IsDir() {
-		return slug, true, nil
+	if len(slug) <= skillname.MaxLength && skillname.Matcher().MatchString(slug) {
+		if info, err := os.Lstat(filepath.Join(root, slug)); err == nil && info.IsDir() {
+			return slug, true, nil
+		}
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return slug, false, nil
+			return absentLiveFolder(slug)
 		}
-		return slug, false, fmt.Errorf("list skills folder: %w", err)
+		return "", false, fmt.Errorf("list skills folder: %w", err)
 	}
 	key := SkillKey(slug)
+	twin := ""
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") || !e.IsDir() {
 			continue
 		}
-		if SkillKey(name) == key {
+		if name == slug {
 			return name, true, nil
 		}
+		if twin == "" && SkillKey(name) == key {
+			twin = name
+		}
 	}
-	return slug, false, nil
+	if twin != "" {
+		return twin, true, nil
+	}
+	return absentLiveFolder(slug)
+}
+
+// absentLiveFolder is resolveLiveFolder's answer for a name with no folder:
+// a valid name is returned for the caller's absent-target path; any other
+// name is refused.
+func absentLiveFolder(slug string) (string, bool, error) {
+	if len(slug) <= skillname.MaxLength && skillname.Matcher().MatchString(slug) {
+		return slug, false, nil
+	}
+	return "", false, fmt.Errorf("%q is not a valid skill name", slug)
 }
 
 // ResolveInstalledSlug returns the on-disk slug of the installed skill whose

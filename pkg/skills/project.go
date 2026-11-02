@@ -178,6 +178,11 @@ func discoverProjectSkills(mountName, mountRoot, requestedSlug string) ([]Projec
 			// The project shelf's boundary is the mount (D4.1): the in-mount
 			// real path is read through the bounded metadata reader.
 			var meta *SkillMetadata
+			// realWithinRoot already confirmed this; the prefix check sits next
+			// to the read so the mount boundary is visible where it is used.
+			if !strings.HasPrefix(realSkillFile, mountRootReal+string(filepath.Separator)) {
+				continue
+			}
 			content, metadataErr := readBoundedInstruction("metadata", realSkillFile, "SKILL.md")
 			if metadataErr == nil {
 				meta = (&SkillsLoader{}).parseSkillMetadata(skillFile, content)

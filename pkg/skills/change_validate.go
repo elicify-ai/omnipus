@@ -35,6 +35,15 @@ func (r *refusal) Error() string { return r.reason }
 
 func saveCheck(reason string) *refusal { return &refusal{code: ErrSaveCheckFailed, reason: reason} }
 
+// notInsideSkill is the refusal for a request path that filepath.IsLocal
+// rejects. validateRelPath already refuses every such path; the IsLocal
+// check sits next to the joins in the callers so the containment rule is
+// visible where the path is used (path-injection analysis does not follow
+// validateRelPath).
+func notInsideSkill(rel string) *refusal {
+	return saveCheck(fmt.Sprintf("'%s' is not a relative path inside the skill", rel))
+}
+
 // validateRelPath applies §7.2's path rules to one relative path: no
 // traversal, no absolute path, Windows-safe components on every platform
 // (pkg/pathsafe), and — for authoring paths — no dot-component.

@@ -18,6 +18,12 @@ const MaxLength = 64
 
 var patternRE = regexp.MustCompile(Pattern)
 
+// Matcher returns the compiled Pattern. A caller that joins a name into a
+// filesystem path calls Matcher().MatchString right before the join (with the
+// MaxLength check), so the check sits next to the path it protects and static
+// path-injection analysis recognises it; Valid is the same rule.
+func Matcher() *regexp.Regexp { return patternRE }
+
 // Valid reports whether s is a valid skill name.
 func Valid(s string) bool {
 	return s != "" && len(s) <= MaxLength && patternRE.MatchString(s)
