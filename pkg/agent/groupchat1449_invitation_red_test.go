@@ -143,8 +143,10 @@ func TestGroupChat1449_InvitationCostIsLoggedOnceAndLeavesTheOriginChat(t *testi
 		t.Fatal(err)
 	}
 	records := 0
-	for _, line := range strings.Split(string(logged), "\n") {
-		if strings.Contains(line, "llm_usage") && strings.Contains(line, `agent="`+testDefaultAgentID+`"`) && strings.Contains(line, `session="`+sessionID+`"`) {
+	// The real file sink is JSON: match the decoded message, not its escaped
+	// physical bytes. The shared parser also refuses malformed/non-INFO usage.
+	for _, record := range expandedLogsUsageRecords(t, logPath) {
+		if record.Session == sessionID && strings.Contains(record.Line, `agent="`+testDefaultAgentID+`"`) {
 			records++
 		}
 	}
