@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -43,6 +44,16 @@ type DiscordChannel struct {
 	typingMu   sync.Mutex
 	typingStop map[string]chan struct{} // chatID → stop signal
 	botUserID  string                   // stored for mention checking
+
+	// lifecycleMu orders Start/Stop against the adapter-owned reconnect loop
+	// (reconnect.go): it guards ctx/cancel writes and the reconnecting flags,
+	// and is held across each reconnect attempt's stop check and Open.
+	lifecycleMu      sync.Mutex
+	reconnecting     bool
+	reconnectPending bool
+	// stopped is set by Stop before the session closes; handleMessage drops
+	// any event still in flight for a stopped adapter.
+	stopped atomic.Bool
 }
 
 func NewDiscordChannel(
@@ -70,25 +81,33 @@ func NewDiscordChannel(
 	if err := applyDiscordProxy(session, cfg.Proxy); err != nil {
 		return nil, err
 	}
+	// The adapter owns reconnection (reconnect.go): discordgo's own loop
+	// cannot be stopped and resurrected stopped sessions.
+	session.ShouldReconnectOnError = false
 	base := channels.NewBaseChannel("discord", cfg, bus, cfg.AllowFrom,
 		channels.WithMaxMessageLength(2000),
 		channels.WithGroupTrigger(cfg.GroupTrigger),
 		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
 
-	return &DiscordChannel{
+	c := &DiscordChannel{
 		BaseChannel: base,
 		session:     session,
 		config:      cfg,
 		ctx:         context.Background(),
 		typingStop:  make(map[string]chan struct{}),
-	}, nil
+	}
+	session.AddHandler(c.onDisconnect)
+	return c, nil
 }
 
 func (c *DiscordChannel) Start(ctx context.Context) error {
 	logger.InfoC("discord", "Starting Discord bot")
 
+	c.lifecycleMu.Lock()
 	c.ctx, c.cancel = context.WithCancel(ctx)
+	c.stopped.Store(false)
+	c.lifecycleMu.Unlock()
 
 	// Get bot user ID before opening session to avoid race condition
 	botUser, err := c.session.User("@me")
@@ -125,10 +144,16 @@ func (c *DiscordChannel) Stop(ctx context.Context) error {
 	}
 	c.typingMu.Unlock()
 
-	// Cancel our context so typing goroutines using c.ctx.Done() exit
+	// Cancel our context so typing goroutines using c.ctx.Done() exit and the
+	// adapter-owned reconnect loop stops. This happens before Close and under
+	// lifecycleMu, so no reconnect attempt can start after it, and an attempt
+	// already in progress finishes first and is closed by the Close below.
+	c.lifecycleMu.Lock()
+	c.stopped.Store(true)
 	if c.cancel != nil {
 		c.cancel()
 	}
+	c.lifecycleMu.Unlock()
 
 	if err := c.session.Close(); err != nil {
 		return fmt.Errorf("failed to close discord session: %w", err)
@@ -349,6 +374,9 @@ func appendContent(content, suffix string) string {
 func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m == nil || m.Author == nil {
 		return
+	}
+	if c.stopped.Load() {
+		return // a stopped adapter handles nothing, even an event already in flight
 	}
 
 	if m.Author.ID == s.State.User.ID {
