@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
@@ -74,27 +74,22 @@ func TestL11274SavedProgramFailingChecksRefusesRun(t *testing.T) {
 	}
 }
 
-// l11274DelegateAndReadRefusal admits a delegation to the worker and returns
-// the Omnipus-authored program refusal the run reported (r17 §3.6 step 5): the
-// admission is asynchronous, so the refusal arrives as the child run's error
-// event, with the driver never entered.
+// l11274DelegateAndReadRefusal delegates to the worker and returns the
+// Omnipus-authored program refusal (r17 section 3.6 step 5, chief ruling A):
+// the delegation itself is refused as the parent's tool error BEFORE any child
+// session is created, so no child record exists and the driver is never reached.
 func l11274DelegateAndReadRefusal(t *testing.T, f *l11274Fixture, id, task string) string {
 	t.Helper()
-	sub := f.al.SubscribeEvents(512)
-	defer f.al.UnsubscribeEvents(sub.ID)
 	result := l11274Delegate(t, f, id, task, true)
-	if result == nil || result.IsError {
-		t.Fatalf("instrument: delegation must be admitted before the run refuses, got %+v", result)
+	if result == nil || !result.IsError {
+		t.Fatalf("an unrunnable external worker must be refused as the delegation tool error, got %+v", result)
 	}
-	f.al.drainSteeredTurns(30 * time.Second)
-	for _, evt := range collectEventStream(sub.C) {
-		if evt.Kind != EventKindError {
-			continue
-		}
-		if payload, ok := evt.Payload.(ErrorPayload); ok && payload.Stage == "external_cli" {
-			return payload.Message
-		}
+	records, err := f.al.GetSessionLifecycleStore().List(session.LifecycleFilter{AgentID: id})
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatal("the refused run reported no external_cli error")
-	return ""
+	for _, rec := range records {
+		t.Errorf("a refused delegation created child session %q for %s", rec.SessionID, id)
+	}
+	return result.ForLLM
 }

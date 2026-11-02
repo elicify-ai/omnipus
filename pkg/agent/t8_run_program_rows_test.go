@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
@@ -232,6 +233,9 @@ func TestSpawn_ResolveCheckExec_NoFallback_ParentGetsRefusal_9_13(t *testing.T) 
 	assert.Contains(t, res.ForLLM, thirdpartycli.NoPathText("codex"))
 	f.al.drainSteeredTurns(30 * time.Second)
 	assert.Empty(t, fake.RecordedRunOpts())
+	records, err := f.al.GetSessionLifecycleStore().List(session.LifecycleFilter{AgentID: t8ProgramWorker})
+	require.NoError(t, err)
+	assert.Empty(t, records, "no child session was created for the refused delegation")
 }
 
 // 9.17: the preset (with a flag the filter drops from an agent) reaches the

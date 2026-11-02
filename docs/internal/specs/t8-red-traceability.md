@@ -873,3 +873,13 @@ The gateway stub `pkg/gateway/t8_spawn_settings_blocked_test.go` is deleted. The
 
 ### Item 5
 Untouched. No test needed changing.
+
+## Round 5 (2026-11-02)
+
+Chief ruling A on row 9.13: spec r17 section 3.6 step 5 wins. A delegation to an external worker whose Settings program is missing or fails its check is refused before any session is created, and the parent gets the NoPath or CheckFailed text as the tool error. Developer commits fdb09c5dc, 33316c8b8, 5fd85ff74.
+
+- The shared helper `l11274DelegateAndReadRefusal` (`pkg/agent/l1_1274_saved_program_test.go`) now expects the delegation result to be a tool error, returns its text, and fails if any lifecycle record exists for the worker (no child session). The refusal-text and "driver never reached" assertions are unchanged; only the moment moved.
+- Tests that use the helper and so changed moment: TestL11274SavedProgramRespectsCurrentUserExecuteAccess, TestL11274CreateWithoutSavedProgramIsNotRunnableAndRefusesRun, TestL11274SavedProgramFailingChecksRefusesRun, TestSpawn_ResolveCheckExec_NoFallback_UnsafeRetarget_9_10, TestSpawn_ResolveCheckExec_NoFallback_EmptyPath_9_12.
+- 9.13 (TestSpawn_ResolveCheckExec_NoFallback_ParentGetsRefusal_9_13) gained the same no-child-session assertion.
+- Result: the targeted pkg/agent run (L11274 tests plus all run-program rows, log 136) passes, so 9.13 and 8.14 are now green with the developer's fixes. pkg/agentmutation passes (log 137, 12 tests). `check-no-unsafe-error-wrap.sh` passes.
+- No weakened or removed assertion. No production file touched.
