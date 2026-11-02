@@ -367,7 +367,7 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 	require.Len(t, pol, len(catalog),
 		"policy must enumerate the whole static catalog, one literal entry each (Constraint #6)")
 
-	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true, "grep": true}
+	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true, "grep": true, "get_agent": true} // get_agent: r17 FR-143, every agent
 	for _, name := range catalog {
 		p, ok := pol[name]
 		require.Truef(t, ok, "policy must enumerate tool %q (no default fallback)", name)
@@ -420,8 +420,12 @@ func TestPlanSupervisorResolved_ExactlyPlanCorrect(t *testing.T) {
 		"(PlanSupervisor, grep) must RESOLVE allow — ADR-081 D11's founder ruling (FR-009) "+
 			"grants grep to every agent tier including the most locked-down system agent")
 
+	assert.Equal(t, "allow", resolveFor(t, cfg, id, "get_agent", nil),
+		"(PlanSupervisor, get_agent) must RESOLVE allow — r17 FR-143 grants get_agent to every agent, "+
+			"Judge and Plan Supervisor included")
+
 	for _, name := range coreagent.AllStaticToolNames() {
-		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" || name == "grep" {
+		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" || name == "grep" || name == "get_agent" {
 			continue
 		}
 		assert.Equalf(t, "deny", resolveFor(t, cfg, id, name, nil),
