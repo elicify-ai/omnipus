@@ -13,10 +13,8 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -93,27 +91,9 @@ func turnSkillFolders(ctx context.Context) []string {
 // not applied: it can only lift a global deny, so ignoring it can only make
 // SkillsReadAll stricter, never looser.
 func readGlobalToolCeiling(home string) (map[string]config.ToolPolicy, error) {
-	out := map[string]config.ToolPolicy{}
-	for k, v := range config.DefaultToolPolicyCeiling() {
-		out[k] = config.ToolPolicy(v)
-	}
-	raw, err := os.ReadFile(filepath.Join(home, "config.json"))
+	ceiling, err := config.ReadPersistedToolCeiling(home)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return out, nil
-		}
-		return nil, fmt.Errorf("skills authority: read config: %w", err)
+		return nil, fmt.Errorf("skills authority: %w", err)
 	}
-	var doc struct {
-		Sandbox struct {
-			ToolPolicies map[string]string `json:"tool_policies"`
-		} `json:"sandbox"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, fmt.Errorf("skills authority: parse config: %w", err)
-	}
-	for k, v := range doc.Sandbox.ToolPolicies {
-		out[k] = config.ToolPolicy(v)
-	}
-	return out, nil
+	return ceiling, nil
 }
