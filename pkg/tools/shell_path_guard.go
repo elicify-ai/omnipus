@@ -499,7 +499,7 @@ func (t *ExecTool) guardProtectedOperands(ctx context.Context, command string) (
 		// UAT-1 F-8: an operand inside one of the turn's loadable skill
 		// folders may be read or run, never changed (shell_skill_operands.go).
 		// Without a turn policy nothing is loadable and the deny below stands.
-		if policyOK {
+		if policyOK && !operandHasGlob(cmd, start) {
 			if folder := loadableSkillFolder(p, turnPolicy.HomeGuard.SkillFolders); folder != "" {
 				if ok, reason := classifier.skillOperandUse(start); !ok {
 					return skillWriteRefusal(p, folder, reason), false
@@ -893,6 +893,8 @@ func (c pathUseClassifier) classify(start int) pathUseVerdict {
 		return pathUseVerdict{reason: fmt.Sprintf("the command word is spelled with a directory prefix or in upper case (%q), which the read-only allowlist matches only literally", head)}
 	case !readOnlyShellCommands[head]:
 		return pathUseVerdict{reason: fmt.Sprintf("%q is not on the guard's read-only allowlist (%s) — it has a flag or mode that can write to a path named on its command line, so the guard cannot prove this use is a read", head, readOnlyShellCommandsSummary())}
+	case head == "rg" && rgRunsCommands(seg):
+		return pathUseVerdict{reason: "rg with --pre, --pre-glob or --hostname-bin runs another program, so the guard cannot prove this use is a read"}
 	}
 	// Rule 5: this word is a redirect target.
 	if c.precededByOutputRedirect(word, segStart) {

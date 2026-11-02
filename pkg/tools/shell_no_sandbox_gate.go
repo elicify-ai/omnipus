@@ -105,6 +105,9 @@ func isNoSandboxReadOnlySegment(seg string) bool {
 		// refuse.
 		return false
 	}
+	if head == "rg" && rgRunsCommands(seg) {
+		return false // SEC2-01: rg's preprocessor flags run another program
+	}
 	if readOnlyShellCommands[head] || noSandboxExtraReadOnlyCommands[head] {
 		return true
 	}
@@ -193,7 +196,7 @@ func segmentNamesProtectedHomeOperand(seg string, home string, skillFolders []st
 		if err != nil {
 			continue
 		}
-		if loadableSkillFolder(p, skillFolders) != "" {
+		if !operandHasGlob(seg, start) && loadableSkillFolder(p, skillFolders) != "" {
 			continue // a read of a loadable skill's file (UAT-1 F-8)
 		}
 		if fspolicy.IsProtectedHomePath(p, home) || fspolicy.CoversChildOnlySecretPath(p, home) {

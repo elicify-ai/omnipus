@@ -21,7 +21,13 @@ package tools
 //     (pathUseClassifier.classify reports readOnly);
 //   - the path is the FIRST argument word of a literal script runner
 //     (skillScriptRunners) — the script it runs;
-//   - the path is the first argument word of a literal `cd`.
+//   - the path is the first argument word of a literal `cd`, and every later
+//     segment is a `./relative` script run or a literal read-only command
+//     with no redirect (afterSkillCd, SEC2-03).
+//
+// A glob-bearing operand (operandHasGlob, SEC2-02) never earns the
+// exception, and `rg` with a preprocessor flag is not a read (rgRunsCommands,
+// SEC2-01).
 //
 // Every other shape (an output-redirect target, a writer such as rm/cp/mv/
 // tee/touch/sed, a runner's later argument, an unparseable command, a brace
@@ -31,6 +37,7 @@ package tools
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
@@ -68,6 +75,46 @@ func loadableSkillFolder(p string, skillFolders []string) string {
 
 func coversForGrantBoth(folder, lexical, resolved string) bool {
 	return fspolicy.CoversForGrant(folder, lexical) && fspolicy.CoversForGrant(folder, resolved)
+}
+
+// operandHasGlob reports whether the shell word that begins at byte offset
+// start of s carries a glob or brace character (security review 2, SEC2-02).
+// absolutePathPattern stops a candidate at such a character, so
+// `<skills>/granted*/x` reaches the guard as `<skills>/granted` — a loadable
+// folder — while the shell expands it onto ungranted siblings too. A
+// glob-bearing operand never earns the skill exception; it meets the
+// ordinary deny instead. Quoting is ignored on purpose (a quoted `*` is
+// literal, and refusing it only costs a needless refusal).
+func operandHasGlob(s string, start int) bool {
+	if start < 0 || start > len(s) {
+		return true
+	}
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '*', '?', '[', ']', '{', '}':
+			return true
+		case ' ', '\t', '\n', '\r', ';', '|', '&', '(', ')', '<', '>', '`':
+			return false
+		}
+	}
+	return false
+}
+
+// rgRunsCommands reports whether a segment whose head is `rg` names one of
+// ripgrep's flags that spawn a program (--pre, --pre-glob, --hostname-bin):
+// such an rg is not a read (security review 2, SEC2-01). A segment the
+// tokenizer cannot split counts as running commands (fail closed).
+func rgRunsCommands(seg string) bool {
+	words, ok := tokenizeShellWords(seg)
+	if !ok {
+		return true
+	}
+	for _, w := range words {
+		if strings.HasPrefix(w, "--pre") || strings.HasPrefix(w, "--hostname-bin") {
+			return true
+		}
+	}
+	return false
 }
 
 // skillOperandUse reports whether the absolute-path candidate starting at
@@ -122,6 +169,50 @@ func (c pathUseClassifier) skillOperandUse(start int) (allowed bool, reason stri
 	if word != j || word != start {
 		return false, fmt.Sprintf("only the first argument of %q (the script or folder itself) may name a skill path", head)
 	}
+	if head == "cd" {
+		return c.afterSkillCd(segEnd)
+	}
+	return true, ""
+}
+
+// afterSkillCd judges every segment after a literal `cd <skill folder>`
+// (security review 2, SEC2-03 ruling): their relative operands land inside
+// the skill, so each later segment must be either a `./relative` script run
+// (command word starting with `./`, no `..`) or a literal read-only
+// allowlisted command with no output redirect. Anything else — chmod, rm,
+// cp, tee, a redirect, another cd — is refused.
+func (c pathUseClassifier) afterSkillCd(from int) (bool, string) {
+	for i := from; i < len(c.cmd); {
+		segStart, segEnd := c.segmentBounds(i)
+		if segEnd <= i {
+			i++ // a separator byte (`&&`, `;`, `|`)
+			continue
+		}
+		i = segEnd
+		seg := c.cmd[segStart:segEnd]
+		if strings.TrimSpace(seg) == "" {
+			continue
+		}
+		for k := segStart; k < segEnd; k++ {
+			if !c.mask[k] && strings.ContainsRune("><{}", rune(c.cmd[k])) {
+				return false, "after cd into a skill folder, a later command redirects output or uses brace expansion"
+			}
+		}
+		fw := c.firstWordStart(segStart, segEnd)
+		if strings.HasPrefix(c.cmd[fw:segEnd], "./") {
+			wordEnd := fw
+			for wordEnd < segEnd && (c.mask[wordEnd] || !isShellWordBreak(c.cmd[wordEnd])) {
+				wordEnd++
+			}
+			if !strings.Contains(c.cmd[fw:wordEnd], "..") {
+				continue // a script of the skill, run in place
+			}
+		}
+		head, headIsExpansion, headNormalised := shellCommandHeadDetailed(seg)
+		if headIsExpansion || headNormalised || !readOnlyShellCommands[head] || (head == "rg" && rgRunsCommands(seg)) {
+			return false, fmt.Sprintf("after cd into a skill folder, %q could change the skill's files", head)
+		}
+	}
 	return true, ""
 }
 
@@ -133,7 +224,7 @@ func (c pathUseClassifier) skillOperandUse(start int) (allowed bool, reason stri
 // read/run shape returns false and meets the ordinary checks.
 func loadableSkillReadOrRun(raw string, start int, c pathUseClassifier, policy fspolicy.FSPolicy) bool {
 	p, err := filepath.Abs(raw)
-	if err != nil || loadableSkillFolder(p, policy.HomeGuard.SkillFolders) == "" {
+	if err != nil || operandHasGlob(c.cmd, start) || loadableSkillFolder(p, policy.HomeGuard.SkillFolders) == "" {
 		return false
 	}
 	ok, _ := c.skillOperandUse(start)
