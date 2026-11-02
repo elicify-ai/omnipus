@@ -838,7 +838,11 @@ func TestAgentGetFieldsDefinition(t *testing.T) {
 	}
 	have := map[string]bool{}
 	for _, v := range enum {
-		have[v.(string)] = true
+		s, isString := v.(string)
+		if !isString {
+			t.Fatalf("enum value %v has type %T, want string", v, v)
+		}
+		have[s] = true
 	}
 	for _, want := range []string{"all", "soul", "agent_md", "tool_permissions"} {
 		if !have[want] {

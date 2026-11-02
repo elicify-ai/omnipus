@@ -47,7 +47,8 @@ func TestT8ModelChain_InheritanceLegacyAndUnknownCapability(t *testing.T) {
 			assert.Equal(t, "inherited-primary", primary["model"])
 			if kind == "6.4 legacy fallback" {
 				require.Len(t, chain, 2)
-				row := chain[1].(map[string]any)
+				row, isRow := chain[1].(map[string]any)
+				require.True(t, isRow, "chain row is an object")
 				assert.Equal(t, "legacy-only-model", row["model"])
 				assert.Contains(t, row["warning"], "not paired with a provider — reported, never routed")
 			}

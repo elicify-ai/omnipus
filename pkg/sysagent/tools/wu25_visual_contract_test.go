@@ -100,9 +100,10 @@ func TestWU25EditableFields_MatchCallableUpdateContract(t *testing.T) {
 			for _, name := range executorOnly {
 				require.Contains(t, props, name, "update_agent schema carries the executor setting %s", name)
 				value := any("x")
-				if name == "env_overrides" {
+				switch name {
+				case "env_overrides":
 					value = map[string]any{"A": "b"}
-				} else if name == "env_overrides_remove" {
+				case "env_overrides_remove":
 					value = []any{"A"}
 				}
 				result := h.call(t, "update_agent", map[string]any{"id": id, "revision": h.state(t, id).Revision, name: value})

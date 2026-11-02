@@ -131,7 +131,8 @@ func TestGetAgent_DetailAndModelChain(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, want, row["model"])
 	}
-	last := chain[2].(map[string]any)
+	last, isLast := chain[2].(map[string]any)
+	require.True(t, isLast, "chain row is an object")
 	assert.Equal(t, false, last["provider_configured"], "6.2 missing provider")
 	assert.Contains(t, last["warning"], "no configured provider")
 }
@@ -208,7 +209,8 @@ func TestUpdateAgent_RefusesPermissionFields_ProductionRegistry(t *testing.T) {
 func TestReadSchemas_Bounded(t *testing.T) {
 	d, _ := newTestDeps(t)
 	tool := systools.NewAgentGetTool(d)
-	props := tool.Parameters()["properties"].(map[string]any)
+	props, isProps := tool.Parameters()["properties"].(map[string]any)
+	require.True(t, isProps, "schema properties object")
 	for _, key := range []string{"id", "name"} {
 		p, ok := props[key].(map[string]any)
 		require.True(t, ok, "15.11 missing selector %s", key)
