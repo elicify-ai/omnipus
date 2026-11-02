@@ -144,7 +144,7 @@ Every change to a skill you own is saved as a version of the whole folder. The h
 2. Click **Browse Skills**. A search window opens over the screen.
 3. Type what you are looking for. Results come from the ClawHub registry, each with its name, version, and summary.
 4. Click **Install** on the one you want. The skill appears under Installed Skills, marked Community.
-5. To use a file you already have, choose **Install from file** in the same window. A file install cannot be verified against a published checksum, so Omnipus shows what the skill claims to do and asks you to confirm.
+5. To use a file you already have, choose **Install from file** in the same window. A file install cannot be verified against a published checksum, so Omnipus shows what the skill claims to do and asks you to confirm. The file is a `SKILL.md` or a `.zip`, named after the skill (for example `my-skill.zip`). In a zip, `SKILL.md` must sit at the top level: a zip whose files are all inside one folder is refused with that reason. Files under `scripts/` that are executable in the zip stay executable.
 6. Grant the skill. Open the agent, new or existing, and tick the skill in its skills list. An agent with nothing ticked has no skills.
 7. Send the agent a task that matches the skill's description. You can also type `/` in chat and pick the skill to activate it for that one message.
 
