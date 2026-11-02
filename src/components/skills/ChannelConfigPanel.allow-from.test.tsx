@@ -92,13 +92,13 @@ function renderPanel(platform: string, initialAllowFrom: string[] = []) {
 }
 
 async function openAllowFrom(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole('button', { name: 'Advanced', exact: true }))
-  return screen.getByRole<HTMLInputElement>('textbox', { name: 'Allow From', exact: true })
+  await user.click(await screen.findByRole('button', { name: /^Advanced$/ }))
+  return screen.getByRole<HTMLInputElement>('textbox', { name: /^Allow From$/ })
 }
 
 async function save(user: ReturnType<typeof userEvent.setup>) {
-  const outbound = await screen.findByRole('region', { name: 'Starting messages', exact: true })
-  const configureSaves = screen.getAllByRole('button', { name: 'Save', exact: true })
+  const outbound = await screen.findByRole('region', { name: /^Starting messages$/ })
+  const configureSaves = screen.getAllByRole('button', { name: /^Save$/ })
     .filter((button) => !outbound.contains(button))
   expect(configureSaves, 'instrument: select Configure Save, not the separate outbound Save').toHaveLength(1)
   await user.click(configureSaves[0])
@@ -141,7 +141,7 @@ describe.each(['discord', 'telegram'])('U7 Allow From — %s', (platform) => {
     expect(initial.value.split(/[,\s]+/u).filter(Boolean)).toEqual(['111', '222'])
     const readsBeforeClose = configReadCount
     panel.setOpen(false)
-    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Allow From', exact: true })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: /^Allow From$/ })).not.toBeInTheDocument())
 
     panel.setOpen(true)
     const reopened = await openAllowFrom(user)
