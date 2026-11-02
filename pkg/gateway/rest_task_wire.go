@@ -349,7 +349,7 @@ func criteriaFromUpdateWire(items []struct {
 
 // dodFromCreateWire converts the gen.TaskCreateRequest.Dod inline wire shape
 // to internal acceptance criteria (create path). Mirrors criteriaFromCreateWire
-// exactly — see toWireDod's doc comment for why this cannot be shared.
+// exactly — see taskwire.Dod's doc comment for why this cannot be shared.
 func dodFromCreateWire(items []struct {
 	Author struct {
 		Id   string                             `json:"id"`
@@ -405,7 +405,7 @@ func dodFromCreateWire(items []struct {
 
 // dodFromUpdateWire converts the gen.TaskUpdateRequest.Dod inline wire shape
 // to internal acceptance criteria (PATCH path). Mirrors criteriaFromUpdateWire
-// exactly — see toWireDod's doc comment for why this cannot be shared.
+// exactly — see taskwire.Dod's doc comment for why this cannot be shared.
 func dodFromUpdateWire(items []struct {
 	Author struct {
 		Id   string                             `json:"id"`
@@ -696,32 +696,4 @@ func toWireJudgeVerdict(v task.JudgeVerdict) gen.JudgeVerdict {
 // backfill), kept under its gateway name for this package's callers.
 func wireCriterionJudgment(c task.AcceptanceCriterion) task.JudgmentKind {
 	return taskwire.CriterionJudgment(c)
-}
-
-// toWireDod is taskwire.Dod, kept under its gateway name for this package's
-// callers.
-func toWireDod(cs []task.AcceptanceCriterion) *[]struct {
-	Author struct {
-		Id   string                `json:"id"`
-		Kind gen.TaskDodAuthorKind `json:"kind"`
-	} `json:"author"`
-	Behavior *struct {
-		MaxCount *int                      `json:"max_count,omitempty"`
-		MinCount *int                      `json:"min_count,omitempty"`
-		Scope    *gen.TaskDodBehaviorScope `json:"scope,omitempty"`
-		Tool     string                    `json:"tool"`
-	} `json:"behavior,omitempty"`
-	Check *struct {
-		Command          string `json:"command"`
-		ExpectedExitCode int    `json:"expected_exit_code"`
-	} `json:"check,omitempty"`
-	ClauseCount *int                   `json:"clause_count,omitempty"`
-	Id          *string                `json:"id,omitempty"`
-	Judgment    gen.TaskDodJudgment    `json:"judgment"`
-	Kind        gen.TaskDodKind        `json:"kind"`
-	Provenance  *gen.TaskDodProvenance `json:"provenance,omitempty"`
-	Status      gen.TaskDodStatus      `json:"status"`
-	Text        string                 `json:"text"`
-} {
-	return taskwire.Dod(cs)
 }

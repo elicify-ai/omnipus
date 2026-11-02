@@ -240,7 +240,7 @@ func wireCriteria(cs []task.AcceptanceCriterion) *[]struct {
 // wireCriteria because oapi-codegen emits TWO separate named anonymous-
 // struct-element types for Task.Criteria and Task.Dod even though their
 // shapes are structurally identical (same reason wireCriteria/
-// wirePlanDoD in rest_plans.go cannot be shared either — see wirePlanDoD's
+// wirePlanDoD in plan.go cannot be shared either — see wirePlanDoD's
 // own doc comment).
 func Dod(cs []task.AcceptanceCriterion) *[]struct {
 	Author struct {
