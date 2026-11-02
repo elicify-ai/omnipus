@@ -1319,12 +1319,9 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		jsonErr(w, http.StatusBadRequest, refusal)
 		return
 	}
-	// FR-023: the Configure response's own outcome keys are never config.
-	for _, name := range []string{"apply_outcome", "apply_reason", "apply_note"} {
-		for _, key := range foldedKeys(updates, name) {
-			delete(updates, key)
-		}
-	}
+	// FR-023: the Configure response's own outcome keys are never config;
+	// U7: allowed-sender text is saved as a list of ids.
+	dropConfigureOutcomeKeys(updates)
 	normalizeConfigureAllowLists(updates)
 	// Filesystem-path fields (grep of config.ChannelInstanceConfig for path-typed
 	// fields: session_store_path [WhatsApp], crypto_database_path [Matrix],

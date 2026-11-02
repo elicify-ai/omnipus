@@ -28,3 +28,14 @@ func normalizeConfigureAllowLists(updates map[string]any) {
 		}
 	}
 }
+
+// dropConfigureOutcomeKeys removes the Configure response's own outcome keys
+// (any key spelling encoding/json binds to them) from a request: they are
+// never config (FR-023).
+func dropConfigureOutcomeKeys(updates map[string]any) {
+	for _, name := range []string{"apply_outcome", "apply_reason", "apply_note"} {
+		for _, key := range foldedKeys(updates, name) {
+			delete(updates, key)
+		}
+	}
+}
