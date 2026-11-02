@@ -799,3 +799,40 @@ skills: elicify-test-writing, omnipus-shared-rules, omnipus-design-system.
 
 ## Chief ruling: once-run OccurrenceMs (2026-11-01)
 `pkg/agent/t8_task_tool_wiring_test.go::TestTaskTrigger_ScheduledTaskNotRunEarly_ProductionWiring/once` now expects a nil `OccurrenceMs` for a once run (recurring keeps `&at`). Spec-silent conflict (r17 says nothing; released `once_fire_passes_nil` in `pkg/agent/task_run_history_test.go` requires nil) resolved by the chief. Only this one expectation changed.
+
+## Round 2 closeout (2026-11-02)
+
+Logs are in `/workspace/logs/t8-red/closeouts/`. Commits: `a3694d786` (gateway), `a9877e0fe` (sysagent/tools), `e17d89265` (pkg/tools), `5ce78bc21` (pkg/coreagent), `0966fc35a` (pkg/gateway fixtures), `714a158af` (pkg/agentstore), `374e05252` (L11274), `8dd15b501` (scheduler), `0c3f3276f` (pkg/agent misc), `e7b293639` (sysagent lint).
+
+### Scheduler rows now bound to the item-5 hooks
+| Row | Test (pkg/agent) | File |
+|---|---|---|
+| 1.13 | TestT8TaskWrite_ConcurrentPromptWritersGoalFollowsPersistedPrompt | t8_scheduler_barriers_test.go |
+| 18.21 | TestT8Scheduler_QueuedTriggerWriterRegistersLast | t8_scheduler_barriers_test.go |
+| 18.22 | TestT8Scheduler_QueuedManualClearRemovesJobAfterTriggerChange | t8_scheduler_barriers_test.go |
+| 18.24 | TestT8Plan_PromotionPassKeepsTriggerInstalledAfterSnapshot (with control) | t8_scheduler_ownership_test.go |
+| 18.25 | TestT8Scheduler_HeldCompletionNotificationRegistersNothingStale | t8_scheduler_barriers_test.go |
+| 18.26 | TestT8Scheduler_HeldRecoverySweepRegistersNothingAfterClear (with control) | t8_scheduler_barriers_test.go |
+| 18.31 | TestT8TaskTrigger_PendingDeliveryHeldBeforeMarkerProtectsPlan | t8_scheduler_barriers_test.go |
+| 18.34 single and batch | TestT8TaskTrigger_ReservationPublishedBeforeDispatchEntry | t8_scheduler_ownership_test.go |
+| 18.35a/b | TestT8Scheduler_StaleFirePathRecordsNothing | t8_scheduler_barriers_test.go |
+| 18.40 a-c | TestT8TaskTrigger_CollectionSaveFailureStillDeliversQueuedOccurrence (reload leg: gateway TestTaskTrigger_ReloadKeepsLiveScheduler_ProductionPath) | t8_scheduler_ownership_test.go |
+
+Logs: 110 (neighbours), 111-113 (barriers, held, plan/ownership), 117 (full pkg/agent), 120 (two late fixes).
+Rows 1.14, 1.15, 18.32, 18.33a/b1/c and 18.36 are credited to existing neighbour tests (log 110, PASS).
+
+### Deleted tests (record)
+- `t8_scheduler_protocol_blocked_test.go`: the blocked stubs, replaced by the tests above.
+- `l1_1274_fix1_access_windows_test.go` and `l1_1274_fix2_pathext_windows_test.go`: spec r17 area 4 removed the per-agent `cli_path`; the program now comes from `sandbox.third_party_agents.clis.<cli>.path` and is checked by `thirdpartycli.ValidateProgramPath`. The Unix access test was rewritten for the Settings program; Windows PATHEXT resolution no longer exists in Omnipus code.
+- `l1_1274_refusal_fixture_test.go`: its only helper became unused after the rewrite (lint `unused`).
+
+### Rewritten or fixed
+- L11274 tests: now `l1_1274_saved_program_test.go` (create_agent refuses `cli_path`; failing saved program refuses the run with the CheckFailed text; NoPath text with no program).
+- Routing-session-id guard counts now include `external_run_program.go` (34/24).
+- Vacuous-test fixes: 10.7 fixture moved under `workspaces/<id>/work` (it sat in a protected carve-out, so `read_file` was denied and the test passed for the wrong reason); 20.8 long-text fixtures were single-letter runs that the production reader omits as "base64-like", so they now use space-separated text; 21.3 helper-depth assertion matches the JSON `"policy":"depth"`.
+- Lint: `golangci-lint` clean on pkg/agent, pkg/sysagent/tools, pkg/tools, pkg/gateway, pkg/coreagent, pkg/agentstore (logs 119, 121, 123).
+
+### Still red or blocked (production gaps, not test faults)
+- TestParity_RecursivePaths_MappingAndExclusions and TestRuleTable_TaskFrozenSetShared: production has no `pkg/task/fieldrules.go` or canonical mapping rows.
+- TestSeedConfig_OmnipusSkillsReconciled and 14.1: the spec does not list the retired skills and production has no retired-name removal.
+- TestWU23_GodModeNativeSpawns_Landlock: needs a Landlock-capable environment.
