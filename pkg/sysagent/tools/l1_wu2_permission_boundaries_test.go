@@ -79,7 +79,7 @@ func TestL1WU2CreateAgent_RefusesEveryNonDenyManagementGrantBeforePersistence(t 
 	management := []string{"create_agent", "update_agent", "delete_agent", "create_workspace", "update_workspace",
 		"delete_workspace", "create_skill", "edit_skill", "remove_skill", "install_skill", "add_mcp_server",
 		"remove_mcp_server", "configure_provider", "enable_channel", "disable_channel", "configure_channel",
-		"connect_channel", "connect_mailbox", "set_agent_permissions", "remove_secret", "select_secret_version", "set_config"}
+		"connect_channel", "set_channel_outbound", "connect_mailbox", "set_agent_permissions", "remove_secret", "select_secret_version", "set_config"}
 	for _, name := range management {
 		for _, policy := range []string{"allow", "ask"} {
 			t.Run(name+"_"+policy, func(t *testing.T) {

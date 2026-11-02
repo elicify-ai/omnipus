@@ -19,7 +19,7 @@ func TestL1WU2AutoAskList_NewManagementToolsAreExplicitAndNeverAutoRun(t *testin
 		assert.True(t, ClassifyAutoApprove(context.Background(), "read_file", nil, nil).Run)
 	})
 	for _, name := range []string{"delete_agent", "remove_skill", "remove_mcp_server", "add_mcp_server",
-		"configure_provider", "enable_channel", "configure_channel", "connect_channel", "connect_mailbox",
+		"configure_provider", "enable_channel", "configure_channel", "connect_channel", "set_channel_outbound", "connect_mailbox",
 		"set_agent_permissions", "remove_secret", "select_secret_version", "environment_setup"} {
 		t.Run(name, func(t *testing.T) {
 			class, present := table[name]
