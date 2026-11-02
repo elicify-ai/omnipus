@@ -1,7 +1,8 @@
 /**
  * U7 / channels-spec-r8 FR-054, US-6 AS1, S-50.
  * Oracles: the field's comma-separated help text and the chief's explicit
- * comma-or-whitespace ruling. The brief supplies 111/222 as the exact IDs.
+ * comma-or-whitespace ruling, with the WhatsApp comma-only exception (chief
+ * option B, 2026-11-02 06:38Z). The brief supplies all exact phone/Discord IDs.
  * Panel, field catalog, controls, client and schemas stay real. Only HTTP is
  * replaced, and the raw request is captured without server-side normalization.
  */
@@ -78,7 +79,10 @@ afterEach(async () => {
 
 function renderPanel(platform: string, initialAllowFrom: string[] = []) {
   channelId = platform
-  savedConfig = { token: '[configured]', allow_from: initialAllowFrom }
+  // WhatsApp has no token descriptor; don't inject another connector's secret.
+  savedConfig = platform === 'whatsapp'
+    ? { allow_from: initialAllowFrom }
+    : { token: '[configured]', allow_from: initialAllowFrom }
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   clients.add(client)
   const onOpenChange = vi.fn()
@@ -104,6 +108,27 @@ async function save(user: ReturnType<typeof userEvent.setup>) {
   await user.click(configureSaves[0])
   await waitFor(() => expect(configureBodies).toHaveLength(1))
 }
+
+describe('U7 Allow From — WhatsApp comma-only exception', () => {
+  // The chief's literal examples fix the storage/request oracle. Preserve
+  // internal phone spaces; this is not a claim of phone-to-native-JID matching.
+  it.each([
+    { text: '+1 234 567', want: ['+1 234 567'] },
+    { text: '+1 234 567, +4 987 654', want: ['+1 234 567', '+4 987 654'] },
+  ])('typing "$text" sends whole phone IDs, preserving internal spaces', async ({ text, want }) => {
+    const user = userEvent.setup()
+    renderPanel('whatsapp')
+    const input = await openAllowFrom(user)
+    await user.type(input, text)
+    expect(input).toHaveValue(text)
+
+    await save(user)
+
+    expect(configureBodies, 'chief option B: split WhatsApp IDs only at commas, never at phone-number spaces').toEqual([
+      { allow_from: want },
+    ])
+  })
+})
 
 describe.each(['discord', 'telegram'])('U7 Allow From — %s', (platform) => {
   it.each(['111, 222', '111 222'])('typing %j submits two separate IDs in the HTTP request body', async (text) => {

@@ -101,3 +101,82 @@ func TestU7_ConfigureAllowFromSavesListAndAdmitsSecondSender(t *testing.T) {
 		})
 	}
 }
+
+func TestU7_ConfigureAllowFromHonorsWhatsAppCommaOnly(t *testing.T) {
+	// Chief option B (2026-11-02 06:38Z) supplies these exact phone/Discord
+	// literals and the WhatsApp comma-only exception. Preserve internal spaces;
+	// no phone-to-JID rewrite is specified. This tests saving, not phone/JID
+	// alias admission: the native handleIncoming matches evt.Info.Sender.String().
+	cases := []struct {
+		name     string
+		platform string
+		input    any
+		want     []string
+	}{
+		{
+			name: "whatsapp_single_spaced_phone", platform: "whatsapp",
+			input: "+1 234 567", want: []string{"+1 234 567"},
+		},
+		{
+			name: "whatsapp_two_comma_separated_spaced_phones", platform: "whatsapp",
+			input: "+1 234 567, +4 987 654", want: []string{"+1 234 567", "+4 987 654"},
+		},
+		{
+			name: "discord_spaces_still_separate_ids", platform: "discord",
+			input: "111 222", want: []string{"111", "222"},
+		},
+		{
+			name: "whatsapp_comma_separated_jids_unchanged", platform: "whatsapp",
+			input: "1234567@s.whatsapp.net, 4987654@s.whatsapp.net",
+			want:  []string{"1234567@s.whatsapp.net", "4987654@s.whatsapp.net"},
+		},
+		{
+			name: "whatsapp_proper_phone_list_unchanged", platform: "whatsapp",
+			input: []string{"+1 234 567", "+4 987 654"}, want: []string{"+1 234 567", "+4 987 654"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Disabled keeps real WhatsApp pairing/network outside this boundary.
+			seed := fmt.Sprintf(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{%q:{"type":%q,"enabled":false,"token_ref":"u7-existing-token","allow_from":["old-sender"]}}}`, tc.platform, tc.platform)
+			api := newChannelTestAPI(t, seed)
+			t.Setenv("OMNIPUS_HOME", api.homePath)
+			payload, err := json.Marshal(map[string]any{"allow_from": tc.input})
+			require.NoError(t, err)
+			request := httptest.NewRequest(http.MethodPut, "/api/v1/channels/"+tc.platform+"/configure", strings.NewReader(string(payload)))
+			request.Header.Set("Content-Type", "application/json")
+			written := httptest.NewRecorder()
+			api.HandleChannels(written, request)
+			require.Equal(t, http.StatusOK, written.Code, "instrument: valid Configure request must save; body=%s", written.Body.String())
+
+			wantJSON, err := json.Marshal(tc.want)
+			require.NoError(t, err)
+			readback := httptest.NewRecorder()
+			api.HandleChannels(readback, httptest.NewRequest(http.MethodGet, "/api/v1/channels/"+tc.platform, nil))
+			require.Equal(t, http.StatusOK, readback.Code, readback.Body.String())
+			var response map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(readback.Body.Bytes(), &response))
+			assert.JSONEq(t, string(wantJSON), string(response["allow_from"]),
+				"chief option B: GET must retain each WhatsApp phone's internal spaces")
+
+			path := filepath.Join(api.homePath, "config.json")
+			saved, err := os.ReadFile(path)
+			require.NoError(t, err)
+			var root map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(saved, &root))
+			var instances map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(root["channels"], &instances))
+			var stored map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(instances[tc.platform], &stored))
+			assert.JSONEq(t, string(wantJSON), string(stored["allow_from"]),
+				"chief option B: raw config.json must save one entry per comma-separated WhatsApp ID")
+
+			loaded, err := config.LoadConfig(path)
+			require.NoError(t, err, "instrument: the just-saved config must load")
+			instance, exists := loaded.Channels[tc.platform]
+			require.True(t, exists, "instrument: selected platform must survive save/load")
+			assert.Equal(t, tc.want, []string(instance.AllowFrom),
+				"chief option B: exact platform-specific ID list must survive save/load")
+		})
+	}
+}
