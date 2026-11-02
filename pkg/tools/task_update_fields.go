@@ -19,25 +19,32 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// definitionFieldSent reports whether the call sends any field of the task
-// definition group (prompt, criteria, dod, max_attempts, clear_max_attempts:
-// true). Presence uses the same type assertions the apply paths use, so the
-// authority gate refuses exactly what would otherwise be written.
+// definitionArgSent reports whether update_task's arguments send property,
+// using the same type assertions the apply paths use, so a gate refuses
+// exactly what would otherwise be written. max_attempts is also sent by
+// clear_max_attempts: true (its flattened clear, r17 TK-05).
+func definitionArgSent(args map[string]any, property string) bool {
+	switch property {
+	case "prompt":
+		_, ok := args["prompt"].(string)
+		return ok
+	case "criteria", "dod":
+		_, ok := args[property].([]any)
+		return ok
+	case "max_attempts":
+		clearOn, _ := args["clear_max_attempts"].(bool)
+		return args["max_attempts"] != nil || clearOn
+	default:
+		return args[property] != nil
+	}
+}
+
+// definitionFieldSent reports whether the call sends any property of the task
+// definition group, read from Table T-TASK (r17 §7.1, §7.7).
 func definitionFieldSent(args map[string]any) bool {
-	if _, ok := args["prompt"].(string); ok {
-		return true
-	}
-	if _, ok := args["criteria"].([]any); ok {
-		return true
-	}
-	if _, ok := args["dod"].([]any); ok {
-		return true
-	}
-	if v, ok := args["max_attempts"]; ok && v != nil {
-		return true
-	}
-	clearOn, _ := args["clear_max_attempts"].(bool)
-	return clearOn
+	return len(task.SentProperties(task.CreatorOnlyProperties(), func(property string) bool {
+		return definitionArgSent(args, property)
+	})) > 0
 }
 
 // checkDefinitionAuthority refuses a definition field from any caller that is
@@ -72,19 +79,11 @@ func (tu *taskUpdateToolExecute) applyOrganisationFields() (*ToolResult, bool) {
 		tu.patch.Prompt = &prompt
 		tu.updatedFields = append(tu.updatedFields, "prompt")
 	}
-	if raw, present := tu.args["tags"]; present && raw != nil {
-		items, ok := raw.([]any)
-		if !ok {
-			return ErrorResult("tags must be a list of strings"), true
-		}
-		tags := make([]string, 0, len(items))
-		for _, item := range items {
-			s, ok := item.(string)
-			if !ok {
-				return ErrorResult("tags must be a list of strings"), true
-			}
-			tags = append(tags, s)
-		}
+	tags, tagsSent, refusal := stringListArg(tu.args, "tags")
+	if refusal != "" {
+		return ErrorResult(refusal), true
+	}
+	if tagsSent {
 		tu.patch.Tags = &tags
 		tu.updatedFields = append(tu.updatedFields, "tags")
 	}

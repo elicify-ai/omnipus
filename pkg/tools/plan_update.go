@@ -26,8 +26,6 @@ import (
 
 const (
 	planUpdateDeniedText  = "update_plan denied: you are not the owner of a plan with that id"
-	planDoDFrozenText     = "dod cannot be changed once the plan has left draft state"
-	planOwnerFrozenText   = "owner_agent_id cannot be changed once the plan has left draft state"
 	planUpdateNoFieldText = "no updatable fields provided (supply at least one of title, objective, description, owner_agent_id, dod, bounds)"
 )
 
@@ -147,11 +145,19 @@ func planEditableBy(p *plan.Plan, callerID string) bool {
 func (t *PlanUpdateTool) buildPatch(existing *plan.Plan, args map[string]any, callerID string) (plan.Patch, []string, string) {
 	var patch plan.Patch
 	fields := []string{}
-	draft := existing.State == plan.StateDraft
-	if raw, ok := args["dod"]; ok && raw != nil {
-		if !draft {
-			return patch, nil, planDoDFrozenText
+	// Draft-only set and refusal from Table T-PLAN (r17 §7.1,
+	// pkg/plan/fieldrules.go), shared with REST PUT; presence uses the same
+	// type checks as the apply paths below.
+	if frozen := plan.FirstFrozenAfterDraft(existing.State, func(property string) bool {
+		if property == "owner_agent_id" {
+			_, ok := args[property].(string)
+			return ok
 		}
+		return args[property] != nil
+	}); frozen != "" {
+		return patch, nil, plan.LeftDraftRefusal(frozen)
+	}
+	if raw, ok := args["dod"]; ok && raw != nil {
 		items, isList := raw.([]any)
 		if !isList || len(items) == 0 {
 			return patch, nil, "dod must list at least one Definition-of-Done criterion"
@@ -164,9 +170,6 @@ func (t *PlanUpdateTool) buildPatch(existing *plan.Plan, args map[string]any, ca
 		fields = append(fields, "dod")
 	}
 	if owner, ok := args["owner_agent_id"].(string); ok {
-		if !draft {
-			return patch, nil, planOwnerFrozenText
-		}
 		if refusal := t.checkOwner(owner, callerID); refusal != "" {
 			return patch, nil, refusal
 		}

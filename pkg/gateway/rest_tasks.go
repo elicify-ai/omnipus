@@ -108,17 +108,10 @@ func frozenTaskDefinitionFields(req *gen.TaskUpdateRequest) []string {
 	if req == nil {
 		return nil
 	}
-	var frozen []string
-	if req.Prompt != nil {
-		frozen = append(frozen, "prompt")
-	}
-	if req.Criteria != nil {
-		frozen = append(frozen, "criteria")
-	}
-	if req.Dod != nil {
-		frozen = append(frozen, "dod")
-	}
-	return frozen
+	// The frozen set is Table T-TASK's (r17 §7.1, pkg/task/fieldrules.go),
+	// shared with update_task; presence is the request's own non-nil fields.
+	sent := map[string]bool{"prompt": req.Prompt != nil, "criteria": req.Criteria != nil, "dod": req.Dod != nil}
+	return task.SentProperties(task.FrozenWhileRunningProperties(), func(property string) bool { return sent[property] })
 }
 
 // runningTaskFrozenFieldMessage is the single refusal wording shared by both

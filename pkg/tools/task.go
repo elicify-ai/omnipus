@@ -576,6 +576,9 @@ type TaskCreateTool struct {
 	// pkg/agent/loop.go (registerSharedTools); unwired (nil, e.g. a bare unit
 	// test) falls back to config.DefaultGoalMaxRounds.
 	goalMaxRoundsFn func() int
+	// planningFn reads the live planning configuration for the max_attempts
+	// ceiling (r17 TK-05); see SetPlanningConfigFn.
+	planningFn PlanningConfigFn
 }
 
 func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
@@ -911,6 +914,26 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 					"standing quality gates, DISTINCT from criteria and never mixed into it, judged " +
 					"identically. REQUIRED: at least one item — an agent-created task with zero dod " +
 					"items is rejected.",
+			},
+			// r17 TK-02, TK-05, TK-08, TK-10: added to create as well as update.
+			"description": map[string]any{
+				"type":        "string",
+				"description": "Human-facing notes (optional, up to 2000 characters).",
+			},
+			"tags": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Tags (optional; at most 16, each up to 64 characters; lower-cased and de-duplicated).",
+			},
+			"run_isolated": map[string]any{
+				"type":        "boolean",
+				"description": "true runs the task in its own isolated session.",
+			},
+			"max_attempts": map[string]any{
+				"type":    "integer",
+				"minimum": 1,
+				"description": "How many fresh runs this task gets (its retry limit; optional). It must be at most " +
+					"the global limit in Settings. Omit to use the global limit.",
 			},
 		},
 		"required": []string{"title", "prompt", "agent_id", "criteria", "dod"},
@@ -1471,7 +1494,7 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	if isJoin, ok := tc.args["is_join"].(bool); ok {
 		tc.entity.IsJoin = isJoin
 	}
-	return nil, false
+	return tc.applyCreateFields()
 }
 
 // persistAndRespond persists the task and paired goal, invokes the creation observer, and returns the created task identity.
@@ -1632,16 +1655,12 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 // read that function's doc comment for the full rule, the four frozen parts of
 // the judged contract, and the reasoning for what deliberately stays mutable.
 //
-// The two entry points enforce the same rule over different field sets simply
-// because they expose different fields. update_task's schema carries NO
-// `prompt` and no `description` argument at all, so the only frozen-set fields
-// reachable from here are `criteria` and `dod`. Nothing is enumerated for the
-// fields this tool cannot touch: a guard for an argument that does not exist
-// would be dead code, and adding a frozen argument to the schema later must
-// carry adding it here in the same change.
+// Both entry points read the frozen set from Table T-TASK
+// (pkg/task/fieldrules.go::FrozenWhileRunningProperties, r17 §7.1), so they
+// cannot drift.
 //
-// Presence is decided with the SAME type assertion the apply path below uses
-// (`args[k].([]any)`), so the gate refuses exactly what would otherwise be
+// Presence is decided with the SAME type assertion the apply path uses
+// (definitionArgSent), so the gate refuses exactly what would otherwise be
 // written — never more. A `criteria` argument of the wrong JSON shape changes
 // nothing downstream, so it is not something to refuse.
 //
@@ -1649,17 +1668,9 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 // working the task must be able to advance its own status, its todos (a
 // separate tool), its result and its artifacts while it runs.
 func frozenUpdateTaskDefinitionFields(args map[string]any) []string {
-	var frozen []string
-	if _, ok := args["prompt"].(string); ok {
-		frozen = append(frozen, "prompt")
-	}
-	if _, ok := args["criteria"].([]any); ok {
-		frozen = append(frozen, "criteria")
-	}
-	if _, ok := args["dod"].([]any); ok {
-		frozen = append(frozen, "dod")
-	}
-	return frozen
+	return task.SentProperties(task.FrozenWhileRunningProperties(), func(property string) bool {
+		return definitionArgSent(args, property)
+	})
 }
 
 // runningTaskFrozenFieldToolMessage is the tool-side refusal, deliberately

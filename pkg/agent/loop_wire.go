@@ -875,6 +875,8 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			rw.rs.al.NotifyTaskUpserted(entity)
 		})
 		taskCreate.SetInitiatorFn(func(ctx context.Context) *task.Initiator { return rw.rs.al.initiatorFor(ctx, currentAgentID) })
+		// r17 TK-05: create_task's max_attempts ceiling reads the LIVE global.
+		taskCreate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(rw.rs.al) })
 		agent.Tools.RegisterReplacing(taskCreate)
 
 		taskUpdate := tools.NewTaskUpdateTool(rw.rs.al.taskStore)

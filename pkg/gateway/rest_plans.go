@@ -630,12 +630,11 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 		}
 	}
 	if req.Dod != nil || req.OwnerAgentId != nil {
-		if existing.State != plan.StateDraft {
-			if req.Dod != nil {
-				jsonErr(w, http.StatusConflict, "dod cannot be changed once the plan has left draft state")
-				return
-			}
-			jsonErr(w, http.StatusConflict, "owner_agent_id cannot be changed once the plan has left draft state")
+		// Draft-only set and refusal from Table T-PLAN (r17 §7.1,
+		// pkg/plan/fieldrules.go), shared with update_plan.
+		sent := map[string]bool{"dod": req.Dod != nil, "owner_agent_id": req.OwnerAgentId != nil}
+		if frozen := plan.FirstFrozenAfterDraft(existing.State, func(p string) bool { return sent[p] }); frozen != "" {
+			jsonErr(w, http.StatusConflict, plan.LeftDraftRefusal(frozen))
 			return
 		}
 	}
