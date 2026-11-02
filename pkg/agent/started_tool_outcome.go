@@ -41,19 +41,23 @@ func (ex *agentLoopRunTurnToolsExecute) beginStartedTool(tc providers.ToolCall, 
 	// complete()'s o.mu -> ts.mu order. Holding it across the running write
 	// makes a racing cancel() settle that record instead of preceding it.
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	ts.startedTool = o
 	ex.started = o
 	ts.mu.Unlock()
 	// 6c UAT U-D1-6 / AC-D1-6: the call's transcript record is written now, at
 	// dispatch, so its saved position is the live order (A, tool, a steer
-	// accepted while it runs, B). Its outcome settles this record in place. A
-	// failed write is counted and warned by appendToolCallTranscript, and the
-	// outcome is then appended as a fresh record, so the call is never lost;
-	// it does not stop a tool whose execution is unaffected.
+	// accepted while it runs, B). Its outcome settles this record in place.
 	running := o.call
 	running.Status = toolCallStatusRunning
-	_ = ts.appendToolCallTranscript(running)
+	err := ts.appendToolCallTranscript(running)
+	o.mu.Unlock()
+	if err != nil {
+		// 6c CHECK F1: a refused dispatch receipt is reported through the same
+		// visible session-save channel as cancel(), outside o.mu like there.
+		// The tool still runs: its execution is unaffected, and its outcome is
+		// then appended as a fresh record, so the call is never lost.
+		o.al.reportSessionSaveFailure(ts, &messageNotSavedError{role: "tool", cause: err})
+	}
 	return true
 }
 
