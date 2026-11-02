@@ -1027,3 +1027,15 @@ Test-only. Failability = the new test run in a scratch worktree with the fix com
 | CK10 | Parked by the chief; no test change | n/a | n/a | n/a |
 | CK5 delete paths | Existing tests kept (both delete paths remove grants, founder Q-S3) | n/a | n/a | n/a |
 | Lint fixes (dogsled, two shadow, QF1003) | `pkg/agent/loop_slash_test.go`, `pkg/agent/skills_policy_turn_red_test.go`, `pkg/tools/resolvepath_skills_gate_realpolicy_test.go`, `pkg/tools/skills_boundary_turn_red_test.go` | n/a | golangci-lint 0 issues, exit=0: agent, tools, skills, sysagent/tools, gateway (`lint-*-2.log`) | Verified |
+
+## Validation diagnostics must not echo content (private fix, commit 486ebc9fd)
+
+Test-only. Failability = the tests run in a scratch worktree with 486ebc9fd reverted.
+
+| Item | Test (file) | Pre-fix (log) | Current production (log) | Certainty |
+|---|---|---|---|---|
+| Malformed frontmatter (type error, duplicate key, syntax error) quoting a stored 4+ byte value: error text and audit reason do not contain it; reason has the form "not valid YAML (line N: ...)" | `TestFrontmatterRefusal_NeverEchoesContent`, 3 subtests (`pkg/skills/diagnostics_no_echo_s03_test.go`) | FAIL, exit=1 (`failability-s03-skills.log`) | PASS, exit=0 (`s03-skills.log`) | Verified |
+| SKILL.md symlink whose target text is a stored value: the refusal and audit line do not show it, and still say "symlink" | `TestSymlinkedSkillMD_RefusalNeverEchoesTheTarget` (same file) | FAIL, exit=1 (same log) | PASS (`s03-skills.log`) | Verified |
+| REST body of the copy route does not carry the value (frontmatter and symlink cases) | `TestRestCopy_RefusalNeverEchoesSkillContent`, 2 subtests (`pkg/gateway/skills_diagnostics_no_echo_s03_test.go`) | FAIL, exit=1 (`failability-s03-gateway.log`) | PASS, exit=0 (`s03-gateway.log`) | Verified |
+| Observed gap, not asserted as a failure | A scalar decode failure (`description: !!int <text>`) is reported by yaml.v3 without a line number, so its reason is "not valid YAML (syntax error)" with no "line N:"; the test asserts "not valid YAML (" for that case and the full line form for the others | n/a | n/a | Verified observation |
+| Lint | pkg/skills, pkg/gateway: 0 issues (`lint-s03-skills.log`, `lint-s03-gateway.log`) | n/a | exit=0 | Verified |
