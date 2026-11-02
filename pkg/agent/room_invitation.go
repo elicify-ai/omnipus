@@ -119,6 +119,7 @@ func (al *AgentLoop) SummarizeRoomInvitation(ctx context.Context, req RoomInvita
 // at an entry boundary. Every line passes both filters.
 func invitationInput(entries []session.TranscriptEntry, maxEntries, maxBytes int) string {
 	var lines []string
+	var sizes []int
 	for i := len(entries) - 1; i >= 0 && len(lines) < maxEntries; i-- {
 		e := entries[i]
 		if !invitationUsable(e) {
@@ -128,15 +129,20 @@ func invitationInput(entries []session.TranscriptEntry, maxEntries, maxBytes int
 		if e.Role == "assistant" {
 			who = "Agent"
 		}
-		lines = append(lines, who+": "+scrubInvitation(strings.TrimSpace(e.Content)))
+		content := scrubInvitation(strings.TrimSpace(e.Content))
+		lines = append(lines, who+": "+content)
+		sizes = append(sizes, len(content))
 	}
+	// FR-039 / DS-5 rows 3-4: the budget is the bytes of the origin chat's
+	// entries; the speaker prefix and line breaks this input adds are not
+	// part of the chat, so a 16,384-byte entry is used whole.
 	size := 0
 	keep := 0
-	for _, l := range lines { // newest first
-		if size+len(l)+1 > maxBytes {
+	for _, n := range sizes { // newest first
+		if size+n > maxBytes {
 			break
 		}
-		size += len(l) + 1
+		size += n
 		keep++
 	}
 	lines = lines[:keep]
