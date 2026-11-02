@@ -66,13 +66,13 @@ func realTurnPolicy(t *testing.T, home, grant string, editor bool) fspolicy.FSPo
 		generation := "11111111-2222-3333-4444-555555555555"
 		require.NoError(t, os.WriteFile(filepath.Join(home, "skills", grant, ".omnipus-identity"), []byte(generation+"\n"), 0o600))
 		agent.Skills = []string{grant}
-		raw, err := json.Marshal(agent)
-		require.NoError(t, err)
+		raw, marshalErr := json.Marshal(agent)
+		require.NoError(t, marshalErr)
 		var record map[string]any
 		require.NoError(t, json.Unmarshal(raw, &record))
 		record["skill_grants"] = map[string]string{grant: generation}
-		raw, err = json.Marshal(record)
-		require.NoError(t, err)
+		raw, marshalErr = json.Marshal(record)
+		require.NoError(t, marshalErr)
 		require.NoError(t, json.Unmarshal(raw, &agent))
 	}
 	require.NoError(t, agentstore.New(home).Create(agent.ID, &agent))

@@ -65,7 +65,8 @@ func TestSkillPolicy_RealLoopComposesBeforeGenericApproval(t *testing.T) {
 			target := filepath.Join(home, "skills", "fresh-skill", "SKILL.md")
 			content := "---\nname: fresh-skill\ndescription: policy fixture\n---\nAPPROVED CONTENT\n"
 			if tc.outside {
-				work, err := workspace.SafeWorkDir(home, wsID)
+				var work string
+				work, err = workspace.SafeWorkDir(home, wsID)
 				require.NoError(t, err)
 				target = filepath.Join(work, "ordinary.txt")
 				content = "ordinary workspace content\n"

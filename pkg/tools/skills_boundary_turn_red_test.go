@@ -85,11 +85,12 @@ func TestSkillsBoundary_RealTurnReadListGrep(t *testing.T) {
 						require.NotNil(t, res)
 						if wantAllowed {
 							require.False(t, res.IsError, "authorized %s must reach real content: %s", kind, res.ForLLM)
-							if kind == "read_file" {
+							switch kind {
+							case "read_file":
 								assert.Contains(t, res.ForLLM, "BODY-"+slug)
-							} else if kind == "grep" {
+							case "grep":
 								assert.Contains(t, res.ForLLM, "MARKER-"+slug)
-							} else {
+							default:
 								assert.Contains(t, res.ForLLM, "helper.md")
 							}
 						} else {

@@ -57,7 +57,7 @@ func TestHandleCommand_UseTokenIsNormalMessage(t *testing.T) {
 func TestApplyExplicitSkillCommand_OneShot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	if err := os.MkdirAll(
