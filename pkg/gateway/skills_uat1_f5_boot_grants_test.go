@@ -79,6 +79,9 @@ func f5AssertBound(t *testing.T, home string, cfg *config.Config, label string) 
 
 func TestFreshHomeTwoBoots_SeededAgentsAreBoundToBuiltinStamps(t *testing.T) {
 	home := t.TempDir()
+	// The home is set before DefaultConfig is built: the TestMain home-leak
+	// guard fails a test that resolves the default home outside its own.
+	t.Setenv(config.EnvHome, home)
 	require.NoError(t, config.SaveConfig(filepath.Join(home, "config.json"), config.DefaultConfig()))
 
 	rc1 := f5Boot(t, home)

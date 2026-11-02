@@ -150,3 +150,93 @@ func TestShellGuard_NoTurnPolicyRefusesEverySkillForm(t *testing.T) {
 		})
 	}
 }
+
+// Security review 2 (/workspace/omnipus-coordination/designs-20261029/
+// skills-security-report-2.md). Text-level, real turn policy. "Refused" means
+// the path guard returns a message; "asked" means the no-sandbox gate does not
+// treat the command as a read. Nothing runs, so the fixture file is also
+// checked for unchanged bytes.
+
+func sec2Bytes(t *testing.T, f f8Fixture) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(f.granted, "SKILL.md"))
+	require.NoError(t, err)
+	return string(raw)
+}
+
+// SEC2-01: rg runs an arbitrary command per file with --pre, so it is not a
+// proven read.
+func TestShellGuardSEC2_RgPreprocessorIsNotAReadOfASkill(t *testing.T) {
+	f := f8Setup(t)
+	before := sec2Bytes(t, f)
+	tool := f8Tool(t, f, true)
+	folders := []string{f.granted}
+	target := f.granted + "/SKILL.md"
+	for _, cmd := range []string{
+		"rg --pre=rm x " + target,
+		"rg --pre rm x " + target,
+		"rg --pre-glob '*.md' --pre rm x " + target,
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			msg, _ := tool.guardProtectedOperands(f8Ctx(), cmd)
+			assert.NotEmpty(t, msg, "the path guard refuses an rg preprocessor on a skill file")
+			assert.False(t, commandIsNoSandboxReadOnlyFor(cmd, folders), "the no-sandbox gate asks for it")
+		})
+	}
+	assert.Equal(t, before, sec2Bytes(t, f), "the skill file is unchanged")
+}
+
+// SEC2-02: a glob that starts with the granted folder's name also names
+// ungranted siblings.
+func TestShellGuardSEC2_GlobBesideAnUngrantedSiblingIsRefused(t *testing.T) {
+	f := f8Setup(t)
+	private := filepath.Join(f.home, "skills", "f8-granted-private")
+	require.NoError(t, os.MkdirAll(private, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(private, "SKILL.md"), []byte("---\nname: f8-granted-private\ndescription: private\n---\nSECRET\n"), 0o644))
+	skillsDir := filepath.Join(f.home, "skills")
+	tool := f8Tool(t, f, true)
+	folders := []string{f.granted}
+
+	// Control: the plain granted path is still a read.
+	msg, _ := tool.guardProtectedOperands(f8Ctx(), "cat "+f.granted+"/SKILL.md")
+	require.Empty(t, msg, "control: a plain granted path is allowed")
+
+	for _, cmd := range []string{
+		"cat " + skillsDir + "/f8-granted*/SKILL.md",
+		"cat " + skillsDir + "/f8-grante?/SKILL.md",
+		"cat " + skillsDir + "/f8-granted[-]private/SKILL.md",
+		"cat " + skillsDir + "/f8-g*/SKILL.md",
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			msg, _ := tool.guardProtectedOperands(f8Ctx(), cmd)
+			assert.NotEmpty(t, msg, "the path guard refuses a glob-bearing skill operand")
+			assert.False(t, commandIsNoSandboxReadOnlyFor(cmd, folders), "the no-sandbox gate asks for it")
+		})
+	}
+}
+
+// SEC2-03: after a cd into a skill folder, a later relative operand or a
+// redirect is a change inside that folder, which a text guard must not admit.
+// Whether `cd <skill> && ls` or `cat SKILL.md` may stay allowed depends on the
+// developer proving them read-only; they are not asserted here (the F-8 shape
+// `cd <skill> && ./scripts/x.sh` stays allowed, see the loadable-folder test).
+func TestShellGuardSEC2_ChangeAfterCdIntoASkillIsRefused(t *testing.T) {
+	f := f8Setup(t)
+	before := sec2Bytes(t, f)
+	tool := f8Tool(t, f, true)
+	folders := []string{f.granted}
+	for _, cmd := range []string{
+		"cd " + f.granted + " && chmod 000 SKILL.md",
+		"cd " + f.granted + " && printf x > SKILL.md",
+		"cd " + f.granted + " && rm SKILL.md",
+		"cd " + f.granted + " && cp a n",
+		"cd " + f.granted + " && echo x >> SKILL.md",
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			msg, _ := tool.guardProtectedOperands(f8Ctx(), cmd)
+			assert.NotEmpty(t, msg, "the path guard refuses a relative change after a skill cd")
+			assert.False(t, commandIsNoSandboxReadOnlyFor(cmd, folders), "the no-sandbox gate asks for it")
+		})
+	}
+	assert.Equal(t, before, sec2Bytes(t, f), "the skill file is unchanged")
+}
