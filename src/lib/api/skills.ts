@@ -32,6 +32,12 @@ import { uploadFiles } from './uploads'
 export const LOCAL_CHANGES_CONFIRMATION_REQUIRED = 'LOCAL_CHANGES_CONFIRMATION_REQUIRED'
 
 /**
+ * The 409 code an install or copy returns when the target name is a built-in
+ * skill's (skills spec r15 §5.10). Its text names the name and the remedy.
+ */
+export const BUILTIN_NAME_RESERVED = 'BUILTIN_NAME_RESERVED'
+
+/**
  * installSkillFromFile installs an uploaded SKILL.md / zip package. Pass
  * `replaceLocalChanges` only after the person confirmed replacing a skill
  * whose `has_local_changes` is true; the replaced state stays in its history.

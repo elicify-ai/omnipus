@@ -38,6 +38,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import {
   installSkillFromFile,
   installSkillBySlug,
+  BUILTIN_NAME_RESERVED,
   LOCAL_CHANGES_CONFIRMATION_REQUIRED,
   searchSkills,
   fetchSkillMarketplaceStatus,
@@ -364,6 +365,13 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
       if (controller.signal.aborted) return
       if (isLocalChangesRefusal(err)) {
         askToReplace()
+      } else if (isApiError(err) && err.status === 409 && err.code === BUILTIN_NAME_RESERVED) {
+        // The reserved-name refusal carries its own exact text (r15 §5.10,
+        // UAT-1 F-11) — never the changed-after-review line below.
+        addToast({
+          message: `Failed to install skill: ${parseServerErrorField(err.body) ?? err.userMessage}`,
+          variant: 'error',
+        })
       } else if (isApiError(err) && err.status === 409) {
         addToast({
           message: 'This installed skill changed after you reviewed it. Close and reopen the browser before replacing it.',
