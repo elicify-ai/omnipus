@@ -314,6 +314,6 @@ func removeRetiredGrant(grants GrantEditor, name string) {
 		return
 	}
 	if err := grants.RemoveGrant(name); err != nil {
-		slog.Warn("skills: retired built-in grant not removed; retried at the next start", "skill", name, "error", err)
+		slog.Warn("skills: retired built-in grant not removed; retried at the next start", "skill", logSafe(name), "error", logSafe(err.Error()))
 	}
 }

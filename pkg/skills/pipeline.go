@@ -523,7 +523,7 @@ func (p *pipeline) removeGrant(slug string) {
 		return
 	}
 	if err := p.req.Grants.RemoveGrant(slug); err != nil {
-		slog.Warn("skills: grant removal after delete failed; the stale grant stays inert (SD-30)", "skill", slug, "error", err)
+		slog.Warn("skills: grant removal after delete failed; the stale grant stays inert (SD-30)", "skill", logSafe(slug), "error", logSafe(err.Error()))
 		p.warnings = append(p.warnings, "grant cleanup failed: "+err.Error())
 	}
 }
