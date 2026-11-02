@@ -45,8 +45,11 @@ function queue(toolName: string, args: Record<string, unknown>) {
   }] }))
 }
 
-function expectNoSecretAndFidelity(container: HTMLElement, secrets: Record<string, string>) {
-  for (const secret of Object.values(secrets)) expect(container.innerHTML).not.toContain(secret)
+// The modal renders through a portal, so the whole document is inspected,
+// not only the render container.
+function expectNoSecretAndFidelity(secrets: Record<string, string>) {
+  expect(document.body.innerHTML, 'instrument: the card really rendered').toContain('zz_probe')
+  for (const secret of Object.values(secrets)) expect(document.body.innerHTML).not.toContain(secret)
   expect(screen.getByText(/zz_probe/)).toBeInTheDocument()
   expect(screen.getByText(/zz_list/)).toBeInTheDocument()
   expect(screen.getByText(/API_KEY/)).toBeInTheDocument()
@@ -58,15 +61,15 @@ describe('agent change card masks env_overrides nested under unknown arguments',
   it.each(['create_agent', 'update_agent'])('panel for %s never renders a nested env value', (tool) => {
     const { args, secrets } = nestedArgs()
     queue(tool, args)
-    const { container } = renderWithClient(<Panel />)
-    expectNoSecretAndFidelity(container, secrets)
+    renderWithClient(<Panel />)
+    expectNoSecretAndFidelity(secrets)
   })
 
   it.each(['create_agent', 'update_agent'])('modal for %s never renders a nested env value', (tool) => {
     const { args, secrets } = nestedArgs()
     queue(tool, args)
-    const { container } = renderWithClient(<ToolApprovalModal />)
-    expectNoSecretAndFidelity(container, secrets)
+    renderWithClient(<ToolApprovalModal />)
+    expectNoSecretAndFidelity(secrets)
   })
 
   it('redaction keeps structure and unknown names, masks every nested container', () => {
