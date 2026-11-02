@@ -1580,9 +1580,20 @@ var ErrNotRestartable = errors.New("task: not restartable: task is not failed")
 // dependency is not yet `done` — the same dependency recompute Update applies
 // when BlockedBy is patched (DS-5: restart resets a member to "next/blocked").
 //
+// RestartReset is the explicit restart of a person (PlayPlan, the standalone
+// restart route): it lands on `next` even when the task's trigger still has a
+// future occurrence, because the person asked for the run now; the trigger is
+// kept. Automatic resets use AutoRestartReset (trigger_wait.go) instead.
+//
 // Returns ErrNotRestartable when the task is not currently `failed`. Takes
 // the per-task lock once internally.
 func (s *Store) RestartReset(id string) (*Task, error) {
+	return s.restartReset(id, false)
+}
+
+// restartReset is the shared body of RestartReset and AutoRestartReset;
+// automatic selects the TK-30 wait for a future trigger occurrence.
+func (s *Store) restartReset(id string, automatic bool) (*Task, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
@@ -1611,6 +1622,11 @@ func (s *Store) RestartReset(id string) (*Task, error) {
 	t.ResumeFromCommit = ""
 	t.StartedAt = ""
 	t.CompletedAt = ""
+	if automatic && TriggerAwaitingOccurrence(t, time.Now()) {
+		// r17 TK-30: wait for the occurrence. recomputeBlockedStateLocked
+		// leaves an inbox task untouched.
+		t.Status = StatusInbox
+	}
 	s.recomputeBlockedStateLocked(t)
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(t); err != nil {

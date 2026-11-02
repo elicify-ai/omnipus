@@ -85,3 +85,23 @@ func TriggerHoldsPromotion(t *Task, now time.Time) bool {
 		return false
 	}
 }
+
+// AutoRestartReset is RestartReset for an automatic reset nobody asked for at
+// this moment: the plan correction's auto-reset of failed members, its
+// targeted retry, and the boot replay of that retry. It applies the
+// scheduling-wait invariant (r17 TK-30): a task whose once or recurring
+// trigger still has an occurrence strictly in the future is left in the
+// scheduler-owned waiting state, `inbox`, with its trigger and delivery marker
+// untouched, so the ordinary drain cannot run it before the scheduler's fire at
+// that occurrence (SpawnResetForOccurrence) releases it. The decision is taken
+// on the task loaded under the per-task lock, in the same critical section as
+// the write. A manual or absent trigger, or a once trigger whose instant has
+// already passed, has no occurrence to wait for: the task follows the shared
+// path to `next` (or `blocked`) exactly as RestartReset does.
+// TriggerHoldsPromotion is deliberately not used: it also holds a past-due once
+// trigger without a delivery marker, which must reset to `next`.
+//
+// Returns ErrNotRestartable when the task is not currently `failed`.
+func (s *Store) AutoRestartReset(id string) (*Task, error) {
+	return s.restartReset(id, true)
+}

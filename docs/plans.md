@@ -105,7 +105,7 @@ The supervisor can apply four corrections.
 | Targeted retry | Re-runs one failed task |
 | Abandon | Ends the plan, recording that the Definition of Done cannot be reached |
 
-After a correction the plan returns to running. The plan fails when its configured supervision-attempt limit is exhausted; the shipped default is three attempts without a valid correction. The tile shows a warning chip — "Re-planning — awaiting supervision" or "Stalled — needs a correction" — with an explanation underneath. There are no correction buttons for you: the supervisor is the only actor, and **Stop** halts the tasks, the checks, and the supervisor's review alike.
+After a correction the plan returns to running. Append and Supersede also give every failed task another try, and Targeted retry gives its one task another try. If Omnipus shuts down in the middle of a targeted retry, it finishes the retry the same way when it starts again. Such a task goes back to **Next**, except a task whose schedule still has a future occurrence: it goes to **Inbox** and waits there, keeping its schedule, until the occurrence starts it. Pressing **Play** on a stopped plan is different: you asked for the work now, so its failed tasks go to **Next** at once and keep their schedules. The plan fails when its configured supervision-attempt limit is exhausted; the shipped default is three attempts without a valid correction. The tile shows a warning chip — "Re-planning — awaiting supervision" or "Stalled — needs a correction" — with an explanation underneath. There are no correction buttons for you: the supervisor is the only actor, and **Stop** halts the tasks, the checks, and the supervisor's review alike.
 
 ## Limits and things to watch
 
