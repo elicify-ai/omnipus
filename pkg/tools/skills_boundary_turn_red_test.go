@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -142,7 +143,7 @@ func TestSkillPolicy_PathHandleWithoutCompositionMarkerRefused(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "MARKER-granted\n", string(raw), "direct caller changed no bytes")
 	_, err = os.Stat(filepath.Join(home, "system", "skill-history", "granted"))
-	assert.True(t, os.IsNotExist(err), "backstop refusal runs before the mutation pipeline")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "backstop refusal runs before the mutation pipeline")
 }
 
 func TestSkillsBoundary_InventoryWinsEveryEnclosingAuthority(t *testing.T) {

@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,7 +95,7 @@ func TestInstallSkill_RequestExpectationAndLocalConfirmation(t *testing.T) {
 					assert.GreaterOrEqual(t, len(paths), 3, "the local predecessor remains in history")
 				}
 				_, err = os.Stat(filepath.Join(root, "x", ".skill-origin.json"))
-				assert.True(t, os.IsNotExist(err), "no legacy origin metadata is written")
+				assert.True(t, errors.Is(err, os.ErrNotExist), "no legacy origin metadata is written")
 			}
 		})
 	}
