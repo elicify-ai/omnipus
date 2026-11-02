@@ -70,12 +70,9 @@ func TestQ7T22_GrantRecorderCannotRememberTheAlwaysAskTool(t *testing.T) {
 			require.True(t, accepted)
 			t.Cleanup(func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel, false) })
 			record, _ := api.approvalGrantRecorder(entry, scope)
-			// Both nil and a non-recording callback satisfy the skip contract.
-			// The endpoint test separately rejects nil-callback panics and resolution.
-			if record != nil {
-				assert.False(t, record("q7-acting"), "FR-038: callback cannot install an acting-session grant")
-				assert.False(t, record("q7-parent"), "FR-038: callback cannot install a parent-session grant")
-			}
+			require.NotNil(t, record, "instrument: the real grant recorder must be wired, not absent")
+			assert.False(t, record("q7-acting"), "FR-038: callback cannot install an acting-session grant")
+			assert.False(t, record("q7-parent"), "FR-038: callback cannot install a parent-session grant")
 			for _, sid := range []string{"q7-acting", "q7-parent"} {
 				assert.False(t, api.agentLoop.ApprovalGrants().IsAllowed(sid, entry.AgentID, entry.ToolName, args), "FR-038: no remembered grant under %s", sid)
 			}

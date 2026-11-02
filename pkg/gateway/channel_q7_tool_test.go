@@ -102,6 +102,19 @@ func TestQ7T22_AuthorityPrecedesOwnConnectionAndEveryRefusalWritesNothing(t *tes
 	}
 }
 
+func TestQ7T22_AuthorityPrecedesUnknownConnection(t *testing.T) {
+	// FR-031/r9: an ordinary caller is refused before any connection lookup.
+	f := q7Fixture(t, "telegram", "telegram", "jim")
+	const unknownID = "q7-unknown-connection"
+	_, exists := f.al.GetConfig().Channels[unknownID]
+	require.False(t, exists, "instrument: the requested connection really is absent")
+	before := t13Before(t, f)
+	result := q7ExecuteAs(t, f, "mia", q7Args(unknownID, "reply_only", "absent", []string{}))
+	failure := q7Error(t, result, "OMNIPUS_ONLY")
+	require.Equal(t, "only Omnipus can change a connection's posting list; ask the operator or Omnipus", failure["message"], "FR-031: authority-first refusal must not reveal an unknown connection")
+	t13Unchanged(t, f, before)
+}
+
 func TestQ7T22_RequestShapeErrorsAreInvalidInputAndWriteNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name, field string
@@ -170,6 +183,7 @@ func TestQ7T22_TargetCountBoundariesCountCanonicalDistinctIDs(t *testing.T) {
 		}
 		input = append(input, "telegram:222")
 		q7Saved(t, q7Execute(t, f, q7Args("telegram", "agent_may_start", t14Read(t, f, "telegram").Revision, input)), "agent_may_start", want)
+		t13AssertOutbound(t, f, "telegram", "agent_may_start", want)
 	})
 }
 

@@ -20,7 +20,7 @@ func TestQ7T35_ExistingGrantsCannotReplaceFreshApproval(t *testing.T) {
 			al, cleanup := newAL(t)
 			defer cleanup()
 			const sid = "q7-acting-session"
-			args := map[string]any{"id": "discord", "policy": "agent_may_start", "targets": []string{"222"}, "expected_revision": "q7-unchanged-live-token"}
+			args := map[string]any{"id": "discord", "policy": "agent_may_start", "targets": []any{"222"}, "expected_revision": "q7-unchanged-live-token"}
 			store := security.NewApprovalGrantStore()
 			if scope == "exact" {
 				require.True(t, store.Record(sid, string(coreagent.IDOmnipus), "set_channel_outbound", args))
