@@ -133,7 +133,7 @@ You can take permission away even while the connector is not running: remove ids
 
 When an agent starts a message, the result it gets says `accepted for sending … (delivery not confirmed)`. That means the message was handed over for sending, not that the person received it. If sending fails later, the failure appears only in the gateway log; see [troubleshooting](troubleshooting.md#an-agent-started-message-never-arrived).
 
-Heartbeats and scheduled runs have no conversation of their own on a connector, so every message they post to a connector is a started message. It needs **Answer and also start messages** and the destination on the list, like any other start.
+A scheduled task posts to a connector only when it runs isolated (**Run isolated** on the task) or from a heartbeat. A task that runs under the agent's main conversation can message only its own conversation, so its posts to a connector are refused. Heartbeats and isolated tasks have no conversation of their own on a connector, so every message they post to a connector is a started message. It still needs **Answer and also start messages** and the destination on the list, like any other start.
 
 At every turn an agent is told which connectors it may start messages on; see [what an agent knows about its connectors](agents.md#what-an-agent-knows-about-its-connectors).
 
