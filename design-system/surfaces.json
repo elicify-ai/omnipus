@@ -6694,6 +6694,14 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/historyEntryOutcome.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/historyTextOverlay.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/image-lightbox.tsx",
       "lane": 3
     },
@@ -6763,6 +6771,10 @@
     },
     {
       "source": "src/components/chat/tools/HistoricalToolCallBlock.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/HistoryPreviewToolCall.tsx",
       "lane": 3
     },
     {
@@ -8099,14 +8111,6 @@
     },
     {
       "source": "src/routes/_app/workspaces.$workspaceId.rooms.$roomId.tsx",
-      "lane": 3
-    },
-    {
-      "source": "src/components/chat/ChatHeaderSlot.tsx",
-      "lane": 3
-    },
-    {
-      "source": "src/components/chat/useOpenReveal.ts",
       "lane": 3
     },
     {
