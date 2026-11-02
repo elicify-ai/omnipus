@@ -30,7 +30,9 @@ import { HistoryPreviewToolCall } from './HistoryPreviewToolCall'
  * `status.type` to 'incomplete' here does not reopen #617 — it is never
  * consulted for the error bit once an explicit `isError` prop is supplied.
  */
-function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled'): MessagePartStatus {
+function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled', running: boolean): MessagePartStatus {
+  // 6c Done card: a live running call is not complete.
+  if (running) return { type: 'running' }
   return status === 'cancelled' ? { type: 'incomplete', reason: 'cancelled' } : { type: 'complete' }
 }
 
@@ -44,6 +46,8 @@ interface HistoricalToolCallArgs {
   liteMode: boolean
   /** The saved occurrence owning this call (#1452 D2: addresses its full result). */
   historyPosition?: string
+  /** 6c Done card: the call is still executing in the live turn (decided by the row). */
+  running?: boolean
 }
 
 export function renderHistoricalToolCall(args: HistoricalToolCallArgs): ReactNode {
@@ -70,6 +74,7 @@ function renderSavedToolCall({
   verboseChatEnabled,
   goalRecordEmpty,
   liteMode,
+  running = false,
 }: HistoricalToolCallArgs): ReactNode {
   // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
   // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
@@ -81,7 +86,7 @@ function renderSavedToolCall({
         key={callId}
         args={(tc.params ?? {}) as { path?: string; command?: string; port?: number; duration_seconds?: number }}
         result={tc.result ?? null}
-        isRunning={false}
+        isRunning={running}
         // Issue #617: replay must reflect the tool call's real
         // outcome, mirroring GenericToolCall's `error={tc.error}`
         // below — previously this row always rendered "Done"
@@ -124,7 +129,7 @@ function renderSavedToolCall({
         toolName={tc.tool}
         args={tc.params}
         result={tc.result}
-        status={replayPartStatus(tc.status)}
+        status={replayPartStatus(tc.status, running)}
         isError={tc.status === 'error'}
       />
     ))
@@ -147,7 +152,7 @@ function renderSavedToolCall({
         key={callId}
         args={tc.params}
         result={tc.result}
-        status={replayPartStatus(tc.status)}
+        status={replayPartStatus(tc.status, running)}
         isRunning={tc.status === 'running'}
         isError={tc.status === 'error'}
         error={tc.error}
@@ -172,7 +177,7 @@ function renderSavedToolCall({
         toolName={tc.tool}
         args={(tc.params ?? {}) as { command?: string; description?: string; action?: string }}
         result={tc.result}
-        isRunning={false}
+        isRunning={running}
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
@@ -185,7 +190,7 @@ function renderSavedToolCall({
         toolName={tc.tool}
         args={(tc.params ?? {}) as { path?: string }}
         result={tc.result}
-        isRunning={false}
+        isRunning={running}
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
@@ -198,7 +203,7 @@ function renderSavedToolCall({
         toolName={tc.tool}
         args={(tc.params ?? {}) as { path?: string }}
         result={tc.result}
-        isRunning={false}
+        isRunning={running}
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
@@ -211,7 +216,7 @@ function renderSavedToolCall({
         toolName={tc.tool}
         args={(tc.params ?? {}) as { query?: string }}
         result={tc.result}
-        isRunning={false}
+        isRunning={running}
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
@@ -224,7 +229,7 @@ function renderSavedToolCall({
         toolName={tc.tool}
         args={(tc.params ?? {}) as { url?: string }}
         result={tc.result}
-        isRunning={false}
+        isRunning={running}
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
@@ -241,7 +246,7 @@ function renderSavedToolCall({
           toolName={tc.tool}
           args={tc.params}
           result={tc.result}
-          status={replayPartStatus(tc.status)}
+          status={replayPartStatus(tc.status, running)}
           error={tc.error}
           isError={tc.status === 'error'}
           durationMs={tc.duration_ms}
@@ -277,7 +282,7 @@ function renderSavedToolCall({
       toolName={tc.tool}
       args={tc.params}
       result={tc.result}
-      status={replayPartStatus(tc.status)}
+      status={replayPartStatus(tc.status, running)}
       error={tc.error}
       // Issue #617: pass the store's real outcome explicitly rather
       // than letting GenericToolCall infer it from `status`/`error`

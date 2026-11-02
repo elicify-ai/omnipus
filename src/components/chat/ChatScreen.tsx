@@ -1040,6 +1040,11 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
   const toolCallOwners = useChatStore((s) =>
     activeSessionId ? s.sessionsById[activeSessionId]?.toolCallOwnerMessageId : undefined,
   )
+  // 6c Done card: this row may hold a still-running call (a saved row of the
+  // active turn after a mid-turn join, or the bubble a steer closed).
+  const activeTurnId = useChatStore((s) =>
+    activeSessionId ? s.sessionsById[activeSessionId]?.activeTurnId ?? null : null,
+  )
   // Fix 2 (user-approved 2026-07-16): same thread-gating rule as the live
   // path's SubagentSpansRenderer, applied here for the historical/virtualized
   // render tree. This component is React.memo'd, so the selector MUST be
@@ -1276,6 +1281,10 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
               goalRecordEmpty,
               liteMode,
               historyPosition: historyCallPosition(message, callId),
+              // A running call is live only when the live store holds it or
+              // its row belongs to the active turn; another turn's saved
+              // pending call never borrows that turn's Running label.
+              running: tc.status === 'running' && (callId in toolCalls || (!!activeTurnId && message.turnId === activeTurnId)),
             })}</div>
           })}</div>)}
           {/* Inline indicator — 1b (founder UI feedback 2026-10-11): rendered
