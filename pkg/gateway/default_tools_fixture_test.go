@@ -95,7 +95,7 @@ func defaultToolsAdminOnlyNames() []string {
 	return strings.Fields("create_agent update_agent delete_agent set_agent_permissions read_agent_metadata " +
 		"get_config set_config run_doctor get_usage create_workspace update_workspace delete_workspace " +
 		"configure_provider list_providers test_provider list_models " +
-		"enable_channel configure_channel disable_channel list_channels test_channel connect_channel " +
+		"enable_channel configure_channel disable_channel list_channels test_channel connect_channel set_channel_outbound " +
 		"add_mcp_server remove_mcp_server list_mcp_servers remove_skill install_skill remove_secret select_secret_version connect_mailbox list_mailboxes")
 }
 

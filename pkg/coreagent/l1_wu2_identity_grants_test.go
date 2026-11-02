@@ -72,7 +72,7 @@ func l1WU2OmnipusSupport() []string {
 		// Founder 2026-10-18: create yes; delete deferred to #1363 (explicit Deny).
 		"create_workspace", "update_workspace", "create_skill", "edit_skill", "remove_skill", "install_skill",
 		"add_mcp_server", "remove_mcp_server", "configure_provider", "enable_channel",
-		"disable_channel", "configure_channel", "connect_channel", "connect_mailbox",
+		"disable_channel", "configure_channel", "connect_channel", "set_channel_outbound", "connect_mailbox",
 		"set_agent_permissions", "request_secret", "select_secret_version", "remove_secret",
 		"read_conversation", "list_mailboxes", "environment_setup", "bash",
 	}
@@ -89,7 +89,7 @@ func TestL1WU2OmnipusPolicies_ExactSupportSetAndNoPerAgentAsk(t *testing.T) {
 		assert.Contains(t, catalog, name, "§6.5: granted tool %s must not be invisible to the catalogue", name)
 	}
 	ask := []string{"delete_agent", "remove_skill", "remove_mcp_server", "add_mcp_server",
-		"configure_provider", "enable_channel", "configure_channel", "connect_channel",
+		"configure_provider", "enable_channel", "configure_channel", "connect_channel", "set_channel_outbound",
 		"connect_mailbox", "set_agent_permissions", "remove_secret", "select_secret_version",
 		"environment_setup", "bash"}
 	global := map[string]config.ToolPolicy{}
@@ -128,7 +128,12 @@ func TestL1WU2OmnipusPolicies_ExactSupportSetAndNoPerAgentAsk(t *testing.T) {
 			if slices.Contains(support, name) {
 				godWant = "allow"
 			}
-			assert.Equal(t, godWant, tools.ResolveEffectivePolicy(pc, name), "FR-023: God Mode floors only the global ceiling")
+			// Channels FR-033/036, Q22 B: this single tool bypasses the floor;
+			// all previously supported tools retain their original God Mode oracle.
+			if name == "set_channel_outbound" {
+				godWant = "ask"
+			}
+			assert.Equal(t, godWant, tools.ResolveEffectivePolicy(pc, name), "FR-023 plus channels FR-036: only set_channel_outbound always asks")
 			pc.GodMode = false
 		})
 	}
@@ -146,7 +151,7 @@ func TestL1WU2SecretAndManagementGrants_AllNativeRolesAndCustomMain(t *testing.T
 		{"researcher", false}, {"judge", false}, {"plansupervisor", false},
 	}
 	newNames := []string{"request_secret", "list_secrets", "remove_secret", "select_secret_version",
-		"connect_channel", "connect_mailbox", "set_agent_permissions", "read_conversation", "list_mailboxes"}
+		"connect_channel", "set_channel_outbound", "connect_mailbox", "set_agent_permissions", "read_conversation", "list_mailboxes"}
 	catalog := coreagent.AllStaticToolNames()
 	for _, name := range newNames {
 		assert.Contains(t, catalog, name, "FR-007/021: new tool must be classified explicitly")
@@ -206,6 +211,6 @@ func l1WU2ManagementNames() []string {
 	return []string{"create_agent", "update_agent", "delete_agent", "create_workspace", "update_workspace",
 		"delete_workspace", "create_skill", "edit_skill", "remove_skill", "install_skill",
 		"add_mcp_server", "remove_mcp_server", "configure_provider", "enable_channel", "disable_channel",
-		"configure_channel", "connect_channel", "connect_mailbox", "set_agent_permissions",
+		"configure_channel", "connect_channel", "set_channel_outbound", "connect_mailbox", "set_agent_permissions",
 		"remove_secret", "select_secret_version", "set_config"}
 }
