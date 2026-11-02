@@ -1039,3 +1039,16 @@ Test-only. Failability = the tests run in a scratch worktree with 486ebc9fd reve
 | REST body of the copy route does not carry the value (frontmatter and symlink cases) | `TestRestCopy_RefusalNeverEchoesSkillContent`, 2 subtests (`pkg/gateway/skills_diagnostics_no_echo_s03_test.go`) | FAIL, exit=1 (`failability-s03-gateway.log`) | PASS, exit=0 (`s03-gateway.log`) | Verified |
 | Observed gap, not asserted as a failure | A scalar decode failure (`description: !!int <text>`) is reported by yaml.v3 without a line number, so its reason is "not valid YAML (syntax error)" with no "line N:"; the test asserts "not valid YAML (" for that case and the full line form for the others | n/a | n/a | Verified observation |
 | Lint | pkg/skills, pkg/gateway: 0 issues (`lint-s03-skills.log`, `lint-s03-gateway.log`) | n/a | exit=0 | Verified |
+
+
+## CI round 1 follow-up (chief decision Q1 = A: stale pins updated to the spec)
+
+Test-side only. Each changed pin still asserts the spec value; nothing was weakened or skipped. Logs in `/workspace/logs/skills-test/`.
+
+| Item | Change | Evidence | Certainty |
+|---|---|---|---|
+| Slash matrix A1/A3/A8 and A2 (`pkg/agent/slash_skill_test.go`) | The fixture writes frontmatter and the grant goes through the persisted SD-30 identity binding (`persistSkillGrantFixture`, spec r15 §5.13a); the matrix rows and assertions are unchanged | `ci1-agent-slash.log` exit=0 (all A rows PASS) | Verified |
+| Tool count 35 to 34 (`pkg/tools/scope_catalog_test.go`, `pkg/gateway/builtin_registry_metadata_test.go`) | create_skill and remove_skill retired, get_skill added (spec r15 §10): `TestSysagentCatalog_AllToolsAreScopeCore`, `TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools`, `TestCentralBuiltinRegistry_NoDoubleCountSystemTools`, message text updated | `ci1-tools.log`, `ci1-gateway.log` exit=0 | Verified |
+| Frozen system policy baseline (`tests/default-tools/system-policy-baseline-c90310f1f.json`) | judge and plansupervisor: create_skill and remove_skill removed, `get_skill: allow` added (spec §10); omnipus unchanged | `TestDefaultToolSets_Founder20261022/system_policy_baseline` PASS in `ci1-gateway.log` | Verified |
+| WU23 edit_skill probe (`pkg/gateway/wu23_skill_edit_path_probe_test.go`, row added to `pkg/gateway/wu23_path_tool_coverage_test.go`) | `TestWU23_EditSkillPathProtectsOutsideFiles` through the real boot wiring: relative traversal, absolute path and a sibling skill's file are refused and the outside files survive; an in-folder `delete_file` is the positive control | `ci1-wu23.log` exit=0 | Verified; the probe asserts production refusals, it was not run against a broken build |
+| Vitest `src/lib/api/skills-real-responses.test.ts` (`.github/workflows/pr.yml`, job `vitest`, group lib-store) | New steps run the Go producer `TestRestS1119_ResponseCorpus` first with `SKILLS_REST_CORPUS` set, fail if it did not run, passed or skipped or wrote nothing, then export the path to the Vitest step; the test's own BLOCKED guard is untouched | Local run of the same two commands: producer `ci1-corpus-producer.log` exit=0, Vitest `ci1-vitest-corpus.log` 5/5 PASS exit=0; the workflow YAML parses; the hosted run is not verified | Verified locally, hosted CI Unknown |
