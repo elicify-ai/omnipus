@@ -188,7 +188,8 @@ func (p *groupChatProvider) GetDefaultModel() string { return "test-model" }
 
 func groupChatInvitationLoop(t *testing.T) (*AgentLoop, *groupChatProvider, *session.UnifiedStore, string, func()) {
 	t.Helper()
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, seedProvider, cleanup := newTestAgentLoop(t)
+	_ = seedProvider // The invitation fixture installs its own provider below.
 	provider := &groupChatProvider{}
 	inst, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
 	if !ok || inst == nil {

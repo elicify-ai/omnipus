@@ -81,7 +81,7 @@ function savedMiaTurn16(correctedNewHistory: boolean) {
   const steer = entry(correctedNewHistory ? 69 : 68, { id: STEER, content: 'also add a third sentence', timestamp: '2026-11-02T04:36:52.508030335Z' })
   const tool = prose(correctedNewHistory ? 68 : 69, CALL, '', {
     type: 'tool_call', turn_id: 'mia-turn-16', timestamp: '2026-11-02T04:37:19.773894247Z',
-    tool_calls: [{ id: CALL, tool: 'bash', status: 'success', parameters: { command: 'sleep 30 && echo "slept 30s; exit code 0"' } }],
+    tool_calls: [{ id: CALL, tool: 'bash', status: 'success', parameters: { command: 'sleep 30 && echo "slept 30s; exit code 0"' }, content_state: 'full' }],
   })
   const b = prose(70, SAVED_B, B_TEXT, { turn_id: 'mia-turn-16', timestamp: '2026-11-02T04:37:22.429815648Z' })
   // New dispatch-time records precede the steer by acceptance position. Do
