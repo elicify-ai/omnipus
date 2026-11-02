@@ -259,7 +259,7 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 // extra adds metadata to the wake (a group-chat room request adds its no-join
 // marker and room id, room_request.go) - the same one publication site.
 func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing.Pair, sender addressing.Sender, requestID, receiverSessionID, content string, extra ...map[string]string) error {
-	return al.bus.PublishInbound(ctx, requestWakeMessage(receiver, sender, requestID, receiverSessionID, content, extra...))
+	return al.publishRequestWakeMessage(ctx, requestWakeMessage(receiver, sender, requestID, receiverSessionID, content, extra...))
 }
 
 // publishCaptureWake is publishRequestWake for a stored capture: it also hands
@@ -267,6 +267,13 @@ func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing
 func (al *AgentLoop) publishCaptureWake(ctx context.Context, c addressing.Capture, extra ...map[string]string) error {
 	msg := requestWakeMessage(c.Receiver, c.Sender, c.RequestID, c.ReceiverSessionID, c.Text, extra...)
 	msg.Media = append([]string(nil), c.Media...)
+	return al.publishRequestWakeMessage(ctx, msg)
+}
+
+// publishRequestWakeMessage is the one PublishInbound site both request wakes
+// share; msg is always built by requestWakeMessage (owner-wake marker, never
+// OperatorPrompt or UserInitiated).
+func (al *AgentLoop) publishRequestWakeMessage(ctx context.Context, msg bus.InboundMessage) error {
 	return al.bus.PublishInbound(ctx, msg)
 }
 
