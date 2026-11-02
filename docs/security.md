@@ -88,7 +88,7 @@ There is no mode badge in the chat header. The composer has one labelled **Auto*
 
 | What you see | Meaning |
 |---|---|
-| **Auto** pressed and greyed out, with the God Mode tooltip | God Mode is on. The button cannot be changed. Every tool runs without asking, except a tool that an agent itself sets to Ask, which still asks, and a tool that an agent has denied, which stays denied. |
+| **Auto** pressed and greyed out, with the God Mode tooltip | God Mode is on. The button cannot be changed. Every tool runs without asking, except `set_channel_outbound`, which always asks, a tool that an agent itself sets to Ask, which still asks, and a tool that an agent has denied, which stays denied. |
 | **Auto** not pressed | Auto-approve is off for this chat. Every tool set to Ask prompts. |
 | **Auto** pressed | Auto-approve is on. Safe calls run; the rest ask. |
 | **Auto** pressed, tooltip adds the no-sandbox caution | Auto-approve is on, but there is no active kernel sandbox. Every other tool's safe calls still run as usual; the shell only auto-runs a read-only command or one an operator's rule explicitly allows — everything else asks first (see above). The caution is in that same tooltip, not a second label. |
@@ -115,7 +115,7 @@ The first time you turn God Mode on through this screen, on an installation that
 
 | Area | Under God Mode |
 |---|---|
-| Tool policies | Every tool's global (installation-wide) policy is treated as Allow — no prompt from that policy, for any tool. |
+| Tool policies | Every tool's global (installation-wide) policy is treated as Allow — no prompt from that policy — for every tool except `set_channel_outbound`, which always asks for approval. A global Deny for that one tool stays in force. |
 | Shell approval | God Mode removes the global shell approval requirement. A per-agent Ask can still require approval, and a per-agent Deny still blocks the tool. Operator deny rules and the surviving outside-workspace write guard also remain in force. |
 | Kernel filesystem confinement | Widened for shell and environment-setup children. A protected-file floor remains on Linux and macOS only while an enforcing kernel sandbox is active; Off, Permissive and degraded/unavailable operation install no floor. Application path checks still apply. |
 | Kernel network-port controls | Off for the shell's own commands: they can bind or connect to any port, not just an allowed list. |
@@ -179,7 +179,7 @@ For reading, this matches the shell. Under Auto-approve, the shell command `cat 
 
 **Messages and files sent to chat channels go out with no prompt.** `send_message` runs under Auto-approve, and so does `send_file` for a file inside the workspace or a mounted folder. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, turn Auto-approve off, or set those two tools to Deny for that agent. Email is different: `send_email` and `reply` keep asking whenever they're set to Ask, even with Auto-approve on.
 
-**These registered tools keep asking when their effective policy is Ask, even with Auto-approve on.** God Mode is a separate override: it removes global Ask, but a per-agent Ask or Deny still applies.
+**These registered tools keep asking when their effective policy is Ask, even with Auto-approve on.** God Mode is a separate override: it removes global Ask, but a per-agent Ask or Deny still applies. The one exception is `set_channel_outbound`: it asks with a fresh card on every call, in God Mode too, and its approvals are never remembered (see [tools](tools.md#changing-who-a-connector-may-start-messages-to)).
 
 | Group | Tools |
 |---|---|
@@ -190,7 +190,7 @@ For reading, this matches the shell. Under Auto-approve, the shell command `cat 
 | Browser scripts and uploads | `browser_evaluate`, `browser_upload_file` |
 | Settings and diagnostics | `set_config`, `run_doctor` |
 | Providers | `configure_provider`, `test_provider` |
-| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `test_channel` |
+| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `set_channel_outbound`, `test_channel` |
 | Connected servers | `add_mcp_server`, `remove_mcp_server` |
 | Agents and workspaces | `create_agent`, `update_agent`, `set_agent_permissions`, `update_workspace` |
 | Skills | `create_skill`, `edit_skill`, `remove_skill` |

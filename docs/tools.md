@@ -48,7 +48,7 @@ An agent sees common tools directly and searches the rest when a task calls for 
 
 You can also ask Omnipus in its chat to change an agent's permissions. Outside God Mode, it is instructed to show one plan summary and ask **Go / Change / Cancel** before its first change. Go does not replace any tool approval required by the effective policy; `set_agent_permissions` is on the Auto-approve ask-list. In God Mode, Omnipus shows its summary as a message and skips approval questions and global tool-policy prompts. Stricter per-agent policies remain in force.
 
-**Omnipus itself.** Omnipus takes no per-agent **Ask**: setting one of its tools to Ask is refused with "Omnipus takes no per-agent Ask; set Ask globally or use Deny". **Deny** works for it like for any agent. Which of its tools always ask, and how God Mode changes that, are described in [security](security.md).
+**Omnipus itself.** Omnipus takes no per-agent **Ask**: setting one of its tools to Ask is refused with "Omnipus takes no per-agent Ask; set Ask globally or use Deny". **Deny** works for it like for any agent. To bring back the shipped behaviour of an always-asking tool such as `set_channel_outbound` after a per-agent Deny, clear Omnipus's entry for it: Omnipus then follows the global policy again, which asks every time while the global policy is not Deny (see [Changing who a connector may start messages to](#changing-who-a-connector-may-start-messages-to)). Which of its tools always ask, and how God Mode changes that, are described in [security](security.md).
 
 The installation-wide setting lives in **Settings → Security**, under **Advanced / technical details**, in **Tool Access — Global Policies**. Global tool-policy changes save immediately using your signed-in session, with no second password prompt. Changing a tool to **Allow** can enable it for every agent that follows the global setting; stricter per-agent **Ask** or **Deny** settings still apply.
 
@@ -173,7 +173,7 @@ Concrete combinations:
 
 A tool blocked globally is greyed out in each agent's tool list, so you can see where the ceiling sits while you work.
 
-**God-mode** (Settings → Gateway → Danger zone) overrides every tool's global policy to Allow at once, for every agent — see [security](security.md#god-mode) for what that does and does not change.
+**God-mode** (Settings → Gateway → Danger zone) overrides every tool's global policy to Allow at once, for every agent, except `set_channel_outbound`, which always asks — see [security](security.md#god-mode) for what that does and does not change.
 
 ## Starting a message on a connector
 
@@ -188,7 +188,19 @@ A tool blocked globally is greyed out in each agent's tool list, so you can see 
 
 A refusal says why and ends with `Nothing was sent.`, for example: `cannot start a message on "discord.team": this connection is set to "Only answer". The operator can change it in Connectors > Discord > Configure ("Answer and also start messages"). Nothing was sent.` A start that passes returns `accepted for sending to <connector>:<id> (delivery not confirmed)`. That means the message was handed over for sending, not that it arrived; a later failure appears only in the gateway log.
 
-These rules are separate from Allow, Ask and Deny: `send_message` still needs no approval card, but no card does not make every chat reachable. The list of people and groups is set only in [Connectors → Configure → Starting messages](connectors.md#starting-messages); no agent tool changes it.
+These rules are separate from Allow, Ask and Deny: `send_message` still needs no approval card, but no card does not make every chat reachable. The list of people and groups is set in [Connectors → Configure → Starting messages](connectors.md#starting-messages). The only agent tool that changes it is `set_channel_outbound`, below; no other tool, and no general settings change, can.
+
+## Changing who a connector may start messages to
+
+`set_channel_outbound` lets Omnipus change one connector's **Starting messages** setting for you: switch it between **Only answer** and **Answer and also start messages**, and replace the whole list of people and groups the bound agent may message. It saves through the same step as the **Save** button in **Connectors → Configure → Starting messages**, so the same checks and messages apply. For example, you ask Omnipus to let Mia's Discord connector post to channel `222`; Omnipus reads the connector with `list_channels`, then calls `set_channel_outbound` with `policy` `agent_may_start`, `targets` `["222"]` and the connector's `expected_revision`.
+
+- **Only Omnipus holds it.** Any other agent calling it is refused with `only Omnipus can change a connection's posting list; ask the operator or Omnipus`, nothing saved. Omnipus is also refused for a connector bound to Omnipus itself: `a connection's own agent cannot change its posting list; ask the operator`.
+- **It always asks, even in God Mode.** Every call shows a fresh approval card, also under Auto-approve and also when an earlier call was approved. The card offers **Approve Once**, **Deny** and **Cancel**, and says "This approval applies to this one request." There is no **Always Allow**: approvals of this tool are never remembered.
+- **Unattended runs refuse it.** A scheduled or other unattended run has nobody to approve the card, so the call is refused and nothing changes.
+- **It can be set to Ask or Deny, not Allow.** Setting it to Allow — on the global Tools screen, on an agent's tools screen or through `set_agent_permissions` — is refused with `set_channel_outbound always asks for approval; it can be set to ask or deny, not allow`, nothing saved. On Omnipus's own tools screen, Ask is also not storable (see "Omnipus itself", above): clear the entry instead.
+- **A stored Deny keeps it off in every mode.** A global Deny, or a Deny for Omnipus, refuses the call with no card, also in God Mode and also with Auto-approve on. To restore it after a Deny, set the global policy back to Ask (or clear it) **and** remove Omnipus's own entry; clearing Omnipus's entry alone leaves a global Deny in force.
+
+A refused save changes nothing and names the reason with a code, for example `CONFLICT` (the connector changed since Omnipus read it, or its saved and running settings differ), `INVALID_TARGETS` (an entry is not a valid id, or more than 20 people and groups were listed), `PLATFORM_CANNOT_START` (the connector cannot start messages), `CONNECT_FIRST` (adding a Discord id needs the connector running) or `LOOKUP_UNAVAILABLE` (Discord could not be reached to check an id). If the list was saved and is in force but other settings of the connector could not be refreshed, the result says `saved` and carries a warning that starts `Saved and in force for starting messages.`
 
 ## Tools from connected servers
 
@@ -245,7 +257,7 @@ Next to the outcome, `check_scope` says what the check actually proved and `not_
 
 ### When a shared setting changed in the meantime
 
-Providers, connected servers and channels are shared by the whole installation, and both you (in Settings) and an agent can change them. The tools that list them return a `revision` for each entry (for channels, each connection — such as `telegram.eu` — has its own) — a short code that changes whenever the entry's settings change (it never contains a key or password). A missing entry has the revision `absent`. The tools that change these entries — `configure_provider`, `add_mcp_server`, `remove_mcp_server`, `enable_channel`, `configure_channel`, `connect_channel` and `disable_channel` — must send the revision they planned against (`expected_revision`). If the entry changed since, for example because you saved it in Settings while Omnipus was preparing its summary, the change is refused with `CONFLICT`, nothing is saved, and Omnipus re-reads the entry and asks you again. A tool change and a Settings save of these entries never run at the same time: they take turns.
+Providers, connected servers and channels are shared by the whole installation, and both you (in Settings) and an agent can change them. The tools that list them return a `revision` for each entry (for channels, each connection — such as `telegram.eu` — has its own) — a short code that changes whenever the entry's settings change (it never contains a key or password). A missing entry has the revision `absent`. The tools that change these entries — `configure_provider`, `add_mcp_server`, `remove_mcp_server`, `enable_channel`, `configure_channel`, `connect_channel`, `set_channel_outbound` and `disable_channel` — must send the revision they planned against (`expected_revision`). If the entry changed since, for example because you saved it in Settings while Omnipus was preparing its summary, the change is refused with `CONFLICT`, nothing is saved, and Omnipus re-reads the entry and asks you again. A tool change and a Settings save of these entries never run at the same time: they take turns.
 
 ## Limits and things to watch
 
