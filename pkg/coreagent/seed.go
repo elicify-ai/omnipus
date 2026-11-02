@@ -134,6 +134,8 @@ var allStaticToolNames = []string{
 	// PANICS validateOverrideKeys at boot.
 	"goal_claim",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
+	// r17 §7.9 — the read-back tools beside list_tasks.
+	"get_task", "get_plan", "get_goal",
 	"remember", "recall_memory", "run_retrospective", "recall_conversation",
 	"serve_web",
 	"set_todos",
@@ -913,6 +915,9 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"stop_plan":           allow,
 				"plan_correct":        allow,
 				"list_tasks":          allow,
+				"get_task":            allow,
+				"get_plan":            allow,
+				"get_goal":            allow,
 				"update_task":         allow,
 				"create_task":         allow,
 				"delete_task":         ask,

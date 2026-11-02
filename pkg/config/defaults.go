@@ -518,6 +518,12 @@ func defaultToolPoliciesPlanning() map[string]string {
 		"update_plan":     "allow",
 		"run_task":        "allow",
 		"inspect_session": "allow",
+		// r17 §7.9/§16 D-7: the read-back tools. Every ordinary agent may
+		// read the tasks, plans and goals the visibility rule (§7.8) shows
+		// it; the hidden system roles are denied by their own seeds.
+		"get_task": "allow",
+		"get_plan": "allow",
+		"get_goal": "allow",
 	}
 }
 

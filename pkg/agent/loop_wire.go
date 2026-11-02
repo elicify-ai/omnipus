@@ -793,6 +793,9 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 		currentAgentID := agentID
 
 		agent.Tools.RegisterReplacing(tools.NewTaskListTool(rw.rs.al.taskStore))
+		// r17 §7.9: get_task and get_goal, rebuilt on every registration pass
+		// (boot and reload) like the other task tools.
+		rw.rs.al.registerTaskReadTools(agent)
 
 		taskCreate := tools.NewTaskCreateTool(rw.rs.al.taskStore)
 		// Resolve the real default workspace (is_default ULID) when a
@@ -1760,6 +1763,10 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	})
 	planUpdate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(al) })
 	agent.Tools.RegisterReplacing(planUpdate)
+
+	// get_plan (r17 PL-12, §7.8): reads a plan the caller owns, created, or
+	// has a task in; the task store serves membership and progress.
+	agent.Tools.RegisterReplacing(tools.NewPlanGetTool(planStore, al.taskStore))
 
 	// execute_plan (FR-003/004/030, US-3): SD-A7 tiered-DoD gate's isAgentID
 	// checker (SetIsAgentIDChecker) mirrors gateway's restAPI.isAgentID.

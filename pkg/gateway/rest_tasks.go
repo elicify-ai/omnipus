@@ -29,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/taskwire"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -589,13 +590,7 @@ func ptr[T any](v T) *T { return &v }
 // Fix #5: logs a Warn when a non-empty string fails to parse (empty is normal
 // for an unset optional field and does not warrant a log line).
 func parseTimeOrNow(s string) time.Time {
-	if ts, err := time.Parse(time.RFC3339, s); err == nil {
-		return ts
-	}
-	if s != "" {
-		slog.Warn("rest_tasks: corrupt timestamp, defaulting to now", "value", s)
-	}
-	return time.Now().UTC()
+	return taskwire.ParseTimeOrNow(s)
 }
 
 // --- handlers ---------------------------------------------------------------

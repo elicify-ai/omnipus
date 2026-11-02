@@ -580,6 +580,16 @@ func (r *ToolRegistry) ExecuteWithContext(
 			map[string]any{"tool": name})
 	}
 
+	// A read tool's `fields` argument is checked by the one shared helper
+	// before generic schema validation, so the agent sees the §7.13 text
+	// (tool-parity spec r17, scenario 20.10) rather than the generic refusal,
+	// and the tool's Execute is not reached on a bad selection.
+	if selecting, ok := tool.(FieldSelecting); ok {
+		if _, refusal := ValidateFieldsArg(args, selecting.FieldSpecFor(args)); refusal != nil {
+			return refusal
+		}
+	}
+
 	// Validate arguments against the tool's declared schema.
 	if err := validateToolArgs(tool.Parameters(), args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",

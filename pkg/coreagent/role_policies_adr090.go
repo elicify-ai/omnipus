@@ -165,6 +165,9 @@ var omnipusSupportedTools = []string{
 	"disable_channel", "configure_channel", "connect_channel", "connect_mailbox",
 	"set_agent_permissions", "request_secret", "select_secret_version", "remove_secret",
 	"read_conversation", "list_mailboxes", "environment_setup", "bash",
+	// r17 §16 D-7: Omnipus reads tasks (get_task); get_plan and get_goal
+	// stay denied for it.
+	"get_task",
 }
 
 // OmnipusSupportedTools returns a copy of Omnipus's supporting set (§6.5).
