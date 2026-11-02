@@ -102,7 +102,7 @@ func executorConfigFromRequest(kind, cli string) (*config.ExecutorConfig, string
 // A body that is not an object, or has no executor object, passes untouched:
 // the later decode reports its real problem.
 func refuseForbiddenExecutorFields(w http.ResponseWriter, raw []byte, forbidden ...string) bool {
-	var body struct {
+	var body struct { // not-wire-format: a probe that peeks at one key of the incoming body before the generated strict decoder reads it
 		Executor map[string]json.RawMessage `json:"executor"`
 	}
 	if err := json.Unmarshal(raw, &body); err != nil || body.Executor == nil {

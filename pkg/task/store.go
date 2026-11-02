@@ -1306,6 +1306,22 @@ func (su *storeUpdateLocked) applyAttemptFields() error {
 }
 
 // applyRemainingFields validates and applies the remaining independent patch fields.
+// applyTrigger validates and sets a new trigger (nil clears it). r17 TK-30:
+// the write that changes the trigger invalidates the delivery marker
+// atomically; an identical re-save keeps it.
+func (su *storeUpdateLocked) applyTrigger(newTrigger *Trigger) error {
+	if newTrigger != nil {
+		if err := ValidateTrigger(newTrigger); err != nil {
+			return err
+		}
+	}
+	if !reflect.DeepEqual(su.t.Trigger, newTrigger) {
+		su.t.LastDeliveredAtMs = nil
+	}
+	su.t.Trigger = newTrigger
+	return nil
+}
+
 func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 	if su.patch.Initiator != nil {
 		su.t.Initiator = *su.patch.Initiator
@@ -1352,18 +1368,9 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 		}
 	}
 	if su.patch.Trigger != nil {
-		newTrigger := *su.patch.Trigger
-		if newTrigger != nil {
-			if err := ValidateTrigger(newTrigger); err != nil {
-				return nil, true, err
-			}
+		if err := su.applyTrigger(*su.patch.Trigger); err != nil {
+			return nil, true, err
 		}
-		// r17 TK-30: the write that changes the trigger invalidates the
-		// delivery marker atomically; an identical re-save keeps it.
-		if !reflect.DeepEqual(su.t.Trigger, newTrigger) {
-			su.t.LastDeliveredAtMs = nil
-		}
-		su.t.Trigger = newTrigger
 	}
 	if su.patch.Due != nil {
 		su.t.Due = *su.patch.Due
