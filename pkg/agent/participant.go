@@ -188,7 +188,9 @@ const (
 // The reference survives only when both sides are requests of the same group;
 // any other input (a message typed in the agent's own chat, a channel
 // message, a task, another agent's message, a request of a second group)
-// drops it for good, and the card stays in the agent's own chat.
+// drops it for good, and the card stays in the agent's own chat. Such a card
+// carries no group label either (S-83): once the fold is mixed, a room-class
+// label is dropped and the highest label of the other inputs applies.
 func mergeApprovalOrigin(current, next approvalOrigin) approvalOrigin {
 	if next.none {
 		return current
@@ -197,15 +199,21 @@ func mergeApprovalOrigin(current, next approvalOrigin) approvalOrigin {
 		return next
 	}
 	out := current
-	if next.Label != "" && next.Class > current.Class {
-		out.Label, out.Class = next.Label, next.Class
-	}
 	sameGroup := !current.mixed && !next.mixed && current.RoomRef != nil && next.RoomRef != nil &&
 		current.RoomRef.RoomId == next.RoomRef.RoomId
 	if sameGroup {
 		out.RoomRef = current.RoomRef
 	} else {
 		out.RoomRef, out.mixed = nil, true
+		if out.Class == originRoom {
+			out.Label, out.Class = "", originWeb
+		}
+		if next.Class == originRoom {
+			return out
+		}
+	}
+	if next.Label != "" && next.Class > out.Class {
+		out.Label, out.Class = next.Label, next.Class
 	}
 	return out
 }

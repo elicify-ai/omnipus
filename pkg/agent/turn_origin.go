@@ -93,11 +93,16 @@ func (o inputOrigin) approvalFor(al *AgentLoop) approvalOrigin {
 	}
 	origin := tools.NewTurnOrigin()
 	o.recordInto(al, origin)
-	class := originPeer
-	if origin.ChannelTriggered() {
-		class = originChannel
-	}
 	// An input with no label (a message typed in the agent's own chat, a
-	// task) is still an input: merging it drops a group reference (D23).
-	return approvalOrigin{Label: origin.Label(), Class: class}
+	// task) is still an input: merging it drops a group reference (D23). It
+	// ranks as web, so a later peer or channel label still applies (§6.18).
+	label := origin.Label()
+	class := originWeb
+	switch {
+	case origin.ChannelTriggered():
+		class = originChannel
+	case label != "":
+		class = originPeer
+	}
+	return approvalOrigin{Label: label, Class: class}
 }
