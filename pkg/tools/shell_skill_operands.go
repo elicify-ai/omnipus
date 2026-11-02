@@ -23,7 +23,8 @@ package tools
 //     (skillScriptRunners) — the script it runs;
 //   - the path is the first argument word of a literal `cd`, and every later
 //     segment is a `./relative` script run or a literal read-only command
-//     with no redirect (afterSkillCd, SEC2-03).
+//     with no redirect, and no later operand has a `..` path segment
+//     (afterSkillCd, SEC2-03 and SEC3-01).
 //
 // A glob-bearing operand (operandHasGlob, SEC2-02) never earns the
 // exception, and `rg` with a preprocessor flag is not a read (rgRunsCommands,
@@ -198,6 +199,9 @@ func (c pathUseClassifier) afterSkillCd(from int) (bool, string) {
 				return false, "after cd into a skill folder, a later command redirects output or uses brace expansion"
 			}
 		}
+		if wordLeavesFolder(seg) {
+			return false, "after cd into a skill folder, a later operand leaves the folder through a '..' path segment"
+		}
 		fw := c.firstWordStart(segStart, segEnd)
 		if strings.HasPrefix(c.cmd[fw:segEnd], "./") {
 			wordEnd := fw
@@ -229,6 +233,27 @@ func loadableSkillReadOrRun(raw string, start int, c pathUseClassifier, policy f
 	}
 	ok, _ := c.skillOperandUse(start)
 	return ok
+}
+
+// wordLeavesFolder reports whether any word of seg is, or contains, a `..`
+// path segment (bare `..`, `../x`, `./../x`, `a/../b`, `--flag=../x`): after
+// a cd into a skill folder such an operand reaches ungranted siblings
+// (security review 3, SEC3-01). Segment boundaries are the word's ends, `/`,
+// `=` and `:`. A segment the tokenizer cannot split counts as leaving.
+func wordLeavesFolder(seg string) bool {
+	words, ok := tokenizeShellWords(seg)
+	if !ok {
+		return true
+	}
+	for _, w := range words {
+		parts := strings.FieldsFunc(w, func(r rune) bool { return r == '/' || r == '=' || r == ':' })
+		for _, part := range parts {
+			if part == ".." {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // skillWriteRefusal is the refusal for a write-shaped operand inside a
