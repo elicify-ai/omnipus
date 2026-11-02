@@ -661,7 +661,6 @@ func (c *QQChannel) handleC2CMessage() event.C2CMessageEventHandler {
 		}
 
 		if !c.IsAllowedSender(sender) {
-
 			c.RecordRejected(sender.CanonicalID)
 			return nil
 		}
@@ -743,7 +742,6 @@ func (c *QQChannel) handleGroupATMessage() event.GroupATMessageEventHandler {
 		}
 
 		if !c.IsAllowedSender(sender) {
-
 			c.RecordRejected(sender.CanonicalID)
 			return nil
 		}

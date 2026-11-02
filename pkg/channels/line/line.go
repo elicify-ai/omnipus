@@ -421,7 +421,6 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 	}
 
 	if !c.IsAllowedSender(sender) {
-
 		c.RecordRejected(sender.CanonicalID)
 		return
 	}

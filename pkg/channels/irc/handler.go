@@ -71,7 +71,6 @@ func (c *IRCChannel) onPrivmsg(conn *ircevent.Connection, e ircmsg.Message) {
 	}
 
 	if !c.IsAllowedSender(sender) {
-
 		c.RecordRejected(sender.CanonicalID)
 		return
 	}
