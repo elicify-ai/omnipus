@@ -6,6 +6,7 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -125,7 +126,7 @@ func TestSkillSeen_ReadThenMutation_RevisionAndSessionBound(t *testing.T) {
 				old := skills.FaultManifestWrite
 				t.Cleanup(func() { skills.FaultManifestWrite = old })
 				skills.FaultManifestWrite = func(string) error {
-					if _, err := os.Stat(filepath.Join(dir, "notes.md")); os.IsNotExist(err) {
+					if _, err := os.Stat(filepath.Join(dir, "notes.md")); errors.Is(err, os.ErrNotExist) {
 						fired = true
 						return os.ErrPermission
 					}
@@ -141,7 +142,7 @@ func TestSkillSeen_ReadThenMutation_RevisionAndSessionBound(t *testing.T) {
 				out := mutate(ctx, "notes.md")
 				require.False(t, out.IsError, "recorded revision must equal the captured read: %s", out.ForLLM)
 				_, err := os.Stat(filepath.Join(dir, "notes.md"))
-				assert.True(t, os.IsNotExist(err))
+				assert.True(t, errors.Is(err, os.ErrNotExist))
 				assert.Contains(t, out.ForLLM, "saved as skill version")
 			}
 		})

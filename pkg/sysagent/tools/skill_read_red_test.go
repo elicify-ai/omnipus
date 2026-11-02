@@ -14,6 +14,7 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -588,7 +589,7 @@ func TestGetSkill_LockedReadCoherence(t *testing.T) {
 		if rev == after {
 			require.False(t, probe.IsError, "recorded seen must equal returned B: %s", probe.ForLLM)
 			_, statErr := os.Stat(filepath.Join(dir, "notes.md"))
-			assert.True(t, os.IsNotExist(statErr))
+			assert.True(t, errors.Is(statErr, os.ErrNotExist))
 		} else {
 			code, _ := errorBlock(t, probe)
 			assert.Equal(t, "SKILL_CHANGED", code, "returned A must record A, not a later live B")

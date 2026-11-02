@@ -5,6 +5,7 @@ package systools_test
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,7 +39,7 @@ func TestSkillWriteAudit_NormalMutationCompletePayload(t *testing.T) {
 	res := systools.NewSkillEditTool(deps).Execute(ctx, map[string]any{"action": "delete_file", "skill": "foo", "path": "notes.md"})
 	require.False(t, res.IsError, "normal approved adapter mutation must commit: %s", res.ForLLM)
 	_, err = os.Stat(filepath.Join(dir, "notes.md"))
-	require.True(t, os.IsNotExist(err))
+	require.True(t, errors.Is(err, os.ErrNotExist))
 	after, err := skills.ContentRevision(dir)
 	require.NoError(t, err)
 	require.NotEqual(t, before, after)

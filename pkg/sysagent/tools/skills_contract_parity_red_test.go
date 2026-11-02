@@ -3,6 +3,7 @@ package systools_test
 // r15 C-1/T-S5 and §5.2: fields are derived from the contract's properties.
 // Missing contract is a loud dependency failure, not an authorship deferral.
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,7 +27,7 @@ func TestGetSkill_FieldsEnumMatchesSkillDetailContract(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal(raw, &control))
 	require.Contains(t, control, "properties")
 	raw, err = os.ReadFile(filepath.Join(schemas, "SkillDetail.yaml"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		t.Fatal("BLOCKED: SkillDetail contract not implemented — required by r15 C-1/T-S5 and Hard Constraint #8")
 	}
 	require.NoError(t, err)

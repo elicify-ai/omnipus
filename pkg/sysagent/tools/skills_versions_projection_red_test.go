@@ -5,6 +5,7 @@ package systools_test
 // created_at to supply the retention clock. Read/paging/restore are real.
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -179,7 +180,7 @@ func TestGetSkill_VersionPaging_D7(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, "---\nname: foo\ndescription: paging fixture\n---\nBody.\n", string(raw))
 				_, err = os.Stat(filepath.Join(root, "foo", "notes.md"))
-				assert.True(t, os.IsNotExist(err))
+				assert.True(t, errors.Is(err, os.ErrNotExist))
 			}
 		})
 	}
@@ -254,7 +255,7 @@ func TestGetSkill_LastChangePathsSurviveParentPruning(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, skills.RetentionSweep(hist, 90, false, now))
 	_, err = os.Stat(filepath.Join(hist, "foo", "versions", ids[0]+".json"))
-	require.True(t, os.IsNotExist(err), "instrument: parent really pruned")
+	require.True(t, errors.Is(err, os.ErrNotExist), "instrument: parent really pruned")
 	after, err := os.ReadFile(filepath.Join(hist, "foo", "versions", ids[1]+".json"))
 	require.NoError(t, err)
 	assert.Equal(t, before, after, "retained manifest is not rewritten")
