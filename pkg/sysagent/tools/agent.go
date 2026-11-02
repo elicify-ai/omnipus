@@ -466,7 +466,10 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	if ac.newAgent.Type == config.AgentTypeWorker {
 		coreagent.RestrictForWorkerTier(ac.newAgent.Tools)
 	}
-	fields := mutationFieldNames(ac.args)
+	// The flattened executor arguments (env_overrides, cli_args) are the
+	// record field "executor" in the role matrix, exactly as on update_agent
+	// (r17 §7.5 AG-12/AG-13; §7.1 rule 4 flattened mapping).
+	fields := executorRecordFields(mutationFieldNames(ac.args))
 	if err := agentmutation.ValidateFields(ac.newAgent, fields); err != nil {
 		return fieldErrorResult(err), true
 	}

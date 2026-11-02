@@ -28,7 +28,10 @@ var knownFields = map[string]struct{}{
 	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {},
 	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "model": {}, "provider": {},
 	"fallback_models": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
-	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {}, "cli_path": {},
+	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {},
+	// cli_path is not a field (r17 §7.5 AG-10: removed from every
+	// agent-writable surface). The flattened tool arguments env_overrides,
+	// env_overrides_remove and cli_args are validated as "executor".
 	// AGENT.md beside SOUL.md (#1064), written by the update_agent tool; it
 	// follows soul's protection rules.
 	"agent_md": {},
