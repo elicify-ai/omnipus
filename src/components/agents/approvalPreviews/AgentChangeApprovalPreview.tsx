@@ -11,7 +11,8 @@
 // approval frame (r17 SR-1). The card still never reads or renders a value:
 // the summary shows names only, with the fixed mask and the readable text
 // "value hidden" (17.7), and redactAgentChangeArgs replaces every value
-// before the args reach the summary or the raw JSON dump. A malformed
+// before the args reach the summary or the raw JSON dump, including an
+// env_overrides container nested under an unknown argument. A malformed
 // env_overrides (not an object of names) is masked as a whole.
 
 import type { ToolApprovalPreviewContext } from './types'
@@ -25,19 +26,32 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function isEnvOverridesKey(key: string): boolean {
+  return key.toLowerCase() === ENV_OVERRIDES
+}
+
+function maskEnvContainer(env: unknown): unknown {
+  if (env === null) return null // an explicit null carries no value
+  return isPlainObject(env) ? Object.fromEntries(Object.keys(env).map((name) => [name, ENV_VALUE_MASK])) : ENV_VALUE_MASK
+}
+
+function redactEnvDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactEnvDeep)
+  if (!isPlainObject(value)) return value
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, isEnvOverridesKey(key) ? maskEnvContainer(item) : redactEnvDeep(item)]),
+  )
+}
+
 /**
- * Returns a copy of args whose env_overrides values are all replaced by
- * ENV_VALUE_MASK. Names stay; an explicit null stays null (it carries no
- * value). Args without env_overrides come back unchanged.
+ * Returns a copy of args in which every env_overrides container (any letter
+ * case, at any depth, inside objects and arrays, CK-11) has all its values
+ * replaced by ENV_VALUE_MASK. Names stay; an explicit null stays null (it
+ * carries no value); a container that is not an object is masked whole.
+ * Every other key, value and the structure stay visible (17.3).
  */
 export function redactAgentChangeArgs(args: Record<string, unknown>): Record<string, unknown> {
-  if (!(ENV_OVERRIDES in args)) return args
-  const env = args[ENV_OVERRIDES]
-  if (env === null) return args
-  const masked = isPlainObject(env)
-    ? Object.fromEntries(Object.keys(env).map((name) => [name, ENV_VALUE_MASK]))
-    : ENV_VALUE_MASK
-  return { ...args, [ENV_OVERRIDES]: masked }
+  return redactEnvDeep(args) as Record<string, unknown>
 }
 
 // tokenizeCliArgs mirrors pkg/agent/runner/executor_opts.go::tokenizeArgs
