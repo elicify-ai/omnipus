@@ -13,7 +13,7 @@ import (
 )
 
 // applyOutboundChangeForTool runs applyOutboundChange for the tool and
-// translates its errors: *outboundRejectionError → *ChannelOutboundRefusal
+// translates its errors: *outboundRejectionError → *ChannelOutboundRefusalError
 // (the writer's code and safe text, per-target detail kept);
 // errOutboundNotConfigured → ErrChannelOutboundNotConfigured; any other error
 // is returned unchanged (a save failure before the file write).
@@ -33,7 +33,7 @@ func (a *restAPI) applyOutboundChangeForTool(ctx context.Context, change systool
 		}
 		return saved, nil
 	case errors.As(err, &rejection):
-		refusal := &systools.ChannelOutboundRefusal{Reason: string(rejection.Body.Code), Message: rejection.Body.Error}
+		refusal := &systools.ChannelOutboundRefusalError{Reason: string(rejection.Body.Code), Message: rejection.Body.Error}
 		if rejection.Body.TargetErrors != nil {
 			refusal.TargetErrors = *rejection.Body.TargetErrors
 		}

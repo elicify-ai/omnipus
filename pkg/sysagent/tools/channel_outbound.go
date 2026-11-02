@@ -56,20 +56,20 @@ type ChannelOutboundSaved struct {
 	Warning  string
 }
 
-// ChannelOutboundRefusal is the writer's refusal before anything was
+// ChannelOutboundRefusalError is the writer's refusal before anything was
 // written. Reason is the writer's rejection code (ChannelOutboundRejection
 // code: stale_revision, saved_live_mismatch, invalid_targets,
 // too_many_targets, platform_cannot_start, platform_cannot_message_people,
 // connect_first, lookup_unavailable); Message its safe text; TargetErrors and
 // OmittedCount its per-target detail when present.
-type ChannelOutboundRefusal struct {
+type ChannelOutboundRefusalError struct {
 	Reason       string
 	Message      string
 	TargetErrors any
 	OmittedCount int
 }
 
-func (e *ChannelOutboundRefusal) Error() string { return e.Reason + ": " + e.Message }
+func (e *ChannelOutboundRefusalError) Error() string { return e.Reason + ": " + e.Message }
 
 // ErrChannelOutboundNotConfigured is the writer's answer for an instance with
 // no configuration entry.
@@ -229,7 +229,7 @@ func outboundTargetsArg(raw any) ([]string, string) {
 // writer's own reason is kept in the detail (r9 Q7-Q2 A), so the two CONFLICT
 // causes and the translated codes stay distinguishable.
 func outboundErrorResult(id string, err error) *tools.ToolResult {
-	var refusal *ChannelOutboundRefusal
+	var refusal *ChannelOutboundRefusalError
 	switch {
 	case errors.As(err, &refusal):
 		code, known := outboundReasonCodes[refusal.Reason]

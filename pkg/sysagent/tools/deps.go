@@ -116,7 +116,7 @@ type Deps struct {
 	// ApplyChannelOutbound is the one outbound writer (channels-spec-r8
 	// FR-020, FR-030): the gateway wires it to restAPI.applyOutboundChange,
 	// the same function behind PUT /api/v1/channels/{id}/outbound, and
-	// translates its refusals to *ChannelOutboundRefusal and
+	// translates its refusals to *ChannelOutboundRefusalError and
 	// ErrChannelOutboundNotConfigured. Any other error is a save failure
 	// before the file write. Nil (unit tests) makes set_channel_outbound
 	// refuse with CONFIG_SAVE_FAILED.
