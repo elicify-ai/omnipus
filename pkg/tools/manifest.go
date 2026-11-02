@@ -181,10 +181,13 @@ var administrativeToolNames = map[string]struct{}{
 	"configure_channel": {},
 	// connect_channel (omnipus-system-agent FR-080, WU-7): saves, binds,
 	// enables and live-starts a channel install-wide; Omnipus only, ships ask.
-	"connect_channel":    {},
-	"configure_provider": {},
-	"set_config":         {},
-	"stop_plan":          {},
+	"connect_channel": {},
+	// set_channel_outbound (channels FR-032): changes which people and groups
+	// a connection may start messages to; Omnipus only, always asks.
+	"set_channel_outbound": {},
+	"configure_provider":   {},
+	"set_config":           {},
+	"stop_plan":            {},
 }
 
 // administrativeExemptNames carries a one-line reason for every static tool

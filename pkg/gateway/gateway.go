@@ -1356,6 +1356,15 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		LockConfigWrites: func() func() { return lockConfigWrites(rc.runningServices) },
 		CredStore:        rc.credStore,
 		ReloadFunc:       rc.reloadTrigger,
+		// channels-spec-r8 FR-020/FR-030: set_channel_outbound calls the same
+		// writer as PUT /api/v1/channels/{id}/outbound, resolved at call
+		// time through the one restAPI.
+		ApplyChannelOutbound: func(ctx context.Context, change systools.ChannelOutboundChange) (systools.ChannelOutboundSaved, error) {
+			if rc.runningServices == nil || rc.runningServices.restAPIRef == nil {
+				return systools.ChannelOutboundSaved{}, errors.New("the outbound writer is not wired")
+			}
+			return rc.runningServices.restAPIRef.applyOutboundChangeForTool(ctx, change)
+		},
 		// EnsureWorkspaceMains (final-gate H2): create_agent's team join gives the
 		// new member its main chat through the workspace-save path. Resolved at
 		// call time through the one restAPI (the same method boot stores in

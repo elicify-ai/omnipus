@@ -113,6 +113,14 @@ type Deps struct {
 	// agent-loop lock is held. The gateway wires it to lockConfigWrites; nil
 	// (unit tests building Deps by hand) adds no outer lock.
 	LockConfigWrites func() (unlock func())
+	// ApplyChannelOutbound is the one outbound writer (channels-spec-r8
+	// FR-020, FR-030): the gateway wires it to restAPI.applyOutboundChange,
+	// the same function behind PUT /api/v1/channels/{id}/outbound, and
+	// translates its refusals to *ChannelOutboundRefusal and
+	// ErrChannelOutboundNotConfigured. Any other error is a save failure
+	// before the file write. Nil (unit tests) makes set_channel_outbound
+	// refuse with CONFIG_SAVE_FAILED.
+	ApplyChannelOutbound func(ctx context.Context, change ChannelOutboundChange) (ChannelOutboundSaved, error)
 	// URLChecker is the SSRF guard for outbound checks a change tool makes to
 	// an operator- or agent-supplied endpoint (configure_provider's model
 	// listing, FR-031). A row whose catalog locality is local always uses

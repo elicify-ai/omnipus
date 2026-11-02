@@ -39,13 +39,15 @@ func AllTools(d *Deps) []tools.Tool {
 		// which now carry the optional workspace_id. There is no task section
 		// here any more: one family, one implementation.
 
-		// Channel management (6)
+		// Channel management (7)
 		NewChannelEnableTool(d),
 		NewChannelConfigureTool(d),
 		NewChannelDisableTool(d),
 		NewChannelListTool(d),
 		NewChannelTestTool(d),
 		NewChannelConnectTool(d),
+		// channels-spec-r8 FR-030: the dedicated outbound-list writer.
+		NewChannelOutboundTool(d),
 
 		// Skill management (4: install and search retired)
 		NewSkillRemoveTool(d),

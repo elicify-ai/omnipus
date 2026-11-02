@@ -544,6 +544,14 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// channels-spec-r8 FR-038(b): the lasting allow action is refused for an
+	// always-ask tool BEFORE the pending call is approved or resolved, so the
+	// card stays usable for approve-once, Deny or Cancel.
+	if recordGrant && tools.IsAlwaysAsk(entry.ToolName) {
+		jsonErr(w, http.StatusBadRequest, tools.AlwaysAskAllowRefusal(entry.ToolName))
+		return
+	}
+
 	// MERGE NOTE 2026-09-15: integrate's per-account owner gate (Claude review
 	// C4 / D-16 parity — 403 when another account decides an approval) is
 	// dropped here. The founder ruled tool approval comes from release (#683)
@@ -769,10 +777,14 @@ func toolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
 // always from the immutable approval entry — and the scope it records. A
 // "prefix" request on a bash call records an ADR-092 D4 prefix grant when
 // tools.BashPrefixGrantFor finds a safe one; every other case records the
-// exact-fingerprint grant.
+// exact-fingerprint grant. An always-ask tool (channels-spec-r8 FR-038(b))
+// gets a recorder that records nothing in any session and reports false.
 func (a *restAPI) approvalGrantRecorder(
 	entry *approvalEntry, requested gen.ToolApprovalActionRequestScope,
 ) (func(sessionID string) bool, gen.ToolApprovalResponseScope) {
+	if tools.IsAlwaysAsk(entry.ToolName) {
+		return func(string) bool { return false }, gen.ToolApprovalResponseScopeExact
+	}
 	grants := a.agentLoop.ApprovalGrants()
 	if requested == gen.ToolApprovalActionRequestScopePrefix && entry.ToolName == "bash" {
 		if g, ok := tools.BashPrefixGrantFor(entry.Args); ok {

@@ -46,7 +46,7 @@ var managementTools = map[string]bool{
 	"create_skill": true, "edit_skill": true, "remove_skill": true, "install_skill": true,
 	"add_mcp_server": true, "remove_mcp_server": true, "configure_provider": true,
 	"enable_channel": true, "disable_channel": true, "configure_channel": true,
-	"connect_channel": true, "connect_mailbox": true, "set_agent_permissions": true,
+	"connect_channel": true, "set_channel_outbound": true, "connect_mailbox": true, "set_agent_permissions": true,
 	"remove_secret": true, "select_secret_version": true, "set_config": true,
 }
 

@@ -93,6 +93,12 @@ func (t *AgentPermissionsTool) Execute(_ context.Context, args map[string]any) (
 			return fieldErrorResult(err)
 		}
 		requested = patch.Set
+		// Channels FR-037 (T-10 rows 15–16): an always-ask tool can be set to
+		// ask or deny, never allow, on any agent.
+		if name, bad := tools.AlwaysAskAllowViolation(patch.Set); bad {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", tools.AlwaysAskAllowRefusal(name),
+				"Set it to ask or deny, or remove the override to inherit the global policy"))
+		}
 		if _, bad := coreagent.OmnipusPerAgentAskViolation(id, patch.Set); bad {
 			return tools.ErrorResult(errorJSON("OMNIPUS_PER_AGENT_ASK", coreagent.OmnipusPerAgentAskRefusal,
 				"Use deny for Omnipus, or set Ask on the global tool policy"))

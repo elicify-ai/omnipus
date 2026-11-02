@@ -344,6 +344,9 @@ var allStaticToolNames = []string{
 	"request_secret", "list_secrets", "remove_secret", "select_secret_version",
 	"connect_channel", "connect_mailbox", "set_agent_permissions",
 	"read_conversation", "list_mailboxes",
+	// channels-spec-r8 FR-032: the dedicated outbound-list writer, implemented
+	// in pkg/sysagent/tools and always asking (FR-036).
+	"set_channel_outbound",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
