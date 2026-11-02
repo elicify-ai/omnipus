@@ -253,7 +253,12 @@ export function resetRealStores(): void {
   // jsdom does not implement, and the page never attaches. The list's own
   // fallback, used when ResizeObserver is absent, draws every row.
   vi.stubGlobal('scrollTo', () => {})
-  if (typeof HTMLElement.prototype.scrollTo !== 'function') HTMLElement.prototype.scrollTo = () => {}
+  // On Element.prototype, where the stage-1 and history-layout harnesses own
+  // and restore it. An own property on HTMLElement.prototype would shadow the
+  // history layout's working scrollTo and is never restored.
+  if (typeof Element.prototype.scrollTo !== 'function') {
+    Object.defineProperty(Element.prototype, 'scrollTo', { configurable: true, writable: true, value() {} })
+  }
   if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {}
   localStorage.clear()
   act(() => {
