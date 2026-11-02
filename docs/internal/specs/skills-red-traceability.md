@@ -1099,3 +1099,10 @@ Test-only. Red logs and exit codes are in `/workspace/logs/skills-test/` (`uat1-
 | Replaced | The planned "cd && rm x asks" test was replaced by the three SEC2 tests | n/a | n/a |
 
 Lint (own files): pkg/tools 0 issues (`uat1-lint2-tools.log`), pkg/gateway 0 issues (`uat1-lint2-gateway.log`). pkg/skills has no file of mine left.
+
+### Security re-check 3 (SEC3-01)
+
+| Item | Change | Evidence | Certainty |
+|---|---|---|---|
+| SEC3-01 read that leaves the skill folder after a skill cd | `TestShellGuardSEC3_ReadThatLeavesTheSkillFolderAfterCdIsRefused` (`pkg/tools/shell_skill_operands_uat1_f8_test.go`): `cd <f>; grep -r . ..`, `cat ../f8-granted-private/SKILL.md`, `ls ..`, `grep -r . ../`, `cat ./../f8-granted-private/SKILL.md`, with an ungranted `f8-granted-private` sibling in the fixture. Controls that must stay allowed and are asserted first: `cat SKILL.md`, `ls`, `cat ./notes.md` after the cd. Skill file bytes asserted unchanged | RED, exit=1 (`sec3-red.log`): the path guard admits all 5 operands that contain a `..` segment (empty message). The three controls pass, so the fixture and the cd rule are live; the SEC2 and F-8 tests pass at this head | Verified |
+| Rule for the developer | Any operand equal to or containing a `..` segment after a skill cd is refused. Only the path guard is asserted (the no-sandbox gate is not part of this finding's test) | n/a | n/a |

@@ -240,3 +240,42 @@ func TestShellGuardSEC2_ChangeAfterCdIntoASkillIsRefused(t *testing.T) {
 	}
 	assert.Equal(t, before, sec2Bytes(t, f), "the skill file is unchanged")
 }
+
+// SEC3-01 (skills-security-report-3.md): after a literal skill-folder cd, a
+// later operand that leaves the folder (equal to or containing a `..` segment)
+// reads ungranted siblings, so the path guard refuses it. Reads of the folder's
+// own files stay allowed.
+func TestShellGuardSEC3_ReadThatLeavesTheSkillFolderAfterCdIsRefused(t *testing.T) {
+	f := f8Setup(t)
+	private := filepath.Join(f.home, "skills", "f8-granted-private")
+	require.NoError(t, os.MkdirAll(private, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(private, "SKILL.md"), []byte("---\nname: f8-granted-private\ndescription: private\n---\nSECRET\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(f.granted, "notes.md"), []byte("notes\n"), 0o644))
+	before := sec2Bytes(t, f)
+	tool := f8Tool(t, f, true)
+
+	// Controls: reads inside the folder stay allowed (a positive instrument for
+	// the refusals below).
+	for _, cmd := range []string{
+		"cd " + f.granted + " && cat SKILL.md",
+		"cd " + f.granted + " && ls",
+		"cd " + f.granted + " && cat ./notes.md",
+	} {
+		msg, _ := tool.guardProtectedOperands(f8Ctx(), cmd)
+		require.Empty(t, msg, "control: %s", cmd)
+	}
+
+	for _, cmd := range []string{
+		"cd " + f.granted + "; grep -r . ..",
+		"cd " + f.granted + " && cat ../f8-granted-private/SKILL.md",
+		"cd " + f.granted + " && ls ..",
+		"cd " + f.granted + " && grep -r . ../",
+		"cd " + f.granted + " && cat ./../f8-granted-private/SKILL.md",
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			msg, _ := tool.guardProtectedOperands(f8Ctx(), cmd)
+			assert.NotEmpty(t, msg, "the path guard refuses an operand that leaves the skill folder")
+		})
+	}
+	assert.Equal(t, before, sec2Bytes(t, f), "the skill file is unchanged")
+}
