@@ -25,8 +25,8 @@ type startedToolOutcome struct {
 func (ex *agentLoopRunTurnToolsExecute) beginStartedTool(tc providers.ToolCall, at time.Time) bool {
 	ts := ex.rx.rr.rq.ri.rf.rt.ts
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	if ts.hardAbort || ts.abandoned.Load() {
+		ts.mu.Unlock()
 		return false
 	}
 	o := &startedToolOutcome{
@@ -37,8 +37,23 @@ func (ex *agentLoopRunTurnToolsExecute) beginStartedTool(tc providers.ToolCall, 
 			ParentToolCallID: session.ToolCallID(ts.parentSpawnCallID),
 		},
 	}
+	// o is not yet published, so taking its lock under ts.mu cannot invert
+	// complete()'s o.mu -> ts.mu order. Holding it across the running write
+	// makes a racing cancel() settle that record instead of preceding it.
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	ts.startedTool = o
 	ex.started = o
+	ts.mu.Unlock()
+	// 6c UAT U-D1-6 / AC-D1-6: the call's transcript record is written now, at
+	// dispatch, so its saved position is the live order (A, tool, a steer
+	// accepted while it runs, B). Its outcome settles this record in place. A
+	// failed write is counted and warned by appendToolCallTranscript, and the
+	// outcome is then appended as a fresh record, so the call is never lost;
+	// it does not stop a tool whose execution is unaffected.
+	running := o.call
+	running.Status = toolCallStatusRunning
+	_ = ts.appendToolCallTranscript(running)
 	return true
 }
 

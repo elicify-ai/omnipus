@@ -55,8 +55,21 @@ func (r *SteerBootRecovery) recoverOrdinaryRoot(id string, notice func(string, s
 	if r.BootEpoch != nil && r.BootEpoch.Current() != 0 && rec.ExecutionID.BootSeq >= r.BootEpoch.Current() {
 		return nil // Same-boot and future-boot work is not this restart's victim.
 	}
+	toolErr := r.interruptRunningToolCalls(id, notice)
 	if err := r.failInterrupted(rec); err != nil {
 		notice("interrupted-write:"+id, fmt.Sprintf("session %s restart stop refused at boot: %v", id, err))
+		return errors.Join(toolErr, err)
+	}
+	return toolErr
+}
+
+// interruptRunningToolCalls settles the running tool-call records a prior-boot
+// execution left behind (it died with the process) to interrupted, in place.
+// A failure is noticed and returned; it never blocks the restart stop itself.
+func (r *SteerBootRecovery) interruptRunningToolCalls(id string, notice func(string, string)) error {
+	if _, err := r.Sessions.InterruptRunningToolCalls(id); err != nil {
+		err = fmt.Errorf("session %s running tool calls not interrupted at boot: %w", id, err)
+		notice("tool-interrupt:"+id, err.Error())
 		return err
 	}
 	return nil

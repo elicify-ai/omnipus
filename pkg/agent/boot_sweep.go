@@ -218,7 +218,9 @@ func (r *SteerBootRecovery) sessionIDs() ([]string, error) {
 	return out, nil
 }
 
-func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notice func(string, string)) error {
+func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notice func(string, string)) (err error) {
+	var toolErr error
+	defer func() { err = errors.Join(toolErr, err) }()
 	rec, err := r.Lifecycle.Load(id)
 	if err != nil || rec == nil {
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
@@ -251,6 +253,12 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		// continuation this same boot already admitted.
 		r.recoverStoppedChildNotice(ctx, rec, notice)
 		return nil
+	}
+	// A prior-boot execution died with the process, so its running tool-call
+	// records are settled to interrupted whatever the stop arms below decide.
+	if rec.ExecutionID != nil && !rec.Terminal() && (r.BootEpoch == nil || r.BootEpoch.Current() == 0 || rec.ExecutionID.BootSeq < r.BootEpoch.Current()) &&
+		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued || rec.State == session.LifecycleNeedsInput) {
+		toolErr = r.interruptRunningToolCalls(id, notice)
 	}
 	stopLandedByBoot := false
 	var interruptedErr error

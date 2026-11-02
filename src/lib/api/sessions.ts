@@ -24,6 +24,7 @@ import type {
   OperationResult,
   JudgeVerdict,
   Message as WireMessage,
+  ToolCall as WireToolCall,
 } from '@/lib/api/generated/openapi-types'
 import type { SubagentEndFrame, SubagentMessageFrame, SubagentStartFrame, SubagentStateFrame } from '@/lib/api/generated/asyncapi-types'
 import { _recordApiSchemaError, request } from './http'
@@ -501,7 +502,7 @@ export interface RunInWorkspaceResult { // not-wire-format: parsed from ToolCall
 interface RawToolCall { // not-wire-format: adapter alias over the generated ToolCall wire schema. Used only in rawToToolCall() to rename `parameters`→`params` before the SPA consumer sees it. The wire name is `parameters` (Go json tag); the SPA-internal name is `params` (ToolCall interface above). Never sent to or received as a standalone type from the gateway.
   id: string
   tool: string
-  status: 'success' | 'error' | 'pending' | 'denied' | 'running' | 'cancelled'
+  status: WireToolCall['status']
   duration_ms?: number
   parameters?: Record<string, unknown>
   result?: unknown
@@ -608,9 +609,13 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
 
 function rawToToolCall(raw: RawToolCall): ToolCall {
   // Map wire status → SPA status.
-  // Wire values: 'success' | 'error' | 'pending' | 'denied' | 'running' | 'cancelled'
+  // Wire values: the generated ToolCall status enum (contracts ToolCall.yaml).
   // SPA values:  'running' | 'success' | 'error' | 'cancelled'
   //
+  // 'interrupted' → 'error': the call never finished (a restart cut it off,
+  //   or a delegate's parent stopped mid-flight); it must never reload as a
+  //   spinner. 'error' is what the snapshot/replay carrier already shows for
+  //   it (pkg/gateway/replay.go::toolCallResultStatus), so both carriers agree.
   // 'pending' → 'running': the SPA uses 'running' for in-progress calls; in a
   //   completed transcript 'pending' should never occur, but we map it safely.
   // 'denied'  → 'cancelled': the tool call was rejected by policy — the SPA
@@ -625,6 +630,9 @@ function rawToToolCall(raw: RawToolCall): ToolCall {
       break
     case 'denied':
       status = 'cancelled'
+      break
+    case 'interrupted':
+      status = 'error'
       break
     case 'pending':
     default:
