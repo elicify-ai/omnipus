@@ -9,6 +9,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
@@ -20,26 +21,47 @@ import (
 // fallback. The person's preset parameters (§3.7) are read from the same
 // Settings row. A refusal is the error the caller returns as written.
 func (ed *runExternalCLISubTurnState) resolveRunProgram(cli string) error {
-	cfg := ed.al.GetConfig()
+	row, refusal := ed.al.runProgramFor(cli)
+	if refusal != "" {
+		return ed.reportProgramRefusal(refusal)
+	}
+	resolved := row.resolved
+	ed.programEntered = row.settings.Path
+	ed.programResolved = resolved
+	ed.presetText = row.settings.PresetArgs
+	ed.presetArgs = runner.ParseCLIArgs(row.settings.PresetArgs, ed.runID)
+	return nil
+}
+
+// runProgram is the Settings row for one CLI and the checked file it runs.
+type runProgram struct {
+	settings config.ThirdPartyCLIConfig
+	resolved string
+}
+
+// runProgramFor applies r17 §3.6 steps 1–3 for cli against the live config:
+// the Settings clis.<cli>.path only, re-checked; refusal is the NoPath or
+// CheckFailed text, "" when the program may run. Shared by the spawn
+// (resolveRunProgram) and the delegation pre-flight (SteerLauncher.Launch).
+func (al *AgentLoop) runProgramFor(cli string) (runProgram, string) {
+	cfg := al.GetConfig()
 	if cfg == nil {
-		return ed.reportProgramRefusal(thirdpartycli.NoPathText(cli))
+		return runProgram{}, thirdpartycli.NoPathText(cli)
 	}
 	row := cfg.Sandbox.ThirdPartyCLI(cli)
 	resolved, refusal := thirdpartycli.RunProgram(cli, row.Path, thirdpartycli.AgentWritableRoots(omnipusHome(), cfg)...)
 	if refusal != "" {
-		return ed.reportProgramRefusal(refusal)
+		return runProgram{}, refusal
 	}
-	ed.programEntered = row.Path
-	ed.programResolved = resolved
-	ed.presetText = row.PresetArgs
-	ed.presetArgs = runner.ParseCLIArgs(row.PresetArgs, ed.runID)
-	return nil
+	return runProgram{settings: row, resolved: resolved}, ""
 }
 
 // reportProgramRefusal records the refusal on the child session like the
 // workspace refusal does and returns it as an Omnipus-authored error, so a
-// task shows the text as its result and a delegation returns it as the tool
-// error (r17 §3.6 step 5).
+// task shows the text as its result (r17 §3.6 step 5). A delegation is
+// refused earlier, at launch, with the same text as the parent's tool error
+// (SteerLauncher.Launch); reaching this for a delegated child means the
+// Settings program changed between launch and spawn.
 func (ed *runExternalCLISubTurnState) reportProgramRefusal(text string) error {
 	refusal := &curatedTurnError{text: text}
 	llm := TranslateTurnError(refusal)
