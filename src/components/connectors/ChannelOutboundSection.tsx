@@ -47,7 +47,9 @@ const PLATFORM_HELP: Record<string, string> = {
   discord: "A person's id sends a direct message; a channel or thread id posts there. Adding a Discord id needs the connection running.",
   telegram: 'A positive id is a person (they must have started your bot first); a negative id is a group or channel; a forum topic is written chat_id/topic_id.',
 }
-const NOT_RUNNING_DISCORD = 'This connection is not running. You can remove ids or switch to Only answer; adding a Discord id needs it running.'
+const NOT_CONFIGURED_TITLE = 'Save the connection first'
+const NOT_CONFIGURED_HELP = 'Who the agent may message can be set once this connection is saved. Fill in the settings above and press Save.'
+const NOT_RUNNING_DISCORD ='This connection is not running. You can remove ids or switch to Only answer; adding a Discord id needs it running.'
 
 // S-81: each 409 is handled by its rejection code, never by one stale-form text.
 const STALE_TEXT = 'These settings changed since you opened them. The current values are shown; check them and save again.'
@@ -146,6 +148,18 @@ function UnsupportedSection({ channelName }: { channelName: string }) {
       <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
         {`Starting messages is not supported yet on ${channelName}. The agent only answers here.`}
       </p>
+    </SectionFrame>
+  )
+}
+
+function NotConfiguredSection() {
+  const headingId = useId()
+  return (
+    <SectionFrame headingId={headingId}>
+      <div className="space-y-[var(--space-1)] text-[length:var(--type-caption-size)] leading-relaxed">
+        <p className="font-medium text-[var(--color-secondary)]">{NOT_CONFIGURED_TITLE}</p>
+        <p className="text-[var(--color-muted)]">{NOT_CONFIGURED_HELP}</p>
+      </div>
     </SectionFrame>
   )
 }
@@ -273,6 +287,10 @@ function OutboundSettings({
     )
   }
   if (!read.start_supported) return <UnsupportedSection channelName={channelName} />
+  // Revision "absent" means the connection was never saved, and the outbound
+  // PUT refuses it with 404 (contract ChannelOutboundRead.revision). Show no
+  // controls, so no list can be sent, until the connection exists.
+  if (read.revision === 'absent') return <NotConfiguredSection />
 
   const notRunning = read.availability.state !== 'running'
   const sectionMessage = notice ?? refusal.message

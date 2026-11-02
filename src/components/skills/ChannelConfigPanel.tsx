@@ -674,6 +674,8 @@ export function ChannelConfigPanel({
       setFieldErrors({})
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
+      // A first save creates the connection; Starting messages unlocks on re-read.
+      queryClient.invalidateQueries({ queryKey: ['channel-outbound', channelId] })
       showConfigureOutcome(channelId, describeConfigureOutcome(response, 'save'))
     },
     onError: (err: unknown) => {
@@ -732,6 +734,7 @@ export function ChannelConfigPanel({
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['channels'] }),
         queryClient.invalidateQueries({ queryKey: ['channel-config', targetId] }),
+        queryClient.invalidateQueries({ queryKey: ['channel-outbound', targetId] }),
       ])
     },
   })

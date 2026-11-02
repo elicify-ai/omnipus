@@ -175,6 +175,21 @@ A tool blocked globally is greyed out in each agent's tool list, so you can see 
 
 **God-mode** (Settings → Gateway → Danger zone) overrides every tool's global policy to Allow at once, for every agent — see [security](security.md#god-mode) for what that does and does not change.
 
+## Starting a message on a connector
+
+`send_message` can also start a message on a Discord or Telegram connector: a new message that does not answer someone who wrote first. A start names both `channel` (the connector, for example `discord.team`) and `chat_id`. Heartbeats and scheduled runs have no conversation of their own on a connector, so their connector messages are always starts. Omnipus checks these rules in order, and the first one that fails refuses the start:
+
+1. the connector exists;
+2. it is enabled and bound to this agent in the current workspace;
+3. it is a Discord or Telegram connector;
+4. it is set to **Answer and also start messages**;
+5. the `chat_id` is on its list of people and groups;
+6. it is running right now.
+
+A refusal says why and ends with `Nothing was sent.`, for example: `cannot start a message on "discord.team": this connection is set to "Only answer". The operator can change it in Connectors > Discord > Configure ("Answer and also start messages"). Nothing was sent.` A start that passes returns `accepted for sending to <connector>:<id> (delivery not confirmed)`. That means the message was handed over for sending, not that it arrived; a later failure appears only in the gateway log.
+
+These rules are separate from Allow, Ask and Deny: `send_message` still needs no approval card, but no card does not make every chat reachable. The list of people and groups is set only in [Connectors → Configure → Starting messages](connectors.md#starting-messages); no agent tool changes it.
+
 ## Tools from connected servers
 
 A connected server adds tools Omnipus was not born with — a company wiki, a design app, a database. One server can add several tools.

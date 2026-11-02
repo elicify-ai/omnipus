@@ -68,7 +68,7 @@ When you press **Save** or **Save & Enable** in a connection's settings on the *
 | Message | What it means | What to do |
 |---|---|---|
 | `Saved. The connection restarted with the new settings.` | The settings were saved and the connection restarted and is running with them. A second note says a restart was attempted and that other connections and scheduled services may have paused briefly while it ran. | Nothing. |
-| `Saved.` | The settings were saved and nothing needed restarting: the connection is turned off, or it already runs these settings. With **Save & Enable**, the enable step shows its own result instead. | Nothing. |
+| `Saved.` | The settings were saved and, according to Omnipus's records, nothing needed applying: the connection is turned off, or these settings were already applied to it with no failed start, unfinished shutdown or stored token still waiting. It does not confirm that the connection is running or reachable right now. With **Save & Enable**, the enable step shows its own result instead. | Nothing for the settings. If the connection does not answer, check its status on the Connectors screen. |
 | `Saved, but the connection is not running: <reason>.` | The settings were saved and applied, but the connection did not start. The reason comes from the connection, for example a rejected token. | Fix the reason and save again. |
 | `Saved. The restart was not confirmed yet; check the connection status in a moment.` | The settings were saved, but the restart did not confirm in time. | Check the connection's status on the Connectors screen shortly. |
 | `Saved, but applying the change did not complete: <reason>. Check the connection status before retrying.` | The settings were saved, but applying them to the running connection failed. This message does not mean the old settings are still running. When Omnipus can read the connection's state, a second message follows: `The connection is currently: running.`, `not running.` or `not loaded.` | Check the status, fix the reason, then save again. |
@@ -76,9 +76,38 @@ When you press **Save** or **Save & Enable** in a connection's settings on the *
 | `The credential was saved, but the configuration change was not: …` | A token or other secret from this save was stored, then saving the rest failed. Nothing else was applied, and the connection keeps its previous token until it next restarts. A restart picks up the new value only when the saved settings refer to the credential this form writes (the usual case); if they refer to a different stored credential, the new value stays stored but unused. | Save again: a successful save of the same form applies everything. |
 | `could not save config` or another error | Nothing was saved. | Fix the cause shown and save again. |
 
+### Saving again with the same values
+
+For an enabled connection, pressing **Save** again without changing anything retries an application of the settings that did not finish. Omnipus decides from its own records of applying and starting the connection, not by testing whether the connection is connected right now. When those records show one of the cases below, it restarts the connection and reports the new result:
+
+- a restart that failed earlier;
+- a start that failed when the gateway started;
+- a shutdown of the previous connection that did not finish;
+- a token you stored through **Configure** that was never applied. Leave the token field blank and save; the stored token is used, and you do not need to type it again. This works when the saved settings select the reference the token was stored under.
+- a connection that could not be built at all, for example because its credential reference could not be resolved. While the cause lasts, each save reports the real failure. Once you fix the cause, the same save builds and starts the connection, again without re-entering a stored token.
+
+When none of these cases is recorded, the save answers `Saved.` without restarting anything, even if the connection has since dropped on its own. `Saved.` therefore does not prove that the connection is running; check its status on the Connectors screen.
+
 ## The bot ignores someone
 
 A connector whose **Allow From** list is not empty ignores messages from everyone not on the list and sends them no reply. Open the connector's **Configure** panel on the **Connectors** screen. A line `Ignored <count> messages from senders not on the allowed list. Latest: <ids>` means it has ignored such messages since the connector last started; the ids are the latest ignored senders, most recent first. To let that person in, select and copy their id from the line, add it to **Allow From**, and save. The gateway log also records a newly ignored sender, once, with the message `channel ignored a sender not on the allowed list` and the sender's id — never the message text. A sender is logged again only after 20 other senders have been ignored since. With an empty **Allow From** list, nobody is ignored.
+
+## The agent says a connection is set to "Only answer"
+
+An agent that tries to start a message on a connector set to **Only answer** is refused with a message that ends `The operator can change it in Connectors > <platform> > Configure ("Answer and also start messages"). Nothing was sent.` To allow it, open **Connectors**, open the connector's **Configure** panel, and in **Starting messages** choose **Answer and also start messages**. List the people and groups the agent may message, then press that section's own **Save**. Starting messages works on Discord and Telegram only; see [Starting messages](connectors.md#starting-messages).
+
+## Saving Starting messages is refused or shows a warning
+
+| Message | What it means | What to do |
+|---|---|---|
+| `An earlier change to this connection did not finish applying, so nothing was saved. …` | The connection's saved and running settings differ, because an earlier change was not applied. While they differ, a list save is accepted only if every permission it leaves in place is already granted in both the saved and the running settings. Switching to **Only answer** without adding ids is always accepted. Removing only some ids can still be refused, for example after the connector was bound to a different agent or workspace. | Finish applying the earlier change: any successful save of this connection, or disable and enable it. Then save the list again. |
+| `Discord could not be reached to check <ids>; nothing was saved; try again` | Omnipus could not ask Discord about the new ids in time. It does not mean the ids are wrong. | Check that the connector is connected, wait a moment, and save again. |
+| `Connect the channel first to add Discord ids.` | New Discord ids are checked with Discord, which needs the connector running. | Start the connector, then save again. |
+| `Saved and in force for starting messages. Other settings could not be refreshed: the running configuration could not be reloaded. Check the server log.` | The new list was saved and is already in force. Only other settings of the running configuration could not be refreshed. | Nothing for the list. Check the server log for why the reload failed before relying on other recent changes. |
+
+## An agent-started message never arrived
+
+An agent's started message is reported as `accepted for sending … (delivery not confirmed)`. That only means it was handed over for sending. If sending fails later, or the message is dropped because the connector's queue is full, no notice is posted in the chat; the failure appears only in the gateway log, as `Send failed` or `Outbound queue full, message dropped`. Ordinary replies keep their usual in-chat notices. On Discord, a direct message to a person is refused, and logged the same way, when Discord does not let the bot open the direct message, or does not answer within 5 seconds (for example while rate limiting it). A message that was refused is never sent later.
 
 ## Every request returns 401 Unauthorized
 

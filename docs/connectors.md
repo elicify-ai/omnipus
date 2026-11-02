@@ -116,6 +116,27 @@ Each drop is written to the log as an error and to the audit log, and the connec
 
 Changing a connector from workspace A to B does not move its existing A conversation. Subsequent input uses a separate B-scoped conversation, without carrying A's conversation history or recalled shared notes into it. Existing A archives remain readable in A. Directly trying to reuse an A chat or helper in B is refused with a visible error; open B's conversation instead.
 
+## Starting messages
+
+By default an agent only answers messages that arrive on a connector. Each connector's **Configure** panel has a **Starting messages** section with two choices:
+
+- **Only answer**: the agent answers messages that arrive here. It never starts a conversation.
+- **Answer and also start messages**: the agent may also start messages, but only to the people and groups in the list below, **People and groups the agent may message**.
+
+Enter one id per line, up to 20; the same id entered twice counts once. Write the id as the platform gives it, either bare or with the connector's prefix (for example `discord:123456789012345678`). Names such as `@alice`, `*`, and ids from another platform are refused, and the panel marks the refused line under the field. The section has its own **Save** button; the panel's main **Save** does not change it. This list is separate from **Allow From**, which controls whose messages the agent answers. Only you can change the list, here in the panel; agents have no tool to change it.
+
+Starting messages works on Discord and Telegram only. On every other connector the section says `Starting messages is not supported yet on <name>. The agent only answers here.` The [Discord](connectors/discord.md#starting-messages) and [Telegram](connectors/telegram.md#starting-messages) guides say which ids to use.
+
+On a Discord or Telegram connector that has never been saved, the section shows only `Save the connection first`. Fill in the connector's settings, press the panel's main **Save**, and the two choices appear.
+
+You can take permission away even while the connector is not running: remove ids, or switch to **Only answer**, and save. If an earlier change to the connector did not finish applying, removing only some ids can be refused; switching to **Only answer** still works (see [troubleshooting](troubleshooting.md#saving-starting-messages-is-refused-or-shows-a-warning)). Adding a Discord id needs the connector running, because Omnipus checks each new id with Discord before it saves.
+
+When an agent starts a message, the result it gets says `accepted for sending … (delivery not confirmed)`. That means the message was handed over for sending, not that the person received it. If sending fails later, the failure appears only in the gateway log; see [troubleshooting](troubleshooting.md#an-agent-started-message-never-arrived).
+
+Heartbeats and scheduled runs have no conversation of their own on a connector, so every message they post to a connector is a started message. It needs **Answer and also start messages** and the destination on the list, like any other start.
+
+At every turn an agent is told which connectors it may start messages on; see [what an agent knows about its connectors](agents.md#what-an-agent-knows-about-its-connectors).
+
 ## Connectors you can set up
 
 Each guide explains the credentials and platform-specific setup.
