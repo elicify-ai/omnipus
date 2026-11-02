@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -272,7 +273,8 @@ type secretSet struct {
 }
 
 // loadSecrets enumerates the store. A provider error fails closed with
-// SECRET_CHECK_UNAVAILABLE naming the reason and the readable names only.
+// SECRET_CHECK_UNAVAILABLE naming the reason (§5.10) — damaged entry names
+// only, never values.
 func loadSecrets() (*secretSet, *refusal) {
 	provider := SecretValuesProvider
 	if provider == nil {
@@ -280,16 +282,11 @@ func loadSecrets() (*secretSet, *refusal) {
 	}
 	values, err := provider()
 	if err != nil {
-		reason := "the secret check could not be completed (" + secretUnavailableReason(err)
-		if len(values) > 0 {
-			names := make([]string, 0, len(values))
-			for _, v := range values {
-				names = append(names, v.Name)
-			}
-			sort.Strings(names)
-			reason += "; readable: " + strings.Join(names, ", ")
-		}
-		reason += ")"
+		// §5.10 text form exactly: (locked | unreadable | N damaged entries:
+		// NAMES). The underlying cause goes to the log for the operator, never
+		// into the refusal text (it can carry paths).
+		slog.Warn("skills: secret check unavailable; the change is refused", "error", err)
+		reason := "the secret check could not be completed (" + secretUnavailableReason(err) + ")"
 		return nil, &refusal{code: ErrSecretCheckUnavailable, reason: reason}
 	}
 	kept := values[:0:0]
@@ -309,7 +306,7 @@ func secretUnavailableReason(err error) string {
 	case errors.As(err, &damaged):
 		return fmt.Sprintf("%d damaged entries: %s", len(damaged.Names), strings.Join(damaged.Names, ", "))
 	default:
-		return "unreadable: " + err.Error()
+		return "unreadable"
 	}
 }
 
