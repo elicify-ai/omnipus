@@ -125,6 +125,21 @@ func (c pathUseClassifier) skillOperandUse(start int) (allowed bool, reason stri
 	return true, ""
 }
 
+// loadableSkillReadOrRun is the workspace scan's half of the rule
+// (guardCommandClassified, restrictToWorkspace): a read or run of a loadable
+// skill folder's file is allowed outside the working directory, as the kernel
+// grants those folders read+exec (turnAllowRoots). A write-shaped operand
+// there was already refused by guardProtectedOperands; anything not proven a
+// read/run shape returns false and meets the ordinary checks.
+func loadableSkillReadOrRun(raw string, start int, c pathUseClassifier, policy fspolicy.FSPolicy) bool {
+	p, err := filepath.Abs(raw)
+	if err != nil || loadableSkillFolder(p, policy.HomeGuard.SkillFolders) == "" {
+		return false
+	}
+	ok, _ := c.skillOperandUse(start)
+	return ok
+}
+
 // skillWriteRefusal is the refusal for a write-shaped operand inside a
 // loadable skill folder.
 func skillWriteRefusal(p, folder, reason string) string {

@@ -396,17 +396,8 @@ func (t *ExecTool) guardCommandClassified(ctx context.Context, command, cwd stri
 			use.readOnly = false
 		}
 
-		// UAT-1 F-8: a read or run of a loadable skill folder's file is
-		// allowed outside the working directory, as the kernel grants those
-		// folders read+exec (turnAllowRoots). A write-shaped operand there was
-		// already refused by guardProtectedOperands; anything not proven a
-		// read/run shape falls through to the ordinary checks below.
-		if readPolicyOK && !expansionDerived {
-			if p, aerr := filepath.Abs(raw); aerr == nil && loadableSkillFolder(p, turnPolicy.HomeGuard.SkillFolders) != "" {
-				if ok, _ := classifier.skillOperandUse(start); ok {
-					continue
-				}
-			}
+		if readPolicyOK && !expansionDerived && loadableSkillReadOrRun(raw, start, classifier, turnPolicy) {
+			continue // UAT-1 F-8 (shell_skill_operands.go)
 		}
 
 		// Colon-joined path list (PATH= assignments, -I a:b-style flags):
