@@ -147,9 +147,17 @@ func defaultToolsCreateTool(t *testing.T, api *restAPI, kind string) *config.Age
 		"agent_type": kind, "name": "Default Tool Subject", "description": "Checks default policies.", "model": "scripted-model",
 	}
 	if kind == "subagent_3p" {
-		// create_agent's external variant takes cli/cli_path and no native soul.
-		// The executable is validated but never launched by this test.
-		args["cli"], args["cli_path"] = "codex", defaultToolsExecutable(t)
+		// create_agent's external variant takes cli and no native soul; r17
+		// area 4 removed cli_path, so the program comes from the saved
+		// Settings -> Third-party agents row. The executable is validated but
+		// never launched by this test.
+		args["cli"] = "codex"
+		require.NoError(t, deps.MutateConfig(func(cfg *config.Config) error {
+			cfg.Sandbox.ThirdPartyAgents = &config.ThirdPartyAgentsConfig{CLIs: map[string]config.ThirdPartyCLIConfig{
+				"codex": {Path: defaultToolsExecutable(t)},
+			}}
+			return nil
+		}))
 	} else {
 		args["soul"] = "Complete the user's task."
 	}

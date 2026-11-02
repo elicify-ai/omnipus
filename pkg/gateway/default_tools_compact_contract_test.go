@@ -47,7 +47,15 @@ func defaultToolsAssertCompactContract(t *testing.T) {
 				require.Len(t, entries, 1)
 				require.NotNil(t, entries[0].Description)
 				// r17 7.12.1: both Allow and Ask use the exact first-sentence/40-character contract.
-				assert.Equal(t, defaultToolsEntry{Tool: permission.name, Effective: permission.policy, Description: &row.want}, entries[0], "first-sentence, whitespace and 40-character rules")
+				// The preview shows the stored value the new agent would carry for the
+				// exact key, so override is either null or the same value; the
+				// description rules are what this row pins.
+				got := entries[0]
+				if got.Override != nil {
+					assert.Equal(t, permission.policy, *got.Override, "a preview override is the value the new agent would store")
+				}
+				got.Override = nil
+				assert.Equal(t, defaultToolsEntry{Tool: permission.name, Effective: permission.policy, Description: &row.want}, got, "first-sentence, whitespace and 40-character rules")
 			})
 		}
 	}
@@ -57,9 +65,13 @@ func defaultToolsAssertCompactContract(t *testing.T) {
 			cfg.Sandbox.ToolPolicies["read_file"] = "deny"
 			metadata := []tools.Tool{defaultToolsMetadata{name: "read_file", description: description}}
 			raw := defaultToolsInventory(t, t.TempDir(), cfg, metadata, map[string]any{"new_agent_type": "Main"})
-			// r17 7.12.1: a deny entry carries tool and effective (override null), no description key.
+			// r17 7.12.1: a deny entry carries tool and effective, no description key.
+			// A preview's override is the value the new agent would store, so it is
+			// not part of this row.
 			identity, entries := defaultToolsDecode(t, raw)
 			assert.Equal(t, map[string]any{"preview_of": "Main"}, identity)
+			require.Len(t, entries, 1)
+			entries[0].Override = nil
 			assert.Equal(t, []defaultToolsEntry{{Tool: "read_file", Effective: "deny"}}, entries)
 		})
 	}
@@ -100,7 +112,9 @@ func defaultToolsAssertCompactMCP(t *testing.T) {
 	assert.Equal(t, []defaultToolsEntry{
 		{Tool: read.Name(), Effective: "ask", Description: &ask},
 		{Tool: write.Name(), Effective: "deny", Override: ptrString("deny")},
-		{Tool: "read_file", Effective: "allow", Description: &allow},
+		// NewCustomAgentToolsCfg stores an explicit allow for read_file, so the
+		// exact-key override is "allow" (r17 7.12.1: override = stored value).
+		{Tool: "read_file", Effective: "allow", Override: ptrString("allow"), Description: &allow},
 	}, sortedEntries(entries), "exact sorted entries; no parameters or verbose metadata")
 }
 
