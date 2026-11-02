@@ -1,0 +1,135 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package tools
+
+// Skills spec r15 §1 item 2, §6.1 item 5 (UAT-1 F-8): bash may READ and RUN
+// the files of a skill the acting agent can load, and may not change any
+// skill path. The loadable folders are the turn policy's
+// HomeGuard.SkillFolders (resolveTurnSkillAuthority — the same set the
+// kernel grants read+exec, turnAllowRoots). Everything else under the skills
+// root (an ungranted skill, .staging, .swap) and system/skill-history keeps
+// the child-only deny, and without a turn policy nothing is loadable.
+//
+// An operand inside a loadable folder is allowed only in one of these
+// shapes, judged from the command TEXT, failing closed to "write-shaped":
+//
+//   - the path is the command itself (command position: run it);
+//   - the path is an argument of a literal read-only allowlisted command
+//     (readOnlyShellCommands) and the segment's own read proof holds
+//     (pathUseClassifier.classify reports readOnly);
+//   - the path is the FIRST argument word of a literal script runner
+//     (skillScriptRunners) — the script it runs;
+//   - the path is the first argument word of a literal `cd`.
+//
+// Every other shape (an output-redirect target, a writer such as rm/cp/mv/
+// tee/touch/sed, a runner's later argument, an unparseable command, a brace
+// expansion, a command word spelled with a prefix or an expansion) is
+// refused with skillWriteRefusal.
+
+import (
+	"fmt"
+	"path/filepath"
+
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
+)
+
+// skillScriptRunners are the interpreters whose first argument is the script
+// they run. Only that one argument position is accepted for a skill operand.
+var skillScriptRunners = map[string]bool{
+	"sh": true, "bash": true, "dash": true, "zsh": true,
+	"python": true, "python3": true, "node": true,
+}
+
+// loadableSkillFolder returns the loadable skill folder (from skillFolders)
+// that contains p, on both its lexical and its symlink-resolved form, or ""
+// when p is not inside one. Both forms must agree: a symlink inside a skill
+// folder that points elsewhere is judged by the ordinary rules.
+func loadableSkillFolder(p string, skillFolders []string) string {
+	if len(skillFolders) == 0 {
+		return ""
+	}
+	resolved := p
+	if canonical, err := resolvePathAgainstExistingAncestor(p); err == nil {
+		resolved = canonical
+	}
+	for _, folder := range skillFolders {
+		if folder == "" {
+			continue
+		}
+		clean := filepath.Clean(folder)
+		if coversForGrantBoth(clean, p, resolved) {
+			return clean
+		}
+	}
+	return ""
+}
+
+func coversForGrantBoth(folder, lexical, resolved string) bool {
+	return fspolicy.CoversForGrant(folder, lexical) && fspolicy.CoversForGrant(folder, resolved)
+}
+
+// skillOperandUse reports whether the absolute-path candidate starting at
+// byte offset start, which lies inside a loadable skill folder, is used in
+// one of the allowed read/run shapes (file comment). reason explains a
+// refusal.
+func (c pathUseClassifier) skillOperandUse(start int) (allowed bool, reason string) {
+	if !c.classifiable {
+		return false, "the command contains quoting or a substitution the guard cannot parse"
+	}
+	if start < 0 || start >= len(c.cmd) {
+		return false, "the reference could not be located in the command text"
+	}
+	segStart, segEnd := c.segmentBounds(start)
+	word := c.wordStart(start, segStart)
+	if c.precededByOutputRedirect(word, segStart) {
+		return false, "the path is the target of an output redirect"
+	}
+	use := c.classify(start)
+	if use.readOnly {
+		return true, ""
+	}
+	for i := segStart; i < segEnd; i++ {
+		if !c.mask[i] && (c.cmd[i] == '{' || c.cmd[i] == '}') {
+			return false, "the command uses brace expansion ({ }), which rewrites its words before they run"
+		}
+	}
+	if !c.redirectTargetsAreLiteral(segStart, segEnd) {
+		return false, "the same command segment redirects output to a target the guard cannot see"
+	}
+	if use.exec {
+		if word != start {
+			return false, "the command word is not the skill path itself"
+		}
+		return true, ""
+	}
+	head, headIsExpansion, headNormalised := shellCommandHeadDetailed(c.cmd[segStart:segEnd])
+	if headIsExpansion || headNormalised || (!skillScriptRunners[head] && head != "cd") {
+		return false, fmt.Sprintf("%q can change files named on its command line", head)
+	}
+	fw := c.firstWordStart(segStart, segEnd)
+	j := fw
+	for j < segEnd && (c.mask[j] || !isShellWordBreak(c.cmd[j])) {
+		j++
+	}
+	if c.cmd[fw:j] != head {
+		return false, "the command word is preceded by an assignment or quoting"
+	}
+	for j < segEnd && !c.mask[j] && (c.cmd[j] == ' ' || c.cmd[j] == '\t') {
+		j++
+	}
+	if word != j || word != start {
+		return false, fmt.Sprintf("only the first argument of %q (the script or folder itself) may name a skill path", head)
+	}
+	return true, ""
+}
+
+// skillWriteRefusal is the refusal for a write-shaped operand inside a
+// loadable skill folder.
+func skillWriteRefusal(p, folder, reason string) string {
+	return fmt.Sprintf(
+		"Command blocked: %q is inside the skill folder %q. bash may read and run a skill's files but not change them "+
+			"(%s). Change a skill with write_file or edit_file, or with edit_skill to copy, delete or restore it.",
+		p, folder, reason)
+}

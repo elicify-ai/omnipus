@@ -396,6 +396,19 @@ func (t *ExecTool) guardCommandClassified(ctx context.Context, command, cwd stri
 			use.readOnly = false
 		}
 
+		// UAT-1 F-8: a read or run of a loadable skill folder's file is
+		// allowed outside the working directory, as the kernel grants those
+		// folders read+exec (turnAllowRoots). A write-shaped operand there was
+		// already refused by guardProtectedOperands; anything not proven a
+		// read/run shape falls through to the ordinary checks below.
+		if readPolicyOK && !expansionDerived {
+			if p, aerr := filepath.Abs(raw); aerr == nil && loadableSkillFolder(p, turnPolicy.HomeGuard.SkillFolders) != "" {
+				if ok, _ := classifier.skillOperandUse(start); ok {
+					continue
+				}
+			}
+		}
+
 		// Colon-joined path list (PATH= assignments, -I a:b-style flags):
 		// each `:`-separated segment is checked independently against the
 		// workspace boundary (the same check applied to a bare candidate
@@ -473,6 +486,7 @@ func (t *ExecTool) guardProtectedOperands(ctx context.Context, command string) (
 	}
 
 	cmd := strings.TrimSpace(command)
+	classifier := newPathUseClassifier(cmd)
 	for _, loc := range absolutePathPattern.FindAllStringSubmatchIndex(cmd, -1) {
 		start, end := loc[2], loc[3]
 		if start < 0 || end < 0 {
@@ -491,6 +505,17 @@ func (t *ExecTool) guardProtectedOperands(ctx context.Context, command string) (
 		if err != nil {
 			continue
 		}
+		// UAT-1 F-8: an operand inside one of the turn's loadable skill
+		// folders may be read or run, never changed (shell_skill_operands.go).
+		// Without a turn policy nothing is loadable and the deny below stands.
+		if policyOK {
+			if folder := loadableSkillFolder(p, turnPolicy.HomeGuard.SkillFolders); folder != "" {
+				if ok, reason := classifier.skillOperandUse(start); !ok {
+					return skillWriteRefusal(p, folder, reason), false
+				}
+				continue
+			}
+		}
 		if t.operandIsProtected(p, turnPolicy, policyOK, home) {
 			resolved := p
 			if canonical, resolveErr := resolvePathAgainstExistingAncestor(p); resolveErr == nil {
@@ -502,7 +527,7 @@ func (t *ExecTool) guardProtectedOperands(ctx context.Context, command string) (
 			if policyOK && !fspolicy.InventoryGuarded(turnPolicy, resolved) &&
 				(fspolicy.CoversForDeny(filepath.Join(home, "agents"), resolved) ||
 					fspolicy.CoversForDeny(filepath.Join(home, "workspaces"), resolved)) {
-				return outsideWorkDirRefusal(p, turnPolicy.WorkDir, newPathUseClassifier(cmd).classify(start), false), false
+				return outsideWorkDirRefusal(p, turnPolicy.WorkDir, classifier.classify(start), false), false
 			}
 			return ProtectedInternalFileMessage(p), true
 		}
