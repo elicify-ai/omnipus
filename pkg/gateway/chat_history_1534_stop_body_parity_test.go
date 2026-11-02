@@ -64,7 +64,7 @@ var _ providers.StreamingProvider = (*stopBodyParityProvider)(nil)
 // and returns every raw frame in between. Unlike the shared D16 readUntil —
 // whose blanket "no error frames" guard is for flows that never read across a
 // Stop — a mid-stream Stop legitimately delivers the production
-// turn_canceled error notice ("This turn was stopped before it finished.")
+// turn_canceled error notice (agent.UserMessageForCode(agent.CodeTurnCanceled))
 // before done; that notice is part of the unchanged UX this row must keep.
 func stopBodyParityReadToDone(t *testing.T, h *historyD16Harness, peer *websocket.Conn) [][]byte {
 	t.Helper()
@@ -111,14 +111,11 @@ func stopBodyParityParseLive(t *testing.T, raws [][]byte) stopBodyParityLive {
 		case "error":
 			// Characterization (label-parity half): the stopped turn's
 			// user-visible notice, unchanged by the fix.
-			var frame struct {
-				Payload struct {
-					LLMError struct {
-						Code string `json:"code"`
-					} `json:"llm_error"`
-				} `json:"payload"`
-			}
-			if json.Unmarshal(raw, &frame) == nil && frame.Payload.LLMError.Code == "turn_canceled" {
+			var frame generated.ErrorFrame
+			require.NoError(t, json.Unmarshal(raw, &frame))
+			if frame.Payload != nil && frame.Payload.LlmError.Code == string(agent.CodeTurnCanceled) {
+				assert.Equal(t, agent.UserMessageForCode(agent.CodeTurnCanceled), frame.Payload.LlmError.Message,
+					"the stopped-turn notice must retain the canonical catalogue copy")
 				live.canceledNotice = true
 			}
 		}
