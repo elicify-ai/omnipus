@@ -110,46 +110,47 @@ func TestSecretCheck_OAuthSubValue_RefusedNamed(t *testing.T) {
 
 // TestSecretCheck_StoreUnavailable_FailsClosed (S-4.5).
 // BDD: a locked/unreadable/damaged store makes EVERY write refuse
-// SECRET_CHECK_UNAVAILABLE with the reason and the readable names — nothing
-// commits while the check cannot run.
+// SECRET_CHECK_UNAVAILABLE in the exact §5.10 text form (locked | unreadable |
+// N damaged entries: NAMES) — nothing commits while the check cannot run.
 // Traces to: skills-spec-r15.md §7.4, S-4.5.
 func TestSecretCheck_StoreUnavailable_FailsClosed(t *testing.T) {
 	root := t.TempDir()
 	appDir := writeSkillFixture(t, root, "foo")
 
-	t.Run("provider error refuses the write", func(t *testing.T) {
-		withSecrets(t, func() ([]credentials.NamedValue, error) {
-			return nil, errors.New("store locked")
+	// Chief ruling CK11: the §5.10 text is normative —
+	// "(<locked | unreadable | N damaged entries: NAMES>)", with no raw error
+	// text for a locked store and no "readable: NAMES" suffix.
+	const prefix = "the secret check could not be completed ("
+	for _, tc := range []struct {
+		name   string
+		values []credentials.NamedValue
+		err    error
+		want   string
+	}{
+		{"locked store", nil, credentials.ErrStoreLocked, prefix + "locked)"},
+		{"unreadable store", nil, errors.New("open credentials.json: permission denied"), prefix + "unreadable)"},
+		{"damaged entries", []credentials.NamedValue{{Name: "GOOD_REF", Value: "readable-value-1"}},
+			&credentials.DamagedEntriesError{Names: []string{"BAD_ONE", "BAD_TWO"}},
+			prefix + "2 damaged entries: BAD_ONE, BAD_TWO)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withSecrets(t, func() ([]credentials.NamedValue, error) { return tc.values, tc.err })
+			_, err := ApplyChange(root, ChangeRequest{
+				Kind: KindEdit, Slug: "foo", Path: "SKILL.md",
+				Content: []byte(validSkillMD("foo", "v", "clean body")),
+				Expect:  Expectation{Revision: readLiveRevision(t, appDir)},
+				Actor:   ChangeActor{Kind: "agent", AgentID: "a", Tool: "write_file"},
+			})
+			require.Error(t, err, "the check fails closed")
+			assert.True(t, errors.Is(err, ErrSecretCheckUnavailable),
+				"the refusal is SECRET_CHECK_UNAVAILABLE, got: %v", err)
+			assert.Contains(t, err.Error(), tc.want, "the exact §5.10 text form")
+			assert.NotContains(t, err.Error(), "; readable:", "§5.10 has no 'readable: NAMES' suffix")
+			assert.NotContains(t, err.Error(), "GOOD_REF", "only damaged entries are named")
+			assert.NotContains(t, err.Error(), "readable-value-1", "no value is echoed")
+			assert.FileExists(t, filepath.Join(appDir, "SKILL.md"), "nothing written")
 		})
-		_, err := ApplyChange(root, ChangeRequest{
-			Kind: KindEdit, Slug: "foo", Path: "SKILL.md",
-			Content: []byte(validSkillMD("foo", "v", "clean body")),
-			Expect:  Expectation{Revision: readLiveRevision(t, appDir)},
-			Actor:   ChangeActor{Kind: "agent", AgentID: "a", Tool: "write_file"},
-		})
-		require.Error(t, err, "the check fails closed")
-		assert.True(t, errors.Is(err, ErrSecretCheckUnavailable),
-			"the refusal is SECRET_CHECK_UNAVAILABLE, got: %v", err)
-		assert.Contains(t, err.Error(), "store locked", "the refusal carries the reason")
-		assert.FileExists(t, filepath.Join(appDir, "SKILL.md"), "nothing written")
-	})
-
-	t.Run("readable names still surface alongside the failure", func(t *testing.T) {
-		withSecrets(t, func() ([]credentials.NamedValue, error) {
-			return []credentials.NamedValue{
-				{Name: "GOOD_REF", Value: "readable-value-1"},
-			}, errors.New("one entry damaged")
-		})
-		_, err := ApplyChange(root, ChangeRequest{
-			Kind: KindEdit, Slug: "foo", Path: "SKILL.md",
-			Content: []byte(validSkillMD("foo", "v", "clean body")),
-			Expect:  Expectation{Revision: readLiveRevision(t, appDir)},
-			Actor:   ChangeActor{Kind: "agent", AgentID: "a", Tool: "write_file"},
-		})
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrSecretCheckUnavailable))
-		assert.Contains(t, err.Error(), "GOOD_REF", "the readable names are listed")
-	})
+	}
 }
 
 // TestSecretCheck_NoStore_Committed (S-4.6).
