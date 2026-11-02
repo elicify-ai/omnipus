@@ -155,7 +155,7 @@ func TestWU3RegistrySchemaEnvelopeControls(t *testing.T) {
 	assert.NotEqual(t, "failed: nothing saved", body["outcome"], "a valid call is executed, not refused")
 	assert.NotEmpty(t, body["changed_fields"], "the valid control really saved")
 
-	read := reg.ExecuteWithContext(context.Background(), "get_agent", map[string]any{"id": float64(1)}, "", "", nil)
+	read := reg.ExecuteWithContext(context.Background(), "get_agent", map[string]any{"id": float64(1), "fields": []any{"name"}}, "", "", nil)
 	require.True(t, read.IsError, "control: the read call is schema-invalid")
 	assert.True(t, strings.HasPrefix(read.ForLLM, "invalid arguments for tool"),
 		"a read tool's refusal is not wrapped in a change verdict: %s", read.ForLLM)

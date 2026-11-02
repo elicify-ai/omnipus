@@ -29,7 +29,7 @@ func TestL1WU1AgentTools_DefaultArgumentAndResponseAreRetired(t *testing.T) {
 	}
 	ac := config.AgentConfig{ID: "no-default-subject", Name: "No default subject", Type: config.AgentTypeCustom}
 	require.NoError(t, agentstore.New(deps.Home).Create(ac.ID, &ac))
-	result := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"id": ac.ID})
+	result := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"id": ac.ID, "fields": wu3AllAgentFields()})
 	require.False(t, result.IsError)
 	body := parseSuccess(t, result.ForLLM)
 	assert.Equal(t, ac.ID, body["id"], "real read-back positive control")

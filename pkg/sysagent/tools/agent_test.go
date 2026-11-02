@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -757,22 +756,17 @@ func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 	}
 }
 
-// TestAgentMetadataTools_RoundTrip verifies system.agent.read_metadata's read
-// semantics. Its former write-side companion, agent.write_metadata, was
-// retired (tool-manifest-tier-redesign review F6): it was a redundant,
-// unguarded second door onto files update_agent already writes through a
-// properly-guarded path (update_agent refuses locked core agents;
-// write_agent_metadata had no such check). Content is seeded directly on
-// disk below — what the write tool used to do in this test — rather than
-// through a tool call. The former AGENT.md frontmatter-validation subtests
-// (malformed/valid/no-frontmatter) tested write-side behavior that no longer
-// exists anywhere in this package and were removed along with the tool.
+// TestAgentMetadataTools_RoundTrip verifies the read side of an agent's
+// instruction files through get_agent (spec r17 7.12: it replaced
+// read_agent_metadata). Content is seeded directly on disk, as the retired
+// write companion used to do.
 //
-// Scenario A: seed heartbeat content on disk, read it back → exact match.
-// Scenario B: the retired memory kind → typed redirect to the memory tools.
-// Scenario C: an unknown file key is rejected.
+// Removed with the tool, because the spec removed the behaviour (r17 7.12):
+// the HEARTBEAT.md read (per-agent HEARTBEAT.md is dead data) and the typed
+// redirect for the retired memory kind (get_agent has no such file kind; it
+// refuses any unknown field name, covered below).
 //
-// Traces to: issue #240 regression lock B; tool-manifest-tier-redesign review F6.
+// Traces to: issue #240 regression lock B; r17 7.12.1.
 func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 	agentID := "test-roundtrip-agent"
@@ -781,127 +775,83 @@ func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 	if err := os.MkdirAll(wsPath, 0o700); err != nil {
 		t.Fatalf("setup workspace: %v", err)
 	}
-	// #1032 F-3: read_agent_metadata answers only for an agent that exists, so
-	// the fixture agent has its entity record.
 	seedAgentEntityForTest(t, home, agentID)
+	readTool := systools.NewAgentGetTool(deps)
 
-	readTool := systools.NewAgentReadMetadataTool(deps)
-
-	t.Run("heartbeat_roundtrip", func(t *testing.T) {
-		beatContent := "Remind the team about the standup at 10am."
-
-		if err := os.WriteFile(filepath.Join(wsPath, "HEARTBEAT.md"), []byte(beatContent), 0o644); err != nil {
-			t.Fatalf("seed HEARTBEAT.md: %v", err)
+	t.Run("soul_roundtrip", func(t *testing.T) {
+		soul := "Remind the team about the standup at 10am."
+		if err := os.WriteFile(filepath.Join(wsPath, "SOUL.md"), []byte(soul), 0o644); err != nil {
+			t.Fatalf("seed SOUL.md: %v", err)
 		}
-
-		readResult := readTool.Execute(context.Background(), map[string]any{
-			"file":     "heartbeat",
-			"agent_id": agentID,
-		})
+		readResult := readTool.Execute(context.Background(), map[string]any{"fields": []any{"soul"}, "id": agentID})
 		if readResult.IsError {
-			t.Fatalf("read_metadata(heartbeat) failed: %s", readResult.ForLLM)
+			t.Fatalf("get_agent(soul) failed: %s", readResult.ForLLM)
 		}
-
 		var body struct {
-			Content string `json:"content"`
+			Soul string `json:"soul"`
 		}
 		if err := json.Unmarshal([]byte(readResult.ForLLM), &body); err != nil {
-			t.Fatalf("parse read_metadata result: %v", err)
+			t.Fatalf("parse get_agent result: %v", err)
 		}
-		if body.Content != beatContent {
-			t.Errorf("read_metadata returned %q, want %q", body.Content, beatContent)
-		}
-	})
-
-	t.Run("retired_memory_kind_redirects_to_memory_tools", func(t *testing.T) {
-		legacyContent := "leftover data from an older install"
-		if err := os.WriteFile(filepath.Join(wsPath, "MEMORY.md"), []byte(legacyContent), 0o600); err != nil {
-			t.Fatalf("seed leftover MEMORY.md: %v", err)
-		}
-
-		readResult := readTool.Execute(context.Background(), map[string]any{
-			"file":     "memory",
-			"agent_id": agentID,
-		})
-		if !readResult.IsError {
-			t.Fatalf("retired memory kind should fail, got success: %s", readResult.ForLLM)
-		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(readResult.ForLLM), &m); err != nil {
-			t.Fatalf("result not JSON: %v", err)
-		}
-		errObj, _ := m["error"].(map[string]any)
-		if errObj["code"] != "INVALID_INPUT" {
-			t.Errorf("expected INVALID_INPUT error code, got %v", errObj["code"])
-		}
-		if !strings.Contains(readResult.ForLLM, "recall_memory") {
-			t.Errorf("retired memory error must name recall_memory, got: %s", readResult.ForLLM)
-		}
-		if !strings.Contains(readResult.ForLLM, "remember") {
-			t.Errorf("retired memory error must name remember, got: %s", readResult.ForLLM)
+		if body.Soul != soul {
+			t.Errorf("get_agent returned soul %q, want %q", body.Soul, soul)
 		}
 	})
 
-	t.Run("invalid_file_key_rejected", func(t *testing.T) {
-		result := readTool.Execute(context.Background(), map[string]any{
-			"file":     "totally-wrong",
-			"agent_id": agentID,
-		})
-		if !result.IsError {
-			t.Fatal("invalid file key should be rejected")
-		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(result.ForLLM), &m); err != nil {
-			t.Fatalf("result not JSON: %v", err)
-		}
-		errObj, _ := m["error"].(map[string]any)
-		if errObj["code"] != "INVALID_INPUT" {
-			t.Errorf("expected INVALID_INPUT, got %v", errObj["code"])
+	t.Run("retired_file_kinds_are_unknown_fields", func(t *testing.T) {
+		for _, field := range []string{"memory", "heartbeat", "totally-wrong"} {
+			result := readTool.Execute(context.Background(), map[string]any{"fields": []any{field}, "id": agentID})
+			if !result.IsError {
+				t.Fatalf("field %q must be refused, got success: %s", field, result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, "unknown field") {
+				t.Errorf("field %q: refusal must name the unknown field, got: %s", field, result.ForLLM)
+			}
 		}
 	})
 }
 
-// TestAgentReadMetadataTool_DefinitionHasThreeKinds locks the public tool
-// contract after retiring the inert MEMORY.md metadata surface. The schema
-// must expose exactly the three files that read_agent_metadata can read, and
-// neither description may advertise MEMORY.md as real memory.
+// TestAgentGetFieldsDefinition locks the public tool contract after retiring
+// read_agent_metadata (r17 7.12.1): the fields enum offers soul and agent_md
+// but no heartbeat or memory kind, and no description advertises MEMORY.md.
 //
-// Traces to: issue #627.
-func TestAgentReadMetadataTool_DefinitionHasThreeKinds(t *testing.T) {
+// Traces to: issue #627; r17 7.12.1.
+func TestAgentGetFieldsDefinition(t *testing.T) {
 	deps, _ := newTestDepsWithHome(t)
-	tool := systools.NewAgentReadMetadataTool(deps)
+	tool := systools.NewAgentGetTool(deps)
 
 	properties, ok := tool.Parameters()["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("parameters.properties is not an object")
 	}
-	fileSchema, ok := properties["file"].(map[string]any)
+	fieldsSchema, ok := properties["fields"].(map[string]any)
 	if !ok {
-		t.Fatal("parameters.properties.file is not an object")
+		t.Fatal("parameters.properties.fields is not an object")
 	}
-	gotEnum, ok := fileSchema["enum"].([]string)
+	items, ok := fieldsSchema["items"].(map[string]any)
 	if !ok {
-		t.Fatalf("file enum has type %T, want []string", fileSchema["enum"])
+		t.Fatal("fields.items is not an object")
 	}
-	wantEnum := []string{"soul", "heartbeat", "agent"}
-	if !reflect.DeepEqual(gotEnum, wantEnum) {
-		t.Fatalf("file enum = %v, want exactly %v", gotEnum, wantEnum)
+	enum, ok := items["enum"].([]any)
+	if !ok {
+		t.Fatalf("fields enum has type %T, want []any", items["enum"])
 	}
-
-	description := tool.Description()
-	for _, filename := range []string{"SOUL.md", "HEARTBEAT.md", "AGENT.md"} {
-		if !strings.Contains(description, filename) {
-			t.Errorf("tool description must name %s: %s", filename, description)
+	have := map[string]bool{}
+	for _, v := range enum {
+		have[v.(string)] = true
+	}
+	for _, want := range []string{"all", "soul", "agent_md", "tool_permissions"} {
+		if !have[want] {
+			t.Errorf("fields enum must offer %q: %v", want, enum)
 		}
 	}
-	if strings.Count(description, ".md") != 3 {
-		t.Errorf("tool description must name exactly three metadata files: %s", description)
+	for _, retired := range []string{"heartbeat", "memory"} {
+		if have[retired] {
+			t.Errorf("fields enum must not offer retired kind %q: %v", retired, enum)
+		}
 	}
-	if strings.Contains(description, "MEMORY.md") {
-		t.Errorf("tool description must not advertise MEMORY.md: %s", description)
-	}
-	if fileDescription, _ := fileSchema["description"].(string); strings.Contains(strings.ToLower(fileDescription), "memory") {
-		t.Errorf("file parameter description must not advertise memory: %s", fileDescription)
+	if strings.Contains(tool.Description(), "MEMORY.md") || strings.Contains(tool.Description(), "HEARTBEAT.md") {
+		t.Errorf("tool description must not advertise MEMORY.md or HEARTBEAT.md: %s", tool.Description())
 	}
 }
 

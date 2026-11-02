@@ -150,7 +150,7 @@ func TestT8ReadAgent_LiveConnectorWildcardAndStoredOverrides(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.MutateState("r1", before.Revision, func(a *config.AgentConfig) error {
 		a.Tools.MCP.Servers = []config.AgentMCPServerBinding{{ID: "S", ToolsSpecified: true, Tools: []string{"*"}}}
-		a.Tools.Builtin.Policies = map[string]config.ToolPolicy{"mcp_S_*": config.ToolPolicyAsk, "mcp_gone_tool": config.ToolPolicyDeny}
+		a.Tools.Builtin.Policies = map[string]config.ToolPolicy{"mcp_s_*": config.ToolPolicyAsk, "mcp_gone_tool": config.ToolPolicyDeny}
 		for i := range d.GetCfg().Agents.List {
 			if d.GetCfg().Agents.List[i].ID == a.ID {
 				d.GetCfg().Agents.List[i] = *a
@@ -159,9 +159,9 @@ func TestT8ReadAgent_LiveConnectorWildcardAndStoredOverrides(t *testing.T) {
 		return nil
 	}, nil)
 	require.NoError(t, err)
-	d.GetCfg().Sandbox.ToolPolicies["mcp_S_*"] = "allow"
+	d.GetCfg().Sandbox.ToolPolicies["mcp_s_*"] = "allow"
 	out := t8Read(t, d, map[string]any{"id": "r1", "fields": []any{"tool_permissions", "stored_overrides"}})
-	assert.Equal(t, map[string]any{"mcp_S_*": "ask", "mcp_gone_tool": "deny"}, out["stored_overrides"], "19.18 raw stored entries are not expanded or pruned")
+	assert.Equal(t, map[string]any{"mcp_s_*": "ask", "mcp_gone_tool": "deny"}, out["stored_overrides"], "19.18 raw stored entries are not expanded or pruned")
 	rows, ok := out["tool_permissions"].([]any)
 	require.True(t, ok)
 	seen := map[string]bool{}

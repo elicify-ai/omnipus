@@ -87,10 +87,26 @@ func TestWU25EditableFields_MatchCallableUpdateContract(t *testing.T) {
 					advertised = append(advertised, name)
 				}
 			}
+			// r17 EX-02..EX-04 (area 5): update_agent also takes the executor
+			// settings, but only an external-CLI worker has a runtime
+			// environment; for these native agents each is refused, so editable_fields
+			// rightly does not advertise it. The refusal is asserted below.
+			executorOnly := []string{"cli_args", "env_overrides", "env_overrides_remove"}
 			for name := range props {
-				if name != "id" && name != "revision" {
+				if name != "id" && name != "revision" && !slices.Contains(executorOnly, name) {
 					accepted = append(accepted, name)
 				}
+			}
+			for _, name := range executorOnly {
+				require.Contains(t, props, name, "update_agent schema carries the executor setting %s", name)
+				value := any("x")
+				if name == "env_overrides" {
+					value = map[string]any{"A": "b"}
+				} else if name == "env_overrides_remove" {
+					value = []any{"A"}
+				}
+				result := h.call(t, "update_agent", map[string]any{"id": id, "revision": h.state(t, id).Revision, name: value})
+				assert.True(t, result.IsError, "a native %s agent has no runtime environment: %s is refused", runtimeType, name)
 			}
 			slices.Sort(advertised)
 			slices.Sort(accepted)
