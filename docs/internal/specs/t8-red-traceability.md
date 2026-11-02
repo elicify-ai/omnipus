@@ -836,3 +836,11 @@ Rows 1.14, 1.15, 18.32, 18.33a/b1/c and 18.36 are credited to existing neighbour
 - TestParity_RecursivePaths_MappingAndExclusions and TestRuleTable_TaskFrozenSetShared: production has no `pkg/task/fieldrules.go` or canonical mapping rows.
 - TestSeedConfig_OmnipusSkillsReconciled and 14.1: the spec does not list the retired skills and production has no retired-name removal.
 - TestWU23_GodModeNativeSpawns_Landlock: needs a Landlock-capable environment.
+
+### Round 2 final gateway pass (logs 125-129)
+Full `./pkg/gateway` (log 127, local slot; the runner OOM-killed it twice, logs 125 and 126) showed 10 failing tests. Fixed in test code: REST create fixtures for `subagent_3p` no longer send `executor.kind`, `executor.cli_path` or `soul` (spec r17: kind derived, no cli_path, no soul); the request-path redaction inventory now lists the new `middleware/person_session.go` site (eight sites). Passing after the fix: log 128; lint clean: log 129. Full `./pkg/sysagent/tools`: exit 0 (log 124).
+
+Still red in `pkg/gateway`:
+- TestRestCreate_KeepsFallbackModels (7.7): PRODUCTION BUG. `pkg/gateway/rest_agents_create.go` validates `fallback_models` into `pap.fallbackModels` and never writes it to the created agent; the stored agent has 0 fallbacks. Not fixed by the test author.
+- TestHistoryPageCleanupFailure_OutranksCancellationAndNotFound and TestHistoryPageMeasurement_SectionHReceipt: BLOCKED, the prebuilt `build/tools/chat-history-fixture.test` driver does not exist in this worktree.
+- TestSpawnSettings_MissingAuthorityPrerequisites rows 6.7, 6.8, 8.14, 9.9-9.14, 9.17-9.19: BLOCKED stubs, the Settings-bound dispatch fixture is not bound in the gateway package (the same behaviour is covered at the pkg/agent level by `l1_1274_saved_program_test.go`, but the gateway rows stay unbound).

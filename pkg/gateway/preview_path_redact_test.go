@@ -483,6 +483,7 @@ var expectedRedactionSites = []redactionRecordingSite{
 	{file: "rest_preview_audit.go", what: "emitPreviewAuditEntry: details[\"sanitized_path\"]"},
 	{file: filepath.Join("middleware", "bypass_gate.go"), what: "RequireNotBypass: 503 forensic warning"},
 	{file: filepath.Join("middleware", "csrf.go"), what: "CSRFMiddleware: safe-method cookie re-mint failure"},
+	{file: filepath.Join("middleware", "person_session.go"), what: "RequirePersonSession: person-session refusal warning (r17 Settings endpoint)"},
 	// WU-24 (PLAN-omnipus-L1-v2-20261013.md §10): Copilot CLI model
 	// provider and its sign-in handler are deleted, including its log sink.
 	{file: "rest_knowledge.go", what: "allowKnowledgeRetrieval: knowledge rate-limit 429 warning (2026-09-14 limiter fix)"},
@@ -531,11 +532,11 @@ func TestRequestPathRedaction_SourceInventory(t *testing.T) {
 				"or the audit chain (FR-003e).\ninventory: %+v", expectedRedactionSites)
 	})
 
-	t.Run("inventory_is_seven_sites", func(t *testing.T) {
-		// WU-24 retires only the Copilot sign-in sink. The original six
-		// plus the knowledge rate-limit sink remain an exact seven-site set.
-		assert.Len(t, expectedRedactionSites, 7,
-			"WU-24 removes the Copilot sink; all seven remaining recording sites must stay redacted")
+	t.Run("inventory_is_eight_sites", func(t *testing.T) {
+		// WU-24 retired the Copilot sign-in sink; the person-session refusal
+		// (r17 Settings endpoint) added one redacted site: an exact eight-site set.
+		assert.Len(t, expectedRedactionSites, 8,
+			"WU-24 removes the Copilot sink; all eight recording sites must stay redacted")
 	})
 }
 
