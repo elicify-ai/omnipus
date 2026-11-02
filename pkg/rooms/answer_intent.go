@@ -205,14 +205,14 @@ func (s *Service) stageSources(r *room, a Answer) (files []intentFile, tmp strin
 			}
 			part, resolveErr := s.deps.Media.ResolveAttachment(r.rec.WorkspaceID, f.Ref)
 			if resolveErr != nil {
-				return nil, tmp, fmt.Errorf("%w: file %d: %v", ErrAnswerFilesRefused, n, resolveErr)
+				return nil, tmp, fmt.Errorf("%w: file %d: %w", ErrAnswerFilesRefused, n, resolveErr)
 			}
 			out = append(out, intentFile{Ref: f.Ref, Filename: part.Filename, Part: &part})
 			continue
 		}
 		staged, stageErr := stageOne(tmp, strconv.Itoa(n), f)
 		if stageErr != nil {
-			return nil, tmp, fmt.Errorf("%w: file %d (%s): %v", ErrAnswerFilesRefused, n, f.Filename, stageErr)
+			return nil, tmp, fmt.Errorf("%w: file %d (%s): %w", ErrAnswerFilesRefused, n, f.Filename, stageErr)
 		}
 		out = append(out, staged)
 	}
@@ -450,9 +450,9 @@ func (s *Service) publishIntentFiles(r *room, in *intentRecord) error {
 			return ErrAnswerCompleting
 		}
 		ref := refOfPart(part)
-		if err := s.deps.Media.Retain(r.rec.WorkspaceID, ref, intentOwner(r.rec.ID, in.IntentID)); err != nil &&
-			!errors.Is(err, ErrPublishDeleted) && !errors.Is(err, ErrAttachmentMissing) {
-			logRoomError("a published answer file could not be marked as kept; the answer completes on the next attempt", r.rec.ID, err)
+		if retainErr := s.deps.Media.Retain(r.rec.WorkspaceID, ref, intentOwner(r.rec.ID, in.IntentID)); retainErr != nil &&
+			!errors.Is(retainErr, ErrPublishDeleted) && !errors.Is(retainErr, ErrAttachmentMissing) {
+			logRoomError("a published answer file could not be marked as kept; the answer completes on the next attempt", r.rec.ID, retainErr)
 			return ErrAnswerCompleting
 		}
 		f.Part, f.LibraryName = &part, used
