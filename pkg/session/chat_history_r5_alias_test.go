@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +26,7 @@ func historyR5CanonicalFixture(t *testing.T, records []string) (*UnifiedStore, s
 	require.NoError(t, s.Close())
 	dir := filepath.Join(s.BaseDir(), sid)
 	path := filepath.Join(dir, "transcript.jsonl")
-	if old, err := os.ReadFile(path); !os.IsNotExist(err) {
+	if old, err := os.ReadFile(path); !errors.Is(err, os.ErrNotExist) {
 		require.NoError(t, err)
 		require.Empty(t, old, "fixture must not overwrite accepted canonical records")
 	}

@@ -2,7 +2,7 @@
 // Oracle: docs/internal/specs/1449-group-chat-spec.md S-50 (max 3; +N for the rest)
 // and design-system/manifests/avatar-stack.json check avatar-stack-unit.
 // The component is the shared mark row. A missing module fails loudly, never skips.
-import { createElement, type ComponentType, type ReactNode } from 'react'
+import { createElement, forwardRef, type ComponentType, type ReactNode } from 'react'
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
@@ -18,7 +18,15 @@ interface AvatarStackProps {
 }
 
 const MODULE_PATH = '/src/components/ui/avatar-stack.tsx'
-const modules = import.meta.glob<Record<string, unknown>>([MODULE_PATH])
+const modules = import.meta.glob<Record<string, unknown>>(['/src/components/ui/avatar-stack.tsx'])
+// The registered component is a forwardRef object (36c9aac883), not a plain
+// function. Use React itself as the tag control; arbitrary objects stay invalid.
+const forwardRefControl = forwardRef<HTMLSpanElement, AvatarStackProps>(() => null)
+function isForwardRefStack(value: unknown): boolean {
+  return typeof value === 'object' && value !== null
+    && Reflect.get(value, '$$typeof') === forwardRefControl.$$typeof
+    && typeof Reflect.get(value, 'render') === 'function'
+}
 
 async function loadStack(): Promise<ComponentType<AvatarStackProps>> {
   const load = modules[MODULE_PATH]
@@ -27,7 +35,7 @@ async function loadStack(): Promise<ComponentType<AvatarStackProps>> {
   }
   const mod = await load()
   const Stack = mod.AvatarStack
-  if (typeof Stack !== 'function') {
+  if (!isForwardRefStack(Stack)) {
     throw new Error(`BLOCKED: ${MODULE_PATH} exports no AvatarStack — required by T-39 / S-50`)
   }
   return Stack as ComponentType<AvatarStackProps>
@@ -41,6 +49,23 @@ function items(count: number): StackItem[] {
 }
 
 describe('AvatarStack', () => {
+  it('export guard accepts the real forwardRef shape and rejects missing or non-forwardRef values', () => {
+    expect(isForwardRefStack(forwardRefControl), 'positive instrument: React constructs an accepted component').toBe(true)
+    const invalid = [
+      undefined,
+      null,
+      {},
+      () => null,
+      { render: () => null },
+      { $$typeof: Symbol('not-forwardRef'), render: () => null },
+      { $$typeof: forwardRefControl.$$typeof },
+      { $$typeof: forwardRefControl.$$typeof, render: null },
+    ]
+    for (const value of invalid) {
+      expect(isForwardRefStack(value), 'missing exports and arbitrary/non-renderable objects must fail the export guard').toBe(false)
+    }
+  })
+
   it('AvatarStack draws up to max avatars and a +N marker for the rest', async () => {
     const AvatarStack = await loadStack()
     // S-50 examples, max 3: 2 → 2 none; 3 → 3 none; 4 → 3 +1; 10 → 3 +7.
