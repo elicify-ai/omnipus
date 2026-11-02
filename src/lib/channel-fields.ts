@@ -7,7 +7,7 @@ import { WHATSAPP_NATIVE_CHANNEL_ID } from '@/components/skills/whatsappChannelI
 export interface ChannelField { // not-wire-format: UI form-field descriptor for channel config forms; never serialised over any HTTP/WS boundary
   key: string
   label: string
-  /** 'list': a list of ids typed as one text, separated by commas or spaces; submitted as string[] (U7). */
+  /** 'list': a list of ids typed as one text, separated by commas or spaces (WhatsApp: commas only, see splitIdListText); submitted as string[] (U7). */
   type: 'text' | 'password' | 'url' | 'number' | 'toggle' | 'textarea' | 'list'
   required: boolean
   placeholder?: string
@@ -153,7 +153,7 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
       type: 'list',
       required: false,
       placeholder: '+1234567890, group_jid@g.us',
-      helpText: 'Phone numbers or JIDs. Separate ids with commas or spaces (empty = allow all)',
+      helpText: 'Phone numbers or JIDs. Separate ids with commas (empty = allow all)',
       advanced: true,
     },
     {
@@ -626,11 +626,26 @@ export function getChannelFields(channelId: string): ChannelField[] {
 }
 
 /**
- * splitIdListText turns the text typed into a 'list' field into its ids:
- * commas (",", full-width "，") and whitespace separate ids, and empty pieces
- * are dropped, so an empty text is the empty list. Mirrors the server's
- * config.SplitAllowFromText.
+ * idListSplitsOnWhitespace reports whether whitespace separates ids in a
+ * 'list' field of this channel (an instance id such as "whatsapp.eu" or the
+ * internal 'whatsapp_native' id is accepted too). Commas always separate ids.
+ * WhatsApp is the one exception to whitespace (chief ruling 2026-11-02,
+ * option B): a phone number may contain spaces. Mirrors the server's
+ * config.AllowFromSplitsOnWhitespace.
  */
-export function splitIdListText(text: string): string[] {
-  return text.split(/[,，\s]+/u).filter((id) => id !== '')
+export function idListSplitsOnWhitespace(channelId: string): boolean {
+  const baseType = channelId.trim().toLowerCase().split('.')[0]
+  return baseType !== 'whatsapp' && baseType !== WHATSAPP_NATIVE_CHANNEL_ID
+}
+
+/**
+ * splitIdListText turns the text typed into a 'list' field of this channel
+ * into its ids: commas (",", full-width "，") separate ids, and whitespace
+ * too except on WhatsApp (see idListSplitsOnWhitespace). Each id is trimmed
+ * and empty pieces are dropped, so an empty text is the empty list. Mirrors
+ * the server's config.SplitAllowFromText.
+ */
+export function splitIdListText(channelId: string, text: string): string[] {
+  const separators = idListSplitsOnWhitespace(channelId) ? /[,，\s]+/u : /[,，]/u
+  return text.split(separators).map((id) => id.trim()).filter((id) => id !== '')
 }

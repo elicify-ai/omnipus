@@ -68,4 +68,6 @@ properties:
       element. An empty list admits every sender. The server saves a list.
       For compatibility with older clients the server also accepts one string
       when inbound schema validation is off; it splits that string on commas
-      (",", full-width "，") and whitespace and drops empty pieces.
+      (",", full-width "，") and, except on WhatsApp (whose ids may be phone
+      numbers with spaces), on whitespace, trims each id and drops empty
+      pieces.

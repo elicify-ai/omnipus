@@ -9,45 +9,72 @@ import (
 	"unicode"
 )
 
-// SplitAllowFromText splits a typed or legacy-saved Allow From text into its
-// ids: commas (",", full-width "，") and any whitespace separate ids, and
-// empty pieces are dropped. An empty or separator-only text yields an empty
-// list, which means "allow every sender".
+// AllowFromSplitsOnWhitespace reports whether whitespace separates ids in an
+// allowed-sender text of the given channel type (an instance key such as
+// "whatsapp.eu" is accepted too). Commas ("," and full-width "，") always
+// separate ids. WhatsApp is the one exception to whitespace (chief ruling
+// 2026-11-02, option B): a phone number may contain spaces, so a WhatsApp
+// text splits at commas only and each id keeps its inner spaces.
+func AllowFromSplitsOnWhitespace(channelType string) bool {
+	base, _ := ParseInstanceKey(strings.ToLower(strings.TrimSpace(channelType)))
+	return base != "whatsapp" && base != "whatsapp_native"
+}
+
+// SplitAllowFromText splits a typed or legacy-saved Allow From text of the
+// given channel type into its ids with that type's separators (see
+// AllowFromSplitsOnWhitespace). Each id is trimmed and empty pieces are
+// dropped, so an empty or separator-only text yields an empty list, which
+// means "allow every sender".
 //
 // Use it only for allowed-sender fields (allow_from, group_allow_from).
 // Other list fields — outbound targets, IRC channels — keep
 // FlexibleStringSlice's unsplit single-string behaviour.
-func SplitAllowFromText(text string) []string {
-	return strings.FieldsFunc(text, func(r rune) bool {
-		return r == ',' || r == '，' || unicode.IsSpace(r)
+func SplitAllowFromText(channelType, text string) []string {
+	onWhitespace := AllowFromSplitsOnWhitespace(channelType)
+	pieces := strings.FieldsFunc(text, func(r rune) bool {
+		return r == ',' || r == '，' || (onWhitespace && unicode.IsSpace(r))
 	})
+	ids := make([]string, 0, len(pieces))
+	for _, piece := range pieces {
+		if id := strings.TrimSpace(piece); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
-// allowFromList is the dedicated JSON decoding type for a saved allowed-sender
-// field. A single JSON string is split with SplitAllowFromText, so a value an
-// older Configure saved as one string ("a, b c") self-heals on load into
-// separate ids and "" becomes the empty (allow-all) list. Every other shape
-// (a list, a number, null) decodes exactly as FlexibleStringSlice does, so a
-// saved list loads unchanged.
-type allowFromList []string
+// pendingAllowFromText holds allowed-sender fields that were saved as one
+// string on an instance without a "type" key. The effective type then comes
+// from the instance's map key, which only the loader knows, so
+// CanonicalChannelInstance re-splits these texts with it.
+type pendingAllowFromText struct {
+	allowFrom      *string
+	groupAllowFrom *string
+}
 
-func (l *allowFromList) UnmarshalJSON(data []byte) error {
+// decodeAllowFromField decodes one saved allowed-sender field. A single JSON
+// string is split with SplitAllowFromText for channelType, so a value an
+// older Configure saved as one string ("a, b c") self-heals on load into
+// separate ids and "" becomes the empty (allow-all) list; the text is also
+// returned so it can be re-split once the effective type is known. Every
+// other shape (a list, a number, null) decodes exactly as
+// FlexibleStringSlice does, so a saved list loads unchanged.
+func decodeAllowFromField(raw json.RawMessage, channelType string) (FlexibleStringSlice, *string, error) {
 	var text string
-	if err := json.Unmarshal(data, &text); err == nil {
-		*l = SplitAllowFromText(text)
-		return nil
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return FlexibleStringSlice(SplitAllowFromText(channelType, text)), &text, nil
 	}
 	var flexible FlexibleStringSlice
-	if err := json.Unmarshal(data, &flexible); err != nil {
-		return err
+	if err := json.Unmarshal(raw, &flexible); err != nil {
+		return nil, nil, err
 	}
-	*l = allowFromList(flexible)
-	return nil
+	return flexible, nil, nil
 }
 
 // UnmarshalJSON decodes a channel instance with the allowed-sender fields
-// read through allowFromList; every other field decodes exactly as the plain
-// struct would. A field absent from the JSON keeps its current value.
+// read through decodeAllowFromField, using the instance's own "type" for the
+// separators; every other field decodes exactly as the plain struct would. A
+// field absent from the JSON keeps its current value.
 func (c *ChannelInstanceConfig) UnmarshalJSON(data []byte) error {
 	type plainInstance ChannelInstanceConfig
 	aux := struct {
@@ -58,19 +85,41 @@ func (c *ChannelInstanceConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
+	pending := &pendingAllowFromText{}
 	if aux.AllowFrom != nil {
-		var ids allowFromList
-		if err := json.Unmarshal(aux.AllowFrom, &ids); err != nil {
+		ids, text, err := decodeAllowFromField(aux.AllowFrom, c.Type)
+		if err != nil {
 			return fmt.Errorf("allow_from: %w", err)
 		}
-		c.AllowFrom = FlexibleStringSlice(ids)
+		c.AllowFrom, pending.allowFrom = ids, text
 	}
 	if aux.GroupAllowFrom != nil {
-		var ids allowFromList
-		if err := json.Unmarshal(aux.GroupAllowFrom, &ids); err != nil {
+		ids, text, err := decodeAllowFromField(aux.GroupAllowFrom, c.Type)
+		if err != nil {
 			return fmt.Errorf("group_allow_from: %w", err)
 		}
-		c.GroupAllowFrom = FlexibleStringSlice(ids)
+		c.GroupAllowFrom, pending.groupAllowFrom = ids, text
+	}
+	c.allowFromText = nil
+	if strings.TrimSpace(c.Type) == "" && (pending.allowFrom != nil || pending.groupAllowFrom != nil) {
+		c.allowFromText = pending
 	}
 	return nil
+}
+
+// resolvePendingAllowFrom re-splits allowed-sender texts kept for an instance
+// that had no "type" key, now that its effective type is known, and clears
+// them. It works on the caller's copy.
+func resolvePendingAllowFrom(inst *ChannelInstanceConfig, effectiveType string) {
+	pending := inst.allowFromText
+	if pending == nil {
+		return
+	}
+	if pending.allowFrom != nil {
+		inst.AllowFrom = FlexibleStringSlice(SplitAllowFromText(effectiveType, *pending.allowFrom))
+	}
+	if pending.groupAllowFrom != nil {
+		inst.GroupAllowFrom = FlexibleStringSlice(SplitAllowFromText(effectiveType, *pending.groupAllowFrom))
+	}
+	inst.allowFromText = nil
 }

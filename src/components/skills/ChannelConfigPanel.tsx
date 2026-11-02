@@ -842,7 +842,7 @@ export function ChannelConfigPanel({
     // touch is already an array and travels unchanged.
     for (const key of editedListKeysRef.current) {
       const typed = getNested(formValues, key)
-      if (typeof typed === 'string') payload[key] = splitIdListText(typed)
+      if (typeof typed === 'string') payload[key] = splitIdListText(channelId, typed)
     }
 
     if (!isGoogleChat) return payload

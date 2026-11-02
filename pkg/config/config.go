@@ -1212,6 +1212,12 @@ type ChannelInstanceConfig struct {
 	// Both IRC and email use the same password_ref JSON key for their connection
 	// password, which is stored encrypted in the credential store.
 	EmailUsername string `json:"username,omitempty"`
+
+	// allowFromText keeps an allowed-sender field saved as one string while
+	// the instance's type is not yet known (no "type" key), so loading can
+	// split it with the effective type's separators (channel_allow_from.go).
+	// Never serialized; CanonicalChannelInstance clears it.
+	allowFromText *pendingAllowFromText
 }
 
 // CredentialRefs returns every credential-reference field this instance
