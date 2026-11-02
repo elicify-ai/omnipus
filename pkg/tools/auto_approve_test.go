@@ -93,8 +93,6 @@ var founderRunsNames = []string{
 	"list_channels",
 	"list_mcp_servers",
 	"get_agent",
-	"get_agent_tools",
-	"read_agent_metadata",
 	"list_workspaces",
 	"get_workspace",
 	"create_workspace",
@@ -143,8 +141,8 @@ var founderRunsIfArgsNames = []string{
 }
 
 func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
-	if len(founderRunsNames) != 77 || len(founderAsksNames) != 27 {
-		t.Fatalf("founder lists: %d runs, %d asks; spec §3.8 says 81 and 28 minus the four retired *_in_workspace tools (DEL-23) and switch_agent (U8 DEL-07/DEL-21) = 77 and 27", len(founderRunsNames), len(founderAsksNames))
+	if len(founderRunsNames) != 75 || len(founderAsksNames) != 27 {
+		t.Fatalf("founder lists: %d runs, %d asks; spec §3.8 says 81 and 28 minus the four retired *_in_workspace tools (DEL-23) and switch_agent (U8 DEL-07/DEL-21) = 77 and 27, minus get_agent_tools and read_agent_metadata (retired by r17 7.12) = 75 and 27", len(founderRunsNames), len(founderAsksNames))
 	}
 	runsIf := map[string]bool{}
 	for _, n := range founderRunsIfArgsNames {
@@ -181,8 +179,14 @@ func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
 	// -- total 110. Plus the nine omnipus-system-agent §6.5 tools (WU-2,
 	// 2026-10-13; FR-021 puts five on the ask-list, the four reads run) --
 	// total 119.
-	if len(table) != 119 {
-		t.Errorf("table has %d entries, want 119 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02 -- plus answer_request, founder gap 5, 2026-10-11 -- plus the nine omnipus-system-agent §6.5 tools, 2026-10-13)", len(table))
+	// r17 (T8 area 9): get_agent_tools and read_agent_metadata are retired
+	// (-2) and the three reads get_task, get_plan and get_goal join as AutoRuns
+	// (+3, spec F-5). The founder-file lists above cover 102 of the table's
+	// entries; the other 19 are tools added after that file (bash, mail and
+	// secret tools, answer_request, update_plan, read_conversation and the
+	// three new reads).
+	if len(table) != 121 {
+		t.Errorf("table has %d entries, want 121 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02 -- plus answer_request, founder gap 5, 2026-10-11 -- plus the nine omnipus-system-agent §6.5 tools, 2026-10-13)", len(table))
 	}
 	if got := table["bash"]; got != AutoShellMode {
 		t.Errorf("bash class = %s, want shell_mode (bash keeps its own mechanism, §3.7)", got)

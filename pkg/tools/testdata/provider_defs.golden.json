@@ -29,7 +29,7 @@
   },
   {
     "name": "create_agent",
-    "description": "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague) and 'Subagent' (native delegation-only worker) require soul; 'subagent_3p' is a delegation-only worker on an external CLI — it takes no soul, requires cli, and its cli_path is optional (empty means the CLI's default binary on PATH). name, description and model are required; soul is required for native agents ('Main'/'Subagent') and must be omitted for 'subagent_3p' (an external CLI worker has no soul; supplying one is refused). A set cli_path must name an executable file this machine can run for the current user (an existing regular file with execute access on Unix; a PATHEXT-admitted extension on Windows); leave it empty to use the CLI's default binary on PATH. color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team when membership succeeds; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — the response's status field (joined_workspace vs metadata_only) reports membership, persistence_status reports durable-save completion (complete, partial, or none), and activation_status reports live publication (active, failed, or not_attempted); joined_workspace alone does not prove the agent is live or runnable — check persistence_status, activation_status and any publish_warning before reporting it ready.",
+    "description": "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague) and 'Subagent' (native delegation-only worker) require soul; 'subagent_3p' is a delegation-only worker on an external CLI — it takes no soul and requires cli; the program that runs that CLI is set by a person in Settings → Third-party agents, never by an agent, so there is no cli_path argument (an unusable or missing program still creates the agent, with runnable false and program_warning naming what a person must fix in Settings). An external worker may also take env_overrides (environment names and values for its runs; values are never echoed back) and cli_args (extra command-line flags as one string; the result lists them as argv and names any the safety filter drops at run time). name, description and model are required; soul is required for native agents ('Main'/'Subagent') and must be omitted for 'subagent_3p' (an external CLI worker has no soul; supplying one is refused). color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team when membership succeeds; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — the response's status field (joined_workspace vs metadata_only) reports membership, persistence_status reports durable-save completion (complete, partial, or none), and activation_status reports live publication (active, failed, or not_attempted); joined_workspace alone does not prove the agent is live or runnable — check persistence_status, activation_status and any publish_warning before reporting it ready.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
@@ -85,14 +85,7 @@
   },
   {
     "name": "get_agent",
-    "description": "Read one agent's sanitized configuration, instructions, editable fields, stored assignments, revision, and activation status. Use get_agent_tools for the full tool catalog.",
-    "scope": "core",
-    "category": "agents",
-    "source": "builtin"
-  },
-  {
-    "name": "get_agent_tools",
-    "description": "List tools and effective policies. For an existing agent or new-agent preview, allow/ask lines show name, effective policy, and a description of at most 40 characters; deny lines show only name and deny. Previews use main or worker defaults. ToolSearch reports allow. Existing agents use the effective policy, not only the stored override.",
+    "description": "Read one agent: pass `fields` with the properties you need, or [\"all\"]. Select it by exact id or exact name; with neither you read yourself. Covers its model and effective model chain, instructions (soul, agent_md), skills, tool permissions (effective policy per tool, plus its stored overrides), connectors, external-worker executor (env values masked) and state. With new_agent_type (Main, Subagent, subagent_3p) it previews the tool_permissions and connectors a new agent of that type would get, without creating one.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
@@ -161,13 +154,6 @@
     "source": "builtin"
   },
   {
-    "name": "read_agent_metadata",
-    "description": "Read one of an agent's three metadata files: SOUL.md (personality, persona, system prompt and behavioural instructions), HEARTBEAT.md (proactive schedule), or AGENT.md (frontmatter config). Defaults to the calling agent's own files; pass agent_id to read another agent's. There is no per-target permission check — any agent granted this tool can read any agent's metadata. Use recall_memory to access memories.",
-    "scope": "core",
-    "category": "agents",
-    "source": "builtin"
-  },
-  {
     "name": "remove_mcp_server",
     "description": "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change. expected_revision is the server's revision from list_mcp_servers; the removal is refused if the server changed since.\nParameters: name (required), confirm (bool, must be true), expected_revision (required).",
     "scope": "core",
@@ -204,7 +190,7 @@
   },
   {
     "name": "set_agent_permissions",
-    "description": "Change an existing agent's per-agent tool policies and connector (MCP) assignments. This is the only agent-tool path for those changes — update_agent refuses both. The shipped policy asks the user for approval before it runs; Omnipus skips approvals in God Mode. Send id, revision (the opaque revision returned by get_agent), and at least one of tool_policy_changes or mcp_servers. A stale revision or any other input field is refused; re-read the agent before retrying a stale write. tool_policy_changes is a sparse patch: set maps tool names to allow|ask|deny, and remove lists per-agent override names to delete. Unknown tools and invalid policy values are rejected; per-agent policies cannot widen the global tool policy. mcp_servers replaces the full connector-assignment list; [] clears all bindings. Each entry is {id, tools?}: omitted tools grants all tools of that assigned server, an empty tools list grants none. Unknown servers or unknown/unavailable tool names are rejected. External CLI workers reject these capability fields; Judge and Plan Supervisor keep fixed capabilities. Omnipus refuses any per-agent ask as a whole — use deny, or set ask on the global tool policy.",
+    "description": "Change an existing agent's per-agent tool policies and connector (MCP) assignments. This is the only agent-tool path for those changes — update_agent refuses both. The shipped policy asks the user for approval before it runs; Omnipus skips approvals in God Mode. Send id, revision (the opaque revision returned by get_agent), and at least one of tool_policy_changes or mcp_servers. A stale revision or any other input field is refused; re-read the agent before retrying a stale write. tool_policy_changes is a sparse patch: set maps tool names to allow|ask|deny, and remove lists per-agent override names to delete. Unknown tools and invalid policy values are rejected; per-agent policies cannot widen the global tool policy. mcp_servers replaces the full connector-assignment list; [] clears all bindings. Each entry is {id, tools?}: omitted tools grants all tools of that assigned server, an empty tools list grants none. Unknown servers or unknown/unavailable tool names are rejected. An agent cannot change its own permissions: an id equal to the calling agent is refused. External CLI workers reject these capability fields; Judge and Plan Supervisor keep fixed capabilities. Omnipus refuses any per-agent ask as a whole — use deny, or set ask on the global tool policy.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
@@ -232,7 +218,7 @@
   },
   {
     "name": "update_agent",
-    "description": "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Omnipus, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their skills are editable. An existing agent's per-agent tool policies and connector (MCP) assignments are changed with set_agent_permissions, never update_agent. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type.",
+    "description": "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Omnipus, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their skills are editable. An existing agent's per-agent tool policies and connector (MCP) assignments are changed with set_agent_permissions, never update_agent. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli cannot change after creation; create a new agent for a different type or CLI. An external worker's program is set by a person in Settings → Third-party agents, never here. An external worker's env_overrides merge into its stored environment (env_overrides_remove removes names) and cli_args replaces its extra flags; the result lists environment names by outcome, never values.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
