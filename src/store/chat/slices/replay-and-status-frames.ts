@@ -245,10 +245,14 @@ function handleSessionStateFrame(
         // answered directly (findOpenAssistantMessageId) rather than via a
         // separately-tracked flag.
         const bubbleOpen = findOpenAssistantMessageId(b.messageOrder, b.messagesById) !== null
+        // 6c F4: that lookup also returns a finished tail (a straggler tool's
+        // done placeholder). With the turn cleared, release a busy flag that no
+        // streaming row, running tool or steer-closed bubble backs.
+        const release = !bubbleOpen || busyFlagIsUnbacked({ ...b, activeTurnId: null })
         return {
           activeTurnId: null,
           activeTurnAgentId: null,
-          ...(bubbleOpen ? {} : { isStreaming: false }),
+          ...(release ? { isStreaming: false } : {}),
         }
       })
     }
