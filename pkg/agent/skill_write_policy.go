@@ -11,6 +11,8 @@ package agent
 // edit_skill ask shows the standard approval card for the write.
 
 import (
+	"fmt"
+
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -101,6 +103,8 @@ func (ex *agentLoopRunTurnToolsExecute) denySkillWrite(tc providers.ToolCall) ag
 	// ADR-058 set.
 	cls, _ := ClassifyDenial("policy_denied")
 	cls.Reason = skillEditDeniedReason
+	// UAT run 2 R2-1: the refusal names the skill and the real cause.
+	cls.ModelMessage = fmt.Sprintf("Changing skill '%s' is not allowed: this agent's edit_skill permission is Deny. ", ex.skillWriteKey) + cls.ModelMessage
 	denyMsg := denialPayloadJSON(ex.toolName, skillEditDeniedReason, cls)
 	rt.al.emitPolicyDenyAudit(rt.ts, ex.toolName, "deny", skillEditDeniedReason)
 	if err := ex.admitAndCheckpoint(toolResultAdmission{

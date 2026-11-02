@@ -207,7 +207,13 @@ func skillWriteTargetOf(ctx context.Context, agentHome string, restrict bool, to
 	}
 	handle, err := ResolvePathAllowingPatterns(ctx, policy, toolName, "", FSOpWrite, raw, patterns)
 	if err != nil {
-		return "", false
+		// UAT run 2 R2-1: with edit_skill Deny the resolver itself refuses a
+		// skill folder the agent cannot load, yet the write is still a skill
+		// write — the loop must answer it skill_edit_denied with its audit
+		// entry, not leave it to the tool's protected-file refusal. Only a
+		// literal absolute path is classified; the answer can only make the
+		// loop's verdict stricter, and the tool still refuses on its own.
+		return refusedSkillWriteTarget(raw)
 	}
 	defer func() { _ = handle.Close() }()
 	realPath, err := handle.RealPath()
@@ -215,6 +221,20 @@ func skillWriteTargetOf(ctx context.Context, agentHome string, restrict bool, to
 		return "", false
 	}
 	return RegistrySkillKeyForPath(realPath)
+}
+
+// refusedSkillWriteTarget classifies a literal absolute path the resolver
+// refused: its symlink-resolved form (through the deepest existing ancestor)
+// when that resolves, else its cleaned lexical form.
+func refusedSkillWriteTarget(raw string) (string, bool) {
+	if !filepath.IsAbs(raw) {
+		return "", false
+	}
+	p := filepath.Clean(raw)
+	if resolved, err := resolvePathAgainstExistingAncestor(p); err == nil {
+		p = resolved
+	}
+	return RegistrySkillKeyForPath(p)
 }
 
 func (t *WriteFileTool) SkillWriteTarget(ctx context.Context, args map[string]any) (string, bool) {

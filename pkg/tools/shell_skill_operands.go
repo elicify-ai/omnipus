@@ -36,6 +36,7 @@ package tools
 // refused with skillWriteRefusal.
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -254,6 +255,47 @@ func wordLeavesFolder(seg string) bool {
 		}
 	}
 	return false
+}
+
+// SkillWriteTarget implements SkillWriteTargeter for bash (UAT run 2 R2-1):
+// a command that names a path in a skill folder in a write shape (any shape
+// skillOperandUse does not accept, including changes after a skill cd) is a
+// skill write, so the loop composes edit_skill into its verdict and a denied
+// edit_skill answers skill_edit_denied with its audit entry. The path guard
+// still refuses every such command on its own whatever the verdict.
+func (t *ExecTool) SkillWriteTarget(_ context.Context, args map[string]any) (string, bool) {
+	command, _ := args["command"].(string)
+	return commandSkillWriteTarget(command)
+}
+
+// commandSkillWriteTarget returns the skill key of the first write-shaped
+// skill operand in command.
+func commandSkillWriteTarget(command string) (string, bool) {
+	cmd := strings.TrimSpace(command)
+	c := newPathUseClassifier(cmd)
+	for _, loc := range absolutePathPattern.FindAllStringSubmatchIndex(cmd, -1) {
+		start, end := loc[2], loc[3]
+		if start < 0 || end < 0 || operandHasGlob(cmd, start) {
+			continue
+		}
+		raw := cmd[start:end]
+		if loc[0] >= 0 && loc[0] < start {
+			if prefix, resolved, isExpansion := expandCandidatePrefix(cmd[loc[0]:start]); isExpansion {
+				if !resolved {
+					continue
+				}
+				raw = filepath.Join(prefix, raw)
+			}
+		}
+		key, ok := refusedSkillWriteTarget(raw)
+		if !ok {
+			continue
+		}
+		if allowed, _ := c.skillOperandUse(start); !allowed {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 // skillWriteRefusal is the refusal for a write-shaped operand inside a
