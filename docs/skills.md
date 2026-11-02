@@ -54,7 +54,7 @@ When an agent loads a skill, it gets the whole skill in one answer: a short head
 - the skill's folder on disk and its file list (at most 200 names; more are summarised);
 - its version and a revision code that changes whenever any file changes;
 - its metadata, such as name, version, author and `allowed-tools`;
-- the programs it needs (`metadata.omnipus-requires`), and whether each one is found on the machine;
+- the programs it needs (`metadata.omnipus-requires`), and whether each one is found on the machine (an entry that is not a plain program name is listed as "declared, not checked"; see below);
 - who last changed it and when;
 - what this agent may do: read every file, run scripts with its normal `bash` permission, and whether it may edit.
 
@@ -71,6 +71,8 @@ metadata:
 ```
 
 Omnipus looks for each program name on the same search path the agent's `bash` uses. The header then says whether it is present or missing. This is a hint for the agent, not a block: a skill with a missing program still loads.
+
+Only a plain program name, such as `python3`, is checked. Anything else, for example a version requirement like `pypdf>=4` or a quoted phrase like `"pypdf >= 4"`, is not looked up. The header shows it in quotes as "declared, not checked", never as present or missing, so the agent knows the skill asks for it but Omnipus has not confirmed it. The skill's detail view (`get_skill`) lists only the program names that were checked, with present or missing for each; the unchecked entries appear only in the load header.
 
 ## Who can read and edit skills
 
