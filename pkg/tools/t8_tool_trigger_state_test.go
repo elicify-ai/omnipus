@@ -43,7 +43,32 @@ func TestT8ToolTriggerState_Matrix_TK30(t *testing.T) {
 			got, err := store.Get(tk.ID)
 			require.NoError(t, err)
 			require.NotNil(t, got.Trigger, "instrument: the trigger persisted")
+			// CK-9: the exact requested trigger is stored, every supplied
+			// configuration field and nothing else.
+			cfg, _ := tc.trig["config"].(map[string]any)
+			wantType, typeOK := tc.trig["type"].(string)
+			require.True(t, typeOK, "instrument: the case names its trigger type")
+			require.Equal(t, task.TriggerType(wantType), got.Trigger.Type, "the exact trigger type is stored")
+			t8RequireStoredField(t, cfg, "at_ms", got.Trigger.Config.AtMs)
+			t8RequireStoredField(t, cfg, "rrule", got.Trigger.Config.Rrule)
+			t8RequireStoredField(t, cfg, "dtstart_ms", got.Trigger.Config.DtstartMs)
+			t8RequireStoredField(t, cfg, "tz", got.Trigger.Config.Tz)
 			assert.Equal(t, tc.want, got.Status)
 		})
 	}
+}
+
+// t8RequireStoredField asserts one stored trigger configuration field equals
+// the value the request supplied, and is unset when the request omitted it.
+func t8RequireStoredField[T comparable](t *testing.T, cfg map[string]any, key string, stored *T) {
+	t.Helper()
+	supplied, ok := cfg[key]
+	if !ok {
+		require.Nil(t, stored, "no %s invented", key)
+		return
+	}
+	want, typeOK := supplied.(T)
+	require.True(t, typeOK, "instrument: %s has the expected Go type", key)
+	require.NotNil(t, stored, "%s is stored", key)
+	require.Equal(t, want, *stored, "the exact %s is stored", key)
 }

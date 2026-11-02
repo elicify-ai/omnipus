@@ -920,3 +920,30 @@ Logs: `/workspace/logs/t8-red/round7-ck4-rest.log`, `round7-tool.log`, `round7-c
 | Lint | - | `pkg/agent/t8_run_program_dirlink_test.go` variable `real` renamed `realExe` | 0 issues |
 
 Correction (setup only): the two `UnchangedTriggerResave_KeepsNext_TK30_3` controls (REST and tool) seeded the trigger and status next in ONE write, which is exactly the CK-4 input and lands inbox under the chief ruling. Setup now writes the trigger alone, then status next without a trigger, then the identical-trigger re-save; assertions unchanged. With the uncommitted CK-4 store fix in the tree all REST (`^TestT8RestTriggerState_`, `^TestT8RestTriggerStatus_`) and tool (`Matrix_TK30`, `TestT8ToolTriggerStatus_`) tests pass, exit 0 each (logs `round7-fixup-rest.log`, `round7-fixup-tool.log`).
+
+## Round 8 (2026-11-02) - RED tests for CK-8, strengthened controls for CK-9
+
+Oracle: r17 TK-30, the wait invariant across every automatic promotion path. A member waiting for a future occurrence is scheduler-owned: status `inbox`, trigger kept; only the scheduler fire (`SpawnResetForOccurrence`) releases it. A task whose trigger is none, manual or already due has no occurrence to wait for and follows the shared path (`next`). An explicit person action (Play of the plan, standalone restart) may still publish `next`.
+
+Logs in `/workspace/logs/t8-red/r8/`; report `/workspace/logs/t8-red/closeouts/round8-report.md`. No production file touched.
+
+`RestartReset` callers and what the spec requires of each:
+
+| Caller | Automatic? | Required | Test |
+|---|---|---|---|
+| `autoResetLiveRoundFailedMembers` (append/supersede correction) | yes | future trigger waits in inbox; others dispatchable | `pkg/agent/t8_plan_failed_member_reset_test.go::TestT8PlanCorrection_AppendAutoReset_FailedMemberTrigger_TK30` |
+| targeted_retry apply func in `AppendCorrection` | yes | same | `...TargetedRetry_FailedMemberTrigger_TK30` |
+| `applyIntentRecord` (boot replay of targeted_retry) | yes | same | `...BootReplayTargetedRetry_FailedMemberTrigger_TK30` |
+| `PlayPlan` (person restarts the plan) | no, explicit | `next`, trigger kept | `...TestT8PlanPlay_PersonRestart_FutureTriggerMember_StaysAllowed_TK30` (control) |
+| `handleTaskRestart` (person restarts a stopped standalone task) | no, explicit | `next`, trigger kept | `pkg/gateway/t8_rest_trigger_state_test.go::TestT8RestTriggerState_PersonRestart_FutureTrigger_StaysNext_TK30` (control) |
+
+| Finding | Spec row | Test | Expected now |
+|---|---|---|---|
+| CK-8 | TK-30 | the three correction/replay tests, subtest `future once trigger` | RED (expected inbox, actual in_progress for the two live paths, next for boot replay) |
+| CK-8 | TK-30 | same tests, subtests `no trigger`, `manual trigger`, `already-due trigger` | controls, pass (live paths: next or in_progress, boot replay exactly next) |
+| CK-8 | TK-30 | `TestT8PlanWaitingMember_DueRelease_ThroughSchedulerPath_TK30` | control, passes (scheduler release gives next and records the exact occurrence) |
+| CK-9 | TK-30 (5) | `TestT8RestTriggerState_AlreadyDue_KeepsToday_TK30_5` now requires HTTP 200, the exact stored once trigger and exactly `next` | pass |
+| CK-9 | TK-30 (3) | `Blocked_StaysBlocked_TK30_3`, `Terminal_StaysDone_TK30_3` now also assert the exact stored once trigger (`t8AssertStoredOnce`) | pass |
+| CK-9 | TK-30 | `pkg/tools/t8_tool_trigger_state_test.go::Matrix_TK30` leaves assert exact trigger type and every supplied config field (and none invented) | pass |
+
+Note: an already-due `once` trigger with no delivery marker is "held" by `task.TriggerHoldsPromotion`. The brief and the shared path require such a member to reset to `next`, so a fix must not reuse that predicate unchanged for the reset; the control pins `next`.
