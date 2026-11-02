@@ -6293,6 +6293,8 @@
     }
   ],
   "sourceOwners": [
+    { "source": "src/components/connectors/ChannelOutboundSection.tsx", "lane": 5 },
+    { "source": "src/components/skills/channelConfigureOutcome.ts", "lane": 5 },
     {"source":"src/components/agents/AgentPrivateSecrets.tsx","lane":5},
     {"source":"src/components/chat/SecretRequestCard.tsx","lane":3},
     {"source":"src/components/chat/OmnipusChatScreen.tsx","lane":3},
