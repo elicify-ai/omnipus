@@ -261,7 +261,11 @@ func defaultToolPoliciesGeneral() map[string]string {
 		"answer_request": "allow",
 		"send_file":      "allow",
 		"find_skills":    "allow",
-		"install_skill":  "allow",
+		// install_skill: "ask" (founder decision 2026-11-03) — a person
+		// approves each install. Installs whose config already persisted
+		// "allow" keep it: Reconcile adds missing keys only and never
+		// overwrites an operator-set value (Hard Constraint #6).
+		"install_skill":  "ask",
 		"delegate":       "allow",
 		"message_parent": "allow",
 		// AskUserQuestion (askuserquestion-tool-spec v3, ADR-074 D4b):

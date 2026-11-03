@@ -48,6 +48,8 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		"enable_channel": true, "configure_channel": true,
 		"connect_channel": true, "connect_mailbox": true, "set_agent_permissions": true,
 		"remove_secret": true, "select_secret_version": true,
+		// install_skill ships Ask (founder decision 2026-11-03).
+		"install_skill": true,
 		// Outbound mail stays Ask; r15 §10 now also makes skill editing globally Ask.
 		"send_email": true, "reply": true,
 	}
