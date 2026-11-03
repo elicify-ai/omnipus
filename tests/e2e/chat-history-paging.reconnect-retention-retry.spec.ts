@@ -6,7 +6,7 @@ import { chatInput, waitForConnected } from './fixtures/selectors';
 import { test, seededHistoryTest, HistoryHarness, observeTraffic, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
 import { browseBack, dropSocket, expectedReaderOrdinals } from './fixtures/chat-history-paging/actions';
 import { ageRolledHistoryPartitions, sweepChatHistoryFixture } from './fixtures/chat-history';
-import { readerFixtureDays } from './fixtures/chat-history-paging/day-fixtures';
+import { INLINE_RESULT_BYTES, inlineToolMessage, readerFixtureDays } from './fixtures/chat-history-paging/day-fixtures';
 import { openSessionByDeepLink } from './fixtures/session-setup';
 import { assertRestoredControl, assertSessionStopped, controlProvider, floodRealJournal, pendingAction, reconnectWithPending,
   sendControlInstruction, stopHeldControlTurn, stopPendingControl, waitForPendingControl } from './fixtures/chat-history-paging/control-actions';
@@ -341,7 +341,9 @@ test('T24 B47:500 held tool groups can require MORE than5 bounded byte-limited r
   await history.open();
   await browseBack(history, 300);
   const saved = await anchor(page);
-  expect(expectedReaderOrdinals(history), 'held500-group interval is the real large-tool fixture').toHaveLength(500);
+  const heldOrdinals = expectedReaderOrdinals(history);
+  expect(heldOrdinals, 'held500-group interval is the real large-tool fixture').toHaveLength(500);
+  expect(heldOrdinals.every((n) => n < 1000), 'all500 held owners use the re-derived inline-result costs').toBe(true);
   await history.gateway.kill9();
   history.gateway.assertStoppedForFixture();
   const before = history.traffic.pages.length;
@@ -353,6 +355,26 @@ test('T24 B47:500 held tool groups can require MORE than5 bounded byte-limited r
   const responses = history.traffic.pages.slice(before).map((r) => ({ url: new URL(r.url), page: SessionHistoryResponse.parse(r.body) }));
   expect(responses.every((r) => r.url.searchParams.has('window_start'))).toBe(true);
   expect(responses.reduce((sum, r) => sum + r.page.page_info.source_group_count, 0)).toBe(500);
+  // D-F1/A2.7:40 two-call owners fit4MiB (40×102KiB +8KiB envelope
+  // <4MiB);41×102,400 result bytes alone exceed it.500 owners therefore
+  // require12 byte-cut pages plus a20-owner end, not five100-group cap pages.
+  expect(40 * 102 * 1024 + 8 * 1024).toBeLessThan(4_194_304);
+  expect(41 * 2 * INLINE_RESULT_BYTES).toBeGreaterThan(4_194_304);
+  expect(responses).toHaveLength(Math.ceil(500 / 40));
+  expect(responses.flatMap((r) => r.page.entries.map((entry) => Number(entry.id.slice(-6)))).sort((a, b) => a - b)).toEqual(heldOrdinals);
+  for (const [index, response] of responses.entries()) {
+    const groups = index === responses.length - 1 ? 500 % 40 : 40;
+    expect(response.page.page_info).toMatchObject({ limit: 100, min_rows: 20,
+      source_group_count: groups, row_count: groups * 2, soft_byte_budget: 4_194_304,
+      stop_reason: index === responses.length - 1 ? 'range_end' : 'byte_budget', byte_budget_exceeded: false });
+    expect(response.page.page_info.projected_bytes).toBeGreaterThanOrEqual(groups * 2 * INLINE_RESULT_BYTES);
+    expect(response.page.page_info.projected_bytes).toBeLessThanOrEqual(4_194_304);
+    expect(response.page.page_info.budget_override).toBeUndefined();
+    for (const entry of response.page.entries) {
+      expect(entry.tool_calls).toEqual(inlineToolMessage('range-bytes', Number(entry.id.slice(-6)), history.ids.agent.id, 2).tool_calls);
+      expect(Buffer.byteLength(JSON.stringify(entry)), 'independent2KiB/owner envelope headroom').toBeLessThanOrEqual(102 * 1024);
+    }
+  }
   for (let i = 1; i < responses.length; i++) expect(responses[i].url.searchParams.get('before')).toBe(responses[i - 1].page.next_before);
   await expectAnchor(page, saved);
   await history.record('range-more-than-five-byte-pages');
