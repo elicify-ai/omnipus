@@ -24,6 +24,7 @@ import { fetchSkills, deleteSkill, type Skill } from '@/lib/api'
 import { SkillsScreen } from '@/components/screens/SkillsScreen'
 
 const skill: Skill = {
+  has_local_changes: false,
   revision: '3'.repeat(64),
   id: 'web-research',
   name: 'Web Research',

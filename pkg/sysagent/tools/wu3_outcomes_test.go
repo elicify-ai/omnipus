@@ -93,7 +93,7 @@ func TestWU4B_ProviderConfigFailureAfterCardSubmitRetainsValueWithoutSelection(t
 func TestWU3EveryChangeFamilyValidationFailureReportsNothingSaved(t *testing.T) {
 	d, _ := wu3Deps(t)
 	family := append(systools.AllTools(d), tools.NewInstallSkillTool(skills.NewRegistryManager(), filepath.Join(d.Home, "skills")), tools.NewEnvironmentSetupTool(tools.EnvironmentSetupToolDeps{Home: d.Home}))
-	wanted := map[string]bool{"create_agent": true, "update_agent": true, "delete_agent": true, "update_workspace": true, "configure_provider": true, "add_mcp_server": true, "remove_mcp_server": true, "configure_channel": true, "enable_channel": true, "disable_channel": true, "create_skill": true, "edit_skill": true, "remove_skill": true, "set_agent_permissions": true, "install_skill": true, "environment_setup": true}
+	wanted := map[string]bool{"create_agent": true, "update_agent": true, "delete_agent": true, "update_workspace": true, "configure_provider": true, "add_mcp_server": true, "remove_mcp_server": true, "configure_channel": true, "enable_channel": true, "disable_channel": true, "edit_skill": true, "set_agent_permissions": true, "install_skill": true, "environment_setup": true}
 	seen := map[string]bool{}
 	before := wu3ReadFile(t, d.ConfigPath)
 	for _, tool := range family {

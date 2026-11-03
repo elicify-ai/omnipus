@@ -10,12 +10,15 @@ import (
 // Oracle: omnipus-system-agent-spec FR-020/021, BDD-3.3 and dataset D5.
 func TestL1WU2DefaultCeiling_OmnipusAskListAndPrivateSecretAllows(t *testing.T) {
 	cfg := config.DefaultConfig()
+	for _, retired := range []string{"create_skill", "remove_skill"} {
+		assert.NotContains(t, cfg.Sandbox.ToolPolicies, retired, "r15 §10: retired tools have no ceiling entry")
+	}
 	t.Run("lookup_positive_control", func(t *testing.T) {
 		assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["read_file"])
 		assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["get_agent"])
 	})
 	for _, name := range []string{
-		"delete_agent", "remove_skill", "add_mcp_server", "configure_provider", "enable_channel", "configure_channel",
+		"delete_agent", "edit_skill", "add_mcp_server", "configure_provider", "enable_channel", "configure_channel",
 		"remove_mcp_server", "connect_channel", "connect_mailbox", "set_agent_permissions", "remove_secret",
 		"select_secret_version", "environment_setup", "bash",
 	} {
@@ -32,8 +35,8 @@ func TestL1WU2DefaultCeiling_OmnipusAskListAndPrivateSecretAllows(t *testing.T) 
 			assert.Equal(t, "allow", value)
 		})
 	}
-	// SPEC.md Q22=B: create_skill/edit_skill stay globally Allow so exempt Omnipus can ride the ceiling.
-	for _, name := range []string{"create_agent", "update_agent", "update_workspace", "create_skill", "edit_skill", "install_skill", "disable_channel"} {
+	// Skills r15 §10 supersedes Q22: edit_skill asks globally; get_skill is a read.
+	for _, name := range []string{"create_agent", "update_agent", "update_workspace", "get_skill", "install_skill", "disable_channel"} {
 		t.Run(name, func(t *testing.T) {
 			assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies[name], "OSA-3: summary-gated changes retain allow")
 		})

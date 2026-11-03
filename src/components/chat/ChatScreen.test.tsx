@@ -99,9 +99,9 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
   ]
   // Installed skills returned by GET /api/v1/skills — used by the skill-arg autocomplete.
   const mockSkills = [
-    { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-    { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-    { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+    { has_local_changes: false, id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+    { has_local_changes: false, id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+    { has_local_changes: false, id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
   ]
   return {
     ...actual,
@@ -151,9 +151,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
       { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
     ]),
     fetchSkills: vi.fn().mockResolvedValue([
-      { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-      { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-      { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+      { has_local_changes: false, id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+      { has_local_changes: false, id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+      { has_local_changes: false, id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
     ]),
     uploadFiles: vi.fn(),
     fetchProviders: vi.fn().mockResolvedValue([]),

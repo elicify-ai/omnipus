@@ -48,6 +48,7 @@ function renderScreen() {
 beforeEach(() => {
   vi.mocked(fetchSkills).mockResolvedValue([
     {
+      has_local_changes: false,
       revision: '0'.repeat(64),
       id: 'web-search-skill',
       name: 'Web Search',
@@ -59,6 +60,7 @@ beforeEach(() => {
       agent_assignment: 'general-assistant',
     },
     {
+      has_local_changes: false,
       revision: '0'.repeat(64),
       id: 'pdf-reader',
       name: 'PDF Reader',

@@ -81,8 +81,8 @@ Both `list_secrets` and `request_secret` are implemented built-in tools. Main ag
 | List and update tasks: `list_tasks`, `update_task` | Allow | Allow |
 | Create tasks: `create_task` | Allow | Off |
 | Delete tasks: `delete_task` | Ask | Ask |
-| Find and load skills and tools: `Skill`, `ToolSearch`, `find_skills`, `list_skills` | Allow | Allow |
-| Create or edit a skill: `create_skill`, `edit_skill` | Ask | Ask |
+| Find, read and load skills and tools: `Skill`, `ToolSearch`, `find_skills`, `list_skills`, `get_skill` | Allow | Allow |
+| Change a skill: `edit_skill` (copy, delete a file, delete, restore). A new or edited skill file is written with `write_file`, `edit_file` or `append_file`, which inside a skill folder follows the stricter of its own setting and `edit_skill`; Auto-approve always asks there | Ask | Ask |
 | Search and open the web: `search_web`, `fetch_url` | Allow | Allow |
 | Browser tools, except file upload | Allow | Allow |
 | Upload a file to a website: `browser_upload_file` | Ask | Ask |

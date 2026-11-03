@@ -288,7 +288,7 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 			// this call existed nowhere in production, tools.ResolvePath's
 			// write hook (and pkg/sysagent/tools' project-shelf authoring path,
 			// via tools.EmitSkillWriteAudit) was a permanent silent no-op:
-			// write_file/edit_file/edit_skill/remove_skill writes into a
+			// write_file/edit_file/edit_skill writes into a
 			// recognised skills location produced zero audit entries regardless
 			// of sandbox.audit_log. Idempotent (last caller wins), mirrors
 			// audit.SetProcessChainKey's process-wide-var pattern exactly.

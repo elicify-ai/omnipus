@@ -506,6 +506,10 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 var retiredToolCanonicalNames = map[string]string{
 	// ADR-071 D1: load_tool -> ToolSearch (2026-08-28).
 	"load_tool": "ToolSearch",
+	// Skills spec r15 §10: a skill is created by writing its SKILL.md and
+	// deleted with edit_skill action=delete.
+	"create_skill": "write_file",
+	"remove_skill": "edit_skill",
 }
 
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
