@@ -334,17 +334,24 @@ func persistSeededCoreAgents(homePath string, agents []config.AgentConfig) error
 		switch {
 		case getErr == nil:
 			// Record exists and parsed fine — re-enforce identity fields.
-			if _, updateErr := store.Update(seeded.ID, func(existing *config.AgentConfig) error {
+			updated, updateErr := store.Update(seeded.ID, func(existing *config.AgentConfig) error {
 				*existing = seeded
 				return nil
-			}); updateErr != nil {
+			})
+			if updateErr != nil {
 				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, updateErr)
 			}
+			// The store rewrites skill_grants from the installed skills on
+			// every persist (§5.13a); carry what it saved into the live
+			// roster, or the start-up binding step finds the record already
+			// bound and leaves the in-memory agent stale.
+			agents[i].SkillGrants = updated.SkillGrants
 		case errors.Is(getErr, entity.ErrNotFound):
 			// No record on disk yet — create it.
 			if createErr := store.Create(seeded.ID, &seeded); createErr != nil {
 				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, createErr)
 			}
+			agents[i].SkillGrants = seeded.SkillGrants
 		default:
 			// Get failed for a reason OTHER than "not found" — most commonly a
 			// corrupt/unparseable record. Skip re-seeding this one agent rather

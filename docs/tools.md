@@ -97,6 +97,8 @@ Both `list_secrets` and `request_secret` are implemented built-in tools. Main ag
 | List and read workspace details: `list_workspaces`, `get_workspace` | Allow | Allow |
 | Set up an execution environment: `environment_setup` | Ask | Ask |
 
+**Skill installs ask by default.** On a new installation the global policy for `install_skill` is Ask, so a person approves each install (it still asks under Auto-approve). An installation that already saved Allow keeps it.
+
 **Shell access is unchanged.** A new custom Main or Worker starts with `bash` Off; the shipped global ceiling is Ask. Built-in agents retain their deliberate shell settings, including Jim's Deny. External command-line workers still use their own tool and safety settings internally; this table controls Omnipus tools, not the external program.
 
 The five ordinary built-in agents receive at least their kind's positive defaults: Mia and Jim use the Main core; Planner, Researcher and General Purpose use the Worker core. They retain their role-specific extras, including the specialists' existing task or memory tools. Omnipus, Judge and Plan Supervisor are excluded from these role changes and keep their existing per-agent tool sets. Global policies still apply to them.
