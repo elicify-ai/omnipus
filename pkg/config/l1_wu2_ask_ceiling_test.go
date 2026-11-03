@@ -20,7 +20,7 @@ func TestL1WU2DefaultCeiling_OmnipusAskListAndPrivateSecretAllows(t *testing.T) 
 	for _, name := range []string{
 		"delete_agent", "edit_skill", "add_mcp_server", "configure_provider", "enable_channel", "configure_channel",
 		"remove_mcp_server", "connect_channel", "connect_mailbox", "set_agent_permissions", "remove_secret",
-		"select_secret_version", "environment_setup", "bash",
+		"select_secret_version", "environment_setup", "bash", "install_skill",
 	} {
 		t.Run(name, func(t *testing.T) {
 			value, present := cfg.Sandbox.ToolPolicies[name]
@@ -36,7 +36,7 @@ func TestL1WU2DefaultCeiling_OmnipusAskListAndPrivateSecretAllows(t *testing.T) 
 		})
 	}
 	// Skills r15 §10 supersedes Q22: edit_skill asks globally; get_skill is a read.
-	for _, name := range []string{"create_agent", "update_agent", "update_workspace", "get_skill", "install_skill", "disable_channel"} {
+	for _, name := range []string{"create_agent", "update_agent", "update_workspace", "get_skill", "disable_channel"} {
 		t.Run(name, func(t *testing.T) {
 			assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies[name], "OSA-3: summary-gated changes retain allow")
 		})

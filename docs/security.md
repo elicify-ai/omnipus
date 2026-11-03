@@ -41,6 +41,8 @@ not a successful-save confirmation.
 
 On a new installation the shell tool, `bash`, is set to **Ask**.
 
+On a new installation `install_skill` is also set to **Ask**: you approve each skill install, and the card keeps appearing even with Auto-approve on (see the always-ask list below). An installation that already saved `install_skill` as Allow keeps that setting; change it in **Tool Access — Global Policies** if you want the prompt.
+
 ### Turn Auto-approve on or off
 
 Auto-approve can be set in two places. On a new installation it is **on** globally.
