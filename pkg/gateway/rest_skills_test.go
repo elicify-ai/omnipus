@@ -683,10 +683,11 @@ func TestListSkillsVersionDefaultsWhenAbsent(t *testing.T) {
 // DELETE is rejected with 403. This is the Part B id/name-separation contract.
 func TestListSkillsDisplayNameSeparateFromID(t *testing.T) {
 	builtinDir := t.TempDir()
-	// Directory slug is "daily-briefing"; frontmatter name is the display name.
-	seedSkill(t, builtinDir, "daily-briefing",
-		"name: Daily Briefing\ndescription: Summarize the day for the operator.\nversion: 1.2.3",
-		"# Daily Briefing\n\nProduce a concise daily briefing.")
+	// r15 F2 retires daily-briefing. Keep a current built-in's stable slug
+	// separate from its human label (the skills module's metadata contract).
+	seedSkill(t, builtinDir, "plan",
+		"name: plan\ndescription: Plan the requested task.\nversion: 1.2.3\nmetadata:\n  display_name: Plan a Task",
+		"# Plan a Task\n\nProduce a task plan.")
 
 	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
 
@@ -700,22 +701,25 @@ func TestListSkillsDisplayNameSeparateFromID(t *testing.T) {
 	require.Len(t, listed, 1)
 
 	s := listed[0]
-	assert.Equal(t, "daily-briefing", s.Id, "Id must be the slug")
-	assert.Equal(t, "Daily Briefing", s.Name, "Name must be the display name")
+	assert.Equal(t, "plan", s.Id, "Id must be the slug")
+	assert.Equal(t, "Plan a Task", s.Name, "Name must be the display name")
 	assert.True(t, s.Verified, "embedded default must be verified")
 	require.NotNil(t, s.Source)
 	assert.Equal(t, gen.SkillSourceBuiltin, *s.Source, "must surface as builtin")
 
 	// System detection + delete guard are keyed on the slug (Id), not the
 	// display name — DefaultSkillNames returns slugs.
-	assert.Equal(t, "builtin", api.skillSource("daily-briefing"))
+	assert.Equal(t, "builtin", api.skillSource("plan"))
 
 	// DELETE by slug must be rejected with 403.
-	rd := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/daily-briefing", nil)
+	rd := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/plan", nil)
 	wd := httptest.NewRecorder()
 	api.HandleSkills(wd, rd)
 	assert.Equal(t, http.StatusForbidden, wd.Code, "body: %s", wd.Body.String())
-	assert.Contains(t, wd.Body.String(), "built-in skills cannot be removed")
+	var refusal gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(wd.Body.Bytes(), &refusal))
+	// ErrorResponse permits optional code/details; r15 §5.10 fixes the text.
+	assert.Equal(t, `Built-in skills can't be removed or edited. Use "Make a copy" to create your own version.`, refusal.Error, "r15 §5.10 exact built-in refusal")
 }
 
 // TestHandleSkills_IncludesArgumentHint verifies that GET /api/v1/skills

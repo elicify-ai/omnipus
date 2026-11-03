@@ -118,7 +118,7 @@ func ManifestExtensionID() (string, error) {
 
 // Seed seeds the embedded capture extension into
 // <destRoot>/captureext/<Version>/ via a staged-tmpdir + atomic rename (the
-// pkg/skills.SeedDefaults pattern). Safe to call on every boot.
+// staged-publish pattern the skills pipeline also uses). Safe to call on every boot.
 //
 // The gate is CONTENT-verified, not existence-verified: if the directory
 // already exists AND every embedded file matches it byte-for-byte, Seed does

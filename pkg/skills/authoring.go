@@ -10,8 +10,6 @@ import (
 	"time"
 	"unicode"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
@@ -25,12 +23,12 @@ const MaxSkillMarkdownBytes = 256 * 1024
 const versionsDir = ".versions"
 
 // builtinMarkerFile is written into a skill's directory whenever
-// SeedDefaults (embed.go) materializes a built-in skill onto disk at boot.
+// the start-up built-in sync (builtins_sync.go) materializes a built-in skill onto disk at boot.
 //
 // UAT batch3 S68 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
 // finding #3): EditSkill used to infer "this is a genuine prior user
 // override, safe to edit in place" from mere file EXISTENCE at the writer's
-// root path. That inference is unsound in this install: SeedDefaults
+// root path. That inference is unsound in this install: the built-in sync
 // materializes every built-in skill (for example plan, interview, write-skill)
 // onto the SAME writer-root path a real override would also
 // occupy — there is no separate, untouched "factory" location existence
@@ -159,15 +157,19 @@ func ValidateSkillMarkdown(expectedName, content string) error {
 	}
 
 	if frontmatter != "" {
-		// Reuse the loader's frontmatter parser to pull name/description.
-		fm := (&SkillsLoader{}).parseSimpleYAML(frontmatter)
+		// The one shared frontmatter parser (FR-002) pulls name/description.
+		parsed, parseErr := parseFrontmatter(frontmatter)
+		if parseErr != nil {
+			slog.Warn("SKILL.md: failed to parse YAML frontmatter", "error", yamlErrorSummary(parseErr))
+		}
+		fm := frontmatterFields(parsed)
 		if n := fm["name"]; n != "" {
 			info.Name = n
 		}
 		// S59 fix: once the frontmatter DECLARES a `description` key at all —
 		// even as `description:` (empty) or `description: null` — that
 		// declaration is authoritative and must not be silently papered over
-		// by the body's first paragraph. parseSimpleYAML's map drops
+		// by the body's first paragraph. frontmatterFields' map drops
 		// empty/null values entirely, so `fm["description"] != ""` alone
 		// cannot distinguish "declared empty" from "not declared" — an
 		// author who writes an empty `description:` field was previously let
@@ -234,7 +236,7 @@ func ValidateSkillDescription(skillName, description string) error {
 
 // frontmatterHasKey reports whether the given YAML frontmatter block
 // declares key at all, regardless of whether its value is empty, null, or
-// non-empty. parseSimpleYAML's string-map result cannot make this
+// non-empty. frontmatterFields' string-map result cannot make this
 // distinction on its own (it drops empty/null values from the map), so
 // ValidateSkillMarkdown uses this to tell "the author wrote an empty
 // description:" (must fail validation) apart from "the author wrote no
@@ -244,8 +246,8 @@ func ValidateSkillDescription(skillName, description string) error {
 // tolerates a parse failure by falling back to zero values, and this must
 // not behave more strictly than that fallback.
 func frontmatterHasKey(frontmatter, key string) bool {
-	var raw map[string]any
-	if err := yaml.Unmarshal([]byte(frontmatter), &raw); err != nil {
+	raw, err := parseFrontmatter(frontmatter)
+	if err != nil {
 		return false
 	}
 	_, ok := raw[key]
@@ -326,7 +328,7 @@ func (w *SkillWriter) CreateSkill(name, content string) (string, error) {
 
 // EditSkill updates an existing skill named name with new SKILL.md content.
 // The prior content — a genuine local override OR a still-pristine built-in
-// materialized by SeedDefaults (see builtinMarkerFile) — is snapshotted into
+// materialized by the built-in sync (see builtinMarkerFile) — is snapshotted into
 // .versions/ first, so it is always recoverable, before anything is
 // overwritten.
 //
@@ -366,7 +368,7 @@ func (w *SkillWriter) EditSkill(
 	}
 
 	// A file's mere presence at this writer-root path is NOT proof of a
-	// genuine prior user override — SeedDefaults materializes every
+	// genuine prior user override — the built-in sync materializes every
 	// built-in skill onto this SAME path at boot, so on a fresh install
 	// fileExists is already true for every embedded skill (plan, interview,
 	// write-skill, ...) before any user has ever touched them.

@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
@@ -718,9 +719,9 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		// concern) and they stay separate fields on the wire.
 		ag.DegradedReason = agentDegradedReason(a.providerCatalog, cfg, &ac)
 		if len(ac.Skills) > 0 {
-			skills := make([]string, len(ac.Skills))
-			copy(skills, ac.Skills)
-			ag.Skills = &skills
+			grantedSkills := make([]string, len(ac.Skills))
+			copy(grantedSkills, ac.Skills)
+			ag.Skills = &grantedSkills
 		}
 		setAgentExecutorResponse(&ag, ac.Subagents)
 		if ac.UpdatedAt != nil {
@@ -782,9 +783,19 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			// ADR-067 FR-016/FR-031 (T067-09) — see listAgents.
 			ag.DegradedReason = agentDegradedReason(a.providerCatalog, cfg, &ac)
 			if len(ac.Skills) > 0 {
-				skills := make([]string, len(ac.Skills))
-				copy(skills, ac.Skills)
-				ag.Skills = &skills
+				grantedSkills := make([]string, len(ac.Skills))
+				copy(grantedSkills, ac.Skills)
+				ag.Skills = &grantedSkills
+			}
+			// UAT-1 F-9: the granted names activation would refuse with
+			// SKILL_GRANT_STALE, so the Skills tab can mark them.
+			stale, staleErr := skills.StaleGrants(filepath.Join(a.homePath, "skills"), ac.Skills, ac.SkillGrants)
+			if staleErr != nil {
+				jsonServerFailure(w, http.StatusInternalServerError, "could not check the agent's skill grants", staleErr)
+				return
+			}
+			if len(stale) > 0 {
+				ag.StaleSkillGrants = &stale
 			}
 			setAgentExecutorResponse(&ag, ac.Subagents)
 			if ac.UpdatedAt != nil {

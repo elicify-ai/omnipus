@@ -20,8 +20,8 @@ import (
 )
 
 // defineGoalSkillPath returns the seeded define-goal skill file's path under
-// the runtime skills root ($OMNIPUS_HOME/skills — the SeedDefaults
-// destination, pkg/gateway boot). ADR-074 D4/D4a: the quality bar is injected
+// the runtime skills root ($OMNIPUS_HOME/skills — where the start-up
+// built-in sync writes, pkg/gateway boot). ADR-074 D4/D4a: the quality bar is injected
 // ENGINE-SIDE into every goal compile, independent of the goal-bearing
 // agent's own skill allowlist. ADR-080 D-SKILL renamed the skill
 // define-done→define-goal; the path below reflects the rename.
@@ -38,13 +38,13 @@ func defineGoalSkillPath() string {
 // quality bar — the skill ships via ADR-074 D4's own rollout slot).
 //
 // Fix-wave finding #7: os.IsNotExist is the ONLY expected/silent case (a
-// pre-rollout install, or an install where SeedDefaults simply hasn't run
-// yet) — every other read error (permission denied, a corrupt/unreadable
+// pre-rollout install, or an install where the built-in sync simply hasn't
+// run yet) — every other read error (permission denied, a corrupt/unreadable
 // file, an I/O error) is WARN-logged once per call, mirroring
 // goalCompileWindowText's own logging pattern above, so a mis-permissioned
 // or corrupt SKILL.md is observable rather than silently indistinguishable
 // from "not seeded yet". This is what makes finding #1's downstream
-// (deleteOrphanedDefineDoneDir deleting define-done/ while define-goal/ is
+// (the start-up cleanup deleting define-done/ while define-goal/ is
 // unreadable) visible in the logs rather than a silent quality-bar loss.
 func loadDefineGoalSkillContent() string {
 	p := defineGoalSkillPath()

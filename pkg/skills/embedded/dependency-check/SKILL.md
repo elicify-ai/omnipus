@@ -7,10 +7,10 @@ metadata:
 # Dependency check (pre-summary, W1 / W6 / W10 / W18)
 
 ## Prerequisites
-The skill or task-plan guidance of everything the plan installs (recipes live there — none are hard-coded here), plus `tool:list_skills`, `tool:list_mcp_servers`, and `tool:get_workspace` for the target.
+The skill or task-plan guidance of everything the plan installs (recipes live there — none are hard-coded here), plus `tool:list_skills`, `tool:get_skill`, `tool:list_mcp_servers`, and `tool:get_workspace` for the target.
 
 ## Steps
-1. Read the declared needs of each skill, connector and agent the plan creates (for example a document converter, an MCP server's runtime).
+1. Read the declared needs of each skill, connector and agent the plan creates (for example a document converter, an MCP server's runtime). For an installed skill, `tool:get_skill` with `fields: ["needs"]` lists the programs its `metadata.omnipus-requires` declares and whether the agent's bash finds them.
 2. Check what the target already has. Shared runtimes are application-managed — if one is missing, report it as a machine-level need; never install a shared runtime yourself.
 3. For each need, take the install command from the declaring skill's or task plan's guidance, and name the target workspace it installs into.
 

@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -121,6 +122,9 @@ func (al *AgentLoop) assembleMessages(
 			userMsg, media = "", nil
 		}
 	}
+	// Read before the build: a skill change committed during it makes the
+	// next turn refreeze the menu once more instead of missing the change.
+	ts.skillsMenuGeneration = skills.Generation()
 	base := ts.agent.ContextBuilder.BuildMessages(ts.depth, nil, userMsg, media,
 		ts.opts.WorkspaceID, ts.channel, ts.chatID, ts.opts.SenderID,
 		ts.opts.SenderDisplayName, withExpiryNote(breadcrumb, expiryNote), nil, skillNames...)

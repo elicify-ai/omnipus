@@ -27,6 +27,11 @@ import (
 // config.json) — not resolution-time code logic.
 func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	cfg := DefaultConfig()
+	for _, retired := range []string{"create_skill", "remove_skill"} {
+		if _, present := cfg.Sandbox.ToolPolicies[retired]; present {
+			t.Errorf("r15 §10: retired tool %q must not have a ceiling entry", retired)
+		}
+	}
 
 	destructive := map[string]bool{
 		"delete_workspace":  true,
@@ -37,13 +42,13 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// approvalGated is the omnipus-system-agent ask-list (spec §6.5): FR-020
 	// moves these management tools to "ask" at the shipped ceiling, and
 	// FR-021 ships the five new secret/connection/permission tools "ask".
-	// (delete_agent and remove_skill were allow before FR-020.)
+	// Skills r15 §10 replaces the retired skill deletion verb with edit_skill Ask.
 	approvalGated := map[string]bool{
-		"delete_agent": true, "remove_skill": true, "configure_provider": true,
+		"delete_agent": true, "edit_skill": true, "configure_provider": true,
 		"enable_channel": true, "configure_channel": true,
 		"connect_channel": true, "connect_mailbox": true, "set_agent_permissions": true,
 		"remove_secret": true, "select_secret_version": true,
-		// SPEC.md Table + Q22=B: outbound mail stays Ask; skill authoring is globally Allow and per-agent Ask.
+		// Outbound mail stays Ask; r15 §10 now also makes skill editing globally Ask.
 		"send_email": true, "reply": true,
 	}
 
@@ -120,7 +125,7 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 			t.Errorf("FR-020/FR-021: %q must ship 'ask', got %q", name, got)
 		}
 	}
-	for _, name := range []string{"request_secret", "list_secrets"} {
+	for _, name := range []string{"request_secret", "list_secrets", "get_skill"} {
 		if got := cfg.Sandbox.ToolPolicies[name]; got != "allow" {
 			t.Errorf("FR-021: %q must ship 'allow', got %q", name, got)
 		}

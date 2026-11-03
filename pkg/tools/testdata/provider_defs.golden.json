@@ -35,13 +35,6 @@
     "source": "builtin"
   },
   {
-    "name": "create_skill",
-    "description": "Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills directory; prior versions are snapshotted for rollback. This call writes the file; it is not a confirmation step. Policy may still Ask at execution; that is not a substitute for the user's confirmation of the proposal, and you must not invent a second confirmation ritual. content must not exceed 262144 bytes. A name that already exists is refused — use edit_skill to modify it instead. Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md including YAML frontmatter with name and description).",
-    "scope": "core",
-    "category": "skills",
-    "source": "builtin"
-  },
-  {
     "name": "create_workspace",
     "description": "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id as workspace_id to create_task when delivering tasks to the workspace. Members named in core_team also get the default delegation trust edges between them, so they can delegate to each other immediately. name is capped at 200 characters and description at 2000; exceeding either is rejected.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace).",
     "scope": "core",
@@ -71,7 +64,7 @@
   },
   {
     "name": "edit_skill",
-    "description": "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version for rollback, then writes the new SKILL.md. This call writes the file; it is not a confirmation step. Policy may still Ask at execution; that is not a substitute for the user's confirmation of the proposal, and you must not invent a second confirmation ritual. Editing a built-in creates a user override; the built-in is never mutated in place. content must not exceed 262144 bytes. Parameters: name, content (full new SKILL.md), and revision from the reviewed skill read are required. A conflict means the skill changed after review; stop, reread, and do not retry the stale write.",
+    "description": "Change a skill other than by writing a file: action=copy makes your own copy of a skill (built-ins included) under the name given in to; action=delete_file removes one file (path, never SKILL.md); action=delete deletes the skill (its history is kept, so it can be restored); action=restore brings back a version listed by get_skill (version). To create a skill, write its SKILL.md with write_file; to change a file, use write_file or edit_file. delete_file, delete and restoring an existing skill need a current read of the skill in this session (get_skill, Skill, read_file or list_directory). Built-in skills are read-only: copy them first. A new copy is granted to no agent.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
@@ -102,6 +95,13 @@
     "description": "Read a setting (port, timeout, host, feature flag, or similar) from config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.mode'. Pair with set_config to change a value. Credential-shaped fields (API keys, secrets, tokens, passwords) and a handful of security-critical keys (gateway account/token data, the whole sandbox namespace's writable form, etc.) are refused or returned redacted — use list_providers to check configured providers without exposing keys.\nParameters: key (required, e.g. 'gateway.port').",
     "scope": "core",
     "category": "platform",
+    "source": "builtin"
+  },
+  {
+    "name": "get_skill",
+    "description": "Read one installed skill's details by id. fields is required: pass [\"all\"] or one or more of: state, name, description, shelf, folder, files, metadata, compatibility, allowed_tools, needs, last_change, has_local_changes, versions, instructions. versions lists retained versions newest first (versions_limit 1-100, default 50; pass next_before back as versions_before for older ones). A successful read lets this session change the skill afterwards. If versions make the result too large, lower versions_limit.",
+    "scope": "core",
+    "category": "skills",
     "source": "builtin"
   },
   {
@@ -148,7 +148,7 @@
   },
   {
     "name": "list_skills",
-    "description": "List installed skills. scope=usable (the default) lists only skills assigned for this agent to run. scope=management lists sanitized installed inventory for configuration review when the caller has management-read authority; name may inspect one skill's sanitized content in management scope. Use Skill to run an assigned skill and find_skills to search the marketplace.",
+    "description": "List installed skills. scope=usable (the default) lists only skills assigned for this agent to run. scope=management lists sanitized installed inventory for configuration review when the caller has management-read authority. Read one skill's details with get_skill. Use Skill to run an assigned skill and find_skills to search the marketplace.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
@@ -179,13 +179,6 @@
     "description": "Remove one stored secret reference after the person has seen who depends on it. Supply the full reference name as list_secrets reports it, version suffix included. The consumers are listed on the approval card before anything is deleted. Removal of an in-use reference proceeds behind the approval; the result names every consumer, reports the stale live value truthfully, and the next boot starts with the affected integrations degraded. Removing an older version that a replacement superseded leaves the integration unaffected and working. The result reports three separate facts and they must stay separate: whether the value is durably deleted, what the live effect on running connections is, and whether the configuration still starts on the next boot. Never summarise them into a single ok. Values are never an input or an output. Only Omnipus holds this tool — an agent that wants a reference removed asks Omnipus. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode.",
     "scope": "core",
     "category": "platform",
-    "source": "builtin"
-  },
-  {
-    "name": "remove_skill",
-    "description": "Remove a project or installation-wide skill. IRREVERSIBLE — the skill's whole directory, including any version history it holds, is permanently deleted; there is no undo. It searches the target workspace's project shelf first and removes a matching skill from its own project. Only if no project skill matches does it use the installation's skills directory, which also contains installation-wide authored skills and user overrides. A project-shelf read failure returns READ_FAILED without removal or fallback; project-path integrity errors also stop removal instead of falling back. A skill present only on the built-in shelf is not removed. If the removed skill was shadowing a lower-priority skill of the same id (an override or a built-in), that one becomes visible again. Parameters: name (required, the skill id as reported by list_skills — no path separators), revision (required from the reviewed skill read), confirm (bool, must be true). A conflict requires a fresh read; do not retry the stale deletion.",
-    "scope": "core",
-    "category": "skills",
     "source": "builtin"
   },
   {

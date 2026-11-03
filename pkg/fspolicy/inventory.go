@@ -129,35 +129,16 @@ const workspaceInternalDir = ".omnipus"
 // own working area.
 const workspaceWorkDirName = "work"
 
-// SkillInstructionLeaves are the filenames D10.3's narrowed Part A gates — a
-// skill's INSTRUCTIONS, not its directory. They are single-sourced HERE
-// (the #1284 predicate denies them under the registry skills shelf, A7) and
-// pkg/tools' skills gate reads them through IsSkillInstructionLeaf so the
-// ResolvePath refusal message and the predicate can never name different
-// files. Keys are lowercase; the lookup folds case (deny side).
-var SkillInstructionLeaves = map[string]bool{
-	"skill.md":  true,
-	"agent.md":  true,
-	"agents.md": true,
-}
-
-// IsSkillInstructionLeaf reports whether name — a final path component — is
-// one of the gated skill instruction filenames. Deny-side: folds case.
-func IsSkillInstructionLeaf(name string) bool {
-	return SkillInstructionLeaves[strings.ToLower(name)]
-}
-
 // BaseAllowRelative are the $OMNIPUS_HOME-relative subtrees the app layer
 // re-admits for every turn without per-turn context (amendment §2 D3):
 //
 //	media  (A3) — downloaded media and attachment staging, read-only
-//	skills (A7) — bundled skill helper files, read-only, FILE TOOLS ONLY;
-//	              instruction files stay behind the skills gate in
-//	              pkg/tools/resolvepath.go, and spawned children keep the
-//	              whole-directory kernel deny (CoversChildOnlySecretPath)
+//
+// skills is not a base entry (skills spec r15 §6.1 item 3): the registry
+// shelf is readable per turn through HomeGuard.SkillFolders /
+// SkillsReadAll only (inventoryDenies' skills rule, allowedUnderHome).
 var BaseAllowRelative = []string{
 	"media",
-	"skills",
 }
 
 // HomeGlobPrefixes returns the protected basename prefixes that live directly
