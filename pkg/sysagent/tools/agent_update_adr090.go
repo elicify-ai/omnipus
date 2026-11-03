@@ -114,8 +114,10 @@ func externalCLIOf(store *agentstore.Store, id string) (string, bool) {
 }
 
 // mutateRecord applies the record, SOUL.md and AGENT.md fields under the
-// store's one revision check. With no record field the record bytes are left
-// untouched. A refusal or failure comes back as the tool result.
+// store's one revision check. With no record field the store still runs the
+// skills binding; the record bytes are left untouched unless that binding
+// rebinds a skill grant, in which case the rebound record is published. A
+// refusal or failure comes back as the tool result.
 func (t *AgentUpdateTool) mutateRecord(store *agentstore.Store, id, revision string, fields []string,
 	meta []agentMetadataWrite, args map[string]any,
 ) (agentstore.MutationResult, *gen.AgentExecutorSettingsResult, *tools.ToolResult) {

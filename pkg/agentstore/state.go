@@ -268,8 +268,11 @@ type stagedFile struct {
 // (r17 §7.5 AG-05, §7.10, #1321): under one lock it checks the revision (which
 // covers all three files), stages every changed file, then publishes them in
 // the order entity, SOUL.md, AGENT.md. A nil mutate changes the record only
-// through the skills binding (bindingMutate), and an unchanged record is not
-// rewritten; a nil soul or agentMD leaves that file untouched. A replace that
+// through the skills binding (bindingMutate): when the binding leaves the
+// logical record unchanged the stored entity bytes are kept, otherwise the
+// rebound record is published. A non-nil mutate stages the entity whenever its
+// canonical encoding differs from the stored bytes. A nil soul or agentMD
+// leaves that file untouched. A replace that
 // fails after an earlier one succeeded is a partial write; the result names
 // what was and was not saved and the revision now readable.
 func (s *Store) MutateStateWithAgentMD(id, expectedRevision string, mutate func(*config.AgentConfig) error,
@@ -297,15 +300,27 @@ func (s *Store) MutateStateWithAgentMD(id, expectedRevision string, mutate func(
 			}
 			result.Revision = current.Revision
 			// The skills binding (skills spec r15, bindingMutate) runs on every
-			// write, a nil mutate included; the entity is staged only when its
-			// bytes actually change, so a nil mutate with no binding drift
-			// leaves the record untouched (r17 §7.5).
+			// write, a nil mutate included. With a nil mutate the logical
+			// record is compared before and after the binding: when the
+			// binding changed nothing the stored entity bytes are kept as
+			// they are (even a valid non-canonical encoding), so the entity is
+			// not staged and not reported changed (r17 §7.5).
+			var unbound []byte
+			if mutate == nil {
+				var baselineErr error
+				if unbound, baselineErr = json.MarshalIndent(current.Agent, "", "  "); baselineErr != nil {
+					return fmt.Errorf("marshal current entity: %w", baselineErr)
+				}
+			}
 			if mutateErr := s.bindingMutate(mutate)(current.Agent); mutateErr != nil {
 				return mutateErr
 			}
 			newEntity, marshalErr := json.MarshalIndent(current.Agent, "", "  ")
 			if marshalErr != nil {
 				return fmt.Errorf("marshal candidate entity: %w", marshalErr)
+			}
+			if mutate == nil && string(unbound) == string(newEntity) {
+				newEntity = oldEntity
 			}
 			var files []*stagedFile
 			add := func(field, path string, old, data []byte) {
