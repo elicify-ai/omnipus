@@ -110,6 +110,12 @@ Project rules belong in **Workspace settings → Project Instructions**, stored 
 
 In native turns, an agent's own folder does not supply instructions from `AGENT.md`, `AGENTS.md` or `IDENTITY.md`. Their contents are not added to the system prompt, and changing those files does not refresh the prompt cache. `SOUL.md` and the global `USER.md` still load for native agents.
 
+### What an agent knows about its connectors
+
+At every turn a native agent gets a short **Channels** section in its instructions, read fresh for that turn. It lists each enabled connector bound to that agent in the current workspace and says, for each one, whether the agent can only answer there or may also start messages. When it may start messages, the section lists the ids it may use, each with a label such as `person, direct message` or `group`, and the `send_message` call to use. A connector that is not running is listed as not connected right now, and the agent cannot post there until it reconnects.
+
+With no bound connector, the section says the agent cannot post to any chat platform and should not ask you for channel ids. When the agent is not allowed to use `send_message`, or runs in a delegated session, the section says that instead of listing connectors. You change what the section shows in each connector's **Configure** panel; see [Starting messages](connectors.md#starting-messages).
+
 ## How to delete an agent
 
 **Delete agent** asks you to confirm twice: the first step explains that the agent and its chats, memory and related data are removed permanently, the second is the final confirmation. Dismissing either step deletes nothing. A locked core agent, a System Agent, and an agent that owns an active plan cannot be deleted — stop or reassign the plan first.

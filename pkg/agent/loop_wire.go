@@ -547,12 +547,14 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 		// common point before the wire. System-originated publishes leave
 		// these empty and are exempt by that emptiness.
 		return rw.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Channel:          channel,
-			ChatID:           chatID,
-			Content:          content,
-			AgentID:          origin.AgentID,
-			WorkspaceID:      origin.WorkspaceID,
-			OwnershipChecked: origin.OwnershipChecked,
+			Channel:     channel,
+			ChatID:      chatID,
+			Content:     content,
+			AgentID:     origin.AgentID,
+			WorkspaceID: origin.WorkspaceID,
+			// FR-043: the tool's decision; a start is re-checked at
+			// dispatch and dequeue (FR-044).
+			Operation: busOperation(origin.Operation),
 		})
 	})
 	// Peer and reply forms (session-core U8): the router resolves the live
@@ -562,6 +564,9 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 	messageTool.SetMainConnectorGuard(func(sessionID, channel string) bool {
 		return rw.rs.al.mainConnectorTurn(channel, sessionID)
 	})
+	// channels-spec-r8 T-4/FR-041: starts to listed targets, checked on the
+	// live configuration and the manager's availability.
+	messageTool.SetStartPolicy(messageStartPolicy{al: rw.rs.al})
 	// Re-apply the stored resolver: this runs on every reload, and the
 	// MessageTool above is brand new each time (ADR-065).
 	if own := rw.rs.al.ChannelOwnership(); own != nil {

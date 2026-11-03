@@ -120,7 +120,9 @@ func channelConfigFingerprint(cfg *config.Config, instance string) string {
 	if !exists {
 		return "absent"
 	}
-	canonical, supported := config.CanonicalChannelInstance(instance, inst)
+	// FR-015: the adapter view — a list-only outbound change is not a
+	// connection change, so it never moves the pairing fingerprint.
+	canonical, supported := config.CanonicalChannelInstance(instance, config.ChannelAdapterView(inst))
 	if !supported {
 		return "absent" // the loader drops the same unsupported entry
 	}
@@ -146,7 +148,7 @@ func (o *PairingOrder) BindReadySnapshot(cfg *config.Config) {
 func ChannelConfigChanges(before, after *config.Config) []string {
 	ids := make(map[string]bool)
 	for id, old := range before.Channels {
-		if next, exists := after.Channels[id]; !exists || !reflect.DeepEqual(old, next) {
+		if next, exists := after.Channels[id]; !exists || !reflect.DeepEqual(config.ChannelAdapterView(old), config.ChannelAdapterView(next)) {
 			ids[id] = true
 		}
 	}

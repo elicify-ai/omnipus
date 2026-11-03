@@ -1095,6 +1095,10 @@ type ChannelInstanceConfig struct {
 	Identity *ChannelIdentity `json:"identity,omitempty"`
 	// WorkspaceID binds this instance to one workspace (ADR-029). Empty = unbound.
 	WorkspaceID string `json:"workspace_id,omitempty"`
+	// Outbound is the operator's start-messages setting (channels spec
+	// FR-010). Absent = reply_only. Only the dedicated outbound writer may
+	// change it; set_config refuses channels.*.outbound (FR-024).
+	Outbound *ChannelOutboundConfig `json:"outbound,omitempty"`
 
 	// --- Common per-channel fields shared across multiple channel types ---
 	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`
@@ -1213,6 +1217,12 @@ type ChannelInstanceConfig struct {
 	// Both IRC and email use the same password_ref JSON key for their connection
 	// password, which is stored encrypted in the credential store.
 	EmailUsername string `json:"username,omitempty"`
+
+	// allowFromText keeps an allowed-sender field saved as one string while
+	// the instance's type is not yet known (no "type" key), so loading can
+	// split it with the effective type's separators (channel_allow_from.go).
+	// Never serialized; CanonicalChannelInstance clears it.
+	allowFromText *pendingAllowFromText
 }
 
 // CredentialRefs returns every credential-reference field this instance

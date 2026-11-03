@@ -61,7 +61,7 @@ func allowAgentOriginatedSend(cfg *config.Config, msg bus.OutboundMessage) bool 
 	// refusals — an ordinary delegated reply is sent by the DELEGATE into the
 	// PARENT's conversation, so the pair legitimately mismatches the instance
 	// owner. Trust the decision; verify that one was made.
-	if msg.OwnershipChecked {
+	if msg.Operation == bus.OperationChecked {
 		return true
 	}
 	if cfg == nil {

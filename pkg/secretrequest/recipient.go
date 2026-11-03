@@ -112,6 +112,10 @@ func ResolveRecipient(cfg *config.Config, in Input) ([]credentials.CardRecipient
 		projection.WorkspaceID = ""
 		projection.Identity = nil
 		projection.Enabled = false
+		// FR-058: the outbound setting is posting policy, not credential
+		// consent scope — an outbound-only change keeps an open card
+		// submittable and a stored reference selectable.
+		projection.Outbound = nil
 		rv := reflect.ValueOf(&projection).Elem()
 		for i := 0; i < rv.NumField(); i++ {
 			if strings.HasSuffix(rv.Type().Field(i).Name, "Ref") {

@@ -1,0 +1,38 @@
+title: ChannelOutbound
+description: >
+  Whether the agent bound to a chat connection may start messages on it, and
+  to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in
+  config.json means {policy: reply_only, targets: []}. Targets are stored in
+  canonical "platform:id" form; their length is counted with the prefix. The
+  longest valid canonical value is 40 characters
+  (telegram:-9223372036854775807/2147483647), so the 64-character bound never
+  refuses a valid id.
+type: object
+additionalProperties: false
+required:
+  - policy
+  - targets
+properties:
+  policy:
+    type: string
+    description: >
+      reply_only = "Only answer" (the default; the agent never starts a
+      conversation). agent_may_start = "Answer and also start messages", but
+      only to the listed targets; an empty list allows nothing.
+    enum:
+      - reply_only
+      - agent_may_start
+    example: reply_only
+  targets:
+    type: array
+    description: >
+      Canonical "platform:id" targets the agent may start messages to: a
+      person's user id (a direct message) or a group's chat id. At most 20,
+      no wildcard, no @name.
+    maxItems: 20
+    items:
+      type: string
+      minLength: 1
+      maxLength: 64
+    example:
+      - "telegram:-1001234567890"
