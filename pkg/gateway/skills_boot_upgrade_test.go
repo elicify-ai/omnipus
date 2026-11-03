@@ -133,6 +133,70 @@ func TestBootUpgrade_FirstStartBindsBuiltinGrantsOnDiskAndInMemory(t *testing.T)
 	require.NotZero(t, checked, "control: at least one installed built-in grant was checked")
 }
 
+// First start where the built-in skills are already installed (and stamped)
+// but one seeded core agent has no stored record yet: persistSeededCoreAgents
+// takes its Create branch. The store binds the new record grants on disk, so
+// bootSkills later finds nothing to add; unless the Create branch copies the
+// saved grants into the live roster, the in-memory agent stays unbound.
+func TestBootUpgrade_CreatePathBindsBuiltinGrantsOnDiskAndInMemory(t *testing.T) {
+	home, configPath := upgradeBootEnv(t)
+	root := filepath.Join(home, "skills")
+	store := agentstore.New(home)
+
+	// Settle a home: built-ins installed and stamped, every agent stored.
+	_, err := skills.SyncBuiltins(root, nil)
+	require.NoError(t, err)
+	settle := upgradeFreshConfig(t, home, configPath)
+	require.NoError(t, seedAndPersistAgentRoster(settle, home, configPath))
+	_, err = bootSkills(settle, home)
+	require.NoError(t, err)
+
+	// Pick a stored agent that holds an installed built-in and drop its record,
+	// so the next start must Create it (the others take the Update branch).
+	settled, _, err := store.List()
+	require.NoError(t, err)
+	victim := ""
+	for i := range settled {
+		for _, name := range builtinSkillsOf(&settled[i]) {
+			if _, statErr := os.Stat(filepath.Join(root, name)); statErr == nil {
+				victim = settled[i].ID
+			}
+		}
+	}
+	require.NotEmpty(t, victim, "setup: a stored agent must hold an installed built-in")
+	require.NoError(t, os.Remove(filepath.Join(home, "entities", "agents", victim+".json")))
+	_, err = store.Get(victim)
+	require.Error(t, err, "setup: the victim agent must have no stored record")
+
+	// First start after that: a new process, a fresh config.
+	cfg := upgradeFreshConfig(t, home, configPath)
+	require.NoError(t, seedAndPersistAgentRoster(cfg, home, configPath))
+	_, err = bootSkills(cfg, home)
+	require.NoError(t, err)
+
+	disk, err := store.Get(victim)
+	require.NoError(t, err)
+	var mem *config.AgentConfig
+	for j := range cfg.Agents.List {
+		if cfg.Agents.List[j].ID == victim {
+			mem = &cfg.Agents.List[j]
+		}
+	}
+	require.NotNil(t, mem, "agent %q is in the in-memory roster", victim)
+	checked := 0
+	for _, name := range builtinSkillsOf(disk) {
+		if _, statErr := os.Stat(filepath.Join(root, name)); statErr != nil {
+			continue
+		}
+		checked++
+		assert.True(t, grantUsable(t, root, disk, name),
+			"created agent %q: stored built-in grant %q must be bound to the installed generation", victim, name)
+		assert.True(t, grantUsable(t, root, mem, name),
+			"created agent %q: in-memory built-in grant %q must be bound to the installed generation (SKILL_GRANT_STALE otherwise)", victim, name)
+	}
+	require.NotZero(t, checked, "control: at least one installed built-in grant was checked")
+}
+
 func TestBootUpgrade_AlreadyBoundHomeStaysByteIdentical(t *testing.T) {
 	home, configPath := upgradeBootEnv(t)
 	root := filepath.Join(home, "skills")
