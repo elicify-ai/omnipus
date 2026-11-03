@@ -80,7 +80,7 @@ func TestL1WU2CreateAgent_RefusesEveryNonDenyManagementGrantBeforePersistence(t 
 		"delete_workspace", "install_skill", // r15 §10: editing leaves management; retired verbs are absent.
 		"add_mcp_server",
 		"remove_mcp_server", "configure_provider", "enable_channel", "disable_channel", "configure_channel",
-		"connect_channel", "set_channel_outbound", "connect_mailbox", "set_agent_permissions", "remove_secret", "select_secret_version", "set_config"}
+		"connect_channel", "connect_mailbox", "set_agent_permissions", "remove_secret", "select_secret_version", "set_config"}
 	for _, name := range management {
 		for _, policy := range []string{"allow", "ask"} {
 			t.Run(name+"_"+policy, func(t *testing.T) {

@@ -166,8 +166,13 @@ func TestL1WU2SecretAndManagementGrants_AllNativeRolesAndCustomMain(t *testing.T
 					(name == "list_secrets" && row.id != "judge" && row.id != "plansupervisor") {
 					want = config.ToolPolicyAllow
 				}
+				// Founder Q4, 2026-11-03: chat-capable Main agents may use
+				// outbound with fresh consent; background/system roles stay denied.
+				if row.private && name == "set_channel_outbound" {
+					want = config.ToolPolicyAsk
+				}
 				pc, _ := tools.BuildFallbackPolicyCfg(cfg, row.id)
-				assert.Equal(t, string(want), tools.ResolveEffectivePolicy(pc, name), "%s/%s independent §6.5 oracle", row.id, name)
+				assert.Equal(t, string(want), tools.ResolveEffectivePolicy(pc, name), "%s/%s independent §6.5 plus Q4 oracle", row.id, name)
 				if want == config.ToolPolicyDeny {
 					p, present := ac.Tools.Builtin.Policies[name]
 					assert.True(t, present, "%s/%s needs explicit Deny", row.id, name)
@@ -205,6 +210,10 @@ func TestL1WU2SecretAndManagementGrants_AllNativeRolesAndCustomMain(t *testing.T
 			assert.True(t, present, "new custom main must classify %s", name)
 			assert.Equal(t, config.ToolPolicyDeny, p, "ordinary management entries stay Deny")
 		}
+		customCfg := config.DefaultConfig()
+		customCfg.Agents.List = []config.AgentConfig{{ID: "q4-custom", Type: config.AgentTypeCustom, Tools: custom}}
+		customPolicy, _ := tools.BuildFallbackPolicyCfg(customCfg, "q4-custom")
+		assert.Equal(t, "ask", tools.ResolveEffectivePolicy(customPolicy, "set_channel_outbound"), "Q4: custom chat agents always ask, not management Deny")
 		assert.Equal(t, config.ToolPolicyAsk, custom.Builtin.Policies["edit_skill"], "r15 §10 Main editing")
 		assert.Equal(t, config.ToolPolicyAllow, custom.Builtin.Policies["get_skill"], "r15 §10 read access")
 		for _, retired := range []string{"create_skill", "remove_skill"} {
@@ -219,6 +228,6 @@ func l1WU2ManagementNames() []string {
 	return []string{"create_agent", "update_agent", "delete_agent", "create_workspace", "update_workspace",
 		"delete_workspace", "install_skill",
 		"add_mcp_server", "remove_mcp_server", "configure_provider", "enable_channel", "disable_channel",
-		"configure_channel", "connect_channel", "set_channel_outbound", "connect_mailbox", "set_agent_permissions",
-		"remove_secret", "select_secret_version", "set_config"}
+		"configure_channel", "connect_channel", "connect_mailbox", "set_agent_permissions",
+		"remove_secret", "select_secret_version", "set_config"} // Q4: outbound is no longer an Omnipus-only management grant.
 }

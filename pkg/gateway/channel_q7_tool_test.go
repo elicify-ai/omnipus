@@ -84,34 +84,42 @@ func TestQ7T22_SaveCanonicalWholeListAndShareTheLiveRevision(t *testing.T) {
 	t13AssertOutbound(t, f, "telegram", "reply_only", []string{})
 }
 
-func TestQ7T22_AuthorityPrecedesOwnConnectionAndEveryRefusalWritesNothing(t *testing.T) {
+// Founder 2026-11-03 Q4 supersedes FR-031's Omnipus-only fence, not
+// OWN_CONNECTION. Direct execution here complements the real-consent tests.
+func TestQ7T22_ChatCapableAuthorityPreservesOwnConnectionRefusals(t *testing.T) {
 	for _, tc := range []struct{ name, caller, bound, code, message string }{
 		{"Omnipus_own", "omnipus", "omnipus", "OWN_CONNECTION", "a connection's own agent cannot change its posting list; ask the operator"},
-		{"ordinary_other", "mia", "jim", "OMNIPUS_ONLY", "only Omnipus can change a connection's posting list; ask the operator or Omnipus"},
-		{"ordinary_own", "mia", "mia", "OMNIPUS_ONLY", "only Omnipus can change a connection's posting list; ask the operator or Omnipus"},
+		{"ordinary_other", "mia", "jim", "", ""},
+		{"ordinary_own", "mia", "mia", "OWN_CONNECTION", "a connection's own agent cannot change its posting list; ask the operator"},
 		{"missing_identity", "", "mia", "OMNIPUS_ONLY", "only Omnipus can change a connection's posting list; ask the operator or Omnipus"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := q7Fixture(t, "telegram", "telegram", tc.bound)
 			before := t13Before(t, f)
 			result := q7ExecuteAs(t, f, tc.caller, q7Args("telegram", "agent_may_start", t14Read(t, f, "telegram").Revision, []string{"222"}))
+			if tc.code == "" {
+				q7Saved(t, result, "agent_may_start", []string{"telegram:222"})
+				t13AssertOutbound(t, f, "telegram", "agent_may_start", []string{"telegram:222"})
+				return
+			}
 			failure := q7Error(t, result, tc.code)
-			require.Equal(t, tc.message, failure["message"], "FR-031/r9 Q1 A: authority-first exact refusal")
+			require.Equal(t, tc.message, failure["message"], "Q4: own-connection refusal remains exact; unidentified callers are not authorized")
 			t13Unchanged(t, f, before)
 		})
 	}
 }
 
-func TestQ7T22_AuthorityPrecedesUnknownConnection(t *testing.T) {
-	// FR-031/r9: an ordinary caller is refused before any connection lookup.
+func TestQ7T22_OrdinaryCallerUnknownConnectionIsNotOmnipusOnly(t *testing.T) {
+	// Q4 supersedes FR-031: an ordinary caller reaches the normal FR-030 lookup.
 	f := q7Fixture(t, "telegram", "telegram", "jim")
 	const unknownID = "q7-unknown-connection"
 	_, exists := f.al.GetConfig().Channels[unknownID]
 	require.False(t, exists, "instrument: the requested connection really is absent")
 	before := t13Before(t, f)
 	result := q7ExecuteAs(t, f, "mia", q7Args(unknownID, "reply_only", "absent", []string{}))
-	failure := q7Error(t, result, "OMNIPUS_ONLY")
-	require.Equal(t, "only Omnipus can change a connection's posting list; ask the operator or Omnipus", failure["message"], "FR-031: authority-first refusal must not reveal an unknown connection")
+	failure := q7Error(t, result, "CHANNEL_NOT_FOUND")
+	require.Contains(t, failure["message"], unknownID, "FR-030: identify the absent connection")
+	require.Contains(t, failure["message"], "nothing was saved")
 	t13Unchanged(t, f, before)
 }
 
