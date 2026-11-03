@@ -125,7 +125,7 @@ func (al *AgentLoop) assembleMessages(
 	// Read before the build: a skill change committed during it makes the
 	// next turn refreeze the menu once more instead of missing the change.
 	ts.skillsMenuGeneration = skills.Generation()
-	base := ts.agent.ContextBuilder.BuildMessages(ts.depth, nil, userMsg, media,
+	base := ts.agent.ContextBuilder.BuildMessagesForSession(ts.transcriptSessionID, ts.depth, nil, userMsg, media,
 		ts.opts.WorkspaceID, ts.channel, ts.chatID, ts.opts.SenderID,
 		ts.opts.SenderDisplayName, withExpiryNote(breadcrumb, expiryNote), nil, skillNames...)
 	base = withoutVolatileNotes(base)
