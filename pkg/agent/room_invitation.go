@@ -79,13 +79,25 @@ func (al *AgentLoop) SummarizeRoomInvitation(ctx context.Context, req RoomInvita
 	if !ok || inst == nil {
 		return RoomInvitationResult{}, fmt.Errorf("agent %s is not available", req.AgentID)
 	}
+	// Security finding F2 (founder 2026-11-03, "the agent's provider"): the
+	// summary goes to the agent's own primary provider/model pair, chosen by
+	// the same checked route as its normal turns (providerForTurnCandidate).
+	// inst.Provider is the installation default injected at boot, so it is
+	// used only when the agent has no candidate, exactly as a normal turn
+	// does. A named route that is unavailable refuses before anything is sent
+	// (*providers.ModelRouteUnavailableError, no call: FR-041/FR-045).
 	inst.mu.RLock()
-	provider, model := inst.Provider, inst.Model
+	provider, model := inst.Provider, resolvedCandidateModel(inst.Candidates, inst.Model)
 	providerID := ""
+	var routeErr error
 	if len(inst.Candidates) > 0 {
 		providerID = inst.Candidates[0].Provider
+		provider, routeErr = inst.providerForTurnCandidate(inst.Candidates[0], false)
 	}
 	inst.mu.RUnlock()
+	if routeErr != nil {
+		return RoomInvitationResult{}, routeErr
+	}
 	if provider == nil || strings.TrimSpace(model) == "" {
 		return RoomInvitationResult{}, fmt.Errorf("agent %s has no model", req.AgentID)
 	}
