@@ -6,6 +6,7 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -53,6 +54,16 @@ func TestQ7T35_PermissionToolStoresApplicableAskDenyAndClearsToInheritance(t *te
 			if tc.refuse {
 				require.True(t, result.IsError)
 				require.Contains(t, result.ForLLM, "OMNIPUS_PER_AGENT_ASK", "T-10 R16: preserve existing Omnipus Ask refusal")
+				var body struct {
+					Error struct {
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &body))
+				message := strings.ToLower(body.Error.Message)
+				require.Contains(t, message, "clear the entry", "S-39 row 16: name the supported recovery action")
+				require.Contains(t, message, "inherit", "S-39 row 16: removing the entry restores inheritance")
+				require.Regexp(t, `global[^.\n]*(not\s+[^a-z]*deny|non-deny)`, message, "S-39 row 16: clearing cannot override global Deny")
 				require.Equal(t, before, after)
 				return
 			}

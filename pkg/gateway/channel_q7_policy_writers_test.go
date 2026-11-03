@@ -7,6 +7,7 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -136,6 +137,11 @@ func TestQ7T35_PerAgentWriterMatrixUsesTheAlwaysAskAndExistingOmnipusRules(t *te
 					if id == "omnipus" && policy == "ask" {
 						require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "T-10 R16: existing Omnipus guard remains: %s", rec.Body.String())
 						require.Contains(t, rec.Body.String(), "Omnipus takes no per-agent Ask")
+						var refusal struct {
+							Error string `json:"error"`
+						}
+						require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &refusal))
+						q7AssertClearEntryGuidance(t, refusal.Error)
 						require.Equal(t, before, after)
 						require.Equal(t, configBefore, q7ConfigBytes(t, f.wu6Fixture))
 						return
@@ -146,6 +152,16 @@ func TestQ7T35_PerAgentWriterMatrixUsesTheAlwaysAskAndExistingOmnipusRules(t *te
 			}
 		}
 	}
+}
+
+// R-CHK, S-39 row 16 / T-10 row 9: the refusal must explain the recovery
+// path without promising that clearing a private entry can lift global Deny.
+func q7AssertClearEntryGuidance(t *testing.T, message string) {
+	t.Helper()
+	message = strings.ToLower(message)
+	require.Contains(t, message, "clear the entry", "S-39: refusal names the supported action")
+	require.Contains(t, message, "inherit", "S-39: clearing restores inheritance, not stored Ask")
+	require.Regexp(t, `global[^.\n]*(not\s+[^a-z]*deny|non-deny)`, message, "S-39: always-ask recovery requires a non-Deny global layer")
 }
 
 func TestQ7T35_ClearingOmnipusOverrideRestoresOnlyGlobalInheritance(t *testing.T) {

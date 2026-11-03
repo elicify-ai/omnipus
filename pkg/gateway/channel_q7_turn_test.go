@@ -131,10 +131,13 @@ func q7WaitTurn(t *testing.T, f *wu6Fixture, events agent.EventSubscription, sid
 				require.True(t, ok)
 				if end.SessionID == sid {
 					require.Equal(t, agent.TurnEndStatusCompleted, end.Status)
-					// Shutdown waits permanently close intake. Observe this completed
-					// turn here; the existing cleanup still asserts the full drain.
-					_, _, _, active := f.al.ActiveForegroundTurnInfo(sid)
-					require.False(t, active, "instrument: completed foreground turn is no longer active")
+					// TurnEnd precedes clearActiveTurn's deferred cleanup. Wait for
+					// that nondestructively; shutdown waits permanently close intake.
+					// q7StartTurn cleanup still asserts the full request drain.
+					require.Eventually(t, func() bool {
+						_, _, _, active := f.al.ActiveForegroundTurnInfo(sid)
+						return !active
+					}, time.Second, time.Millisecond, "instrument: completed foreground turn is no longer active")
 					return
 				}
 			}
