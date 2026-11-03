@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
-import type { APIRequestContext, APIResponse, Page, Request } from '@playwright/test'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { APIRequestContext, APIResponse, Locator, Page, Request } from '@playwright/test'
 import type { components } from '../../../src/lib/api/generated/openapi-types'
-import { ensurePagingRoom, PAGING_ENTRY_COUNT, PAGING_ROOM_NAME, pagingEntrySelector, waitForOlderRequest } from './room-history-paging'
+import { ensurePagingRoom, PAGING_ENTRY_COUNT, PAGING_ROOM_NAME, pagingEntrySelector, scrollHistoryToTop, waitForOlderRequest } from './room-history-paging'
 
 type Entry = components['schemas']['RoomEntry']
 type Room = components['schemas']['Room']
@@ -143,5 +143,106 @@ describe('round-3 paging fixture regressions', () => {
     await expect(waitForOlderRequest(page, 'r', action)).resolves.toBe(wanted)
     expect(action).toHaveBeenCalledTimes(1)
     expect(waitForRequest).toHaveBeenCalledTimes(1)
+  })
+})
+
+// R3 dispatch: wait for genuine native Home completion before the one PageDown;
+// never manufacture scrollTop0 to hide an unfinished keyboard animation. The
+// helper is real; only browser transport and animation-frame scheduling are doubles.
+function navigationFixture(top: number) {
+  const element = document.createElement('div')
+  element.tabIndex = -1
+  element.scrollTop = top
+  document.body.append(element)
+  const frames: FrameRequestCallback[] = []
+  const animationFrame = vi.fn((callback: FrameRequestCallback) => frames.push(callback))
+  vi.stubGlobal('requestAnimationFrame', animationFrame)
+  const keys: string[] = []
+  const focus = vi.fn(async () => { element.focus() })
+  const press = vi.fn(async (key: string) => { keys.push(key) })
+  let evaluated!: () => void
+  const evaluating = new Promise<void>((resolve) => { evaluated = resolve })
+  const evaluate = vi.fn(async (action: (el: HTMLElement) => unknown) => {
+    const result = action(element)
+    evaluated()
+    return await result
+  })
+  let syntheticScrolls = 0
+  element.addEventListener('scroll', () => { syntheticScrolls++ })
+  return {
+    element, frames, animationFrame, keys, focus, press, evaluate, evaluating,
+    syntheticScrolls: () => syntheticScrolls,
+    history: { focus, evaluate } as unknown as Locator,
+    page: { keyboard: { press } } as unknown as Page,
+  }
+}
+
+describe('native history navigation ordering', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    document.body.replaceChildren()
+  })
+
+  it.each([1, 1_000])('waits for native Home from %ipx without forcing zero or issuing PageDown early', async (top) => {
+    const fixture = navigationFixture(top)
+    let ready = false
+    const reading = scrollHistoryToTop(fixture.page, fixture.history).then(async () => {
+      ready = true
+      await fixture.page.keyboard.press('PageDown')
+    })
+    await fixture.evaluating
+    try {
+      expect(fixture.element.scrollTop, 'the helper must not fake native Home completion').toBe(top)
+      expect(ready, 'a resolved key injection is not a completed scroll').toBe(false)
+      expect(fixture.keys).toEqual(['Home'])
+      expect(fixture.frames).toHaveLength(1)
+      // Even a final fractional pixel is not the native Home destination.
+      fixture.element.scrollTop = top / 2
+      fixture.frames.shift()!(0)
+      await Promise.resolve()
+      expect(ready).toBe(false)
+      expect(fixture.keys).toEqual(['Home'])
+      expect(fixture.frames).toHaveLength(1)
+      fixture.element.scrollTop = 0 // browser animation reaches its real target
+      fixture.frames.shift()!(0)
+      await reading
+      expect(fixture.keys).toEqual(['Home', 'PageDown'])
+      expect(fixture.focus).toHaveBeenCalledExactlyOnceWith()
+      expect(fixture.evaluate).toHaveBeenCalledTimes(1)
+      expect(fixture.syntheticScrolls()).toBe(0)
+    } finally {
+      fixture.element.scrollTop = 0
+      for (const callback of fixture.frames.splice(0)) callback(0)
+      await reading
+    }
+  })
+
+  it('keeps genuine Home input when already at the top without scheduling a fake scroll', async () => {
+    const fixture = navigationFixture(0)
+    await scrollHistoryToTop(fixture.page, fixture.history)
+    expect(fixture.element.scrollTop).toBe(0)
+    expect(fixture.keys).toEqual(['Home'])
+    expect(fixture.focus).toHaveBeenCalledExactlyOnceWith()
+    expect(fixture.animationFrame).not.toHaveBeenCalled()
+    expect(fixture.syntheticScrolls()).toBe(0)
+  })
+
+  it('propagates a failed focus without sending Home or pretending navigation succeeded', async () => {
+    const fixture = navigationFixture(1)
+    const failure = new Error('history viewport unavailable')
+    fixture.focus.mockRejectedValueOnce(failure)
+    await expect(scrollHistoryToTop(fixture.page, fixture.history)).rejects.toBe(failure)
+    expect(fixture.press).not.toHaveBeenCalled()
+    expect(fixture.evaluate).not.toHaveBeenCalled()
+  })
+
+  it('propagates a failed Home injection without evaluating or forcing the scroll position', async () => {
+    const fixture = navigationFixture(1)
+    const failure = new Error('native Home injection failed')
+    fixture.press.mockRejectedValueOnce(failure)
+    await expect(scrollHistoryToTop(fixture.page, fixture.history)).rejects.toBe(failure)
+    expect(fixture.press).toHaveBeenCalledExactlyOnceWith('Home')
+    expect(fixture.evaluate).not.toHaveBeenCalled()
+    expect(fixture.element.scrollTop).toBe(1)
   })
 })

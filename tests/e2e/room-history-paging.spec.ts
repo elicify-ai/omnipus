@@ -10,7 +10,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { components } from '../../src/lib/api/generated/openapi-types'
 import { WsFrame } from '../../src/lib/api/generated/ws-schemas'
-import { ensurePagingRoom, waitForOlderRequest, PAGING_ENTRY_COUNT, PAGING_NEWEST_TEXT, PAGING_OLDEST_TEXT } from './fixtures/room-history-paging'
+import { ensurePagingRoom, scrollHistoryToTop, waitForOlderRequest, PAGING_ENTRY_COUNT, PAGING_NEWEST_TEXT, PAGING_OLDEST_TEXT } from './fixtures/room-history-paging'
 
 type Workspace = components['schemas']['Workspace']
 let fixture: Awaited<ReturnType<typeof ensurePagingRoom>>
@@ -98,9 +98,7 @@ test('scrolling up through paged history keeps the reader anchored and ends at t
     // The helper arms the event waiter BEFORE scrolling. A fast request
     // emitted before scrollIntoViewIfNeeded resolves cannot be lost.
     const request = await waitForOlderRequest(page, roomId, async () => {
-      await log.focus()
-      await page.keyboard.press('Home') // Genuine reader intent, not a store edit.
-      await log.evaluate((el) => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+      await scrollHistoryToTop(page, log)
     })
     const cursor = Number(new URL(request.url()).searchParams.get('before_seq'))
     expect(cursor).toBeGreaterThan(fixture.oldest.seq)
@@ -145,9 +143,7 @@ test('scrolling up through paged history keeps the reader anchored and ends at t
     // Virtual rows are mounted only near the reader. Move deliberately to
     // the first entry AFTER proving the unchanged prepend anchor, then retain
     // the original exact-count and visibility oracles (and add in-viewport).
-    await log.focus()
-    await page.keyboard.press('Home')
-    await log.evaluate((el) => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+    await scrollHistoryToTop(page, log)
     const oldest = pagingEntry(fixture.oldest).locator('p')
     await expect(oldest).toHaveCount(1)
     await expect(oldest).toHaveText(PAGING_OLDEST_TEXT)

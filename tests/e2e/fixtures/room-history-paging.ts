@@ -1,4 +1,4 @@
-import type { APIRequestContext, Page, Request } from '@playwright/test'
+import type { APIRequestContext, Locator, Page, Request } from '@playwright/test'
 import type { components } from '../../../src/lib/api/generated/openapi-types'
 
 type Room = components['schemas']['Room']
@@ -93,6 +93,18 @@ export async function waitForOlderRequest(page: Page, roomId: string, scroll: ()
   }, { timeout: 30_000 })
   await scroll()
   return await pending
+}
+
+/** Home key injection completes before its native scroll animation. Wait for
+ * the actual top: forcing zero can leave Home pending and cancel PageDown. */
+export async function scrollHistoryToTop(page: Page, history: Locator): Promise<void> {
+  await history.focus()
+  await page.keyboard.press('Home')
+  await history.evaluate(async (el) => {
+    while (el.scrollTop !== 0) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    }
+  })
 }
 
 /** Server entry identity, never substring text (20 also matches 2000, etc.). */
