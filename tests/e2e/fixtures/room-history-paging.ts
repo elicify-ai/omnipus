@@ -16,8 +16,8 @@ async function body<T>(response: Awaited<ReturnType<APIRequestContext['get']>>, 
   return await response.json() as T
 }
 
-/** Existing REST endpoints only. Both base and recovery identities are eligible
- * for reuse; replacement Playwright workers reconstruct this from the server. */
+/** Existing REST endpoints only. Base and recovery rooms are reusable only
+ * while the last seed is still their real tail; a live probe dirties the room. */
 export async function ensurePagingRoom(
   request: APIRequestContext,
   workspaceId: string,
@@ -29,7 +29,10 @@ export async function ensurePagingRoom(
   let complete: Room | undefined
   for (const room of candidates) {
     const latest = await body<RoomHistory>(await request.get(`/api/v1/rooms/${room.id}/messages?limit=100`, { headers }), 'probe paging seed')
-    if (latest.entries.some((entry) => entry.client_message_id === `seed-${PAGING_ENTRY_COUNT}` && entry.text === PAGING_NEWEST_TEXT)) {
+    // A successful browser attempt appends a live entry. Reusing that room
+    // would shift the opening boundary from seed6 to seed7 on its retry.
+    const tail = latest.entries.at(-1)
+    if (tail?.client_message_id === `seed-${PAGING_ENTRY_COUNT}` && tail.text === PAGING_NEWEST_TEXT) {
       complete = room
       break
     }

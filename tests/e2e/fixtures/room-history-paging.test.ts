@@ -82,6 +82,41 @@ describe('round-3 paging fixture regressions', () => {
     expect(post).toHaveBeenCalledTimes(PAGING_ENTRY_COUNT + 2) // create + pause + seed
   })
 
+  it('replaces a complete room after a live probe so every retry starts with exactly 10,005 seeds', async () => {
+    const live: Entry = { ...entry(PAGING_ENTRY_COUNT + 1, 'used'), client_message_id: 'live-probe', text: 'pager-message-live-proof' }
+    const get = vi.fn(async (path: string) => {
+      if (path === '/api/v1/workspaces/sales/rooms') return response([room('used', PAGING_ROOM_NAME)])
+      if (path === '/api/v1/rooms/used/messages?limit=100') return response({ entries: [entry(PAGING_ENTRY_COUNT, 'used'), live], has_older: true })
+      if (path.includes('/api/v1/rooms/used/messages?before_seq=')) return response({ entries: [entry(1, 'used'), entry(20, 'used')], has_older: false })
+      if (path === '/api/v1/rooms/fresh/messages?limit=100') return response({ entries: [entry(PAGING_ENTRY_COUNT, 'fresh')], has_older: true })
+      if (path.includes('/api/v1/rooms/fresh/messages?before_seq=')) return response({ entries: [entry(1, 'fresh'), entry(20, 'fresh')], has_older: false })
+      throw new Error(`unexpected fixture request: ${path}`)
+    })
+    let paused = false
+    let seeds = 0
+    const post = vi.fn(async (path: string, options: { data: Record<string, unknown> }) => {
+      if (path === '/api/v1/workspaces/sales/rooms') return response(room('fresh', `${PAGING_ROOM_NAME}-fresh`))
+      expect(path, 'retry must not append to the contaminated room').toBe('/api/v1/rooms/fresh/messages')
+      if (options.data.text === '/pause') {
+        expect(options.data).toEqual({ client_message_id: 'paging-pause', text: '/pause', mentions: [] })
+        paused = true
+      } else {
+        expect(paused, 'the replacement room is paused before broadcasts').toBe(true)
+        seeds++
+        expect(options.data).toEqual({ client_message_id: `seed-${seeds}`, text: `pager-message-${seeds}`, mentions: [] })
+      }
+      return response(null)
+    })
+    const fixture = await ensurePagingRoom({ get, post } as unknown as APIRequestContext, 'sales', {})
+    expect(fixture.roomId, 'a live probe disqualifies the formerly complete room').toBe('fresh')
+    expect(fixture.seeded).toBe(PAGING_ENTRY_COUNT)
+    expect(seeds).toBe(PAGING_ENTRY_COUNT)
+    expect(fixture.anchor).toEqual(entry(20, 'fresh'))
+    expect(fixture.oldest).toEqual(entry(1, 'fresh'))
+    expect(fixture.newest).toEqual(entry(PAGING_ENTRY_COUNT, 'fresh'))
+    expect(post).toHaveBeenCalledTimes(PAGING_ENTRY_COUNT + 2)
+  })
+
   it('never treats an incomplete recovery seed as complete', async () => {
     const get = vi.fn(async (path: string) => path.endsWith('/rooms')
       ? response([room('partial', `${PAGING_ROOM_NAME}-partial`)])
