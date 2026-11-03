@@ -132,6 +132,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// reasoning: a workspace's core_team can change via hot-reload too.
 	wireWorkingDirInjectors(al, registry)
 	wireModeNoteInjectors(al, registry)
+	wireChannelsInjectors(al, registry)
 
 	// Re-wire per-workspace project-shelf resolvers (ADR-072 R1 fix regression,
 	// live UAT 2026-09-02): this was missing here, so a mounted project's

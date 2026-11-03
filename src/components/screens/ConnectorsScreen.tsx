@@ -1308,6 +1308,7 @@ export function ConnectorsScreen() {
           nativeAvailable={configuringChannelProps?.nativeAvailable}
           enabled={channelsState?.status === 'success' ? currentConfiguringChannel?.enabled : undefined}
           enabledStateUnknown={channelsState?.status === 'error'}
+          rejectedSenders={currentConfiguringChannel?.rejected_senders}
           open={configuringChannel !== null}
           onOpenChange={(open) => {
             if (!open) setConfiguringChannel(null)

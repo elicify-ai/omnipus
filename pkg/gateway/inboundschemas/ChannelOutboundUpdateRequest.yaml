@@ -1,0 +1,39 @@
+title: ChannelOutboundUpdateRequest
+description: >
+  Request body of PUT /api/v1/channels/{id}/outbound (channels spec FR-020,
+  FR-022). The whole target list replaces the stored one. Targets are raw
+  input: the server trims, canonicalizes, removes duplicates and then enforces
+  the limit of 20 (too_many_targets).
+type: object
+additionalProperties: false
+required:
+  - policy
+  - targets
+  - expected_revision
+properties:
+  policy:
+    type: string
+    description: reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+    enum:
+      - reply_only
+      - agent_may_start
+    example: agent_may_start
+  targets:
+    type: array
+    description: >
+      Raw target entries, one per textarea line: a bare id or "platform:id".
+      Rejections refer to an entry by its 0-based index in this array.
+    maxItems: 64
+    items:
+      type: string
+      maxLength: 256
+    example:
+      - "-1001234567890"
+  expected_revision:
+    type: string
+    description: >
+      The revision returned by GET /api/v1/channels/{id}/outbound (or
+      list_channels). A different current revision is refused with 409
+      stale_revision.
+    minLength: 1
+    example: absent
