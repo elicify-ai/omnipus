@@ -68,7 +68,9 @@ test('T28 B39:byte-shortened open and simultaneous2H observer top-up share ONE c
   await history.authenticate();
   await history.open();
   await expect.poll(async () => { const g = await geometry(page); return g.height / g.H; },
-    { message: 'byte cuts cannot declare opening ready with only2H content' }).toBeGreaterThanOrEqual(4);
+    // Founder amendment2026-10-30 (#1452), spec header and D5: opening3H;
+    // a2H-only implementation still fails. Prefetch remains2H below.
+    { message: 'byte cuts cannot declare opening ready with only2H content' }).toBeGreaterThanOrEqual(3);
   const snapshot = history.snapshot();
   expect(snapshot.page_info.soft_byte_budget).toBe(BUDGET);
   const openingPages = history.traffic.pages.filter((r) => r.status === 200).map((r) => ({ url: new URL(r.url), page: SessionHistoryResponse.parse(r.body) }));
