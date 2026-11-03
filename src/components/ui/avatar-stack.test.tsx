@@ -66,7 +66,7 @@ describe('AvatarStack', () => {
     }
   })
 
-  it('AvatarStack draws up to max avatars and a +N marker for the rest', async () => {
+  it('draws up to max avatars and a +N marker for the rest', async () => {
     const AvatarStack = await loadStack()
     // S-50 examples, max 3: 2 → 2 none; 3 → 3 none; 4 → 3 +1; 10 → 3 +7.
     const cases = [
