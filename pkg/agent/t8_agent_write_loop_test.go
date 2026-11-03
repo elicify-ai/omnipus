@@ -26,6 +26,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// t8LockedBuffer is a bytes.Buffer safe for the slog capture below: other
+// goroutines in the process (a shared session store's stats flusher started by
+// an earlier test) log through slog.Default while the test reads the capture.
+type t8LockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *t8LockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *t8LockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type t8DecisionRecorder struct {
 	mu       sync.Mutex
 	requests []PolicyApprovalReq
@@ -101,7 +121,7 @@ func TestT8AgentEnv_RealLoopApprovalAndRedaction(t *testing.T) {
 			al.SetToolApprover(decider)
 			sub := al.SubscribeEvents(256)
 			defer al.UnsubscribeEvents(sub.ID)
-			var logs bytes.Buffer
+			var logs t8LockedBuffer
 			previous := slog.Default()
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 			defer slog.SetDefault(previous)
