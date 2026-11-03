@@ -93,7 +93,7 @@ func TestL1WU2OmnipusPolicies_ExactSupportSetAndNoPerAgentAsk(t *testing.T) {
 	ask := []string{"delete_agent", "edit_skill", "remove_mcp_server", "add_mcp_server",
 		"configure_provider", "enable_channel", "configure_channel", "connect_channel",
 		"connect_mailbox", "set_agent_permissions", "remove_secret", "select_secret_version",
-		"environment_setup", "bash", "delete_task"}
+		"environment_setup", "bash", "delete_task", "install_skill"}
 	global := map[string]config.ToolPolicy{}
 	for name, p := range cfg.Sandbox.ToolPolicies {
 		global[name] = config.ToolPolicy(p)
