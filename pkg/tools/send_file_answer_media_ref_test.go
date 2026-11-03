@@ -54,8 +54,8 @@ func TestSendFileAnswer_MediaRefsEnforceSendPolicy(t *testing.T) {
 			path := filepath.Join(dir, "source.txt")
 			const content = "The answer file contains the Friday launch plan.\n"
 			const filename = "prepared-answer.txt"
-			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-				t.Fatalf("write registered file: %v", err)
+			if writeErr := os.WriteFile(path, []byte(content), 0o600); writeErr != nil {
+				t.Fatalf("write registered file: %v", writeErr)
 			}
 			store := media.NewFileMediaStore()
 			t.Cleanup(store.Stop)
@@ -67,8 +67,8 @@ func TestSendFileAnswer_MediaRefsEnforceSendPolicy(t *testing.T) {
 			}
 			// Positive control: this is an existing, resolvable legacy ref,
 			// not a nonexistent ref that would fail before the send check.
-			if resolved, err := store.Resolve(ref); err != nil || resolved != path {
-				t.Fatalf("registered media reference resolves to %q, err=%v; want %q", resolved, err, path)
+			if resolved, lookupErr := store.Resolve(ref); lookupErr != nil || resolved != path {
+				t.Fatalf("registered media reference resolves to %q, err=%v; want %q", resolved, lookupErr, path)
 			}
 			pattern := regexp.MustCompile("^" + regexp.QuoteMeta(mediaDir) + "(?:" + regexp.QuoteMeta(string(os.PathSeparator)) + "|$)")
 			files := NewSendFileTool(workspace, true, 0, store, []*regexp.Regexp{pattern})
