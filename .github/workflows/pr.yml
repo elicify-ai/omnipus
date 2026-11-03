@@ -898,10 +898,12 @@ jobs:
       # are merged — so both run in the design-system-audit job, not here.
       - run: npm run test:design-system:package
       # Build both revisions on this runner; a macOS baseline is not a Linux budget oracle.
+      # Baseline re-based 2026-11-03 to the release/v0.1.1 tip 3e2dc1ace by founder
+      # decision B1 = A (#1183); it was the frozen 92aeb4d5d (2026-09-17) before.
       - name: Checkout immutable production baseline
         uses: actions/checkout@v7
         with:
-          ref: 92aeb4d5dcb0d545e2370ddd1c57c099a03392ba
+          ref: 3e2dc1ace3da5bf1c035ca9808de18964565182e
           path: dist/design-system-ci-baseline
       - name: Build baseline with its original dependency lock
         working-directory: dist/design-system-ci-baseline
