@@ -47,12 +47,12 @@ func AllTools(d *Deps) []tools.Tool {
 		NewChannelTestTool(d),
 		NewChannelConnectTool(d),
 
-		// Skill management (4: install and search retired)
-		NewSkillRemoveTool(d),
+		// Skill management (3: install, search, create_skill and remove_skill retired)
 		NewSkillListTool(d),
-		// Skill authoring / self-improvement (Spec-6 U2): consent-gated +
-		// versioned writes. Editing a built-in produces a user override.
-		NewSkillCreateTool(d),
+		// get_skill: the one reader of one installed skill (skills spec r15 §5.2).
+		NewGetSkillTool(d),
+		// edit_skill (r15 §5.1): copy, delete_file, delete and restore, all
+		// through skills.ApplyChange.
 		NewSkillEditTool(d),
 
 		// MCP server management (3)

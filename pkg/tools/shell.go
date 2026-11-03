@@ -580,7 +580,11 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		}
 		turnNotice += n
 	}
-	runtimeAllowRoots := turnAllowRoots(rtLayer, docLayer)
+	var godSkillFolders []string
+	if t.godMode {
+		godSkillFolders = turnSkillFolders(ctx) // r15 §6.2 item 1: the God floor grants them too
+	}
+	runtimeAllowRoots := turnAllowRoots(rtLayer, docLayer, godSkillFolders)
 
 	// FR-B6: route every non-god-mode invocation through sandbox.ResolveLimits.
 	// P3 (ADR-046): EffectiveFSPolicy feeds the per-child Landlock ruleset
@@ -845,7 +849,7 @@ func (t *ExecTool) turnKernelPolicy(ctx context.Context, cwd string, rt environm
 	// appended after. augmentKernelPolicy below keeps adding the same rules
 	// additively for the child env composition; the denial no longer depends
 	// on it.
-	policy, err := sandbox.KernelPolicyForTurn(authored, turnAllowRoots(rt, doc)...)
+	policy, err := sandbox.KernelPolicyForTurn(authored, turnAllowRoots(rt, doc, authored.HomeGuard.SkillFolders)...)
 	if err != nil || policy == nil {
 		return policy, err
 	}

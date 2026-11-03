@@ -4,6 +4,7 @@ import { ApiSchemaError } from './http'
 
 const revision = 'a'.repeat(64)
 const activeSkill = {
+  has_local_changes: false,
   revision,
   persistence_status: 'complete' as const,
   activation_status: 'active' as const,

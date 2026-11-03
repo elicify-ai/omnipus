@@ -469,6 +469,11 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 		return agentLoopRunTurnConductorReturn, true
 	}
 	rp.rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTurnWorkspaceDir(rp.rc.rx.rr.rq.ri.rf.rt.turnCtx, rp.rc.rx.rr.rq.ri.wsDir)
+	// Skills `needs` (r15 §5.7) checks the PATH this agent's bash child gets.
+	turnTools := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Tools
+	rp.rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithAgentBashPATH(rp.rc.rx.rr.rq.ri.rf.rt.turnCtx, func(ctx context.Context) string {
+		return tools.BashChildPATH(ctx, turnTools)
+	})
 
 	// FR-011, FR-012: detect a per-thread model switch via the inbound message
 	// metadata. When the user-selected model differs from the agent's currently

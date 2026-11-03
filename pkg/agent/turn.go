@@ -102,6 +102,11 @@ type turnState struct {
 	// userInputInWindow is set by assembleMessages when this turn's re-read
 	// instruction is already the newest line of the model window.
 	userInputInWindow bool
+	// skillsMenuGeneration is skills.Generation() read just before this
+	// turn's system prompt was assembled (assembleMessages). The session menu
+	// freeze refreezes when it differs from the frozen generation (skills spec
+	// r15 FR-053: the next turn's menu reflects a committed change).
+	skillsMenuGeneration uint64
 
 	agent *AgentInstance
 	opts  processOptions

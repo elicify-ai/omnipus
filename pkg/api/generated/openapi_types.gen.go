@@ -11036,6 +11036,60 @@ func (e SkillStatus) Valid() bool {
 	}
 }
 
+// Defines values for SkillDetailNeedsStatus.
+const (
+	SkillDetailNeedsStatusMissing SkillDetailNeedsStatus = "missing"
+	SkillDetailNeedsStatusPresent SkillDetailNeedsStatus = "present"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailNeedsStatus enum.
+func (e SkillDetailNeedsStatus) Valid() bool {
+	switch e {
+	case SkillDetailNeedsStatusMissing:
+		return true
+	case SkillDetailNeedsStatusPresent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillDetailShelf.
+const (
+	SkillDetailShelfBuiltin  SkillDetailShelf = "builtin"
+	SkillDetailShelfRegistry SkillDetailShelf = "registry"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailShelf enum.
+func (e SkillDetailShelf) Valid() bool {
+	switch e {
+	case SkillDetailShelfBuiltin:
+		return true
+	case SkillDetailShelfRegistry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillDetailState.
+const (
+	SkillDetailStateDeleted   SkillDetailState = "deleted"
+	SkillDetailStateInstalled SkillDetailState = "installed"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailState enum.
+func (e SkillDetailState) Valid() bool {
+	switch e {
+	case SkillDetailStateDeleted:
+		return true
+	case SkillDetailStateInstalled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SkillTrustResponseLevel.
 const (
 	SkillTrustResponseLevelAllowAll        SkillTrustResponseLevel = "allow_all"
@@ -14076,11 +14130,17 @@ type Agent struct {
 	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Role AgentRole `json:"role"`
 
+	// SkillGrants Skill key → generation the grant is bound to (SD-30). Written wholesale by the server at every agent create/update from its own observation of the installed skill folders; requests stay name-only. An absent field or entry is unbound and authorizes nothing.
+	SkillGrants *map[string]string `json:"skill_grants,omitempty"`
+
 	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
 	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null). For `type: system` agents (e.g. the Judge), this is ALSO the judging rubric — one unified soul concept (ADR-052 FR-038, no separate `rubric` field); the Judge's soul is editable while the agent stays otherwise locked.
 	Soul string `json:"soul"`
+
+	// StaleSkillGrants Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). Computed by the server on the agent detail read (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is not listed. Omitted when empty.
+	StaleSkillGrants *[]string `json:"stale_skill_grants,omitempty"`
 
 	// Stats Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
 	Stats *struct {
@@ -25456,6 +25516,9 @@ type Skill struct {
 	Description *string `json:"description,omitempty"`
 	ErrorStage  *string `json:"error_stage,omitempty"`
 
+	// HasLocalChanges true when any of: (a) the newest version's kind is not install or install_replace (a restore of an install version counts as a change); (b) the live folder's current content revision differs from the newest version's revision (an outside change not yet recorded) — evaluated at read time, never by writing history; (c) history is missing or unreadable. Always false for built-ins.
+	HasLocalChanges bool `json:"has_local_changes"`
+
 	// Id Unique skill identifier (typically the skill directory name or npm package name).
 	Id string `json:"id"`
 
@@ -25497,8 +25560,82 @@ type SkillSource string
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string
 
+// SkillCopyRequest Request body for POST /api/v1/skills/{name}/copy: the name of the new user-owned copy. The copy starts ungranted.
+type SkillCopyRequest struct {
+	// NewId Slug of the new skill (letters, digits and single hyphens).
+	NewId string `json:"new_id"`
+}
+
+// SkillDetail Tool-only: the complete result envelope of the get_skill agent tool (skills spec §5.2). Not served by any REST route; it exists so the selectable `fields` names are generated and compared, not typed twice.
+type SkillDetail struct {
+	AbsentFields  *[]string `json:"absent_fields,omitempty"`
+	AllowedTools  *[]string `json:"allowed_tools,omitempty"`
+	Compatibility *string   `json:"compatibility,omitempty"`
+	Description   *string   `json:"description,omitempty"`
+	Files         *struct {
+		Items []struct {
+			Exec bool   `json:"exec"`
+			Path string `json:"path"`
+			Size int64  `json:"size"`
+		} `json:"items"`
+		Total int `json:"total"`
+	} `json:"files,omitempty"`
+	Folder          *string `json:"folder,omitempty"`
+	HasLocalChanges *bool   `json:"has_local_changes,omitempty"`
+
+	// Id The skill slug as it is on disk.
+	Id           string  `json:"id"`
+	Instructions *string `json:"instructions,omitempty"`
+	LastChange   *struct {
+		Actor       *string   `json:"actor,omitempty"`
+		At          *string   `json:"at,omitempty"`
+		Paths       *[]string `json:"paths,omitempty"`
+		ShippedWith *string   `json:"shipped_with,omitempty"`
+		Tool        *string   `json:"tool,omitempty"`
+		Unknown     *bool     `json:"unknown,omitempty"`
+	} `json:"last_change,omitempty"`
+	Metadata *map[string]string `json:"metadata,omitempty"`
+	Name     *string            `json:"name,omitempty"`
+	Needs    *[]struct {
+		Path    *string                `json:"path,omitempty"`
+		Program string                 `json:"program"`
+		Status  SkillDetailNeedsStatus `json:"status"`
+	} `json:"needs,omitempty"`
+
+	// Revision Content revision; null only for a deleted skill.
+	Revision        *string           `json:"revision"`
+	Shelf           *SkillDetailShelf `json:"shelf,omitempty"`
+	State           *SkillDetailState `json:"state,omitempty"`
+	TruncatedFields *[]string         `json:"truncated_fields,omitempty"`
+	Versions        *struct {
+		Items []struct {
+			Actor      string   `json:"actor"`
+			At         string   `json:"at"`
+			Id         string   `json:"id"`
+			Kind       string   `json:"kind"`
+			Paths      []string `json:"paths"`
+			PathsTotal int      `json:"paths_total"`
+			Tool       *string  `json:"tool,omitempty"`
+		} `json:"items"`
+		NextBefore *string `json:"next_before"`
+		Total      int     `json:"total"`
+	} `json:"versions,omitempty"`
+}
+
+// SkillDetailNeedsStatus defines model for SkillDetail.Needs.Status.
+type SkillDetailNeedsStatus string
+
+// SkillDetailShelf defines model for SkillDetail.Shelf.
+type SkillDetailShelf string
+
+// SkillDetailState defines model for SkillDetail.State.
+type SkillDetailState string
+
 // SkillInstallRequest Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
 type SkillInstallRequest struct {
+	// ReplaceLocalChanges Required true to replace an installed skill whose has_local_changes is true. Absent means false.
+	ReplaceLocalChanges *bool `json:"replace_local_changes,omitempty"`
+
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision *string `json:"revision,omitempty"`
 
@@ -29132,6 +29269,9 @@ type UpdateMemorySettingsJSONRequestBody = MemorySettings
 // InstallSkillJSONRequestBody defines body for InstallSkill for application/json ContentType.
 type InstallSkillJSONRequestBody = SkillInstallRequest
 
+// CopySkillJSONRequestBody defines body for CopySkill for application/json ContentType.
+type CopySkillJSONRequestBody = SkillCopyRequest
+
 // PatchAppStateJSONRequestBody defines body for PatchAppState for application/json ContentType.
 type PatchAppStateJSONRequestBody = AppStatePatchRequest
 
@@ -31428,6 +31568,13 @@ func (t SkillInstallRequest) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if t.ReplaceLocalChanges != nil {
+		object["replace_local_changes"], err = json.Marshal(t.ReplaceLocalChanges)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'replace_local_changes': %w", err)
+		}
+	}
+
 	if t.Revision != nil {
 		object["revision"], err = json.Marshal(t.Revision)
 		if err != nil {
@@ -31468,6 +31615,13 @@ func (t *SkillInstallRequest) UnmarshalJSON(b []byte) error {
 	err = json.Unmarshal(b, &object)
 	if err != nil {
 		return err
+	}
+
+	if raw, found := object["replace_local_changes"]; found {
+		err = json.Unmarshal(raw, &t.ReplaceLocalChanges)
+		if err != nil {
+			return fmt.Errorf("error reading 'replace_local_changes': %w", err)
+		}
 	}
 
 	if raw, found := object["revision"]; found {

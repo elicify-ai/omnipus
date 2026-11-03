@@ -29,7 +29,7 @@ func writeSkillFile(t *testing.T, workspace, name string) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(dir, "SKILL.md"),
-		[]byte("# "+name+"\n\nSkill description for "+name+"."),
+		[]byte("---\nname: "+name+"\ndescription: Skill description for "+name+"\n---\n\n# "+name+"\n"),
 		0o644,
 	); err != nil {
 		t.Fatalf("WriteFile(SKILL.md for %s): %v", name, err)
@@ -53,9 +53,15 @@ func TestResolveSlash_Matrix(t *testing.T) {
 	// ADR-072 D5: absence of a grant list denies every skill now, so this
 	// test must explicitly grant what it installed — it used to resolve
 	// under the old "no allowlist = unrestricted" default.
-	if agent.ContextBuilder != nil {
-		agent.ContextBuilder.WithSkillAllowlist([]string{"web-research", "web", "summarize"})
+	// r15 SD-30 (§5.13a): the grant is a persisted identity binding, which
+	// stamps the installed folders; the allowlist alone no longer resolves.
+	granted := persistSkillGrantFixture(t, cfg.Agents.Defaults.Home, config.AgentConfig{
+		ID: agent.ID, Skills: []string{"web-research", "web", "summarize"},
+	})
+	if agent.ContextBuilder == nil {
+		t.Fatal("expected the real agent context builder")
 	}
+	agent.ContextBuilder.WithSkillAllowlist(granted.Skills).WithSkillBindings(granted.SkillGrants)
 
 	type row struct {
 		id          string
@@ -187,12 +193,17 @@ func TestResolveSlash_Matrix_A2(t *testing.T) {
 	// ADR-072 D5: absence of a grant list denies every skill now, so this
 	// test must explicitly grant "web-research" — it used to resolve under
 	// the old "no allowlist = unrestricted" default.
-	if agent != nil && agent.ContextBuilder != nil {
-		agent.ContextBuilder.WithSkillAllowlist([]string{"web-research"})
-	}
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
+	// r15 SD-30 (§5.13a): grant through the persisted identity binding.
+	granted := persistSkillGrantFixture(t, cfg.Agents.Defaults.Home, config.AgentConfig{
+		ID: agent.ID, Skills: []string{"web-research"},
+	})
+	if agent.ContextBuilder == nil {
+		t.Fatal("expected the real agent context builder")
+	}
+	agent.ContextBuilder.WithSkillAllowlist(granted.Skills).WithSkillBindings(granted.SkillGrants)
 
 	originalMsg := "/web-research"
 	opts := &processOptions{

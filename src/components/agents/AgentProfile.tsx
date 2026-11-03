@@ -1891,6 +1891,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                                   verified
                                 </span>
                               )}
+                              {granted && agent?.stale_skill_grants?.includes(skill.id) && (
+                                // UAT-1 F-9: the grant is bound to a previous skill with this
+                                // name, so the agent cannot load it (SKILL_GRANT_STALE).
+                                <span
+                                  data-testid={`skill-stale-badge-${skill.id}`}
+                                  title="This grant is for a previous skill with this name. Save the agent to grant the current one."
+                                  className="text-[length:var(--type-caption-size)] px-[var(--space-1)] rounded bg-[var(--color-warning)]/20 text-[var(--color-warning)] border border-[var(--color-warning)]/30"
+                                >
+                                  stale grant
+                                </span>
+                              )}
                             </div>
                           </div>
                         </Label>

@@ -29,8 +29,8 @@ const mockCommands = [
   { name: 'unknown-agent-cmd', label: '/handoff', description: 'Agent-delivered command', delivery: 'agent', available_while_streaming: false },
 ]
 const mockSkills = [
-  { id: 'web-research', name: 'Web Research', version: '1.0', description: 'Web search and extraction', verified: true, status: 'active', argument_hint: '<query>' },
-  { id: 'code-review', name: 'Code Review', version: '1.0', description: 'Reviews code quality', verified: true, status: 'active' },
+  { has_local_changes: false, id: 'web-research', name: 'Web Research', version: '1.0', description: 'Web search and extraction', verified: true, status: 'active', argument_hint: '<query>' },
+  { has_local_changes: false, id: 'code-review', name: 'Code Review', version: '1.0', description: 'Reviews code quality', verified: true, status: 'active' },
 ]
 // "@" mention menu source data — includes a worker (id "max") to prove
 // useChatAgents' isWorker exclusion carries through to the mention menu,
@@ -272,6 +272,7 @@ describe('useSlashMenu — D9 "/skills" filter', () => {
 describe('useSlashMenu — skills cap + hidden count (deferred item 3)', () => {
   it('11 skills show exactly 8 alphabetically-ordered rows for a bare "/", plus skillsHiddenCount=3', () => {
     skillsOverride = Array.from({ length: 11 }, (_, i) => ({
+      has_local_changes: false,
       id: `sk${String(i + 1).padStart(2, '0')}`,
       name: `Skill${String(i + 1).padStart(2, '0')}`,
       version: '1.0',
@@ -293,6 +294,7 @@ describe('useSlashMenu — skills cap + hidden count (deferred item 3)', () => {
 
   it('narrowing to ≤8 matches drops skillsHiddenCount back to 0', () => {
     skillsOverride = Array.from({ length: 11 }, (_, i) => ({
+      has_local_changes: false,
       id: `sk${String(i + 1).padStart(2, '0')}`,
       name: `Skill${String(i + 1).padStart(2, '0')}`,
       version: '1.0',

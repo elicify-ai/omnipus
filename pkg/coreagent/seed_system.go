@@ -105,6 +105,10 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// read-boundary-consistency-spec.md FR-012; the superseded
 			// unified-search-and-grep-spec.md FR-020 no longer applies).
 			"grep": allow,
+			// Skills spec r15 §10: get_skill, the read of one skill, is
+			// allowed everywhere, hidden engine agents included. edit_skill
+			// stays deny through denyAllThenOverride.
+			"get_skill": allow,
 		})
 		// JUDGE-FR-058 (D10, C5): the Judge's MCP closure. Stamped DIRECTLY
 		// onto the map denyAllThenOverride returned rather than passed into
@@ -244,6 +248,9 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// founder ruling's explicit, unqualified "every agent tier ...
 			// system agents" roster.
 			"grep": allow,
+			// Skills spec r15 §10: get_skill is allowed everywhere, hidden
+			// engine agents included; edit_skill stays deny.
+			"get_skill": allow,
 		})
 	default:
 		return denyAllThenOverride(nil)

@@ -118,12 +118,14 @@ func TestInstallSkillTool_ForceReinstallStillWorks(t *testing.T) {
 	_, err := os.Stat(filepath.Join(globalSkills, "new-skill", "SKILL.md"))
 	require.NoError(t, err, "the installed skill must be on disk")
 
-	// A force reinstall over an existing skill — the branch that holds the
-	// os.RemoveAll — must still replace exactly that one directory.
+	// A force reinstall still replaces exactly one directory. This seeded
+	// package has no history, so r15 §9.2 also requires explicit local-change
+	// consent; force is never an implicit confirmation of those changes.
 	revision, err := skills.NewSkillWriter(globalSkills).SkillRevision("pdf")
 	require.NoError(t, err)
 	result = tool.Execute(context.Background(), map[string]any{
 		"slug": "pdf", "registry": "fake", "force": true, "revision": revision,
+		"replace_local_changes": true,
 	})
 	require.False(t, result.IsError, "force reinstall must succeed, got: %s", result.ForLLM)
 	_, err = os.Stat(filepath.Join(globalSkills, "pdf", "SKILL.md"))
