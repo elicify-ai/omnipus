@@ -17,7 +17,7 @@ import (
 // injected resolver is a filesystem/policy edge, not a fake Skill result.
 func TestSkills_T8Texts_FreshInstallLoad(t *testing.T) {
 	root := t.TempDir()
-	_, err := skills.SeedDefaults(root)
+	_, err := skills.SyncBuiltins(root, nil)
 	require.NoError(t, err)
 	loader := skills.NewSkillsLoader("", root, "")
 	tool := tools.NewSkillTool(10)
@@ -41,7 +41,7 @@ func TestSkills_T8Texts_FreshInstallLoad(t *testing.T) {
 				assert.NotContains(t, r.ForLLM, old, "19.17/19.19 loaded package has no removed name")
 				assert.NotContains(t, string(before), old)
 			}
-			_, err = skills.SeedDefaults(root)
+			_, err = skills.SyncBuiltins(root, nil)
 			require.NoError(t, err)
 			after, err := os.ReadFile(path)
 			require.NoError(t, err)
