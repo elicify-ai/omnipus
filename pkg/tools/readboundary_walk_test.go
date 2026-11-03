@@ -14,6 +14,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestReadBoundary_WalkWithholdsCarveOuts preserves the wide-walk oracle.
@@ -53,98 +56,94 @@ func TestReadBoundary_WalkWithholdsCarveOuts(t *testing.T) {
 	}
 }
 
-// TestReadBoundary_SkillsRegistryGate is test 8: registry skill instruction
-// files never match (name or content), their helpers do, a path naming one
-// is refused like read_file refuses it, and project-shelf instruction files
-// stay searchable exactly as read_file reads them.
-//
-// Deviation from S-2.4's wording, stated: S-2.4 says "greps with no
-// `path`". A project shelf lives under a DOT folder (`.omnipus/skills` or
-// `.claude/skills`, resolvepath.go::skillsGateProjectSubdirs) and grep's
-// engine prunes hidden entries during every walk (filegrep's IncludeHidden
-// is never set by the tool), so a no-`path` search can never reach it on
-// any code, before or after #920. The subtests below keep S-2.4's oracle —
-// "the match is returned, exactly as read_file would read it" — by naming
-// the shelf folder as `path`, by shorthand and by absolute
-// path. The wording conflict is reported as a finding.
-//
-// Traces: S-2.2, S-2.3, S-2.4; FR-006.
+// TestReadBoundary_SkillsRegistryGate retains #920's read/search/audit parity
+// and project-shelf controls. r15 §6.1 and S-2.1–4 supersede its old leaf-only
+// gate: registry/control roots are denied to everyone; an ungranted non-editor
+// cannot search any part of a skill; a grant or editor permission admits the
+// whole ordinary folder, including instructions and helper names/content.
+// Project shelves are still probed explicitly because hidden shelf directories
+// are not descended by a default grep walk (#920 S-2.4's recorded limitation).
 func TestReadBoundary_SkillsRegistryGate(t *testing.T) {
-	seedRegistry := func(t *testing.T, f *rbFixture) (skills, demo string) {
-		t.Helper()
-		skills = filepath.Join(f.home, "skills")
-		demo = filepath.Join(skills, "demo")
-		for _, leaf := range []string{"SKILL.md", "AGENT.md", "AGENTS.md"} {
-			rbWrite(t, filepath.Join(demo, leaf), "needle-instruction-"+leaf+"\n")
+	for _, editor := range []bool{false, true} {
+		label := "non-editor"
+		if editor {
+			label = "editor"
 		}
-		rbWrite(t, filepath.Join(demo, "scripts", "needle-helper.py"), "print('needle-helper-content')\n")
-		return skills, demo
+		t.Run("r15 registry and control roots refused/"+label, func(t *testing.T) {
+			f, root, _ := newRBSkillsFixture(t, true, editor)
+			for _, target := range []string{root, filepath.Join(root, ".staging"), filepath.Join(root, ".swap"), filepath.Join(root, "invalid.name")} {
+				res := f.grepCall("needle", rbStr(target))
+				require.True(t, res.IsError, "registry/control search must be refused: %s", res.ForLLM)
+				assert.Contains(t, res.ForLLM, ErrCarveOut.Error(), "not a missing-file or directory error")
+				assert.NotContains(t, res.ForLLM, "needle-instruction-")
+				read := f.read.Execute(f.ctx, map[string]any{"path": target})
+				require.True(t, read.IsError, "registry/control read must be refused: %s", read.ForLLM)
+				assert.Contains(t, read.ForLLM, ErrCarveOut.Error())
+			}
+		})
 	}
 
-	t.Run("S-2.2 registry instruction files withheld, helper matches by name and content", func(t *testing.T) {
-		f := newRBFixture(t)
-		skills, demo := seedRegistry(t, f)
-		res := f.grepCall("needle", rbStr(skills))
-		if res.IsError {
-			t.Fatalf("grep path=$OMNIPUS_HOME/skills: DS-1 row 15 says admitted, got error: %s", res.ForLLM)
-		}
-		helper := rbSlash(filepath.Join(demo, "scripts", "needle-helper.py"))
-		if !strings.Contains(res.ForLLM, helper+"  (name match)") {
-			t.Errorf("S-2.2: the helper must match by NAME; want line %q in:\n%s", helper+"  (name match)", res.ForLLM)
-		}
-		if !strings.Contains(res.ForLLM, helper+":1:") {
-			t.Errorf("S-2.2: the helper must match by CONTENT; want %q in:\n%s", helper+":1:", res.ForLLM)
-		}
-		for _, h := range rbHitPaths(res.ForLLM) {
+	for _, authority := range []struct {
+		name    string
+		granted bool
+		editor  bool
+	}{
+		{"granted non-editor", true, false},
+		{"ungranted editor", false, true},
+		{"granted editor", true, true},
+	} {
+		t.Run("r15 whole authorized folder/"+authority.name, func(t *testing.T) {
+			f, _, demo := newRBSkillsFixture(t, authority.granted, authority.editor)
+			res := f.grepCall("needle", rbStr(demo))
+			require.False(t, res.IsError, "authorized folder must really be searched: %s", res.ForLLM)
+			want := []string{
+				rbSlash(filepath.Join(demo, "SKILL.md")), rbSlash(filepath.Join(demo, "AGENT.md")),
+				rbSlash(filepath.Join(demo, "AGENTS.md")), rbSlash(filepath.Join(demo, "scripts", "needle-helper.py")),
+			}
+			assert.ElementsMatch(t, want, rbHitPaths(res.ForLLM), "the whole folder, not helpers alone, is searchable")
+			helper := rbSlash(filepath.Join(demo, "scripts", "needle-helper.py"))
+			assert.Contains(t, res.ForLLM, helper+"  (name match)", "helper name matching is retained")
+			assert.Contains(t, res.ForLLM, helper+":1:", "helper content matching is retained")
 			for _, leaf := range []string{"SKILL.md", "AGENT.md", "AGENTS.md"} {
-				if strings.HasSuffix(h, "/"+leaf) {
-					t.Errorf("S-2.2: registry instruction file %q matched", h)
-				}
+				path := rbSlash(filepath.Join(demo, leaf))
+				assert.Contains(t, res.ForLLM, "needle-instruction-"+leaf)
+				byName := f.grepCall(leaf, rbStr(demo))
+				require.False(t, byName.IsError, "authorized name search: %s", byName.ForLLM)
+				assert.Equal(t, []string{path}, rbHitPaths(byName.ForLLM), "only the requested instruction filename matches")
+				assert.Contains(t, byName.ForLLM, path+"  (name match)")
+				read := f.read.Execute(f.ctx, map[string]any{"path": filepath.Join(demo, leaf)})
+				require.False(t, read.IsError, "authorized grep/read parity: %s", read.ForLLM)
+				assert.Contains(t, read.ForLLM, "needle-instruction-"+leaf)
 			}
-		}
-		if strings.Contains(res.ForLLM, "needle-instruction-") {
-			t.Errorf("S-2.2: registry instruction content leaked:\n%s", res.ForLLM)
-		}
-		// Name probe: a pattern that matches only the instruction file
-		// NAMES must not surface them either ("by name", S-2.2).
-		byName := f.grepCall("SKILL", rbStr(skills))
-		if byName.IsError {
-			t.Fatalf("name probe grep failed: %s", byName.ForLLM)
-		}
-		for _, h := range rbHitPaths(byName.ForLLM) {
-			if strings.HasSuffix(h, "/SKILL.md") {
-				t.Errorf("S-2.2: registry SKILL.md surfaced by name: %q", h)
-			}
-		}
-	})
+			read := f.read.Execute(f.ctx, map[string]any{"path": filepath.Join(demo, "scripts", "needle-helper.py")})
+			require.False(t, read.IsError, "authorized helper read: %s", read.ForLLM)
+			assert.Contains(t, read.ForLLM, "print('needle-helper-content')")
+		})
+	}
 
-	t.Run("S-2.3 a path naming a registry instruction file is refused like read_file", func(t *testing.T) {
-		f := newRBFixture(t)
-		_, demo := seedRegistry(t, f)
-		skillMD := filepath.Join(demo, "SKILL.md")
-		res := f.grepCall("needle", rbStr(skillMD))
-		if !res.IsError {
-			t.Fatalf("S-2.3: grep path=%q must be refused, got success:\n%s", skillMD, res.ForLLM)
-		}
-		if strings.Contains(res.ForLLM, "needle-instruction-") {
-			t.Fatalf("S-2.3: refusal leaked the instruction content: %s", res.ForLLM)
-		}
-		if rr := f.read.Execute(f.ctx, map[string]any{"path": skillMD}); !rr.IsError {
-			t.Fatalf("S-2.3 parity: read_file of the registry SKILL.md must be refused, got: %s", rr.ForLLM)
-		}
-		// "Refused like read_file" (S-2.3) — by the same decision, not by a
-		// grep-only lexical rule: grep's refusal row carries the reason
-		// read_file records for the same path (FR-020, MV-2).
-		rows := f.rows(t)
-		g := rbRowsFor(rows, rbAccessDeniedEvent, "grep")
-		r := rbRowsFor(rows, rbAccessDeniedEvent, "read_file")
-		if len(g) != 1 || len(r) != 1 {
-			t.Fatalf("S-2.3: want one path.access_denied row each for grep and read_file, got grep=%d read_file=%d: %+v", len(g), len(r), rows)
-		}
-		if g[0].detail("reason") != r[0].detail("reason") {
-			t.Errorf("S-2.3 / MV-2: grep reason %q != read_file reason %q for the same registry SKILL.md", g[0].detail("reason"), r[0].detail("reason"))
-		}
-	})
+	for _, leaf := range []string{"SKILL.md", "AGENT.md", "AGENTS.md", "scripts/needle-helper.py"} {
+		t.Run("r15 ungranted whole-folder refusal and audit parity/"+leaf, func(t *testing.T) {
+			f, _, demo := newRBSkillsFixture(t, false, false)
+			target := filepath.Join(demo, filepath.FromSlash(leaf))
+			res := f.grepCall("needle", rbStr(target))
+			require.True(t, res.IsError, "ungranted instruction/helper search must be refused: %s", res.ForLLM)
+			assert.Contains(t, res.ForLLM, ErrCarveOut.Error())
+			assert.NotContains(t, res.ForLLM, "needle-instruction-")
+			assert.NotContains(t, res.ForLLM, "needle-helper-content")
+			read := f.read.Execute(f.ctx, map[string]any{"path": target})
+			require.True(t, read.IsError, "ungranted grep/read parity: %s", read.ForLLM)
+			assert.Contains(t, read.ForLLM, ErrCarveOut.Error())
+			assert.NotContains(t, read.ForLLM, "needle-instruction-")
+			assert.NotContains(t, read.ForLLM, "needle-helper-content")
+			rows := f.rows(t)
+			g := rbRowsFor(rows, rbAccessDeniedEvent, "grep")
+			r := rbRowsFor(rows, rbAccessDeniedEvent, "read_file")
+			require.Len(t, g, 1, "one real grep path.access_denied row")
+			require.Len(t, r, 1, "one real read_file path.access_denied row")
+			require.NotEmpty(t, g[0].detail("reason"), "audit parity cannot be two absent reasons")
+			assert.Equal(t, r[0].detail("reason"), g[0].detail("reason"), "same path, same canonical read decision")
+		})
+	}
 
 	t.Run("S-2.4 project-shelf instruction file stays searchable", func(t *testing.T) {
 		f := newRBFixture(t)

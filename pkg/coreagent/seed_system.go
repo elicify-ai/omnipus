@@ -108,6 +108,10 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// r17 §7.12.1 (founder: "everyone"): every agent may read any
 			// agent with get_agent; env values stay masked.
 			"get_agent": allow,
+			// Skills spec r15 §10: get_skill, the read of one skill, is
+			// allowed everywhere, hidden engine agents included. edit_skill
+			// stays deny through denyAllThenOverride.
+			"get_skill": allow,
 		})
 		// JUDGE-FR-058 (D10, C5): the Judge's MCP closure. Stamped DIRECTLY
 		// onto the map denyAllThenOverride returned rather than passed into
@@ -251,6 +255,10 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// every agent, the system agents included, may read any agent
 			// with get_agent (read-only; env values stay masked).
 			"get_agent": allow,
+			// Skills spec r15 §10: the deliberate SIXTH grant — get_skill is
+			// allowed everywhere, hidden engine agents included; edit_skill
+			// stays deny.
+			"get_skill": allow,
 		})
 	default:
 		return denyAllThenOverride(nil)

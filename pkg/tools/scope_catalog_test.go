@@ -174,8 +174,8 @@ func TestGeneralBuiltinMetadata_AllToolsHaveKnownScope(t *testing.T) {
 // pkg/sysagent/tools/registry.go BuildRegistry doc comment.
 func TestSysagentCatalog_AllToolsAreScopeCore(t *testing.T) {
 	catalog := systools.AllTools(nil)
-	if len(catalog) != 33 {
-		t.Fatalf("expected systools.AllTools(nil) to return exactly 33 tools (r17 7.12 retired get_agent_tools; the old read_agent_metadata is gone too), got %d — catalog membership drifted from its own documentation", len(catalog))
+	if len(catalog) != 32 {
+		t.Fatalf("expected systools.AllTools(nil) to return exactly 32 tools (r17 7.12 retired get_agent_tools and read_agent_metadata; skills r15 §10 retired create_skill and remove_skill and added get_skill), got %d — catalog membership drifted from its own documentation", len(catalog))
 	}
 
 	for _, tl := range catalog {

@@ -24,16 +24,20 @@ package tools
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 )
 
 func documentGuidanceLayout(t *testing.T, workerID string) documentruntime.Layout {
 	t.Helper()
-	layout, err := documentruntime.ResolveLayout(t.TempDir(), documentruntime.ManifestRevision, workerID)
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	layout, err := documentruntime.ResolveLayout(home, documentruntime.ManifestRevision, workerID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,9 +46,26 @@ func documentGuidanceLayout(t *testing.T, workerID string) documentruntime.Layou
 
 func loadSkillAs(t *testing.T, agentID, slug string, runtime *documentruntime.Layout, body string) *ToolResult {
 	t.Helper()
+	home := os.Getenv(config.EnvHome)
+	if runtime == nil {
+		home = t.TempDir()
+		t.Setenv(config.EnvHome, home)
+	}
+	if home == "" || !filepath.IsAbs(home) {
+		t.Fatal("document guidance fixture requires its isolated absolute home")
+	}
+	folder := filepath.Join(home, "skills", slug)
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Only the pre-existing load edge is stubbed; actual guidance receives the
+	// independently seeded registry folder required by r15 §11.
+	if err := os.WriteFile(filepath.Join(folder, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	tool := NewSkillTool(5)
 	tool.SetResolver(func(context.Context, string) SkillLoadOutcome {
-		return SkillLoadOutcome{Status: SkillLoadLoaded, Content: body, CanonicalSlug: slug}
+		return SkillLoadOutcome{Status: SkillLoadLoaded, Content: body, CanonicalSlug: slug, Folder: folder}
 	}, func(context.Context, string) bool { return true }, nil)
 	if runtime != nil {
 		tool.SetDocumentRuntime(*runtime)
@@ -182,7 +203,7 @@ func TestDocumentSkillLoad_MiaSelfServesMissingDependencies(t *testing.T) {
 	if !strings.Contains(text, "portable document instructions") {
 		t.Fatalf("portable body dropped: %s", text)
 	}
-	if !strings.Contains(text, filepath.Join(layout.Skills, "elicify-docx")) {
+	if !strings.Contains(text, filepath.Join(os.Getenv(config.EnvHome), "skills", "elicify-docx")) {
 		t.Fatalf("missing authorized package root: %s", text)
 	}
 	probe := strings.Join(documentruntime.ProbeArgv(layout), " ")
@@ -234,8 +255,11 @@ func TestDocumentSkillLoad_AllFirstPartyDocumentSlugsGetGuidance(t *testing.T) {
 		if result.IsError || !strings.Contains(result.ForLLM, "environment_setup") {
 			t.Fatalf("slug %s: %+v", slug, result)
 		}
-		if !strings.Contains(result.ForLLM, filepath.Join(layout.Skills, slug)) {
-			t.Fatalf("slug %s missing own package root", slug)
+		if !strings.Contains(result.ForLLM, filepath.Join(os.Getenv(config.EnvHome), "skills", slug)) {
+			t.Fatalf("slug %s missing own registry package root", slug)
+		}
+		if strings.Contains(result.ForLLM, filepath.Join(layout.Prefix, "skills")) {
+			t.Fatalf("slug %s points at the retired toolchain copy: %s", slug, result.ForLLM)
 		}
 	}
 }

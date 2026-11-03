@@ -506,6 +506,10 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 var retiredToolCanonicalNames = map[string]string{
 	// ADR-071 D1: load_tool -> ToolSearch (2026-08-28).
 	"load_tool": "ToolSearch",
+	// Skills spec r15 §10: a skill is created by writing its SKILL.md and
+	// deleted with edit_skill action=delete.
+	"create_skill": "write_file",
+	"remove_skill": "edit_skill",
 	// Tool-parity r17 §7.12.3: get_agent is the single agent reader
 	// (fields ["tool_permissions"], ["soul"], ["agent_md"]).
 	"get_agent_tools":     "get_agent",

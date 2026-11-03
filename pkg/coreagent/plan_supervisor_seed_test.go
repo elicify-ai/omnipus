@@ -353,7 +353,8 @@ func TestSeedSystemAgents_ReEnforcesJudgeSkillAllowlist(t *testing.T) {
 // test's own comment used to say would require amending it on purpose; see
 // coreAgentSeed's IDPlanSupervisor case for the full rationale, including
 // why this does not reopen the read_file/list_directory withholding just
-// below). Every other name in the static catalog stays deny. Stated as a
+// below). Skills r15 §10 deliberately adds get_skill Allow everywhere,
+// including hidden engine agents. Every other name stays deny. Stated as a
 // COMPLEMENT rather than a list, so a tool added to the catalog later can
 // never silently land in PlanSupervisor's allow set.
 func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
@@ -367,7 +368,7 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 	require.Len(t, pol, len(catalog),
 		"policy must enumerate the whole static catalog, one literal entry each (Constraint #6)")
 
-	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true, "grep": true, "get_agent": true} // get_agent: r17 FR-143, every agent
+	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true, "grep": true, "get_agent": true, "get_skill": true} // get_agent: r17 FR-143, every agent; get_skill: r15 §10
 	for _, name := range catalog {
 		p, ok := pol[name]
 		require.Truef(t, ok, "policy must enumerate tool %q (no default fallback)", name)
@@ -377,7 +378,7 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 		}
 		assert.Equalf(t, config.ToolPolicyDeny, p,
 			"%q must be deny — PlanSupervisor's grant is exactly plan_correct plus the ToolSearch, "+
-				"Skill and (ADR-081 D11) grep grants; if you are widening it further, amend this "+
+				"Skill, (ADR-081 D11) grep, and (skills r15 §10) get_skill grants; amend this "+
 				"test deliberately (the complement failing IS the guard working)", name)
 	}
 
@@ -423,14 +424,16 @@ func TestPlanSupervisorResolved_ExactlyPlanCorrect(t *testing.T) {
 	assert.Equal(t, "allow", resolveFor(t, cfg, id, "get_agent", nil),
 		"(PlanSupervisor, get_agent) must RESOLVE allow — r17 FR-143 grants get_agent to every agent, "+
 			"Judge and Plan Supervisor included")
+	assert.Equal(t, "allow", resolveFor(t, cfg, id, "get_skill", nil),
+		"r15 §10 grants get_skill Allow to every tier, including PlanSupervisor")
 
 	for _, name := range coreagent.AllStaticToolNames() {
-		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" || name == "grep" || name == "get_agent" {
+		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" || name == "grep" || name == "get_agent" || name == "get_skill" {
 			continue
 		}
 		assert.Equalf(t, "deny", resolveFor(t, cfg, id, name, nil),
 			"(PlanSupervisor, %s) must resolve deny — its grant is exactly plan_correct plus "+
-				"the ToolSearch/Skill structural floors and (ADR-081 D11) grep", name)
+				"the ToolSearch/Skill structural floors, (ADR-081 D11) grep and (r15 §10) get_skill", name)
 	}
 }
 

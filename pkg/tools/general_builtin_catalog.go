@@ -118,12 +118,7 @@ func GeneralBuiltinMetadata() []Tool {
 	out = append(out, NewSendFileTool("", false, 0, nil))
 
 	// --- Skill tools (CategorySkills) ---
-	// remove_skill is NOT listed here: it is a ScopeCore management tool
-	// (systools.SkillRemoveTool, pkg/sysagent/tools/skill.go), registered via
-	// systools.AllTools in the central BuiltinRegistry — not a ScopeGeneral
-	// tool from this metadata catalog. A duplicate ScopeGeneral "remove_skill"
-	// registered here would be silently skipped as a name collision (harmless
-	// but dead weight) since systools.AllTools populates the registry first.
+	// create_skill and remove_skill are retired (skills spec r15 §5.1).
 	out = append(out, NewFindSkillsTool(nil, nil))
 	out = append(out, NewInstallSkillTool(nil, ""))
 	// Skill (ADR-072 D1): the on-demand load-by-slug / search-by-query tool

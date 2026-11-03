@@ -25,7 +25,7 @@ var wu3ChangeFamilies = []string{
 	"create_workspace", "update_workspace", "delete_workspace",
 	"configure_provider", "add_mcp_server", "remove_mcp_server",
 	"configure_channel", "enable_channel", "disable_channel",
-	"create_skill", "edit_skill", "remove_skill", "install_skill", "environment_setup",
+	"edit_skill", "install_skill", "environment_setup", // r15 §10 retires the other skill verbs.
 }
 
 // wu3DurableInventory snapshots every file under the stores a change tool can

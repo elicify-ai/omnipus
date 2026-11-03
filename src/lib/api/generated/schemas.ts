@@ -1550,7 +1550,9 @@ type Agent = {
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
   stats?: AgentStats | undefined;
+  skill_grants?: {} | undefined;
   skills?: Array<string> | undefined;
+  stale_skill_grants?: Array<string> | undefined;
   updated_at?: string | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
@@ -2159,6 +2161,7 @@ type IntegrationProvider = {
   fallback_automatic?: boolean | undefined;
 };
 type Skill = {
+  has_local_changes: boolean;
   revision: ConfigurationRevision;
   persistence_status?: ConfigurationPersistenceStatus | undefined;
   activation_status?: ConfigurationActivationStatus | undefined;
@@ -4661,7 +4664,9 @@ export const Agent: z.ZodType<Agent> = z
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: AgentModelParams.optional(),
     stats: AgentStats.optional(),
+    skill_grants: z.record(z.string()).optional(),
     skills: z.array(z.string()).optional(),
+    stale_skill_grants: z.array(z.string()).optional(),
     updated_at: z.string().datetime({ offset: true }).optional(),
     voice: z.string().nullish(),
     executor: ExecutorConfig.optional(),
@@ -5684,6 +5689,7 @@ export const SlashCommand = z.object({
   delivery: z.enum(["client", "agent"]),
 });
 export const Skill: z.ZodType<Skill> = z.object({
+  has_local_changes: z.boolean(),
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   persistence_status: ConfigurationPersistenceStatus.optional(),
   activation_status: ConfigurationActivationStatus.optional(),
@@ -5725,6 +5731,12 @@ export const SkillMarketplaceStatus = z.object({
   registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
 });
 export const SkillInstallRequest = z.union([z.unknown(), z.unknown()]);
+export const SkillCopyRequest = z.object({
+  new_id: z
+    .string()
+    .max(64)
+    .regex(/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/),
+});
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
   .object({
     id: z.string(),
@@ -8059,6 +8071,71 @@ export const OnboardingStatusResponse = z
   .passthrough();
 export const ActivityEventsResponse: z.ZodType<ActivityEventsResponse> =
   z.object({ events: z.array(ActivityEvent), warning: z.string().optional() });
+export const SkillDetail = z.object({
+  id: z.string(),
+  revision: z.string().nullable(),
+  state: z.enum(["installed", "deleted"]).optional(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  shelf: z.enum(["builtin", "registry"]).optional(),
+  folder: z.string().optional(),
+  files: z
+    .object({
+      items: z.array(
+        z.object({
+          path: z.string(),
+          size: z.number().int(),
+          exec: z.boolean(),
+        })
+      ),
+      total: z.number().int(),
+    })
+    .optional(),
+  metadata: z.record(z.string()).optional(),
+  compatibility: z.string().nullish(),
+  allowed_tools: z.array(z.string()).optional(),
+  needs: z
+    .array(
+      z.object({
+        program: z.string(),
+        status: z.enum(["present", "missing"]),
+        path: z.string().optional(),
+      })
+    )
+    .optional(),
+  last_change: z
+    .object({
+      at: z.string(),
+      actor: z.string(),
+      tool: z.string(),
+      paths: z.array(z.string()),
+      shipped_with: z.string(),
+      unknown: z.boolean(),
+    })
+    .partial()
+    .optional(),
+  has_local_changes: z.boolean().optional(),
+  versions: z
+    .object({
+      items: z.array(
+        z.object({
+          id: z.string(),
+          kind: z.string(),
+          actor: z.string(),
+          tool: z.string().optional(),
+          at: z.string(),
+          paths: z.array(z.string()),
+          paths_total: z.number().int(),
+        })
+      ),
+      total: z.number().int(),
+      next_before: z.string().nullable(),
+    })
+    .optional(),
+  instructions: z.string().optional(),
+  absent_fields: z.array(z.string()).optional(),
+  truncated_fields: z.array(z.string()).optional(),
+});
 export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
   .object({
     instance_id: z.string(),
@@ -15163,7 +15240,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "delete",
     path: "/skills/:name",
     alias: "deleteSkill",
-    description: `Removes an installed skill from the local skills directory. The skill must not be the default skill, in use by any agent, or required by a seeded dependency. On success the gateway removes the skill directory and returns 204 No Content.
+    description: `Deletes an installed user-owned skill through the change pipeline (a delete_skill version is recorded; history is kept until retention). revision is the caller&#x27;s expected revision; a mismatch is 409 SKILL_CHANGED. Built-in skills are refused with 403.
 `,
     requestFormat: "json",
     parameters: [
@@ -15178,7 +15255,65 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
         schema: z.string().regex(/^[a-f0-9]{64}$/),
       },
     ],
-    response: z.void(),
+    response: ConfigurationMutationState,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `The skill is a built-in skill and is read-only (BUILTIN_READ_ONLY).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Storage failure, before publication or after publication (partial deletion).`,
+        schema: ConfigurationMutationFailureState,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/skills/:name/copy",
+    alias: "copySkill",
+    description: `Creates a new user-owned skill from the named skill; the copy&#x27;s frontmatter name is rewritten to new_id. The copy starts ungranted.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({
+          new_id: z
+            .string()
+            .max(64)
+            .regex(/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/),
+        }),
+      },
+      {
+        name: "name",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Skill,
     errors: [
       {
         status: 400,
@@ -15197,8 +15332,13 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists.`,
+        description: `Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED). A copy refused by the save check (SAVE_CHECK_FAILED) answers 400.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Storage failure, before publication or after publication (partial save).`,
+        schema: ConfigurationMutationFailureState,
       },
     ],
   },
@@ -15235,8 +15375,15 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists.`,
+        description: `Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller&#x27;s expected revision and the skill changed since it was read).
+`,
         schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Storage failure, before publication (error_stage names the failed stage) or after publication (a partial save; message names the undo).
+`,
+        schema: ConfigurationMutationFailureState,
       },
       {
         status: 502,

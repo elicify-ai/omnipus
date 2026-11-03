@@ -635,9 +635,14 @@ type AgentConfig struct {
 	// This field previously existed only on the wire and in raw config.json —
 	// it was silently dropped on load and never applied by the runtime
 	// (P0 bug, fixed 2026-07-03).
-	MaxToolIterations int              `json:"max_tool_iterations,omitempty"`
-	Skills            []string         `json:"skills,omitempty"`
-	Subagents         *SubagentsConfig `json:"subagents,omitempty"`
+	MaxToolIterations int      `json:"max_tool_iterations,omitempty"`
+	Skills            []string `json:"skills,omitempty"`
+	// SkillGrants binds each granted skill key to the folder generation it
+	// was granted against (skills spec r15 §5.13a, SD-30). Written by the
+	// server at every agent save; an absent entry is unbound and authorizes
+	// nothing for a stamped folder.
+	SkillGrants map[string]string `json:"skill_grants,omitempty"`
+	Subagents   *SubagentsConfig  `json:"subagents,omitempty"`
 	// FallbackModels is the ordered fallback chain tried when the primary
 	// model returns an error. Each entry carries its own provider so a
 	// fallback can route through a different provider than the primary (e.g.

@@ -267,8 +267,9 @@ type stagedFile struct {
 // MutateStateWithAgentMD is MutateState plus AGENT.md as the third staged file
 // (r17 §7.5 AG-05, §7.10, #1321): under one lock it checks the revision (which
 // covers all three files), stages every changed file, then publishes them in
-// the order entity, SOUL.md, AGENT.md. A nil mutate leaves the record bytes
-// untouched; a nil soul or agentMD leaves that file untouched. A replace that
+// the order entity, SOUL.md, AGENT.md. A nil mutate changes the record only
+// through the skills binding (bindingMutate), and an unchanged record is not
+// rewritten; a nil soul or agentMD leaves that file untouched. A replace that
 // fails after an earlier one succeeded is a partial write; the result names
 // what was and was not saved and the revision now readable.
 func (s *Store) MutateStateWithAgentMD(id, expectedRevision string, mutate func(*config.AgentConfig) error,
@@ -284,53 +285,58 @@ func (s *Store) MutateStateWithAgentMD(id, expectedRevision string, mutate func(
 	if validateErr := ValidateRevision(expectedRevision); validateErr != nil {
 		return result, validateErr
 	}
-	err = s.inner.WithLock(id, func(entityPath string) error {
-		current, oldEntity, oldSoul, readErr := readStateFiles(entityPath, s.soulPath(id), id)
-		if readErr != nil {
-			return readErr
-		}
-		if current.Revision != expectedRevision {
-			return fmt.Errorf("%w: expected %s, current %s", ErrRevisionConflict, expectedRevision, current.Revision)
-		}
-		result.Revision = current.Revision
-		newEntity := oldEntity
-		if mutate != nil {
-			if mutateErr := mutate(current.Agent); mutateErr != nil {
+	var updated *config.AgentConfig
+	err = s.withSkillsLock(func() error {
+		return s.inner.WithLock(id, func(entityPath string) error {
+			current, oldEntity, oldSoul, readErr := readStateFiles(entityPath, s.soulPath(id), id)
+			if readErr != nil {
+				return readErr
+			}
+			if current.Revision != expectedRevision {
+				return fmt.Errorf("%w: expected %s, current %s", ErrRevisionConflict, expectedRevision, current.Revision)
+			}
+			result.Revision = current.Revision
+			// The skills binding (skills spec r15, bindingMutate) runs on every
+			// write, a nil mutate included; the entity is staged only when its
+			// bytes actually change, so a nil mutate with no binding drift
+			// leaves the record untouched (r17 §7.5).
+			if mutateErr := s.bindingMutate(mutate)(current.Agent); mutateErr != nil {
 				return mutateErr
 			}
-			var marshalErr error
-			if newEntity, marshalErr = json.MarshalIndent(current.Agent, "", "  "); marshalErr != nil {
+			newEntity, marshalErr := json.MarshalIndent(current.Agent, "", "  ")
+			if marshalErr != nil {
 				return fmt.Errorf("marshal candidate entity: %w", marshalErr)
 			}
-		}
-		var files []*stagedFile
-		add := func(field, path string, old, data []byte) {
-			if string(old) != string(data) {
-				files = append(files, &stagedFile{field: field, path: path, data: data})
+			var files []*stagedFile
+			add := func(field, path string, old, data []byte) {
+				if string(old) != string(data) {
+					files = append(files, &stagedFile{field: field, path: path, data: data})
+				}
 			}
-		}
-		add("entity", entityPath, oldEntity, newEntity)
-		if soul != nil {
-			add("soul", s.soulPath(id), oldSoul, []byte(*soul))
-		}
-		if agentMD != nil {
-			add("agent_md", s.agentMDPath(id), []byte(current.AgentMD), []byte(*agentMD))
-		}
-		if publishErr := s.publishStaged(entityPath, id, files, &result); publishErr != nil {
-			return publishErr
-		}
-		actual, _, _, actualErr := readStateFiles(entityPath, s.soulPath(id), id)
-		if actualErr != nil {
-			result.PersistenceStatus = PersistencePartial
-			result.ErrorStage = "verify"
-			return actualErr
-		}
-		result.PersistenceStatus = PersistenceComplete
-		result.Revision = actual.Revision
-		if s.notifier != nil {
-			s.notifier.AgentUpserted(id, actual.Agent)
-		}
-		return nil
+			add("entity", entityPath, oldEntity, newEntity)
+			if soul != nil {
+				add("soul", s.soulPath(id), oldSoul, []byte(*soul))
+			}
+			if agentMD != nil {
+				add("agent_md", s.agentMDPath(id), []byte(current.AgentMD), []byte(*agentMD))
+			}
+			if publishErr := s.publishStaged(entityPath, id, files, &result); publishErr != nil {
+				return publishErr
+			}
+			actual, _, _, actualErr := readStateFiles(entityPath, s.soulPath(id), id)
+			if actualErr != nil {
+				result.PersistenceStatus = PersistencePartial
+				result.ErrorStage = "verify"
+				return actualErr
+			}
+			result.PersistenceStatus = PersistenceComplete
+			result.Revision = actual.Revision
+			updated = actual.Agent
+			if s.notifier != nil {
+				s.notifier.AgentUpserted(id, updated)
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		result.Message = err.Error()
@@ -397,56 +403,61 @@ func (s *Store) CreateState(id string, agent *config.AgentConfig, soul string) (
 	if agent.ID != "" && agent.ID != id {
 		return result, fmt.Errorf("agentstore: create state %q: cfg.ID %q does not match", id, agent.ID)
 	}
-	err = s.inner.WithLock(id, func(entityPath string) error {
-		if _, statErr := os.Stat(entityPath); statErr == nil {
-			return entity.ErrAlreadyExists
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return statErr
-		}
-		agent.ID = id
-		if agent.CreatedAt == nil {
-			now := time.Now().UTC()
-			agent.CreatedAt = &now
-		}
-		entityBytes, marshalErr := json.MarshalIndent(agent, "", "  ")
-		if marshalErr != nil {
-			return marshalErr
-		}
-		entityStage, stageErr := s.stageFile(entityPath, entityBytes, 0o600)
-		if stageErr != nil {
-			result.PersistenceStatus, result.ErrorStage = PersistenceNone, "stage_entity"
-			return stageErr
-		}
-		defer os.Remove(entityStage)
-		soulStage, stageErr := s.stageFile(s.soulPath(id), []byte(soul), 0o600)
-		if stageErr != nil {
-			result.PersistenceStatus, result.ErrorStage = PersistenceNone, "stage_soul"
-			return stageErr
-		}
-		defer os.Remove(soulStage)
-		if replaceErr := s.replaceFile(entityStage, entityPath); replaceErr != nil {
-			result.PersistenceStatus, result.ErrorStage = PersistenceNone, "replace_entity"
-			return replaceErr
-		}
-		result.ChangedFields = append(result.ChangedFields, "entity")
-		if replaceErr := s.replaceFile(soulStage, s.soulPath(id)); replaceErr != nil {
-			result.PersistenceStatus, result.ErrorStage = PersistencePartial, "replace_soul"
-			if actual, _, _, readErr := readStateFiles(entityPath, s.soulPath(id), id); readErr == nil {
-				result.Revision = actual.Revision
+	err = s.withSkillsLock(func() error {
+		return s.inner.WithLock(id, func(entityPath string) error {
+			if _, statErr := os.Stat(entityPath); statErr == nil {
+				return entity.ErrAlreadyExists
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				return statErr
 			}
-			return replaceErr
-		}
-		result.ChangedFields = append(result.ChangedFields, "soul")
-		actual, _, _, readErr := readStateFiles(entityPath, s.soulPath(id), id)
-		if readErr != nil {
-			result.PersistenceStatus, result.ErrorStage = PersistencePartial, "verify"
-			return readErr
-		}
-		result.PersistenceStatus, result.Revision = PersistenceComplete, actual.Revision
-		if s.notifier != nil {
-			s.notifier.AgentUpserted(id, agent)
-		}
-		return nil
+			agent.ID = id
+			if bindErr := s.bindSkillGrants(agent); bindErr != nil {
+				return bindErr
+			}
+			if agent.CreatedAt == nil {
+				now := time.Now().UTC()
+				agent.CreatedAt = &now
+			}
+			entityBytes, marshalErr := json.MarshalIndent(agent, "", "  ")
+			if marshalErr != nil {
+				return marshalErr
+			}
+			entityStage, stageErr := s.stageFile(entityPath, entityBytes, 0o600)
+			if stageErr != nil {
+				result.PersistenceStatus, result.ErrorStage = PersistenceNone, "stage_entity"
+				return stageErr
+			}
+			defer os.Remove(entityStage)
+			soulStage, stageErr := s.stageFile(s.soulPath(id), []byte(soul), 0o600)
+			if stageErr != nil {
+				result.PersistenceStatus, result.ErrorStage = PersistenceNone, "stage_soul"
+				return stageErr
+			}
+			defer os.Remove(soulStage)
+			if replaceErr := s.replaceFile(entityStage, entityPath); replaceErr != nil {
+				result.PersistenceStatus, result.ErrorStage = PersistenceNone, "replace_entity"
+				return replaceErr
+			}
+			result.ChangedFields = append(result.ChangedFields, "entity")
+			if replaceErr := s.replaceFile(soulStage, s.soulPath(id)); replaceErr != nil {
+				result.PersistenceStatus, result.ErrorStage = PersistencePartial, "replace_soul"
+				if actual, _, _, readErr := readStateFiles(entityPath, s.soulPath(id), id); readErr == nil {
+					result.Revision = actual.Revision
+				}
+				return replaceErr
+			}
+			result.ChangedFields = append(result.ChangedFields, "soul")
+			actual, _, _, readErr := readStateFiles(entityPath, s.soulPath(id), id)
+			if readErr != nil {
+				result.PersistenceStatus, result.ErrorStage = PersistencePartial, "verify"
+				return readErr
+			}
+			result.PersistenceStatus, result.Revision = PersistenceComplete, actual.Revision
+			if s.notifier != nil {
+				s.notifier.AgentUpserted(id, agent)
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		result.Message = err.Error()

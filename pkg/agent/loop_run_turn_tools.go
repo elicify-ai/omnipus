@@ -37,6 +37,11 @@ type agentLoopRunTurnToolsExecute struct {
 	recordArgs     map[string]any
 	ledgerToolName string
 	toctouPolicy   string
+	// skillWriteKey is the skill key a file-tool write into a skill folder
+	// targets (skills spec r15 §10.1), set by enforceExecutionPolicy's
+	// composition step; it rides the tool's context as the backstop marker
+	// (tools.WithSkillWriteApproval). Reset for every call.
+	skillWriteKey string
 	// shellModePin is the ADR-092 bash mode resolveAskPolicy settled on for
 	// this call; guardAndDispatch pins it on the tool's context so the bash
 	// tool enforces the same decision. Empty for every non-bash call.
@@ -731,6 +736,15 @@ func (ex *agentLoopRunTurnToolsExecute) applyApprovalHook(tc providers.ToolCall)
 // enforceExecutionPolicy rechecks execution policy and records a policy denial.
 func (ex *agentLoopRunTurnToolsExecute) enforceExecutionPolicy(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
 	ex.toctouPolicy = ex.rx.rr.rq.ri.rf.rt.al.resolveToolPolicyAtExec(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.rx.rr.rq.filterTimePolicyMap)
+	ex.skillWriteKey = ""
+	if ex.toctouPolicy != "deny" {
+		if key, ok := ex.composeSkillWritePolicy(tc); ok {
+			ex.skillWriteKey = key
+			if ex.toctouPolicy == "deny" {
+				return ex.denySkillWrite(tc)
+			}
+		}
+	}
 	if ex.toctouPolicy == "deny" {
 		if canonical, retired := tools.RetiredToolCanonical(ex.toolName); retired {
 			return ex.refuseRetiredToolName(tc, canonical)
@@ -1419,6 +1433,11 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// immediately before dispatch, including connector assignments removed meanwhile.
 	if flow := ex.enforceExecutionPolicy(tc); flow != agentLoopRunTurnToolsExecuteNext {
 		return flow
+	}
+	if ex.skillWriteKey != "" {
+		// Skills spec r15 §10.1 item 7: the composed decision for this
+		// skill key, checked again by PathHandle.WriteFile.
+		execCtx = tools.WithSkillWriteApproval(execCtx, ex.skillWriteKey)
 	}
 	if ex.autoPin.Run && ex.toctouPolicy == "ask" {
 		// ADR-092 D9 §5.3/§5.5: Auto ran this call without a prompt. Pin the

@@ -223,8 +223,10 @@ func TestSKILLMDParseYAML_ArgumentHintPreserved(t *testing.T) {
 	frontmatter := sl.extractFrontmatter(content)
 	assert.NotEmpty(t, frontmatter, "frontmatter must be extracted")
 
-	yamlFields := sl.parseSimpleYAML(frontmatter)
-	assert.Equal(t, "my-skill", yamlFields["name"])
-	assert.Equal(t, "My description", yamlFields["description"])
-	// argument-hint not in the struct but must not break parsing
+	// FR-002 removes the old parser helper, not this metadata regression.
+	yamlFields := sl.parseSkillMetadata(filepath.Join("my-skill", "SKILL.md"), []byte(content))
+	require.NotNil(t, yamlFields)
+	assert.Equal(t, "my-skill", yamlFields.Name)
+	assert.Equal(t, "My description", yamlFields.Description)
+	assert.Equal(t, "[query] [options]", yamlFields.ArgumentHint, "the loader preserves the declared argument hint")
 }

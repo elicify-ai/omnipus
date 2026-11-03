@@ -1938,6 +1938,10 @@ components:
       $ref: ./components/schemas/AppStatePatchRequest.yaml
     SkillInstallRequest:
       $ref: ./components/schemas/SkillInstallRequest.yaml
+    SkillCopyRequest:
+      $ref: ./components/schemas/SkillCopyRequest.yaml
+    SkillDetail:
+      $ref: ./components/schemas/SkillDetail.yaml
     SkillSearchResult:
       $ref: ./components/schemas/SkillSearchResult.yaml
     SkillMarketplaceStatus:
@@ -7148,18 +7152,85 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
         '409':
-          $ref: '#/components/responses/409Conflict'
+          description: >
+            Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a
+            built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed
+            skill has local changes; resend with replace_local_changes: true),
+            SKILL_CHANGED (revision is the caller's expected revision and the
+            skill changed since it was read).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: >
+            Storage failure, before publication (error_stage names the failed
+            stage) or after publication (a partial save; message names the
+            undo).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
         '502':
           $ref: '#/components/responses/502BadGateway'
+  /skills/{name}/copy:
+    post:
+      operationId: copySkill
+      summary: Copy an installed or built-in skill to a new user-owned skill
+      description: >
+        Creates a new user-owned skill from the named skill; the copy's
+        frontmatter name is rewritten to new_id. The copy starts ungranted.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: name
+        in: path
+        required: true
+        description: Source skill slug.
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillCopyRequest'
+      responses:
+        '201':
+          description: Copy created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED). A copy refused by the save check (SAVE_CHECK_FAILED) answers 400.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage failure, before publication or after publication (partial save).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
   /skills/{name}:
     delete:
       operationId: deleteSkill
       summary: Delete an installed skill
       description: >
-        Removes an installed skill from the local skills directory. The skill
-        must not be the default skill, in use by any agent, or required by a
-        seeded dependency. On success the gateway removes the skill directory
-        and returns 204 No Content.
+        Deletes an installed user-owned skill through the change pipeline (a
+        delete_skill version is recorded; history is kept until retention).
+        revision is the caller's expected revision; a mismatch is 409
+        SKILL_CHANGED. Built-in skills are refused with 403.
       tags:
       - Skills
       security:
@@ -7178,16 +7249,32 @@ paths:
           $ref: '#/components/schemas/ConfigurationRevision'
         description: Revision returned by GET /skills for the reviewed installed skill.
       responses:
-        '204':
-          description: Skill removed.
+        '200':
+          description: Skill deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: The skill is a built-in skill and is read-only (BUILTIN_READ_ONLY).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '500':
+          description: Storage failure, before publication or after publication (partial deletion).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
   /activity:
     get:
       operationId: getActivity

@@ -39,65 +39,6 @@ func DefaultSkillNames() []string {
 	return names
 }
 
-// SeedResult reports the outcome of a SeedDefaults call.
-type SeedResult struct {
-	// Seeded lists the skill names that were freshly written to destDir.
-	Seeded []string
-	// Skipped lists the skill names that already existed in destDir and were
-	// therefore left untouched (idempotent first-boot seed).
-	Skipped []string
-}
-
-// SeedDefaults idempotently seeds the embedded default skills into destDir
-// (typically the global skills directory, ~/.omnipus/skills).
-//
-// For each embedded skill <name>, if destDir/<name>/ does not already exist it
-// is created and the embedded SKILL.md (plus any sibling files) is copied in.
-// If the destination skill directory already exists it is left completely
-// untouched — this preserves user edits and overrides on re-boot (FR-9.3:
-// "go:embed default already present in the seed dir → not overwritten").
-//
-// SeedDefaults never overwrites or deletes existing files; it only fills in
-// missing skills. It is safe to call on every boot.
-func SeedDefaults(destDir string) (SeedResult, error) {
-	var res SeedResult
-	if destDir == "" {
-		return res, fmt.Errorf("seed skills: destination directory is empty")
-	}
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return res, fmt.Errorf("seed skills: create dest dir %q: %w", destDir, err)
-	}
-
-	entries, err := fs.ReadDir(embeddedSkills, embeddedRoot)
-	if err != nil {
-		return res, fmt.Errorf("seed skills: read embedded root: %w", err)
-	}
-
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		destSkillDir := filepath.Join(destDir, name)
-
-		// Idempotency: if the destination already exists, never touch it.
-		if _, statErr := os.Stat(destSkillDir); statErr == nil {
-			res.Skipped = append(res.Skipped, name)
-			continue
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return res, fmt.Errorf("seed skills: stat %q: %w", destSkillDir, statErr)
-		}
-
-		if err := copyEmbeddedSkill(name, destSkillDir); err != nil {
-			return res, fmt.Errorf("seed skills: copy %q: %w", name, err)
-		}
-		res.Seeded = append(res.Seeded, name)
-		slog.Info("skills: seeded default skill from embed", "name", name, "dest", destSkillDir)
-	}
-
-	return res, nil
-}
-
 // ExportEmbeddedPackage materializes one compiled-in skill package at destDir.
 // It is the runtime bridge for helpers and knowledge files that the ordinary
 // SKILL.md resolver deliberately does not expose by host path.

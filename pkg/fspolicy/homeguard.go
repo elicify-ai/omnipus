@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/skillname"
 )
 
 // This file evaluates the #1284 home guard (amendment §2 D1/D4/D5):
@@ -70,19 +72,47 @@ func inventoryDenies(home, cleanPath string, policy FSPolicy) bool {
 		return true
 	}
 
-	// A7 (amendment §2 D3): the skills Allow entry re-admits bundled HELPER
-	// files only — a skill's instruction leaf stays gated at the predicate
-	// level, so no consumer of this one predicate (resolver, grep, command
-	// check, pre-flight) can read it. The resolvepath gate keeps its own
-	// redirect message on top; the names are single-sourced in
-	// SkillInstructionLeaves. The registry shelf is $OMNIPUS_HOME/skills;
-	// skills under an agent home are D4-protected wholesale below.
-	if CoversForDeny(filepath.Join(home, "skills"), cleanPath) &&
-		IsSkillInstructionLeaf(filepath.Base(cleanPath)) {
-		return true
+	// Skills spec r15 §6.1 item 2: the registry shelf $OMNIPUS_HOME/skills
+	// is readable exactly per skill folder of the turn's loadable set, or
+	// wholesale for an editor; the shelf root and every registry control
+	// entry (a dot name or a non-slug name directly under skills/) are
+	// refused for everyone. Because inventoryDenies runs before every
+	// mount, path grant, setup root and work dir, none of them re-admits a
+	// refused skill path. Skills under an agent home are D4-protected
+	// wholesale below.
+	if skillsRoot := filepath.Join(home, "skills"); CoversForDeny(skillsRoot, cleanPath) {
+		return skillPathDenied(skillsRoot, cleanPath, policy.HomeGuard)
 	}
 
 	return agentHomeInternalDeny(cleanPath, policy)
+}
+
+// skillPathDenied is §6.1 item 2's rule for a path at or under the registry
+// skills root.
+func skillPathDenied(skillsRoot, cleanPath string, guard HomeGuard) bool {
+	first := firstComponentUnder(skillsRoot, cleanPath)
+	if first == "" || strings.HasPrefix(first, ".") || !skillname.Valid(first) {
+		return true
+	}
+	if guard.SkillsReadAll {
+		return false
+	}
+	for _, folder := range guard.SkillFolders {
+		if folder != "" && CoversForGrant(filepath.Clean(folder), cleanPath) {
+			return false
+		}
+	}
+	return true
+}
+
+// firstComponentUnder returns the first path component of cleanPath below
+// root ("" for root itself or a path that does not resolve below it).
+func firstComponentUnder(root, cleanPath string) string {
+	rel, err := filepath.Rel(root, cleanPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
 }
 
 // allowedUnderHome reports whether an explicit allowance re-admits cleanPath:
@@ -90,6 +120,13 @@ func inventoryDenies(home, cleanPath string, policy FSPolicy) bool {
 // dirs, workspace mounts) or the turn's WorkDir. Inventory matches never
 // reach here — inventoryDenies has already answered.
 func allowedUnderHome(cleanPath string, policy FSPolicy) bool {
+	// §6.1 item 3: a registry skill path the skills rule in inventoryDenies
+	// did not deny is admitted (that rule already decided it, per folder).
+	if home := policy.HomeGuard.Home; home != "" {
+		if skillsRoot := filepath.Join(home, "skills"); CoversForDeny(skillsRoot, cleanPath) {
+			return !skillPathDenied(skillsRoot, cleanPath, policy.HomeGuard)
+		}
+	}
 	for _, entry := range policy.HomeGuard.Allow {
 		if entry.Path == "" {
 			continue

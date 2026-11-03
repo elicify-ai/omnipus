@@ -603,6 +603,9 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 	if rc.err != nil {
 		return rc.err, true
 	}
+	// Skills secret check (skills spec r15 §7.4): every skill change is
+	// checked against the stored secret values from this store.
+	wireSkillSecretCheck(rc.credStore)
 
 	// #155: derive the audit-chain HMAC key from the master key and
 	// install it process-wide BEFORE constructing the agent loop. The
@@ -715,6 +718,14 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 		return rosterErr, true
 	}
 
+	// Skills start-up (skills spec r15 §8.5): recovery, built-in sync and
+	// retirement, before NewAgentLoop builds any agent, so the first live
+	// instance never holds a retired grant. Never fatal: a failure is logged
+	// and the step runs again at the next start.
+	if _, skillsErr := bootSkills(rc.cfg, rc.homePath); skillsErr != nil {
+		slog.Warn("gateway: skills start-up step did not complete; it runs again at the next start", "error", skillsErr)
+	}
+
 	// Eagerly seed every System Agent's SOUL.md right after SeedConfig.
 	// For the Judge this closes an operator-reported UX gap: its soul only
 	// materialized lazily on its FIRST real verifier dispatch (pkg/agent's
@@ -813,6 +824,15 @@ func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
 	// in the real audit chain. Synchronous and fast (one store read, at
 	// most a handful of deletes); never fatal.
 	sweepOrphanedProviderCredentials(rc.cfg, rc.credStore, rc.agentLoop.AuditLogger())
+
+	// Skills start-up audit (§8.5): the facts bootSkills gathered before the
+	// audit logger existed are replayed now, once, through the real logger
+	// NewAgentLoop wired (the same logger SetSkillsWriteAuditLogger installed).
+	// Never fatal: lost lines are counted on the audit-degraded counter.
+	if replayErr := replayBootSkillAudit(skillsBootReport, rc.agentLoop.AuditLogger()); replayErr != nil {
+		slog.Warn("gateway: skills start-up audit lines were not all written", "error", replayErr)
+	}
+	skillsBootReport = skills.SyncReport{}
 
 	// ADR-068 FR-046: an agent-path OAuth refresh (providers'
 	// NewStoreOAuthTokenSource, invoked mid-turn) mints a NEW access+refresh
@@ -1217,44 +1237,6 @@ func (rc *runContextWithOptions) prepareSkillServices() {
 	skillsWorkspace := rc.cfg.AgentHomeBasePath()
 	skillsGlobalDir := filepath.Join(rc.homePath, "skills")
 
-	// First-boot seed of the embedded default skill set (Spec-6 U3, FR-9.3).
-	// SeedDefaults is idempotent: it only fills in skills that are missing from
-	// the global skills dir and never overwrites existing (possibly user-edited)
-	// skills. A fresh install therefore ships with every package under
-	// pkg/skills/embedded (plan, interview, the Omnipus workflow skills, ...)
-	// without any external files.
-	if seedRes, seedErr := skills.SeedDefaults(skillsGlobalDir); seedErr != nil {
-		slog.Warn("gateway: failed to seed default skills from embed", "error", seedErr)
-	} else if len(seedRes.Seeded) > 0 {
-		slog.Info("gateway: seeded default skills from embed",
-			"seeded", seedRes.Seeded, "skipped", seedRes.Skipped)
-	}
-
-	// ADR-080 D-SKILL §151 step (b): once coreagent.applyDefineGoalRenameMigration
-	// has recorded its marker in cfg.SeededSkillGrants (rewritten in memory
-	// during SeedConfig above, persisted to config.json by the
-	// persistSeededSkillGrants call earlier in this function), the embedded
-	// define-goal/ skill SeedDefaults just seeded above HAS SUPERSEDED the
-	// old define-done/ directory — delete the orphan so no stale,
-	// manually-invokable skill serving OLD content survives
-	// (operator-ratified 2026-09-07, Q3). deleteOrphanedDefineDoneDir
-	// verifies the replacement define-goal/ is actually on disk before
-	// deleting — never on the marker's say-so alone (fix-wave finding #1):
-	// if SeedDefaults failed above, define-goal/ is absent and the delete is
-	// skipped, preserving define-done/ so /goal keeps a quality bar rather
-	// than silently losing one. Accepted caveat on the delete path: this
-	// removes any operator edits to the old define-done/ skill — acceptable
-	// because define-goal is an engine-authoritative built-in (ADR-074 D4's
-	// no-drift skill), not a user-customization surface.
-	orphanedRenamedSkillDir := filepath.Join(skillsGlobalDir, "define-done")
-	if deleted, delErr := deleteOrphanedDefineDoneDir(skillsGlobalDir, rc.cfg.SeededSkillGrants); delErr != nil {
-		slog.Warn("gateway: could not delete orphaned define-done skill directory after the ADR-080 define-goal rename",
-			"dir", orphanedRenamedSkillDir, "error", delErr)
-	} else if deleted {
-		slog.Info("gateway: deleted orphaned define-done skill directory after the ADR-080 define-goal rename",
-			"dir", orphanedRenamedSkillDir)
-	}
-
 	rc.sysSkillsLoader = skills.NewSkillsLoader(skillsWorkspace, skillsGlobalDir, skillsBuiltinDir)
 	// SkillWriter authors/versions skills into the global skills dir so editing a
 	// built-in produces a user override rather than mutating the shipped built-in.
@@ -1275,8 +1257,9 @@ func (rc *runContextWithOptions) prepareSkillServices() {
 	}
 	rc.sysRegistryManager = skills.NewRegistryManagerFromConfig(regCfg)
 
-	// SkillInstaller backs remove_skill (SkillRemoveTool, its only consumer —
-	// see pkg/sysagent/tools/skill.go). skills.SkillInstaller.Uninstall joins
+	// SkillInstaller is handed to the sysagent tool deps (Deps.SkillInstaller);
+	// since remove_skill was retired (skills spec r15 §5.1) no skill tool calls
+	// it. skills.SkillInstaller.Uninstall joins
 	// "skills" onto its own root internally (see pkg/skills/installer.go:
 	// NewSkillWriter(filepath.Join(si.workspace, "skills"))), so the value
 	// passed here must be the PARENT of the global skills directory — i.e.
@@ -1289,11 +1272,7 @@ func (rc *runContextWithOptions) prepareSkillServices() {
 	// pkg/tools/skills_install.go) target skillsGlobalDir unconditionally —
 	// the same directory sysSkillsLoader's "global" tier above and
 	// sysSkillWriter both already use — so a SkillInstaller resolving
-	// anywhere else can never find what install_skill actually wrote. Rooting
-	// it at skillsWorkspace was exactly this bug: list_skills correctly
-	// reported an installed skill (via the loader's global tier), but
-	// remove_skill always reported it NOT_FOUND, because Uninstall only ever
-	// looked under skillsWorkspace/skills.
+	// anywhere else can never find what install_skill actually wrote.
 	//
 	// GitHub token/proxy from the first github marketplace entry (optional;
 	// empty → unauthenticated API calls).
@@ -1302,7 +1281,7 @@ func (rc *runContextWithOptions) prepareSkillServices() {
 		rc.homePath, githubToken, githubProxy, ssrfChecker,
 	)
 	if rc.err != nil {
-		slog.Warn("gateway: could not create skill installer; remove_skill unavailable",
+		slog.Warn("gateway: could not create skill installer",
 			"error_type", fmt.Sprintf("%T", rc.err))
 		rc.sysSkillInstaller = nil
 	}
@@ -1444,6 +1423,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		RegistryManager:   rc.sysRegistryManager,
 		SkillInstaller:    rc.sysSkillInstaller,
 		SkillWriter:       rc.sysSkillWriter,
+		SkillGrants:       newDeleteGrantEditor(rc.homePath),
 		ResolveToolPolicy: rc.agentLoop.ResolveRegisteredToolPolicy,
 		GodModeActive:     func() bool { return agent.GodModeActive(rc.agentLoop.GetConfig()) },
 		// ADR-057 U9 changed ListAllSessions' signature to

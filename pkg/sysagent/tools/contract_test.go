@@ -20,7 +20,7 @@ import (
 // plus destructive-op confirmation — not a role-based fence. The role-based
 // admin-ask fence is retired (there is no admin role).
 //
-// BDD: Given all 33 tools returned by AllTools(),
+// BDD: Given all 32 tools returned by AllTools(),
 //
 //	When Category() is called on each,
 //	Then it returns a domain category (NOT CategorySystem) for every tool (FR-059).
@@ -29,13 +29,24 @@ import (
 //
 // Traces to: pkg/sysagent/tools/category.go — Category (FR-059).
 func TestRegistry_AllSysagentToolsCategory(t *testing.T) {
+	// r17 7.12 (-get_agent_tools, -read_agent_metadata) and r15 §10 (-create_skill, -remove_skill, +get_skill): 35 - 4 + 1 = 32.
 	all := AllTools(nil)
 
-	if len(all) != 33 {
-		t.Errorf("expected exactly 33 system tools (r17 7.12 removed get_agent_tools and read_agent_metadata (35 - 2 = 33)), got %d", len(all))
+	if len(all) != 32 {
+		t.Errorf("expected exactly 32 system tools (r17 7.12 removed get_agent_tools and read_agent_metadata; skills r15 §10 removed create_skill and remove_skill and added get_skill: 35 - 2 - 2 + 1 = 32), got %d", len(all))
+	}
+	for _, retired := range []string{"create_skill", "remove_skill"} {
+		if hasToolNamed(all, retired) {
+			t.Errorf("r15 §10: retired tool %q is still registered", retired)
+		}
+	}
+	for _, active := range []string{"get_skill", "edit_skill"} {
+		if !hasToolNamed(all, active) {
+			t.Errorf("r15 §10: active tool %q is missing", active)
+		}
 	}
 	if !hasToolNamed(all, "set_agent_permissions") {
-		t.Errorf("FR-024: set_agent_permissions must be one of the 33 system tools")
+		t.Errorf("FR-024: set_agent_permissions must be one of the 32 system tools")
 	}
 
 	for _, tool := range all {
@@ -131,8 +142,8 @@ func TestRegistry_AllSysagentToolsCategory_CentralRegistry(t *testing.T) {
 	reg := BuildRegistry(nil)
 	allTools := reg.GetAll()
 
-	if len(allTools) != 33 {
-		t.Errorf("central BuiltinRegistry has %d tools; want == 33 (r17 7.12 removed get_agent_tools and read_agent_metadata (35 - 2 = 33))", len(allTools))
+	if len(allTools) != 32 {
+		t.Errorf("central BuiltinRegistry has %d tools; want == 32 (r17 7.12 removed get_agent_tools and read_agent_metadata; skills r15 §10 removed create_skill and remove_skill and added get_skill: 35 - 2 - 2 + 1 = 32)", len(allTools))
 	}
 	if !hasToolNamed(allTools, "set_agent_permissions") {
 		t.Errorf("FR-024: the central registry must carry set_agent_permissions")

@@ -1,0 +1,15 @@
+title: SkillCopyRequest
+description: >
+  Request body for POST /api/v1/skills/{name}/copy: the name of the new
+  user-owned copy. The copy starts ungranted.
+type: object
+additionalProperties: false
+required:
+  - new_id
+properties:
+  new_id:
+    type: string
+    maxLength: 64
+    pattern: '^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$'
+    description: Slug of the new skill (letters, digits and single hyphens).
+    example: "plan-copy"

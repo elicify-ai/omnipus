@@ -43,7 +43,7 @@ func defaultToolsSpecRows(t *testing.T, catalog *tools.BuiltinRegistry) []defaul
 				"list_tasks update_task Skill ToolSearch find_skills list_skills search_web fetch_url " +
 				"read_file list_directory grep list_mounts library_list library_read write_file edit_file append_file send_file serve_web " +
 				"read_inbox search_email read_message create_email_draft list_email_attachments read_email_attachment download_email_attachment " +
-				"list_secrets list_workspaces get_workspace",
+				"list_secrets list_workspaces get_workspace get_skill",
 			main: "allow", worker: "allow",
 		},
 		{
@@ -51,8 +51,11 @@ func defaultToolsSpecRows(t *testing.T, catalog *tools.BuiltinRegistry) []defaul
 			main:  "allow", worker: "deny",
 		},
 		{
-			names: "delete_task create_skill edit_skill browser_upload_file request_mount send_email reply environment_setup",
+			names: "delete_task browser_upload_file request_mount send_email reply environment_setup",
 			main:  "ask", worker: "ask",
+		},
+		{ // Skills r15 §10: editing is no longer management; workers cannot edit.
+			names: "edit_skill", main: "ask", worker: "deny",
 		},
 	}
 	for _, group := range groups {
@@ -96,7 +99,7 @@ func defaultToolsAdminOnlyNames() []string {
 		"get_config set_config run_doctor get_usage create_workspace update_workspace delete_workspace " +
 		"configure_provider list_providers test_provider list_models " +
 		"enable_channel configure_channel disable_channel list_channels test_channel connect_channel " +
-		"add_mcp_server remove_mcp_server list_mcp_servers remove_skill install_skill remove_secret select_secret_version connect_mailbox list_mailboxes")
+		"add_mcp_server remove_mcp_server list_mcp_servers install_skill remove_secret select_secret_version connect_mailbox list_mailboxes")
 }
 
 func defaultToolsCreateREST(t *testing.T, api *restAPI, kind string) *config.AgentConfig {
