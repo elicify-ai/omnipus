@@ -117,9 +117,8 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 	intended := ADR090RolePolicyInventory(id)
 	ceiling := config.DefaultConfig().Sandbox.ToolPolicies
 	result := make(map[string]config.ToolPolicy)
-	// Q22=B: the ordinary core's create_skill/edit_skill Ask differs from
-	// the Allow ceiling, so this delta persists both local Ask entries.
-	// Omnipus returned above and keeps no local entry for either tool.
+	// Omnipus returned above and keeps no local entry for any tool it
+	// supports, edit_skill included (skills spec r15 §10).
 	for _, name := range allStaticToolNames {
 		if intended[name] != config.ToolPolicy(ceiling[name]) {
 			result[name] = intended[name]
@@ -133,8 +132,11 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 	// their stored ask (until the operator explicitly changes or removes
 	// it via the normal tool_policy edit paths). The deny roles are
 	// unaffected: their deny differs from the ask ceiling and is already
-	// persisted by the delta loop above.
-	for _, name := range []string{"ToolSearch", "Skill", "grep", "send_email", "reply", "add_mcp_server", "environment_setup"} {
+	// persisted by the delta loop above. edit_skill (skills spec r15 §10)
+	// rides this list so Mia and Jim persist an explicit "ask" while the
+	// fresh ceiling is ask, and keep it when an operator raises the
+	// ceiling to allow.
+	for _, name := range []string{"ToolSearch", "Skill", "grep", "send_email", "reply", "add_mcp_server", "environment_setup", "edit_skill"} {
 		result[name] = intended[name]
 	}
 	return result
@@ -147,14 +149,14 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 var omnipusSupportedTools = []string{
 	"list_agents", "get_agent", "get_agent_tools", "read_agent_metadata",
 	"list_workspaces", "get_workspace", "list_models", "list_providers", "test_provider",
-	"list_mcp_servers", "list_channels", "test_channel", "list_skills", "find_skills",
+	"list_mcp_servers", "list_channels", "test_channel", "list_skills", "get_skill", "find_skills",
 	"run_doctor", "get_usage", "list_secrets", "AskUserQuestion", "send_message",
 	"answer_request", "message_parent", "delegate", "Skill", "ToolSearch", "remember",
 	"recall_memory", "recall_conversation", "run_retrospective", "set_goal", "goal_claim",
 	"read_file", "write_file", "edit_file", "append_file", "list_directory", "grep",
 	"list_mounts", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list",
 	"search_web", "fetch_url", "create_agent", "update_agent", "delete_agent",
-	"create_workspace", "update_workspace", "create_skill", "edit_skill", "remove_skill", "install_skill",
+	"create_workspace", "update_workspace", "edit_skill", "install_skill",
 	"add_mcp_server", "remove_mcp_server", "configure_provider", "enable_channel",
 	"disable_channel", "configure_channel", "connect_channel", "set_channel_outbound", "connect_mailbox",
 	"set_agent_permissions", "request_secret", "select_secret_version", "remove_secret",

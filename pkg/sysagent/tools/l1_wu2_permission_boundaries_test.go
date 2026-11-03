@@ -77,7 +77,8 @@ func TestL1WU2UpdateAgent_RefusesPermissionAndConnectorFieldsWithoutWrites(t *te
 // FR-025 / BDD-14.3: BOTH allow and ask are non-deny management grants.
 func TestL1WU2CreateAgent_RefusesEveryNonDenyManagementGrantBeforePersistence(t *testing.T) {
 	management := []string{"create_agent", "update_agent", "delete_agent", "create_workspace", "update_workspace",
-		"delete_workspace", "create_skill", "edit_skill", "remove_skill", "install_skill", "add_mcp_server",
+		"delete_workspace", "install_skill", // r15 §10: editing leaves management; retired verbs are absent.
+		"add_mcp_server",
 		"remove_mcp_server", "configure_provider", "enable_channel", "disable_channel", "configure_channel",
 		"connect_channel", "set_channel_outbound", "connect_mailbox", "set_agent_permissions", "remove_secret", "select_secret_version", "set_config"}
 	for _, name := range management {

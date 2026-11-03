@@ -434,7 +434,7 @@ func (rau *restAPIUpdateAgentTools) reloadAndRespond() {
 	// finding #4): before this fix, an unconfirmed-but-error-free reload
 	// (confirmed=false, err=nil) fell through to a 200 with only a
 	// server-side Warn log — a caller had no way to know the tool-policy
-	// tightening they just requested (e.g. create_skill allow/deny -> ask)
+	// tightening they just requested (e.g. edit_skill allow/deny -> ask)
 	// might not be enforced yet, and a tool call dispatched immediately
 	// after could still run under the STALE, more permissive snapshot. This
 	// mirrors waitForReload's OWN documented incident ("Persisted-but-not-

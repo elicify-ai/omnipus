@@ -99,6 +99,7 @@ var founderRunsNames = []string{
 	"get_workspace",
 	"create_workspace",
 	"list_skills",
+	"get_skill", // r15 §10: explicitly AutoRuns, not unknown-name fallback.
 }
 
 var founderAsksNames = []string{
@@ -126,9 +127,7 @@ var founderAsksNames = []string{
 	"delete_agent",
 	"update_workspace",
 	"delete_workspace",
-	"create_skill",
 	"edit_skill",
-	"remove_skill",
 }
 
 // founderRunsIfArgsNames are the §3 "runs" entries that carry the J2
@@ -143,8 +142,8 @@ var founderRunsIfArgsNames = []string{
 }
 
 func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
-	if len(founderRunsNames) != 77 || len(founderAsksNames) != 27 {
-		t.Fatalf("founder lists: %d runs, %d asks; spec §3.8 says 81 and 28 minus the four retired *_in_workspace tools (DEL-23) and switch_agent (U8 DEL-07/DEL-21) = 77 and 27", len(founderRunsNames), len(founderAsksNames))
+	if len(founderRunsNames) != 78 || len(founderAsksNames) != 25 {
+		t.Fatalf("founder lists: %d runs, %d asks; historical 77/27 plus r15 §10 get_skill read and minus create_skill/remove_skill = 78/25", len(founderRunsNames), len(founderAsksNames))
 	}
 	runsIf := map[string]bool{}
 	for _, n := range founderRunsIfArgsNames {
@@ -180,10 +179,9 @@ func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
 	// send_message's reply_to form, so it rides send_message's class (AutoRuns)
 	// -- total 110. Plus the nine omnipus-system-agent §6.5 tools (WU-2,
 	// 2026-10-13; FR-021 puts five on the ask-list, the four reads run) --
-	// total 119. Plus set_channel_outbound (channels-spec-r8 FR-032: an
-	// explicit AutoAsks entry, never the unknown-name fallback) -- total 120.
-	if len(table) != 120 {
-		t.Errorf("table has %d entries, want 120 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02 -- plus answer_request, founder gap 5, 2026-10-11 -- plus the nine omnipus-system-agent §6.5 tools, 2026-10-13 -- plus set_channel_outbound, channels FR-032)", len(table))
+	// total 119.
+	if len(table) != 119 {
+		t.Errorf("table has %d entries, want 119 (+1 set_channel_outbound, channels FR-032; r15 removes two skill tools and adds get_skill to the prior 119: 104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02 -- plus answer_request, founder gap 5, 2026-10-11 -- plus the nine omnipus-system-agent §6.5 tools, 2026-10-13)", len(table))
 	}
 	if got := table["bash"]; got != AutoShellMode {
 		t.Errorf("bash class = %s, want shell_mode (bash keeps its own mechanism, §3.7)", got)

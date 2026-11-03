@@ -120,7 +120,7 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if err := editFile(handle, oldText, newText); err != nil {
 		return ErrorResult(err.Error())
 	}
-	return SilentResult(fmt.Sprintf("File edited: %s", path))
+	return SilentResult(fmt.Sprintf("File edited: %s", path) + handle.SkillChangeNote())
 }
 
 type AppendFileTool struct {
@@ -219,7 +219,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if err := appendFile(handle, content); err != nil {
 		return ErrorResult(err.Error())
 	}
-	return SilentResult(fmt.Sprintf("Appended to %s", path))
+	return SilentResult(fmt.Sprintf("Appended to %s", path) + handle.SkillChangeNote())
 }
 
 // editFile reads the file via handle, performs the replacement, and writes

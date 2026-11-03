@@ -415,6 +415,8 @@ func (nai *newAgentInstance) prepareIdentity() {
 		// is no "unrestricted" state any more: only names present in
 		// agentCfg.Skills resolve or appear in progressive disclosure.
 		nai.contextBuilder.WithSkillAllowlist(nai.agentCfg.Skills)
+		// Skills spec r15 §5.13a SD-30: the identity half of the grant.
+		nai.contextBuilder.WithSkillBindings(nai.agentCfg.SkillGrants)
 		// ADR-052 FR-039: per-agent memory gate (nil = enabled). The Judge
 		// verifier runs memoryless for impartial, reproducible verdicts —
 		// its seed leaves MemoryEnabled=false; every other agent defaults on.

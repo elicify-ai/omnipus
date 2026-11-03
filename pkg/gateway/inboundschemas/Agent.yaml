@@ -192,6 +192,15 @@ properties:
     $ref: './AgentRateLimits.yaml'
   stats:
     $ref: './AgentStats.yaml'
+  skill_grants:
+    type: object
+    additionalProperties:
+      type: string
+    description: >
+      Skill key → generation the grant is bound to (SD-30). Written wholesale
+      by the server at every agent create/update from its own observation of
+      the installed skill folders; requests stay name-only. An absent field or
+      entry is unbound and authorizes nothing.
   skills:
     type: array
     uniqueItems: true
@@ -203,6 +212,19 @@ properties:
       is omitted entirely from the response (the backend does not emit an empty
       array). Absence of the field and an empty array are semantically identical
       (opt-in, default none).
+    example:
+      - "web-research"
+  stale_skill_grants:
+    type: array
+    readOnly: true
+    items:
+      type: string
+    description: >
+      Names from `skills` whose skill is installed but whose grant is bound to
+      a previous skill with that name (or to none), so the agent cannot load it
+      (SKILL_GRANT_STALE). Computed by the server on the agent detail read
+      (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is
+      not listed. Omitted when empty.
     example:
       - "web-research"
   updated_at:

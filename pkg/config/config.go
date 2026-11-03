@@ -628,9 +628,14 @@ type AgentConfig struct {
 	// This field previously existed only on the wire and in raw config.json —
 	// it was silently dropped on load and never applied by the runtime
 	// (P0 bug, fixed 2026-07-03).
-	MaxToolIterations int              `json:"max_tool_iterations,omitempty"`
-	Skills            []string         `json:"skills,omitempty"`
-	Subagents         *SubagentsConfig `json:"subagents,omitempty"`
+	MaxToolIterations int      `json:"max_tool_iterations,omitempty"`
+	Skills            []string `json:"skills,omitempty"`
+	// SkillGrants binds each granted skill key to the folder generation it
+	// was granted against (skills spec r15 §5.13a, SD-30). Written by the
+	// server at every agent save; an absent entry is unbound and authorizes
+	// nothing for a stamped folder.
+	SkillGrants map[string]string `json:"skill_grants,omitempty"`
+	Subagents   *SubagentsConfig  `json:"subagents,omitempty"`
 	// FallbackModels is the ordered fallback chain tried when the primary
 	// model returns an error. Each entry carries its own provider so a
 	// fallback can route through a different provider than the primary (e.g.
@@ -1212,6 +1217,12 @@ type ChannelInstanceConfig struct {
 	// Both IRC and email use the same password_ref JSON key for their connection
 	// password, which is stored encrypted in the credential store.
 	EmailUsername string `json:"username,omitempty"`
+
+	// allowFromText keeps an allowed-sender field saved as one string while
+	// the instance's type is not yet known (no "type" key), so loading can
+	// split it with the effective type's separators (channel_allow_from.go).
+	// Never serialized; CanonicalChannelInstance clears it.
+	allowFromText *pendingAllowFromText
 }
 
 // CredentialRefs returns every credential-reference field this instance

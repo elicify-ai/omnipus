@@ -178,8 +178,10 @@ import (
 // set_agent_permissions, read_conversation, list_mailboxes — classified in
 // the catalogue, ceiling, role inventories, custom constructor and Auto table
 // in one commit.
-// Channels FR-032 adds exactly one tool: set_channel_outbound (119 + 1).
-const catalogSizeToday = 120
+// Skills r15 §10: retire create_skill/remove_skill (-2), add get_skill (+1).
+// edit_skill remains under its supported action contract: 119 - 2 + 1 = 118.
+// Channels FR-032 adds set_channel_outbound: 118 + 1 = 119.
+const catalogSizeToday = 119
 
 // currentKnowledgeToolNames is every knowledge_* tool presently in the
 // catalog: ADR-068 D15.3's original six (the replacement for ADR-067's
@@ -390,7 +392,7 @@ func TestCatalog_MergeArithmetic(t *testing.T) {
 		// alongside (the two knowledge names) their own implementation.
 		// Bump this alongside catalogSizeToday, in the same commit,
 		// whenever a tool is added post-merge.
-		postMergeAdditions = 19 // +1 set_channel_outbound (channels-spec-r8 FR-032); +9 omnipus-system-agent §6.5 tools (WU-2, 2026-10-13); +1 answer_request (founder Gap 5, 2026-10-11); +3 goal-flow; +2 ADR-090 readback; +1 environment_setup; +1 create_email_draft (email-mail-view spec §2.7 point 6); +3 mail attachment tools (ADR-20261001 F3, w4 spec US-3, founder Q4=A); -4 four *_in_workspace task tools (U9/DEL-23); -1 switch_agent (U8/DEL-07)
+		postMergeAdditions = 18 // +1 set_channel_outbound (channels FR-032); r15 §10: -2 retired skill verbs +1 get_skill; +9 omnipus-system-agent §6.5 tools (WU-2, 2026-10-13); +1 answer_request (founder Gap 5, 2026-10-11); +3 goal-flow; +2 ADR-090 readback; +1 environment_setup; +1 create_email_draft (email-mail-view spec §2.7 point 6); +3 mail attachment tools (ADR-20261001 F3, w4 spec US-3, founder Q4=A); -4 four *_in_workspace task tools (U9/DEL-23); -1 switch_agent (U8/DEL-07)
 	)
 	// Checked against the FROZEN adr068OriginalSixKnowledgeToolNames, not
 	// currentKnowledgeToolNames — this arithmetic is a fact about what the

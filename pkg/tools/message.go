@@ -323,10 +323,15 @@ func (t *MessageTool) resolveOwnChannel(workspaceID, actingAgent string) (string
 // ownership alone cannot stop a child from naming the root's chat id and
 // reaching the operator — closing exactly that hole (D3, C1 in Appendix C).
 //
-// Enforced only when the CALLING session classifies as steered
-// (steer.AudienceSteeringSession) — an ordinary root, or a session this
-// resolver has any doubt about, is unaffected (D3's audience answers are
-// user/steering_session/none; only the middle one triggers this rule).
+// Only a CALLING session the resolver classifies as an ordinary root
+// (steer.AudienceUser) is unaffected. A steered session
+// (steer.AudienceSteeringSession) may message only its own turn's
+// conversation. A session the resolver has any doubt about — it answers
+// steer.AudienceNone, or the lookup fails (treated as AudienceNone) — is
+// refused for every target, its own conversation included (fail closed
+// since 4f674cf4a). D3's audience answers are user/steering_session/none.
+// The check is skipped only when no resolver is wired or the context
+// carries no transcript session id.
 func (t *MessageTool) denySteeredSessionOffOwnChat(ctx context.Context, channel, chatID, turnChannel, turnChat string) *ToolResult {
 	if t.steerAudience == nil {
 		return nil

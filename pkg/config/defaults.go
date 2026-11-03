@@ -261,7 +261,11 @@ func defaultToolPoliciesGeneral() map[string]string {
 		"answer_request": "allow",
 		"send_file":      "allow",
 		"find_skills":    "allow",
-		"install_skill":  "allow",
+		// install_skill: "ask" (founder decision 2026-11-03) — a person
+		// approves each install. Installs whose config already persisted
+		// "allow" keep it: Reconcile adds missing keys only and never
+		// overwrites an operator-set value (Hard Constraint #6).
+		"install_skill":  "ask",
 		"delegate":       "allow",
 		"message_parent": "allow",
 		// AskUserQuestion (askuserquestion-tool-spec v3, ADR-074 D4b):
@@ -431,11 +435,13 @@ func defaultToolPoliciesSysagent() map[string]string {
 		// list_mcp_servers is read-only and reports name/transport/enabled/
 		// command/url only — never args or env — so it leaks no credential.
 		"list_mcp_servers": "allow",
-		// Q22=B (2026-10-22): ordinary Main/Worker seeds keep a local Ask,
-		// while Omnipus rides this Allow ceiling without a local entry.
-		"create_skill":      "allow",
-		"edit_skill":        "allow",
-		"remove_skill":      "ask", // FR-020
+		// Skills spec r15 §10: the one skill-change tool asks on a fresh
+		// install (Reconcile never overwrites an operator value); Omnipus
+		// rides this ceiling without a local entry. get_skill, the read of
+		// one skill, is allowed everywhere. create_skill and remove_skill
+		// are retired (tools.RetiredToolNames).
+		"edit_skill":        "ask",
+		"get_skill":         "allow",
 		"list_skills":       "allow",
 		"enable_channel":    "ask",   // FR-020
 		"configure_channel": "ask",   // FR-020

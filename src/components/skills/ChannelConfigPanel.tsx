@@ -27,7 +27,7 @@ import {
   isWorker,
   isApiError,
 } from '@/lib/api'
-import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
+import { getChannelFields, splitIdListText, type ChannelField } from '@/lib/channel-fields'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
 import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
@@ -336,7 +336,7 @@ function ChannelFieldRow({
         <Input
           id={`field-${field.key}`}
           type={field.type === 'number' ? 'number' : 'text'}
-          value={String(getValue(field.key) ?? '')}
+          value={field.type === 'list' ? listFieldText(getValue(field.key)) : String(getValue(field.key) ?? '')}
           onChange={(e) =>
             setValue(
               field.key,
@@ -402,6 +402,13 @@ function validateRequired(
   return errors
 }
 
+// listFieldText shows a 'list' field's value in its text box: a saved list
+// reads "a, b"; text the user is typing (or an older saved string) shows as is.
+function listFieldText(value: unknown): string {
+  if (Array.isArray(value)) return value.map(String).join(', ')
+  return String(value ?? '')
+}
+
 // focusFirstInvalidField moves keyboard/AT focus to the first field with a
 // validation error after a blocked Save — otherwise the error is set but
 // nothing tells a keyboard or screen-reader user where to go. `errors` keys
@@ -431,6 +438,9 @@ export function ChannelConfigPanel({
 
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
+  // 'list' fields the user has typed into since the panel opened. Their text
+  // is split into ids on submit (U7); an untouched value travels as loaded.
+  const editedListKeysRef = useRef(new Set<string>())
 
   const [formValues, setFormValues] = useState<Record<string, unknown>>({})
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
@@ -572,6 +582,7 @@ export function ChannelConfigPanel({
       setFormValues({})
       setHasStoredSecret({})
       isDirtyRef.current = false
+      editedListKeysRef.current.clear()
       setGChatAuthMethod('webhook')
     }
   }, [open])
@@ -756,6 +767,7 @@ export function ChannelConfigPanel({
 
   function setValue(key: string, value: unknown) {
     markDirty()
+    if (fields.some((f) => f.key === key && f.type === 'list')) editedListKeysRef.current.add(key)
     // Support nested keys like "group_trigger.mention_only"
     setFormValues((prev) => setNested(prev, key, value))
     // Clear this field's validation error as soon as the user edits it.
@@ -823,6 +835,21 @@ export function ChannelConfigPanel({
     for (const [key, value] of Object.entries(formValues)) {
       if (redactableKeys.has(key) && (value === '' || value === undefined || value === null)) continue
       payload[key] = value
+    }
+    // U7: a 'list' field the user typed into is submitted as its ids
+    // (string[], the Configure contract's allow_from), never as the typed
+    // text; clearing it submits [] (allow all). A saved list the user did not
+    // touch is already an array and travels unchanged. An untouched legacy
+    // value that is not a list (an old saved string) is left out entirely,
+    // so Save never writes it back (CHECK F7); the server keeps it as stored.
+    for (const field of fields) {
+      if (field.type !== 'list') continue
+      const value = getNested(formValues, field.key)
+      if (editedListKeysRef.current.has(field.key)) {
+        if (typeof value === 'string') payload[field.key] = splitIdListText(channelId, value)
+      } else if (!Array.isArray(value)) {
+        delete payload[field.key]
+      }
     }
 
     if (!isGoogleChat) return payload

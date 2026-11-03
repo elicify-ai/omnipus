@@ -58,23 +58,23 @@ func t11Cfg(instances map[string]config.ChannelInstanceConfig) *config.Config {
 const t11Agent = "mia"
 const t11Workspace = "ws-t11"
 
-func TestT11_StartAllowed_DatasetD2(t *testing.T) {
+type d2Row struct {
+	n       int
+	name    string                              // the connection name the caller supplies
+	inst    func() config.ChannelInstanceConfig // zero Type = the instance is absent from config (D2 row 1)
+	avail   Availability
+	chat    string
+	allowed bool
+	code    StartRefusalCode
+	textHas []string // substrings the normative text must contain
+	textNot []string // substrings it must not contain
+}
+
+func t11DatasetD2(t *testing.T) []d2Row {
 	const d2DiscordName = "discord"
 	const d2TelegramName = "telegram"
 
-	type d2Row struct {
-		n       int
-		name    string                              // the connection name the caller supplies
-		inst    func() config.ChannelInstanceConfig // zero Type = the instance is absent from config (D2 row 1)
-		avail   Availability
-		chat    string
-		allowed bool
-		code    StartRefusalCode
-		textHas []string // substrings the normative text must contain
-		textNot []string // substrings it must not contain
-	}
-
-	rows := []d2Row{
+	return []d2Row{
 		{
 			n: 1,
 			// D2 row 1: the instance exists neither in config nor in the
@@ -292,6 +292,10 @@ func TestT11_StartAllowed_DatasetD2(t *testing.T) {
 			},
 		},
 	}
+}
+
+func TestT11_StartAllowed_DatasetD2(t *testing.T) {
+	rows := t11DatasetD2(t)
 
 	for _, r := range rows {
 		instances := map[string]config.ChannelInstanceConfig{}

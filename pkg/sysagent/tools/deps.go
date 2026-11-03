@@ -383,6 +383,12 @@ type Deps struct {
 	// produces a user override rather than mutating the shipped built-in in
 	// place. Nil in tests or when not wired — callers must nil-check before use.
 	SkillWriter *skills.SkillWriter
+	// SkillGrants removes a deleted skill's name from every agent's stored
+	// grant list (founder Q-S3: best-effort hygiene on delete; SD-30 identity
+	// binding stays the safety rule). edit_skill action=delete passes it to the
+	// pipeline exactly as the REST delete does. Nil in tests or when not wired:
+	// the delete then leaves the stale row, which never matches (SD-30).
+	SkillGrants skills.GrantEditor
 	// ResolveToolPolicy returns the live compositor verdict for a registered
 	// caller. ok is false when the identity is absent or no longer registered.
 	ResolveToolPolicy func(agentID, toolName string) (policy string, ok bool)

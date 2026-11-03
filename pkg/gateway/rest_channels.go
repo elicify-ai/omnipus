@@ -1273,6 +1273,24 @@ func configureProtectedKeyRefusal(updates map[string]any) string {
 	return ""
 }
 
+// prepareConfigureUpdates checks and rewrites a Configure request before it is
+// merged, and returns the 400 text of the first refusal, or "". It refuses a
+// protected field (FR-023) and an allowed-sender field set to null (chief
+// ruling C: null is not a list of ids); it drops the Configure response's own
+// outcome keys, which are never config (FR-023), and saves allowed-sender
+// text as a list of ids (U7).
+func prepareConfigureUpdates(updates map[string]any, channelID string) string {
+	if refusal := configureProtectedKeyRefusal(updates); refusal != "" {
+		return refusal
+	}
+	if refusal := configureNullAllowListRefusal(updates); refusal != "" {
+		return refusal
+	}
+	dropConfigureOutcomeKeys(updates)
+	normalizeConfigureAllowLists(updates, channelID)
+	return ""
+}
+
 // configureChannel handles PUT /api/v1/channels/{id}/configure.
 // Merges the request body fields into the channel's config section (does not overwrite absent fields).
 // Returns the updated channel config with credential fields redacted.
@@ -1315,15 +1333,9 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// FR-023: every spelling encoding/json would bind to a protected field is
 	// refused (folded like jsonFoldKey), and so is outbound, which only the
 	// dedicated writer PUT /channels/{id}/outbound may change.
-	if refusal := configureProtectedKeyRefusal(updates); refusal != "" {
+	if refusal := prepareConfigureUpdates(updates, channelID); refusal != "" {
 		jsonErr(w, http.StatusBadRequest, refusal)
 		return
-	}
-	// FR-023: the Configure response's own outcome keys are never config.
-	for _, name := range []string{"apply_outcome", "apply_reason", "apply_note"} {
-		for _, key := range foldedKeys(updates, name) {
-			delete(updates, key)
-		}
 	}
 	// Filesystem-path fields (grep of config.ChannelInstanceConfig for path-typed
 	// fields: session_store_path [WhatsApp], crypto_database_path [Matrix],
@@ -1486,59 +1498,66 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		}
 	}
 
-	// FINAL-REVIEW HIGH — configureChannel had no audit trail for a mutating,
-	// credential-touching config write (unlike its sibling deleteChannelInstance,
-	// which emits EventChannelInstanceDeleted). A configure call can create,
-	// rotate, or clear stored encrypted secrets and change arbitrary instance
-	// fields, so it MUST leave an audit trail even on the happy path.
-	// updates' keys (never values) are logged — secrets have already been
-	// stripped and replaced with *_ref entries by Phase C above.
-	//
-	// Cross-cutting interaction (intentional, fail-closed tradeoff — see the
-	// matching note in pkg/gateway/gateway.go's executeReload, next to
-	// "Cross-cutting interaction"): the safeUpdateConfigJSON write above
-	// triggers an async config reload via the file-watcher (HotReload
-	// defaults to true, pkg/config/defaults.go). executeReload's credential
-	// check runs against ALL enabled channels, not just this one, so this
-	// DecisionAllow audit entry (recorded because THIS handler's own write
-	// succeeded) can be followed moments later by executeReload rejecting
-	// the reload — and rolling back this channel's newly-saved config in
-	// memory — because a DIFFERENT, unrelated enabled channel's credential
-	// ref fails to resolve. There is no correlation ID between this audit
-	// entry and that later rejection. This is desired behavior (fail closed
-	// rather than silently run a channel with a broken credential), not a
-	// bug: an operator who wants to know whether their save actually "stuck"
-	// checks GET /health's reloadDegraded-driven 503 (surfaces
-	// runningServices.reloadError) alongside the gateway logs, not this
-	// audit event alone.
-	if a.auditor != nil {
-		decision := audit.DecisionAllow
-		if credentialCleanupFailed {
-			decision = audit.DecisionError
-		}
-		touchedFields := make([]string, 0, len(updates))
-		for k := range updates {
-			touchedFields = append(touchedFields, k)
-		}
-		sort.Strings(touchedFields)
-		if err := a.auditor.Log(&audit.Entry{
-			Event:    audit.EventChannelInstanceConfigured,
-			Decision: decision,
-			Details: map[string]any{
-				"channel_id":     channelID,
-				"type":           chBaseType,
-				"fields":         touchedFields,
-				"cleanup_failed": credentialCleanupFailed,
-			},
-		}); err != nil {
-			slog.Warn("audit write failed", "event", audit.EventChannelInstanceConfigured, "error", err)
-		}
-	}
+	a.auditChannelConfigured(channelID, chBaseType, updates, credentialCleanupFailed)
 
 	// FR-050/FR-052: restart from desired-vs-applied state and report the
 	// true outcome (T-6).
 	applied := a.applyConfiguredChannel(channelID, beforeCfg, storedCount > 0)
 	jsonOK(w, configureResponse(redactChannelConfig(channelID, updatedCh), applied))
+}
+
+// auditChannelConfigured records configureChannel's audit entry.
+//
+// FINAL-REVIEW HIGH — configureChannel had no audit trail for a mutating,
+// credential-touching config write (unlike its sibling deleteChannelInstance,
+// which emits EventChannelInstanceDeleted). A configure call can create,
+// rotate, or clear stored encrypted secrets and change arbitrary instance
+// fields, so it MUST leave an audit trail even on the happy path.
+// updates' keys (never values) are logged — secrets have already been
+// stripped and replaced with *_ref entries by configureChannel's Phase C.
+//
+// Cross-cutting interaction (intentional, fail-closed tradeoff — see the
+// matching note in pkg/gateway/gateway.go's executeReload, next to
+// "Cross-cutting interaction"): configureChannel's safeUpdateConfigJSON write
+// triggers an async config reload via the file-watcher (HotReload
+// defaults to true, pkg/config/defaults.go). executeReload's credential
+// check runs against ALL enabled channels, not just this one, so this
+// DecisionAllow audit entry (recorded because THIS handler's own write
+// succeeded) can be followed moments later by executeReload rejecting
+// the reload — and rolling back this channel's newly-saved config in
+// memory — because a DIFFERENT, unrelated enabled channel's credential
+// ref fails to resolve. There is no correlation ID between this audit
+// entry and that later rejection. This is desired behavior (fail closed
+// rather than silently run a channel with a broken credential), not a
+// bug: an operator who wants to know whether their save actually "stuck"
+// checks GET /health's reloadDegraded-driven 503 (surfaces
+// runningServices.reloadError) alongside the gateway logs, not this
+// audit event alone.
+func (a *restAPI) auditChannelConfigured(channelID, chBaseType string, updates map[string]any, cleanupFailed bool) {
+	if a.auditor == nil {
+		return
+	}
+	decision := audit.DecisionAllow
+	if cleanupFailed {
+		decision = audit.DecisionError
+	}
+	touchedFields := make([]string, 0, len(updates))
+	for k := range updates {
+		touchedFields = append(touchedFields, k)
+	}
+	sort.Strings(touchedFields)
+	if err := a.auditor.Log(&audit.Entry{
+		Event:    audit.EventChannelInstanceConfigured,
+		Decision: decision,
+		Details: map[string]any{
+			"channel_id":     channelID,
+			"type":           chBaseType,
+			"fields":         touchedFields,
+			"cleanup_failed": cleanupFailed,
+		},
+	}); err != nil {
+		slog.Warn("audit write failed", "event", audit.EventChannelInstanceConfigured, "error", err)
+	}
 }
 
 // testChannel handles POST /api/v1/channels/{id}/test.

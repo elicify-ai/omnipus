@@ -179,6 +179,9 @@ function OutboundSettings({
   const { data: read, isLoading, isError, refetch } = useQuery({
     queryKey,
     queryFn: () => fetchChannelOutbound(channelId),
+    // T-31: every opening of the panel shows the server's current list and
+    // revision, not a copy cached by the app-wide 30 s staleTime.
+    staleTime: 0,
   })
 
   const [policy, setPolicy] = useState<Policy>('reply_only')

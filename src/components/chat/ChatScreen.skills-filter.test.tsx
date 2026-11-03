@@ -75,16 +75,16 @@ vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock
 // this fixture's alphabetical order matching its numeric intent, same as
 // the analogous fixture in useSlashMenu.test.ts's cap describe block.
 const ALL_MOCK_SKILLS = [
-  { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-  { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-  { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
-  { id: 'skill-04',      name: 'Skill 04',      version: '1.0', description: 'Description 4',             verified: true,  status: 'active' },
-  { id: 'skill-05',      name: 'Skill 05',      version: '1.0', description: 'Description 5',             verified: true,  status: 'active' },
-  { id: 'skill-06',      name: 'Skill 06',      version: '1.0', description: 'Description 6',             verified: true,  status: 'active' },
-  { id: 'skill-07',      name: 'Skill 07',      version: '1.0', description: 'Description 7',             verified: true,  status: 'active' },
-  { id: 'skill-08',      name: 'Skill 08',      version: '1.0', description: 'Description 8',             verified: true,  status: 'active' },
-  { id: 'skill-09',      name: 'Skill 09',      version: '1.0', description: 'Description 9',             verified: true,  status: 'active' },
-  { id: 'skill-10',      name: 'Skill 10',      version: '1.0', description: 'Description 10',            verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+  { has_local_changes: false, id: 'skill-04',      name: 'Skill 04',      version: '1.0', description: 'Description 4',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-05',      name: 'Skill 05',      version: '1.0', description: 'Description 5',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-06',      name: 'Skill 06',      version: '1.0', description: 'Description 6',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-07',      name: 'Skill 07',      version: '1.0', description: 'Description 7',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-08',      name: 'Skill 08',      version: '1.0', description: 'Description 8',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-09',      name: 'Skill 09',      version: '1.0', description: 'Description 9',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-10',      name: 'Skill 10',      version: '1.0', description: 'Description 10',            verified: true,  status: 'active' },
 ]
 // Deferred item 3: even zero-padded, "Web Research" sorts LAST alphabetically
 // among ALL_MOCK_SKILLS' 10 names (W > S > D > C) and never survives an
@@ -94,9 +94,9 @@ const ALL_MOCK_SKILLS = [
 // visible skills use this smaller fixture instead, so they aren't
 // incidentally coupled to the specific 10-item cap fixture's sort order.
 const SMALL_MOCK_SKILLS = [
-  { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-  { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-  { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+  { has_local_changes: false, id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
 ]
 // Mutable per-test override — defaults to the small fixture; the "capped at
 // 8" test below swaps in ALL_MOCK_SKILLS for its own run only.

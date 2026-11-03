@@ -7,7 +7,8 @@ import { WHATSAPP_NATIVE_CHANNEL_ID } from '@/components/skills/whatsappChannelI
 export interface ChannelField { // not-wire-format: UI form-field descriptor for channel config forms; never serialised over any HTTP/WS boundary
   key: string
   label: string
-  type: 'text' | 'password' | 'url' | 'number' | 'toggle' | 'textarea'
+  /** 'list': a list of ids typed as one text, separated by commas or spaces (WhatsApp: commas only, see splitIdListText); submitted as string[] (U7). */
+  type: 'text' | 'password' | 'url' | 'number' | 'toggle' | 'textarea' | 'list'
   required: boolean
   placeholder?: string
   helpText?: string
@@ -36,10 +37,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'user_id1, user_id2',
-      helpText: 'Comma-separated user/chat IDs (empty = allow all)',
+      helpText: 'User/chat IDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
     {
@@ -90,10 +91,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'user_id1, user_id2',
-      helpText: 'Comma-separated user/server IDs (empty = allow all)',
+      helpText: 'User/server IDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
     {
@@ -137,10 +138,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'U12345, C12345',
-      helpText: 'Comma-separated user/channel IDs (empty = allow all)',
+      helpText: 'User/channel IDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
   ],
@@ -149,10 +150,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
-      placeholder: '+1234567890, group_jid@g.us',
-      helpText: 'Comma-separated phone numbers or JIDs (empty = allow all)',
+      placeholder: '1234567890@s.whatsapp.net, group_jid@g.us',
+      helpText: 'WhatsApp account ids such as 1234567890@s.whatsapp.net, not phone numbers. Copy an id from the Ignored … Latest: line in this panel. Separate ids with commas (empty = allow all)',
       advanced: true,
     },
     {
@@ -202,10 +203,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'user_id1, user_id2',
-      helpText: 'Comma-separated user/chat IDs (empty = allow all)',
+      helpText: 'User/chat IDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
     {
@@ -245,10 +246,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: '@user:matrix.org, !room:matrix.org',
-      helpText: 'Comma-separated Matrix user IDs or room IDs (empty = allow all)',
+      helpText: 'Matrix user IDs or room IDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
     {
@@ -297,10 +298,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'U1234..., C1234...',
-      helpText: 'Comma-separated LINE user/group IDs (empty = allow all)',
+      helpText: 'LINE user/group IDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
   ],
@@ -325,10 +326,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'user_id1, user_id2',
-      helpText: 'Comma-separated DingTalk user IDs (empty = allow all)',
+      helpText: 'DingTalk user IDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
     {
@@ -361,10 +362,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'user_id1, group_id1',
-      helpText: 'Comma-separated QQ user or group IDs (empty = allow all)',
+      helpText: 'QQ user or group IDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
     {
@@ -413,10 +414,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'user_id1, user_id2',
-      helpText: 'Comma-separated WeCom user IDs (empty = allow all)',
+      helpText: 'WeCom user IDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
     {
@@ -460,10 +461,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'user1@example.com, user2@example.com',
-      helpText: 'Comma-separated user IDs (empty = allow all)',
+      helpText: 'User IDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
     {
@@ -542,10 +543,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'nick1, #channel1',
-      helpText: 'Comma-separated IRC nicks or channels (empty = allow all)',
+      helpText: 'IRC nicks or channels. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
   ],
@@ -580,10 +581,10 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     {
       key: 'allow_from',
       label: 'Allow From',
-      type: 'text',
+      type: 'list',
       required: false,
       placeholder: 'openid1, openid2',
-      helpText: 'Comma-separated WeChat user OpenIDs (empty = allow all)',
+      helpText: 'WeChat user OpenIDs. Separate ids with commas or spaces (empty = allow all)',
       advanced: true,
     },
     {
@@ -622,4 +623,29 @@ export function getChannelFields(channelId: string): ChannelField[] {
   const baseType = channelId.toLowerCase().split('.')[0]
   const normalised = baseType === WHATSAPP_NATIVE_CHANNEL_ID ? 'whatsapp' : baseType
   return CHANNEL_FIELDS[normalised as ChannelId] ?? NO_FIELDS
+}
+
+/**
+ * idListSplitsOnWhitespace reports whether whitespace separates ids in a
+ * 'list' field of this channel (an instance id such as "whatsapp.eu" or the
+ * internal 'whatsapp_native' id is accepted too). Commas always separate ids.
+ * WhatsApp is the one exception to whitespace (chief ruling 2026-11-02,
+ * option B): a phone number may contain spaces. Mirrors the server's
+ * config.AllowFromSplitsOnWhitespace.
+ */
+export function idListSplitsOnWhitespace(channelId: string): boolean {
+  const baseType = channelId.trim().toLowerCase().split('.')[0]
+  return baseType !== 'whatsapp' && baseType !== WHATSAPP_NATIVE_CHANNEL_ID
+}
+
+/**
+ * splitIdListText turns the text typed into a 'list' field of this channel
+ * into its ids: commas (",", full-width "，") separate ids, and whitespace
+ * too except on WhatsApp (see idListSplitsOnWhitespace). Each id is trimmed
+ * and empty pieces are dropped, so an empty text is the empty list. Mirrors
+ * the server's config.SplitAllowFromText.
+ */
+export function splitIdListText(channelId: string, text: string): string[] {
+  const separators = idListSplitsOnWhitespace(channelId) ? /[,，\s]+/u : /[,，]/u
+  return text.split(separators).map((id) => id.trim()).filter((id) => id !== '')
 }

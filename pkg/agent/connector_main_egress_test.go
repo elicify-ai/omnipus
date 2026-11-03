@@ -37,9 +37,12 @@ package agent
 // PASSES today.
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/png"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -136,7 +139,9 @@ func t40NewFixture(t *testing.T, provider providers.LLMProvider, toolFeedback, w
 	}), "SETUP: connector-fed lifecycle record")
 
 	imagePath := filepath.Join(home, "t40-screenshot.png")
-	require.NoError(t, os.WriteFile(imagePath, []byte("t40 fake screenshot"), 0o644))
+	var screenshot bytes.Buffer
+	require.NoError(t, png.Encode(&screenshot, image.NewRGBA(image.Rect(0, 0, 1, 1))))
+	require.NoError(t, os.WriteFile(imagePath, screenshot.Bytes(), 0o644))
 
 	return &t40Fixture{
 		al: al, bus: msgBus, ch: ch, main: main,

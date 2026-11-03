@@ -43,7 +43,7 @@ func OmnipusPerAgentAskViolation(agentID string, policies map[string]config.Tool
 var managementTools = map[string]bool{
 	"create_agent": true, "update_agent": true, "delete_agent": true,
 	"create_workspace": true, "update_workspace": true, "delete_workspace": true,
-	"create_skill": true, "edit_skill": true, "remove_skill": true, "install_skill": true,
+	"install_skill":  true,
 	"add_mcp_server": true, "remove_mcp_server": true, "configure_provider": true,
 	"enable_channel": true, "disable_channel": true, "configure_channel": true,
 	"connect_channel": true, "set_channel_outbound": true, "connect_mailbox": true, "set_agent_permissions": true,

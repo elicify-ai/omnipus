@@ -20,7 +20,8 @@ import (
 // persistence, exactly like a non-deny `set`.
 func TestCreateAgent_RefusesRemovalOfAnyManagementDenyBeforePersistence(t *testing.T) {
 	management := []string{"create_agent", "update_agent", "delete_agent", "create_workspace", "update_workspace",
-		"delete_workspace", "create_skill", "edit_skill", "remove_skill", "install_skill", "add_mcp_server",
+		"delete_workspace", "install_skill", // r15 §10: editing leaves management; retired verbs are absent.
+		"add_mcp_server",
 		"remove_mcp_server", "configure_provider", "enable_channel", "disable_channel", "configure_channel",
 		"connect_channel", "set_channel_outbound", "connect_mailbox", "set_agent_permissions", "remove_secret", "select_secret_version", "set_config"}
 	for _, name := range management {
@@ -60,5 +61,42 @@ func TestCreateAgent_RefusesRemovalOfAnyManagementDenyBeforePersistence(t *testi
 		assert.False(t, has, "the removed non-management entry rides the ceiling")
 		assert.Equal(t, config.ToolPolicyDeny, ac.Tools.Builtin.Policies["create_agent"],
 			"management tools keep the constructor's explicit deny")
+	})
+}
+
+// Skills r15 §10 explicitly removes edit_skill from the management refusal.
+// Positive persistence controls prevent merely deleting it from the negative
+// table from hiding a still-active management fence. Other denials remain.
+func TestCreateAgent_R15EditSkillIsNotAManagementGrant(t *testing.T) {
+	for _, policy := range []string{"ask", "allow"} {
+		t.Run("set_"+policy, func(t *testing.T) {
+			deps, _ := newTestDepsWithRealSave(t)
+			t.Setenv("OMNIPUS_HOME", deps.Home)
+			args := createNativeArgs("Skill Editor")
+			args["tool_policy_changes"] = map[string]any{"set": map[string]any{"edit_skill": policy}}
+			result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
+			require.False(t, result.IsError, "r15 §10 allows explicit edit_skill grants: %s", result.ForLLM)
+			id, ok := parseSuccess(t, result.ForLLM)["id"].(string)
+			require.True(t, ok)
+			ac, err := agentstore.New(deps.Home).Get(id)
+			require.NoError(t, err)
+			assert.Equal(t, config.ToolPolicy(policy), ac.Tools.Builtin.Policies["edit_skill"])
+			assert.Equal(t, config.ToolPolicyDeny, ac.Tools.Builtin.Policies["create_agent"], "management fence remains")
+		})
+	}
+	t.Run("remove", func(t *testing.T) {
+		deps, _ := newTestDepsWithRealSave(t)
+		t.Setenv("OMNIPUS_HOME", deps.Home)
+		args := createNativeArgs("Skill Ceiling")
+		args["tool_policy_changes"] = map[string]any{"remove": []any{"edit_skill"}}
+		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
+		require.False(t, result.IsError, "r15 §10 removes the management-entry-removal fence: %s", result.ForLLM)
+		id, ok := parseSuccess(t, result.ForLLM)["id"].(string)
+		require.True(t, ok)
+		ac, err := agentstore.New(deps.Home).Get(id)
+		require.NoError(t, err)
+		_, has := ac.Tools.Builtin.Policies["edit_skill"]
+		assert.False(t, has, "explicit removal rides the ceiling")
+		assert.Equal(t, config.ToolPolicyDeny, ac.Tools.Builtin.Policies["create_agent"])
 	})
 }

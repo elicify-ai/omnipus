@@ -174,7 +174,6 @@ var administrativeToolNames = map[string]struct{}{
 	// remove_secret (omnipus-system-agent FR-077, WU-6): deletes a stored
 	// credential version install-wide; Omnipus only, ships ask.
 	"remove_secret":     {},
-	"remove_skill":      {},
 	"disable_channel":   {},
 	"enable_channel":    {},
 	"add_mcp_server":    {},

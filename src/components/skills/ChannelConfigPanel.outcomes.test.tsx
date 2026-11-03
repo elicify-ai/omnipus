@@ -95,7 +95,7 @@ import { ChannelConfigPanel } from './ChannelConfigPanel'
 type ConfigureResponseFixture = Record<string, unknown>
 function resolveConfigure(response: ConfigureResponseFixture | undefined) {
   ;(configureChannel as ReturnType<typeof vi.fn>).mockImplementation(
-    (_id: string, _config: Record<string, unknown>) =>
+    () =>
       response === undefined ? Promise.resolve(undefined) : Promise.resolve(response as unknown as void),
   )
 }
@@ -339,6 +339,9 @@ describe('ChannelConfigPanel — Configure outcome toasts (T-6c / S-57 / FR-055)
     expect(rendered).not.toContain('nothing changed')
   })
 
+})
+
+describe('ChannelConfigPanel — Configure outcome toasts (T-6c / S-57 / FR-055)', () => {
   it('a response missing apply_outcome fails schema validation and never shows "saved"', async () => {
     // FR-055/F4: preserve this row but pass its real raw response through
     // the actual Configure client/request/schema, not an invented Error.

@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func validFor(name string) string {
@@ -13,298 +16,145 @@ func validFor(name string) string {
 	return "---\nname: " + name + "\ndescription: A valid test skill with a sufficiently descriptive summary line.\n---\n\n# " + name + "\n\nThis skill does a thing.\n"
 }
 
-// TestSkillCreate_Versioned covers the create path and verifies that a
-// subsequent edit snapshots the prior version (rollback recoverable).
-//
-// Traces to: Spec-6 BDD "Authoring a skill is consent-gated and versioned".
-// (The consent gate itself is enforced by the agent-loop approval hook; this
-// test exercises the write + versioning the tool performs once dispatched.)
+// r15 §§7.1/5.11: creation and edit each record their resulting state;
+// restoring the creation proves the exact original bytes are recoverable.
 func TestSkillCreate_Versioned(t *testing.T) {
-	root := t.TempDir()
-	w := NewSkillWriter(root)
+	root := filepath.Join(t.TempDir(), "skills")
+	original := validFor("my-skill")
+	created := createAuthoredSkill(t, root, "my-skill", original)
+	ids := manifestIDs(t, SkillHistoryRoot(root), "my-skill")
+	require.Len(t, ids, 1, "creation itself records a version, not only later edits")
+	first := ids[0]
+	assert.Equal(t, "create", manifestField(t, SkillHistoryRoot(root), "my-skill", first, "kind"))
+	_, err := ApplyChange(root, ChangeRequest{Kind: KindCreate, Slug: "my-skill",
+		Content: []byte(original), Expect: Expectation{Absent: true}})
+	require.ErrorIs(t, err, ErrSkillExists)
+	assert.Contains(t, err.Error(), "skill 'my-skill' already exists; read it first")
+	assert.Equal(t, ids, manifestIDs(t, SkillHistoryRoot(root), "my-skill"), "duplicate creation records nothing")
 
-	path, err := w.CreateSkill("my-skill", validFor("my-skill"))
-	if err != nil {
-		t.Fatalf("CreateSkill: %v", err)
-	}
-	if _, statErr := os.Stat(path); statErr != nil {
-		t.Fatalf("created SKILL.md missing: %v", statErr)
-	}
-
-	// Creating the same skill again must be rejected.
-	if _, dupErr := w.CreateSkill("my-skill", validFor("my-skill")); !errors.Is(dupErr, ErrAlreadyExists) {
-		t.Fatalf("expected ErrAlreadyExists on duplicate create, got %v", dupErr)
-	}
-
-	// Versions are empty until the first edit.
-	vers, err := w.ListVersions("my-skill")
-	if err != nil {
-		t.Fatalf("ListVersions: %v", err)
-	}
-	if len(vers) != 0 {
-		t.Fatalf("expected 0 versions before edit, got %d", len(vers))
-	}
-
-	// Edit snapshots the prior version.
 	edited := "---\nname: my-skill\ndescription: An edited description that is also long enough to be valid here.\n---\n\n# my-skill\n\nEdited body.\n"
-	if _, _, editErr := w.EditSkill("my-skill", edited, false); editErr != nil {
-		t.Fatalf("EditSkill: %v", editErr)
-	}
-
-	vers, err = w.ListVersions("my-skill")
-	if err != nil {
-		t.Fatalf("ListVersions after edit: %v", err)
-	}
-	if len(vers) != 1 {
-		t.Fatalf("expected 1 snapshot after edit, got %d (%v)", len(vers), vers)
-	}
-
-	// The snapshot must hold the ORIGINAL content (rollback recoverable).
-	snap, err := w.ReadVersion("my-skill", vers[0])
-	if err != nil {
-		t.Fatalf("ReadVersion: %v", err)
-	}
-	if !strings.Contains(snap, "This skill does a thing.") {
-		t.Errorf("snapshot does not contain original body; got:\n%s", snap)
-	}
-
-	// The live file holds the edited content.
-	live, err := os.ReadFile(filepath.Join(root, "my-skill", "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(live), "Edited body.") {
-		t.Errorf("live SKILL.md was not updated by edit")
-	}
+	changed, second := commitWrite(t, root, "my-skill", "SKILL.md", edited, created.Revision)
+	assert.Equal(t, []string{second, first}, manifestIDs(t, SkillHistoryRoot(root), "my-skill"))
+	assert.Equal(t, first, manifestField(t, SkillHistoryRoot(root), "my-skill", second, "parent"))
+	assert.Equal(t, "edit", manifestField(t, SkillHistoryRoot(root), "my-skill", second, "kind"))
+	assert.Equal(t, edited, readFile(t, filepath.Join(root, "my-skill", "SKILL.md")))
+	_, err = ApplyChange(root, ChangeRequest{Kind: KindRestore, Slug: "my-skill", Version: first,
+		Expect: Expectation{Revision: changed.Revision}})
+	require.NoError(t, err)
+	assert.Equal(t, original, readFile(t, filepath.Join(root, "my-skill", "SKILL.md")), "the entire original version restores byte-for-byte")
 }
 
-// TestSkillEdit_BuiltinOverride verifies FR-9.2 AC-2: editing a skill that
-// exists only as a built-in produces a user override in the writer's root and
-// never mutates the built-in source in place.
-//
-// Traces to: Spec-6 BDD "Editing a built-in creates an override".
-func TestSkillEdit_BuiltinOverride(t *testing.T) {
-	builtinRoot := t.TempDir()
-	globalRoot := t.TempDir()
+// r15 §§5.4/7.1 step 0 replace implicit overrides: refuse built-in edits,
+// explicitly copy to a different name, then edit the copy. Source stays intact.
+func TestSkillEdit_BuiltinRefusesUntilCopied(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	builtinDir := filepath.Join(root, "plan")
+	exportShipped(t, "plan", builtinDir)
+	original := readFile(t, filepath.Join(builtinDir, "SKILL.md"))
+	revision := readLiveRevision(t, builtinDir)
+	out, err := ApplyChange(root, ChangeRequest{Kind: KindEdit, Slug: "plan", Path: "SKILL.md",
+		Content: []byte(validFor("plan")), Expect: Expectation{Revision: revision}})
+	require.ErrorIs(t, err, ErrBuiltinReadOnly)
+	assert.Contains(t, err.Error(), "Copy it first: edit_skill action=copy skill=plan to=<new-name>, then edit the copy and grant it to the agents that should use it.")
+	assert.Equal(t, PersistenceNone, out.PersistenceStatus)
+	assert.Equal(t, original, readFile(t, filepath.Join(builtinDir, "SKILL.md")))
+	assert.NoDirExists(t, filepath.Join(SkillHistoryRoot(root), "plan"), "refused built-in edit never writes history")
 
-	// Stage a built-in skill the user does not have locally.
-	builtinSkillDir := filepath.Join(builtinRoot, "briefing")
-	if err := os.MkdirAll(builtinSkillDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	builtinContent := validFor("briefing")
-	if err := os.WriteFile(filepath.Join(builtinSkillDir, "SKILL.md"), []byte(builtinContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// The writer is rooted at the GLOBAL dir (as in production), so any write is
-	// an override and the builtin is untouchable through it.
-	w := NewSkillWriter(globalRoot)
-
-	override := "---\nname: briefing\ndescription: An overridden briefing skill that the user has customized locally.\n---\n\n# briefing\n\nOverridden.\n"
-	path, createdOverride, err := w.EditSkill("briefing", override, true /* allowCreateOverride: builtin exists */)
-	if err != nil {
-		t.Fatalf("EditSkill (override): %v", err)
-	}
-	if !createdOverride {
-		t.Errorf("expected createdOverride=true when editing a builtin-only skill")
-	}
-	// The override must live under the global root, not the builtin root.
-	if !strings.HasPrefix(path, globalRoot) {
-		t.Errorf("override written outside global root: %s", path)
-	}
-
-	// The built-in source must be byte-for-byte unchanged.
-	after, err := os.ReadFile(filepath.Join(builtinSkillDir, "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(after) != builtinContent {
-		t.Errorf("built-in SKILL.md was mutated in place — must remain unchanged")
-	}
-
-	// A loader with workspace>global>builtin priority must now resolve the override.
-	loader := NewSkillsLoader("", globalRoot, builtinRoot)
-	body, ok := loader.LoadSkill("briefing")
-	if !ok {
-		t.Fatal("loader could not load briefing after override")
-	}
-	if !strings.Contains(body, "Overridden.") {
-		t.Errorf("loader returned builtin body, not the override")
-	}
-
-	// Editing a skill that exists NOWHERE without allowCreateOverride is ErrNotFound.
-	if _, _, err := w.EditSkill("ghost", validFor("ghost"), false); !errors.Is(err, ErrNotFound) {
-		t.Errorf("expected ErrNotFound editing non-existent skill, got %v", err)
-	}
+	copied, err := ApplyChange(root, ChangeRequest{Kind: KindCreate, Slug: "plan", To: "plan-personal", Expect: Expectation{Absent: true}})
+	require.NoError(t, err)
+	assert.Equal(t, strings.Replace(original, "name: plan", "name: plan-personal", 1), readFile(t, filepath.Join(root, "plan-personal", "SKILL.md")))
+	edited := validFor("plan-personal") + "\nOverridden in an explicit copy.\n"
+	commitWrite(t, root, "plan-personal", "SKILL.md", edited, copied.Revision)
+	assert.Equal(t, original, readFile(t, filepath.Join(builtinDir, "SKILL.md")), "copy edits cannot touch the built-in")
+	assert.Equal(t, edited, readFile(t, filepath.Join(root, "plan-personal", "SKILL.md")))
+	loader := NewSkillsLoader("", root, "")
+	body, ok := loader.LoadSkill("plan-personal")
+	require.True(t, ok)
+	assert.Contains(t, body, "Overridden in an explicit copy.")
+	_, err = ApplyChange(root, ChangeRequest{Kind: KindEdit, Slug: "ghost", Path: "SKILL.md",
+		Content: []byte(validFor("ghost")), Expect: Expectation{Revision: revision}})
+	require.ErrorIs(t, err, ErrSkillChanged, "§7.3: an expected revision against absence is refused, never an implicit creation")
+	assert.NoDirExists(t, filepath.Join(root, "ghost"))
 }
 
-// TestSkillEdit_BuiltinMaterializedOntoWriterRoot_NeverMutatedInPlace
-// reproduces UAT batch3 S68 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
-// finding #3): in this install, SeedDefaults (embed.go) materializes every
-// built-in skill onto the SAME directory the SkillWriter is rooted at
-// (pkg/gateway/gateway.go seeds skillsGlobalDir, and NewSkillWriter is
-// rooted at that same skillsGlobalDir) — unlike
-// TestSkillEdit_BuiltinOverride above, which stages the built-in in a
-// SEPARATE builtinRoot and therefore never exercises this collision.
-//
-// Before the fix, EditSkill inferred "this is a genuine prior user
-// override" from the mere existence of SKILL.md at the writer-root path —
-// which SeedDefaults's materialization satisfies for every built-in on a
-// fresh install, before any user has ever touched it. Editing the built-in
-// therefore silently overwrote it in place and reported
-// created_override:false, contradicting edit_skill's own documented
-// contract. This test asserts the fixed contract holds: editing a
-// still-pristine built-in reports created_override:true, its original
-// content survives unchanged in a .versions/ snapshot, the live file now
-// serves the edited content ("used instead"), and a SECOND edit of the same
-// (now genuinely local) skill correctly reports created_override:false.
-func TestSkillEdit_BuiltinMaterializedOntoWriterRoot_NeverMutatedInPlace(t *testing.T) {
-	globalRoot := t.TempDir()
+// Keep UAT S68's same-root collision, now with the real shipped built-in and
+// startup stamp. r15 never edits it or consumes its marker; only the explicit
+// user copy gets versions and repeated in-place edits.
+func TestSkillEdit_MaterializedBuiltinRefused_CopyRemainsEditable(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	_, err := SyncBuiltins(root, nil)
+	require.NoError(t, err)
+	builtinDir := filepath.Join(root, "plan")
+	original := readFile(t, filepath.Join(builtinDir, "SKILL.md"))
+	generation := generationOf(t, builtinDir)
+	_, err = ApplyChange(root, ChangeRequest{Kind: KindEdit, Slug: "plan", Path: "SKILL.md",
+		Content: []byte(validFor("plan")), Expect: Expectation{Revision: readLiveRevision(t, builtinDir)}})
+	require.ErrorIs(t, err, ErrBuiltinReadOnly)
+	requireSameTree(t, "plan", builtinDir)
+	assert.FileExists(t, filepath.Join(builtinDir, builtinMarkerFile), "the builtin marker is never consumed")
+	assert.Equal(t, generation, generationOf(t, builtinDir))
+	assert.NoDirExists(t, filepath.Join(SkillHistoryRoot(root), "plan"))
 
-	// Materialize a built-in exactly as SeedDefaults/copyEmbeddedSkill does
-	// (embed.go): SKILL.md and the pristine-builtin marker land together,
-	// directly in the writer's own root — same-package access to
-	// builtinMarkerFile lets this test simulate that seeding step without
-	// depending on the actual go:embed fixture set (summarize/plan/…),
-	// keeping the fixture name and content deliberately distinct fixture
-	// values (Dataset rule: never reuse a real production skill name here).
-	builtinSkillDir := filepath.Join(globalRoot, "summarize-fixture")
-	if err := os.MkdirAll(builtinSkillDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	originalContent := []byte(validFor("summarize-fixture"))
-	if err := os.WriteFile(filepath.Join(builtinSkillDir, "SKILL.md"), originalContent, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(builtinSkillDir, builtinMarkerFile), []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	w := NewSkillWriter(globalRoot)
-
-	edited := "---\nname: summarize-fixture\ndescription: A user-edited summarize fixture, long enough to validate.\n---\n\n# summarize-fixture\n\nUser-edited body.\n"
-	path, createdOverride, editErr := w.EditSkill("summarize-fixture", edited, true /* allowCreateOverride */)
-	if editErr != nil {
-		t.Fatalf("EditSkill (first edit of pristine built-in): %v", editErr)
-	}
-	if !createdOverride {
-		t.Errorf("first edit of a still-pristine built-in must report created_override=true, got false")
-	}
-	if !strings.HasPrefix(path, globalRoot) {
-		t.Errorf("override written outside global root: %s", path)
-	}
-
-	// The ORIGINAL content must be preserved, unchanged, in a .versions/
-	// snapshot — recoverable even though the live file now holds the edit.
-	vers, verErr := w.ListVersions("summarize-fixture")
-	if verErr != nil {
-		t.Fatalf("ListVersions: %v", verErr)
-	}
-	if len(vers) != 1 {
-		t.Fatalf("expected exactly 1 snapshot after the first edit, got %d (%v)", len(vers), vers)
-	}
-	snap, snapErr := w.ReadVersion("summarize-fixture", vers[0])
-	if snapErr != nil {
-		t.Fatalf("ReadVersion: %v", snapErr)
-	}
-	if snap != string(originalContent) {
-		t.Errorf("preserved snapshot does not match the original built-in content byte-for-byte\nwant:\n%s\ngot:\n%s",
-			originalContent, snap)
-	}
-
-	// The live file now serves the edited content instead — "a new override
-	// is created and used instead".
-	live, liveErr := os.ReadFile(filepath.Join(globalRoot, "summarize-fixture", "SKILL.md"))
-	if liveErr != nil {
-		t.Fatal(liveErr)
-	}
-	if !strings.Contains(string(live), "User-edited body.") {
-		t.Errorf("live SKILL.md does not serve the edited content")
-	}
-	loader := NewSkillsLoader("", globalRoot, t.TempDir())
-	body, ok := loader.LoadSkill("summarize-fixture")
-	if !ok {
-		t.Fatal("loader could not load summarize-fixture after the edit")
-	}
-	if !strings.Contains(body, "User-edited body.") {
-		t.Errorf("loader returned stale content, not the edit")
-	}
-
-	// A SECOND edit of the same skill is now a genuine local-override edit —
-	// created_override must be false (the marker was consumed by the first edit).
-	secondEdit := "---\nname: summarize-fixture\ndescription: A second user edit, also long enough to validate cleanly.\n---\n\n# summarize-fixture\n\nSecond edit.\n"
-	_, createdOverride2, editErr2 := w.EditSkill("summarize-fixture", secondEdit, true)
-	if editErr2 != nil {
-		t.Fatalf("EditSkill (second edit): %v", editErr2)
-	}
-	if createdOverride2 {
-		t.Errorf("second edit of an already-local override must report created_override=false, got true")
-	}
+	copied, err := ApplyChange(root, ChangeRequest{Kind: KindCreate, Slug: "plan", To: "my-plan", Expect: Expectation{Absent: true}})
+	require.NoError(t, err)
+	ids := manifestIDs(t, SkillHistoryRoot(root), "my-plan")
+	require.Len(t, ids, 1)
+	first := ids[0]
+	copyOriginal := strings.Replace(original, "name: plan", "name: my-plan", 1)
+	copyGeneration := generationOf(t, filepath.Join(root, "my-plan"))
+	firstEdit := validFor("my-plan") + "\nUser-edited body.\n"
+	changed, _ := commitWrite(t, root, "my-plan", "SKILL.md", firstEdit, copied.Revision)
+	secondEdit := validFor("my-plan") + "\nSecond edit.\n"
+	twice, _ := commitWrite(t, root, "my-plan", "SKILL.md", secondEdit, changed.Revision)
+	assert.Equal(t, secondEdit, readFile(t, filepath.Join(root, "my-plan", "SKILL.md")))
+	assert.Len(t, manifestIDs(t, SkillHistoryRoot(root), "my-plan"), 3, "copy and both edits are versioned")
+	assert.Equal(t, copyGeneration, generationOf(t, filepath.Join(root, "my-plan")), "content edits preserve the copy's identity")
+	_, err = ApplyChange(root, ChangeRequest{Kind: KindRestore, Slug: "my-plan", Version: first, Expect: Expectation{Revision: twice.Revision}})
+	require.NoError(t, err)
+	assert.Equal(t, copyOriginal, readFile(t, filepath.Join(root, "my-plan", "SKILL.md")), "original copied content remains recoverable after repeated edits")
+	assert.Equal(t, original, readFile(t, filepath.Join(builtinDir, "SKILL.md")))
+	loader := NewSkillsLoader("", root, "")
+	_, ok := loader.LoadSkill("my-plan")
+	assert.True(t, ok, "the restored copy remains loadable")
 }
 
-// TestSkillWrite_Confinement_TraversalAndOversize_Rejected covers TDD #11 / M-6:
-// path traversal, oversize SKILL.md, and invalid frontmatter are all rejected.
-//
-// Traces to: Spec-6 BDD "consent-gated…" (M-6).
+// r15 §§7.2/5.13: preserve traversal, size and invalid-instruction coverage
+// at the registry pipeline. Frontmatter name is identity, never display text.
 func TestSkillWrite_Confinement_TraversalAndOversize_Rejected(t *testing.T) {
-	root := t.TempDir()
-	w := NewSkillWriter(root)
-
-	// 1. Path traversal via "..".
-	traversalNames := []string{
-		"../evil",
-		"..",
-		"foo/bar",
-		"foo\\bar",
-		"/etc/passwd",
-		"a/../../b",
+	root := filepath.Join(t.TempDir(), "skills")
+	for _, name := range []string{"../evil", "..", "foo/bar", "foo\\bar", "/etc/passwd", "a/../../b"} {
+		t.Run("traversal_"+name, func(t *testing.T) {
+			out, err := ApplyChange(root, ChangeRequest{Kind: KindCreate, Slug: name,
+				Content: []byte(validFor("evil")), Expect: Expectation{Absent: true}})
+			require.ErrorIs(t, err, ErrInvalidInput)
+			assert.Equal(t, PersistenceNone, out.PersistenceStatus)
+		})
 	}
-	for _, name := range traversalNames {
-		if _, err := w.CreateSkill(name, validFor("evil")); err == nil {
-			t.Errorf("traversal name %q must be rejected, but CreateSkill succeeded", name)
-		}
-		// Confirm nothing escaped the root.
+	assert.NoDirExists(t, filepath.Join(filepath.Dir(root), "evil"), "no path escaped the registry")
+	oversize := validFor("big") + strings.Repeat("A", MaxSkillMarkdownBytes+1)
+	_, err := ApplyChange(root, ChangeRequest{Kind: KindCreate, Slug: "big", Content: []byte(oversize), Expect: Expectation{Absent: true}})
+	require.ErrorIs(t, err, ErrSaveCheckFailed)
+	assert.Contains(t, err.Error(), "the change to 'big' was not saved:")
+	assert.NoDirExists(t, filepath.Join(root, "big"))
+	for skill, content := range map[string]string{
+		"no-description":     "---\nname: no-description\n---\n\n# no-description\n",
+		"empty":              "",
+		"display-name-skill": "---\nname: A Friendly Display Name\ndescription: A sufficiently long description.\n---\n# x\n",
+	} {
+		t.Run(skill, func(t *testing.T) {
+			_, createErr := ApplyChange(root, ChangeRequest{Kind: KindCreate, Slug: skill, Content: []byte(content), Expect: Expectation{Absent: true}})
+			require.ErrorIs(t, createErr, ErrSaveCheckFailed)
+			assert.NoDirExists(t, filepath.Join(root, skill), "invalid instructions never publish")
+		})
 	}
-	// Specifically assert the canonical ".." form maps to a confinement error.
-	if _, err := w.CreateSkill("..", validFor("x")); err == nil {
-		t.Errorf("'..' must be rejected")
-	}
-
-	// Nothing should have been written outside root.
-	parent := filepath.Dir(root)
-	if _, err := os.Stat(filepath.Join(parent, "evil")); err == nil {
-		t.Errorf("traversal wrote a file outside the skills root")
-	}
-
-	// 2. Oversize SKILL.md.
-	oversize := "---\nname: big\ndescription: ok and long enough to be valid here for sure.\n---\n\n# big\n\n" +
-		strings.Repeat("A", MaxSkillMarkdownBytes+1)
-	if _, err := w.CreateSkill("big", oversize); !errors.Is(err, ErrOversize) {
-		t.Errorf("oversize SKILL.md must be ErrOversize, got %v", err)
-	}
-
-	// 3. Invalid frontmatter / missing required fields.
-	invalids := map[string]string{
-		"no-description": "---\nname: no-description\n---\n\n# no-description\n",
-		"empty":          "",
-	}
-	for skill, content := range invalids {
-		if _, err := w.CreateSkill(skill, content); err == nil {
-			t.Errorf("invalid SKILL.md %q must be rejected, but CreateSkill succeeded", skill)
-		}
-	}
-
-	// 4. The frontmatter `name` is the human-readable DISPLAY name and may legitimately
-	// differ from the slug (the directory/skill id) — e.g. slug "daily-briefing" with
-	// display name "Daily Briefing". Path identity is the slug, so a differing display
-	// name is NOT a confinement risk and must be ACCEPTED.
-	if _, err := w.CreateSkill(
-		"display-name-skill",
-		"---\nname: A Friendly Display Name\ndescription: a description long enough to be valid for this test.\n---\n\n# x\n",
-	); err != nil {
-		t.Errorf("a display name differing from the slug must be accepted, got: %v", err)
-	}
+	// Preserve human-readable naming, through the supported display metadata.
+	content := "---\nname: display-name-skill\ndescription: A sufficiently long description.\nmetadata:\n  display_name: A Friendly Display Name\n---\n# x\n"
+	createAuthoredSkill(t, root, "display-name-skill", content)
+	loader := NewSkillsLoader("", root, "")
+	rows := loader.ListSkills()
+	require.Len(t, rows, 1)
+	assert.Equal(t, "display-name-skill", rows[0].ID)
+	assert.Equal(t, "A Friendly Display Name", rows[0].Name)
 }
 
 // TestValidateSkillMarkdown_Valid sanity-checks a well-formed skill passes.
@@ -314,99 +164,52 @@ func TestValidateSkillMarkdown_Valid(t *testing.T) {
 	}
 }
 
-// TestSkillCreateEdit_RejectsEmptyFrontmatterDescription is the regression
-// test for UAT S59: create_skill (and edit_skill) accepted a skill whose YAML
-// frontmatter declared an empty/whitespace-only `description:` field, because
-// ValidateSkillMarkdown silently fell back to the body's first paragraph as
-// the "description" it validated — even though the author's actual
-// frontmatter said nothing. Each fixture below deliberately includes a real,
-// description-shaped paragraph in the BODY, so a false pass here can only be
-// caused by that silent fallback, not by an accidentally-empty body too.
-//
-// Covers, against BOTH CreateSkill and EditSkill:
-//   - an empty `description:` field is rejected with ValidateSkillDescription's
-//     own "description is required..." message (FR-010, via ValidateSkillMarkdown);
-//   - a whitespace-only `description:` field is rejected identically
-//     (regression matching ValidateSkillDescription's own existing behavior);
-//   - a valid, non-empty description is still accepted (no false-positive
-//     rejection introduced by the fix).
+// Preserve UAT S59's decoy-body regression: explicit empty/null/whitespace
+// descriptions cannot borrow prose from the body. Both create and existing
+// edit use r15 §7.2's save check; refusal preserves exact published bytes.
 func TestSkillCreateEdit_RejectsEmptyFrontmatterDescription(t *testing.T) {
-	const bodyWithRealParagraph = "\n\n# decoy\n\nThis is a real, sentence-shaped paragraph that a naive " +
-		"fallback would mistake for the skill's description.\n"
-
+	const body = "\n\n# decoy\n\nThis is a real, sentence-shaped paragraph that a naive fallback would mistake for the skill's description.\n"
 	cases := []struct {
-		name           string
-		descriptionRaw string // raw YAML scalar for the frontmatter `description:` field, incl. quoting
-		wantErr        bool
-		wantErrSub     string
+		name, description string
+		wantErr           bool
 	}{
-		{
-			name:           "empty description is rejected",
-			descriptionRaw: `""`,
-			wantErr:        true,
-			wantErrSub:     "description is required",
-		},
-		{
-			name:           "null description is rejected",
-			descriptionRaw: "null",
-			wantErr:        true,
-			wantErrSub:     "description is required",
-		},
-		{
-			name:           "whitespace-only description is rejected",
-			descriptionRaw: `"   "`,
-			wantErr:        true,
-			wantErrSub:     "description is required",
-		},
-		{
-			name:           "valid description is accepted",
-			descriptionRaw: `"Use when the user asks to decoy-test something long enough to pass validation."`,
-			wantErr:        false,
-		},
+		{"empty", `""`, true},
+		{"null", "null", true},
+		{"whitespace", `"   "`, true},
+		{"valid", `"Use when the user asks to decoy-test something long enough to pass validation."`, false},
 	}
-
 	for _, tc := range cases {
-		t.Run("CreateSkill/"+tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			w := NewSkillWriter(root)
-			slug := "decoy"
-			content := "---\nname: " + slug + "\ndescription: " + tc.descriptionRaw + "\n---" + bodyWithRealParagraph
-
-			_, err := w.CreateSkill(slug, content)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("expected CreateSkill to reject an empty/whitespace frontmatter description, but it succeeded")
-				}
-				if !strings.Contains(err.Error(), tc.wantErrSub) {
-					t.Fatalf("expected error to contain %q, got: %v", tc.wantErrSub, err)
-				}
-			} else if err != nil {
-				t.Fatalf("expected a valid description to be accepted, got: %v", err)
+		for _, edit := range []bool{false, true} {
+			op := "create"
+			if edit {
+				op = "edit"
 			}
-		})
-
-		t.Run("EditSkill/"+tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			w := NewSkillWriter(root)
-			slug := "decoy"
-			// Seed an existing, valid skill so EditSkill edits rather than creates.
-			if _, err := w.CreateSkill(slug, validFor(slug)); err != nil {
-				t.Fatalf("seed CreateSkill: %v", err)
-			}
-
-			content := "---\nname: " + slug + "\ndescription: " + tc.descriptionRaw + "\n---" + bodyWithRealParagraph
-			_, _, err := w.EditSkill(slug, content, false)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("expected EditSkill to reject an empty/whitespace frontmatter description, but it succeeded")
+			t.Run(op+"/"+tc.name, func(t *testing.T) {
+				root := filepath.Join(t.TempDir(), "skills")
+				content := "---\nname: decoy\ndescription: " + tc.description + "\n---" + body
+				req := ChangeRequest{Kind: KindCreate, Slug: "decoy", Content: []byte(content), Expect: Expectation{Absent: true}}
+				if edit {
+					created := createAuthoredSkill(t, root, "decoy", validFor("decoy"))
+					req.Kind, req.Path, req.Expect = KindEdit, "SKILL.md", Expectation{Revision: created.Revision}
 				}
-				if !strings.Contains(err.Error(), tc.wantErrSub) {
-					t.Fatalf("expected error to contain %q, got: %v", tc.wantErrSub, err)
+				out, err := ApplyChange(root, req)
+				if tc.wantErr {
+					require.ErrorIs(t, err, ErrSaveCheckFailed)
+					assert.Contains(t, err.Error(), "description is required", "the explicit frontmatter is validated, not the decoy body")
+					assert.Equal(t, PersistenceNone, out.PersistenceStatus)
+					if edit {
+						assert.Equal(t, validFor("decoy"), readFile(t, filepath.Join(root, "decoy", "SKILL.md")))
+						assert.Len(t, manifestIDs(t, SkillHistoryRoot(root), "decoy"), 1)
+					} else {
+						assert.NoDirExists(t, filepath.Join(root, "decoy"))
+					}
+					return
 				}
-			} else if err != nil {
-				t.Fatalf("expected a valid description to be accepted, got: %v", err)
-			}
-		})
+				require.NoError(t, err)
+				assert.Equal(t, PersistenceComplete, out.PersistenceStatus)
+				assert.Equal(t, content, readFile(t, filepath.Join(root, "decoy", "SKILL.md")))
+			})
+		}
 	}
 }
 
