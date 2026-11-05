@@ -352,6 +352,8 @@ func Test6cUAT_UD16_g_CancelRacingDispatchWriteKeepsOneCancelledRecord(t *testin
 	ex.rx.rr.rq.ri.rf.rt.al.eventBus = NewEventBus()
 	t.Cleanup(ex.rx.rr.rq.ri.rf.rt.al.eventBus.Close)
 	ex.toolArgs = map[string]any{"command": gate}
+	// Dispatch persists recordArgs; keep the barrier on that real write path.
+	ex.recordArgs = ex.toolArgs
 	accepted, dispatchExited := make(chan bool, 1), make(chan struct{})
 	t.Cleanup(func() {
 		unblock()

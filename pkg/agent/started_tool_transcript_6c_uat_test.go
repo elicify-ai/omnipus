@@ -115,9 +115,11 @@ func (f *uat6cTranscriptFixture) execution() *agentLoopRunTurnToolsExecute {
 	ri := &agentLoopRunTurnIteration{rf: rf}
 	rq := &agentLoopRunTurnRequest{ri: ri}
 	rr := &agentLoopRunTurnResponse{rq: rq}
+	args := map[string]any{"command": uat6cCmd}
 	return &agentLoopRunTurnToolsExecute{
 		rx: &agentLoopRunTurnTools{rr: rr}, toolName: "bash", toolCallID: string(uat6cCall),
-		toolArgs: map[string]any{"command": uat6cCmd},
+		// Match validateCall's record copy for arguments needing no redaction.
+		toolArgs: args, recordArgs: args,
 		// No model result is being admitted: exercise the genuine display
 		// writer, as the approval-placeholder tests do, not a fabricated slot.
 		admitted: admittedToolResult{ArchiveLine: -1},
