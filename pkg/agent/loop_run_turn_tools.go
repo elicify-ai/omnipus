@@ -49,20 +49,24 @@ type agentLoopRunTurnToolsExecute struct {
 	// ruleAskSettled is true when this bash call's one upfront prompt also
 	// settled an operator D3 ask rule (§5.7); guardAndDispatch pins it so
 	// the bash tool does not prompt again. Reset for every call.
-	ruleAskSettled    bool
-	toolCallID        string
-	asyncCallback     func(_ context.Context, result *tools.ToolResult)
-	asyncCallbackGate *asyncToolCallbackGate
-	toolCBSig         string
-	toolResult        *tools.ToolResult
-	toolDuration      time.Duration
-	contentForLLM     string
-	recallDecision    recallInjectionDecision
-	admitted          admittedToolResult
-	toolResultMsg     providers.Message
-	tcRecord          session.ToolCall
-	started           *startedToolOutcome
-	ret0              agentLoopRunTurnToolsFlow
+	ruleAskSettled bool
+	// preApprovalRefusal is the tool's own refusal before any approval card
+	// (tools.PreApprovalChecker); guardAndDispatch records it as the call's
+	// result instead of executing. Reset for every call.
+	preApprovalRefusal *tools.ToolResult
+	toolCallID         string
+	asyncCallback      func(_ context.Context, result *tools.ToolResult)
+	asyncCallbackGate  *asyncToolCallbackGate
+	toolCBSig          string
+	toolResult         *tools.ToolResult
+	toolDuration       time.Duration
+	contentForLLM      string
+	recallDecision     recallInjectionDecision
+	admitted           admittedToolResult
+	toolResultMsg      providers.Message
+	tcRecord           session.ToolCall
+	started            *startedToolOutcome
+	ret0               agentLoopRunTurnToolsFlow
 }
 
 // asyncToolCallbackGate keeps an executor that completes inline from publishing
@@ -803,6 +807,7 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	ex.shellModePin = rt.al.bashShellModeFor(rt.ts, ex.toolName)
 	ex.autoPin = tools.AutoVerdict{}
 	ex.ruleAskSettled = false
+	ex.preApprovalRefusal = nil
 	if ex.toctouPolicy != "ask" {
 		return agentLoopRunTurnToolsExecuteNext
 	}
@@ -885,6 +890,9 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 // second time.
 func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall, rules bashRuleVerdict) agentLoopRunTurnToolsExecuteFlow {
 	rt := ex.rx.rr.rq.ri.rf.rt
+	if ex.refuseBeforeApproval() {
+		return agentLoopRunTurnToolsExecuteNext
+	}
 	requestArgs := ex.toolArgs
 	decisionKind := "classic_ask"
 	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
@@ -1439,14 +1447,7 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		ex.ret0 = agentLoopRunTurnToolsReturn
 		return agentLoopRunTurnToolsExecuteReturn
 	}
-	ex.toolResult = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.ExecuteWithContext(
-		execCtx,
-		ex.toolName,
-		ex.toolArgs,
-		ex.rx.rr.rq.ri.rf.rt.ts.channel,
-		ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-		ex.asyncCallback,
-	)
+	ex.toolResult = ex.executeOrPreRefused(execCtx)
 	ex.toolDuration = time.Since(toolStart)
 	noteGoalExecutedTool(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.toolResult)
 

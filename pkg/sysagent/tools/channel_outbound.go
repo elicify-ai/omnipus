@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -103,7 +102,7 @@ func (t *ChannelOutboundTool) ReportsChangeOutcome()        {}
 
 // Description is the normative FR-035 text.
 func (t *ChannelOutboundTool) Description() string {
-	return "Change which people and groups an agent may start messages to on one chat connection, or switch the connection back to only answering. Supply id, policy (reply_only = Only answer; agent_may_start = Answer and also start messages), the whole targets list (exact ids as the allowed-senders list writes them: a person's user id for a direct message, a group's chat id; no @names, no *; at most 20) and expected_revision from list_channels. Only Discord and Telegram can start messages; on Discord, a channel id must be a text channel, announcement channel or thread. Refused for a connection bound to you. Only Omnipus holds this tool. It always shows an approval card, even in God Mode, and every approval applies to that one request only — it is never remembered."
+	return "Change which people and groups an agent may start messages to on one chat connection, or switch the connection back to only answering. Supply id, policy (reply_only = Only answer; agent_may_start = Answer and also start messages), the whole targets list (exact ids as the allowed-senders list writes them: a person's user id for a direct message, a group's chat id; no @names, no *; at most 20) and expected_revision from list_channels. Only Discord and Telegram can start messages; on Discord, a channel id must be a text channel, announcement channel or thread. Refused for a connection bound to you. It always shows an approval card, even in God Mode, and every approval applies to that one request only — it is never remembered."
 }
 
 func (t *ChannelOutboundTool) Parameters() map[string]any {
@@ -128,20 +127,9 @@ func (t *ChannelOutboundTool) Parameters() map[string]any {
 
 func (t *ChannelOutboundTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
 	defer func() { res = finalizeChangeResult(t.Name(), res) }()
-	// FR-031 (r9 Q7-Q1 A): authority first, before any argument or
-	// connection is looked at.
-	caller := tools.ToolAgentID(ctx)
-	if caller != string(coreagent.IDOmnipus) {
-		return tools.ErrorResult(errorJSON("OMNIPUS_ONLY", outboundOmnipusOnlyText, ""))
-	}
-	change, invalid := outboundChangeArgs(args)
-	if invalid != "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", invalid+"; nothing was saved", "Supply id, policy, the whole targets list and expected_revision from list_channels"))
-	}
-	change.Actor = caller
-	if inst, ok := t.deps.GetCfg().Channels[change.ID]; ok && inst.Identity != nil &&
-		strings.TrimSpace(inst.Identity.ID) == caller {
-		return tools.ErrorResult(errorJSON("OWN_CONNECTION", outboundOwnConnection, ""))
+	change, refusal := t.admit(ctx, args)
+	if refusal != nil {
+		return refusal
 	}
 	if t.deps.ApplyChannelOutbound == nil {
 		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED", "the outbound writer is not wired; nothing was saved", ""))
@@ -162,6 +150,47 @@ func (t *ChannelOutboundTool) Execute(ctx context.Context, args map[string]any) 
 		outcome.NotTested = append(outcome.NotTested, "other settings of this connection were not refreshed")
 	}
 	return tools.ChangeSuccessResult(fields, outcome)
+}
+
+// CheckBeforeApproval implements tools.PreApprovalChecker: a request that can
+// never run is refused before any approval card (founder Q4 / FD-11). Beyond
+// the execution admission it also requires the id to name a configured
+// connection, so the card only ever shows a real connection (security S1): an
+// id that would resolve only after the registry rewrote it is refused here,
+// never approved and then repaired (the registry also refuses any repair of an
+// approved always-ask call).
+func (t *ChannelOutboundTool) CheckBeforeApproval(ctx context.Context, args map[string]any) *tools.ToolResult {
+	change, refusal := t.admit(ctx, args)
+	if refusal == nil {
+		if _, ok := t.deps.GetCfg().Channels[change.ID]; !ok {
+			refusal = outboundErrorResult(change.ID, ErrChannelOutboundNotConfigured)
+		}
+	}
+	if refusal == nil {
+		return nil
+	}
+	return finalizeChangeResult(t.Name(), refusal)
+}
+
+// admit applies the checks that need no writer: the caller's identity, the
+// request shape (FR-030) and the own-connection refusal (FD-11). Founder Q4
+// (2026-11-03) lets every identified chat-capable agent use this tool with a
+// fresh approval; an unidentified caller keeps the OMNIPUS_ONLY refusal.
+func (t *ChannelOutboundTool) admit(ctx context.Context, args map[string]any) (ChannelOutboundChange, *tools.ToolResult) {
+	caller := strings.TrimSpace(tools.ToolAgentID(ctx))
+	if caller == "" {
+		return ChannelOutboundChange{}, tools.ErrorResult(errorJSON("OMNIPUS_ONLY", outboundOmnipusOnlyText, ""))
+	}
+	change, invalid := outboundChangeArgs(args)
+	if invalid != "" {
+		return change, tools.ErrorResult(errorJSON("INVALID_INPUT", invalid+"; nothing was saved", "Supply id, policy, the whole targets list and expected_revision from list_channels"))
+	}
+	change.Actor = caller
+	if inst, ok := t.deps.GetCfg().Channels[change.ID]; ok && inst.Identity != nil &&
+		strings.TrimSpace(inst.Identity.ID) == caller {
+		return change, tools.ErrorResult(errorJSON("OWN_CONNECTION", outboundOwnConnection, ""))
+	}
+	return change, nil
 }
 
 // outboundChangeArgs validates the request shape (FR-030: every shape error

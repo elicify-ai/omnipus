@@ -579,6 +579,15 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// the fingerprint of a genuine leak, so a legitimate value that merely
 	// mentions the tag is left untouched (A1).
 	if repaired, ok := repairLeakedToolArgs(args); ok {
+		if IsAlwaysAsk(name) {
+			// Channels security S1: an always-ask call executes exactly the
+			// arguments the person approved. A repair here would run an
+			// operation nobody saw on the card, so refuse it; the model must
+			// make a new, well-formed call that gets its own fresh approval.
+			logger.WarnCF("tool", "refused repair of an approved always-ask call",
+				map[string]any{"tool": name})
+			return alwaysAskRepairRefusal(tool, name)
+		}
 		args = repaired
 		logger.WarnCF("tool", "repaired leaked tool-call template tokens in arguments",
 			map[string]any{"tool": name})

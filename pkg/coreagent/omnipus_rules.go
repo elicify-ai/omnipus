@@ -44,14 +44,15 @@ func OmnipusPerAgentAskViolation(agentID string, policies map[string]config.Tool
 // workspace, skill, connector, provider, channel, permission, secret and
 // configuration change tools. create_agent refuses any non-deny grant of one
 // of them to a new agent (FR-025) — only Omnipus holds them, through the
-// ceiling.
+// ceiling. set_channel_outbound left this family with founder Q4
+// (2026-11-03): every chat-capable agent may use it with a fresh approval.
 var managementTools = map[string]bool{
 	"create_agent": true, "update_agent": true, "delete_agent": true,
 	"create_workspace": true, "update_workspace": true, "delete_workspace": true,
 	"install_skill":  true,
 	"add_mcp_server": true, "remove_mcp_server": true, "configure_provider": true,
 	"enable_channel": true, "disable_channel": true, "configure_channel": true,
-	"connect_channel": true, "set_channel_outbound": true, "connect_mailbox": true, "set_agent_permissions": true,
+	"connect_channel": true, "connect_mailbox": true, "set_agent_permissions": true,
 	"remove_secret": true, "select_secret_version": true, "set_config": true,
 }
 

@@ -978,6 +978,10 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// ceiling raise does not remove the agent's Ask posture.
 				"environment_setup": ask,
 				"bash":              config.ToolPolicyDeny,
+				// Founder Q4 (2026-11-03): every chat-capable agent may change
+				// a connection's posting list, always with a fresh approval
+				// (channels-spec-r8 FR-036); workers are denied below.
+				"set_channel_outbound": ask,
 			}),
 		},
 	}
@@ -986,11 +990,12 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 // workerTierDeniedTools is the Main-only set from the 2026-10-22 default
 // tool table. Workers may list secrets but ask their main agent to request
 // one; they do not author goals, plans, new tasks or retrospectives, and
-// they do not change skills (skills spec r15 §10).
+// they do not change skills (skills spec r15 §10). Founder Q4 (2026-11-03)
+// opens set_channel_outbound to chat-capable (Main) agents only.
 var workerTierDeniedTools = []string{
 	"answer_request", "read_conversation", "set_goal", "run_retrospective",
 	"create_plan", "execute_plan", "stop_plan", "plan_correct", "create_task",
-	"request_secret", "edit_skill",
+	"request_secret", "edit_skill", "set_channel_outbound",
 }
 
 // RestrictForWorkerTier turns Main creation defaults into Worker defaults

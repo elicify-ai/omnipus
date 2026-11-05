@@ -1,6 +1,11 @@
 package tools
 
-import "github.com/elicify-ai/omnipus/pkg/config"
+import (
+	"encoding/json"
+	"errors"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
+)
 
 // Always-ask mark (channels-spec-r8, FR-036, FR-038, T-10; founder Q22 B).
 // resolveEffectivePolicyWith skips the God Mode floor for a listed tool and
@@ -40,4 +45,29 @@ func AlwaysAskAllowViolation[V ~string](policies map[string]V) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// alwaysAskRepairRefusal is the registry's refusal when an always-ask call's
+// arguments would need template-token repair after approval (channels
+// security S1): approved arguments are never rewritten, so nothing runs and
+// nothing is saved. A change tool's refusal carries the FR-030 envelope.
+func alwaysAskRepairRefusal(tool Tool, name string) *ToolResult {
+	const message = "the arguments contain leaked tool-call template text and would have to be rewritten " +
+		"after approval; an always-ask call runs only exactly what was approved, so nothing was saved"
+	raw, err := json.Marshal(map[string]any{
+		"success": false,
+		"error": map[string]any{
+			"code":       "INVALID_INPUT",
+			"message":    message,
+			"suggestion": "Make the call again with clean arguments; it will ask for a new approval",
+		},
+	})
+	if err != nil {
+		raw = []byte(`{"success":false,"error":{"code":"INVALID_INPUT"}}`)
+	}
+	refusal := ErrorResult(string(raw)).WithError(errors.New("always-ask arguments needed repair after approval"))
+	if _, isChange := tool.(ChangeTool); isChange {
+		refusal = FinalizeChangeResult(name, refusal)
+	}
+	return refusal
 }

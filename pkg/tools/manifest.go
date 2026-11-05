@@ -182,7 +182,8 @@ var administrativeToolNames = map[string]struct{}{
 	// enables and live-starts a channel install-wide; Omnipus only, ships ask.
 	"connect_channel": {},
 	// set_channel_outbound (channels FR-032): changes which people and groups
-	// a connection may start messages to; Omnipus only, always asks.
+	// a connection may start messages to; every chat-capable agent may use it
+	// (founder Q4, 2026-11-03), and it always asks.
 	"set_channel_outbound": {},
 	"configure_provider":   {},
 	"set_config":           {},

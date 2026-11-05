@@ -35,3 +35,24 @@ func WithApprovalContext(ctx context.Context, tool Tool, args map[string]any) ma
 	}
 	return out
 }
+
+// PreApprovalChecker is implemented by an ask-gated tool that can refuse a
+// call from its arguments and its caller alone, before any approval card is
+// shown (channels-spec-r8 FD-11 and founder Q4 for set_channel_outbound: an
+// own-connection or unknown-connection request is refused without asking the
+// person to approve something that can never run). A non-nil result is the
+// call's final result: the loop records it as the tool's result and neither
+// asks for approval nor executes the tool. Nil means "ask as usual".
+type PreApprovalChecker interface {
+	CheckBeforeApproval(ctx context.Context, args map[string]any) *ToolResult
+}
+
+// RefuseBeforeApproval returns tool's pre-approval refusal for args, or nil
+// when tool has no such check or accepts the call for approval.
+func RefuseBeforeApproval(ctx context.Context, tool Tool, args map[string]any) *ToolResult {
+	checker, ok := tool.(PreApprovalChecker)
+	if !ok {
+		return nil
+	}
+	return checker.CheckBeforeApproval(ctx, args)
+}
