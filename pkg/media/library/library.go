@@ -197,6 +197,9 @@ type manifestEntry struct {
 	source             gen.MediaLibraryEntrySource
 	refcount           refcount
 	lastRefcountSeenAt time.Time
+	// libraryPath is the workspace-relative path of the entry's Library
+	// file (#1449 D26, FR-086); empty when it has none.
+	libraryPath string
 }
 
 // newManifestEntry validates all invariants at construction time. The
@@ -293,7 +296,13 @@ func (m manifestEntry) projection() gen.MediaLibraryEntry {
 	refcount := int(m.refcount)
 	lastSeen := m.lastRefcountSeenAt
 	status := gen.MediaLibraryEntryStatusAvailable
+	var libraryPath *string
+	if m.libraryPath != "" {
+		lp := m.libraryPath
+		libraryPath = &lp
+	}
 	return gen.MediaLibraryEntry{
+		LibraryPath:        libraryPath,
 		Id:                 &id,
 		WorkspaceId:        &workspaceID,
 		Filename:           m.filename,
@@ -385,6 +394,12 @@ type Library struct {
 	// Load time is, by construction, a leftover from before this process
 	// started.
 	inFlightUploads map[string]struct{}
+	// owners, deleted and pathsRepaired mirror the manifest envelope's
+	// retention owners, explicit-deletion tombstones and repair mark
+	// (#1449, see manifestFile).
+	owners        map[string]map[string]bool
+	deleted       map[string]bool
+	pathsRepaired bool
 }
 
 type Option func(*Library)
@@ -453,6 +468,8 @@ func New(home, workspaceID string, options ...Option) (*Library, error) {
 		renameFile:      os.Rename,
 		writeManifest:   fileutil.WriteFileAtomic,
 		inFlightUploads: make(map[string]struct{}),
+		owners:          make(map[string]map[string]bool),
+		deleted:         make(map[string]bool),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -549,6 +566,18 @@ func (l *Library) uploadInternal(
 	requireSourceIsProduction bool,
 	reader io.Reader,
 ) (string, gen.MediaLibraryEntry, error) {
+	return l.uploadWithID(uuid.New(), filename, source, requireSourceIsProduction, reader)
+}
+
+// uploadWithID is uploadInternal under a caller-chosen id (a fresh one for
+// Upload; a preallocated one for PublishWithID, #1449 FR-078).
+func (l *Library) uploadWithID(
+	id uuid.UUID,
+	filename string,
+	source gen.MediaLibraryEntrySource,
+	requireSourceIsProduction bool,
+	reader io.Reader,
+) (string, gen.MediaLibraryEntry, error) {
 	filename, normalizeErr := normalizeFilename(filename)
 	if normalizeErr != nil {
 		return "", gen.MediaLibraryEntry{}, normalizeErr
@@ -563,7 +592,6 @@ func (l *Library) uploadInternal(
 		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: create directory: %w", mkdirErr)
 	}
 
-	id := uuid.New()
 	// UPLOAD-LEAK FIX (review): ".upload-*" temp files used to be created via
 	// os.CreateTemp OUTSIDE l.mu, which made a leaked one (a crashed or
 	// interrupted upload) permanently unreclaimable — reconcileStragglersLocked
@@ -960,7 +988,20 @@ func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 
 	previousEntry := entry.clone()
 	delete(l.manifest, id)
+	// An explicit deletion wins over every retention owner and is never
+	// undone by a publication (#1449 D26, FR-076, FR-078 (4)).
+	previousOwners := l.owners[id]
+	delete(l.owners, id)
+	wasDeleted := l.deleted[id]
+	l.deleted[id] = true
 	if err := l.persistLocked(); err != nil {
+		l.owners[id] = previousOwners
+		if previousOwners == nil {
+			delete(l.owners, id)
+		}
+		if !wasDeleted {
+			delete(l.deleted, id)
+		}
 		l.manifest[id] = previousEntry
 		if quarantined {
 			if renameErr := l.renameFile(quarantinePath, rawPath); renameErr != nil {
@@ -1251,7 +1292,9 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 			// age-based sweep below; its bytes are not at rawPath.
 			continue
 		}
-		if entry.refcount != 0 {
+		if entry.refcount != 0 || len(l.owners[id]) > 0 {
+			// A persistent retention owner (#1449 FR-076) keeps the entry
+			// exactly like a reference count does.
 			continue
 		}
 		lastSeen := entry.lastRefcountSeenAt
@@ -1399,6 +1442,7 @@ func (l *Library) loadLocked() error {
 		manifest[id] = constructed
 	}
 	l.manifest = manifest
+	l.loadEnvelopeLocked(persisted)
 	l.rebuildStrandedLocked()
 	return nil
 }
@@ -1440,7 +1484,7 @@ func manifestEntryFromProjection(id uuid.UUID, workspaceID string, p gen.MediaLi
 	if p.LastRefcountSeenAt != nil && !p.LastRefcountSeenAt.IsZero() {
 		observedAt = *p.LastRefcountSeenAt
 	}
-	return newManifestEntry(
+	entry, err := newManifestEntry(
 		id,
 		workspaceID,
 		p.Filename,
@@ -1452,6 +1496,13 @@ func manifestEntryFromProjection(id uuid.UUID, workspaceID string, p gen.MediaLi
 		refcountValue,
 		observedAt,
 	)
+	if err != nil {
+		return entry, err
+	}
+	if p.LibraryPath != nil {
+		entry.libraryPath = *p.LibraryPath
+	}
+	return entry, nil
 }
 
 func (l *Library) changeRefcount(id string, delta int) (int, error) {
@@ -1502,10 +1553,12 @@ func (l *Library) persistLocked() error {
 	for id, entry := range l.manifest {
 		entries[id] = entry.projection()
 	}
-	data, err := json.MarshalIndent(manifestFile{
+	envelope := manifestFile{
 		Version: manifestVersion,
 		Entries: entries,
-	}, "", "  ")
+	}
+	l.storeEnvelopeLocked(&envelope)
+	data, err := json.MarshalIndent(envelope, "", "  ")
 	if err != nil {
 		return fmt.Errorf("media library: encode manifest: %w", err)
 	}
@@ -1888,4 +1941,14 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 type manifestFile struct {
 	Version int                              `json:"version"`
 	Entries map[string]gen.MediaLibraryEntry `json:"entries"`
+	// RetentionOwners are the persistent retention owners per entry id
+	// (#1449 FR-076): an entry with an owner is never removed by OrphanGC.
+	// Only an explicit Delete removes it. Server-internal, never on the wire.
+	RetentionOwners map[string][]string `json:"retention_owners,omitempty"`
+	// DeletedIDs are entries deleted explicitly (D26): a create-or-adopt
+	// publication never recreates one.
+	DeletedIDs []string `json:"deleted_ids,omitempty"`
+	// LibraryPathsRepaired marks the one-time association repair for
+	// uploads made before #1449 (A-14) as done.
+	LibraryPathsRepaired bool `json:"library_paths_repaired,omitempty"`
 }

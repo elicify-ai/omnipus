@@ -1,28 +1,18 @@
 // RoomHeader — a group chat's header (omnipus-system-agent FR-158, FR-171,
 // FR-175, FR-201, FR-204, FR-207, FR-208; §6.11, §6.14).
 //
-// Shows the members with each one's most recent request state (§6.11 labels;
-// the approval and question waits link to that member's main chat, where the
-// card lives — nothing is approved or answered here, FR-169), the room's
-// "allocated cost" (§6.14), the pause state, the link back to the main chat a
-// group was started from (FR-207), Add participant (FR-208) and membership
-// editing: mute/unmute (every kind), remove and delete (squads and ad-hoc).
+// #1449: no longer mounted (the group page uses the shared chat stack, the
+// header line's Participants button and the Participants panel). Kept, with
+// its tests, until the replacement tests pass in CI (SC-010, ADR C-I9); the
+// membership controls it used now live in roomMembership.tsx.
 
-import { useState } from 'react'
-import { Link, useNavigate } from '@tanstack/react-router'
-import { useQueryClient } from '@tanstack/react-query'
-import { DotsThreeVertical } from '@phosphor-icons/react'
-import type { Room, RoomMembersUpdateRequest } from '@/lib/api/generated/openapi-types'
+import type { Room } from '@/lib/api/generated/openapi-types'
 import type { RoomDeliveryState } from '@/lib/api/generated/asyncapi-types'
 import type { Workspace } from '@/lib/api'
-import { deleteRoom, roomsQueryKeys, updateRoomMembers } from '@/lib/api/rooms'
-import { mutationFailureMessage } from '@/lib/mutationOutcome'
 import { AddParticipant } from '@/components/chat/AddParticipant'
 import { Button } from '@/components/ui/button'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { IconButton } from '@/components/ui/icon-button'
 import { deliveryLabel, deliveryNeedsMainChatLink, formatAllocatedCost, memberMainSessionId } from './roomModel'
+import { DeleteGroup, MainChatLink, MemberMenu, useMembership } from './roomMembership'
 
 export interface RoomHeaderProps {
   room: Room
@@ -30,21 +20,6 @@ export interface RoomHeaderProps {
   agentName: (agentId: string) => string
   memberStates: Record<string, RoomDeliveryState>
   onAskAgain: (agentId: string) => void
-}
-
-function MainChatLink({ workspace, agentId, label }: { workspace: Workspace | undefined; agentId: string; label: string }) {
-  const sessionId = memberMainSessionId(workspace, agentId)
-  if (!sessionId) return null
-  return (
-    <Link
-      tabIndex={0}
-      to="/sessions/$sessionId"
-      params={{ sessionId }}
-      className="text-[length:var(--type-caption-size)] text-[var(--color-accent)] underline-offset-2 hover:underline"
-    >
-      {label}
-    </Link>
-  )
 }
 
 function MemberState({ agentId, name, delivery, workspace, onAskAgain }: {
@@ -65,82 +40,6 @@ function MemberState({ agentId, name, delivery, workspace, onAskAgain }: {
         <Button variant="link" size="sm" className="h-auto p-0" onClick={() => onAskAgain(agentId)}>Ask again</Button>
       )}
     </span>
-  )
-}
-
-function useMembership(room: Room) {
-  const client = useQueryClient()
-  const [error, setError] = useState<string | null>(null)
-  async function update(request: RoomMembersUpdateRequest) {
-    setError(null)
-    try {
-      const updated = await updateRoomMembers(room.id, request)
-      client.setQueryData(roomsQueryKeys.detail(room.id), updated)
-      void client.invalidateQueries({ queryKey: roomsQueryKeys.list(room.workspace_id) })
-    } catch (failure) {
-      setError(mutationFailureMessage(failure))
-    }
-  }
-  return { error, update }
-}
-
-function MemberMenu({ room, agentId, name, muted, update }: {
-  room: Room
-  agentId: string
-  name: string
-  muted: boolean
-  update: (request: RoomMembersUpdateRequest) => Promise<void>
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <IconButton size="sm" aria-label={`Options for ${name}`}>
-          <DotsThreeVertical aria-hidden="true" size={14} />
-        </IconButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="border border-[var(--color-border)] bg-[var(--color-surface-1)]">
-        <DropdownMenuItem onSelect={() => void update({ action: muted ? 'unmute' : 'mute', agent_ids: [agentId] })}>
-          {muted ? 'Unmute' : 'Mute'}
-        </DropdownMenuItem>
-        {room.kind !== 'team' && (
-          <DropdownMenuItem onSelect={() => void update({ action: 'remove', agent_ids: [agentId] })}>
-            Remove from group
-          </DropdownMenuItem>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-function DeleteGroup({ room }: { room: Room }) {
-  const navigate = useNavigate()
-  const client = useQueryClient()
-  const [confirming, setConfirming] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  if (room.kind === 'team') return null
-  async function remove() {
-    try {
-      await deleteRoom(room.id)
-      void client.invalidateQueries({ queryKey: roomsQueryKeys.list(room.workspace_id) })
-      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: room.workspace_id } })
-    } catch (failure) {
-      setError(mutationFailureMessage(failure))
-    }
-  }
-  return (
-    <>
-      <Button variant="ghost" size="sm" onClick={() => setConfirming(true)}>Delete group</Button>
-      {error && <span role="alert" className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">{error}</span>}
-      <ConfirmDialog
-        open={confirming}
-        onOpenChange={setConfirming}
-        title={`Delete ${room.name}?`}
-        description="The group and its conversation are deleted. Work already running in members' main chats finishes there."
-        cancelLabel="Keep group"
-        confirmLabel="Delete group"
-        onConfirm={() => void remove()}
-      />
-    </>
   )
 }
 

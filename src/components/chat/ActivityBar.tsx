@@ -3,7 +3,7 @@
 // delegate spans, and background `bash` runs). Click opens the ActivityPanel
 // slide-out for full detail.
 //
-// Mounted once by OmnipusComposer (ChatScreen.tsx), rendered BELOW the
+// Mounted once by OmnipusComposer (composer/OmnipusComposer.tsx), rendered BELOW the
 // composer card, bare on the shell background. Renders NOTHING when there is
 // nothing to show it for (see shouldMount below) — mirroring
 // RateLimitIndicator's own precedent of conditional mounting rather than
@@ -42,6 +42,7 @@
 import { useState, type ReactNode } from 'react'
 import { ArrowsClockwise, CaretRight } from '@phosphor-icons/react'
 import { ActivityAvatar } from './ActivityAvatar'
+import { AvatarStack } from '@/components/ui/avatar-stack'
 import { ActivityPanel } from './ActivityPanel'
 import { Button } from '@/components/ui/button'
 import { useRunningActivity } from '@/hooks/useRunningActivity'
@@ -195,13 +196,14 @@ export function ActivityBar() {
             expanded={panelOpen}
             onClick={openAgents}
             leading={
-              <div className="flex -space-x-[var(--space-2)] shrink-0">
-                {stackItems.map((item) => (
-                  <div key={item.key} className="rounded-full ring-2 ring-[var(--color-surface-1)]">
-                    <ActivityAvatar item={item} size="sm" />
-                  </div>
-                ))}
-              </div>
+              // #1449: the shared AvatarStack (design-system composite). The
+              // pill's count label carries the true total; the stack shows
+              // exactly the capped avatars, with no overflow marker of its own.
+              <AvatarStack
+                size="md"
+                max={stackItems.length}
+                items={stackItems.map((item) => ({ key: item.key, node: <ActivityAvatar item={item} size="sm" /> }))}
+              />
             }
           />
         )}

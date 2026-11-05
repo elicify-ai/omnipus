@@ -385,9 +385,29 @@ export interface paths {
         };
         /**
          * Get a bounded session-history page
-         * @description Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; bytes alone cannot underfill the floor. An individual group's drawn weight may exceed the row target or 100. No lifetime read/rebuild, 503/preparing state or full-history fallback.
+         * @description Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; the soft budget alone cannot underfill the floor. An individual group's drawn weight may exceed the row target or 100. A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason byte_ceiling) may stop below min_rows; the first group is always whole. Tool results over 51,200 encoded bytes are shown as a HistoryResultPreview and ordinary message text over 65,536 UTF-8 bytes as a preview with content_original_size_bytes; getSessionHistoryEntry returns the full occurrence (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)"). No lifetime read/rebuild, 503/preparing state or full-history fallback.
          */
         get: operations["getSessionMessages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{id}/messages/{history_position}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one saved history occurrence in full
+         * @description Returns the full public projection of exactly one saved history occurrence, addressed by the same opaque same-session history_position a history page carries (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). It is the same reduction as the page reader after tool-call effects, cancellation and disposition, with display shortening off, at the server's current read cut: the response never carries a HistoryResultPreview marker and never carries content_original_size_bytes. It never returns the private archive envelope or a pre-correction value, and the read writes nothing (archive, positions, index, tool_results/ and model context are unchanged). It is a position-addressed read, not a UI navigation destination, an around selector or a message-ID resolver. Authorization is identical to getSessionMessages and is applied in the same order before any position work: the registered auth wrapper (valid cookie, configured user bearer or CLI bearer; invalid or revoked credentials refused), session-ID syntax, main-session eligibility, then session existence/metadata. No new per-user ownership rule is introduced. Refusal checks run in this precedence order: 401, 400 invalid session ID, 404 "session not found", 400 "invalid history position", 404 "history position not found", 410 "history entry expired". This order does not override the storage-primary rule shared with getSessionMessages: a cleanup storage failure combined with cancellation, an unknown position or any selector error is the sanitized storage 500, never 404 or 410.
+         */
+        get: operations["getSessionHistoryEntry"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2042,11 +2062,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Upload files for a session
-         * @description Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.
-         *     Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.
-         *     session_id may be supplied as a query parameter or as a form field before the file parts.
-         *     Returns HTTP 201 on success.
+         * Upload files for a session or into a workspace library
+         * @description Streams multipart file uploads. Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory. Returns HTTP 201 on success.
+         *
+         *     Two destinations. With workspace_id (query parameter, or a form field before the file parts) each file is stored in that workspace's media library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25, FR-016): the chat copy in workspaces/<id>/media/ (returned as a media://workspace/<id>/<uuid> ref) and the Library file under the workspace's .library folder; no session is used or created. When both workspace_id and session_id are given, workspace_id routes to the library and session_id is ignored. When the workspace library is unavailable the request fails with 503 and never falls back to the session path. Without workspace_id, session_id (query parameter or form field) is required and files go to ~/.omnipus/uploads/{session_id}/ (legacy path).
          */
         post: operations["uploadFiles"];
         delete?: never;
@@ -2832,7 +2851,7 @@ export interface paths {
         put?: never;
         /**
          * Move a file or directory, optionally across two workspaces
-         * @description Moves the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id == to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `mv` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+         * @description Moves the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id == to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `mv` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. Chat copies (#1449 D26): a move inside one workspace keeps a file's chat-copy association (the media entry's library_path follows the file). A move to another workspace drops it: the moved file becomes an ordinary file there and its chat copy stays in the original workspace.
          */
         post: operations["moveLibraryEntry"];
         delete?: never;
@@ -2852,7 +2871,7 @@ export interface paths {
         put?: never;
         /**
          * Copy a file or directory, optionally across two workspaces
-         * @description Copies the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `cp` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+         * @description Copies the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `cp` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. A copy is a new file with no chat-copy association (#1449 D26): deleting the copy removes only the copy.
          */
         post: operations["copyLibraryEntry"];
         delete?: never;
@@ -2878,6 +2897,8 @@ export interface paths {
         /**
          * Delete a file or directory from a workspace's work tree
          * @description Deletes the file or directory at the given workspace-relative path. Deleting a directory removes it and everything under it. Returns 403 if path resolves outside the workspace's work tree; 404 if nothing exists at path.
+         *
+         *     Chat copies (#1449 D26, FR-086): deleting a file that has an associated chat copy (LibraryEntry.chat_copy; the media entry whose library_path names this file, in the same workspace) also deletes that chat copy, bytes and media entry. Deleting a directory does so for every associated file inside it. Retention owners (session reference counts, group retention) never block an explicit deletion, and nothing recreates a deleted copy. Order: chat copy first, Library file last, so a failure leaves the entry listed and a repeat completes the work; a chat copy that is already gone counts as removed. 204 when both are removed; 500 ErrorResponse "could not delete <name> completely" when either removal failed (the Library file is then still present). Every chat that showed the file then shows it as unavailable. Deleting a group never deletes files (D19).
          */
         delete: operations["deleteLibraryEntry"];
         options?: never;
@@ -3000,7 +3021,7 @@ export interface paths {
         put?: never;
         /**
          * Rename or move a file or directory within one workspace
-         * @description Renames or moves the entry at "from" to "to" within this single workspace's work tree (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id == to_workspace_id == {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if "to" begins with a ".." segment anywhere in the path (rejected outright as a sanity check — such a name isn't a traversal, but this package's hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from" OR "to"'s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at "to".
+         * @description Renames or moves the entry at "from" to "to" within this single workspace's work tree (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id == to_workspace_id == {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if "to" begins with a ".." segment anywhere in the path (rejected outright as a sanity check — such a name isn't a traversal, but this package's hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from" OR "to"'s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at "to". A rename keeps a file's chat-copy association (#1449 D26): the media entry's library_path follows the file.
          */
         post: operations["renameLibraryEntry"];
         delete?: never;
@@ -4981,10 +5002,12 @@ export interface components {
              */
             role?: "user" | "assistant" | "system";
             /**
-             * @description Raw markdown/text content of the message.
+             * @description Raw markdown/text content of the message. On a history page this may be a display preview; see content_original_size_bytes.
              * @example I can help you with that!
              */
             content?: string;
+            /** @description Present only when `content` is a read-time display preview of an ordinary user/assistant chat message (entry type `message` or omitted) whose saved text exceeds 65,536 UTF-8 bytes: `content` then holds its first at most 65,536 bytes cut back to a character boundary, and this field is the exact UTF-8 length of the full saved text (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). The full text is read through getSessionHistoryEntry. Unrelated to `truncated`/`truncation_reason`, which mean the turn itself was cut short. Never present on a getSessionHistoryEntry response, which carries the full content. */
+            readonly content_original_size_bytes?: number;
             /**
              * @description Compaction summary text (present only on type=compaction entries).
              * @example Compacted 120 messages.
@@ -5151,7 +5174,10 @@ export interface components {
             parameters?: {
                 [key: string]: unknown;
             };
-            /** @description Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006). */
+            /**
+             * @description Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+             *     `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
+             */
             result?: {
                 [key: string]: unknown;
             };
@@ -5249,6 +5275,11 @@ export interface components {
              * @description RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
              */
             readonly last_refcount_seen_at?: string;
+            /**
+             * @description Workspace-relative path of this entry's Library file (for example .library/shot.png), with the same path rules as LibraryEntry.path (#1449 D26, FR-086). The durable association between the chat copy and the Library file: written when the file is published, kept across a rename or a move inside the workspace, cleared when the Library file is deleted or moved to another workspace. Absent when the entry has no associated Library file.
+             * @example .library/shot.png
+             */
+            readonly library_path?: string;
             /**
              * @description Server-computed presentation state; never persisted as real entry state (it is derived at read time from the library's internal corruption registry). "stranded" marks an entry whose manifest record still exists but whose raw bytes are unreachable at their normal on-disk location after a prior compound rollback failure — the file is NOT usable and the UI should not offer open/attach/download for it. Only GET .../media (list) annotates a stranded entry this way; the single-entry read/attach/delete endpoints refuse a stranded entry outright (500, "media entry is in an inconsistent state") rather than returning it with this field set, so "stranded" is never observed from those responses — this field is "available" everywhere except a stranded row in the list.
              * @example available
@@ -5400,6 +5431,11 @@ export interface components {
              * @enum {string}
              */
             preview_profile?: "workspace" | "mail_restricted";
+            /**
+             * @description True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+             * @example true
+             */
+            readonly chat_copy?: boolean;
             /**
              * @description The per-file scripts checkbox (founder Q5=A) — true only when the user explicitly allowed scripts for THIS one file, switching only its preview to the ordinary isolated script-permitting profile. Visible, per file, never silent and never global. Meaningful only with preview_profile=mail_restricted; on ordinary workspace files the isolated profile is the default state and this field is absent.
              * @example false
@@ -9415,6 +9451,8 @@ export interface components {
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
             skills?: string[];
+            /** @description Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). The same list the REST agent detail returns as `stale_skill_grants`; empty when none is stale. */
+            stale_skill_grants?: string[];
             /** @description Per-tool effective policy and the agent's own stored override. */
             tool_permissions?: components["schemas"]["AgentToolPermission"][];
             /** @description The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included. */
@@ -18657,7 +18695,7 @@ export interface components {
         };
         /**
          * Room
-         * @description A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}.
+         * @description A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}. invitation_context_status is present on every room the server returns (#1449 FR-041): only an ad-hoc group started with Add participant from a main chat ever has a summary, every other group reports unavailable. invitation_context (with the text) is returned by GET /api/v1/rooms/{id} only.
          */
         Room: {
             id: string;
@@ -18690,7 +18728,38 @@ export interface components {
             allocated_cost_unpriced: boolean;
             /** @description Derived: true while any member state is awaiting_approval or waiting_on_user. */
             needs_attention: boolean;
+            invitation_context_status?: components["schemas"]["RoomInvitationStatus"];
+            invitation_context?: components["schemas"]["RoomInvitationContext"];
         };
+        /**
+         * RoomInvitationContext
+         * @description The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+         */
+        RoomInvitationContext: {
+            status: components["schemas"]["RoomInvitationStatus"];
+            /** @description The summary text. Present only when status is ready. */
+            text?: string;
+            /** @description The starting agent, whose model wrote the summary. */
+            author_agent_id: string;
+            /**
+             * Format: date-time
+             * @description When the summary became ready.
+             */
+            generated_at?: string;
+            /**
+             * Format: int64
+             * @description Cost of the summary call in micro-dollars, counted once into the group's cost. Absent when no call ran.
+             */
+            cost_micro_usd?: number;
+            /** @description True when the summary call ran but reported no price. */
+            cost_unpriced?: boolean;
+        };
+        /**
+         * RoomInvitationStatus
+         * @description State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+         * @enum {string}
+         */
+        RoomInvitationStatus: "generating" | "ready" | "unavailable";
         /**
          * RoomCreateRequest
          * @description Body of POST /api/v1/workspaces/{id}/rooms (spec omnipus-system-agent K24; FR-161, FR-172). Creates a squad or an ad-hoc room; the team room is never created through this route. Semantic rules enforced by the handler with inbound validation on and off: a squad needs a name; at least two distinct agents, all members of the workspace.
@@ -18719,7 +18788,10 @@ export interface components {
          */
         RoomMessageRequest: {
             client_message_id: string;
+            /** @description The message text: at most 65,536 UTF-8 bytes (counted in bytes, not characters); an operator can lower this limit with session_messaging.steer_body, never raise it (#1449 D24, D27). The server enforces the limit in force in UTF-8 bytes before any schema check, with inbound validation on and off, and answers 422 naming the size and the limit; maxLength states the same 65,536 maximum (a byte count is never less than the character count, so the server check always answers first). Text may be empty only when media is not empty: a message with neither non-blank text nor media is refused with 422. */
             text: string;
+            /** @description Files attached to the message (#1449 D3, FR-018): each a media://workspace/<this room's workspace id>/<id> reference returned by POST /upload with workspace_id. Every reference is resolved before anything is recorded; a reference that is not a file of this room's workspace, is missing or is stranded refuses the whole message with 422 and nothing is posted. More than 16 is a 400. The same reference listed twice is kept as listed. Attachments never count toward the text size limit. */
+            media?: string[];
             /** @description Agent ids picked in the @-picker, or the reserved value `all`. */
             mentions: string[];
         };
@@ -18812,6 +18884,23 @@ export interface components {
             message?: string;
         };
         /**
+         * HistoryResultPreview
+         * @description Read-time display marker for a saved tool result whose JSON encoding exceeds 51,200 bytes (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). Emitted only by the session-history readers (REST messages page, bounded session detail and the history-origin replay page of a snapshot) in place of the result value; the saved archive, the model context and the live tool frames are unchanged.
+         *     Distinct from ToolResultRef (`_ref`, live offload store fetched through /sessions/{session_id}/tool-results/{ref}), TruncatedResult (`_truncated`, not retrievable) and the browser-only `_truncated_client`. The full value is addressed by the enclosing entry's history_position plus ToolCall.id / ToolCallResultFrame.call_id and is read through getSessionHistoryEntry (GET /sessions/{id}/messages/{history_position}).
+         *     `_history_preview` is a reserved key: an object carrying it must match this schema, and an ordinary tool result never carries it. Byte rule, enforced at the real server and browser boundaries rather than by this schema: the UTF-8 length of `preview` is at most 4,096 bytes. `maxLength` below is only the character-count upper bound JSON Schema can express.
+         */
+        HistoryResultPreview: {
+            /**
+             * @description Discriminator distinguishing this marker from ToolResultRef and TruncatedResult.
+             * @enum {boolean}
+             */
+            _history_preview: true;
+            /** @description Exact JSON-encoded size in bytes of the full (unshortened) result. */
+            original_size_bytes: number;
+            /** @description The first at most 4,096 bytes of the full result's JSON encoding, cut back to a UTF-8 character boundary. maxLength is a character-count bound only; the 4,096-byte rule is checked separately at the server and browser boundaries. */
+            preview: string;
+        };
+        /**
          * AgentAddress
          * @description A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
          */
@@ -18844,6 +18933,8 @@ export interface components {
             position: string;
             /** @description Original recorded entry ID when nonempty and valid; otherwise omitted. */
             entry_id?: string;
+            /** @description Original recorded turn ID of the persisted source record (its own TranscriptEntry.TurnID) when nonempty; omitted when that record has no recorded turn, which means unknown. Never filled from the active turn, session state, a neighbouring record or any inference (chat-history paging spec, D1 S11d). */
+            turn_id?: string;
         };
         /**
          * SubagentStartFrame
@@ -19128,7 +19219,7 @@ export interface components {
         };
         /**
          * SessionHistoryPageInfo
-         * @description Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+         * @description Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
          */
         SessionHistoryPageInfo: {
             /**
@@ -19151,16 +19242,21 @@ export interface components {
             soft_byte_budget: number;
             /**
              * Format: int64
+             * @description Server-owned hard page selection ceiling, currently 8388608 bytes (8 MiB), on the same meter as projected_bytes (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.3). Before adding any further group, selection stops with stop_reason byte_ceiling if the page with that group would exceed it, even below min_rows. The first group is always returned whole, so projected_bytes <= byte_ceiling holds unless source_group_count is 1. A page selection limit, not a heap or absolute response-size guarantee; not an operator setting.
+             */
+            byte_ceiling: number;
+            /**
+             * Format: int64
              * @description Larger of prepared public REST and historical WS encodings at this cut/context. Excludes diagnostic accounting fields themselves, transport headers and separate live controls/projection. Required projection failure is an error, never an estimate.
              */
             projected_bytes: number;
             /** @description True iff projected bytes exceed the soft budget; requires budget_override. */
             byte_budget_exceeded: boolean;
             /**
-             * @description Actual selection boundary. row_target/source_cap take precedence when their boundary coincides with bytes. True end, closed clear/range or source cap may underfill; bytes alone may not cut below min_rows or split a whole group.
+             * @description Actual selection boundary. row_target/source_cap take precedence when their boundary coincides with bytes. True end, closed clear/range or source cap may underfill; the soft byte_budget may not cut below min_rows. byte_ceiling is the one byte stop allowed below min_rows, and it is reported when the next group would exceed both the soft budget and the ceiling. No byte stop splits a whole group.
              * @enum {string}
              */
-            stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget";
+            stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget" | "byte_ceiling";
             /**
              * @description Present iff the soft budget was exceeded to keep the floor or an atomic group.
              * @enum {string}
@@ -19231,6 +19327,25 @@ export interface components {
             agent_id?: string;
         };
         /**
+         * MediaPart
+         * @description One media attachment within a MediaFrame. Each part maps to a single file stored in the media registry and accessible via /api/v1/media/{ref}.
+         */
+        MediaPart: {
+            /**
+             * @description Media category.
+             * @enum {string}
+             */
+            type: "image" | "audio" | "video" | "file";
+            /** @description Relative URL of the form /api/v1/media/{ref}. The SPA prefixes this with the gateway origin to construct the full URL for <img>, <video>, etc. */
+            url: string;
+            /** @description Original filename as stored in the media registry. */
+            filename: string;
+            /** @description MIME type of the file (e.g., "image/png"). */
+            content_type: string;
+            /** @description Optional human-readable caption for display below the media. */
+            caption?: string;
+        };
+        /**
          * RoomDeliveryState
          * @description State of one (room message, member) delivery (spec omnipus-system-agent K27, §6.11; FR-169, FR-201, FR-213). request_id is the stable delivery id, which is also the receiver's request id. The values are exactly the §6.11 states; the UI labels are in the §6.11 table. Anything the server cannot prove after a restart is `unknown`, never `working`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomDeliveryState) — keep both copies in sync by hand.
          */
@@ -19258,7 +19373,10 @@ export interface components {
             /** @description Echo of RoomMessageRequest.client_message_id for a person's entry. */
             client_message_id?: string;
             author: components["schemas"]["RoomEntryAuthor"];
+            /** @description The message text. New messages and agent answers are refused above the group message limit (#1449 D24, D27: at most 65,536 UTF-8 bytes, lowered by session_messaging.steer_body), stated on RoomMessageRequest.text. A stored entry keeps this wider maximum (TD-8): an entry written under an earlier, larger operator setting still opens and shows in full (S-152). May be empty when the entry carries attachments. */
             text: string;
+            /** @description Images and files of the entry (#1449 D3, FR-016, FR-020), in the order they were sent. Each part's url is the workspace media URL (/api/v1/media/workspace/<workspace id>/<id>). Absent means none. A file deleted later in the Library keeps its part here; fetching it then fails and the chat shows the file as unavailable (D26). */
+            attachments?: components["schemas"]["MediaPart"][];
             /** @description Resolved addressee agent ids. Never null. */
             addressees: string[];
             /** @description True for an answer to work consumed before a /pause; such an answer never forwards its mentions (§6.11). */
@@ -20082,6 +20200,68 @@ export interface operations {
                 };
             };
             /** @description Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly "This conversation's history could not be loaded." A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getSessionHistoryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Addressed session ID; access refusal precedes position validation or lookup. */
+                id: string;
+                /** @description Opaque same-session history position of the occurrence, exactly as a history page, session detail or snapshot replay page carried it. The full tool result of a HistoryResultPreview is addressed by this position plus ToolCall.id. */
+                history_position: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The full public projection of that one occurrence, with history_position set. Never a HistoryResultPreview marker in any tool result and never content_original_size_bytes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description ErrorResponse.error is exactly "invalid session ID" for a malformed session ID (checked before any session lookup), or exactly "invalid history position" for a malformed, blank, badly encoded, wrong-version or non-47-character position (checked only after the session refusals below). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description ErrorResponse.error is exactly "session not found" for a missing session store, session metadata that does not exist, or a main session the caller is not eligible to read, checked before any position work (also when the position is malformed). Otherwise exactly "history position not found" for an unknown or foreign well-formed position; there is no foreign lookup, and a foreign session's expired position is also unknown here. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description ErrorResponse.error is exactly "history entry expired": a same-session position proven expired by its retention tombstone, including a sweep during the read. No content and no other metadata. A corrupt or missing index is never reported as expiry; it is the 500 below. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The existing sanitized errors, all recoverable by retry: session metadata that exists but cannot be read (corruption, permission or I/O) and an unreadable workspace record during the main-session eligibility check use the fixed redacted session-storage error; a required index that is unavailable after the bounded reconciliation check uses exactly "Session history is unavailable. Retry after the operator restores its index."; other required storage/projection failures, including a cleanup storage failure combined with cancellation, an unknown position or a selector error, use the fixed redacted session-storage error. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -23980,10 +24160,12 @@ export interface operations {
         parameters: {
             query?: {
                 /**
-                 * @description Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+                 * @description Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
                  * @example 550e8400-e29b-41d4-a716-446655440000
                  */
                 session_id?: string;
+                /** @description Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Takes precedence over session_id. */
+                workspace_id?: string;
             };
             header?: never;
             path?: never;
@@ -23994,6 +24176,8 @@ export interface operations {
                 "multipart/form-data": {
                     /** @description Session ID (alternative to query parameter). */
                     session_id?: string;
+                    /** @description Workspace ID (alternative to the query parameter); must precede the file parts. */
+                    workspace_id?: string;
                     /** @description One or more files to upload. */
                     files?: string[];
                 };
@@ -24013,6 +24197,15 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The workspace media library is unavailable (workspace_id given). Nothing was stored and no session path was used instead. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -29109,6 +29302,8 @@ export type SecretRequestState = components["schemas"]["SecretRequestState"];
 export type SecretNameEntry = components["schemas"]["SecretNameEntry"];
 export type SecretOptionsUpdateRequest = components["schemas"]["SecretOptionsUpdateRequest"];
 export type Room = components["schemas"]["Room"];
+export type RoomInvitationContext = components["schemas"]["RoomInvitationContext"];
+export type RoomInvitationStatus = components["schemas"]["RoomInvitationStatus"];
 export type RoomCreateRequest = components["schemas"]["RoomCreateRequest"];
 export type RoomMembersUpdateRequest = components["schemas"]["RoomMembersUpdateRequest"];
 export type RoomMessageRequest = components["schemas"]["RoomMessageRequest"];

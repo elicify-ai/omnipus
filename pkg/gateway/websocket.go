@@ -1626,6 +1626,14 @@ type wsStreamer struct {
 	// feeds a catch-up snapshot — the session hub's active-turn projection
 	// does, from the published tokens themselves.)
 	accumulated strings.Builder
+	// stopCut is set once by CutoffAtStop when the user's Stop is claimed
+	// (#1534): from then on Update still publishes frames but no longer
+	// appends to accumulated, so the saved answer ends where the screen
+	// stopped. publishedAfterCut counts the bytes published past the cut so
+	// StreamedContentLen keeps reporting everything sent live. Both guarded
+	// by statsMu.
+	stopCut           bool
+	publishedAfterCut int
 
 	// producedModel is the model string that produced this streamed response.
 	// Set by the agent loop via SetProducedModel before Finalize so the

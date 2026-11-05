@@ -21,6 +21,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
+import { useRoomStore } from '@/store/rooms'
 
 export const WS = 'sales'
 export const ROOM_ID = 'launch'
@@ -94,7 +95,9 @@ export function snapshot(overrides: Partial<RoomSnapshotFrame> = {}): RoomSnapsh
 const plannedModules = import.meta.glob<Record<string, unknown>>([
   '/src/lib/api/rooms.ts', '/src/store/rooms.ts',
   '/src/components/rooms/RoomScreen.tsx', '/src/components/rooms/SquadDialog.tsx',
+  '/src/components/rooms/ParticipantsPanel.tsx',
   '/src/components/chat/AddParticipant.tsx', '/src/components/chat/RoomTrafficEntry.tsx',
+  '/src/components/chat/ChatHeaderSlot.tsx',
   '/src/components/layout/sidebar/WorkspaceAgentList.tsx',
 ])
 
@@ -244,10 +247,18 @@ export function resetRealStores(): void {
     addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {},
     dispatchEvent: () => true,
   }))
-  vi.stubGlobal('ResizeObserver', class {
-    observe() {} unobserve() {} disconnect() {}
-  })
+  // Do not install ResizeObserver. An observer that reports nothing gives the
+  // shared list a zero viewport, so it draws no rows (S-36). An observer that
+  // reports a size makes the list's auto-scroll call element.scrollTo, which
+  // jsdom does not implement, and the page never attaches. The list's own
+  // fallback, used when ResizeObserver is absent, draws every row.
   vi.stubGlobal('scrollTo', () => {})
+  // On Element.prototype, where the stage-1 and history-layout harnesses own
+  // and restore it. An own property on HTMLElement.prototype would shadow the
+  // history layout's working scrollTo and is never restored.
+  if (typeof Element.prototype.scrollTo !== 'function') {
+    Object.defineProperty(Element.prototype, 'scrollTo', { configurable: true, writable: true, value() {} })
+  }
   if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {}
   localStorage.clear()
   act(() => {
@@ -256,6 +267,7 @@ export function resetRealStores(): void {
     useSessionStore.setState(useSessionStore.getInitialState(), true)
     useWorkspacesStore.setState(useWorkspacesStore.getInitialState(), true)
     useUiStore.setState(useUiStore.getInitialState(), true)
+    useRoomStore.setState(useRoomStore.getInitialState(), true)
     useWorkspacesStore.setState({ activeWorkspaceId: WS })
     useSessionStore.setState({ activeSessionId: MAIN_ID, activeAgentId: 'mia', activeAgentType: 'core' })
   })

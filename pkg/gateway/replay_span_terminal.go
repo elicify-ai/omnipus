@@ -135,6 +135,10 @@ func (sr *streamReplayState) launchRefusedWithoutChild(tc session.ToolCall) bool
 // Production puts it in the result text as JSON; a top-level session_id key
 // is accepted too.
 func toolCallNamesChildSession(tc session.ToolCall) bool {
+	// A history page's shortened result keeps both facts from its full value.
+	if d, ok := tc.HistoryDisplayPreview(); ok {
+		return strings.TrimSpace(d.ChildSessionID) != "" || d.TextNamesSessionID
+	}
 	if tc.Result == nil {
 		return false
 	}

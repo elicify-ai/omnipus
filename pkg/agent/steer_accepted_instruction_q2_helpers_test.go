@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -112,29 +113,67 @@ func q2ConsumerRequireReturned(t *testing.T, result q2ConsumerResult, want []ste
 
 // Read both physical JSONL and a reopened real store. A malformed line must
 // fail, not disappear behind ReadTranscript's malformed-line filtering.
-func q2ConsumerReadDurable(t *testing.T, store *session.UnifiedStore, sessionID string) []session.TranscriptEntry {
+func q2ConsumerReadDurable(t *testing.T, store *session.UnifiedStore, sessionID string, wantRunningSuccess ...session.ToolCallID) []session.TranscriptEntry {
 	t.Helper()
 	path := filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl")
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read physical transcript: %v", err)
 	}
+	day, dayErr := os.ReadFile(filepath.Join(store.BaseDir(), sessionID, "transcript.day"))
+	if len(data) != 0 && dayErr != nil {
+		t.Fatalf("read physical transcript partition identity: %v", dayErr)
+	}
 	var physical []session.TranscriptEntry
+	sources := make(map[session.ArchiveAddress]int)
+	settled := make(map[q2ConsumerSettleKey]bool)
+	var offset int64
 	for index, line := range bytes.Split(data, []byte{'\n'}) {
+		addr := session.ArchiveAddress{PartitionKey: strings.TrimSpace(string(day)), ByteOffset: offset}
+		offset += int64(len(line) + 1)
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
-		var entry session.TranscriptEntry
-		if uerr := json.Unmarshal(line, &entry); uerr != nil {
+		var record session.ArchiveRecord
+		if uerr := json.Unmarshal(line, &record); uerr != nil {
 			t.Fatalf("physical transcript line %d is malformed; cannot trust filtered counts: %v", index+1, uerr)
 		}
-		// The one archive holds chat, model and effect records (DEL-12); the
-		// chat projection ReadTranscript returns is the chat records only, so
-		// filter the physical read the same way before comparing.
-		if entry.ViewMembership != session.ViewMembershipChat {
+		addr.EntryID = record.ID
+		// C2 permits a later settlement to change an earlier public row. Derive
+		// that view independently from the physical records, not ReadTranscript.
+		// Unknown effects fail loudly; they are never filtered into a false pass.
+		if record.Type == session.EntryTypeToolCallEffect {
+			q2ConsumerApplySettle(t, physical, sources, settled, record)
 			continue
 		}
-		physical = append(physical, entry)
+		if record.ViewMembership != session.ViewMembershipChat {
+			continue
+		}
+		sources[addr] = len(physical)
+		physical = append(physical, record.TranscriptEntry)
+	}
+	for _, id := range wantRunningSuccess {
+		matches := 0
+		for addr, index := range sources {
+			for _, call := range physical[index].ToolCalls {
+				if call.ID != id {
+					continue
+				}
+				matches++
+				transitions := 0
+				for key := range settled {
+					if key.target == addr && key.callID == id {
+						transitions++
+					}
+				}
+				if transitions != 1 || !settled[q2ConsumerSettleKey{addr, id, "running"}] || call.Status != "success" {
+					t.Fatalf("call %q must have exactly one physical running-to-success settlement after its source; got %d transitions, projected call=%+v", id, transitions, call)
+				}
+			}
+		}
+		if matches != 1 {
+			t.Fatalf("call %q has %d physical source occurrences, want exactly 1", id, matches)
+		}
 	}
 	reopened, err := session.NewUnifiedStore(store.BaseDir())
 	if err != nil {
@@ -153,6 +192,64 @@ func q2ConsumerReadDurable(t *testing.T, store *session.UnifiedStore, sessionID 
 		t.Fatalf("reopened transcript differs from physical durable entries: visible=%+v physical=%+v", visible, physical)
 	}
 	return physical
+}
+
+type q2ConsumerSettleKey struct {
+	target session.ArchiveAddress
+	callID session.ToolCallID
+	from   string
+}
+
+// 8e17995a0 / paging spec C2: retain the running source's exact position and
+// settle it once, only after that source, without changing the call's identity.
+// These instruction/receipt fixtures require settles only, not projections.
+func q2ConsumerApplySettle(t *testing.T, entries []session.TranscriptEntry, sources map[session.ArchiveAddress]int, seen map[q2ConsumerSettleKey]bool, record session.ArchiveRecord) {
+	t.Helper()
+	if err := record.Validate(); err != nil {
+		t.Fatalf("invalid physical effect %q: %v", record.ID, err)
+	}
+	effect := record.ToolCallEffect
+	if effect == nil || effect.Settle == nil || len(effect.Projections) != 0 || len(effect.Retracts) != 0 {
+		t.Fatalf("unexpected physical effect %q: these fixtures require an exact settlement", record.ID)
+	}
+	settle := effect.Settle
+	index, exists := sources[settle.Target]
+	if !exists {
+		t.Fatalf("settlement %q must follow its exact physical source %+v, not precede it or target another occurrence", record.ID, settle.Target)
+	}
+	key := q2ConsumerSettleKey{settle.Target, settle.ToolCall.ID, settle.IfStatus}
+	if seen[key] {
+		t.Fatalf("duplicate physical settlement of call %q from %q at %+v", key.callID, key.from, key.target)
+	}
+	seen[key] = true
+	matches := 0
+	for i := range entries[index].ToolCalls {
+		call := &entries[index].ToolCalls[i]
+		if call.ID != settle.ToolCall.ID {
+			continue
+		}
+		matches++
+		if settle.IfStatus == "" || call.Status != settle.IfStatus {
+			t.Fatalf("settlement %q guard=%q, preceding physical status=%q; require the exact guarded sequence", record.ID, settle.IfStatus, call.Status)
+		}
+		if call.Tool != settle.ToolCall.Tool || !reflect.DeepEqual(call.Parameters, settle.ToolCall.Parameters) {
+			t.Fatalf("settlement %q changed the tool or parameters of call %q", record.ID, call.ID)
+		}
+		if call.Status != "pending" && call.Status != "running" {
+			t.Fatalf("settlement %q tried to settle call %q again after terminal status %q", record.ID, call.ID, call.Status)
+		}
+		if call.Status == "running" {
+			switch settle.ToolCall.Status {
+			case "success", "error", "cancelled", "interrupted":
+			default:
+				t.Fatalf("running call %q settled to nonterminal %q", call.ID, settle.ToolCall.Status)
+			}
+		}
+		*call = settle.ToolCall
+	}
+	if matches != 1 {
+		t.Fatalf("settlement %q matched %d source calls, want exactly 1", record.ID, matches)
+	}
 }
 
 func q2ConsumerRequireTail(t *testing.T, fixture q2ConsumerFixture, want []session.TranscriptEntry) {

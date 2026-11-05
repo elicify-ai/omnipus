@@ -58,3 +58,12 @@ properties:
     minimum: 0
   allocated_cost_unpriced:
     type: boolean
+  invitation_context_status:
+    type: string
+    enum:
+      - generating
+      - ready
+      - unavailable
+    description: >
+      Invitation summary state (#1449 FR-045). The text itself never travels
+      on a frame: on ready, an open Participants panel refetches getRoom.
