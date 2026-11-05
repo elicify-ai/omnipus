@@ -155,6 +155,26 @@ describe('goal_claim always resolves to allow, across every preset', () => {
 })
 
 describe('applyRolePreset — always-ask tools (Q-A / FR-037)', () => {
+  it.each(Object.keys(POLICY_PRESETS) as RolePreset[])('%s preserves a declared deny for an always-ask tool', (role) => {
+    // Q-A / CHECK F4: shipped presets currently have no such denial. Supply
+    // input data through the exported mutable table; keep applyRolePreset real.
+    const toolName = 'set_channel_outbound'
+    expect(ALWAYS_ASK_TOOLS, 'instrument: the fixture must exercise an actual always-ask tool').toContain(toolName)
+    const original = POLICY_PRESETS[role]
+    POLICY_PRESETS[role] = {
+      ...original,
+      overrides: { ...original.overrides, [toolName]: 'deny' },
+    }
+    try {
+      expect(applyRolePreset(role, [makeTool(toolName)])).toStrictEqual({
+        policies: { set_channel_outbound: 'deny' },
+      })
+    } finally {
+      // Restore even if the assertion fails; other tests keep their real inputs.
+      POLICY_PRESETS[role] = original
+    }
+  })
+
   it.each(Object.keys(POLICY_PRESETS) as RolePreset[])('%s never allows an always-ask tool', (role) => {
     expect(ALWAYS_ASK_TOOLS.length, 'instrument: the always-ask check must examine at least one tool').toBeGreaterThan(0)
     const result = applyRolePreset(role, ALWAYS_ASK_TOOLS.map(makeTool))
