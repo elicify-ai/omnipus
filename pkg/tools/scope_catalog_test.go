@@ -42,7 +42,7 @@
 //     invariant for pkg/sysagent/tools, independent of any single tool's
 //     source. See TestSysagentCatalog_AllToolsAreScopeCore.
 //  3. pkg/sysagent/tools/registry.go's own doc comment on BuildRegistry:
-//     "creates a ToolRegistry containing all 32 system tools" — an
+//     "creates a ToolRegistry containing all 33 system tools" — an
 //     independently-stated count used as the catalog-membership sanity
 //     check in TestSysagentCatalog_AllToolsAreScopeCore, not derived by
 //     counting AllTools' literal entries.
