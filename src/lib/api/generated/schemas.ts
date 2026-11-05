@@ -1807,6 +1807,7 @@ type AgentDetail = {
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
   skills?: Array<string> | undefined;
+  stale_skill_grants?: Array<string> | undefined;
   tool_permissions?: Array<AgentToolPermission> | undefined;
   stored_overrides?: {} | undefined;
   connectors?: Array<AgentMCPBinding> | undefined;
@@ -8165,6 +8166,7 @@ export const AgentDetail: z.ZodType<AgentDetail> = z.object({
   role: AgentRole.optional(),
   color: AgentColor.optional(),
   skills: z.array(z.string()).optional(),
+  stale_skill_grants: z.array(z.string()).optional(),
   tool_permissions: z.array(AgentToolPermission).optional(),
   stored_overrides: z.record(z.enum(["allow", "ask", "deny"])).optional(),
   connectors: z.array(AgentMCPBinding).optional(),
