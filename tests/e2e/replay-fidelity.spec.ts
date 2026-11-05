@@ -679,8 +679,8 @@ const attachTest = test.extend<{ replayAttachProvider: ReplayAttachProvider; rep
     try { await use(provider) } finally { await provider.close() }
   },
   canonicalProviderBase: async ({ replayAttachProvider }, use) => { await use(replayAttachProvider.url) },
-  // Playwright gives an explicitly timed fixture its own timeout slot. Cold
-  // startup therefore cannot consume the active experiment's 60 s budget.
+  // Only this viewer fixture has a separate 120 s timeout slot. The inherited
+  // gateway/page/context setup still shares the configured 90 s test budget.
   replayAttachViewers: [async ({ page, browser, canonicalGateway, replayAttachProvider: provider }, use) => {
     BASE_URL = canonicalGateway.baseURL
     AUTH_FILE = canonicalHistoryAuthFile()
@@ -725,7 +725,12 @@ const attachTest = test.extend<{ replayAttachProvider: ReplayAttachProvider; rep
         await waitForWsConnected(page2)
       } finally { warmReady.cancel() }
       await use({ sessionId, page2, traffic1, traffic2, readiness2, atAttach,
-        startTurn() { turnStart = traffic1.received.length; return turnStart },
+        startTurn() {
+          traffic1.startExperiment()
+          traffic2.startExperiment()
+          turnStart = traffic1.received.length
+          return turnStart
+        },
         arm() { armed = true },
       })
     } finally {
@@ -741,11 +746,11 @@ attachTest(
   '(c) attach-during-active-turn: second browser context receives all events without loss',
   async ({ page, replayAttachProvider: provider, replayAttachViewers: viewers }, testInfo) => {
     // Scenario 9 / TDD row 25 (archived sprint-i-historical-replay-fidelity-spec).
-    // 60 s active experiment / 15 s reply waits replaces 360 s / 180 s:
-    // the local stream takes 1.25 s, with no paid-model latency or queue.
-    // The bounded cold-start fixture above has a separate 120 s setup slot;
-    // no startup delay can consume or enlarge the actual event-loss window.
-    test.setTimeout(60_000)
+    // Keep the configured 90 s test budget, including inherited gateway/browser
+    // setup, instead of lowering its already-consumed slot to 60 s. Only the
+    // viewer fixture above has a separate 120 s slot. Reply/delta waits stay
+    // 15 s (formerly 180 s); the local stream has 1.25 s of configured delay
+    // and no paid-model queue. This still replaces the old 360 s test budget.
     const { sessionId, page2, traffic1, traffic2, readiness2, atAttach } = viewers
     const turnStart = viewers.startTurn()
     try {
@@ -767,6 +772,8 @@ attachTest(
         const [, proof] = await Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()])
         expect(proof.request.session_id, 'second viewer requests the target, not its root session').toBe(sessionId)
         expect(proof.completion.session_id, 'real target catch-up completes').toBe(sessionId)
+        traffic1.assertNoReconnect()
+        traffic2.assertNoReconnect()
         expect(atAttach, 'observed attach overlaps an unfinished turn that already emitted a token').toEqual([
           { firstText: REPLAY_ATTACH_PREFIX, doneCount: 0, providerFinished: false },
         ])
@@ -823,8 +830,8 @@ attachTest(
     } finally {
       await testInfo.attach('replay-attach-evidence', { contentType: 'application/json', body: JSON.stringify({
         atAttach, provider: provider.state(),
-        first: { tokens: traffic1.liveTokens(turnStart), attaches: traffic1.attaches, failures: traffic1.failures },
-        second: { tokens: traffic2.liveTokens(), attaches: traffic2.attaches, failures: traffic2.failures },
+        first: traffic1.snapshot(turnStart),
+        second: traffic2.snapshot(),
       }) })
     }
   },
