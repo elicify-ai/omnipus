@@ -43,7 +43,9 @@ func TestGate1Final_WakeThenStatusDoesNotRedeliver(t *testing.T) {
 	if drainErr != nil || more || len(pending) != 0 {
 		t.Errorf("wake-consumed final still pending: count=%d more=%v err=%v, want zero", len(pending), more, drainErr)
 	}
-	entries := qaReceiptReopenTranscript(t, f.al.GetSessionStore(), f.parentID)
+	// C2 / 8e17995a0: the status poll starts running and settles once to
+	// success at the same source position, before reopening the exact view.
+	entries := q2ConsumerReadDurable(t, f.al.GetSessionStore(), f.parentID, qaUATPollCallID)
 	consumed := 0
 	for _, entry := range entries {
 		if entry.ID == "consumed-"+wake.Metadata["steer_message_id"] && entry.Content == "consumed "+wake.Metadata["steer_message_id"] {

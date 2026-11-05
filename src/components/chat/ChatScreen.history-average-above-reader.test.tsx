@@ -92,7 +92,8 @@ it('re-estimates unmeasured groups above a recent-end reader when only A changes
   }
   expect(mounted().some(row => row.dataset.index === '49'), 'positive instrument: the newest group is mounted and measured').toBe(true)
   expect(mounted().length, 'positive instrument: real virtualization leaves groups unmounted').toBeLessThan(50)
-  expect(historyAttachSizing(MAIN_ID).history_limit, 'precondition: mixed 40/80 samples, A is above 40').toBeLessThan(80)
+  // D5 ceiling can still reach60 with A>40: (98*40+80)/99 => ceil59.4=60.
+  expect(historyAttachSizing(MAIN_ID).history_limit, 'precondition: mixed 40/80 samples, three-screen target is at most60').toBeLessThanOrEqual(60)
   expect(total(), 'precondition: unmeasured groups above the reader carry a 2*A estimate above 80').toBeGreaterThan(4000)
   const messages = useChatStore.getState().messages
 
@@ -101,7 +102,7 @@ it('re-estimates unmeasured groups above a recent-end reader when only A changes
   for (const source of sources) layout.state.toolHeights.set(source.tool_calls![0].id, 40)
   await observeLayout()
   await observeLayout()
-  await waitFor(() => expect(historyAttachSizing(MAIN_ID), 'A40 established').toStrictEqual({ history_limit: 80, history_min_rows: 40 }))
+  await waitFor(() => expect(historyAttachSizing(MAIN_ID), 'A40 established').toStrictEqual({ history_limit: 60, history_min_rows: 40 }))
   expect(useChatStore.getState().messages, 'no message-array identity change can rescue the estimates').toBe(messages)
   expect(mounted().map(row => row.getBoundingClientRect().height), 'no outer item-size change').toStrictEqual(Array(mounted().length).fill(80))
   expect(content.style.height, 'D5: unmeasured groups above now estimate 2*A40 = 80, so the total is the physical 4000').toBe('4000px')

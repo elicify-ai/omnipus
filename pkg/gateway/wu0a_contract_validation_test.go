@@ -52,6 +52,7 @@ type wu0aRESTShape struct {
 	schema  string
 	control string
 	newDst  func() any
+	good    []wu0aRESTCase
 	bad     []wu0aRESTCase
 }
 
@@ -115,9 +116,16 @@ func wu0aRESTShapes() []wu0aRESTShape {
 			schema:  "RoomMessageRequest",
 			control: `{"client_message_id":"c1","text":"hello @Mia","mentions":["mia","all"]}`,
 			newDst:  func() any { return &generated.RoomMessageRequest{} },
+			// #1449 DS-1: text.minLength=0 admits files-only messages. The
+			// handler, not this schema-only probe, refuses no text AND no media
+			// with 422 (TestGroupChat1449_HTTPMessageRules, validation on/off).
+			good: []wu0aRESTCase{
+				{"empty text", `{"client_message_id":"c1","text":"","mentions":[]}`},
+				{"files only", `{"client_message_id":"c1","text":"","mentions":[],"media":["media://workspace/ws-1/file-1"]}`},
+			},
 			bad: []wu0aRESTCase{
 				{"missing client_message_id", `{"text":"hi","mentions":[]}`},
-				{"empty text", `{"client_message_id":"c1","text":"","mentions":[]}`},
+				{"missing text", `{"client_message_id":"c1","mentions":[]}`},
 				{"mentions null", `{"client_message_id":"c1","text":"hi","mentions":null}`},
 				{"extra field", `{"client_message_id":"c1","text":"hi","mentions":[],"author":"mia"}`},
 				{"null body", `null`},
@@ -146,6 +154,14 @@ func TestWU0aContracts_RESTInbound_ValidationOn(t *testing.T) {
 			require.True(t, ok, "control must pass %s validation; got %d %s", shape.schema, code, body)
 			assert.Equal(t, http.StatusOK, code, "control must not write an error status")
 		})
+		for _, gc := range shape.good {
+			t.Run(shape.schema+"/"+gc.name, func(t *testing.T) {
+				ok, code, body := wu0aDecode(t, shape.schema, gc.body, shape.newDst(), true)
+				require.True(t, ok, "%s must pass %s schema validation; got %d %s", gc.name, shape.schema, code, body)
+				assert.Equal(t, http.StatusOK, code, "valid schema input must not write an error status")
+				assert.Empty(t, body, "schema acceptance writes no response; business validation belongs to the handler")
+			})
+		}
 		for _, bc := range shape.bad {
 			t.Run(shape.schema+"/"+bc.name, func(t *testing.T) {
 				ok, code, body := wu0aDecode(t, shape.schema, bc.body, shape.newDst(), true)

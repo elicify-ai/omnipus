@@ -1209,7 +1209,7 @@ func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) (
 // own scope is the one registered under it).
 func (al *AgentLoop) noteConsumedOriginsForScope(scope string, consumed []steeringQueueItem) {
 	merged := mergedItemOrigin(consumed)
-	if merged.Label == "" {
+	if merged.none {
 		return
 	}
 	if v, ok := al.activeTurnStates.Load(scope); ok {
@@ -1222,7 +1222,7 @@ func (al *AgentLoop) noteConsumedOriginsForScope(scope string, consumed []steeri
 // mergedItemOrigin folds the origins of consumed items under the §6.18
 // precedence rule (first of the highest class wins).
 func mergedItemOrigin(items []steeringQueueItem) approvalOrigin {
-	var merged approvalOrigin
+	merged := noApprovalOrigin
 	for _, item := range items {
 		merged = mergeApprovalOrigin(merged, item.origin.approval)
 	}
@@ -1580,7 +1580,7 @@ func (al *AgentLoop) continueWithConsumedSteering(
 		// continuationTranscript); a chat-scoped key stays unbound.
 		transcriptSessionID, transcriptStore = al.continuationTranscript(sessionKey)
 	}
-	var origin approvalOrigin
+	origin := noApprovalOrigin
 	for _, consumed := range consumedOrigins {
 		origin = mergeApprovalOrigin(origin, consumed.approvalFor(al))
 	}

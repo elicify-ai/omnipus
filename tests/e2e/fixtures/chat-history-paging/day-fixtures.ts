@@ -18,6 +18,21 @@ export function fixtureMessage(label: string, ordinal: number, agentId: string, 
   return value;
 }
 
+/** D2 A2.1/A2.7: each result is exactly51,200 JSON bytes (11 syntax
+ * bytes +51,189 ASCII bytes), so shortening leaves every contribution whole.
+ * Each call counts as one drawn row; nonempty prose adds one more row. */
+export const INLINE_RESULT_BYTES = 51_200;
+export function inlineToolMessage(label: string, ordinal: number, agentId: string, calls = 5, content = ''): Message {
+  const value = fixtureMessage(label, ordinal, agentId);
+  value.content = content;
+  value.tool_calls = Array.from({ length: calls }, (_, n) => {
+    const id = `call-${value.id}-${n}`;
+    return { id, tool: 'read_file', status: 'success', content_state: 'full',
+      parameters: { path: `${id}.txt` }, result: { text: id + 'x'.repeat(INLINE_RESULT_BYTES - 11 - id.length) } };
+  });
+  return value;
+}
+
 /** D-A1: actual90 append-day partitions, not spoofed entry timestamps. */
 export function prefixFixtureDays(prefix: number, agentId: string): ChatHistoryFixtureDay[] {
   const reference = new Date();
@@ -34,7 +49,10 @@ export function readerFixtureDays(label: string, agentId: string, largeOldTools 
   const reference = new Date();
   const days: ChatHistoryFixtureDay[] = [];
   for (let n = 0; n < 1000; n++) days.push({ day: utcDay(1000 - n, reference),
-    entries: [fixtureMessage(label, n, agentId, largeOldTools ? 200 * 1024 : 96, largeOldTools)] });
+    // D-F1/A2.7: two inline50-KiB results/owner, not one shortened200-KiB
+    // result.40×102KiB +8KiB envelope <4MiB;41×102,400 >4MiB.
+    // Thus500 held owners need13 requests (12×40 +20), not five cap pages.
+    entries: [largeOldTools ? inlineToolMessage(label, n, agentId, 2) : fixtureMessage(label, n, agentId)] });
   days.push({ day: utcDay(0, reference), entries: Array.from({ length: 2400 }, (_, n) => fixtureMessage(label, 1000 + n, agentId)) });
   return days;
 }
