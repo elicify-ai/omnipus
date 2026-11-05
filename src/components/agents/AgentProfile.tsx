@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { Link, useRouter } from '@tanstack/react-router'
 import {
   X,
   CaretDown,
@@ -155,6 +156,28 @@ function useSmAndUp(): boolean {
     return () => media.removeEventListener('change', apply)
   }, [])
   return matches
+}
+
+// r17 17.6: "Change in Settings" beside the read-only Program line. The
+// profile is hosted inside the app router; where no router is mounted (an
+// isolated component render) a plain link to the same address is used, since
+// a router Link cannot render without one.
+function ProgramSettingsLink() {
+  const router = useRouter({ warn: false })
+  const className =
+    'shrink-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline-offset-2 hover:underline'
+  if (!router) {
+    return (
+      <a href="/settings" tabIndex={0} data-testid="profile-program-settings-link" className={className}>
+        Change in Settings
+      </a>
+    )
+  }
+  return (
+    <Link to="/settings" tabIndex={0} data-testid="profile-program-settings-link" className={className}>
+      Change in Settings
+    </Link>
+  )
 }
 
 export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
@@ -1841,6 +1864,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                                   verified
                                 </span>
                               )}
+                              {granted && agent?.stale_skill_grants?.includes(skill.id) && (
+                                // UAT-1 F-9: the grant is bound to a previous skill with this
+                                // name, so the agent cannot load it (SKILL_GRANT_STALE).
+                                <span
+                                  data-testid={`skill-stale-badge-${skill.id}`}
+                                  title="This grant is for a previous skill with this name. Save the agent to grant the current one."
+                                  className="text-[length:var(--type-caption-size)] px-[var(--space-1)] rounded bg-[var(--color-warning)]/20 text-[var(--color-warning)] border border-[var(--color-warning)]/30"
+                                >
+                                  stale grant
+                                </span>
+                              )}
                             </div>
                           </div>
                         </Label>
@@ -1888,6 +1922,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   >
                     {executor?.effective_cli_path ?? 'Not set'}
                   </span>
+                  {/* r17 17.6: a link to where the program is set, not a disabled input. */}
+                  <ProgramSettingsLink />
                 </div>
                 {executor?.program_warning && (
                   <p id="profile-program-warning" data-testid="profile-program-warning" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">

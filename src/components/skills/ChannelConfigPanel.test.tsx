@@ -124,6 +124,12 @@ import type { Workspace } from '@/lib/api'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { ChannelConfigPanel } from './ChannelConfigPanel'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
+import { ChannelConfigureResponse as ChannelConfigureResponseSchema } from '@/lib/api/generated/schemas'
+
+// FR-055 / T-6c: successful Configure mocks must carry a validated outcome.
+// vi.fn is the process-edge API stub across the old Promise<void> signature
+// and the new generated response signature; the response itself is not cast.
+const NO_RELOAD_RESPONSE = ChannelConfigureResponseSchema.parse({ apply_outcome: 'no_reload_needed' })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -686,7 +692,7 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
     // so deleting (omitting) deselected fields would leave the previously-stored
     // service_account_json_ref alive in config.json + the credential store.
     // Sending '' triggers the backend's clear path (rest.go ~4532-4537).
-    vi.mocked(configureChannel).mockResolvedValue(undefined)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
 
     const client = makeQueryClient()
     // Seed with a service_account_json already set (simulates a switch from SA → Webhook)
@@ -743,7 +749,7 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
     // through PUT routing, which enforces CoreTeam membership) — so hydrating
     // them into formValues broke Save/Save & Enable for every bound instance
     // (live-UAT: the WhatsApp QR never appeared because enable always 400'd).
-    vi.mocked(configureChannel).mockResolvedValue(undefined)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
 
     const client = makeQueryClient()
     client.setQueryData(['channel-config', 'telegram.sales'], {
@@ -793,7 +799,7 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
-    vi.mocked(configureChannel).mockResolvedValue(undefined)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
   })
 
   function renderWithConfig(config: Record<string, unknown>) {
@@ -905,13 +911,11 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
     expect(Object.prototype.hasOwnProperty.call(payload, 'app_secret')).toBe(false)
   })
 
-  it('a "[configured]" value in a plain TEXT field is NOT stripped — only password/textarea fields are ever redacted server-side', async () => {
-    // redactChannelConfig (rest.go) only ever redacts password/textarea-typed
-    // fields to the sentinel. Telegram's `allow_from` is a plain text field —
-    // a user who legitimately types the literal string "[configured]" into it
-    // must have that value travel to the backend untouched, not silently
-    // dropped by the sentinel-strip logic.
-    const config = { type: 'telegram', enabled: true, token: 'realtoken123', allow_from: '[configured]' }
+  it('a "[configured]" value in the non-secret Allow From list is preserved as one list element', async () => {
+    // Only password/textarea fields use the redaction sentinel. Allow From is
+    // now a non-secret list: a literal "[configured]" element must survive as
+    // list data, not be silently stripped or flattened back to plain text.
+    const config = { type: 'telegram', enabled: true, token: 'realtoken123', allow_from: ['[configured]'] }
     vi.mocked(fetchChannelConfig).mockResolvedValue(config)
     const client = makeQueryClient()
     client.setQueryData(['channel-config', 'telegram'], config)
@@ -927,7 +931,7 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
       expect(document.getElementById('field-token')).not.toBeNull()
     })
 
-    // allow_from is an advanced TEXT field — expand Advanced to reach it.
+    // Allow From is an advanced list field, edited through its text input.
     fireEvent.click(screen.getByRole('button', { name: /Advanced/i }))
     await waitFor(() => {
       expect((document.getElementById('field-allow_from') as HTMLInputElement).value).toBe('[configured]')
@@ -939,8 +943,8 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
     })
 
     const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
-    // A plain text field's literal "[configured]" must survive untouched.
-    expect(payload['allow_from']).toBe('[configured]')
+    // Preserve the literal as exactly one non-secret list element.
+    expect(payload['allow_from']).toStrictEqual(['[configured]'])
     // The password-typed token is unaffected by this test's assertion.
     expect(payload['token']).toBe('realtoken123')
   })
@@ -1058,7 +1062,7 @@ describe('ChannelConfigPanel — Save & Enable panel close behavior (#358)', () 
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
-    vi.mocked(configureChannel).mockResolvedValue(undefined as never)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
     vi.mocked(enableChannel).mockResolvedValue(undefined as never)
     vi.mocked(useWhatsAppPairingStore).mockImplementation(
       ((selector: (s: { byChannel: Record<string, unknown>; clear: () => void }) => unknown) =>
@@ -1114,7 +1118,7 @@ describe('ChannelConfigPanel — client-side save validation', () => {
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
-    vi.mocked(configureChannel).mockResolvedValue(undefined as never)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
     vi.mocked(enableChannel).mockResolvedValue(undefined as never)
   })
 
@@ -2207,7 +2211,7 @@ describe('ChannelConfigPanel — same-channel close→reopen rehydration (R2F-1 
     // structural sharing returning the pre-close cached reference on reopen.
     const telegramConfig = { type: 'telegram', enabled: true, token: '[configured]' }
     vi.mocked(fetchChannelConfig).mockImplementation(() => Promise.resolve(telegramConfig))
-    vi.mocked(configureChannel).mockResolvedValue(undefined as never)
+    vi.mocked(configureChannel).mockImplementation(vi.fn().mockResolvedValue(NO_RELOAD_RESPONSE))
 
     const { rerender } = renderPanelControlled('telegram', 'Telegram', true)
     await waitFor(() => {

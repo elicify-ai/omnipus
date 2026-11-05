@@ -2,10 +2,6 @@ package gateway
 
 import (
 	"context"
-	"fmt"
-	"slices"
-	"sort"
-	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -29,17 +25,17 @@ func TestDefaultToolsProductionInventoryTracksLiveCatalogAndAssignments(t *testi
 	})
 	owner, ok := rc.agentLoop.GetRegistry().GetAgent("omnipus")
 	require.True(t, ok)
-	reader, ok := owner.Tools.Get("get_agent_tools")
+	reader, ok := owner.Tools.Get("get_agent")
 	require.True(t, ok, "retrieve the real production-wired tool before metadata changes")
 	ctx := tools.WithAgentID(context.Background(), "omnipus")
 	read := func(extra ...tools.Tool) string {
 		state, err := agentstore.New(rc.homePath).ReadState(id)
 		require.NoError(t, err)
-		result := reader.Execute(ctx, map[string]any{"id": id})
+		result := reader.Execute(ctx, map[string]any{"id": id, "fields": []any{"tool_permissions"}})
 		require.False(t, result.IsError, result.ForLLM)
-		header := fmt.Sprintf("agent: %s | name: Catalog Subject | kind: main | revision: %s", id, state.Revision)
+		identity := map[string]any{"id": id, "revision": state.Revision}
 		expected := append(rc.centralBuiltinReg.All(), extra...)
-		fix1InventoryPolicyRows(t, result.ForLLM, header, expected)
+		fix1InventoryPolicyRows(t, result.ForLLM, identity, expected)
 		return result.ForLLM
 	}
 	read() // the reader is already wired and used while the MCP registry is empty
@@ -49,14 +45,14 @@ func TestDefaultToolsProductionInventoryTracksLiveCatalogAndAssignments(t *testi
 	require.Empty(t, rc.centralMCPReg.RegisterServerTools("docs", []tools.Tool{lookup, obsolete}, rc.centralBuiltinReg))
 	require.Empty(t, rc.centralMCPReg.RegisterServerTools("private", []tools.Tool{private}, rc.centralBuiltinReg))
 	first := read(lookup, obsolete)
-	assert.Contains(t, strings.Split(first, "\n"), lookup.Name()+" | allow | Look up a document.", "T1: post-wiring metadata must appear with its exact compact row")
+	assert.Contains(t, fix1Entries(t, first), fix1Entry(lookup.Name(), "allow", "Look up a document."), "T1: post-wiring metadata must appear with its exact inventory entry")
 	assert.NotContains(t, first, private.Name(), "unassigned-server control")
 
 	updated := tools.NewMCPTool(nil, "docs", &mcp.Tool{Name: "lookup", Description: "Find the updated document. New details."})
 	added := tools.NewMCPTool(nil, "docs", &mcp.Tool{Name: "new_operation", Description: "New operation."})
 	require.Empty(t, rc.centralMCPReg.RegisterServerTools("docs", []tools.Tool{updated, added}, rc.centralBuiltinReg))
 	second := read(updated, added)
-	assert.Contains(t, strings.Split(second, "\n"), updated.Name()+" | allow | Find the updated document.", "T1: reconnect replaces the description")
+	assert.Contains(t, fix1Entries(t, second), fix1Entry(updated.Name(), "allow", "Find the updated document."), "T1: reconnect replaces the description")
 	assert.NotContains(t, second, obsolete.Name(), "T1: reconnect evicts obsolete rows")
 	assert.NotContains(t, second, "Look up a document.", "old description must not survive a reconnect")
 	assert.NotContains(t, second, private.Name())
@@ -74,29 +70,22 @@ func TestDefaultToolsProductionInventoryTracksLiveCatalogAndAssignments(t *testi
 	assert.NotContains(t, third, private.Name())
 }
 
-// T1/T2 inspect producer membership and policies. Q21's exact description
-// shape is independently enforced by defaultToolsParseCompact and its cases.
-func fix1InventoryPolicyRows(t *testing.T, raw, header string, expected []tools.Tool) map[string]string {
+// T1/T2 inspect producer membership and policies. The description shape is
+// independently enforced by defaultToolsParseInventory and its cases.
+func fix1InventoryPolicyRows(t *testing.T, raw string, identity map[string]any, expected []tools.Tool) map[string]string {
 	t.Helper()
-	lines := strings.Split(strings.TrimSuffix(raw, "\n"), "\n")
-	require.Equal(t, header, lines[0])
-	require.Len(t, lines, len(expected)+1, "every expected catalog tool appears once, with no extra sections")
-	policies := map[string]string{}
-	names := slices.Grow([]string(nil), len(lines)-1)
-	wanted := slices.Grow([]string(nil), len(expected))
-	for _, line := range lines[1:] {
-		parts := strings.SplitN(line, " | ", 3)
-		require.GreaterOrEqual(t, len(parts), 2)
-		_, duplicate := policies[parts[0]]
-		require.False(t, duplicate)
-		assert.Contains(t, []string{"allow", "ask", "deny"}, parts[1])
-		policies[parts[0]] = parts[1]
-		names = append(names, parts[0])
+	return defaultToolsParseInventory(t, raw, identity, expected)
+}
+
+func fix1Entries(t *testing.T, raw string) []defaultToolsEntry {
+	t.Helper()
+	_, entries := defaultToolsDecode(t, raw)
+	for i := range entries {
+		entries[i].Override = nil // the live-catalog test asserts membership, policy and description
 	}
-	for _, tool := range expected {
-		wanted = append(wanted, tool.Name())
-	}
-	sort.Strings(wanted)
-	assert.Equal(t, wanted, names, "exact live catalog membership and byte order")
-	return policies
+	return entries
+}
+
+func fix1Entry(name, effective, description string) defaultToolsEntry {
+	return defaultToolsEntry{Tool: name, Effective: effective, Description: &description}
 }

@@ -352,12 +352,7 @@ func (g *steerAdmission) tryAdmitRun(sessionID string, gen int, runID string, bo
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	effectiveCap := 1
-	if g.resolveCap != nil {
-		if c := g.resolveCap(); c > 0 {
-			effectiveCap = c
-		}
-	}
+	effectiveCap := g.capLocked()
 	entry := steerQueueEntry{sessionID: sessionID, generation: gen, runID: runID, bootSeq: bootSeq}
 	_, sameSessionActive := g.active[sessionID]
 	if len(g.active) >= effectiveCap || sameSessionActive {
@@ -396,6 +391,14 @@ func (g *steerAdmission) releaseExecution(claim executionClaim) (steerQueueEntry
 
 func (g *steerAdmission) releaseLocked(sessionID string) (steerQueueEntry, bool) {
 	delete(g.active, sessionID)
+	// r17 §7.14.8 (r6): a queued entry is promoted only while the number
+	// running is below the cap in effect now — the same cap tryAdmitRun
+	// applies, memory folded in. Otherwise it keeps its place in line and the
+	// next release re-checks. The cap is never below 1, so when the last
+	// running turn ends the head of the queue always starts.
+	if len(g.active) >= g.capLocked() {
+		return steerQueueEntry{}, false
+	}
 	for i, entry := range g.queue {
 		if _, alreadyActive := g.active[entry.sessionID]; alreadyActive {
 			continue
@@ -405,6 +408,17 @@ func (g *steerAdmission) releaseLocked(sessionID string) (steerQueueEntry, bool)
 		return entry, true
 	}
 	return steerQueueEntry{}, false
+}
+
+// capLocked is the cap in effect for this gate now: the resolver's value,
+// minimum 1. Called with g.mu held by tryAdmitRun and releaseLocked.
+func (g *steerAdmission) capLocked() int {
+	if g.resolveCap != nil {
+		if c := g.resolveCap(); c > 0 {
+			return c
+		}
+	}
+	return 1
 }
 
 // hasReservation reports whether release promoted this exact generation into
@@ -499,9 +513,11 @@ var (
 
 // steerAdmission returns al's steered-turn admission gate, constructing it
 // on first use with a resolver reading the SAME central authority
-// (Performance.EffectiveMaxParallelAgents) AdmissionController and
-// RootDelegationAdmission already read, so all three concurrency gates
-// stay aligned to one operator-configured number.
+// (Performance.EffectiveMaxParallelAgents) AdmissionController reads, folded
+// through the same live memory check the session-worker gate applies
+// (applyMemoryCap; r17 §7.14.8, founder Q27 = A): under memory pressure, or
+// when memory cannot be measured, a new steered session (a delegate helper)
+// above the existing floor queues. It only ever lowers the configured cap.
 func (al *AgentLoop) steerAdmission() *steerAdmission {
 	steerAdmissionRegistryMu.Lock()
 	defer steerAdmissionRegistryMu.Unlock()
@@ -510,7 +526,8 @@ func (al *AgentLoop) steerAdmission() *steerAdmission {
 	}
 	g := newSteerAdmission(func() int {
 		n, _ := al.GetConfig().Performance.EffectiveMaxParallelAgents()
-		return n
+		capped, _ := applyMemoryCap(n)
+		return capped
 	})
 	steerAdmissionRegistry[al] = g
 	return g

@@ -131,9 +131,15 @@ func l11274AssertExternalDelegate(t *testing.T, f *l11274Fixture, id, cli, path 
 	default:
 		t.Error("Run was reached without selecting a CLI driver")
 	}
-	if opts.CLIPath != path || opts.Model != l11274Model || opts.WorkDir != filepath.Join(f.home, "workspaces", l11274WorkspaceID, "work") {
+	// The run execs the checked file saved in Settings (r17 §3.6), never an
+	// agent-supplied path or a PATH lookup.
+	wantProgram, evalErr := filepath.EvalSymlinks(path)
+	if evalErr != nil {
+		t.Fatalf("SETUP: resolve the saved program %q: %v", path, evalErr)
+	}
+	if opts.CLIPath != wantProgram || opts.Model != l11274Model || opts.WorkDir != filepath.Join(f.home, "workspaces", l11274WorkspaceID, "work") {
 		t.Errorf("driver options lost saved runtime/model/workspace: got path=%q model=%q dir=%q; want path=%q model=%q dir=%q",
-			opts.CLIPath, opts.Model, opts.WorkDir, path, l11274Model, filepath.Join(f.home, "workspaces", l11274WorkspaceID, "work"))
+			opts.CLIPath, opts.Model, opts.WorkDir, wantProgram, l11274Model, filepath.Join(f.home, "workspaces", l11274WorkspaceID, "work"))
 	}
 	// Context framing is deliberately not frozen; the exact supplied task must
 	// be present in the instructions delivered across the real process boundary.
@@ -173,8 +179,9 @@ func TestL11274CreatedExternalWorkerCanBeDelegatedToEachDriver(t *testing.T) {
 		t.Run(cli, func(t *testing.T) {
 			f := newL11274Fixture(t, "", false)
 			path := l11274Executable(t, f.home, cli, true)
-			result := f.execute(t, "create_agent", l11274CreateArgs("Created "+cli, cli, path))
-			id := l11274AssertCreated(t, f, result, cli, path, "#6E8BA8")
+			f.setProgram(t, cli, path)
+			result := f.execute(t, "create_agent", l11274CreateArgs("Created "+cli, cli))
+			id := l11274AssertCreated(t, f, result, cli, "#6E8BA8")
 			l11274AssertExternalDelegate(t, f, id, cli, path)
 		})
 	}
@@ -189,7 +196,8 @@ func TestL11274ExistingExternalWorkerDriverControls(t *testing.T) {
 			f := newL11274Fixture(t, "", false)
 			path := l11274Executable(t, f.home, cli, true)
 			id := "existing-" + cli
-			l11274SeedWorker(t, f, id, &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: cli, CLIPath: path})
+			f.setProgram(t, cli, path)
+			l11274SeedWorker(t, f, id, &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: cli})
 			l11274AssertExternalDelegate(t, f, id, cli, path)
 		})
 	}
@@ -229,8 +237,8 @@ func l11274SeedWorker(t *testing.T, f *l11274Fixture, id string, executor *confi
 
 func TestL11274DelegateWithoutTrustEdgeRefusesBeforeDriver(t *testing.T) {
 	f := newL11274Fixture(t, "", false)
-	path := l11274Executable(t, f.home, "codex", true)
-	l11274SeedWorker(t, f, "untrusted-worker", &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "codex", CLIPath: path})
+	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	l11274SeedWorker(t, f, "untrusted-worker", &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "codex"})
 	fake, clis := l11274DriverSeam(t, f)
 	result := l11274Delegate(t, f, "untrusted-worker", "must not execute", false)
 	if !result.IsError || !strings.Contains(result.ForLLM, "untrusted-worker") || !strings.Contains(result.ForLLM, "not permitted") {

@@ -466,8 +466,8 @@ func TestAgentCreate_MaxToolIterations_OutOfRangeRefused(t *testing.T) {
 func TestAgentCreate_Worker_MaxToolIterations(t *testing.T) {
 	mtiUnsetEnv(t)
 	api := buildExecutorTestAPI(t)
-	body := `{"name":"ExtLim","type":"subagent_3p","description":"external worker","soul":"s",` +
-		`"executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"max_tool_iterations":30}`
+	body := `{"name":"ExtLim","type":"subagent_3p","description":"external worker",` +
+		`"executor":{"cli":"codex"},"max_tool_iterations":30}`
 	w := mtiPostAgent(t, api, body)
 	require.Equal(t, http.StatusCreated, w.Code, "subagent_3p create with max_tool_iterations must be accepted (D14); body: %s", w.Body.String())
 	m := mtiDecode(t, w.Body.Bytes())

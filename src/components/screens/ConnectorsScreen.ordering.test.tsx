@@ -44,7 +44,7 @@ function transportFixture() {
     const path = new URL(String(input), 'http://localhost').pathname
     const method = init?.method ?? 'GET'
     calls.push({ path, method, body: init?.body })
-    if (path.endsWith('/configure')) return json(configureStatus === 200 ? {} : { error: 'controlled Configure save failure' }, configureStatus)
+    if (path.endsWith('/configure')) return json(configureStatus === 200 ? { apply_outcome: 'no_reload_needed' } : { error: 'controlled Configure save failure' }, configureStatus)
     if (path.endsWith('/enable')) {
       enteredEnable.resolve()
       return enable.promise
@@ -228,6 +228,7 @@ it('T7 obsolete local Enable success cannot mount the next channel viewer', asyn
   const entered = deferred<void>()
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
     const path = new URL(String(input), 'http://localhost').pathname
+    if (path.endsWith('/configure')) return json({ apply_outcome: 'no_reload_needed' })
     if (path.endsWith('/enable')) { entered.resolve(); return held.promise }
     if (path.endsWith('/routing')) return json({ workspace_id: '', default_agent_id: '', bound: false })
     if (path === '/api/v1/agents' || path === '/api/v1/workspaces') return json([])

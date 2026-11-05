@@ -747,7 +747,7 @@ export interface paths {
         put?: never;
         /**
          * Resolve a pending tool approval (FR-011, FR-082)
-         * @description Approve, deny, or cancel a pending tool call approval.
+         * @description Approve, deny, or cancel a pending tool call approval. For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038, T-10 row 15) the action allow (approve and record a grant) is refused with 400 "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" and nothing is recorded; only allow_once, deny and cancel are accepted, and no approval of such a tool is ever remembered. Every other tool is unchanged.
          */
         post: operations["postToolApproval"];
         delete?: never;
@@ -1219,9 +1219,33 @@ export interface paths {
         get?: never;
         /**
          * Configure a channel
-         * @description Merges request body fields into the channel's config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. Returns the updated config with credential fields redacted.
+         * @description Merges request body fields into the channel's config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. `outbound`, `workspace_id` and `identity` cannot be set here, in any letter case: 400 (the outbound setting is changed only with PUT /api/v1/channels/{id}/outbound; the binding only with the routing route). `apply_outcome`, `apply_reason` and `apply_note` are stripped from the body. When the save changes an access field or stores a credential, or the connection is not current, the one connection is restarted and the response reports the outcome in `apply_outcome` (channels spec T-6, FR-050). Returns the updated config with credential fields redacted.
          */
         put: operations["configureChannel"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/{id}/outbound": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a connection's outbound (start messages) setting
+         * @description Returns whether the agent bound to this connection may start messages and to whom, the live revision token, whether the connection is running and whether its platform can start messages (channels spec FR-021). Read from one live configuration snapshot.
+         */
+        get: operations["getChannelOutbound"];
+        /**
+         * Set a connection's outbound (start messages) setting
+         * @description Replaces the connection's outbound policy and target list (channels spec FR-020, FR-022). Targets are canonicalized and de-duplicated; added Discord targets are looked up through the running connection outside the settings lock, each call bounded by a 5-second deadline that covers the rate-limit wait. The revision is re-checked under the settings lock before saving. A permission-extending write needs the saved and running configurations of the connection to correspond; switching to reply_only or removing targets always works, in any connection state. This is the only way to change the setting; every other save path keeps it as stored. Admin only.
+         */
+        put: operations["setChannelOutbound"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1947,6 +1971,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skills/{name}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy an installed or built-in skill to a new user-owned skill
+         * @description Creates a new user-owned skill from the named skill; the copy's frontmatter name is rewritten to new_id. The copy starts ungranted.
+         */
+        post: operations["copySkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skills/{name}": {
         parameters: {
             query?: never;
@@ -1959,7 +2003,7 @@ export interface paths {
         post?: never;
         /**
          * Delete an installed skill
-         * @description Removes an installed skill from the local skills directory. The skill must not be the default skill, in use by any agent, or required by a seeded dependency. On success the gateway removes the skill directory and returns 204 No Content.
+         * @description Deletes an installed user-owned skill through the change pipeline (a delete_skill version is recorded; history is kept until retention). revision is the caller's expected revision; a mismatch is 409 SKILL_CHANGED. Built-in skills are refused with 403.
          */
         delete: operations["deleteSkill"];
         options?: never;
@@ -8732,6 +8776,10 @@ export interface components {
             fallback_models?: components["schemas"]["FallbackModel"][];
             model_params?: components["schemas"]["AgentModelParams"];
             stats?: components["schemas"]["AgentStats"];
+            /** @description Skill key → generation the grant is bound to (SD-30). Written wholesale by the server at every agent create/update from its own observation of the installed skill folders; requests stay name-only. An absent field or entry is unbound and authorizes nothing. */
+            skill_grants?: {
+                [key: string]: string;
+            };
             /**
              * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
              * @example [
@@ -8739,6 +8787,13 @@ export interface components {
              *     ]
              */
             skills?: string[];
+            /**
+             * @description Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). Computed by the server on the agent detail read (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is not listed. Omitted when empty.
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            readonly stale_skill_grants?: string[];
             /**
              * Format: date-time
              * @description ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
@@ -9848,6 +9903,14 @@ export interface components {
              * @example 2026-10-14T09:30:00Z
              */
             last_dropped_at?: string;
+            /**
+             * @description The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+             * @example reply_only
+             * @enum {string}
+             */
+            outbound_policy?: "reply_only" | "agent_may_start";
+            /** @description Senders the running connection ignored because they are not on its allowed list. Present only when at least one message was ignored (FR-061). */
+            rejected_senders?: components["schemas"]["ChannelRejectedSenders"];
         };
         /**
          * RetentionConfig
@@ -11217,6 +11280,11 @@ export interface components {
              * @example 5242880
              */
             max_bytes: number;
+            /**
+             * @description Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+             * @example 30000
+             */
+            max_patches?: number;
         };
         /**
          * ContextWindowNotice
@@ -11514,6 +11582,8 @@ export interface components {
         };
         /** @description A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata. */
         Skill: {
+            /** @description true when any of: (a) the newest version's kind is not install or install_replace (a restore of an install version counts as a change); (b) the live folder's current content revision differs from the newest version's revision (an outside change not yet recorded) — evaluated at read time, never by writing history; (c) history is missing or unreadable. Always false for built-ins. */
+            has_local_changes: boolean;
             revision: components["schemas"]["ConfigurationRevision"];
             persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
             activation_status?: components["schemas"]["ConfigurationActivationStatus"];
@@ -12868,6 +12938,203 @@ export interface components {
              * @example channel "telegram" is configured
              */
             message: string;
+        };
+        /**
+         * ChannelOutbound
+         * @description Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+         */
+        ChannelOutbound: {
+            /**
+             * @description reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+             * @example reply_only
+             * @enum {string}
+             */
+            policy: "reply_only" | "agent_may_start";
+            /**
+             * @description Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+             * @example [
+             *       "telegram:-1001234567890"
+             *     ]
+             */
+            targets: string[];
+        };
+        /**
+         * ChannelAvailability
+         * @description Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+         */
+        ChannelAvailability: {
+            /**
+             * @description running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+             * @example running
+             * @enum {string}
+             */
+            state: "running" | "not_running" | "not_loaded";
+            /**
+             * @description Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+             * @example not started
+             */
+            reason?: string;
+        };
+        /**
+         * ChannelOutboundRead
+         * @description Response of GET /api/v1/channels/{id}/outbound (channels spec FR-021), read from one live configuration snapshot.
+         */
+        ChannelOutboundRead: {
+            /** @description The connection's outbound setting. When config.json has none, this is {policy: reply_only, targets: []}. */
+            outbound: components["schemas"]["ChannelOutbound"];
+            /**
+             * @description The channel revision token (FR-088) computed over the live configuration — the same token list_channels returns and the writer compares against expected_revision. "absent" when the connection is not configured.
+             * @example absent
+             */
+            revision: string;
+            /** @description Whether the connection is running right now. */
+            availability: components["schemas"]["ChannelAvailability"];
+            /**
+             * @description True only for platforms that can start messages in this release (Discord and Telegram). Other platforms show "not supported yet".
+             * @example true
+             */
+            start_supported: boolean;
+        };
+        /**
+         * ChannelOutboundUpdateRequest
+         * @description Request body of PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-022). The whole target list replaces the stored one. Targets are raw input: the server trims, canonicalizes, removes duplicates and then enforces the limit of 20 (too_many_targets).
+         */
+        ChannelOutboundUpdateRequest: {
+            /**
+             * @description reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+             * @example agent_may_start
+             * @enum {string}
+             */
+            policy: "reply_only" | "agent_may_start";
+            /**
+             * @description Raw target entries, one per textarea line: a bare id or "platform:id". Rejections refer to an entry by its 0-based index in this array.
+             * @example [
+             *       "-1001234567890"
+             *     ]
+             */
+            targets: string[];
+            /**
+             * @description The revision returned by GET /api/v1/channels/{id}/outbound (or list_channels). A different current revision is refused with 409 stale_revision.
+             * @example absent
+             */
+            expected_revision: string;
+        };
+        /**
+         * ChannelOutboundWriteResponse
+         * @description Response of a successful PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-027, T-6b).
+         */
+        ChannelOutboundWriteResponse: {
+            /** @description The saved setting, in canonical form. */
+            outbound: components["schemas"]["ChannelOutbound"];
+            /**
+             * @description The new channel revision token (FR-088) over the live configuration.
+             * @example r1-3f9a
+             */
+            revision: string;
+            /** @description Present only when the file was written but the rest of the running configuration could not be refreshed. The saved list is in force anyway. Text: "Saved and in force for starting messages. Other settings could not be refreshed: <short reason>. Check the server log." */
+            warning?: string;
+        };
+        /**
+         * ChannelOutboundRejection
+         * @description Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502 (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
+         *     Safe-echo set: every string of this schema (error, target_errors[].target, target_errors[].reason) is restricted by its pattern to printable ASCII (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes (double quote, backslash, <, >, &). The server drops any other character before serializing; it never escapes or substitutes. Each string character therefore serializes to exactly one byte, which keeps the worst-case body at about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable characters for its binary sniff.
+         */
+        ChannelOutboundRejection: {
+            /**
+             * @description Human-readable reason, in the safe-echo set. For 502 lookup_unavailable it is "Discord could not be reached to check <ids>; nothing was saved; try again", listing unavailable ids in request order until the next id would exceed 500 characters, then "+<N> more".
+             * @example some targets are not valid ids
+             */
+            error: string;
+            /**
+             * @description Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+             * @example invalid_targets
+             * @enum {string}
+             */
+            code: "invalid_targets" | "too_many_targets" | "platform_cannot_start" | "platform_cannot_message_people" | "stale_revision" | "connect_first" | "lookup_unavailable" | "saved_live_mismatch";
+            /** @description Per-target errors: the first 10 invalid entries in request order. */
+            target_errors?: {
+                /**
+                 * @description 0-based position of the entry in the request's targets array (the client shows it on textarea line index + 1). This is the identifier; target is only a hint.
+                 * @example 0
+                 */
+                index: number;
+                /**
+                 * @description A sanitized hint of the entry: its first 20 safe-echo characters after dropping every other character, plus "..." when more than 20 survived.
+                 * @example @alice
+                 */
+                target: string;
+                /**
+                 * @description Why this entry was refused.
+                 * @example username_not_allowed
+                 * @enum {string}
+                 */
+                code: "invalid_id" | "wildcard_not_allowed" | "username_not_allowed" | "wrong_platform" | "not_found" | "unsupported_channel_kind" | "cannot_message_people" | "lookup_unavailable";
+                /**
+                 * @description Fixed catalog text for the code, in the safe-echo set (the longest, unsupported_channel_kind's, is 115 characters).
+                 * @example a message cannot be sent to a name; use the numeric id
+                 */
+                reason?: string;
+            }[];
+            /**
+             * @description Present only when more than 10 entries were invalid: how many invalid entries are not listed in target_errors.
+             * @example 3
+             */
+            omitted_count?: number;
+        };
+        /**
+         * ChannelConfigureError
+         * @description 500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056, FR-057, T-6b, T-6c). The code says what the request durably changed.
+         */
+        ChannelConfigureError: {
+            /**
+             * @description The normative text for the code. could_not_save: "could not save config". credential_saved_not_saved: "The credential was saved, but the configuration change was not: nothing else was applied. ..." (T-6b). saved_not_refreshed: "settings saved, but the running configuration could not be refreshed; the connection was not restarted".
+             * @example could not save config
+             */
+            error: string;
+            /**
+             * @description could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+             * @example could_not_save
+             * @enum {string}
+             */
+            code: "could_not_save" | "credential_saved_not_saved" | "saved_not_refreshed";
+            /** @description Short reason, never a secret. */
+            detail?: string;
+        };
+        /**
+         * ChannelConfigureResponse
+         * @description 200 body of PUT /api/v1/channels/{id}/configure: the updated channel configuration with credential fields redacted (structure varies by channel type), plus how the save was applied to the running connection (channels spec T-6, FR-050, FR-052).
+         */
+        ChannelConfigureResponse: {
+            /**
+             * @description applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+             * @example applied
+             * @enum {string}
+             */
+            apply_outcome: "applied" | "applied_not_running" | "unconfirmed" | "failed" | "no_reload_needed";
+            /** @description Present for applied_not_running (the availability reason) and failed (a fixed, secret-free phrase, never the raw error text). For failed, use "the configuration reload failed; details are in the server log", or, when the applied/current predicate reaches the pending-disposal leg, "the previous connection did not finish shutting down; the next save retries it". A config-changing save uses the reload phrase because the applied-hash check precedes the disposal check. An identical save with matching applied settings while a disposal remains pending uses the disposal phrase. Error details stay in the server log. Never a secret. */
+            apply_reason?: string;
+            /** @description Present whenever a reload was attempted (every outcome except no_reload_needed): "A connection restart was attempted; other connections and scheduled services may have paused briefly while it ran." */
+            apply_note?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ChannelRejectedSenders
+         * @description Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+         */
+        ChannelRejectedSenders: {
+            /**
+             * @description How many messages were ignored since the adapter started.
+             * @example 2
+             */
+            count: number;
+            /**
+             * @description Canonical sender ids of the latest ignored senders, most recent first.
+             * @example [
+             *       "discord:9"
+             *     ]
+             */
+            recent: string[];
         };
         /**
          * ChannelRouting
@@ -14495,11 +14762,11 @@ export interface components {
                  */
                 occurrence_ms: number;
                 /**
-                 * @description The matched run's status.
+                 * @description The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
                  * @example done
                  * @enum {string}
                  */
-                status: "in_progress" | "done" | "failed" | "skipped";
+                status: "in_progress" | "done" | "failed" | "skipped" | "missed";
                 /**
                  * @description The matched run's ID (ULID).
                  * @example 01J8Z3K2R9G4S6M0N1P2Q3R4S5
@@ -14610,11 +14877,11 @@ export interface components {
              */
             occurrence_ms: number | null;
             /**
-             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
              * @example done
              * @enum {string}
              */
-            status: "in_progress" | "done" | "failed" | "skipped";
+            status: "in_progress" | "done" | "failed" | "skipped" | "missed";
             /**
              * @description Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
              * @example Found 3 anomalies in the gateway logs.
@@ -14733,6 +15000,8 @@ export interface components {
          * @description Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
          */
         SkillInstallRequest: {
+            /** @description Required true to replace an installed skill whose has_local_changes is true. Absent means false. */
+            replace_local_changes?: boolean;
             revision?: components["schemas"]["ConfigurationRevision"];
             /**
              * @description Slug of the skill to install from the ClawHub registry.
@@ -14747,6 +15016,79 @@ export interface components {
              */
             version?: string;
         } & (unknown | unknown);
+        /**
+         * SkillCopyRequest
+         * @description Request body for POST /api/v1/skills/{name}/copy: the name of the new user-owned copy. The copy starts ungranted.
+         */
+        SkillCopyRequest: {
+            /**
+             * @description Slug of the new skill (letters, digits and single hyphens).
+             * @example plan-copy
+             */
+            new_id: string;
+        };
+        /**
+         * SkillDetail
+         * @description Tool-only: the complete result envelope of the get_skill agent tool (skills spec §5.2). Not served by any REST route; it exists so the selectable `fields` names are generated and compared, not typed twice.
+         */
+        SkillDetail: {
+            /** @description The skill slug as it is on disk. */
+            id: string;
+            /** @description Content revision; null only for a deleted skill. */
+            revision: string | null;
+            /** @enum {string} */
+            state?: "installed" | "deleted";
+            name?: string;
+            description?: string;
+            /** @enum {string} */
+            shelf?: "builtin" | "registry";
+            folder?: string;
+            files?: {
+                items: {
+                    path: string;
+                    /** Format: int64 */
+                    size: number;
+                    exec: boolean;
+                }[];
+                total: number;
+            };
+            metadata?: {
+                [key: string]: string;
+            };
+            compatibility?: string | null;
+            allowed_tools?: string[];
+            needs?: {
+                program: string;
+                /** @enum {string} */
+                status: "present" | "missing";
+                path?: string;
+            }[];
+            last_change?: {
+                at?: string;
+                actor?: string;
+                tool?: string;
+                paths?: string[];
+                shipped_with?: string;
+                unknown?: boolean;
+            };
+            has_local_changes?: boolean;
+            versions?: {
+                items: {
+                    id: string;
+                    kind: string;
+                    actor: string;
+                    tool?: string;
+                    at: string;
+                    paths: string[];
+                    paths_total: number;
+                }[];
+                total: number;
+                next_before: string | null;
+            };
+            instructions?: string;
+            absent_fields?: string[];
+            truncated_fields?: string[];
+        };
         /**
          * SkillSearchResult
          * @description A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
@@ -14819,7 +15161,7 @@ export interface components {
          */
         ToolApprovalActionRequest: {
             /**
-             * @description Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+             * @description Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
              * @example allow_once
              * @enum {string}
              */
@@ -14923,6 +15265,8 @@ export interface components {
             username?: string;
             /** @description Login password for IMAP and SMTP authentication (email channel). Stored encrypted in the credential store — never returned in GET responses. */
             password?: string;
+            /** @description Allowed sender ids for this channel instance ("Allow From"), one id per element. An empty list admits every sender. The server saves a list. For compatibility with older clients the server also accepts one string when inbound schema validation is off; it splits that string on commas (",", full-width "，") and, except on WhatsApp, on whitespace, trims each id and drops empty pieces. WhatsApp ids are account ids (digits@s.whatsapp.net or a group JID), not phone numbers, and split on commas only. A null value is refused with 400 and nothing is saved. */
+            allow_from?: string[];
         } & {
             [key: string]: unknown;
         };
@@ -18464,7 +18808,7 @@ export interface components {
              * @enum {string}
              */
             reason?: "index_missing" | "index_inconsistent" | "catchup_limit" | "storage_error" | "projection_error";
-            /** @description Required only when unavailable. Fixed sanitized copy, never an underlying cause, path, raw position or query. For index_missing/index_inconsistent/catchup_limit: "Session history is unavailable. Retry after the operator restores its index." Other required storage/projection failures retain the fixed redacted session-storage error behavior in D11. Not a turn-ending ErrorFrame. */
+            /** @description Required only when unavailable. Fixed sanitized copy, never an underlying cause, path, raw position or query. For index_missing/index_inconsistent/catchup_limit: "This conversation's history could not be loaded." Other required storage/projection failures retain the fixed redacted session-storage error behavior in D11. Not a turn-ending ErrorFrame. */
             message?: string;
         };
         /**
@@ -19737,7 +20081,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly "Session history is unavailable. Retry after the operator restores its index." A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress. */
+            /** @description Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly "This conversation's history could not be loaded." A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -19883,7 +20227,15 @@ export interface operations {
                     "application/json": components["schemas"]["Agent"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
+            /** @description Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
@@ -19894,7 +20246,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. */
+            /** @description Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -20085,7 +20437,15 @@ export interface operations {
                     "application/json": components["schemas"]["AgentToolsResponse"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
+            /** @description Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
@@ -20096,7 +20456,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. */
+            /** @description Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -20453,7 +20813,7 @@ export interface operations {
                     "application/json": components["schemas"]["ToolApprovalResponse"];
                 };
             };
-            /** @description Malformed body or unknown action. */
+            /** @description Malformed body or unknown action, or action allow for an always-ask tool ("set_channel_outbound always asks for approval; it can be set to ask or deny, not allow"; nothing recorded). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -20542,7 +20902,7 @@ export interface operations {
                     "application/json": components["schemas"]["GlobalToolPolicies"];
                 };
             };
-            /** @description Invalid policy values. */
+            /** @description Invalid policy values. Also refused, nothing saved: storing allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 row 15). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -21683,18 +22043,16 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated channel configuration (credentials redacted). */
+            /** @description Updated channel configuration (credentials redacted) plus apply_outcome, and apply_reason / apply_note where T-6 says. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ChannelConfigureResponse"];
                 };
             };
-            /** @description Invalid JSON body. */
+            /** @description Invalid JSON body, or a field that cannot be set here. Texts: "outbound cannot be set via configure; use PUT /api/v1/channels/{id}/outbound"; the existing workspace_id and identity refusals (set the binding with PUT /api/v1/channels/{id}/routing). Matched in any spelling encoding/json would bind to those fields. Nothing was changed. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -21713,6 +22071,147 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description The save did not complete; code says what durably changed: could_not_save (nothing), credential_saved_not_saved (a credential of this request was stored, the configuration was not), or saved_not_refreshed (the file was written, the running configuration was not refreshed and the connection was not restarted). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelConfigureError"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    getChannelOutbound: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel instance ID.
+                 * @example telegram
+                 */
+                id: components["schemas"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The outbound setting. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRead"];
+                };
+            };
+            /** @description Malformed channel id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown channel type. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    setChannelOutbound: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel instance ID.
+                 * @example telegram
+                 */
+                id: components["schemas"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelOutboundUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved and in force. warning is present only when the file was written but the rest of the running configuration could not be refreshed (the saved list is in force anyway, T-6b). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundWriteResponse"];
+                };
+            };
+            /** @description invalid_targets (per-target errors in target_errors) or too_many_targets (more than 20 after de-duplication). Nothing was saved. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown channel. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description stale_revision (the setting changed since it was read; reload and retry), connect_first (adding a Discord target needs the connection running), or saved_live_mismatch (the saved and running configurations differ because an earlier change did not finish applying; a permission-extending write waits until they correspond again). Nothing was saved. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            /** @description platform_cannot_start ("starting messages is not supported yet on <Platform>") or platform_cannot_message_people ("this platform can only answer, not start a direct message"). Nothing was saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            /** @description "could not save the setting; nothing was changed" — the failure happened before the file was written (no credential is involved on this route). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description lookup_unavailable: Discord could not be reached or timed out while checking an added target, including a rate-limit wait past the deadline. Nothing was saved; try again. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     testChannel: {
@@ -23330,8 +23829,73 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
+            /** @description Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller's expected revision and the skill changed since it was read). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Storage failure, before publication (error_stage names the failed stage) or after publication (a partial save; message names the undo). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
             502: components["responses"]["502BadGateway"];
+        };
+    };
+    copySkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source skill slug. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillCopyRequest"];
+            };
+        };
+        responses: {
+            /** @description Copy created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Skill"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED). A copy refused by the save check (SAVE_CHECK_FAILED) answers 400. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Storage failure, before publication or after publication (partial save). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
         };
     };
     deleteSkill: {
@@ -23349,17 +23913,37 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Skill removed. */
-            204: {
+            /** @description Skill deleted. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description The skill is a built-in skill and is read-only (BUILTIN_READ_ONLY). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             404: components["responses"]["404NotFound"];
             409: components["responses"]["409Conflict"];
+            /** @description Storage failure, before publication or after publication (partial deletion). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
         };
     };
     getActivity: {
@@ -28349,6 +28933,15 @@ export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnableRequest = components["schemas"]["ChannelEnableRequest"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
+export type ChannelOutbound = components["schemas"]["ChannelOutbound"];
+export type ChannelAvailability = components["schemas"]["ChannelAvailability"];
+export type ChannelOutboundRead = components["schemas"]["ChannelOutboundRead"];
+export type ChannelOutboundUpdateRequest = components["schemas"]["ChannelOutboundUpdateRequest"];
+export type ChannelOutboundWriteResponse = components["schemas"]["ChannelOutboundWriteResponse"];
+export type ChannelOutboundRejection = components["schemas"]["ChannelOutboundRejection"];
+export type ChannelConfigureError = components["schemas"]["ChannelConfigureError"];
+export type ChannelConfigureResponse = components["schemas"]["ChannelConfigureResponse"];
+export type ChannelRejectedSenders = components["schemas"]["ChannelRejectedSenders"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
 export type ChannelRoutingUpdateRequest = components["schemas"]["ChannelRoutingUpdateRequest"];
 export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"];
@@ -28411,6 +29004,8 @@ export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest
 export type ProviderValidation = components["schemas"]["ProviderValidation"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];
 export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
+export type SkillCopyRequest = components["schemas"]["SkillCopyRequest"];
+export type SkillDetail = components["schemas"]["SkillDetail"];
 export type SkillSearchResult = components["schemas"]["SkillSearchResult"];
 export type SkillMarketplaceStatus = components["schemas"]["SkillMarketplaceStatus"];
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];

@@ -22,12 +22,14 @@ side.
 
 ## This folder is nearly empty on purpose
 
-- Only `EmailMailboxPanel.tsx` lives here — and email is a TOOL, not a channel:
+- `EmailMailboxPanel.tsx` lives here — and email is a TOOL, not a channel:
   a mailbox belongs to exactly one (agent, workspace) pair (see its header).
   Do not model it like a channel row.
 - Per-channel config UI is `ChannelConfigPanel.tsx` in
-  `src/components/skills/`. ConnectorsScreen imports it from there; searching
-  only this folder for channel config finds nothing.
+  `src/components/skills/`. ConnectorsScreen imports it from there.
+- The one exception is `ChannelOutboundSection.tsx` ("Starting messages",
+  channels spec FR-026): its own section with its own Save and route
+  (`PUT /channels/{id}/outbound`), rendered by `ChannelConfigPanel`.
 
 ## WhatsApp pairing
 

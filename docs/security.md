@@ -41,6 +41,8 @@ not a successful-save confirmation.
 
 On a new installation the shell tool, `bash`, is set to **Ask**.
 
+On a new installation `install_skill` is also set to **Ask**: you approve each skill install, and the card keeps appearing even with Auto-approve on (see the always-ask list below). An installation that already saved `install_skill` as Allow keeps that setting; change it in **Tool Access — Global Policies** if you want the prompt.
+
 ### Turn Auto-approve on or off
 
 Auto-approve can be set in two places. On a new installation it is **on** globally.
@@ -68,6 +70,13 @@ That is a summary. The full list of tools that still ask, one row per tool, is u
 The chat switch is the one place that can turn Auto-approve **on** when the global default has it off, because you are present in that conversation. When the chat's agent hands work to another agent (a delegate), the delegate follows the chat's switch exactly as the agent you are talking to does: if Auto-approve is on for the chat, the delegate's Ask tools run under it too.
 
 **Exception: external command-line workers.** A worker that runs on Claude Code, Codex or OpenCode does not use Omnipus's tool approval dialog at all. Omnipus automatically approves the permission requests the external tool reports, so turning Auto-approve off is not a way to make an external worker ask you before each action. Omnipus Allow/Ask/Deny rules govern Omnipus tools only and do not reach inside the external tool. Treat delegating to an external command-line worker as its own trust decision.
+
+**What a person keeps control of for external workers.**
+
+- **The program and its standard parameters are person-only.** They are set in **Settings → Third-party agents** (see [settings](settings.md#third-party-agents)). An agent that sends a `cli_path` is refused, and a worker's kind and command-line tool cannot change after it is created.
+- **Environment values are always masked.** A worker's stored environment values are shown as `••••••` when they are read back, in the web app or through `get_agent`.
+- **Standard parameters are shown in clear and are not filtered.** Your value is passed exactly as typed, so keys and passwords belong in the worker's masked environment, never in the standard parameters.
+- **Agents can look, not change.** An agent can read a worker's saved program and parameters, read-only, and whether a run would start.
 
 ### Auto-approve and the kernel sandbox
 
@@ -193,7 +202,7 @@ For reading, this matches the shell. Under Auto-approve, the shell command `cat 
 | Channels | `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `test_channel` |
 | Connected servers | `add_mcp_server`, `remove_mcp_server` |
 | Agents and workspaces | `create_agent`, `update_agent`, `set_agent_permissions`, `update_workspace` |
-| Skills | `create_skill`, `edit_skill`, `remove_skill` |
+| Skills | `edit_skill`. A write into a skill folder with `write_file`, `edit_file` or `append_file` asks too, whenever `edit_skill` is Ask |
 
 **Tools from connected servers (MCP) mostly still ask.** A connected server can label each of its tools. Under Auto-approve, a server tool runs only when its server labels it read-only or explicitly not destructive. Every other server tool asks, including one with no label at all. Most servers send no labels today, so in practice most server tools still ask. Omnipus trusts these labels because you chose to connect the server, and adding a server is on the always-ask list.
 
@@ -227,11 +236,11 @@ Generic file tools retain the turn's authorized working area and these reading a
 | The agent's own working files when the turn is rooted in its agent home | Read and write; definitions, memory, sessions and internal subfolders stay protected |
 | Downloaded media and attachment staging | Read only |
 | Uploaded files belonging to the acting chat or its root chat | Read only |
-| Installed skills' helper files (scripts, templates — not `SKILL.md`/`AGENT.md`/`AGENTS.md`) | Read only, file tools only |
+| The skill folders an agent may load (instructions, scripts, templates) | Read only. An agent whose `edit_skill` is not Deny can read every installed skill |
 
-Omnipus's setup work can also reach other workspaces' work folders and their mounted folders. That does not open workspace records, private memory, or other internal files. A search of installed skill helpers with `grep` is allowed, but instruction-file names and contents are filtered out. Reading an instruction file is refused with directions to use the Skill tool; listing the registry directly is still refused.
+Omnipus's setup work can also reach other workspaces' work folders and their mounted folders. That does not open workspace records, private memory, or other internal files. `read_file`, `list_directory` and `grep` can open the skill folders the agent may load, `SKILL.md` included. A skill the agent may not load stays hidden, and listing the skills folder itself is refused. Folders whose name starts with a dot, such as Omnipus's own working folders, are never reachable. See [Skill folders are protected by mode](#skill-folders-are-protected-by-mode).
 
-These file-tool reading allowances do not grant registry listing, instruction-file reads or writes. Shell children use a separate kernel allowance set: the uploaded-file and installed-skill-helper allowances above are not general shell grants. Managed runtime execution has its own read/execute-only allowances when a kernel policy is active.
+These file-tool reading allowances do not grant listing the skills folder or writing to it. Writes into a skill follow the skill rules below. Shell children use a separate kernel allowance set: the uploaded-file and installed-skill-helper allowances above are not general shell grants. Managed runtime execution has its own read/execute-only allowances when a kernel policy is active.
 
 Internal state — sessions and transcripts, tasks and plans, memory, agent definitions (`SOUL.md` and friends), skill instructions, audit logs, gateway state, credentials, the master key and `config.json` — stays protected from generic file tools and is hidden from their search results. Shell commands use the command-text check and, when enforcing, the kernel restrictions described below. Use Omnipus's dedicated tools to access managed state.
 
@@ -251,7 +260,7 @@ A refusal carrying `protected_internal_file` is displayed as **Protected Omnipus
 
 - Links (symlinks) it meets inside a folder are not followed. A link you name directly as the folder to search is followed, as `read_file` would.
 - The Linux system folders `/proc`, `/sys` and `/dev` are skipped, and device files, pipes and sockets are never read. They hold no user content, and some of them can hang a search. You can use `read_file` to open a file you name in those folders.
-- Agent notes files such as `SOUL.md`, `HEARTBEAT.md`, `AGENT.md` and `MEMORY.md`, and the instruction files of installed skills (`SKILL.md`, `AGENT.md`, `AGENTS.md` in Omnipus's own skills folder), never show up in results, by name or by content. `read_file` refuses their contents. An agent working from its own home can still list its ordinary working files and folders, but `list_directory` hides protected definitions, memory, sessions, installed-skill folders and internal state from that listing. Those hidden entries do not count toward listing pages. Ordinary nested folders with the same names remain visible when they are not protected paths. Listing the installed skill registry is still refused. A skill's other files, such as its helper scripts, can be read and found.
+- Agent notes files such as `SOUL.md`, `HEARTBEAT.md`, `AGENT.md` and `MEMORY.md`, and never show up in results, by name or by content. `read_file` refuses their contents. Instruction files of skills the agent may load do show up. An agent working from its own home can still list its ordinary working files and folders, but `list_directory` hides protected definitions, memory, sessions, installed-skill folders and internal state from that listing. Those hidden entries do not count toward listing pages. Ordinary nested folders with the same names remain visible when they are not protected paths. Listing the skills folder itself is still refused. A skill the agent may load can be read and found, instruction file and helper scripts alike.
 
 **Denying `read_file` alone does not stop an agent reading.** The policies for `read_file` and `grep` are separate, and `grep` returns the matching lines of any file it can reach (up to the usual limits and surrounding lines). A custom agent with `grep` allowed and `read_file` denied can still read that way. To confine what an agent reads, deny `read_file`, `grep` and `bash` for it.
 
@@ -496,7 +505,7 @@ Omnipus keeps its own state — sessions and transcripts, tasks and plans, memor
 
 Approval cannot authorize generic access to protected internal files. A general tool approval may appear before the tool checks its path; approving it does not override the later refusal. God Mode does not bypass these application checks. Shell protection also depends on the active kernel sandbox, as the platform table explains.
 
-The application's default-deny rule also covers new internal locations before they exist. Kernel restrictions have the platform limits below. Use Omnipus's dedicated controls instead — conversations through the app, skills through the Skill tool, agent definitions through the agent editor.
+The application's default-deny rule also covers new internal locations before they exist. Kernel restrictions have the platform limits below. Use Omnipus's dedicated controls instead — conversations through the app, skills through the Skill and `edit_skill` tools, agent definitions through the agent editor.
 
 ### What each platform enforces
 
@@ -509,6 +518,39 @@ The application's default-deny rule also covers new internal locations before th
 On Linux and macOS with the sandbox Off, Permissive or degraded/unavailable, the same no-kernel limitation applies: file-tool checks remain, but the command-text check alone does not contain arbitrary shell programs. Check the Security screen's actual enforcement and capabilities, not just the operating-system name or version.
 
 An authorized `environment_setup` run can create and read new files directly inside its selected installation folder, as well as use its selected cache and temporary folders. This does not authorize writes to sibling workspaces or unrelated operator-granted folders.
+
+### Skill folders are protected by mode
+
+Skills are instructions other agents will follow, so Omnipus protects the skills folder (`~/.omnipus/skills`) more than ordinary files.
+
+| Situation | What protects skill folders from programs an agent starts |
+|---|---|
+| macOS or Linux, sandbox on | The kernel lets a program read and run the skill folders its agent may load. It lets no program write anywhere under the skills folder. This holds in God Mode too. |
+| Sandbox switched off, Windows, Linux without Landlock, or a hosted setup without Landlock | No kernel rule. Omnipus's own file checks and its shell command-text check still apply, but a script that builds its path at runtime can get past the text check. Omnipus warns at start and records any change made this way as "changed outside Omnipus" at the next load or change. |
+| External workers (Claude Code, Codex, OpenCode) | They run outside the sandbox by design. Their changes to a skill folder are recorded as "changed outside Omnipus". |
+
+Things to know:
+
+- **Linux kernels older than 6.2 cannot stop a program from emptying a skill file.** Landlock (the Linux feature that enforces the sandbox) can block truncation, which means cutting a file down to nothing, only from kernel 6.2 (Landlock ABI v3) on. On kernel 5.13 to 6.1, the sandbox still stops a program from creating, renaming or deleting anything under the skills folder, and still stops writes to skill files it did not already have open, but it cannot stop a program running as your user from truncating an existing skill file. A skill file can therefore be emptied even though `edit_skill` is set to Ask or Deny, and even when the sandbox status says it is enforcing. Omnipus records such a change as "changed outside Omnipus" at the next load. Use kernel 6.2 or newer if you rely on this protection, and see [Landlock rights are gated by kernel version](operations/sandbox-limitations.md#landlock-rights-are-gated-by-kernel-version).
+- **Windows has no kernel protection for skill folders.** The text check and the file-tool checks are all there is.
+- **Agents change skills only through Omnipus.** Every change by an agent goes through one checked path: permission, save check, version, audit entry. The permission is the stricter of the file tool's and `edit_skill`, and it is worked out before the approval step, so Auto-approve never lets a skill write through without a card when the permission is Ask.
+- **History is out of reach.** Saved versions live under Omnipus's `system` folder, which no tool or program can read.
+- **Accepted operator channels.** A mount that points inside the skills folder, a path you allow in the sandbox settings, or an approved path grant for a skill folder can let a program do more than read. These are things you do on purpose; Omnipus does not stop them. On macOS, a skill folder created after a program started can be read, not written, by that program until it ends.
+- **Built-in skills are read-only for everyone.** They are put back to the shipped version at every start.
+- **Outside changes are recorded, not blocked.** Your own editor is allowed to change a skill. Omnipus records the new state as a version.
+
+### Why a skill save can be refused
+
+Every change to a skill is checked before it is saved. If a check fails, nothing is saved and the message says why. The common reasons:
+
+- **A stored secret is in the file.** Omnipus compares the new files with the secrets in your credential vault. If a file contains the value of a stored secret (longer than 3 characters), the save is refused and the message names the secret, never shows its value. Put secrets in the vault and refer to them by name instead.
+- **The secret check could not run.** If the vault is locked or unreadable, Omnipus refuses the save rather than guess. Unlock the vault and try again.
+- **The skill is a built-in.** Built-in skills cannot be changed. Make a copy.
+- **The skill changed since the agent read it.** Another change came in between. The agent must read the skill again, then retry.
+- **A size limit or path rule.** For example a file over 10 MB, a folder over 50 MB, more than 1,000 files, or a name that starts with a dot.
+- **No valid `SKILL.md`.** The instruction file must exist, name the skill and carry a description.
+
+The secret check has an honest limit: it finds a stored value written out in full. A value that was encoded or split into pieces is not caught.
 
 ### Limits of the protection
 

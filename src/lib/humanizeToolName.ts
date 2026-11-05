@@ -92,6 +92,11 @@ const EXPLICIT_LABELS: Record<string, string> = {
   update_task_in_workspace: 'Update task in workspace',
   list_tasks_in_workspace: 'List tasks in workspace',
   delete_task_in_workspace: 'Delete task in workspace',
+  // T8 read and plan-edit tools (tool-parity r17 FR-161, scenario 17.4).
+  get_task: 'Read task',
+  get_plan: 'Read plan',
+  get_goal: 'Read goal',
+  update_plan: 'Update plan',
   // Agent tools
   list_agents: 'List agents',
   create_agent: 'Create agent',

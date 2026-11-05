@@ -18,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/entity"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 // firstForbiddenSubagent3pField moved to agent_field_rules.go (W2a) — it now
@@ -212,6 +213,13 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	// in both validation modes, so an ordinary field bundled with it is not
 	// silently saved while the retired one is dropped.
 	if rejectRetiredDefaultField(uf.w, uf.rawBody) {
+		return true
+	}
+	// r17 §3.11/§7.11: executor.kind is derived, executor.cli is locked after
+	// create and executor.cli_path is Settings-owned. Each is refused with its
+	// own text and field before the schema validator or the strict decoder
+	// could answer with a generic unknown-property message.
+	if refuseForbiddenExecutorFields(uf.w, uf.rawBody, "kind", "cli", "cli_path") {
 		return true
 	}
 	validateEnabled := uf.cfg.Gateway.ValidateInbound
@@ -475,51 +483,61 @@ func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 	// rather than persisting an invalid combination.
 
 	if uf.ru.req.Executor != nil {
-		// CLI-lock rule (spec §4.16 / F-10): executor.cli and executor.kind
-		// are not part of ExecutorConfigUpdate (T8 contract), so an update can
-		// never switch the CLI; only env_overrides and cli_args are writable.
-		// env_overrides OMNIPUS_-prefix guard (spec §4.18 / F-04 STRIDE).
-		// A user-submitted env_overrides key starting with OMNIPUS_ would
-		// override gateway-managed secrets (master key, audit chain, etc.)
-		// for the spawned CLI process — a defense-in-depth gap.
-		if uf.ru.req.Executor.EnvOverrides != nil {
-			for k := range *uf.ru.req.Executor.EnvOverrides {
-				if strings.HasPrefix(strings.ToUpper(k), "OMNIPUS_") {
-					jsonErr(uf.w, http.StatusBadRequest,
-						fmt.Sprintf("env_overrides key %q is reserved: OMNIPUS_* is gateway-internal", k))
-					return true
-				}
-			}
-		}
-		// Merge the request into the existing executor so the stored kind and
-		// cli survive and only the writable fields (env_overrides, cli_args)
-		// change. With no existing executor the agent stays native.
-		var merged *config.ExecutorConfig
-		if uf.foundAgent.Subagents != nil && uf.foundAgent.Subagents.Executor != nil {
-			cp := *uf.foundAgent.Subagents.Executor
-			merged = &cp
-		} else {
-			merged = &config.ExecutorConfig{Kind: config.ExecutorKindNative}
-		}
-		if uf.ru.req.Executor.EnvOverrides != nil {
-			merged.EnvOverrides = *uf.ru.req.Executor.EnvOverrides
-		}
-		if uf.ru.req.Executor.CliArgs != nil {
-			merged.CLIArgs = *uf.ru.req.Executor.CliArgs
-		}
-		// Native-only executor on a non-worker (worker property-model
-		// correction): only a sub-agent worker may declare a non-native
-		// executor. A base or custom agent updated to kind="external-cli"
-		// or "remote-a2a" is rejected at the update gate. A native (or
-		// absent) executor on a non-worker stays allowed.
-		if !uf.foundAgent.IsWorker() && merged.EffectiveKind() != config.ExecutorKindNative {
-			jsonErr(uf.w, http.StatusBadRequest,
-				"only sub-agent workers can use an external executor; base agents run native")
+		merged, stop := uf.mergeExecutorUpdate()
+		if stop {
 			return true
 		}
 		uf.ru.updatedExecutor = merged
 	}
 	return false
+}
+
+// mergeExecutorUpdate applies an ExecutorConfigUpdate to the stored
+// executor (r17 §3.9, EX-02..EX-04, FR-061): env_overrides merge (names
+// added or replaced, {} a no-op), env_overrides_remove (absent names are
+// not refused), cli_args replaced; the merged environment obeys the create
+// limits, and a value equal to the read mask is refused. kind and cli are
+// never writable (refused before decode), so the stored CLI survives. Only
+// an external-CLI worker has a runtime environment; an executor object
+// with no writable field changes nothing.
+func (uf *restAPIUpdateAgentFlow) mergeExecutorUpdate() (*config.ExecutorConfig, bool) {
+	in := uf.ru.req.Executor
+	var stored *config.ExecutorConfig
+	if uf.foundAgent.Subagents != nil {
+		stored = uf.foundAgent.Subagents.Executor
+	}
+	if in.EnvOverrides == nil && in.EnvOverridesRemove == nil && in.CliArgs == nil {
+		return stored, false
+	}
+	if !isExternalSubagent(uf.foundAgent) {
+		jsonErrField(uf.w, http.StatusBadRequest, thirdpartycli.NativeRuntimeRefusalText, "executor")
+		return nil, true
+	}
+	merged := *stored
+	var set map[string]string
+	if in.EnvOverrides != nil {
+		set = *in.EnvOverrides
+	}
+	var remove []string
+	if in.EnvOverridesRemove != nil {
+		remove = *in.EnvOverridesRemove
+	}
+	if set != nil || remove != nil {
+		env, _, err := thirdpartycli.MergeEnvOverrides(stored.EnvOverrides, set, remove)
+		if err != nil {
+			jsonErrField(uf.w, http.StatusBadRequest, err.Error(), "executor.env_overrides")
+			return nil, true
+		}
+		merged.EnvOverrides = env
+	}
+	if in.CliArgs != nil {
+		if err := thirdpartycli.ValidateCLIArgs(*in.CliArgs); err != nil {
+			jsonErrField(uf.w, http.StatusBadRequest, err.Error(), "executor.cli_args")
+			return nil, true
+		}
+		merged.CLIArgs = *in.CliArgs
+	}
+	return &merged, false
 }
 
 // preparePersistence prepares normalized values and tool-policy coverage validation.
@@ -850,7 +868,7 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 					copy(skills, ac.Skills)
 					ag.Skills = &skills
 				}
-				setAgentExecutorResponse(&ag, ac.Subagents)
+				setAgentExecutorResponse(&ag, ac.Subagents, liveCfg, uf.ru.a.homePath)
 				if ac.UpdatedAt != nil {
 					ag.UpdatedAt = ac.UpdatedAt
 				}
@@ -942,6 +960,13 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 		}
 		if errors.Is(updateErr, agentstore.ErrInvalidRevision) {
 			return fmt.Errorf("invalid revision: %w", updateErr)
+		}
+		// r17 FR-132 (#1295, D-10): a field error found inside the mutation
+		// (the tool-policy name rule) is a 400 naming the field; nothing was
+		// written. Only a real storage failure stays a 500.
+		var fieldErr *agentmutation.FieldError
+		if errors.As(updateErr, &fieldErr) && fieldErr.Code == agentmutation.InvalidInput && len(fieldErr.Fields) > 0 {
+			return &requestRefusalError{msg: fieldErr.Error(), field: fieldErr.Fields[0]}
 		}
 		return &configurationMutationError{Result: result, Err: fmt.Errorf("update agent entity record: %w", updateErr)}
 	}
@@ -1078,16 +1103,22 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 		agentRec.MemoryEnabled = rp.ru.req.MemoryEnabled
 	}
 	if rp.ru.req.FallbackModels != nil {
-		fbs := make(config.FallbackModelSlice, 0, len(*rp.ru.req.FallbackModels))
-		for _, fm := range *rp.ru.req.FallbackModels {
-			provider := ""
-			if fm.Provider != nil {
-				provider = *fm.Provider
-			}
-			fbs = append(fbs, config.FallbackModel{Model: fm.Model, Provider: provider})
-		}
-		agentRec.FallbackModels = fbs
+		agentRec.FallbackModels = fallbackModelsFromWire(*rp.ru.req.FallbackModels)
 	}
+}
+
+// fallbackModelsFromWire converts validated wire fallback entries to the
+// stored form, in order (REST create and update share it, r17 §7.5 AG-03).
+func fallbackModelsFromWire(entries []gen.FallbackModel) config.FallbackModelSlice {
+	fbs := make(config.FallbackModelSlice, 0, len(entries))
+	for _, fm := range entries {
+		provider := ""
+		if fm.Provider != nil {
+			provider = *fm.Provider
+		}
+		fbs = append(fbs, config.FallbackModel{Model: fm.Model, Provider: provider})
+	}
+	return fbs
 }
 
 func (rp *restAPIUpdateAgentPersistAgent) updateToolsConfig(agentRec *config.AgentConfig) {

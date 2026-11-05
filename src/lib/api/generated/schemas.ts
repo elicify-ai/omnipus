@@ -1550,7 +1550,9 @@ type Agent = {
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
   stats?: AgentStats | undefined;
+  skill_grants?: {} | undefined;
   skills?: Array<string> | undefined;
+  stale_skill_grants?: Array<string> | undefined;
   updated_at?: string | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
@@ -1871,11 +1873,17 @@ type ChannelEntry = {
   degraded?: boolean | undefined;
   degraded_reason?: string | undefined;
   last_dropped_at?: string | undefined;
+  outbound_policy?: ("reply_only" | "agent_may_start") | undefined;
+  rejected_senders?: ChannelRejectedSenders | undefined;
 };
 type ChannelId = string;
 type ChannelIdentity = {
   kind: "agent" | "user";
   id?: string | undefined;
+};
+type ChannelRejectedSenders = {
+  count: number;
+  recent: Array<string>;
 };
 type AuditLogResponse = {
   entries: Array<AuditEntry>;
@@ -2052,6 +2060,7 @@ type ProvidersCatalog = {
 type CatalogResizeLimits = {
   long_edge_px: number;
   max_bytes: number;
+  max_patches?: number | undefined;
 };
 type CatalogProvider = {
   id: string;
@@ -2156,6 +2165,7 @@ type IntegrationProvider = {
   fallback_automatic?: boolean | undefined;
 };
 type Skill = {
+  has_local_changes: boolean;
   revision: ConfigurationRevision;
   persistence_status?: ConfigurationPersistenceStatus | undefined;
   activation_status?: ConfigurationActivationStatus | undefined;
@@ -2371,6 +2381,25 @@ type AgentToolEntry = {
 type ChannelEnabledResponse = {
   id: ChannelId;
   enabled: boolean;
+};
+type ChannelOutboundRead = {
+  outbound: ChannelOutbound;
+  revision: string;
+  availability: ChannelAvailability;
+  start_supported: boolean;
+};
+type ChannelOutbound = {
+  policy: "reply_only" | "agent_may_start";
+  targets: Array<string>;
+};
+type ChannelAvailability = {
+  state: "running" | "not_running" | "not_loaded";
+  reason?: string | undefined;
+};
+type ChannelOutboundWriteResponse = {
+  outbound: ChannelOutbound;
+  revision: string;
+  warning?: string | undefined;
 };
 type MailboxListResponse = {
   mailboxes: Array<Mailbox>;
@@ -2665,7 +2694,7 @@ type TaskOccurrenceSet = {
   occurrence_runs?:
     | Array<{
         occurrence_ms: number;
-        status: "in_progress" | "done" | "failed" | "skipped";
+        status: "in_progress" | "done" | "failed" | "skipped" | "missed";
         run_id: string;
         session_id: string;
         has_result: boolean;
@@ -2704,6 +2733,7 @@ type ChannelConfigureRequest = Partial<
     smtp_port: number;
     username: string;
     password: string;
+    allow_from: Array<string>;
   } & {
     [key: string]: any;
   }
@@ -4658,7 +4688,9 @@ export const Agent: z.ZodType<Agent> = z
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: AgentModelParams.optional(),
     stats: AgentStats.optional(),
+    skill_grants: z.record(z.string()).optional(),
     skills: z.array(z.string()).optional(),
+    stale_skill_grants: z.array(z.string()).optional(),
     updated_at: z.string().datetime({ offset: true }).optional(),
     voice: z.string().nullish(),
     executor: ExecutorConfig.optional(),
@@ -5316,6 +5348,11 @@ export const ChannelIdentity: z.ZodType<ChannelIdentity> = z.object({
   kind: z.enum(["agent", "user"]),
   id: z.string().optional(),
 });
+export const ChannelRejectedSenders: z.ZodType<ChannelRejectedSenders> =
+  z.object({
+    count: z.number().int().gte(1),
+    recent: z.array(z.string()).max(20),
+  });
 export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
   instance_id: z.string().optional(),
@@ -5337,6 +5374,8 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   degraded: z.boolean().optional(),
   degraded_reason: z.string().optional(),
   last_dropped_at: z.string().datetime({ offset: true }).optional(),
+  outbound_policy: z.enum(["reply_only", "agent_may_start"]).optional(),
+  rejected_senders: ChannelRejectedSenders.optional(),
 });
 export const ChannelCreateRequest = z.object({
   type: z.string(),
@@ -5360,6 +5399,97 @@ export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
     id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
     enabled: z.boolean(),
   });
+export const ChannelConfigureResponse = z
+  .object({
+    apply_outcome: z.enum([
+      "applied",
+      "applied_not_running",
+      "unconfirmed",
+      "failed",
+      "no_reload_needed",
+    ]),
+    apply_reason: z.string().optional(),
+    apply_note: z.string().optional(),
+  })
+  .passthrough();
+export const ChannelConfigureError = z.object({
+  error: z.string(),
+  code: z.enum([
+    "could_not_save",
+    "credential_saved_not_saved",
+    "saved_not_refreshed",
+  ]),
+  detail: z.string().max(500).optional(),
+});
+export const ChannelOutbound: z.ZodType<ChannelOutbound> = z.object({
+  policy: z.enum(["reply_only", "agent_may_start"]),
+  targets: z.array(z.string().min(1).max(64)).max(20),
+});
+export const ChannelAvailability: z.ZodType<ChannelAvailability> = z.object({
+  state: z.enum(["running", "not_running", "not_loaded"]),
+  reason: z.string().max(500).optional(),
+});
+export const ChannelOutboundRead: z.ZodType<ChannelOutboundRead> = z.object({
+  outbound: ChannelOutbound,
+  revision: z.string(),
+  availability: ChannelAvailability,
+  start_supported: z.boolean(),
+});
+export const ChannelOutboundUpdateRequest = z.object({
+  policy: z.enum(["reply_only", "agent_may_start"]),
+  targets: z.array(z.string().max(256)).max(64),
+  expected_revision: z.string().min(1),
+});
+export const ChannelOutboundWriteResponse: z.ZodType<ChannelOutboundWriteResponse> =
+  z.object({
+    outbound: ChannelOutbound,
+    revision: z.string(),
+    warning: z.string().max(500).optional(),
+  });
+export const ChannelOutboundRejection = z.object({
+  error: z
+    .string()
+    .max(500)
+    .regex(/^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$/),
+  code: z.enum([
+    "invalid_targets",
+    "too_many_targets",
+    "platform_cannot_start",
+    "platform_cannot_message_people",
+    "stale_revision",
+    "connect_first",
+    "lookup_unavailable",
+    "saved_live_mismatch",
+  ]),
+  target_errors: z
+    .array(
+      z.object({
+        index: z.number().int().gte(0),
+        target: z
+          .string()
+          .max(24)
+          .regex(/^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$/),
+        code: z.enum([
+          "invalid_id",
+          "wildcard_not_allowed",
+          "username_not_allowed",
+          "wrong_platform",
+          "not_found",
+          "unsupported_channel_kind",
+          "cannot_message_people",
+          "lookup_unavailable",
+        ]),
+        reason: z
+          .string()
+          .max(120)
+          .regex(/^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$/)
+          .optional(),
+      })
+    )
+    .max(10)
+    .optional(),
+  omitted_count: z.number().int().gte(1).optional(),
+});
 export const ChannelTestResponse = z
   .object({ success: z.boolean(), message: z.string() })
   .passthrough();
@@ -5526,6 +5656,7 @@ export const Provider: z.ZodType<Provider> = z.object({
 export const CatalogResizeLimits: z.ZodType<CatalogResizeLimits> = z.object({
   long_edge_px: z.number().int().gte(1),
   max_bytes: z.number().int().gte(1),
+  max_patches: z.number().int().gte(1).optional(),
 });
 export const CatalogProtocol: z.ZodType<CatalogProtocol> = z.object({
   protocol: z.enum([
@@ -5678,6 +5809,7 @@ export const SlashCommand = z.object({
   delivery: z.enum(["client", "agent"]),
 });
 export const Skill: z.ZodType<Skill> = z.object({
+  has_local_changes: z.boolean(),
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   persistence_status: ConfigurationPersistenceStatus.optional(),
   activation_status: ConfigurationActivationStatus.optional(),
@@ -5719,6 +5851,12 @@ export const SkillMarketplaceStatus = z.object({
   registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
 });
 export const SkillInstallRequest = z.union([z.unknown(), z.unknown()]);
+export const SkillCopyRequest = z.object({
+  new_id: z
+    .string()
+    .max(64)
+    .regex(/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/),
+});
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
   .object({
     id: z.string(),
@@ -6042,7 +6180,7 @@ export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
     .array(
       z.object({
         occurrence_ms: z.number().int(),
-        status: z.enum(["in_progress", "done", "failed", "skipped"]),
+        status: z.enum(["in_progress", "done", "failed", "skipped", "missed"]),
         run_id: z.string(),
         session_id: z.string(),
         has_result: z.boolean(),
@@ -6104,7 +6242,7 @@ export const TaskRun = z.object({
   run_id: z.string(),
   task_id: z.string(),
   occurrence_ms: z.number().int().nullable(),
-  status: z.enum(["in_progress", "done", "failed", "skipped"]),
+  status: z.enum(["in_progress", "done", "failed", "skipped", "missed"]),
   result: z.string().max(50000).optional(),
   session_id: z.string(),
   kind: z.enum(["scheduled", "manual"]),
@@ -8053,6 +8191,71 @@ export const OnboardingStatusResponse = z
   .passthrough();
 export const ActivityEventsResponse: z.ZodType<ActivityEventsResponse> =
   z.object({ events: z.array(ActivityEvent), warning: z.string().optional() });
+export const SkillDetail = z.object({
+  id: z.string(),
+  revision: z.string().nullable(),
+  state: z.enum(["installed", "deleted"]).optional(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  shelf: z.enum(["builtin", "registry"]).optional(),
+  folder: z.string().optional(),
+  files: z
+    .object({
+      items: z.array(
+        z.object({
+          path: z.string(),
+          size: z.number().int(),
+          exec: z.boolean(),
+        })
+      ),
+      total: z.number().int(),
+    })
+    .optional(),
+  metadata: z.record(z.string()).optional(),
+  compatibility: z.string().nullish(),
+  allowed_tools: z.array(z.string()).optional(),
+  needs: z
+    .array(
+      z.object({
+        program: z.string(),
+        status: z.enum(["present", "missing"]),
+        path: z.string().optional(),
+      })
+    )
+    .optional(),
+  last_change: z
+    .object({
+      at: z.string(),
+      actor: z.string(),
+      tool: z.string(),
+      paths: z.array(z.string()),
+      shipped_with: z.string(),
+      unknown: z.boolean(),
+    })
+    .partial()
+    .optional(),
+  has_local_changes: z.boolean().optional(),
+  versions: z
+    .object({
+      items: z.array(
+        z.object({
+          id: z.string(),
+          kind: z.string(),
+          actor: z.string(),
+          tool: z.string().optional(),
+          at: z.string(),
+          paths: z.array(z.string()),
+          paths_total: z.number().int(),
+        })
+      ),
+      total: z.number().int(),
+      next_before: z.string().nullable(),
+    })
+    .optional(),
+  instructions: z.string().optional(),
+  absent_fields: z.array(z.string()).optional(),
+  truncated_fields: z.array(z.string()).optional(),
+});
 export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
   .object({
     instance_id: z.string(),
@@ -8068,6 +8271,7 @@ export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
     smtp_port: z.number().int(),
     username: z.string(),
     password: z.string(),
+    allow_from: z.array(z.string()),
   })
   .partial()
   .passthrough();
@@ -8799,7 +9003,8 @@ Includes session_start events from all agent stores and task lifecycle events.
     errors: [
       {
         status: 400,
-        description: `Bad request — missing or invalid field.`,
+        description: `Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; (channels spec FR-037, T-10 rows 15-16).
+`,
         schema: ErrorResponse,
       },
       {
@@ -8824,7 +9029,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 422,
-        description: `Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of &#x60;ask&#x60; for Omnipus is refused — &quot;Omnipus takes no per-agent Ask; set Ask globally or use Deny&quot;. &#x60;deny&#x60; is accepted. No writes occurred.
+        description: `Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of &#x60;ask&#x60; for Omnipus is refused — &quot;Omnipus takes no per-agent Ask; set Ask globally or use Deny&quot;. &#x60;deny&#x60; is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9).
 `,
         schema: ErrorResponse,
       },
@@ -9226,7 +9431,8 @@ Includes session_start events from all agent stores and task lifecycle events.
     errors: [
       {
         status: 400,
-        description: `Bad request — missing or invalid field.`,
+        description: `Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; (channels spec FR-037, T-10 rows 15-16).
+`,
         schema: ErrorResponse,
       },
       {
@@ -9251,7 +9457,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 422,
-        description: `Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of &#x60;ask&#x60; for Omnipus is refused — &quot;Omnipus takes no per-agent Ask; set Ask globally or use Deny&quot;. &#x60;deny&#x60; is accepted. No writes occurred.
+        description: `Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of &#x60;ask&#x60; for Omnipus is refused — &quot;Omnipus takes no per-agent Ask; set Ask globally or use Deny&quot;. &#x60;deny&#x60; is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9).
 `,
         schema: ErrorResponse,
       },
@@ -9825,7 +10031,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/channels/:id/configure",
     alias: "configureChannel",
-    description: `Merges request body fields into the channel&#x27;s config section. Fields absent from the request body are not touched (merge, not replace). The &quot;enabled&quot; field is reserved and ignored if sent. Returns the updated config with credential fields redacted.
+    description: `Merges request body fields into the channel&#x27;s config section. Fields absent from the request body are not touched (merge, not replace). The &quot;enabled&quot; field is reserved and ignored if sent. &#x60;outbound&#x60;, &#x60;workspace_id&#x60; and &#x60;identity&#x60; cannot be set here, in any letter case: 400 (the outbound setting is changed only with PUT /api/v1/channels/{id}/outbound; the binding only with the routing route). &#x60;apply_outcome&#x60;, &#x60;apply_reason&#x60; and &#x60;apply_note&#x60; are stripped from the body. When the save changes an access field or stores a credential, or the connection is not current, the one connection is restarted and the response reports the outcome in &#x60;apply_outcome&#x60; (channels spec T-6, FR-050). Returns the updated config with credential fields redacted.
 `,
     requestFormat: "json",
     parameters: [
@@ -9842,11 +10048,24 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.string(),
       },
     ],
-    response: z.object({}).partial().passthrough(),
+    response: z
+      .object({
+        apply_outcome: z.enum([
+          "applied",
+          "applied_not_running",
+          "unconfirmed",
+          "failed",
+          "no_reload_needed",
+        ]),
+        apply_reason: z.string().optional(),
+        apply_note: z.string().optional(),
+      })
+      .passthrough(),
     errors: [
       {
         status: 400,
-        description: `Invalid JSON body.`,
+        description: `Invalid JSON body, or a field that cannot be set here. Texts: &quot;outbound cannot be set via configure; use PUT /api/v1/channels/{id}/outbound&quot;; the existing workspace_id and identity refusals (set the binding with PUT /api/v1/channels/{id}/routing). Matched in any spelling encoding/json would bind to those fields. Nothing was changed.
+`,
         schema: ErrorResponse,
       },
       {
@@ -9857,6 +10076,17 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The save did not complete; code says what durably changed: could_not_save (nothing), credential_saved_not_saved (a credential of this request was stored, the configuration was not), or saved_not_refreshed (the file was written, the running configuration was not refreshed and the connection was not restarted).
+`,
+        schema: ChannelConfigureError,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -9944,6 +10174,107 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 503,
         description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/channels/:id/outbound",
+    alias: "getChannelOutbound",
+    description: `Returns whether the agent bound to this connection may start messages and to whom, the live revision token, whether the connection is running and whether its platform can start messages (channels spec FR-021). Read from one live configuration snapshot.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
+      },
+    ],
+    response: ChannelOutboundRead,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed channel id.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Unknown channel type.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/channels/:id/outbound",
+    alias: "setChannelOutbound",
+    description: `Replaces the connection&#x27;s outbound policy and target list (channels spec FR-020, FR-022). Targets are canonicalized and de-duplicated; added Discord targets are looked up through the running connection outside the settings lock, each call bounded by a 5-second deadline that covers the rate-limit wait. The revision is re-checked under the settings lock before saving. A permission-extending write needs the saved and running configurations of the connection to correspond; switching to reply_only or removing targets always works, in any connection state. This is the only way to change the setting; every other save path keeps it as stored. Admin only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ChannelOutboundUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
+      },
+    ],
+    response: ChannelOutboundWriteResponse,
+    errors: [
+      {
+        status: 400,
+        description: `invalid_targets (per-target errors in target_errors) or too_many_targets (more than 20 after de-duplication). Nothing was saved.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Unknown channel.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `stale_revision (the setting changed since it was read; reload and retry), connect_first (adding a Discord target needs the connection running), or saved_live_mismatch (the saved and running configurations differ because an earlier change did not finish applying; a permission-extending write waits until they correspond again). Nothing was saved.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 422,
+        description: `platform_cannot_start (&quot;starting messages is not supported yet on &lt;Platform&gt;&quot;) or platform_cannot_message_people (&quot;this platform can only answer, not start a direct message&quot;). Nothing was saved.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 500,
+        description: `&quot;could not save the setting; nothing was changed&quot; — the failure happened before the file was written (no credential is involved on this route).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `lookup_unavailable: Discord could not be reached or timed out while checking an added target, including a rate-limit wait past the deadline. Nothing was saved; try again.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -14591,7 +14922,8 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     errors: [
       {
         status: 400,
-        description: `Invalid policy values.`,
+        description: `Invalid policy values. Also refused, nothing saved: storing allow for an always-ask tool — &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; (channels spec FR-037, T-10 row 15).
+`,
         schema: ErrorResponse,
       },
       {
@@ -14925,7 +15257,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       },
       {
         status: 500,
-        description: `Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly &quot;Session history is unavailable. Retry after the operator restores its index.&quot; A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress.
+        description: `Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly &quot;This conversation&#x27;s history could not be loaded.&quot; A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress.
 `,
         schema: ErrorResponse,
       },
@@ -15157,7 +15489,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "delete",
     path: "/skills/:name",
     alias: "deleteSkill",
-    description: `Removes an installed skill from the local skills directory. The skill must not be the default skill, in use by any agent, or required by a seeded dependency. On success the gateway removes the skill directory and returns 204 No Content.
+    description: `Deletes an installed user-owned skill through the change pipeline (a delete_skill version is recorded; history is kept until retention). revision is the caller&#x27;s expected revision; a mismatch is 409 SKILL_CHANGED. Built-in skills are refused with 403.
 `,
     requestFormat: "json",
     parameters: [
@@ -15172,7 +15504,65 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
         schema: z.string().regex(/^[a-f0-9]{64}$/),
       },
     ],
-    response: z.void(),
+    response: ConfigurationMutationState,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `The skill is a built-in skill and is read-only (BUILTIN_READ_ONLY).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Storage failure, before publication or after publication (partial deletion).`,
+        schema: ConfigurationMutationFailureState,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/skills/:name/copy",
+    alias: "copySkill",
+    description: `Creates a new user-owned skill from the named skill; the copy&#x27;s frontmatter name is rewritten to new_id. The copy starts ungranted.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({
+          new_id: z
+            .string()
+            .max(64)
+            .regex(/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/),
+        }),
+      },
+      {
+        name: "name",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Skill,
     errors: [
       {
         status: 400,
@@ -15191,8 +15581,13 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists.`,
+        description: `Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED). A copy refused by the save check (SAVE_CHECK_FAILED) answers 400.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Storage failure, before publication or after publication (partial save).`,
+        schema: ConfigurationMutationFailureState,
       },
     ],
   },
@@ -15229,8 +15624,15 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists.`,
+        description: `Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller&#x27;s expected revision and the skill changed since it was read).
+`,
         schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Storage failure, before publication (error_stage names the failed stage) or after publication (a partial save; message names the undo).
+`,
+        schema: ConfigurationMutationFailureState,
       },
       {
         status: 502,
@@ -16066,7 +16468,7 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "post",
     path: "/tool-approvals/:approval_id",
     alias: "postToolApproval",
-    description: `Approve, deny, or cancel a pending tool call approval.
+    description: `Approve, deny, or cancel a pending tool call approval. For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038, T-10 row 15) the action allow (approve and record a grant) is refused with 400 &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; and nothing is recorded; only allow_once, deny and cancel are accepted, and no approval of such a tool is ever remembered. Every other tool is unchanged.
 `,
     requestFormat: "json",
     parameters: [
@@ -16085,7 +16487,8 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     errors: [
       {
         status: 400,
-        description: `Malformed body or unknown action.`,
+        description: `Malformed body or unknown action, or action allow for an always-ask tool (&quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot;; nothing recorded).
+`,
         schema: ErrorResponse,
       },
       {
@@ -18078,7 +18481,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "helper_event", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "provider_status", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "helper_event", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta"]);
 
 export const HistoryEntryOrigin = z
   .object({
@@ -18458,7 +18861,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -18475,7 +18878,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     provider_message: z.boolean().optional(),
@@ -18800,6 +19203,20 @@ export const ProviderRetryFrame = z
     attempt: z.number().int().min(2),
     max_attempts: z.number().int().min(1),
     error_code: z.string().max(64),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ProviderStatusFrame = z
+  .object({
+    type: z.literal("provider_status"),
+    session_id: z.string().min(1).max(255),
+    turn_id: z.string().min(1).max(128),
+    state: z.enum(["waiting", "responding", "recovered"]),
+    sent_at: z.string(),
+    silent_since: z.string().optional(),
+    stall_at: z.string().optional(),
+    retries: z.number().int().min(1).optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -19797,6 +20214,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   ToolResultProjectionFrame,
   RateLimitFrame,
   ProviderRetryFrame,
+  ProviderStatusFrame,
   ContextWindowNoticeFrame,
   ProviderFallbackFrame,
   ProviderFallbackNote,

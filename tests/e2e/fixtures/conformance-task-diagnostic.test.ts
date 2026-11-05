@@ -254,7 +254,7 @@ describe('paged-history carrier contract for the existing safe diagnostic', () =
     const input = fixture([call()])
     const detail = {
       session: input.detail.session,
-      history_state: { status: 'unavailable', reason: 'index_missing', message: 'Session history is unavailable. Retry after the operator restores its index.' },
+      history_state: { status: 'unavailable', reason: 'index_missing', message: 'This conversation\'s history could not be loaded.' },
     }
     const safe = projectStandaloneTaskDiagnostic(input.task, detail)
     expect(safe.classification).toBe('unavailable')

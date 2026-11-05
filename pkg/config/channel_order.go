@@ -79,7 +79,7 @@ func (c *Config) MergeUnchangedChannelOrders(source *Config) {
 		before, existed := source.Channels[instance]
 		after, exists := c.Channels[instance]
 		current, _ := c.ChannelOrderGeneration(instance)
-		if generation > current && existed == exists && reflect.DeepEqual(before, after) {
+		if generation > current && existed == exists && reflect.DeepEqual(ChannelAdapterView(before), ChannelAdapterView(after)) {
 			c.CarryChannelOrderGeneration(instance, generation)
 		}
 	}

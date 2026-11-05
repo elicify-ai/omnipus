@@ -142,6 +142,12 @@ type envelopeJSON struct {
 type resizeLimitsJSON struct {
 	LongEdgePx int   `json:"long_edge_px"`
 	MaxBytes   int64 `json:"max_bytes"`
+	// MaxPatches mirrors the contract's optional max_patches (issue #1435).
+	// omitempty is REQUIRED, not cosmetic: zero means the provider's patch
+	// accounting is unknown/unlimited, and the contract admits the field
+	// only as an integer >= 1 — serializing 0 would hand the SPA a response
+	// its own generated validator rejects (#1435 R4 / round-1 F1).
+	MaxPatches int `json:"max_patches,omitempty"`
 }
 
 type endpointJSON struct {

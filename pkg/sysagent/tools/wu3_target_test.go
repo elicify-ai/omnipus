@@ -36,51 +36,48 @@ func TestWU3CreateAgentJoinsExplicitTargetNotCallerAnchor(t *testing.T) {
 	wu3Outcome(t, systools.NewAgentCreateTool(d).Execute(ctx, map[string]any{"name": ""}), "failed: nothing saved")
 }
 
-// FR-043: each explicit invalid target refuses before any creation/membership.
+// FR-043 still governs agent provisioning. r15 §5.4 retires skill
+// workspace_id/content/revision; no removed request may mutate a global skill.
 func TestWU3UnknownTargetRefusesEverySetupWriteWithoutFallback(t *testing.T) {
-	for _, verb := range []string{"create_agent", "create_skill", "edit_skill", "remove_skill"} {
-		for _, target := range []string{"missing-workspace", "", " ", "../sales", "sales\\escape"} {
-			t.Run(verb+"_"+target, func(t *testing.T) {
-				d, _ := wu3Deps(t)
-				wu3Workspace(t, d, "default", "omnipus")
-				content := validSkill("crm")
-				_, revision, err := d.SkillWriter.CreateSkillReviewed("crm", content)
-				require.NoError(t, err)
-				anchorPath := filepath.Join(d.Home, "workspaces", "default.json")
-				before := wu3ReadFile(t, anchorPath)
-				ctx := tools.WithWorkspaceID(tools.WithAgentID(context.Background(), "omnipus"), "default")
-				var tool tools.Tool
-				args := map[string]any{"name": "crm", "content": validSkill("crm") + "\nMust not land.\n", "revision": revision, "workspace_id": target}
-				switch verb {
-				case "create_agent":
-					tool = systools.NewAgentCreateTool(d)
-					args = wu3CreateArgs("Must not exist")
-					args["workspace_id"] = target
-				case "create_skill":
-					tool = systools.NewSkillCreateTool(d)
-					args["name"] = "new-skill"
-					args["content"] = validSkill("new-skill")
-					delete(args, "revision")
-				case "edit_skill":
-					tool = systools.NewSkillEditTool(d)
-				case "remove_skill":
-					tool = systools.NewSkillRemoveTool(d)
-					delete(args, "content")
-					args["confirm"] = true
-				}
-				result := tool.Execute(ctx, args)
-				assert.True(t, result.IsError, "invalid explicit target must be refused, not treated as omitted: %s", result.ForLLM)
-				assert.Equal(t, before, wu3ReadFile(t, anchorPath))
-				assert.Equal(t, content, string(wu3ReadFile(t, filepath.Join(d.Home, "skills", "crm", "SKILL.md"))))
-				_, statErr := os.Stat(filepath.Join(d.Home, "skills", "new-skill"))
-				assert.ErrorIs(t, statErr, os.ErrNotExist)
-				agents, skipped, listErr := agentstore.New(d.Home).List()
-				require.NoError(t, listErr)
-				require.Empty(t, skipped, "an unreadable partial entity cannot hide a rejected-target write")
-				assert.Empty(t, agents, "invalid target must save no agent entity")
-				wu3Outcome(t, result, "failed: nothing saved")
-			})
-		}
+	for _, target := range []string{"missing-workspace", "", " ", "../sales", "sales\\escape"} {
+		t.Run(target, func(t *testing.T) {
+			d, _ := wu3Deps(t)
+			wu3Workspace(t, d, "default", "omnipus")
+			content := validSkill("crm")
+			_, _, err := d.SkillWriter.CreateSkillReviewed("crm", content)
+			require.NoError(t, err)
+			anchorPath := filepath.Join(d.Home, "workspaces", "default.json")
+			before := wu3ReadFile(t, anchorPath)
+			ctx := tools.WithWorkspaceID(tools.WithAgentID(context.Background(), "omnipus"), "default")
+			args := wu3CreateArgs("Must not exist")
+			args["workspace_id"] = target
+			result := systools.NewAgentCreateTool(d).Execute(ctx, args)
+			require.True(t, result.IsError, "invalid explicit target must refuse: %s", result.ForLLM)
+			wu3Outcome(t, result, "failed: nothing saved")
+			assertRemovedSkillMutationArgs(t, d, ctx, "crm", target)
+			assert.Equal(t, before, wu3ReadFile(t, anchorPath))
+			assert.Equal(t, content, string(wu3ReadFile(t, filepath.Join(d.Home, "skills", "crm", "SKILL.md"))))
+			_, statErr := os.Stat(filepath.Join(d.Home, "skills", "new-skill"))
+			assert.ErrorIs(t, statErr, os.ErrNotExist)
+			agents, skipped, listErr := agentstore.New(d.Home).List()
+			require.NoError(t, listErr)
+			require.Empty(t, skipped)
+			assert.Empty(t, agents)
+		})
+	}
+}
+
+// Every withdrawn parameter is checked separately: a rejection of one must
+// not accidentally hide silent acceptance of another. This invokes real tools.
+func assertRemovedSkillMutationArgs(t *testing.T, d *systools.Deps, ctx context.Context, slug, target string) {
+	t.Helper()
+	for _, extra := range []struct {
+		name  string
+		value any
+	}{{"workspace_id", target}, {"content", validSkill(slug)}, {"revision", "not-a-supported-input"}} {
+		result := systools.NewSkillEditTool(d).Execute(ctx, map[string]any{"action": "delete", "skill": slug, extra.name: extra.value})
+		body := wu3Error(t, result, "INVALID_INPUT")
+		require.Contains(t, body["message"], extra.name, "§5.4 refusal names the removed input")
 	}
 }
 
@@ -106,62 +103,67 @@ func wu3ProjectTarget(t *testing.T) (*systools.Deps, context.Context, string, st
 	return d, ctx, roots["default"], roots["sales"]
 }
 
-// FR-042 / BDD-4.5/4.8: a same-slug negative control in the anchor shelf.
-func TestWU3ProjectSkillEditUsesTargetShelfAndPreservesAnchor(t *testing.T) {
+// r15 §15: explicit project file paths replace withdrawn slug routing.
+func TestWU3ProjectFileEditUsesExplicitTargetAndPreservesAnchor(t *testing.T) {
 	d, ctx, anchor, target := wu3ProjectTarget(t)
+	path := filepath.Join(target, "crm", "SKILL.md")
 	before := wu3ReadFile(t, filepath.Join(anchor, "crm", "SKILL.md"))
-	revision, err := skills.NewSkillWriter(target).SkillRevision("crm")
-	require.NoError(t, err)
 	content := validSkill("crm") + "\nEdited Sales only.\n"
-	result := systools.NewSkillEditTool(d).Execute(ctx, map[string]any{"name": "crm", "content": content, "revision": revision, "workspace_id": "sales"})
-	wu3Success(t, result)
-	assert.Equal(t, content, string(wu3ReadFile(t, filepath.Join(target, "crm", "SKILL.md"))))
+	result := tools.NewWriteFileTool(filepath.Dir(filepath.Dir(target)), true).Execute(ctx, map[string]any{"path": path, "content": content, "overwrite": true})
+	require.False(t, result.IsError, result.ForLLM)
+	assert.Equal(t, content, string(wu3ReadFile(t, path)))
 	assert.Equal(t, before, wu3ReadFile(t, filepath.Join(anchor, "crm", "SKILL.md")))
 	assert.Equal(t, "default", tools.ToolWorkspaceID(ctx))
-	wu3Outcome(t, result, "working")
+	assert.NoDirExists(t, filepath.Join(d.Home, "skills", "crm"))
 }
 
-func TestWU3ProjectSkillCreateUsesTargetWithoutGlobalShadow(t *testing.T) {
+func TestWU3ProjectFileCreateUsesExplicitTargetWithoutGlobalShadow(t *testing.T) {
 	d, ctx, anchor, target := wu3ProjectTarget(t)
 	content := validSkill("sales-new")
-	result := systools.NewSkillCreateTool(d).Execute(ctx, map[string]any{"name": "sales-new", "content": content, "workspace_id": "sales"})
-	wu3Success(t, result)
+	result := tools.NewWriteFileTool(filepath.Dir(filepath.Dir(target)), true).Execute(ctx, map[string]any{"path": filepath.Join(target, "sales-new", "SKILL.md"), "content": content})
+	require.False(t, result.IsError, result.ForLLM)
 	assert.Equal(t, content, string(wu3ReadFile(t, filepath.Join(target, "sales-new", "SKILL.md"))))
 	for _, path := range []string{filepath.Join(anchor, "sales-new"), filepath.Join(d.Home, "skills", "sales-new")} {
-		_, err := os.Stat(path)
-		assert.ErrorIs(t, err, os.ErrNotExist, "target create must not fork an anchor/global copy")
+		assert.NoDirExists(t, path, "no implicit anchor/global copy")
 	}
 	assert.Equal(t, "default", tools.ToolWorkspaceID(ctx))
+	assert.NoDirExists(t, filepath.Join(d.Home, "system", "skill-history"), "project creation has no registry pipeline")
 }
 
-func TestWU3ProjectSkillRemoveUsesTargetAndProtectsSameSlugAnchor(t *testing.T) {
-	d, ctx, anchor, target := wu3ProjectTarget(t)
+func TestWU3ProjectWriterRemoveUsesTargetAndProtectsSameSlugAnchor(t *testing.T) {
+	_, ctx, anchor, target := wu3ProjectTarget(t)
 	before := wu3ReadFile(t, filepath.Join(anchor, "crm", "SKILL.md"))
-	revision, err := skills.NewSkillWriter(target).SkillRevision("crm")
+	writer := skills.NewSkillWriter(target)
+	revision, err := writer.SkillRevision("crm")
 	require.NoError(t, err)
-	result := systools.NewSkillRemoveTool(d).Execute(ctx, map[string]any{"name": "crm", "revision": revision, "confirm": true, "workspace_id": "sales"})
-	wu3Success(t, result)
-	_, err = os.Stat(filepath.Join(target, "crm"))
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, writer.RemoveSkillReviewed("crm", revision))
+	assert.NoDirExists(t, filepath.Join(target, "crm"))
 	assert.Equal(t, before, wu3ReadFile(t, filepath.Join(anchor, "crm", "SKILL.md")))
 	assert.Equal(t, "default", tools.ToolWorkspaceID(ctx))
 }
 
-func TestWU3ProjectSkillDiscoveryReadsTargetContentAndRevision(t *testing.T) {
+func TestWU3ProjectDiscoveryListsTargetAndFileReadUsesExplicitPath(t *testing.T) {
 	d, ctx, _, target := wu3ProjectTarget(t)
-	result := systools.NewSkillListTool(d).Execute(ctx, map[string]any{"scope": "management", "name": "crm", "workspace_id": "sales"})
-	body := wu3Success(t, result)
+	listed := systools.NewSkillListTool(d).Execute(ctx, map[string]any{"scope": "management", "workspace_id": "sales"})
+	body := wu3Success(t, listed)
 	items, ok := body["skills"].([]any)
 	require.True(t, ok)
-	require.Len(t, items, 1)
-	item := wu3Object(t, items[0])
-	assert.Equal(t, "crm", item["id"])
-	assert.Equal(t, "project", item["origin"])
-	assert.Contains(t, item["content"], "sales-only-body")
-	assert.NotContains(t, item["content"], "default-only-body")
-	revision, err := skills.NewSkillWriter(target).SkillRevision("crm")
+	var project map[string]any
+	for _, value := range items {
+		item := wu3Object(t, value)
+		if item["id"] == "crm" && item["origin"] == "project" {
+			project = item
+		}
+	}
+	require.NotNil(t, project, "pure list includes target project")
+	assert.NotContains(t, project, "content", "§5.3 pure list never returns content")
+	revision, err := skills.ContentRevision(filepath.Join(target, "crm"))
 	require.NoError(t, err)
-	assert.Equal(t, revision, item["revision"])
+	assert.Equal(t, revision, project["revision"])
+	result := tools.NewReadFileTool(filepath.Dir(filepath.Dir(target)), true, 0).Execute(ctx, map[string]any{"path": filepath.Join(target, "crm", "SKILL.md")})
+	require.False(t, result.IsError, result.ForLLM)
+	assert.Contains(t, result.ForLLM, "sales-only-body")
+	assert.NotContains(t, result.ForLLM, "default-only-body")
 	assert.Equal(t, "default", tools.ToolWorkspaceID(ctx))
 }
 
@@ -180,12 +182,16 @@ func TestWU3StaleAgentAndGlobalSkillWritesKeepWinner(t *testing.T) {
 	})
 	t.Run("global_skill", func(t *testing.T) {
 		d, _ := wu3Deps(t)
-		_, revision, err := d.SkillWriter.CreateSkillReviewed("crm", validSkill("crm"))
+		root := filepath.Join(d.Home, "skills")
+		_, _, err := d.SkillWriter.CreateSkillReviewed("crm", validSkill("crm"))
 		require.NoError(t, err)
-		tool := systools.NewSkillEditTool(d)
+		ctx := observeSkillForMutation(t, d, readCtx("editor"), "crm")
+		// An outside winner changes bytes after the session's supported read.
 		winner := validSkill("crm") + "\nWinner\n"
-		wu3Success(t, tool.Execute(context.Background(), map[string]any{"name": "crm", "revision": revision, "content": winner}))
-		wu3Error(t, tool.Execute(context.Background(), map[string]any{"name": "crm", "revision": revision, "content": validSkill("crm") + "\nLoser\n"}), "CONFLICT")
-		assert.Equal(t, winner, string(wu3ReadFile(t, filepath.Join(d.Home, "skills", "crm", "SKILL.md"))))
+		path := filepath.Join(root, "crm", "SKILL.md")
+		require.NoError(t, os.WriteFile(path, []byte(winner), 0o600))
+		result := systools.NewSkillEditTool(d).Execute(ctx, map[string]any{"action": "delete", "skill": "crm"})
+		wu3Error(t, result, "SKILL_CHANGED")
+		assert.Equal(t, winner, string(wu3ReadFile(t, path)), "stale session cannot delete the winner")
 	})
 }

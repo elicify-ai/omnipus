@@ -49,10 +49,12 @@ func TestL11274OmnipusCreatesEachSupportedExternalWorker(t *testing.T) {
 	for _, cli := range []string{"claude-code", "codex", "opencode"} {
 		t.Run(cli, func(t *testing.T) {
 			f := newL11274Fixture(t, "", false)
-			path := l11274Executable(t, f.home, cli, true)
-			args := l11274CreateArgs("Created "+cli, cli, path)
-			result := f.execute(t, "create_agent", args)
-			l11274AssertCreated(t, f, result, cli, path, "#6E8BA8")
+			f.setProgram(t, cli, l11274Executable(t, f.home, cli, true))
+			result := f.execute(t, "create_agent", l11274CreateArgs("Created "+cli, cli))
+			l11274AssertCreated(t, f, result, cli, "#6E8BA8")
+			if body := l11274ResultObject(t, result); body["runnable"] != true || body["program_warning"] != nil {
+				t.Errorf("with a valid Settings program the worker is runnable with no warning: %s", result.ForLLM)
+			}
 		})
 	}
 }
@@ -61,7 +63,7 @@ func TestL11274OmnipusCreatesEachSupportedExternalWorker(t *testing.T) {
 // the created agent's id. Founder decision 2026-10-14 (WU-3): a new agent's id
 // is a generated UUID, never derived from its name, so the id is read from the
 // result and checked to be a UUID rather than predicted from the name.
-func l11274AssertCreated(t *testing.T, f *l11274Fixture, result *tools.ToolResult, cli, path, color string) string {
+func l11274AssertCreated(t *testing.T, f *l11274Fixture, result *tools.ToolResult, cli, color string) string {
 	t.Helper()
 	if result == nil || result.IsError {
 		t.Fatalf("#1274: valid %s worker creation must succeed through Omnipus, got %+v", cli, result)
@@ -72,7 +74,7 @@ func l11274AssertCreated(t *testing.T, f *l11274Fixture, result *tools.ToolResul
 		t.Fatalf("created worker id %q must be a generated UUID: %v", id, err)
 	}
 	for key, want := range map[string]any{"id": id, "type": "subagent_3p", "cli": cli,
-		"cli_path": path, "model": l11274Model, "status": "joined_workspace",
+		"model": l11274Model, "status": "joined_workspace",
 		// ConfigurationPersistenceStatus.yaml: all requested components saved.
 		"persistence_status": "complete", "activation_status": "active"} {
 		if got := body[key]; got != want {
@@ -97,7 +99,7 @@ func l11274AssertCreated(t *testing.T, f *l11274Fixture, result *tools.ToolResul
 	if stored.Model == nil || stored.Model.Primary != l11274Model {
 		t.Errorf("stored model = %+v, want Primary=%q", stored.Model, l11274Model)
 	}
-	wantExecutor := &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: cli, CLIPath: path}
+	wantExecutor := &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: cli}
 	if stored.Subagents == nil || !reflect.DeepEqual(stored.Subagents.Executor, wantExecutor) {
 		t.Errorf("stored external executor = %+v, want %+v", stored.Subagents, wantExecutor)
 	}

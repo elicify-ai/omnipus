@@ -335,121 +335,56 @@ func TestUpdateAgent_ContextWindowOverride_RejectsNonPositive(t *testing.T) {
 // cli was freely mutable; the cli-lock rule per spec §4.16 / F-10 is
 // exercised by this test.)
 func TestUpdateAgent_ExecutorChanges(t *testing.T) {
-	api := buildExecutorTestAPIWithWorker(t)
-
-	// Seed the worker with an initial external-cli executor.
-	put1 := `{"executor":{"kind":"external-cli","cli":"codex"}}`
-	pw1 := httptest.NewRecorder()
-	pr1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker", strings.NewReader(put1))
-	pr1.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(pw1, pr1)
-	require.Equal(t, http.StatusOK, pw1.Code)
-
-	// Attempt to change the cli to opencode — must be rejected 400 by the
-	// cli-lock rule.
-	put2 := `{"executor":{"kind":"external-cli","cli":"opencode"}}`
-	pw2 := httptest.NewRecorder()
-	pr2 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker", strings.NewReader(put2))
-	pr2.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(pw2, pr2)
-	require.Equal(t, http.StatusBadRequest, pw2.Code,
-		"changing cli after create must be rejected by the cli-lock rule; body: %s", pw2.Body.String())
-	assert.Contains(t, pw2.Body.String(), "executor.cli is locked",
-		"the rejection must reference the cli-lock rule")
-
-	// Persisted to the agent's entity record — original cli is preserved, not
-	// overwritten (ADR-054: no longer config.json's agents.list).
-	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
-	require.NotNil(t, exec, "executor not persisted")
-	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
-	assert.Equal(t, "codex", exec.CLI,
-		"original cli must survive the rejected PUT (cli-lock rule)")
-}
-
-// TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor verifies the
-// native-only-for-non-workers rule at the update gate. A non-worker updated
-// to kind=external-cli must be rejected with 400; a non-worker updated to
-// kind=native (or omitting the field) stays allowed.
-func TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	// External-cli on the test-agent (a custom non-worker) → 400.
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
-		strings.NewReader(`{"executor":{"kind":"external-cli","cli":"codex"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "only sub-agent workers",
-		"the rejection must reference the worker-only rule")
-
-	// Remote-a2a on the test-agent → 400.
-	w = httptest.NewRecorder()
-	r = revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
-		strings.NewReader(`{"executor":{"kind":"remote-a2a"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-}
-
-// TestUpdateAgent_NonWorkerNativeExecutorAllowed is the control: a non-worker
-// updated with kind=native (or omitting the executor) must still be 200. The
-// native-only rule is not a blanket reject.
-func TestUpdateAgent_NonWorkerNativeExecutorAllowed(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
-		strings.NewReader(`{"executor":{"kind":"native"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-}
-
-// TestUpdateAgent_WorkerAllowsExternalCLIExecutor is the control: a worker
-// can keep / change its executor to external-cli (workers are the only
-// agents allowed non-native executors).
-func TestUpdateAgent_WorkerAllowsExternalCLIExecutor(t *testing.T) {
-	api := buildExecutorTestAPIWithWorker(t)
-
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker",
-		strings.NewReader(`{"executor":{"kind":"external-cli","cli":"codex"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	// And it is persisted to the agent's entity record (ADR-054) — the
-	// write-time guard is the regression we are guarding against, so the
-	// persistence is the load-bearing assertion. (The PUT response may not
-	// echo the executor because the response reads from the live in-memory
-	// config; the entity record is the source of truth.)
-	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
-	require.NotNil(t, exec, "worker executor must be persisted to the entity record")
+	api, id := t8ExistingExternalWorker(t)
+	t8AssertExecutorRefusal(t, api, id, `{"executor":{"cli":"opencode"}}`, "executor.cli", "executor.cli is locked after create; create a new agent to switch CLIs.")
+	exec := agentExecutorFromStore(t, api.homePath, id)
+	require.NotNil(t, exec)
 	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
 	assert.Equal(t, "codex", exec.CLI)
 }
 
-// TestUpdateAgent_WorkerAllowsRemoteA2AExecutor is the positive control for
-// remote-a2a: a worker's executor.kind may be changed to remote-a2a
-// (reserved/future — accepted and persisted without roster resolution or
-// dispatch, per executorConfigFromRequest's "accepted but reserved" comment).
-// TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor only covers the
-// negative (non-worker rejected with remote-a2a too); this is the missing
-// worker-allowed positive case.
-func TestUpdateAgent_WorkerAllowsRemoteA2AExecutor(t *testing.T) {
-	api := buildExecutorTestAPIWithWorker(t)
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	for _, kind := range []string{"external-cli", "remote-a2a"} {
+		t.Run(kind, func(t *testing.T) {
+			t8AssertExecutorRefusal(t, api, "test-agent", `{"executor":{"kind":"`+kind+`"}}`, "executor.kind", "executor.kind is derived from the agent type and cannot be set.")
+		})
+	}
+}
 
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestUpdateAgent_NonWorkerNativeExecutorRefused(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	t8AssertExecutorRefusal(t, api, "test-agent", `{"executor":{"kind":"native"}}`, "executor.kind", "executor.kind is derived from the agent type and cannot be set.")
+	// Omission is the positive control: unrelated mutable fields still work.
 	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker",
-		strings.NewReader(`{"executor":{"kind":"remote-a2a"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	api.HandleAgents(w, revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(`{"description":"native remains native"}`)))
+	require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
+	assert.Nil(t, agentExecutorFromStore(t, api.homePath, "test-agent"))
+	saved, err := agentstore.New(api.homePath).Get("test-agent")
+	require.NoError(t, err)
+	assert.Equal(t, "native remains native", saved.Description)
+}
 
-	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
-	require.NotNil(t, exec, "worker remote-a2a executor must be persisted")
-	assert.Equal(t, config.ExecutorKindRemoteA2A, exec.Kind)
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestUpdateAgent_WorkerAllowsMutableExecutorFields(t *testing.T) {
+	api, id := t8ExistingExternalWorker(t)
+	w := httptest.NewRecorder()
+	api.HandleAgents(w, revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(`{"executor":{"cli_args":"--verbose","env_overrides":{"FOO":"bar"}}}`)))
+	require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
+	exec := agentExecutorFromStore(t, api.homePath, id)
+	require.NotNil(t, exec)
+	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
+	assert.Equal(t, "codex", exec.CLI)
+	assert.Equal(t, "--verbose", exec.CLIArgs)
+	assert.Equal(t, map[string]string{"FOO": "bar"}, exec.EnvOverrides)
+}
+
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestUpdateAgent_WorkerRejectsRemoteA2AExecutor(t *testing.T) {
+	api, id := t8ExistingExternalWorker(t)
+	t8AssertExecutorRefusal(t, api, id, `{"executor":{"kind":"remote-a2a"}}`, "executor.kind", "executor.kind is derived from the agent type and cannot be set.")
 }
 
 // Note: agent-level heartbeat write-time guards (RejectsHeartbeatOnWorker /
@@ -597,14 +532,13 @@ func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 	}
 }
 
-// TestUpdateAgent_ExecutorMutability verifies that cli_path, env_overrides, and
-// cli_args are mutable on a subagent_3p worker, while the cli itself is locked.
+// TestUpdateAgent_ExecutorMutability preserves mutable env/args; r17 removes agent-owned paths.
 func TestUpdateAgent_ExecutorMutability(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	id := createSubagent3p(t, api)
 
 	// Mutate CLI-owned mutable fields.
-	body := `{"executor":{"cli_path":"/opt/codex","env_overrides":{"FOO":"bar"},"cli_args":"--verbose"}}`
+	body := `{"executor":{"env_overrides":{"FOO":"bar"},"cli_args":"--verbose"}}`
 	w := httptest.NewRecorder()
 	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -613,7 +547,7 @@ func TestUpdateAgent_ExecutorMutability(t *testing.T) {
 
 	exec := agentExecutorFromStore(t, api.homePath, id)
 	require.NotNil(t, exec)
-	assert.Equal(t, "/opt/codex", exec.CLIPath)
+	assert.Empty(t, exec.CLIPath, "r17: no per-agent program path")
 	assert.Equal(t, map[string]string{"FOO": "bar"}, exec.EnvOverrides)
 	assert.Equal(t, "--verbose", exec.CLIArgs)
 }
@@ -630,7 +564,9 @@ func TestUpdateAgent_ExecutorOMNIPUSPrefixRejected(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "OMNIPUS_* is gateway-internal")
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	assert.Equal(t, `env_overrides key "OMNIPUS_MASTER_KEY" is reserved: OMNIPUS_* is gateway-internal`, out["error"])
 }
 
 // TestUpdateAgent_UpdatedAtRejected verifies FR-007's single concurrency
@@ -828,8 +764,10 @@ func TestUpdateAgent_ExecutorCliImmutable_Returns400(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, w.Code,
 		"switching executor.cli after create must be rejected with 400; body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "executor.cli is locked",
-		"error message must explain that cli is locked; body: %s", w.Body.String())
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	assert.Equal(t, "executor.cli", out["field"])
+	assert.Equal(t, "executor.cli is locked after create; create a new agent to switch CLIs.", out["error"])
 
 	// Verify the persisted cli is still the original.
 	exec := agentExecutorFromStore(t, api.homePath, id)
@@ -838,25 +776,10 @@ func TestUpdateAgent_ExecutorCliImmutable_Returns400(t *testing.T) {
 		"persisted executor.cli must be unchanged after a rejected mutation")
 }
 
-// TestUpdateAgent_ExecutorCliPathMutable verifies that cli_path IS mutable on
-// PUT for a subagent_3p agent (binary upgrade without re-creating the agent).
-// Spec §9.2: "PUT executor.cli_path: /new/path → 200".
-func TestUpdateAgent_ExecutorCliPathMutable(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-	id := createSubagent3p(t, api) // cli_path: /usr/local/bin/codex
-
-	body := `{"executor":{"cli_path":"/opt/codex-v2"}}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	exec := agentExecutorFromStore(t, api.homePath, id)
-	require.NotNil(t, exec)
-	assert.Equal(t, "/opt/codex-v2", exec.CLIPath,
-		"cli_path must be updated to the new value")
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestUpdateAgent_ExecutorCliPathRefused(t *testing.T) {
+	api, id := t8ExistingExternalWorker(t)
+	t8AssertExecutorRefusal(t, api, id, `{"executor":{"cli_path":"/opt/codex-v2"}}`, "executor.cli_path", "cli_path cannot be set on an agent. The program for the chosen CLI is set by a person in Settings → Third-party agents.")
 }
 
 // TestUpdateAgent_FallbackModels_PersistAndEchoOnPUT proves the PUT response

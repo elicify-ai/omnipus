@@ -86,28 +86,34 @@ func TestLoadTool_PolicyDeniedCarriesReason(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// create_task is upfront (ADR-090 §5.4) and NOT in Omnipus's role-policy
-	// allow set.
-	require.Equal(t, tools.ManifestFull, tools.ToolManifestTier("create_task"),
-		"create_task must be ManifestFull (ADR-090 §5.4 upfront set) for this test to be meaningful")
-
-	// Structural guarantee: create_task must NOT be in Omnipus's policy-filtered set.
+	// r17 7.14.2 grants Omnipus the task tools, so create_task is no longer a
+	// denied subject. The subject is chosen from the live registry: an upfront
+	// (ManifestFull) tool that Omnipus's role policy does not allow, so the test
+	// still exercises the policy-denied FULL-tier path.
 	omnipusAgent, ok := al.registry.GetAgent("omnipus")
 	require.True(t, ok)
 	allTools := omnipusAgent.Tools.GetAll()
 	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, omnipusAgent.AgentType, omnipusAgent.LoadToolPolicy())
+	allowed := make(map[string]bool, len(policyFiltered))
 	for _, tool := range policyFiltered {
-		require.NotEqual(t, "create_task", tool.Name(),
-			"create_task must NOT be policy-allowed for omnipus — update test if Omnipus policy changed")
+		allowed[tool.Name()] = true
 	}
+	subject := ""
+	for _, tool := range allTools {
+		name := tool.Name()
+		if !allowed[name] && tools.ToolManifestTier(name) == tools.ManifestFull && (subject == "" || name < subject) {
+			subject = name
+		}
+	}
+	require.NotEmpty(t, subject, "instrument: Omnipus must have an upfront tool its policy denies")
 
 	tt := loadToolFor(t, al, "omnipus")
 	ctx := execCtx("omnipus", "sess-c3-denied")
 
-	result := tt.Execute(ctx, map[string]any{"names": []any{"create_task"}})
+	result := tt.Execute(ctx, map[string]any{"names": []any{subject}})
 
 	assert.True(t, result.IsError,
-		"create_task must be rejected for omnipus (policy denied); got: %s", result.ForLLM)
+		"%s must be rejected for omnipus (policy denied); got: %s", subject, result.ForLLM)
 	assert.True(t,
 		strings.Contains(result.ForLLM, "denied") || strings.Contains(result.ForLLM, "policy"),
 		"error message must mention 'denied' or 'policy'; got: %s", result.ForLLM)

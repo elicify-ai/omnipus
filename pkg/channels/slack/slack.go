@@ -372,6 +372,7 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 		CanonicalID: identity.BuildCanonicalID("slack", ev.User),
 	}
 	if !c.IsAllowedSender(sender) {
+		c.RecordRejected(sender.CanonicalID)
 		logger.DebugCF("slack", "Message rejected by allowlist", map[string]any{
 			"user_id": ev.User,
 		})
@@ -477,11 +478,13 @@ func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {
 		return
 	}
 
-	if !c.IsAllowedSender(bus.SenderInfo{
+	allowCheck := bus.SenderInfo{
 		Platform:    "slack",
 		PlatformID:  ev.User,
 		CanonicalID: identity.BuildCanonicalID("slack", ev.User),
-	}) {
+	}
+	if !c.IsAllowedSender(allowCheck) {
+		c.RecordRejected(allowCheck.CanonicalID)
 		logger.DebugCF("slack", "Mention rejected by allowlist", map[string]any{
 			"user_id": ev.User,
 		})
@@ -553,6 +556,7 @@ func (c *SlackChannel) handleSlashCommand(event socketmode.Event) {
 		CanonicalID: identity.BuildCanonicalID("slack", cmd.UserID),
 	}
 	if !c.IsAllowedSender(cmdSender) {
+		c.RecordRejected(cmdSender.CanonicalID)
 		logger.DebugCF("slack", "Slash command rejected by allowlist", map[string]any{
 			"user_id": cmd.UserID,
 		})

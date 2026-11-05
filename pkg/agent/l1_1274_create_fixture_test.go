@@ -178,18 +178,19 @@ func (f *l11274Fixture) execute(t *testing.T, name string, args map[string]any) 
 	return omnipus.Tools.ExecuteWithContext(tools.WithToolCallID(f.ctx, "1274-"+name), name, args, "webchat", "1274-chat", nil)
 }
 
-func l11274CreateArgs(name, cli, path string) map[string]any {
+func l11274CreateArgs(name, cli string) map[string]any {
 	// Chief clarification Q1 B, 2026-10-14: external workers have no native
 	// soul. Omitting it is the valid request; it remains required for natives.
 	return map[string]any{"name": name, "description": "External worker for issue 1274",
-		"model": l11274Model, "color": "#6E8BA8", "agent_type": "subagent_3p", "cli": cli, "cli_path": path}
+		"model": l11274Model, "color": "#6E8BA8", "agent_type": "subagent_3p", "cli": cli}
 }
 
-func l11274Executable(t *testing.T, home, cli string, executable bool) string {
+func l11274Executable(t *testing.T, _ string, cli string, executable bool) string {
 	t.Helper()
 	// Spaces exercise legitimate non-standard install paths, without relying
-	// on the user's PATH or on any installed external agent.
-	dir := filepath.Join(home, "fake CLI installs")
+	// on the user's PATH or on any installed external agent. The install lives
+	// outside OMNIPUS_HOME, as the saved-program checks require (r17 area 4).
+	dir := filepath.Join(t.TempDir(), "fake CLI installs")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -221,6 +222,29 @@ func l11274Executable(t *testing.T, home, cli string, executable bool) string {
 		}
 	}
 	return path
+}
+
+// setProgram saves path as the program of cli in Settings -> Third-party
+// agents (config sandbox.third_party_agents.clis.<cli>.path). r17 area 4
+// removed the per-agent cli_path: this is the only place a run's program comes
+// from. The run reads the live config, so no restart is needed.
+func (f *l11274Fixture) setProgram(t *testing.T, cli, path string) {
+	t.Helper()
+	err := f.al.MutateConfig(func(c *config.Config) error {
+		if c.Sandbox.ThirdPartyAgents == nil {
+			c.Sandbox.ThirdPartyAgents = &config.ThirdPartyAgentsConfig{}
+		}
+		if c.Sandbox.ThirdPartyAgents.CLIs == nil {
+			c.Sandbox.ThirdPartyAgents.CLIs = map[string]config.ThirdPartyCLIConfig{}
+		}
+		row := c.Sandbox.ThirdPartyAgents.CLIs[cli]
+		row.Path = path
+		c.Sandbox.ThirdPartyAgents.CLIs[cli] = row
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("SETUP: save the %s program in Settings: %v", cli, err)
+	}
 }
 
 func l11274ResultObject(t *testing.T, result *tools.ToolResult) map[string]any {

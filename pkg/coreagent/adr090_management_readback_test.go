@@ -22,13 +22,10 @@ func TestADR090_ManagementReadbackRealCatalogReachability(t *testing.T) {
 		t.Run(agent.ID, func(t *testing.T) {
 			require.NotNil(t, agent.Tools)
 			_, policies := tools.FilterToolsByPolicy(systools.AllTools(nil), string(agent.Type), &tools.ToolPolicyCfg{GlobalPolicies: global, Policies: agent.Tools.Builtin.Policies})
-			for _, name := range []string{"get_agent", "get_agent_tools"} {
-				// SPEC.md Table: get_agent/get_agent_tools are Allow for Main and Worker; excluded Omnipus keeps its existing Allow.
-				if agent.ID != "judge" && agent.ID != "plansupervisor" {
-					require.Equal(t, "allow", policies[name], "%s must actually reach %s", agent.ID, name)
-				} else {
-					require.Empty(t, policies[name], "%s must not silently inherit management readback", agent.ID)
-				}
+			for _, name := range []string{"get_agent"} {
+				// SPEC.md Table (r17 7.12: get_agent is the one reader): get_agent is Allow for Main and Worker; excluded Omnipus keeps its existing Allow.
+				// r17 FR-143: every agent reaches get_agent, Judge and Plan Supervisor included.
+				require.Equal(t, "allow", policies[name], "%s must actually reach %s", agent.ID, name)
 			}
 		})
 	}

@@ -38,7 +38,7 @@ import (
 // pkg/tools' real compositor, which imports pkg/skills — an in-package test
 // could not import it without a cycle. Both lint files therefore live in the
 // external test package and read the embedded content through the PUBLIC
-// first-boot seeder (skills.SeedDefaults into a temp dir + os.DirFS), so the
+// first-boot seeder (skills.SyncBuiltins into a temp dir + os.DirFS), so the
 // lint sees the exact bytes a fresh install actually ships, marker file
 // included, without any new production API.
 
@@ -72,25 +72,28 @@ type seededSkillFile struct {
 }
 
 // seededEmbeddedFiles seeds the embedded default skills into a fresh temp
-// directory via the public skills.SeedDefaults and walks the result.
+// directory via the public skills.SyncBuiltins and walks the result.
 // Structural guards: every DefaultSkillNames package must be present in the
-// walk (SeedDefaults must have seeded, not skipped, all of them into the
-// fresh dir), so a newly added package is linted without anyone updating a
+// walk (SyncBuiltins must install the exact complete set into the fresh dir),
+// so a newly added package is linted without anyone updating a
 // list — the property a hand-copied file list cannot provide.
 func seededEmbeddedFiles(t *testing.T) []seededSkillFile {
 	t.Helper()
 	root := t.TempDir()
-	res, err := skills.SeedDefaults(root)
+	res, err := skills.SyncBuiltins(root, nil)
 	if err != nil {
-		t.Fatalf("SeedDefaults into temp dir: %v", err)
+		t.Fatalf("SyncBuiltins into temp dir: %v", err)
 	}
 	names := skills.DefaultSkillNames()
 	if len(names) == 0 {
 		t.Fatal("skills.DefaultSkillNames() is empty — the lint would be vacuous")
 	}
-	if len(res.Seeded) != len(names) || len(res.Skipped) != 0 {
-		t.Fatalf("SeedDefaults into a fresh temp dir seeded %d, skipped %d; want seeded=%d skipped=0 — the walk would not cover the full default set",
-			len(res.Seeded), len(res.Skipped), len(names))
+	installed := append([]string(nil), res.Installed...)
+	sort.Strings(installed)
+	sort.Strings(names)
+	if strings.Join(installed, "\n") != strings.Join(names, "\n") || len(res.Updated) != 0 {
+		t.Fatalf("SyncBuiltins into a fresh temp dir installed %v, updated %v; want exactly %v installed and no updates — the walk would not cover the full default set",
+			installed, res.Updated, names)
 	}
 	sys := os.DirFS(root)
 	var files []seededSkillFile

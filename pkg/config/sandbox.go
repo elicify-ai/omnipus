@@ -306,6 +306,12 @@ type OmnipusSandboxConfig struct {
 	// Paths outside this list (and the agent workspace) are inaccessible.
 	AllowedPaths []string `json:"allowed_paths,omitempty"`
 
+	// ThirdPartyAgents is Settings -> Third-party agents: the person-set
+	// program path and standard parameters per external CLI (tool-parity
+	// spec r17 §3.4). Written only by the person-only PUT
+	// /api/v1/settings/third-party-agents; set_config refuses sandbox.*.
+	ThirdPartyAgents *ThirdPartyAgentsConfig `json:"third_party_agents,omitempty"`
+
 	// AllowedExecPaths lists directories the sandbox may READ and EXECUTE
 	// from, and never write to. It exists because AllowedPaths cannot express
 	// "run the tools installed here": that list grants read+write and never
