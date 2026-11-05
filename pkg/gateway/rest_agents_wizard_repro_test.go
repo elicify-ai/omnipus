@@ -57,7 +57,7 @@ func TestCreateAgent_WizardRealMuxRoundTrip(t *testing.T) {
 			for _, entry := range entries {
 				policy := gen.AgentCreateRequestMainToolsCfgBuiltinPoliciesAllow
 				switch entry.Name {
-				case "bash", "browser_navigate", "browser_click", "browser_type", "write_file":
+				case "bash", "browser_navigate", "browser_click", "browser_type", "write_file", "set_channel_outbound":
 					policy = gen.AgentCreateRequestMainToolsCfgBuiltinPoliciesAsk
 				case "browser_evaluate":
 					policy = gen.AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
@@ -87,6 +87,8 @@ func TestCreateAgent_WizardRealMuxRoundTrip(t *testing.T) {
 				assert.Equal(t, body.Name, state.Agent.Name)
 				assert.Equal(t, body.Soul, state.Soul)
 				assert.Equal(t, string(color), state.Agent.Color)
+				require.NotNil(t, state.Agent.Tools)
+				assert.Equal(t, "ask", string(state.Agent.Tools.Builtin.Policies["set_channel_outbound"]), "Q-A / FR-037: the wizard's always-ask policy must persist unchanged")
 			}
 
 			// Same identity, model and instructions; only optional tools_cfg

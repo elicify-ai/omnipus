@@ -17,6 +17,7 @@ import {
   type RolePreset,
 } from './toolPolicyPresets'
 import type { AgentToolsCfg, RegistryTool } from '@/lib/api'
+import { ALWAYS_ASK_TOOLS } from './alwaysAskTools'
 
 function makeTool(name: string): RegistryTool {
   return { name, description: `${name} description`, scope: 'general', category: 'core', source: 'builtin' }
@@ -150,6 +151,22 @@ describe('goal_claim always resolves to allow, across every preset', () => {
 
   it.each(Object.keys(POLICY_PRESETS) as RolePreset[])('%s → goal_claim = allow', (role) => {
     expect(applyRolePreset(role, TOOLS_WITH_GOAL_CLAIM).policies.goal_claim).toBe('allow')
+  })
+})
+
+describe('applyRolePreset — always-ask tools (Q-A / FR-037)', () => {
+  it.each(Object.keys(POLICY_PRESETS) as RolePreset[])('%s never allows an always-ask tool', (role) => {
+    expect(ALWAYS_ASK_TOOLS.length, 'instrument: the always-ask check must examine at least one tool').toBeGreaterThan(0)
+    const result = applyRolePreset(role, ALWAYS_ASK_TOOLS.map(makeTool))
+    const preset = POLICY_PRESETS[role]
+
+    for (const toolName of ALWAYS_ASK_TOOLS) {
+      // Q-A / FR-037: preserve a declared denial; every other policy must ask.
+      // The preset definition is input; the function's result is never the oracle.
+      const declaredPolicy = preset.overrides[toolName] ?? preset.defaultPolicy
+      const expectedPolicy = declaredPolicy === 'deny' ? 'deny' : 'ask'
+      expect(result.policies[toolName], `${role} → ${toolName} must be ${expectedPolicy}, never allow`).toBe(expectedPolicy)
+    }
   })
 })
 
