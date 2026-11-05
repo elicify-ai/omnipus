@@ -81,8 +81,12 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		return false, "internal_error", false
 	}
 
+	// Every admission attempt writes its request record, a refused one too
+	// (saturated, missing turn id): its pre-delivered refusal is audited as the
+	// terminal decision below, and every decision is paired with its request
+	// (channels S3, approval state table, CHECK F2).
+	auditAskRequested(ctx, a.consentAudit(), entry)
 	if accepted {
-		auditAskRequested(ctx, a.consentAudit(), entry)
 		// Broadcast the WS frame to connected clients scoped to the session owner (FR-073).
 		a.wsHandler.broadcastToolApprovalRequired(entry)
 		// A member's own approval while it works on a group-chat request shows
