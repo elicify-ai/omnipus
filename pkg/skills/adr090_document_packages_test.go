@@ -31,12 +31,12 @@ func TestADR090_DocumentPackagesSeedPinnedAssets(t *testing.T) {
 		}
 	}
 	dest := t.TempDir()
-	result, err := SeedDefaults(dest)
+	result, err := SyncBuiltins(dest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	seeded := map[string]bool{}
-	for _, name := range result.Seeded {
+	for _, name := range result.Installed {
 		seeded[name] = true
 	}
 	for _, name := range []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"} {

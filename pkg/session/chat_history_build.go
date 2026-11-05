@@ -15,11 +15,21 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
-type ChatHistoryIndexBuildOptions struct{ ScratchRoot string }
+type ChatHistoryIndexBuildOptions struct {
+	ScratchRoot string
+	// demand marks the in-process self-heal build (never the offline repair
+	// command). It requires a complete proof of the existing published index
+	// (a failed proof refuses with class index_inconsistent instead of
+	// rebuilding without the old ranks) and classifies a failure as
+	// source_changed only when the canonical source is proven to have moved.
+	demand bool
+}
 type ChatHistoryIndexBuildSummary struct {
 	SessionID, Action string
 	SourceGroupCount  int64
 	PartitionCount    int
+	// ArchiveRecordCount is every archive record the build read.
+	ArchiveRecordCount int64
 }
 type historySourceFact struct {
 	Size   int64
@@ -33,6 +43,7 @@ type historySourceFact struct {
 type ChatHistoryIndexBuild struct {
 	summary    ChatHistoryIndexBuildSummary
 	dir        string
+	demand     bool
 	source     map[string]historySourceFact
 	tree       *chatHistoryIndexTree
 	checkpoint historyCheckpoint
@@ -137,15 +148,37 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 	}
 	source, err := historySourceInventory(ctx, dir)
 	if err != nil {
+		if opts.demand && errors.Is(err, os.ErrNotExist) {
+			return nil, historyBuildFailure("source_changed", err)
+		}
 		return nil, err
+	}
+	if opts.demand {
+		// Runs before the generic storage_error wrapper above: an early read
+		// or decode failure is a source change only with positive evidence.
+		defer func() {
+			var classified *ChatHistoryIndexBuildError
+			if buildErr == nil || ctx.Err() != nil || errors.As(buildErr, &classified) && classified.Class == "index_inconsistent" {
+				return
+			}
+			if historySourceChanged(ctx, dir, source) {
+				buildErr = &ChatHistoryIndexBuildError{Class: "source_changed", cause: buildErr}
+			}
+		}()
 	}
 	planning := &chatHistoryIndexTree{ctx: ctx, sid: sid, planning: map[string]json.RawMessage{}, knownRanks: map[HistoryPosition]uint64{}}
 	retainedRanks := map[uint64]bool{}
 	oldProofValid := false
 	cp := historyCheckpoint{FormatVersion: 1, SessionID: sid, ArchiveEnds: map[string]int64{}}
 	old, oldErr := historyLoadCheckpoint(ctx, dir, sid)
+	if oldErr != nil && opts.demand {
+		return nil, historyBuildFailure("index_inconsistent", oldErr)
+	}
 	if oldErr == nil {
 		t, e := historyOpenTree(ctx, dir, old, false)
+		if e != nil && opts.demand {
+			return nil, historyBuildFailure("index_inconsistent", e)
+		}
 		if e == nil {
 			e = t.walk(func(n historyNode) error {
 				if strings.HasPrefix(n.Key, "r/") {
@@ -172,6 +205,9 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 				return nil
 			})
 			e = errors.Join(e, t.file.Close())
+			if e != nil && opts.demand {
+				return nil, historyBuildFailure("index_inconsistent", e)
+			}
 			if e == nil {
 				oldProofValid = true
 				cp.Rank = old.Rank
@@ -203,7 +239,7 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 			return positionErr == nil && rank > 0 && !retainedRanks[rank]
 		}
 	}
-	var groups int64
+	var groups, records int64
 	for _, stream := range streams {
 		for off := int64(0); off < stream.end; {
 			b, e := historyReadSuffix(ctx, stream, off, sid, "archive", "suffix")
@@ -218,6 +254,7 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 			if e = historyReduceArchive(planning, &cp, a, b, rec); e != nil {
 				return nil, e
 			}
+			records++
 			if rec.ViewMembership != ViewMembershipModel && rec.Type != EntryTypeToolCallEffect && rec.Type != EntryTypeModelRef {
 				groups++
 			}
@@ -283,7 +320,18 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 	if !reflect.DeepEqual(source, final) {
 		return nil, historyBuildFailure("source_changed", errors.New("canonical source changed during offline operation"))
 	}
-	return &ChatHistoryIndexBuild{summary: ChatHistoryIndexBuildSummary{SessionID: sid, Action: action, SourceGroupCount: groups, PartitionCount: len(streams)}, dir: dir, source: source, tree: planning, checkpoint: cp}, nil
+	return &ChatHistoryIndexBuild{summary: ChatHistoryIndexBuildSummary{SessionID: sid, Action: action, SourceGroupCount: groups, PartitionCount: len(streams), ArchiveRecordCount: records}, dir: dir, demand: opts.demand, source: source, tree: planning, checkpoint: cp}, nil
+}
+
+// historySourceChanged reports positive evidence that the canonical source
+// moved since the build's first inventory: a different inventory, or a listed
+// file that vanished while it was being taken. Any other error is no proof.
+func historySourceChanged(ctx context.Context, dir string, source map[string]historySourceFact) bool {
+	after, err := historySourceInventory(ctx, dir)
+	if err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	return !reflect.DeepEqual(source, after)
 }
 func historyJSONEqual(a, b []byte) bool {
 	var av, bv any
@@ -302,7 +350,19 @@ func (b *ChatHistoryIndexBuild) Summary() ChatHistoryIndexBuildSummary {
 	}
 	return b.summary
 }
-func (b *ChatHistoryIndexBuild) Publish(ctx context.Context) (buildErr error) {
+func (b *ChatHistoryIndexBuild) Publish(ctx context.Context) error {
+	// Offline only: no live reader can hold a generation pin, so a fresh
+	// owner may retire every older generation.
+	return b.publish(ctx, func(generations, keep string) error {
+		owner := &chatHistoryOwner{refs: map[string]int{}, retired: map[string]bool{}}
+		return owner.retire(generations, keep)
+	})
+}
+
+// publish is Publish with the generation-retirement step supplied by the
+// caller. The in-process self-heal retires through the runtime owner so the
+// pins of concurrent page readers are honoured.
+func (b *ChatHistoryIndexBuild) publish(ctx context.Context, retire func(generations, keep string) error) (buildErr error) {
 	defer func() { buildErr = historyBuildFailure("storage_error", buildErr) }()
 	if b == nil || b.closed {
 		return errors.New("history build is closed")
@@ -312,6 +372,9 @@ func (b *ChatHistoryIndexBuild) Publish(ctx context.Context) (buildErr error) {
 	}
 	source, err := historySourceInventory(ctx, b.dir)
 	if err != nil {
+		if b.demand && errors.Is(err, os.ErrNotExist) {
+			return historyBuildFailure("source_changed", err)
+		}
 		return err
 	}
 	if !reflect.DeepEqual(source, b.source) {
@@ -342,8 +405,7 @@ func (b *ChatHistoryIndexBuild) Publish(ctx context.Context) (buildErr error) {
 	if err = historyPublish(b.dir, t, &cp, "repair", 0); err != nil {
 		return err
 	}
-	owner := &chatHistoryOwner{refs: map[string]int{}, retired: map[string]bool{}}
-	if err = owner.retire(filepath.Join(historyIndexPath(b.dir), "generations"), cp.File); err != nil {
+	if err = retire(filepath.Join(historyIndexPath(b.dir), "generations"), cp.File); err != nil {
 		return err
 	}
 	b.checkpoint = cp

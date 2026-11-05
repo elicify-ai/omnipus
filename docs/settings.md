@@ -111,6 +111,7 @@ Each tab and neighbor screen has one job.
 | Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
 | Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
+| Settings, Third-party agents | The program each external command-line tool (Claude Code, Codex, OpenCode) runs, and its standard parameters |
 | Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
 | Settings, Data | Session retention, storage numbers, backups, clearing sessions |
 | Settings, Memory | What the team remembers: recap and retrospective settings |
@@ -142,6 +143,27 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 **Settings → System agents** lists Judge, Plan Supervisor and Omnipus. Judge and Plan Supervisor are internal engine agents and cannot join workspace teams. Omnipus is a hidden member of the default workspace only; open its fixed sidebar entry rather than looking for it in Team. These built-in agents cannot be deleted.
 
 **Edit** opens the shared agent editor, including Omnipus's model setting. You can repair its model here without a working model conversation. Judge and Plan Supervisor also have editable instructions; their capabilities remain fixed. There is no default-agent setting. The editor saves on its own; if the answer to a save is lost, it says **Save not confirmed — it may or may not have been stored.** with **Retry** instead of claiming it saved. The Omnipus chat's gear button opens this tab directly. While the list loads it says **Loading system agents…**; if it cannot load, the tab says **Could not load the system agents.** with **Retry**; if a refresh fails after it loaded, the rows stay with **Could not refresh — this list may be out of date.** and **Retry**.
+
+## Third-party agents
+
+**Settings → Third-party agents** decides which program runs for each external command-line tool — Claude Code, Codex and OpenCode — and which standard parameters it always gets. It applies to every external worker that uses that tool. Only a person signed in to the web app can change it: agents cannot, through any tool, and `set_config` refuses the whole sandbox section. An agent can read the saved program and parameters for one worker, read-only, through `get_agent` (see below); it cannot read or change the Settings section itself.
+
+Each tool has two fields:
+
+| Field | What to enter |
+|---|---|
+| Program path | The full path to the tool's program, for example `/opt/homebrew/bin/codex`. Leave it empty if you do not use that tool |
+| Standard parameters | Flags passed on every run of that tool, on one line, exactly as typed. Leave it empty for none |
+
+**Checks when you save.** A program path must be absolute, point at a file that exists, is a regular file and can be run by the user Omnipus runs as. The file, and the folder holding it, must not be changeable by every user on the machine, and the file must not sit in a folder agents can write to (the Omnipus data folder, any workspace folder, or any extra folder the sandbox lets agents write). A link is followed to the real file; each link's folder is checked the same way. On Windows the file must end in `.exe`, `.com`, `.cmd` or `.bat`. Standard parameters may be at most 4,096 characters, with no line breaks. If any field fails, nothing is saved and the message names the tool and the reason, for example "The program path for Codex was not saved: it must be an absolute path." Saving the same section from two browser tabs keeps the last save.
+
+**Checks on every run.** The program is checked again each time a worker starts. If no program is saved for that tool, or it no longer passes the checks, the run is refused before anything starts — for a delegation, no worker session is created — and the person or agent that started it sees the reason — for example "This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex." There is no fallback to a program found on the system path. The file that was checked is the file that runs.
+
+**Standard parameters are yours, in clear.** They come after the worker's own flags, so your value wins when both set the same flag, and they are not filtered the way an agent's flags are. They are shown back and written to the audit log exactly as typed, so do not put keys or passwords in them: put secrets in the worker's own environment variables instead, which are always masked.
+
+**Why agents cannot change it.** The program and its parameters decide what actually runs on your machine. Keeping them person-only means an agent cannot point a worker at a different program or add flags that lift the tool's safety settings. An agent can see the saved program and parameters for a worker (read-only) and whether a run would start.
+
+Every change is recorded in the audit log: a changed path or changed parameters, with the old and new value and who saved it. Every external-worker run is recorded too, with the program, the flags the safety filter dropped from the agent's own flags, and your standard parameters.
 
 ## Goal timers
 
@@ -265,6 +287,7 @@ Older versions capped a delegated session at 30 minutes. An install that still h
 Two limits stay, because they protect against a broken connection or command rather than limiting work:
 
 - each request to a model provider has its own request timeout (`request_timeout` on the model, 120 seconds when unset); a provider that stops answering is retried or reported as **The model provider didn't answer this request in time** — the turn itself is not stopped by a clock. For a streamed reply the same limit applies only to waiting for the reply to start; once it is streaming, only a total silence (`stream_stall_timeout`, 300 seconds by default) ends it, so a long reply that keeps arriving is never cut off;
+  - when an agent has a fallback model, each attempt on each model has its own limit. With `request_timeout` set on a model, that value is the limit for that model, longer or shorter than the default. Without it, the limit grows with the size of the request: 120 seconds for a request of up to about 100,000 tokens, 60 seconds more for every further 100,000 tokens or part of them, and never more than 10 minutes — for example about 6 minutes for a 440,000-token request. A very large conversation is therefore no longer cut off after 120 seconds on every model. The silence limit (`stream_stall_timeout`) is unchanged;
 - a shell command run by an agent has its own `timeout_seconds` (default 300 seconds), and the environment-setup tool has its own job timeout.
 
 ### Which new agents get a self-line
@@ -294,7 +317,9 @@ When one agent sends a message into another's turn — `delegate` with `action: 
 - `steer_rate` — how many steer, respond or redirect messages one agent may send to the same target per minute. Default **60**.
 - `steer_aggregate_body` — the most message bytes that may be waiting for one conversation at once, added up across its waiting ordinary messages. Default **1,048,576** (1 MiB). A message that would take the waiting total past this is refused with a named error and is never trimmed; the total comes back down as the agent reads what is waiting. At most 200 messages may wait for one conversation, whichever limit is reached first. Wake-ups and other control messages do not count.
 
-All are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. A message beyond any bound is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these keys.
+**Messages you type into a chat while its agent is working behave differently today.** They wait in that chat's queue and reach the agent at its next step. The same 1 MiB total and 200-message limit apply to that queue, but a message that does not fit is not refused: it runs as the next turn, after the current one ends. Stop does not cancel it — Stop ends the current turn, the messages that were waiting in the queue are dropped with a "please resend" notice, and the message that did not fit then starts running. This is tracked in [#1503](https://github.com/elicify-ai/omnipus/issues/1503), which will make such a message refused visibly instead.
+
+All are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. Apart from the chat case above, a message beyond any bound is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these keys.
 
 ### Safety stops that are not settings
 
@@ -318,7 +343,7 @@ Three protections are fixed in the code on purpose. They guard against malformed
 
 - [security](security.md) — the rest of the Security tab: the sandbox, the encrypted credential vault, and the audit log.
 - [tools](tools.md) — which tools agents may use, and the allow, ask, and deny permissions that govern them.
-- [agents](agents.md) — giving one agent its own model instead of the default, and the agent roster.
+- [agents](agents.md) — giving one agent its own model instead of the default, the agent roster, and external workers.
 - [memory](memory.md) — what the team remembers between chats, behind the Memory tab.
 - [connectors](connectors.md) — connector accounts and their credentials, managed on the Connectors screen.
 - [providers and models](providers-and-models.md) — how providers, sign-in methods, models, and defaults fit together.

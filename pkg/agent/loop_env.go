@@ -56,6 +56,7 @@ func (al *AgentLoop) wireEnvProviders(cfg *config.Config, registry *AgentRegistr
 
 	// Wire the per-turn mode note (FR-015) for every agent in this registry.
 	wireModeNoteInjectors(al, registry)
+	wireChannelsInjectors(al, registry)
 
 	// Wire the per-turn, per-workspace project-shelf resolver for every agent
 	// in this registry (ADR-072 R1 fix — see wireProjectShelfResolvers).

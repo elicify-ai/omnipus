@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import React, { useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { VirtualizedMessageList } from './ChatMessageList'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -31,10 +31,10 @@ import { resolvedToolPartStatus } from '@/lib/assistant-tool-status'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { renderHistoricalToolCall } from './tools/HistoricalToolCallBlock'
 import { classifySetGoalCall } from './tools/SetGoalToolUI'
-import { FeedKindLabel } from './FeedKindLabel'
 import { UnavailableChatNotice } from './UnavailableChatNotice'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ProviderRetryIndicator } from './ProviderRetryIndicator'
+import { ProviderWaitingIndicator } from './ProviderWaitingIndicator'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
@@ -45,6 +45,7 @@ import { ModelPicker } from './composer/ModelPicker'
 import { AutoApprovePicker } from './composer/AutoApprovePicker'
 import { TokenCounter } from './composer/TokenCounter'
 import { MarkdownText } from './markdown-text'
+import { CATCH_UP_SMOOTH, ThreadRevealContext } from './useOpenReveal'
 import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
@@ -52,6 +53,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { isClearCommandText } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
 import { AgentReplyLabel, ParticipantMessageRow, useParticipantLabelParts } from './ParticipantLabels'
+import { assistantRowCorrelationAttributes } from './assistantRowAttributes'
 import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
 import { pendingRedirectSids } from '@/store/chat/runtime-state'
@@ -80,8 +82,7 @@ import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { fetchAgents, fetchCommands, fetchSkills } from '@/lib/api'
-import { MainChatAddParticipant } from './AddParticipant'
-import { INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
+import { INLINE_TOOL_APPROVALS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
@@ -500,10 +501,14 @@ class TextPartErrorBoundary extends React.Component<{ children: React.ReactNode 
 }
 
 function AssistantTextPart() {
+  // A reply already in progress when the chat opened must show its text so
+  // far, not re-type it from empty (the open flicker): catch-up pacing while
+  // the opened conversation is covered, normal pacing after the reveal.
+  const revealed = useContext(ThreadRevealContext)
   return (
     <TextPartErrorBoundary>
       <div>
-        <MarkdownText />
+        <MarkdownText smooth={revealed ? true : CATCH_UP_SMOOTH} />
       </div>
     </TextPartErrorBoundary>
   )
@@ -1211,6 +1216,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
       data-testid="assistant-message"
       data-message-role="assistant"
       data-message-id={message.id}
+      {...assistantRowCorrelationAttributes(message)}
       data-status="complete"
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
@@ -1554,6 +1560,7 @@ export function AssistantMessage() {
     <MessagePrimitive.Root
       data-testid="assistant-message"
       data-message-id={message.id}
+      {...assistantRowCorrelationAttributes(storeMsg)}
       data-status={message.status?.type ?? 'complete'}
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
@@ -2729,6 +2736,10 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const rateLimitEvent = useChatStore((s) => s.rateLimitEvent)
   const clearRateLimitEvent = useChatStore((s) => s.clearRateLimitEvent)
   const providerRetryEvent = useChatStore((s) => s.providerRetryEvent)
+  // Issues #1478/#1280 — the provider_status "waiting" notice slot (the
+  // model has gone quiet). Cleared by the frame handler on responding/
+  // recovered; like the retry line it renders only while the turn streams.
+  const providerStatusEvent = useChatStore((s) => s.providerStatusEvent)
   const isStreaming = useChatStore((s) => s.isStreaming)
   // ADR-049 D6/US-12/SD-C9: loop indicator state, same session-scoped
   // foreground field as rateLimitEvent above. (Goal pill state is read
@@ -2824,11 +2835,10 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         </div>
       )}
 
-      {/* FR-207: "Add participant" at the top-left of a member's main chat (absent for Omnipus) — hidden until WU-15 (stage 3), #1314. */}
-      {ROOMS_ENABLED && <MainChatAddParticipant />}
-
-      {/* Above-feed kind. FeedKindLabel also keeps the old Task: line when no descriptor matches. */}
-      <FeedKindLabel />
+      {/* #1449 D13 (founder 2026-10-28): the chat's own chrome — the kind
+          label / helper breadcrumb and "Add participant" — lives in the
+          workspace header line's right-end slot (ChatHeaderSlot), not in a
+          row above the feed. */}
 
         <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">
           {/* ARIA live region: announces new assistant messages to screen readers.
@@ -2848,7 +2858,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           ) : (
             /* key = active session: each chat gets a fresh scroll engine, so switching
                 chats lands at the bottom instead of keeping the previous chat's offset. */
-            <VirtualizedMessageList key={activeSessionId ?? '__none'} messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} />
+            <VirtualizedMessageList key={activeSessionId ?? '__none'} messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} openFailed={historyRead.isError} />
           )}
 
           <ChatConnectionNotice />
@@ -2884,8 +2894,25 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 receivedAt={providerRetryEvent.receivedAt}
                 attempt={providerRetryEvent.attempt}
                 maxAttempts={providerRetryEvent.maxAttempts}
+                errorCode={providerRetryEvent.errorCode}
                 previousProvider={providerRetryEvent.previousProvider}
                 previousModel={providerRetryEvent.previousModel}
+              />
+            </div>
+          )}
+
+          {/* Issues #1478/#1280 — the "model has gone quiet" notice: the
+              provider_status waiting frame, same above-composer slot. The
+              frame handler clears it on responding/recovered; the streaming
+              gate removes it with the turn. No dismiss control — Stop stays
+              available the whole time (docs/troubleshooting.md). */}
+          {providerStatusEvent && isStreaming && (
+            <div className="px-[var(--space-3)] pb-[var(--space-2)]">
+              <ProviderWaitingIndicator
+                silentSince={providerStatusEvent.silentSince}
+                sentAt={providerStatusEvent.sentAt}
+                receivedAt={providerStatusEvent.receivedAt}
+                stallAt={providerStatusEvent.stallAt}
               />
             </div>
           )}

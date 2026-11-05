@@ -802,11 +802,9 @@ func (g grepGateFS) withheld(name string) bool {
 	if _, _, ok := metadataFileMatch(abs); ok {
 		return true
 	}
-	if isSkillInstructionFileLeaf(abs) {
-		if shelf, ok := classifySkillsGateCandidate(abs, g.policy); ok && shelf == skillShelfRegistry {
-			return true
-		}
-	}
+	// Skill instruction files are no longer withheld by name (skills spec
+	// r15 §6.1): whether a skill path is readable is the home-guard
+	// predicate's decision, checked by IsCarveOut on every open.
 	return false
 }
 

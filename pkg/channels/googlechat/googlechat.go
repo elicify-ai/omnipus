@@ -634,6 +634,7 @@ func (c *GoogleChatChannel) processEvent(event googleChatEvent) {
 	}
 
 	if !c.IsAllowedSender(sender) {
+		c.RecordRejected(sender.CanonicalID)
 		return
 	}
 

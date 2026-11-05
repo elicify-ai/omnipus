@@ -2,6 +2,7 @@ package rooms
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -228,5 +229,52 @@ func TestTrain3_OverlappingRetryReturnsAtApprovalCardNotDecision(t *testing.T) {
 	f.deps.mu.Unlock()
 	if got := f.admittedIDs(); countOf(got, first) != 1 || cards != 1 {
 		t.Fatalf("admissions of %s = %d, cards = %d; want one of each (%v)", first, countOf(got, first), cards, got)
+	}
+}
+
+// Train 3 / FR-216, CHECK round 2 F2: the in-flight admission an overlapping
+// Retry joined is REFUSED. Every exit of that admission settles it, the
+// refusal included, so the Retry returns with Jim's refused state decided -
+// it never hangs on an admission that ended without admitting anyone.
+func TestTrain3_RetryOverlappingRefusedAdmissionReturnsRefused(t *testing.T) {
+	f := newFixture(t)
+	room := f.squad("mia", "jim")
+	gate := make(chan struct{})
+	var openGate sync.Once
+	t.Cleanup(func() { openGate.Do(func() { close(gate) }); f.drain(room.Id) })
+	entered := make(chan string, 8)
+	f.deps.mu.Lock()
+	f.deps.gate["jim"] = gate
+	f.deps.entered = entered
+	f.deps.admitErr["jim"] = fmt.Errorf("jim declined: %w", ErrAdmitRefused)
+	f.deps.mu.Unlock()
+	req := generated.RoomMessageRequest{ClientMessageId: "c1", Text: "@Jim go", Mentions: []string{}}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- f.svc.PostMessage(room.Id, req, "admin") }()
+	first := within(t, entered, "the first admission") // in flight, held at the gate
+	retryDone := make(chan error, 1)
+	go func() { retryDone <- f.svc.PostMessage(room.Id, req, "admin") }()
+	if !awaitParked(t, retryDone, inAdmitAll, "[chan receive", inPostMessage) {
+		t.Fatalf("FR-216: the Retry returned while Jim's admission %s was still in flight", first)
+	}
+	select {
+	case second := <-entered:
+		t.Fatalf("FR-216: the overlapping Retry started a second admission of %s (first %s)", second, first)
+	default:
+	}
+	openGate.Do(func() { close(gate) }) // the in-flight admission now ends refused
+	if err := within(t, retryDone, "the Retry's return after the in-flight admission was refused"); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	// Read before any drain: the Retry's return alone must mean decided.
+	if got := f.states(room.Id)["jim"]; got != StateRefused+"/" {
+		t.Fatalf("Jim's state when the Retry returned = %q, want %q", got, StateRefused+"/")
+	}
+	if err := within(t, firstDone, "the first post's return"); err != nil {
+		t.Fatalf("first post: %v", err)
+	}
+	f.drain(room.Id)
+	if got := f.admittedIDs(); countOf(got, first) != 0 {
+		t.Fatalf("a refused delivery was admitted %d times (%v)", countOf(got, first), got)
 	}
 }

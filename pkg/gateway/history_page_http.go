@@ -12,7 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-const historyUnavailableCopy = "Session history is unavailable. Retry after the operator restores its index."
+const historyUnavailableCopy = "This conversation's history could not be loaded."
 const historyStorageCopy = "This session could not be read because session storage failed. Check disk space and permissions, then retry. Details are in the server log."
 
 func historyStateForError(err error) generated.SessionHistoryState {

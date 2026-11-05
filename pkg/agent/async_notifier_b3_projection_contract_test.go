@@ -30,6 +30,28 @@ const b3RejectMessage = "Async notification origin warning enqueue rejected"
 const b3RejectedText = "async notification origin warning: outbound enqueue not accepted"
 const b3JoinWatchdog = 45 * time.Second // deadlock/setup guard, NOT a turn/caller budget or oracle
 
+// b3DeliveryDeadlineCtx bounds the caller deadline for the failure-projection
+// subtests whose oracles are WHAT a failed delivery projects: the saved
+// transcript warning, the WARN record shape, the outbound enqueue/rejection
+// outcome and the DeadlineExceeded cause. Those oracles are identical after one
+// real failed publish as after the full three-attempt budget:
+// b3AssertDiagnostic asserts attempt_budget (the constant 3) and only ALLOWS
+// the attempt/status keys, and reportAsyncNotifyFailure runs for any
+// attempts > 0 unless the caller was canceled (async_notifier.go Notify).
+// The full retry-budget arithmetic stays owned by
+// TestAsyncNotifierB3RetryContract on real timers (b3CausalRepair's 5+1+5s
+// bound, b3ThreeFailures' three records); b3CallerDeadline there already pins
+// this single-attempt projection shape with a bounded caller context.
+// 500ms is far below the 5s per-attempt publish timeout, so exactly one real
+// failed attempt runs against the untouched full inbound queue before the
+// caller deadline ends the loop.
+func b3DeliveryDeadlineCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	t.Cleanup(cancel)
+	return ctx
+}
+
 type b3Boundary struct {
 	boundary steer.Boundary
 	sid      string
@@ -315,7 +337,7 @@ func b3OriginOnly(t *testing.T) {
 	require.NoError(t, f.al.RecordLastChannel("telegram.b3-foreign"))
 	require.NoError(t, f.al.RecordLastChatID("b3-origin-chat"))
 	b3FillInbound(t, f.bus)
-	err := f.al.asyncNotifier.Notify(context.Background(), f.event)
+	err := f.al.asyncNotifier.Notify(b3DeliveryDeadlineCtx(t), f.event)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.NotErrorIs(t, err, bus.ErrBusClosed)
 	n, q := f.counts()
@@ -333,13 +355,18 @@ func b3OriginOnly(t *testing.T) {
 
 func b3RejectedWarning(t *testing.T, closed bool) {
 	f := b3New(t)
+	notifyCtx := context.Background()
 	if closed {
 		f.bus.Close()
 	} else {
+		// Open bus: bound the caller deadline (see b3DeliveryDeadlineCtx).
+		// The closed-bus branch fails fast without any real attempt and
+		// needs no bound.
 		b3FillInbound(t, f.bus)
 		b3FillOutbound(t, f.bus)
+		notifyCtx = b3DeliveryDeadlineCtx(t)
 	}
-	err := f.al.asyncNotifier.Notify(context.Background(), f.event)
+	err := f.al.asyncNotifier.Notify(notifyCtx, f.event)
 	require.Error(t, err)
 	if closed {
 		assert.ErrorIs(t, err, bus.ErrBusClosed)
@@ -418,7 +445,7 @@ func b3ExcludedOrigin(t *testing.T, kind string) {
 		}
 	}
 	b3FillInbound(t, f.bus)
-	err := f.al.asyncNotifier.Notify(context.Background(), f.event)
+	err := f.al.asyncNotifier.Notify(b3DeliveryDeadlineCtx(t), f.event)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Empty(t, b3DrainOutbound(f.bus), "ineligible origin never gains inherited/last-channel human delivery")
 	assert.Empty(t, b3Logs(t, f.logPath, b3RejectMessage), "skipped route is NOT a failed enqueue")

@@ -33,6 +33,13 @@ export const INITIAL_GZIP_BUDGET_BYTES = 25 * 1024
 // ELK engine (+1,462,909 raw bytes); release growth measured +1,955,396.
 // Raise the raw-growth allowance to 2 MiB; keep the frozen baseline and
 // the initial-gzip allowance unchanged.
+// Founder decision B1 = A (2026-11-03), #1183: re-baselined on 2026-11-03 to
+// the 3e2dc1ace release (release/v0.1.1 tip) instead of the frozen 92aeb4d5d
+// (2026-09-17). Growth is now measured against the current release, which is
+// the root cause #1183 names above; the 2 MiB raw-growth allowance and the
+// 25 KiB initial-gzip ceiling are unchanged. The CI baseline revision lives in
+// .github/workflows/pr.yml; the local verified baseline is
+// docs/internal/design/evidence/design-system-production-baseline-verified.json.
 export const TOTAL_RAW_BUDGET_BYTES = 2097152
 
 export function compareProductionBundles(baseline, candidate, provenance = null) {

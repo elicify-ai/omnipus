@@ -112,6 +112,11 @@ type restAPI struct {
 	taskStore        *task.Store         // unified task persistence
 	taskExecutor     *agent.TaskExecutor // task execution engine
 
+	// outboundDedicatedWrite is true only while applyOutboundChange's save
+	// runs (guarded by configMu): the outbound guard then keeps the
+	// writer's value (T-8 row 2). Every other save is not dedicated.
+	outboundDedicatedWrite bool
+
 	// limitAgentStore is the agent store the #904 global tool-iteration
 	// lowering (PUT /performance, D11) reads and writes. Nil in production
 	// (agentstore.New(homePath) is used); tests inject I/O and revision
@@ -522,6 +527,9 @@ func (a *restAPI) withAuthAndBodyLimit(handler http.HandlerFunc, bodyLimit int64
 		if result.ViaCLIToken {
 			ctx = context.WithValue(ctx, CLITokenContextKey{}, true)
 		}
+		if result.ViaSessionCookie {
+			ctx = context.WithValue(ctx, sessionCookieAuthContextKey{}, true)
+		}
 		handler(w, r.WithContext(ctx))
 	}
 }
@@ -811,6 +819,12 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// authenticated user (A2/G-02 — not admin-only because recap and retention
 	// settings are non-sensitive operational knobs without blast-radius risk).
 	rae.cm.RegisterHTTPHandler("/api/v1/settings/memory", rae.a.withAuth(rae.a.HandleMemorySettings))
+	// Settings -> Third-party agents (tool-parity spec r17 §3.3): signed-in
+	// person only, behind the shared T11 slice A check — no session 401, a
+	// CLI token or a non-person identity 403, no password step — and, for
+	// row 9.23, any bearer token 403 (requireSessionCookieAuth).
+	rae.cm.RegisterHTTPHandler("/api/v1/settings/third-party-agents",
+		rae.a.withAuth(middleware.RequirePersonSession(requireSessionCookieAuth(rae.a.HandleThirdPartyAgentSettings))))
 
 	// Context-budget settings endpoint (ADR-066 D9, FR-036 / US-11): the D4
 	// per-surface caps, the D6 absolute trigger, the D10 ingest bound, the D2

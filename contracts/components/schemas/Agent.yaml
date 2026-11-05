@@ -37,6 +37,15 @@ properties:
     type: string
   editable_fields:
     type: array
+    description: >
+      Per-field editability for this agent. For custom subagent_3p agents
+      the executor descriptors are executor.env_overrides,
+      executor.env_overrides_remove and executor.cli_args (editable; other
+      agents get the reason "Only external-CLI workers have a runtime
+      environment."), executor.cli (never: "Locked after create; create a new
+      agent to switch CLIs."), executor.effective_cli_path (never: "Set in
+      Settings -> Third-party agents.") and executor.kind (never: "Derived
+      from the agent type.").
     items:
       $ref: './AgentFieldDescriptor.yaml'
       x-go-type: AgentFieldDescriptor
@@ -188,10 +197,17 @@ properties:
         provider: "anthropic"
   model_params:
     $ref: './AgentModelParams.yaml'
-  rate_limits:
-    $ref: './AgentRateLimits.yaml'
   stats:
     $ref: './AgentStats.yaml'
+  skill_grants:
+    type: object
+    additionalProperties:
+      type: string
+    description: >
+      Skill key → generation the grant is bound to (SD-30). Written wholesale
+      by the server at every agent create/update from its own observation of
+      the installed skill folders; requests stay name-only. An absent field or
+      entry is unbound and authorizes nothing.
   skills:
     type: array
     uniqueItems: true
@@ -203,6 +219,19 @@ properties:
       is omitted entirely from the response (the backend does not emit an empty
       array). Absence of the field and an empty array are semantically identical
       (opt-in, default none).
+    example:
+      - "web-research"
+  stale_skill_grants:
+    type: array
+    readOnly: true
+    items:
+      type: string
+    description: >
+      Names from `skills` whose skill is installed but whose grant is bound to
+      a previous skill with that name (or to none), so the agent cannot load it
+      (SKILL_GRANT_STALE). Computed by the server on the agent detail read
+      (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is
+      not listed. Omitted when empty.
     example:
       - "web-research"
   updated_at:

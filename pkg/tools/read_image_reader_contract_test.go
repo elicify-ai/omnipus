@@ -656,7 +656,7 @@ func TestReadImage_AccessAuditAndMetadataPrivacy(t *testing.T) {
 	if !guarded.IsError || len(guarded.InspectionImages) != 0 {
 		t.Fatalf("metadata-hidden image was not refused: %#v", guarded)
 	}
-	if !strings.Contains(guarded.ForLLM, "read_agent_metadata") {
+	if !strings.Contains(guarded.ForLLM, "get_agent") {
 		t.Fatalf("metadata guard text: %q", guarded.ForLLM)
 	}
 

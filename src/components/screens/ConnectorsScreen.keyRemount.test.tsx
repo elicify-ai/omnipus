@@ -19,10 +19,11 @@
  * temporarily removing it locally (see task notes).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
+import { ChannelConfigureResponse as ChannelConfigureResponseSchema } from '@/lib/api/generated/schemas'
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -148,6 +149,12 @@ function makeClient() {
 // (module instantiation resolves all static imports first, regardless of
 // their lexical position), causing a TDZ ReferenceError inside the mocked
 // '@/lib/api' factory. ConnectorsScreen.test.tsx uses the same pattern.
+// Load the real module after those consts initialize, outside the timed test
+// body. Its cached import below keeps the same render path; no timeout changes.
+beforeAll(async () => {
+  await import('./ConnectorsScreen')
+})
+
 async function renderScreen() {
   const { ConnectorsScreen } = await import('./ConnectorsScreen')
   const client = makeClient()
@@ -169,6 +176,9 @@ beforeEach(() => {
   mockFetchAgents.mockResolvedValue([])
   mockFetchMailboxes.mockResolvedValue([])
   mockSetChannelRouting.mockResolvedValue({})
+  mockConfigureChannel.mockResolvedValue(
+    ChannelConfigureResponseSchema.parse({ apply_outcome: 'no_reload_needed' }),
+  )
 })
 
 describe('ConnectorsScreen — switching Configure targets while the panel stays open (round-1 CRITICAL)', () => {

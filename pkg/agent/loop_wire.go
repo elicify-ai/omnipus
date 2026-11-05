@@ -547,12 +547,14 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 		// common point before the wire. System-originated publishes leave
 		// these empty and are exempt by that emptiness.
 		return rw.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Channel:          channel,
-			ChatID:           chatID,
-			Content:          content,
-			AgentID:          origin.AgentID,
-			WorkspaceID:      origin.WorkspaceID,
-			OwnershipChecked: origin.OwnershipChecked,
+			Channel:     channel,
+			ChatID:      chatID,
+			Content:     content,
+			AgentID:     origin.AgentID,
+			WorkspaceID: origin.WorkspaceID,
+			// FR-043: the tool's decision; a start is re-checked at
+			// dispatch and dequeue (FR-044).
+			Operation: busOperation(origin.Operation),
 		})
 	})
 	// Peer and reply forms (session-core U8): the router resolves the live
@@ -562,6 +564,9 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 	messageTool.SetMainConnectorGuard(func(sessionID, channel string) bool {
 		return rw.rs.al.mainConnectorTurn(channel, sessionID)
 	})
+	// channels-spec-r8 T-4/FR-041: starts to listed targets, checked on the
+	// live configuration and the manager's availability.
+	messageTool.SetStartPolicy(messageStartPolicy{al: rw.rs.al})
 	// Re-apply the stored resolver: this runs on every reload, and the
 	// MessageTool above is brand new each time (ADR-065).
 	if own := rw.rs.al.ChannelOwnership(); own != nil {
@@ -651,17 +656,8 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 		// agent.Home, so a skill installed by one agent is discoverable
 		// by every other agent.
 		agent.Tools.RegisterReplacing(tools.NewInstallSkillTool(registryMgr, globalSkillsDir()))
-		// remove_skill is NOT registered here: it is a ScopeCore
-		// management tool (systools.SkillRemoveTool, "remove_skill"),
-		// wired onto every agent's Tools registry by WireSysagentDeps
-		// (pkg/gateway/gateway.go), which shares its SkillInstaller/
-		// SkillsLoader with this same skill engine. A prior version of
-		// this block registered a second, competing ScopeGeneral
-		// implementation here, constructed against the agent's own
-		// per-agent workspace root (the field ADR-057 FR-001/FR-002
-		// renamed to .Home) — a root that predates ADR-046 FR-009's move
-		// to a single global skills directory and that install_skill
-		// above no longer targets. Do not reintroduce it.
+		// remove_skill is retired (skills spec r15 §5.1): a skill is deleted with
+		// edit_skill action=delete. Do not register a removal tool here.
 	}
 
 	// Email tools (M11) — registered UNCONDITIONALLY for every agent. The
@@ -793,6 +789,9 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 		currentAgentID := agentID
 
 		agent.Tools.RegisterReplacing(tools.NewTaskListTool(rw.rs.al.taskStore))
+		// r17 §7.9: get_task and get_goal, rebuilt on every registration pass
+		// (boot and reload) like the other task tools.
+		rw.rs.al.registerTaskReadTools(agent)
 
 		taskCreate := tools.NewTaskCreateTool(rw.rs.al.taskStore)
 		// Resolve the real default workspace (is_default ULID) when a
@@ -872,13 +871,23 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			rw.rs.al.NotifyTaskUpserted(entity)
 		})
 		taskCreate.SetInitiatorFn(func(ctx context.Context) *task.Initiator { return rw.rs.al.initiatorFor(ctx, currentAgentID) })
+		// r17 TK-05: create_task's max_attempts ceiling reads the LIVE global.
+		taskCreate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(rw.rs.al) })
 		agent.Tools.RegisterReplacing(taskCreate)
 
 		taskUpdate := tools.NewTaskUpdateTool(rw.rs.al.taskStore)
 		// Same live goal try limit as taskCreate above, for the goal record
 		// update_task creates when a legacy task gets criteria/dod.
 		taskUpdate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(rw.rs.al) })
+		// r17 TK-05: the max_attempts ceiling reads the LIVE global.
+		// r17 TK-11: plan_id attach is checked against the plan store; the
+		// SetPlanStore late-binding pass re-wires it once the store exists.
+		taskUpdate.SetPlanStore(rw.rs.al.GetPlanStore())
+		taskUpdate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(rw.rs.al) })
 		taskUpdate.SetAssigneeReadinessChecker(rw.rs.al.TaskAssigneeCannotFinish)
+		// r17 TK-30: a trigger write reconciles the live scheduler under the
+		// task's coordination lock (reconciliation step 3).
+		taskUpdate.SetScheduleReconciler(rw.rs.al.ReconcileTaskScheduleLocked)
 		taskUpdate.SetOnComplete(func(t *task.Task) {
 			if rw.rs.al.taskExecutor != nil {
 				rw.rs.al.taskExecutor.onTaskComplete(t)
@@ -1533,6 +1542,9 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 					}
 
 					if resolved, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug); resolvedOK {
+						if resolved.Shelf != skills.ShelfProject {
+							return rw.rs.al.loadSkillActivation(ctx, callerAgent, callerID, workspaceID, resolved)
+						}
 						if content, readOK := skills.LoadSkillFile(resolved.Path); readOK {
 							audit.EmitSkillCall(rw.rs.al.auditLogger, callerID, workspaceID, resolved.Slug,
 								audit.SkillCallModeLoad, audit.SkillCallOutcomeLoaded, string(resolved.Shelf))
@@ -1541,6 +1553,7 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 								Content:       content,
 								Shelf:         resolved.Shelf,
 								CanonicalSlug: resolved.Slug,
+								Folder:        filepath.Dir(resolved.Path),
 							}
 						}
 						// Resolved but the file vanished or became unreadable
@@ -1561,6 +1574,11 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 						if strings.EqualFold(s.ID, slug) || strings.EqualFold(s.Name, slug) {
 							audit.EmitSkillCall(rw.rs.al.auditLogger, callerID, workspaceID, slug,
 								audit.SkillCallModeLoad, audit.SkillCallOutcomeDenied, "")
+							if callerAgent.ContextBuilder.HoldsSkillName(s.ID) {
+								// Granted by name, refused by identity (SD-30).
+								skills.ForgetSeen(tools.ToolTranscriptSessionID(ctx), s.ID)
+								return tools.SkillLoadOutcome{Status: tools.SkillLoadRefused, Message: skills.StaleGrantError(s.ID).Error()}
+							}
 							return tools.SkillLoadOutcome{Status: tools.SkillLoadDenied}
 						}
 					}
@@ -1742,7 +1760,20 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	planCreate.SetOwnerValidator(func(ownerAgentID string) error {
 		return validatePlanOwnerAgentForTool(al.GetConfig(), ownerAgentID)
 	})
+	planCreate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(al) })
 	agent.Tools.RegisterReplacing(planCreate)
+
+	// update_plan (r17 §7.3): same owner validator and live bounds ceiling.
+	planUpdate := tools.NewPlanUpdateTool(planStore)
+	planUpdate.SetOwnerValidator(func(ownerAgentID string) error {
+		return validatePlanOwnerAgentForTool(al.GetConfig(), ownerAgentID)
+	})
+	planUpdate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(al) })
+	agent.Tools.RegisterReplacing(planUpdate)
+
+	// get_plan (r17 PL-12, §7.8): reads a plan the caller owns, created, or
+	// has a task in; the task store serves membership and progress.
+	agent.Tools.RegisterReplacing(tools.NewPlanGetTool(planStore, al.taskStore))
 
 	// execute_plan (FR-003/004/030, US-3): SD-A7 tiered-DoD gate's isAgentID
 	// checker (SetIsAgentIDChecker) mirrors gateway's restAPI.isAgentID.

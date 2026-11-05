@@ -14,6 +14,16 @@ supersedes the original topology, ownership, capacity, review-scope and landing 
 where they differ. The body above/below preserves the original design record; use
 root `CLAUDE.md` and the linked procedures for current operation.
 
+**Current-process notice (2026-10-28):** the `squad-lead` role is **deleted** — founder
+decision 2026-10-27, confirmed 2026-10-28: "squad leads need to be deleted as agents, we
+do not need them anymore." The 2026-10-23 amendment had already retired in-session
+squad-lead dispatch for new work and kept #1266 as the sole exception; #1266 has since
+landed, so nothing needs the role. Team-lead coordinates workers directly; a separate,
+directly addressable session for an independent stream is simply another **team-lead**
+session (for example the Discord team leads on the pods). The dated amendment at the end
+of this document records what changed and where. The body above and below preserves the
+original design record, including the squad-lead role this amendment supersedes.
+
 ---
 
 ## 1. Purpose and scope
@@ -1223,3 +1233,30 @@ outside the repo; root "Running CLI agents" and the planning skill's
 exemptions. The standing-instance rebuild pipeline still needs its own campaign,
 version and readiness evidence. Implementation is not a passing later candidate;
 raw failures, independent verification and founder-question rules remain unchanged.
+
+## Amendment — 2026-10-28: the squad-lead role is deleted
+
+Last reviewed: 2026-10-28
+
+Decision source: founder decision 2026-10-27, confirmed 2026-10-28 — "squad leads need
+to be deleted as agents, we do not need them anymore." The 2026-10-23 amendment had
+already retired in-session squad-lead dispatch for new work and retained #1266 as the
+sole exception; #1266 has since landed, so no live work needs the role.
+
+This amendment supersedes the original squad-lead text wherever it appears in the body
+above — the term definitions in §1, the team-size and diagram text in §3, the role tables
+in §4, the capacity and coordination text in §5, the skill-preload mapping in §6.1, the
+guard checks in §8.1 and the rollout stages in §10. That text is preserved, not
+rewritten: it is the original design record.
+
+| Superseded original | Current canonical rule |
+|---|---|
+| `squad-lead.md` — the eleventh agent file, carrying the shared-traits discipline block | Deleted. `.claude/agents/` holds **ten** role files; every orchestrator session runs `team-lead.md` |
+| Squad lead — "the agent running one squad", dispatched in-session or run by one of the founder's separate sessions | A separate, directly addressable session for an independent stream is a **team-lead** session; it coordinates workers directly under the same rules |
+| Squad — "the unit of parallel feature-size work: one squad lead, its own worktree(s), its own feature branch…" | A **stream** — the same unit of parallel feature-size work: its own worktree(s), its own feature branch, and the specialists it draws from the ten roles. The coordination ledger's `squads/<id>.md` path and its `squad=` parser key are unchanged file and field conventions, not a role reference |
+| The chief aligns "squad leads" across the founder's sessions | The chief aligns team-lead sessions across the founder's sessions |
+| Guard check 11's orchestrator-side role category (`ORCH_SHARED_ONLY`) | Removed with the role; `scripts/check-agent-files.sh` classifies the ten remaining role files |
+| The planning skill preloaded into "team-lead.md and squad-lead.md" | Preloaded into `team-lead.md` only; a separate team-lead session loads it the same way |
+
+Root `CLAUDE.md` ("Subagent Workflow") and `.claude/agents/team-lead.md` carry the
+current rule. The roster count is **ten** roles.

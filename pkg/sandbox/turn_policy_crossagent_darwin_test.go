@@ -67,6 +67,7 @@ func crossAgentHome(t *testing.T) string {
 	}
 	write("master.key", "SECRET-MASTER-KEY")
 	write(filepath.Join("agents", "self", "OWN.md"), "own soul")
+	write(filepath.Join("agents", "victim", "OWN.md"), "victim own")
 	write(filepath.Join("agents", "victim", "SOUL.md"), "victim soul")
 	write(filepath.Join("workspaces", "w1", "mounts.json"), `{"mounts":[]}`)
 	write(filepath.Join("workspaces", "w2", "record.json"), `{"id":"w2"}`)
@@ -250,6 +251,13 @@ func TestPerTurnPolicy_WorkspaceTurn_CannotWriteAWorkspaceRecordItDoesNotOwn(t *
 // whole class of "the seam works once" bug: a cache or a backend field that
 // accepts the first per-turn policy and then ignores every later one would pass
 // every single-turn test above.
+//
+// The "own file" each turn reads is an ORDINARY file (OWN.md), not a
+// definition file. Since #1284 (amendment §2 D4) the agent-home-internal set —
+// .omnipus/**, memory/, sessions/, skills/, SOUL.md, AGENT.md, HEARTBEAT.md,
+// MEMORY.md — stays protected even inside the agent's OWN home, so SOUL.md is
+// no longer a reachable "own file" for a child and is asserted as denied in
+// both directions below.
 func TestPerTurnPolicy_TwoAgentTurns_AreGenuinelyDifferentChildren(t *testing.T) {
 	home := crossAgentHome(t)
 	installCrossAgentTurn(t, home)
@@ -258,7 +266,8 @@ func TestPerTurnPolicy_TwoAgentTurns_AreGenuinelyDifferentChildren(t *testing.T)
 	victimLim := turnLimits(t, home, filepath.Join(home, "agents", "victim"))
 
 	selfFile := filepath.Join(home, "agents", "self", "OWN.md")
-	victimFile := filepath.Join(home, "agents", "victim", "SOUL.md")
+	victimFile := filepath.Join(home, "agents", "victim", "OWN.md")
+	victimDef := filepath.Join(home, "agents", "victim", "SOUL.md")
 
 	// Each turn reads its own file and is refused the other's, in both
 	// directions — so neither policy is simply "whatever was derived first".
@@ -271,6 +280,16 @@ func TestPerTurnPolicy_TwoAgentTurns_AreGenuinelyDifferentChildren(t *testing.T)
 	assert.Equal(t, 0, code, "victim turn reads its own file. stderr=%s", stderr)
 	code, _ = runChild(t, readScript(selfFile), victimLim)
 	assert.NotEqual(t, 0, code, "victim turn is refused self's file")
+
+	// #1284 D4: the definition files stay protected even in the agent's own
+	// home, so the victim's SOUL.md is refused to the VICTIM turn as well as
+	// to the self turn. The app layer agrees (IsCarveOut over the HomeGuard
+	// production always carries), so this is the two layers converging.
+	code, _ = runChild(t, readScript(victimDef), selfLim)
+	assert.NotEqual(t, 0, code, "self turn is refused victim's definition file")
+	code, _ = runChild(t, readScript(victimDef), victimLim)
+	assert.NotEqual(t, 0, code,
+		"a definition file stays protected even in the agent's OWN home (#1284 D4)")
 }
 
 // TestPerTurnPolicy_NoRegisteredBase_FallsBackRatherThanErroring pins the

@@ -1,5 +1,10 @@
 import { type Page, expect } from '@playwright/test';
 import { selectCentralModel } from './select-model.js';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { E2E_PRIMARY } from './e2e-model.js';
+import { keyEnvNamesFor, lookupModelKey } from './e2e-model-keys.js';
 
 export interface Credentials {
   username: string;
@@ -57,17 +62,22 @@ async function isAuthenticated(page: Page): Promise<boolean> {
  * Step 1 — admin username: #admin-username → "Continue"
  * Step 2 — admin password: #admin-password / #admin-password-confirm → "Continue"
  * Step 3 — preferences: #pref-name → "Continue"
- * Step 4 — provider: pick the OpenRouter Popular tile
- *           (picker-popular-openrouter) → type the key into the second-level
+ * Step 4 — provider: pick the central PRIMARY provider (E2E_PRIMARY from
+ *           tests/e2e/e2e-model.json) — its Popular tile
+ *           (picker-popular-<id>) when the catalog ranks it popular, else
+ *           its row in the searched catalog list (picker-row-<company>) →
+ *           type the key into the second-level
  *           panel (provider-detail-panel-api-key-input) → confirm
  *           (provider-detail-panel-continue) → choose the central e2e model
  *           (onboarding-model-select → the tests/e2e/e2e-model.json entry;
  *           choosing auto-probes it, FR-029) → "Finish" once the probe passed
  * Done   — "Start chatting" on the Meet-your-Assistant screen
  *
- * The API key is sourced from OPENROUTER_API_KEY_CI (or OPENROUTER_API_KEY as a
- * fallback for local worker runs); tests will fail with a real probe error if
- * it is absent — that is intentional: Finish only enables on a passed probe.
+ * The API key is the primary provider's key (fixtures/e2e-model-keys.ts:
+ * <REF>_CI, then <REF> for local runs). A missing key throws before the
+ * wizard starts, naming both variables: Finish only enables on a passed probe,
+ * so a placeholder could never get through. The browser wizard seeds no
+ * fallback; agents onboarded this way have no fallback_models.
  *
  * IMPORTANT: pressSequentially() is used instead of fill() on the admin
  * inputs because React's synthetic onChange is not triggered by fill() on
@@ -75,10 +85,13 @@ async function isAuthenticated(page: Page): Promise<boolean> {
  * without real keystroke events.
  */
 async function completeOnboarding(page: Page, creds: Credentials): Promise<void> {
-  const apiKey =
-    process.env.OPENROUTER_API_KEY_CI ??
-    process.env.OPENROUTER_API_KEY ??
-    'sk-test-placeholder';
+  const apiKey = lookupModelKey(E2E_PRIMARY.provider);
+  if (!apiKey) {
+    throw new Error(
+      `completeOnboarding: no API key for the primary provider "${E2E_PRIMARY.provider}" — set ` +
+        `${keyEnvNamesFor(E2E_PRIMARY.provider).join(' or ')}.`,
+    );
+  }
 
   // ── Step 1 — Admin username ───────────────────────────────────────────────
   await expect(page).toHaveURL(/onboarding/, { timeout: 15_000 });
@@ -98,9 +111,10 @@ async function completeOnboarding(page: Page, creds: Credentials): Promise<void>
   await page.getByRole('button', { name: /^continue$/i }).click();
 
   // ── Step 4 — Provider ─────────────────────────────────────────────────────
-  // The ONE picker (FR-021): OpenRouter is a Popular tile in the shipped
-  // catalog (pkg/providers/catalog/data/providers_catalog.json, tier "popular").
-  await page.getByTestId('picker-popular-openrouter').click();
+  // The ONE picker (FR-021): the primary provider is a Popular tile when the
+  // catalog ranks it "popular"; otherwise it is a row of the full list,
+  // grouped by company, reached through the search box.
+  await pickPrimaryProvider(page);
   const panel = page.getByTestId('provider-detail-panel');
   await expect(panel).toBeVisible({ timeout: 8_000 });
   await panel.getByTestId('provider-detail-panel-api-key-input').fill(apiKey);
@@ -210,4 +224,41 @@ export async function loginAs(page: Page, username = 'admin', password = 'admin1
   await page.goto('/#/login');
   await expect(page.locator('#login-username')).toBeVisible({ timeout: 10_000 });
   await completeLoginForm(page, creds);
+}
+
+/**
+ * Pick E2E_PRIMARY.provider in the onboarding provider picker: its Popular
+ * tile if one exists, else search the catalog list for the provider's
+ * company and choose that row (ProviderPicker.tsx: picker-search,
+ * picker-row-<company>). The company comes from the embedded catalog the
+ * gateway serves, so no provider name is hardcoded here.
+ */
+async function pickPrimaryProvider(page: Page): Promise<void> {
+  const tile = page.getByTestId(`picker-popular-${E2E_PRIMARY.provider}`);
+  if ((await tile.count()) > 0) {
+    await tile.click();
+    return;
+  }
+  const company = primaryProviderCompany();
+  await page.getByTestId('picker-search').fill(company);
+  await page.getByTestId(`picker-row-${company}`).click();
+}
+
+function primaryProviderCompany(): string {
+  const catalogPath = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../../pkg/providers/catalog/data/providers_catalog.json',
+  );
+  const doc = JSON.parse(readFileSync(catalogPath, 'utf8')) as {
+    providers?: { id?: string; name?: string; company?: string }[];
+  };
+  const row = doc.providers?.find((p) => p.id === E2E_PRIMARY.provider);
+  const company = row?.company || row?.name;
+  if (!company) {
+    throw new Error(
+      `completeOnboarding: provider "${E2E_PRIMARY.provider}" (tests/e2e/e2e-model.json primary) ` +
+        `is not in ${catalogPath}; the onboarding wizard cannot offer it.`,
+    );
+  }
+  return company;
 }

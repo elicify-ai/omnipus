@@ -58,14 +58,17 @@
 //      `test.skip()` — if a feature is missing the test FAILS loud.
 //
 // Real-LLM requirement (per §9.1 "at least one real-LLM run per
-// user-facing flow"): every test depends on OPENROUTER_API_KEY_CI.
-// The global-setup preflight throws immediately if it is unset.
+// user-facing flow"): every test needs the live-model keys — the central
+// primary's and the fallback's (fixtures/e2e-model-keys.ts). The global-setup
+// preflight throws immediately if either is unset.
 
 import { expect, test, type Page } from '@playwright/test'
 import { assistantMessages, dismissStaleDialogOverlay } from './selectors'
 import { freshChat } from './session-setup'
 import { stubCliExecutor, type StubCliTexts } from './stub-external-cli'
 import { sessionMessages, type RetainedHistoryMessage } from './session-history'
+import { e2eAgentModelFields } from './e2e-agent-model'
+import { requireLiveModelKeys } from './e2e-model-keys'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -73,14 +76,12 @@ export const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
 // ── T0.1: API key gate ──────────────────────────────────────────────────────
 
+// Checks the keys for the ACTIVE pair: the central primary (or the fallback
+// after a failed job-start check) and the fallback.
 export function requireApiKey(): void {
-  if (!process.env.OPENROUTER_API_KEY_CI) {
-    throw new Error(
-      'BLOCKED: OPENROUTER_API_KEY_CI not set. Every conformance e2e in this file ' +
-        'requires a real LLM (the spec demands at least one real-LLM run per user-facing ' +
-        'flow). See tests/e2e/README.md prerequisites.',
-    )
-  }
+  requireLiveModelKeys(
+    'the conformance e2e (the spec demands at least one real-LLM run per user-facing flow)',
+  )
 }
 
 // ── Shared helpers (mirror verifier-eval.spec.ts's apiFetch pattern) ────────
@@ -322,6 +323,10 @@ export async function createMainAgent(
     type: 'Main',
     name,
     soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
+    // The central live model plus its fallback: the product falls back per
+    // agent only, so an agent without fallback_models fails when the primary
+    // is unavailable.
+    ...e2eAgentModelFields('live'),
   }
   const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', body)
   if (!res.ok) {

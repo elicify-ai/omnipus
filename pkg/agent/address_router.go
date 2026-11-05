@@ -161,7 +161,9 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 			return "", "", false, err
 		}
 	}
-	meta, err := store.GetOrCreateMainSession(a.Receiver.WorkspaceID, a.Receiver.AgentID)
+	// No person creates this main: if it is new, it is owned by the operator
+	// (the first configured account; empty when none is configured).
+	meta, err := store.GetOrCreateMainSessionOwned(a.Receiver.WorkspaceID, a.Receiver.AgentID, al.systemMainOwner())
 	if err != nil {
 		return "", "", false, storageRefusal("the receiver's conversation could not be prepared", err, ErrPeerRefused)
 	}
@@ -535,7 +537,7 @@ func (al *AgentLoop) replyViaConnector(ctx context.Context, c addressing.Capture
 		SessionID:        c.Source.SessionID,
 		Content:          req.Content,
 		ReplyToMessageID: c.Source.PlatformMessageID,
-		// The author is the responder; OwnershipChecked stays false because
+		// The author is the responder; Operation stays "" because
 		// the author owns nothing here — the Return route is what authorizes.
 		AgentID:     responder.AgentID,
 		WorkspaceID: responder.WorkspaceID,

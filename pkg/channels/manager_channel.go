@@ -18,8 +18,8 @@ import (
 // fields are plain strings (*Ref), they survive JSON marshal/unmarshal without any
 // special handling.
 
-// toChannelHashes produces a map from instanceID → config-hash for all enabled
-// channel instances. Both m.channels and m.channelHashes are keyed by instanceID
+// toChannelHashes produces a map from instanceID → adapter-view config-hash
+// (config.ChannelAdapterView, FR-015) for all enabled channel instances. Both m.channels and m.channelHashes are keyed by instanceID
 // (FR-015 / WS-B), so compareChannels and Reload operate on a consistent key
 // space. Legacy single-instance names ("telegram", "whatsapp") behave
 // identically to before because their instanceID IS their type name.
@@ -32,7 +32,9 @@ func toChannelHashes(cfg *config.Config) map[string]string {
 		// Canonicalize supported instance fields exactly like the loader. The
 		// manager's typed/factory callers retain their existing enabled set;
 		// filtering unsupported file sections remains the loader's job.
-		canonical, _ := config.CanonicalChannelInstance(instanceID, inst)
+		// FR-015: hash the adapter view, so a list-only outbound change
+		// restarts nothing and moves no pairing revision.
+		canonical, _ := config.CanonicalChannelInstance(instanceID, config.ChannelAdapterView(inst))
 		valueBytes, err := json.Marshal(canonical)
 		if err != nil {
 			logger.WarnCF("channels", "toChannelHashes: failed to marshal channel instance",

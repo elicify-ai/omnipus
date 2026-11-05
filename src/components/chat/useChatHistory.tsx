@@ -7,7 +7,6 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { pendingClearRefetches } from '@/store/chat/runtime-state'
 import { ErrorState } from '@/components/ui/error-state'
-import { Skeleton } from '@/components/ui/skeleton'
 
 export function useChatHistory() {
   const sid = useSessionStore(s => s.activeSessionId)
@@ -56,9 +55,7 @@ export function HistoryOpenState({ read }: { read: ReturnType<typeof useChatHist
     if (sid && pendingClearRefetches[sid]) useChatStore.getState().retryClearTranscript(sid)
     else void read.refetch()
   }} />
-  if (sid && !history.historyLoaded && count === 0 && !read.isError) return <div className="p-[var(--space-3)]" aria-busy="true">
-    <Skeleton className="h-8 w-full" />
-    <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Loading messages…</p>
-  </div>
+  // The opening loading status and cover belong to the conversation list
+  // (ChatMessageList.tsx::OpenCover), which is always mounted in this state.
   return null
 }

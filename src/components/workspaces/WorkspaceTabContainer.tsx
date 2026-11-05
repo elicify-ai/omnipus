@@ -12,6 +12,7 @@ import { getPanelDefinition } from '@/components/panel-shell/registry'
 import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
 import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 import { ChatControls } from '@/components/chat/ChatControls'
+import { ChatHeaderSlot } from '@/components/chat/ChatHeaderSlot'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { Button } from '@/components/ui/button'
 import { SidebarShowButton } from '@/components/layout/SidebarShowButton'
@@ -264,7 +265,10 @@ function WorkspaceTabContainerView({
             `header` CSS selector. @container enables container-query variants
             on children (used by ChatControls' "Open browser" label).
             WorkspaceTabBar measures the remaining flex slot instead of
-            using a fixed container breakpoint.
+            using a fixed container breakpoint. data-header-line marks this
+            row as the line it measures against: the chat title in the slot
+            at the right end is room the strip may take back
+            (useWorkspaceHeaderMode).
             No secondary breadcrumb row: the tab strip already names the
             workspace + active view, so a second chrome line was redundant and
             broke the flat 44px shell alignment.
@@ -276,6 +280,7 @@ function WorkspaceTabContainerView({
           role="banner"
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
           data-testid="workspace-top-bar"
+          data-header-line=""
         >
           <SidebarShowButton
             testId="workspace-hamburger"
@@ -291,6 +296,17 @@ function WorkspaceTabContainerView({
               <ChatControls />
             </div>
           )}
+
+          {/* #1449 D13 (founder 2026-10-28): the chat's own chrome sits at
+              the right end of THIS header line — the same line as the
+              workspace strip, which stays where it is on the left. No new
+              row, no bar, no border, no background: the slot carries the
+              chat label / helper breadcrumb and the chat controls (today
+              "Add participant"; the group chat's Participants button plugs
+              into the same slot later). On a room page the slot stays
+              empty — the room owns its own chrome until the group work
+              lands. */}
+          {activeSegment === 'chat' && <ChatHeaderSlot workspaceId={workspace.id} />}
         </header>
 
         {/* Tab content */}

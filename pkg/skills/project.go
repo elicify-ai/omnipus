@@ -158,7 +158,8 @@ func discoverProjectSkills(mountName, mountRoot, requestedSlug string) ([]Projec
 				continue
 			}
 			skillFile := filepath.Join(dirPath, slug, "SKILL.md")
-			if _, ok, resolveErr := realWithinRoot(mountRootReal, skillFile); !ok {
+			realSkillFile, ok, resolveErr := realWithinRoot(mountRootReal, skillFile)
+			if !ok {
 				if resolveErr != nil {
 					incomplete = errors.Join(incomplete,
 						fmt.Errorf("mount %q: %s/%s/SKILL.md: %w", mountName, dirRel, slug, resolveErr))
@@ -174,7 +175,18 @@ func discoverProjectSkills(mountName, mountRoot, requestedSlug string) ([]Projec
 				Path:   skillFile,
 				Source: string(ShelfProject),
 			}
-			meta, metadataErr := (&SkillsLoader{}).getSkillMetadataChecked(skillFile)
+			// The project shelf's boundary is the mount (D4.1): the in-mount
+			// real path is read through the bounded metadata reader.
+			var meta *SkillMetadata
+			// realWithinRoot already confirmed this; the prefix check sits next
+			// to the read so the mount boundary is visible where it is used.
+			if !strings.HasPrefix(realSkillFile, mountRootReal+string(filepath.Separator)) {
+				continue
+			}
+			content, metadataErr := readBoundedInstruction("metadata", realSkillFile, "SKILL.md")
+			if metadataErr == nil {
+				meta = (&SkillsLoader{}).parseSkillMetadata(skillFile, content)
+			}
 			if metadataErr != nil {
 				incomplete = errors.Join(incomplete,
 					fmt.Errorf("mount %q: %s/%s/SKILL.md: %w", mountName, dirRel, slug, metadataErr))

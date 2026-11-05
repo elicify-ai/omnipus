@@ -1,6 +1,6 @@
 import http from 'node:http';
 import type { ServerResponse } from 'node:http';
-import { E2E_MODEL } from '../e2e-model';
+import { E2E_FALLBACK } from '../e2e-model';
 
 // Only this external model HTTP boundary is scripted. The engine, tool search,
 // actual approval/question/secret registries and UI are never replaced.
@@ -35,7 +35,7 @@ export async function startHistoryControlProvider(kind: HistoryControlKind): Pro
     request.on('end', () => {
       if (request.method === 'GET' && request.url?.includes('/models')) {
         response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ object: 'list', data: [{ id: E2E_MODEL, object: 'model' }] }));
+        response.end(JSON.stringify({ object: 'list', data: [{ id: E2E_FALLBACK.model, object: 'model' }] }));
         return;
       }
       if (request.method !== 'POST' || !request.url?.includes('/chat/completions')) {
@@ -47,7 +47,7 @@ export async function startHistoryControlProvider(kind: HistoryControlKind): Pro
       catch (error) { failures.push(`invalid provider JSON: ${String(error)}`); response.writeHead(400); response.end(); return; }
       if (body.stream !== true) {
         response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ id: 'history-control-probe', object: 'chat.completion', model: E2E_MODEL,
+        response.end(JSON.stringify({ id: 'history-control-probe', object: 'chat.completion', model: E2E_FALLBACK.model,
           choices: [{ index: 0, message: { role: 'assistant', content: 'probe ok' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
         return;
@@ -107,6 +107,6 @@ function call(name: string, parameters: unknown, id: string) {
   return chunk({ tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(parameters) } }] }, null);
 }
 function chunk(delta: Record<string, unknown>, finishReason: string | null) {
-  return 'data: ' + JSON.stringify({ id: 'history-control-stream', object: 'chat.completion.chunk', model: E2E_MODEL,
+  return 'data: ' + JSON.stringify({ id: 'history-control-stream', object: 'chat.completion.chunk', model: E2E_FALLBACK.model,
     created: Math.floor(Date.now() / 1000), choices: [{ index: 0, delta, finish_reason: finishReason }] }) + '\n\n';
 }

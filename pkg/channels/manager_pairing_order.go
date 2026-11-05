@@ -86,6 +86,9 @@ func (mr *managerReload) publishStartedWorker(name string, channel Channel) {
 		return
 	}
 	mr.m.noteStartLocked(name, nil)
+	// The rebuild of name completed: acknowledge only the credential writes
+	// its captured bundle included (FR-050 (iii), snapshot-aware).
+	mr.m.acknowledgeApplication(name, mr.captureVersion)
 	w.gen = mr.m.dispatchGen
 	mr.m.workers[name] = w
 	mr.m.recordResourceConfigOrder(name, mr.cfg)
@@ -168,8 +171,10 @@ func (mr *managerReload) recordStartFailure(name string, channel Channel, err er
 
 func (mr *managerReload) restartDrainedWorker(name string, w *channelWorker) {
 	// Join the cancelled generation BEFORE entering the ordering boundary.
+	mr.m.observeWorkerJoin(name, workerJoinJoining, w.done, w.mediaDone)
 	<-w.done
 	<-w.mediaDone
+	mr.m.observeWorkerJoin(name, workerJoinJoined, w.done, w.mediaDone)
 	order := mr.m.PairingAttempts().LockChannel(name)
 	defer order.Unlock()
 	if !order.MatchesConfig(mr.cfg) || mr.m.workers[name] != w || mr.dispatchCtx.Err() != nil {

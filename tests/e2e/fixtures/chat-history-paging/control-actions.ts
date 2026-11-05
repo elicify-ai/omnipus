@@ -169,20 +169,34 @@ export async function activatePendingControl(history: HistoryHarness, pending: P
   await expect(history.page.getByText(CONTROL_RUNNING, { exact: true })).toBeVisible();
 }
 export async function stopRunningControlTurn(history: HistoryHarness) {
+  await stopHeldControlTurn(history);
+  await assertSessionStopped(history);
+  expect(controlProvider(history).failures()).toEqual([]);
+}
+/** The latest genuinely running control turn's observed identity, skipping already-stopped turns. */
+function runningControlTurnId(history: HistoryHarness, stopped: readonly string[]) {
+  const fact = [...history.traffic.frames].reverse().find((f) =>
+    (f.type === 'token' && f.session_id === history.sessionId && f.content === CONTROL_RUNNING && f.turn_id !== undefined && !stopped.includes(f.turn_id)) ||
+    (f.type === 'session_state' && f.session_id === history.sessionId && f.active_turn !== undefined && !stopped.includes(f.active_turn.turn_id)));
+  return fact?.type === 'token' ? fact.turn_id : fact?.type === 'session_state' ? fact.active_turn?.turn_id : undefined;
+}
+/**
+ * Stop ONE genuinely running, provider-held control turn through the visible
+ * Stop button and prove that exact turn ended and its held model call was
+ * cancelled. Lifecycle is the caller's oracle (assertSessionStopped).
+ */
+export async function stopHeldControlTurn(history: HistoryHarness, stopped: readonly string[] = []) {
   const provider = controlProvider(history);
   await expect.poll(() => provider.heldCount(), { message: 'positive control: an actual model HTTP response is held open' }).toBeGreaterThan(0);
-  const fact = [...history.traffic.frames].reverse().find((f) =>
-    (f.type === 'token' && f.session_id === history.sessionId && f.content === CONTROL_RUNNING && f.turn_id !== undefined) ||
-    (f.type === 'session_state' && f.session_id === history.sessionId && f.active_turn !== undefined));
-  const turnId = fact?.type === 'token' ? fact.turn_id : fact?.type === 'session_state' ? fact.active_turn?.turn_id : undefined;
+  if (stopped.length) await expect.poll(() => runningControlTurnId(history, stopped) !== undefined, { message: 'a further genuinely running control turn is observed' }).toBe(true);
+  const turnId = runningControlTurnId(history, stopped);
   if (!turnId) throw new Error('genuinely running provider turn has no authoritative observed identity');
   const before = provider.aborted();
   expect(terminalLogRows(history.logPath).filter((r) => r.event_kind === 'turn_end' && r.turn_id === turnId)).toEqual([]);
   await history.page.getByTestId('stop-btn').click();
   await expect.poll(() => terminalLogRows(history.logPath).filter((r) => r.event_kind === 'turn_end' && r.turn_id === turnId).length).toBe(1);
   await expect.poll(() => provider.aborted(), { message: 'Stop cancelled the actual held HTTP model call' }).toBe(before + 1);
-  await assertSessionStopped(history);
-  expect(provider.failures()).toEqual([]);
+  return turnId;
 }
 async function startRunningTurnWithPendingQuestion(history: HistoryHarness, pending: Extract<PendingHistoryControl, { kind: 'question' }>) {
   return startRunningTurnWithParkedControl(history, pending);

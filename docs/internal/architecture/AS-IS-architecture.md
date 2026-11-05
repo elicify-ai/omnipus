@@ -176,15 +176,13 @@ An authorized page attempt has one `history_page` summary. Its explicit fields d
 
 Source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_diagnostics.go::historyPageAttempt.finish`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_diagnostics.go::historyPageAttempt.preparationComplete`.
 
-### 2.8 Standalone offline repair, not a product-binary fallback
+### 2.8 Offline index reconstruction lives in the session package; no standalone repair command ships
 
-The repair program has its own `main` and an explicit operator-only Makefile target, `history-index-repair`. It is **not shipped inside the Omnipus application binary**, nor a dependency of the normal build/install/release targets. The product entry point separately calls `app.Main`.
+**The standalone repair program was removed by founder decision 2026-10-27 (greenfield, no upgrade path).** Its command package, its operator-only Makefile target, its CI job and Fly gate, and its operator runbook are gone. No operator-only offline repair command ships with Omnipus, and the product binary never contained one.
 
-Repair supports dry-run, apply and verify. `prepareAllSessions` invokes the shared `PrepareChatHistoryIndex` builder; the offline builder can traverse retained canonical input rather than obeying the online 64-mutation recovery limit. It uses the same archive/disposition reducers. The command plans all sessions before publication and invokes the shared index verifier afterward.
+What remains is the shared offline builder in the session package. `PrepareChatHistoryIndex` reconstructs a session's derived index from retained canonical bytes using the same archive/disposition reducers as the online path, and `VerifyChatHistoryIndex` verifies the published result. The builder can traverse retained canonical input rather than obeying the online 64-mutation recovery limit, but it is **not** an application-startup or ordinary-send fallback, and it does not invoke the gateway/projector/model to reconstruct the index. It is exercised by the session and gateway test suites.
 
-Apply prerequisites are **check-only**, not an exclusion lock: `repairGuards` checks stopped-instance evidence, backup/source validity and stopped evidence again, with checks around publication and at the end. They do not guarantee that another process cannot start after a check; that residual race remains. A late guard/publication failure can follow an already-published derived checkpoint. The command reports the failure and actual publication counts; it does not automatically restore the backup or retry the operation.
-
-Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/chat-history-index-repair/main.go::main`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/Makefile::history-index-repair`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/omnipus/main.go::main`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/chat-history-index-repair/plan.go::prepareAllSessions`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_build.go::PrepareChatHistoryIndex`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/chat-history-index-repair/plan.go::repairGuards`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/chat-history-index-repair/evidence.go::verifyStoppedEvidence`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/chat-history-index-repair/plan.go::runRepairPlan`.
+Sources: `pkg/session/chat_history_build.go::PrepareChatHistoryIndex`; `pkg/session/chat_history_build.go::VerifyChatHistoryIndex`; `cmd/omnipus/main.go::main`.
 
 ### 2.9 Frontend reader, live tail and inactive-body release
 

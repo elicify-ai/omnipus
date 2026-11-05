@@ -23,14 +23,19 @@ import (
 // (FR-009's founder ruling: explicit allow for every agent tier including
 // system agents; a natural extension of the Judge's existing read_file/
 // list_directory grant, not a new capability class). Every other static
-// builtin name must resolve to explicit deny.
+// builtin name must resolve to explicit deny. Skills r15 §10 deliberately adds
+// get_skill Allow everywhere, including hidden engine agents.
 var judgeAllowedTools = map[string]bool{
 	"read_file":       true,
 	"list_directory":  true,
 	"inspect_session": true,
 	"ToolSearch":      true,
 	"Skill":           true,
-	"grep":            true,
+	// r17 FR-143 / 7.12.1: every agent may read any agent with get_agent,
+	// the Judge included (founder: "everyone").
+	"get_agent": true,
+	"grep":      true,
+	"get_skill": true, // r15 §10 read floor; data access remains separately gated.
 }
 
 // TestSeed_JudgeSystemAgent verifies ADR-049 D3 / US-4 Acceptance Scenario 1,
@@ -151,6 +156,7 @@ func TestSeed_JudgeExactSetReEnforced(t *testing.T) {
 		cfg.Agents.List[i].Tools.Builtin.Policies["create_plan"] = config.ToolPolicyAllow
 		cfg.Agents.List[i].Tools.Builtin.Policies["inspect_session"] = config.ToolPolicyDeny
 		cfg.Agents.List[i].Tools.Builtin.Policies["read_file"] = config.ToolPolicyAsk
+		cfg.Agents.List[i].Tools.Builtin.Policies["get_skill"] = config.ToolPolicyDeny
 	}
 
 	require.True(t, coreagent.SeedConfig(cfg), "re-enforcement must report modified=true after tamper")

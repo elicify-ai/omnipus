@@ -32,6 +32,23 @@ import (
 // Without the secret-set entries these tests fail with the file contents
 // printed, which is exactly what a `bash -c 'cat ...'` tool call would have
 // returned to the model.
+//
+// # The control cases moved when the home became default-deny
+//
+// This file's control case used to be "an ordinary file sitting directly in
+// $OMNIPUS_HOME", and it was READABLE. It is not any more, and the change
+// was deliberate: the #1284 internal-files amendment (amendment §2 D1/D5,
+// spec FR-254) replaced the enumerated secret set with a default-deny inside
+// $OMNIPUS_HOME plus a short allow-list (D3). The app layer makes the same
+// call — IsCarveOut over the HomeGuard production always carries answers
+// "protected" for that path — so the kernel agreeing with it is the two
+// layers converging, not the kernel over-reaching.
+//
+// The control's PURPOSE is unchanged and still asserted: the deny must be
+// TARGETED, not a blanket refusal of the home. It now lives on an
+// allow-listed branch (media/, D3 A3) as well as in the agent's own work
+// dir, so a deny that swallowed the whole home would still fail this test
+// rather than pass it by denying everything.
 
 // secretSetKernelPolicy builds the per-turn kernel policy for an agent-home
 // turn under a realistic $OMNIPUS_HOME, going through the production seam
@@ -55,10 +72,23 @@ func secretSetKernelPolicy(t *testing.T) (home, agentHome string, policy Sandbox
 		filepath.Join(home, "auth.json"),
 		[]byte(`{"credentials":{"anthropic":{"refresh_token":"OAUTH-REFRESH-TOKEN"}}}`), 0o600))
 
-	// Controls: an ordinary file in the same parent as both secrets, and one
-	// in the agent's own tree. If these stopped being readable the test would
-	// be proving "the home is unreachable", not "these entries are".
+	// An ordinary file sitting DIRECTLY in $OMNIPUS_HOME, beside the two
+	// secrets above. Since the #1284 internal-files amendment (amendment §2
+	// D1/D5, spec FR-254) the home is default-deny and only a short
+	// allow-list stays reachable, so this file is DENIED — the same answer
+	// the app layer gives (IsCarveOut over a policy carrying the HomeGuard
+	// production always sets).
 	require.NoError(t, os.WriteFile(filepath.Join(home, "notes.txt"), []byte("ORDINARY-HOME-FILE"), 0o600))
+
+	// Controls: an ordinary file in an ALLOW-LISTED branch of the home
+	// (media/ — amendment §2 D3 A3, read-only) and one in the agent's own
+	// tree. If these stopped being readable the test would be proving "the
+	// home is unreachable", not "these entries are". The two are reachable
+	// by DIFFERENT mechanisms — allow-list branch vs work-dir branch — so a
+	// deny that swallowed the whole home would still leave the work-dir
+	// control green while this one goes red.
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "media"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "media", "notes.txt"), []byte("ORDINARY-MEDIA-FILE"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(agentHome, "own.txt"), []byte("OWN-WORKDIR-FILE"), 0o600))
 
 	authored := fspolicy.FSPolicy{
@@ -91,7 +121,8 @@ func TestSeatbelt_ChildCannotReadBackupsOrAuthJSON(t *testing.T) {
 	}{
 		{"backups tarball", filepath.Join(home, "backups", "backup-20260812T090000Z.tar.gz"), "VAULT-TARBALL-BYTES", true},
 		{"auth.json", filepath.Join(home, "auth.json"), "OAUTH-REFRESH-TOKEN", true},
-		{"control: ordinary file in $OMNIPUS_HOME", filepath.Join(home, "notes.txt"), "ORDINARY-HOME-FILE", false},
+		{"default-deny: ordinary file directly in $OMNIPUS_HOME", filepath.Join(home, "notes.txt"), "ORDINARY-HOME-FILE", true},
+		{"control: ordinary file in the allow-listed media/ branch", filepath.Join(home, "media", "notes.txt"), "ORDINARY-MEDIA-FILE", false},
 		{"control: file in the agent's own work dir", filepath.Join(agentHome, "own.txt"), "OWN-WORKDIR-FILE", false},
 	}
 

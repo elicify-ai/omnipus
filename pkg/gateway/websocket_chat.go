@@ -5,7 +5,9 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -968,9 +970,47 @@ func (hcm *wsHandlerHandleChatMessage) persistUserMessage() bool {
 			hcm.sendAppendFailureError(appendErr)
 			return true
 		}
+		hcm.adoptMainOwnerOnSend()
 		hcm.acceptPersistedUserMessage(entry)
 	}
 	return false
+}
+
+// adoptMainOwnerOnSend gives an ownerless main its first owner when a signed-in
+// person's message has just been durably saved in it. This is the one choke
+// point for a person writing into an existing chat over the WebSocket: it runs
+// only after a successful append (never on open, attach or list, so reading a
+// main never changes it), and AdoptMainSessionOwner is a no-op for a non-main,
+// an already-owned main, or an empty owner. The machine principal "cli" and an
+// unauthenticated connection (dev-mode bypass) are not persons and adopt
+// nothing. The adoption itself does not bump the main's recency.
+//
+// AdoptMainSessionOwner returns at once, without locks or disk I/O, for a
+// cached non-main or already-owned session, so this costs nothing on the
+// ordinary send path. A successful adoption is logged at Info.
+//
+// A failed adoption does not fail the message: the message is already saved
+// and the owner is attribution (ADR-019), not a read or write gate. It is
+// still read by the channel-pairing ownership check (rest_channel_enable.go)
+// and by goal_pause_notify.go routing, so an ownerless main can cause a 403 on
+// a pairing retry until the next signed-in send adopts it. A session that
+// vanished between the append and this call is logged at Debug only; any other
+// failure is logged at error level with the cause, and the next message from a
+// signed-in person retries it.
+func (hcm *wsHandlerHandleChatMessage) adoptMainOwnerOnSend() {
+	actor := hcm.wc.userID
+	if actor == "" || actor == config.MachinePrincipalUsername {
+		return
+	}
+	adopted, err := hcm.store.AdoptMainSessionOwner(hcm.sessionID, actor)
+	switch {
+	case err != nil && errors.Is(err, fs.ErrNotExist):
+		logsafeDebug("ws: main chat owner not recorded: the session no longer exists", "session_id", hcm.sessionID, "error", err)
+	case err != nil:
+		logsafeError("ws: could not record the owner of the main chat", "session_id", hcm.sessionID, "error", err)
+	case adopted:
+		logsafeInfo("ws: main chat owner recorded", "session_id", hcm.sessionID, "owner", actor)
+	}
 }
 
 // acceptPersistedUserMessage runs the success path of a durable append:

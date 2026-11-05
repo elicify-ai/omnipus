@@ -12,14 +12,14 @@ import { createTerminalSession } from '../terminal-outcome-acceptance';
 import { openSessionByDeepLink } from '../session-setup';
 import { chatInput, waitForConnected } from '../selectors';
 import { seedChatHistoryDayPartitions, type ChatHistoryFixtureDay } from '../chat-history';
-import { E2E_MODEL } from '../e2e-model';
+import { e2eAgentModelFields } from '../e2e-agent-model';
 import { startHistoryControlProvider, type HistoryControlKind, type HistoryControlProvider } from './control-provider';
 import { historyDevOrigin } from './dev-origin';
 import { assertNativeBashPolicy } from './agent-tool-policy';
 type HistoryProvider = Awaited<ReturnType<typeof startTerminalOutcomeProvider>> | HistoryControlProvider;
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
-export const UNAVAILABLE = 'Session history is unavailable. Retry after the operator restores its index.';
+export const UNAVAILABLE = 'This conversation\'s history could not be loaded.';
 export const BUDGET = 4_194_304; // D4a: 4 MiB, not an observed product value.
 export const POSITION = /^hp1_[A-Za-z0-9_-]{43}$/;
 export const historyScroller = (page: Page) => page.getByTestId('virtualized-message-list');
@@ -167,7 +167,7 @@ async function createControlSessions(gateway: GatewayProcess, kind: HistoryContr
   // Eight rounds accommodate discovery + actual control + resumed stream; the
   // old terminal-outcome fixture deliberately stays cap1 and is not weakened.
   const result = await gateway.apiFetch('POST', '/api/v1/agents', { type: 'Main', name: 'History control acceptance',
-    soul: 'Use the requested tool. Ask the human when their format choice is needed.', provider: 'openrouter', model: E2E_MODEL,
+    soul: 'Use the requested tool. Ask the human when their format choice is needed.', ...e2eAgentModelFields('mock'),
     // The native approval scenario needs the real operator-facing grant on
     // this custom agent. Ask remains Ask under the global ceiling; it does
     // not auto-approve or bypass the actual decision being tested.

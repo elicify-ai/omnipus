@@ -13,10 +13,17 @@ import type {
   ProviderFallbackFrame,
   ProviderFallbackNote,
   ProviderRetryFrame,
+  ProviderStatusFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { getMessages } from '../messages'
 import { applyMessageArray } from '../session'
-import type { ChatMessage, ChatStore, ProviderRetryEventData, SessionChatState } from '../types'
+import type {
+  ChatMessage,
+  ChatStore,
+  ProviderRetryEventData,
+  ProviderStatusEventData,
+  SessionChatState,
+} from '../types'
 
 type Frame = Parameters<ChatStore['handleFrame']>[0]
 
@@ -137,12 +144,92 @@ export function handleProviderFrame({ frame, targetSid, get, withBucket }: Provi
           receivedAt,
           attempt: retryFrame.attempt,
           maxAttempts: retryFrame.max_attempts,
+          // Issues #1280/#1478 wording round — the cause class the indicator
+          // renders in plain English (never the raw code). Optional on the
+          // type only for forward/backward compat with frames that pre-date
+          // the field; the contract requires it since #1280.
+          ...(typeof retryFrame.error_code === 'string' && retryFrame.error_code.length > 0
+            ? { errorCode: retryFrame.error_code }
+            : {}),
           ...(movedWithinProvider && !movedAcrossProviders
             ? { previousProvider: prev.provider, previousModel: prev.model }
             : {}),
         }
         return { providerRetryEvent: next }
       })
+      return true
+    }
+
+    case 'provider_status': {
+      if (!targetSid) return true
+      const statusFrame = frame as ProviderStatusFrame
+      // The store manages the notice slot only; the recovered note and the
+      // stale retry-line clear are handled here so the reducer stays the one
+      // place that owns these slots' invariants.
+      if (statusFrame.state === 'waiting') {
+        // C-11 — the receipt anchor, captured at reducer entry (same rule as
+        // the provider_retry case above).
+        const receivedAt = new Date().toISOString()
+        withBucket(targetSid, (b) => ({
+          providerStatusEvent: {
+            state: 'waiting',
+            turnId: statusFrame.turn_id,
+            silentSince: statusFrame.silent_since ?? statusFrame.sent_at,
+            ...(typeof statusFrame.stall_at === 'string' && statusFrame.stall_at.length > 0
+              ? { stallAt: statusFrame.stall_at }
+              : {}),
+            sentAt: statusFrame.sent_at,
+            receivedAt,
+          } satisfies ProviderStatusEventData,
+          // The wait this turn's last provider_retry frame announced has
+          // clearly FIRED — a call is running now (silence is measured inside
+          // it). A countdown line frozen at "Retrying now…" under the waiting
+          // notice would describe nothing, so the same-turn stale slot goes.
+          ...(b.providerRetryEvent?.turnId === statusFrame.turn_id ? { providerRetryEvent: null } : {}),
+        }))
+        return true
+      }
+      if (statusFrame.state === 'responding') {
+        // Data arrives again / the call returned / a retry was scheduled —
+        // the waiting notice goes. Deliberately does NOT touch
+        // providerRetryEvent: the backend emits responding when a retry is
+        // SCHEDULED (provider_status.go::retryScheduled), exactly when the
+        // retry line must stay up.
+        withBucket(targetSid, () => ({ providerStatusEvent: null }))
+        return true
+      }
+      if (statusFrame.state === 'recovered') {
+        // The call succeeded after automatic retries (#1280). The notice
+        // goes, a stale "Retrying now…" line cannot survive a success, and
+        // the chat gets the short recovered note (docs/troubleshooting.md:
+        // "the chat notes that the connection came back and after how many
+        // retries").
+        const retries = statusFrame.retries
+        if (typeof retries !== 'number' || !Number.isFinite(retries) || retries < 1) {
+          // Contract violation (retries is what the note exists to say).
+          // Render nothing rather than invented copy.
+          logDiagnostic('chatProviderStatusSkipped', { sessionId: targetSid, frameState: statusFrame.state })
+          withBucket(targetSid, () => ({ providerStatusEvent: null, providerRetryEvent: null }))
+          return true
+        }
+        const note: ChatMessage = {
+          id: generateId(),
+          role: 'system',
+          content: `Connection came back — the model answered after ${retries} ${retries === 1 ? 'retry' : 'retries'}.`,
+          timestamp: new Date().toISOString(),
+          status: 'done',
+          isStreaming: false,
+        }
+        withBucket(targetSid, (b) => ({
+          providerStatusEvent: null,
+          providerRetryEvent: null,
+          ...applyMessageArray([...getMessages(b), note], b),
+        }))
+        return true
+      }
+      // Unknown state (forward compat: a newer backend, or a corrupted
+      // frame the WS zod schema somehow passed). Skip + log; render nothing.
+      logDiagnostic('chatProviderStatusSkipped', { sessionId: targetSid, frameState: (statusFrame as { state?: string }).state })
       return true
     }
 

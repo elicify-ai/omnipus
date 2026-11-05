@@ -171,8 +171,9 @@ PLUGIN_REVIEWERS = {
 DEVELOPER_SIDE = {"backend-lead", "frontend-lead", "uat-tester", "prometheus-prompt-engineer"}
 REVIEWER_SIDE = {"security-lead", "uat-validator", "docs-verifier"}
 BOTH_SIDE = {"qa-lead", "architect"}
-ORCH_SHARED_ONLY = {"squad-lead"}
-# team-lead is exempt from check 11 (design 8.1 check 11).
+# team-lead is exempt from check 11 (design 8.1 check 11). The orchestrator-side
+# category (ORCH_SHARED_ONLY) held only `squad-lead`, whose role was deleted by
+# founder decision 2026-10-27 — every orchestrator session now runs team-lead.md.
 
 findings = []
 warnings = []
@@ -435,7 +436,7 @@ SKILL_SHAPE_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)+$")
 # check 6's role-isolation gate applies to them at all — without this they
 # fall outside isolation_universe() entirely and any role could cite any of
 # the four with no check6 finding. LANES.md S5 task 5 fixes the mapping:
-# team-lead and squad-lead may cite all four; architect may cite grill-spec
+# team-lead may cite all four; architect may cite grill-spec
 # only; qa-lead and the developers (backend-lead, frontend-lead) may cite
 # grill-code only.
 SPEC_PROCESS_SKILLS = {"plan-spec", "grill-spec", "grill-code", "spec-sync"}
@@ -475,7 +476,7 @@ def role_allowed(role, skill):
         if skill in {"ux-heuristics-review", "elicify-ui-ux-design", "grill-spec"}:
             return True
         return skill.startswith("gitnexus")
-    if role in {"team-lead", "squad-lead"}:
+    if role == "team-lead":
         if skill == "omnipus-planning-orchestration":
             return True
         return skill in SPEC_PROCESS_SKILLS
@@ -500,7 +501,7 @@ def is_known_skill_shape(tok):
 # list itself, not "the name appears somewhere in the file text".
 def required_preloads_for(role):
     req = {"omnipus-shared-rules"}
-    if role in {"team-lead", "squad-lead"}:
+    if role == "team-lead":
         req.add("omnipus-planning-orchestration")
     if role == "frontend-lead":
         req.add("omnipus-frontend-rules")
@@ -791,8 +792,6 @@ def required_sections_for(base):
     # file is now itself a finding ("role not classified").
     if base == "team-lead":
         return set(), True
-    if base in ORCH_SHARED_ONLY:
-        return {"shared-traits"}, True
     if base in DEVELOPER_SIDE:
         return {"shared-traits", "developer-rules"}, True
     if base in REVIEWER_SIDE:
@@ -817,7 +816,7 @@ for path in agent_files:
     base = os.path.splitext(os.path.basename(path))[0]
     req, classified = required_sections_for(base)
     if not classified:
-        finding(11, "%s: role not classified in the guard's discipline role lists (team-lead/DEVELOPER_SIDE/REVIEWER_SIDE/BOTH_SIDE/ORCH_SHARED_ONLY) — add it to scripts/check-agent-files.sh" % relpath(path))
+        finding(11, "%s: role not classified in the guard's discipline role lists (team-lead/DEVELOPER_SIDE/REVIEWER_SIDE/BOTH_SIDE) — add it to scripts/check-agent-files.sh" % relpath(path))
         continue
     if not req:
         continue
