@@ -2,10 +2,12 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sync/atomic"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -59,13 +61,25 @@ func TestChannelsQ2B_Q1B_OutageAfterCardSavesWithoutSecondLookup(t *testing.T) {
 			require.Len(t, rows, 1)
 			require.Equal(t, "saved", rows[0]["outcome"])
 			require.Equal(t, entry.ApprovalID, rows[0]["approval_id"])
-			for _, target := range wantLookups {
-				assert.True(t, q7AuditContainsValue(rows[0], target), "Q1 B: saved outcome must identify the pre-card result for each saved target (%s), not only the target count", target)
+			// A1: both saved Discord targets required and passed pre-card lookup.
+			assert.Equal(t, []any{"verified_before_approval", "verified_before_approval"}, rows[0]["target_verifications"], "A1: one exact result per saved target, in saved order")
+			assert.Equal(t, float64(len(wantLookups)), rows[0]["target_count"], "A1: verification list length equals saved target_count")
+			var records []map[string]any
+			for _, record := range q7AuditRead(t, f, sid, "set_channel_outbound", false) {
+				fields, _ := record["fields"].(map[string]any)
+				if record["event"] == audit.EventChannelOutboundWrite && fields["tool_call_id"] == callID && fields["session_id"] == sid {
+					records = append(records, record)
+				}
 			}
-			// The contract gives no audit field names or result vocabulary.
-			// Keep that missing oracle loud until team-lead specifies it; a
-			// target's presence alone never certifies its verification status.
-			t.Fatal("BLOCKED: per-target pre-card verification audit representation is unspecified — required by Q2-B contract final founder Q1 B amendment; define field/result vocabulary before CHECK")
+			require.Len(t, records, 1, "instrument: privacy assertion inspects the entire actual correlated saved record")
+			recordJSON, err := json.Marshal(records[0])
+			require.NoError(t, err)
+			for _, target := range wantLookups {
+				assert.NotContains(t, string(recordJSON), target, "A1: no canonical target value appears anywhere in the saved audit record")
+			}
+			for _, rawTarget := range []string{"600", "601"} {
+				assert.NotContains(t, string(recordJSON), `"`+rawTarget+`"`, "A1: no raw target value appears anywhere in the saved audit record")
+			}
 		})
 	}
 }
@@ -105,4 +119,5 @@ func TestChannelsQ2B_Q1B_ChangedDiscordRevisionRefusesWithoutWriting(t *testing.
 	require.Equal(t, "refused", rows[0]["outcome"])
 	require.Equal(t, "stale_revision", rows[0]["reason"])
 	require.Equal(t, entry.ApprovalID, rows[0]["approval_id"])
+	require.NotContains(t, rows[0], "target_verifications", "A1: refusal audit omits verification results, rather than recording null or an empty list")
 }
