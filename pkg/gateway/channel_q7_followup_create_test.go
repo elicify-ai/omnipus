@@ -42,9 +42,9 @@ func TestQ7FollowupS4_RegisteredCreateRefusesAllowButAcceptsAskAndDeny(t *testin
 				if policy == "allow" {
 					assert.Equal(t, http.StatusBadRequest, rec.Code, "S4: create must refuse the same unstorable Allow as update")
 					assert.JSONEq(t, `{"error":"`+q7AlwaysAskText+`"}`, rec.Body.String(), "S4: exact FR-037 refusal, not unknown tool or invalid shape")
-					after, skipped, err := store.List()
-					require.NoError(t, err)
-					require.Empty(t, skipped)
+					after, afterSkipped, afterErr := store.List()
+					require.NoError(t, afterErr)
+					require.Empty(t, afterSkipped)
 					assert.Equal(t, before, after, "S4: refused creation persists no agent")
 					assert.Equal(t, beforeConfig, q7ConfigBytes(t, f.wu6Fixture), "S4: refused creation writes no config")
 					assert.Equal(t, beforeLive, f.al.GetConfig().Agents.List, "S4: refused creation publishes no live agent")

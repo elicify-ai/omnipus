@@ -66,9 +66,11 @@ func TestQ7FollowupS3_RealAuditBindsEachConsentDecisionToItsCall(t *testing.T) {
 			approvedHash := q7FollowupDigest(t, args)
 			require.False(t, f.al.ApprovalGrants().IsAllowed(sid, "omnipus", toolName, args))
 			if tc.stale {
+				expectedRevision, ok := args["expected_revision"].(string)
+				require.True(t, ok, "instrument: the original requested revision is a string")
 				body, err := json.Marshal(gen.ChannelOutboundUpdateRequest{
 					Policy:  gen.ChannelOutboundUpdateRequestPolicyAgentMayStart,
-					Targets: []string{"333"}, ExpectedRevision: args["expected_revision"].(string),
+					Targets: []string{"333"}, ExpectedRevision: expectedRevision,
 				})
 				require.NoError(t, err)
 				require.Equal(t, http.StatusOK, request(http.MethodPut, "/api/v1/channels/telegram/outbound", string(body)).Code, "instrument: an actual concurrent operator save makes the displayed revision stale")

@@ -114,9 +114,10 @@ func TestQ7FollowupQ4_ChatCapableAgentsAlwaysAskInEveryConsentMode(t *testing.T)
 			}
 			args := q7Args("telegram", "reply_only", t14Read(t, f, "telegram").Revision, []string{})
 			grants := f.al.ApprovalGrants()
-			if tc.grant == "exact" {
+			switch tc.grant {
+			case "exact":
 				require.True(t, grants.Record(sid, "mia", "set_channel_outbound", args))
-			} else if tc.grant == "inherited" {
+			case "inherited":
 				require.True(t, grants.Record("q4-parent", "mia", "set_channel_outbound", args))
 				grants.InheritFrom("q4-parent", "mia", sid, "mia")
 			}
