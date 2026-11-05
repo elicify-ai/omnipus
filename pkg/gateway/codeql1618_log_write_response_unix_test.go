@@ -3,8 +3,7 @@
 package gateway
 
 import (
-	"fmt"
-	"io"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -59,9 +58,9 @@ func TestCodeQL1618_ToolResultWriteResponseLogHasSafeIdentifiers(t *testing.T) {
 
 				response := &codeQL1618WriteFailure{
 					header:  make(http.Header),
-					failure: fmt.Errorf("response transport failed for %s: %w", inputID, io.ErrClosedPipe),
+					failure: errors.New("response transport failed for " + inputID + ": closed pipe"),
 				}
-				require.ErrorIs(t, response.failure, io.ErrClosedPipe)
+				require.EqualError(t, response.failure, "response transport failed for "+inputID+": closed pipe")
 				require.Contains(t, response.failure.Error(), inputID, "fixture: the transport error must really embed the raw request-derived identifier")
 				api.HandleToolResults(response, codeQL1618ToolResultRequest(t, sessionID, ref))
 
