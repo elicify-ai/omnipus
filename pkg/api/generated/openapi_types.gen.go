@@ -15165,6 +15165,9 @@ type AgentDetail struct {
 	// Soul SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul).
 	Soul *string `json:"soul,omitempty"`
 
+	// StaleSkillGrants Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). The same list the REST agent detail returns as `stale_skill_grants`; empty when none is stale.
+	StaleSkillGrants *[]string `json:"stale_skill_grants,omitempty"`
+
 	// StoredOverrides The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included.
 	StoredOverrides *map[string]AgentDetailStoredOverrides `json:"stored_overrides,omitempty"`
 
