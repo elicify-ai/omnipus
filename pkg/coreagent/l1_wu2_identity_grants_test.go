@@ -60,7 +60,9 @@ func l1WU2SeededAgent(t *testing.T, cfg *config.Config, id string) config.AgentC
 // out-of-role tool to the production catalogue must still leave it explicit Deny.
 func l1WU2OmnipusSupport() []string {
 	return []string{
-		"list_agents", "get_agent", "get_agent_tools", "read_agent_metadata",
+		"list_agents", "get_agent",
+		// r17 7.14.2 change 1 / D-7: Omnipus creates and schedules tasks for itself and sees its helpers.
+		"list_tasks", "get_task", "create_task", "update_task", "run_task", "delete_task", "list_jobs",
 		"list_workspaces", "get_workspace", "list_models", "list_providers", "test_provider",
 		"list_mcp_servers", "list_channels", "test_channel", "list_skills", "find_skills",
 		"run_doctor", "get_usage", "list_secrets", "AskUserQuestion", "send_message",
@@ -91,7 +93,7 @@ func TestL1WU2OmnipusPolicies_ExactSupportSetAndNoPerAgentAsk(t *testing.T) {
 	ask := []string{"delete_agent", "edit_skill", "remove_mcp_server", "add_mcp_server",
 		"configure_provider", "enable_channel", "configure_channel", "connect_channel",
 		"connect_mailbox", "set_agent_permissions", "remove_secret", "select_secret_version",
-		"environment_setup", "bash", "install_skill"}
+		"environment_setup", "bash", "delete_task", "install_skill"}
 	global := map[string]config.ToolPolicy{}
 	for name, p := range cfg.Sandbox.ToolPolicies {
 		global[name] = config.ToolPolicy(p)

@@ -1847,7 +1847,13 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
 	}
-	if runningServices.TaskTrigger != nil {
+	// RELOAD MUST NOT STOP IT (tool-parity spec r17 §7.2 TK-30, 18.40): the
+	// task-trigger scheduler is not reconstructed on reload, so its queued
+	// and running callbacks settle, re-arm and publish into the same live
+	// engine, and no reload reads or writes its store. It reads the live
+	// task store and executor of the same *AgentLoop, so nothing it captured
+	// goes stale across a reload.
+	if !isReload && runningServices.TaskTrigger != nil {
 		runningServices.TaskTrigger.Stop()
 	}
 	if runningServices.LoopScheduler != nil {

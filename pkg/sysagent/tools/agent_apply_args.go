@@ -26,6 +26,8 @@ var agentUpdateArgNames = map[string]struct{}{
 	"memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
 	"agent_md": {}, // AGENT.md (#1064), written beside the record
+	// r17 §3.9 ExecutorConfigUpdate: external-CLI worker settings only.
+	"env_overrides": {}, "env_overrides_remove": {}, "cli_args": {},
 }
 
 // permissionFieldNames are the capability fields only set_agent_permissions
@@ -49,8 +51,8 @@ func permissionFieldRefusal(args map[string]any) *tools.ToolResult {
 var agentCreateArgNames = map[string]struct{}{
 	"name": {}, "description": {}, "soul": {}, "model": {}, "color": {},
 	"figure": {}, "role": {}, // visual identity (#1303); defaults resolved in validate
-	"agent_type": {}, "cli": {}, "cli_path": {}, "provider": {}, "fallback_models": {},
-	"heartbeat": {}, "max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
+	"agent_type": {}, "cli": {}, "env_overrides": {}, "cli_args": {}, "provider": {}, "fallback_models": {},
+	"max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
 	"tool_policy_changes": {}, "memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
 	workspaceIDParam: {}, // destination workspace (FR-040), not an agent field
@@ -68,8 +70,8 @@ func rejectUnknownAgentFields(args map[string]any, allowed map[string]struct{}) 
 func mutationFieldNames(args map[string]any) []string {
 	fields := make([]string, 0, len(args))
 	for name := range args {
-		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" || name == "cli_path" ||
-			name == "heartbeat" || name == "agent_md" || name == workspaceIDParam {
+		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" ||
+			name == "agent_md" || name == workspaceIDParam {
 			continue
 		}
 		fields = append(fields, name)
@@ -509,6 +511,13 @@ func decodePolicyPatch(raw any) (agentmutation.ToolPolicyChanges, error) {
 // explicitly NOT claimed as safe in production (the production gateway
 // always wires both).
 func publishAgentActivation(deps *Deps, id string) (agentstore.ActivationStatus, string) {
+	// r17 SR-2: the write just saved may have set or cleared env values;
+	// the live masking set follows the stored records before anything else.
+	if deps != nil && deps.GetCfg != nil {
+		if cfg := deps.GetCfg(); cfg != nil {
+			cfg.RefreshAgentEnvSensitiveValues()
+		}
+	}
 	if deps != nil && deps.UpsertAgentFastFunc != nil {
 		if err := deps.UpsertAgentFastFunc(id); err != nil {
 			return agentstore.ActivationFailed, err.Error()

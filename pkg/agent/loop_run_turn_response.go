@@ -900,9 +900,14 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 
 	rr.normalizedToolCalls = make([]providers.ToolCall, 0, len(rr.rq.ri.rf.response.ToolCalls))
 	rr.argumentRefusals = make([]*tools.ToolResult, 0, len(rr.rq.ri.rf.response.ToolCalls))
+	rr.recordToolArgs = make([]map[string]any, 0, len(rr.rq.ri.rf.response.ToolCalls))
 	for _, tc := range rr.rq.ri.rf.response.ToolCalls {
-		call, refusal := valueFreeRefusedToolCall(rr.rq.ri.rf.rt.ts.agent.Tools, providers.NormalizeToolCall(tc))
+		// r17 SR-3: the one redaction step. normalizedToolCalls keeps the
+		// real arguments for execution only; recordToolArgs is the copy
+		// every record, log, event and frame of this call carries.
+		call, recorded, refusal := admittedToolCall(rr.rq.ri.rf.rt.ts.agent.Tools, providers.NormalizeToolCall(tc))
 		rr.normalizedToolCalls = append(rr.normalizedToolCalls, call)
+		rr.recordToolArgs = append(rr.recordToolArgs, recorded)
 		rr.argumentRefusals = append(rr.argumentRefusals, refusal)
 	}
 
@@ -931,8 +936,8 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 		ReasoningContent: rr.rq.ri.rf.response.ReasoningContent,
 		ThinkingBlocks:   append([]string(nil), rr.rq.ri.rf.response.ThinkingBlocks...),
 	}
-	for _, tc := range rr.normalizedToolCalls {
-		argumentsJSON, marshalErr := json.Marshal(tc.Arguments)
+	for i, tc := range rr.normalizedToolCalls {
+		argumentsJSON, marshalErr := json.Marshal(rr.recordToolArgs[i])
 		if marshalErr != nil {
 			logger.WarnCF("agent", "failed to marshal tool call arguments", map[string]any{"tool": tc.Name, "error": marshalErr.Error()})
 			argumentsJSON = []byte("{}")

@@ -65,6 +65,16 @@ flowchart LR
 
 The agent works, claims completion, and the Judge either ends the goal or sends the agent back with the list of what is missing.
 
+### Reading a goal from a chat
+
+An agent reads a goal with `get_goal`.
+
+- **With `task_id`** it reads that task's goal, under the same rule as `get_task`: the agent created the task or is assigned to it. Any other task reads as `task "<id>" not found`.
+- **Without `task_id`** it reads the goal of the chat it is working in.
+- **`fields` is required.** Pass `["all"]` or the properties you need; `goal_id` always comes back.
+
+No goal is a plain answer, not an error. A task with no goal returns `{"goal": null, "message": "Task \"<id>\" has no goal."}`, and a chat with no goal returns `{"goal": null, "message": "No goal is set in this chat."}`.
+
 ## What you see while a goal runs
 
 Each goal shows as a labelled pill at the bottom-right of the chat:

@@ -135,63 +135,29 @@ func decodeAgentResp(t *testing.T, body []byte) gen.Agent {
 	return ag
 }
 
-// TestGetEditPut_ExecutorRoundTripPreserved is the core regression: a worker
-// updated to a non-native executor, then a PUT that does NOT touch the
-// executor must preserve it (the GET→edit→PUT round-trip must not erase it).
-// Uses a worker (the only agent kind that may declare an external executor
-// under the native-only-for-non-workers rule). The worker is unlocked for
-// this test so an unrelated PUT (e.g., description) is not blocked by the
-// locked-agent identity check.
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
 func TestGetEditPut_ExecutorRoundTripPreserved(t *testing.T) {
-	api := buildExecutorTestAPIWithWorker(t)
-	// Unlock the worker so an unrelated-field PUT is allowed. ADR-054: the
-	// locked-agent identity check in updateAgent reads the LIVE in-memory
-	// cfg.Agents.List (mutating it in place here works exactly as before —
-	// GetConfig returns the same *config.Config the AgentLoop holds), but the
-	// worker's PERSISTED entity record must also be unlocked so a later
-	// write-triggered refresh (populateAgentsListFromEntityStore, which
-	// replaces cfg.Agents.List wholesale from the entity store) does not
-	// silently re-lock it.
-	cf := api.agentLoop.GetConfig()
-	for i := range cf.Agents.List {
-		if cf.Agents.List[i].ID == "test-worker" {
-			cf.Agents.List[i].Locked = false
-		}
-	}
-	_, err := agentstore.New(api.homePath).Update("test-worker", func(a *config.AgentConfig) error {
-		a.Locked = false
-		return nil
-	})
-	require.NoError(t, err)
-
-	// 1. PUT an external-cli executor on the worker.
-	put1 := `{"executor":{"kind":"external-cli","cli":"claude-code"}}`
-	pw1 := httptest.NewRecorder()
-	pr1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker", strings.NewReader(put1))
-	pr1.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(pw1, pr1)
-	require.Equal(t, http.StatusOK, pw1.Code, "put body: %s", pw1.Body.String())
-
-	// 2. Persisted to the agent's entity record (ADR-054 — no longer
-	// config.json's agents.list).
-	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
-	require.NotNil(t, exec, "executor not persisted")
-	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
-	assert.Equal(t, "claude-code", exec.CLI)
-
-	// 3. PUT an UNRELATED field (description) — must NOT erase the executor.
-	put2 := `{"description":"a helpful worker"}`
-	pw2 := httptest.NewRecorder()
-	pr2 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker", strings.NewReader(put2))
-	pr2.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(pw2, pr2)
-	require.Equal(t, http.StatusOK, pw2.Code, "put body: %s", pw2.Body.String())
-
-	// And it is still persisted.
-	exec = agentExecutorFromStore(t, api.homePath, "test-worker")
-	require.NotNil(t, exec, "executor missing from entity record after unrelated PUT")
-	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
-	assert.Equal(t, "claude-code", exec.CLI)
+	api, id := t8ExistingExternalWorker(t)
+	w := httptest.NewRecorder()
+	api.HandleAgents(w, revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(`{"executor":{"cli_args":"--verbose"}}`)))
+	require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
+	before := agentExecutorFromStore(t, api.homePath, id)
+	require.NotNil(t, before)
+	assert.Equal(t, config.ExecutorKindExternalCLI, before.Kind)
+	assert.Equal(t, "codex", before.CLI)
+	assert.Equal(t, "--verbose", before.CLIArgs)
+	// GET, then unrelated PUT: preserve the entire stored executor, not just CLI.
+	get := httptest.NewRecorder()
+	api.HandleAgents(get, httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+id, nil))
+	require.Equal(t, http.StatusOK, get.Code, "%s", get.Body.String())
+	ag := decodeAgentResp(t, get.Body.Bytes())
+	require.NotNil(t, ag.Executor)
+	require.NotNil(t, ag.Executor.Cli)
+	assert.Equal(t, gen.ExternalCliToolCodex, *ag.Executor.Cli)
+	w = httptest.NewRecorder()
+	api.HandleAgents(w, revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(`{"description":"a helpful worker"}`)))
+	require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
+	assert.Equal(t, before, agentExecutorFromStore(t, api.homePath, id), "unrelated PUT must preserve the full executor")
 }
 
 // TestExecutorConfigFromRequest_Validation unit-tests the mapping/validation helper
@@ -298,7 +264,7 @@ func buildExecutorTestAPIWithWorker(t *testing.T) *restAPI {
 // Helper: create a subagent_3p worker and return its id.
 func createSubagent3p(t *testing.T, api *restAPI) string {
 	t.Helper()
-	body := `{"name":"ExternalWorker","type":"subagent_3p","description":"external worker","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"}}`
+	body := `{"name":"ExternalWorker","type":"subagent_3p","description":"external worker","executor":{"cli":"codex"}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")

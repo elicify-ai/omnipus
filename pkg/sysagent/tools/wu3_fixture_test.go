@@ -124,9 +124,22 @@ func wu3CaseAgent(t *testing.T, d *systools.Deps, cfg *config.Config) string {
 	return id
 }
 
+// wu3AllAgentFields is every selectable get_agent property except
+// tool_permissions, which needs a wired tool catalog (r17 7.12.1: read tools
+// return only what is requested).
+func wu3AllAgentFields() []any {
+	fields := []any{}
+	for _, name := range tools.AgentFieldNames {
+		if name != "tool_permissions" {
+			fields = append(fields, name)
+		}
+	}
+	return fields
+}
+
 func wu3AgentRead(t *testing.T, d *systools.Deps, id string) map[string]any {
 	t.Helper()
-	return wu3Success(t, systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"id": id}))
+	return wu3Success(t, systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"id": id, "fields": wu3AllAgentFields()}))
 }
 
 func wu3Workspace(t *testing.T, d *systools.Deps, id string, members ...string) workspace.State {

@@ -48,6 +48,15 @@ var (
 // session exists.
 var ErrDelegateTargetCannotReport = errors.New("tools: delegation target cannot deliver a result upward (message_parent denied)")
 
+// DelegateProgramRefusalError is returned by the session launcher when the target
+// is an external CLI worker whose Settings program is missing or fails its
+// check (r17 §3.6 steps 2, 3, 5): Text is the NoPath or CheckFailed text,
+// returned to the parent as the tool error as written. No child session
+// exists. Declared here for the same tools<->agent-cycle reason as above.
+type DelegateProgramRefusalError struct{ Text string }
+
+func (e *DelegateProgramRefusalError) Error() string { return e.Text }
+
 // delegateTargetCannotReportResult is the visible refusal for
 // ErrDelegateTargetCannotReport. It names the agent and the policy, and says
 // plainly that this is a policy configuration problem, not a lifecycle
@@ -270,6 +279,10 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		}
 		if errors.Is(err, ErrDelegateTargetCannotReport) {
 			return delegateTargetCannotReportResult(targetAgentID).WithError(err)
+		}
+		var programRefusal *DelegateProgramRefusalError
+		if errors.As(err, &programRefusal) {
+			return ErrorResult(programRefusal.Text).WithError(err)
 		}
 		if result := steeringUnavailableResult(err); result != nil {
 			return result

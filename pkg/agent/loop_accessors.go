@@ -296,6 +296,12 @@ func (al *AgentLoop) SetPlanStore(store *plan.Store) {
 				taskCreate.SetPlanStore(store)
 			}
 		}
+		// update_task's plan_id attach (r17 TK-11) needs the same store.
+		if raw, ok := inst.Tools.Get("update_task"); ok {
+			if taskUpdate, ok := raw.(*tools.TaskUpdateTool); ok {
+				taskUpdate.SetPlanStore(store)
+			}
+		}
 	}
 
 	// UAT fix (fix/uat-defects-2026-08-22): re-wire the system.* tool surface

@@ -11,11 +11,11 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
 	"github.com/elicify-ai/omnipus/pkg/entity"
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -58,68 +58,105 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 			return refusal
 		}
 	}
-	newRevision := revision
-	if len(fields) > 0 {
-		result, refusal := t.mutateRecord(store, id, revision, fields, args)
-		if refusal != nil {
-			return refusal
-		}
-		newRevision = result.Revision
-	} else if refusal := checkRevisionUnchanged(store, id, revision); refusal != nil {
+	// The record, SOUL.md and AGENT.md are one staged write under one lock
+	// and one revision check (r17 §7.5 AG-05, §7.10, #1321).
+	result, executorBlock, refusal := t.mutateRecord(store, id, revision, fields, meta, args)
+	if refusal != nil {
 		return refusal
 	}
-	written, unverified, metaFailure := writeAgentMetadataFiles(home, id, meta)
-	durable := append(append([]string{}, fields...), written...)
-	if metaFailure != nil {
-		if len(durable) == 0 {
-			return tools.ErrorResult(errorJSON("SAVE_FAILED", metaFailure.Error(), "Read the agent with get_agent before retrying"))
-		}
-		missing := missingMetadata(meta, written)
-		if unverified != "" {
-			missing = append(missing, "read-back of "+unverified)
-		}
+	newRevision := result.Revision
+	durable := append([]string{}, fields...)
+	for _, w := range meta {
+		durable = append(durable, w.arg)
+	}
+	if unverified, readErr := verifyAgentMetadataFiles(home, id, meta); readErr != nil {
 		return changeErrorWithOutcome(map[string]any{
 			"success":            false,
-			"error":              map[string]any{"code": "SAVE_FAILED", "message": metaFailure.Error()},
+			"error":              map[string]any{"code": "SAVE_FAILED", "message": readErr.Error()},
 			"id":                 id,
 			"revision":           newRevision,
 			"persistence_status": agentstore.PersistencePartial,
 			"changed_fields":     durable,
-		}, partlySaved(metaFailure.Error(), "", missing))
+		}, partlySaved(readErr.Error(), "", []string{"read-back of " + unverified}))
 	}
 	activation, message := publishAgentActivation(t.deps, id)
 	if _, hasVoice := args["voice"]; hasVoice && message == "" {
 		message = "voice is persisted; playback is inactive in this release"
 	}
-	return changeSuccess(map[string]any{
+	out := map[string]any{
 		"id":                 id,
 		"revision":           newRevision,
 		"persistence_status": agentstore.PersistenceComplete,
 		"activation_status":  activation,
 		"changed_fields":     durable,
 		"message":            message,
-	}, updateVerdict(activation, message))
+	}
+	if executorBlock != nil {
+		// r17 K-9/EX-07: names by outcome, argv and dropped_at_run, and the
+		// program status; never an environment value.
+		if cli, ok := externalCLIOf(store, id); ok {
+			if warning := executorProgramWarning(t.deps, cli); warning != "" {
+				executorBlock.ProgramWarning = &warning
+			}
+		}
+		out["executor"] = executorBlock
+	}
+	return changeSuccess(out, updateVerdict(activation, message))
 }
 
-// mutateRecord applies the record and SOUL.md fields under the store's
-// revision check. A refusal or failure comes back as the tool result.
+// externalCLIOf reads the saved agent's external CLI, if it has one.
+func externalCLIOf(store *agentstore.Store, id string) (string, bool) {
+	state, err := store.ReadState(id)
+	if err != nil || state.Agent == nil || !state.Agent.IsExternalCLIWorker() {
+		return "", false
+	}
+	return state.Agent.Subagents.Executor.CLI, true
+}
+
+// mutateRecord applies the record, SOUL.md and AGENT.md fields under the
+// store's one revision check. With no record field the store still runs the
+// skills binding; the record bytes are left untouched unless that binding
+// rebinds a skill grant, in which case the rebound record is published. A
+// refusal or failure comes back as the tool result.
 func (t *AgentUpdateTool) mutateRecord(store *agentstore.Store, id, revision string, fields []string,
-	args map[string]any,
-) (agentstore.MutationResult, *tools.ToolResult) {
+	meta []agentMetadataWrite, args map[string]any,
+) (agentstore.MutationResult, *gen.AgentExecutorSettingsResult, *tools.ToolResult) {
 	// An absent soul is a normal "field not supplied" case, not an error: the
 	// pointer stays nil and MutateState leaves the persisted soul untouched.
 	var soul *string
 	if raw, present := args["soul"]; present {
 		v, ok := raw.(string)
 		if !ok || strings.TrimSpace(v) == "" {
-			return agentstore.MutationResult{}, fieldErrorResult(fieldErr("soul", "soul must be a nonblank string"))
+			return agentstore.MutationResult{}, nil, fieldErrorResult(fieldErr("soul", "soul must be a nonblank string"))
 		}
 		soul = &v
 	}
+	var agentMD *string
+	for _, w := range meta {
+		if w.arg == "agent_md" {
+			content := w.content
+			agentMD = &content
+		}
+	}
+	if len(fields) == 0 {
+		result, mutateErr := store.MutateStateWithAgentMD(id, revision, nil, nil, agentMD)
+		if mutateErr != nil {
+			return result, nil, t.mutateErrorResult(id, result, mutateErr)
+		}
+		return result, nil, nil
+	}
 	known := knownToolPolicies(t.deps)
 	inv := t.deps.currentInventory()
-	result, mutateErr := store.MutateState(id, revision, func(a *config.AgentConfig) error {
-		if err := agentmutation.ValidateFields(*a, fields); err != nil {
+	var executorBlock *gen.AgentExecutorSettingsResult
+	result, mutateErr := store.MutateStateWithAgentMD(id, revision, func(a *config.AgentConfig) error {
+		// The executor settings are checked first so a native agent gets the
+		// r17 §3.9 reason rather than a generic role-matrix refusal.
+		block, _, err := applyExecutorUpdate(a, args)
+		if err != nil {
+			return err
+		}
+		executorBlock = block
+		if err := agentmutation.ValidateFields(*a, executorRecordFields(fields)); err != nil {
 			return err
 		}
 		// #904 D10/D15: read the global in force INSIDE the closure, under
@@ -131,11 +168,11 @@ func (t *AgentUpdateTool) mutateRecord(store *agentstore.Store, id, revision str
 		// above the new global, which the resolver caps and flags (D1).
 		// Never unbounded, and visible on the profile.
 		return applyAgentToolArgs(a, args, known, inv, t.deps.agentDefaults())
-	}, soul)
+	}, soul, agentMD)
 	if mutateErr != nil {
-		return result, t.mutateErrorResult(id, result, mutateErr)
+		return result, nil, t.mutateErrorResult(id, result, mutateErr)
 	}
-	return result, nil
+	return result, executorBlock, nil
 }
 
 // updateVerdict is update_agent's FR-030 verdict from the existing read-back:
@@ -207,49 +244,21 @@ func checkMetadataWriteAllowed(store *agentstore.Store, id string, writes []agen
 	return nil
 }
 
-// checkRevisionUnchanged refuses a metadata-only update whose entity/SOUL
-// revision is stale. The revision covers only the entity record and SOUL.md,
-// not AGENT.md, so it does not detect a concurrent AGENT.md-only change
-// (tracked as #1321).
-func checkRevisionUnchanged(store *agentstore.Store, id, revision string) *tools.ToolResult {
-	current, err := store.PeekRevision(id)
-	if err != nil {
-		if errors.Is(err, entity.ErrNotFound) {
-			return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND", fmt.Sprintf("No agent with ID %q", id), "Use list_agents"))
-		}
-		return tools.ErrorResult(errorJSON("READ_FAILED", fmt.Sprintf("agent %q could not be read: %v", id, err), ""))
-	}
-	if current != revision {
-		return tools.ErrorResult(errorJSON("CONFLICT",
-			fmt.Sprintf("agent %q changed: expected revision %q, current %q", id, revision, current),
-			"Re-read with get_agent and revise the proposal"))
-	}
-	return nil
-}
-
-// writeAgentMetadataFiles writes each requested file atomically (0600) in the
-// agent's home and reads it back. It stops at the first failure. written lists
-// the arguments whose file was published — recorded as soon as the atomic
-// write succeeds, because publication is durable whether or not the read-back
-// then works (WU-3 SF-05). unverified names the file whose read-back failed or
-// differed, if that was the failure.
-func writeAgentMetadataFiles(home, id string, writes []agentMetadataWrite) (written []string, unverified string, err error) {
+// verifyAgentMetadataFiles reads each just-published metadata file back and
+// compares it with what was written. On a failure it names the file; the
+// write itself is durable (WU-3 SF-05), so the caller reports partly saved.
+func verifyAgentMetadataFiles(home, id string, writes []agentMetadataWrite) (unverified string, err error) {
 	dir := datamodel.AgentHomePath(home, id)
 	for _, w := range writes {
-		path := filepath.Join(dir, w.file)
-		if werr := fileutil.WriteFileAtomic(path, []byte(w.content), 0o600); werr != nil {
-			return written, "", fmt.Errorf("%s could not be written: %w", w.file, werr)
-		}
-		written = append(written, w.arg)
-		back, rerr := readAgentMetadataBack(path)
+		back, rerr := readAgentMetadataBack(filepath.Join(dir, w.file))
 		if rerr != nil {
-			return written, w.file, fmt.Errorf("%s was saved but could not be read back: %w", w.file, rerr)
+			return w.file, fmt.Errorf("%s was saved but could not be read back: %w", w.file, rerr)
 		}
 		if string(back) != w.content {
-			return written, w.file, fmt.Errorf("%s was saved but reads back differently", w.file)
+			return w.file, fmt.Errorf("%s was saved but reads back differently", w.file)
 		}
 	}
-	return written, "", nil
+	return "", nil
 }
 
 // readAgentMetadataBack reads a just-written metadata file back. A variable
@@ -257,24 +266,12 @@ func writeAgentMetadataFiles(home, id string, writes []agentMetadataWrite) (writ
 // production never reassigns it.
 var readAgentMetadataBack = os.ReadFile
 
-// missingMetadata lists the requested metadata files that were not written.
-func missingMetadata(writes []agentMetadataWrite, written []string) []string {
-	done := map[string]bool{}
-	for _, w := range written {
-		done[w] = true
-	}
-	var missing []string
-	for _, w := range writes {
-		if !done[w.arg] {
-			missing = append(missing, w.file)
-		}
-	}
-	return missing
-}
-
 func (t *AgentUpdateTool) mutateErrorResult(id string, result agentstore.MutationResult, mutateErr error) *tools.ToolResult {
 	var fe *agentmutation.FieldError
+	var refusal executorRefusalError
 	switch {
+	case errors.As(mutateErr, &refusal):
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", refusal.Error(), ""))
 	case errors.Is(mutateErr, entity.ErrNotFound):
 		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND", fmt.Sprintf("No agent with ID %q", id), "Use list_agents"))
 	case errors.Is(mutateErr, agentstore.ErrInvalidRevision):
@@ -303,12 +300,20 @@ func (t *AgentUpdateTool) mutateErrorResult(id string, result agentstore.Mutatio
 			payload["revision"] = result.Revision
 		}
 		if result.PersistenceStatus == agentstore.PersistencePartial {
+			payload["message"] = partialSaveMessage(result)
 			return changeErrorWithOutcome(payload, partlySaved(
 				fmt.Sprintf("the agent update was partly written (stage %s): %v", result.ErrorStage, mutateErr), "",
 				[]string{"stage " + result.ErrorStage}))
 		}
 		return tools.ErrorResult(successJSON(payload))
 	}
+}
+
+// partialSaveMessage is r17 §7.10's partially-saved text, naming the files
+// that were and were not published and the revision now readable.
+func partialSaveMessage(result agentstore.MutationResult) string {
+	return fmt.Sprintf("Saved: %s. Not saved: %s. Current revision: %s. Read the agent again before retrying.",
+		strings.Join(result.ChangedFields, ", "), strings.Join(result.NotSaved, ", "), result.Revision)
 }
 
 // reservedNameResult is the FR-002 refusal in this package's error shape.

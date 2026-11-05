@@ -142,6 +142,12 @@ type runExternalCLISubTurnState struct {
 	childEnv   []string
 	execCfg    *config.ExecutorConfig
 	cliArgs    []string
+	// The Settings program and preset for this run (r17 §3.6, §3.7),
+	// filled by resolveRunProgram before anything is dispatched.
+	programEntered  string
+	programResolved string
+	presetText      string
+	presetArgs      []string
 }
 
 // runExternalCLISubTurn executes a delegated sub-agent task through an external
@@ -212,6 +218,11 @@ func runExternalCLISubTurn(
 	ed.runID = ed.childTS.turnID
 	if ed.runID == "" {
 		ed.runID = fmt.Sprintf("ext-%d", time.Now().UnixNano())
+	}
+	// r17 §3.6: no Settings program, or one that fails its checks, refuses
+	// the run before anything is dispatched.
+	if refusal := ed.resolveRunProgram(cli); refusal != nil {
+		return nil, refusal
 	}
 
 	// 1. Resolve the run's working directory: the workspace's dedicated
@@ -439,8 +450,9 @@ func (ed *runExternalCLISubTurnState) startAndDrain(
 		Input:        task,
 		Env:          ed.childEnv,
 		MaxTurns:     ed.maxTurns,
-		CLIPath:      ed.execCfg.CLIPath,
+		CLIPath:      ed.programResolved,
 		CLIArgs:      ed.cliArgs,
+		PresetArgs:   ed.presetArgs,
 		EnvOverrides: ed.execCfg.EnvOverrides,
 		// Fix C: auto-set the delegate's own configured model on the external
 		// CLI invocation. Each driver's buildArgs guards so an unmapped/empty
@@ -452,6 +464,7 @@ func (ed *runExternalCLISubTurnState) startAndDrain(
 		evCh <-chan runner.RunEvent
 		err  error
 	)
+	ed.auditRunSpawn(runCtx, cli)
 	if resume {
 		evCh, err = driver.Resume(runCtx, ed.runID, task)
 		if err != nil {
@@ -581,9 +594,9 @@ func (ed *runExternalCLISubTurnState) prepareRunOptions() {
 	// the workspace FS boundary.
 	ed.childEnv = injectRunnerEgressProxy(ed.childEnv, ed.al.runnerEgressProxyAddr())
 
-	// MAJ-5: consume the agent's ExecutorConfig (cli_path / cli_args /
-	// env_overrides) when spawning the external CLI. cli_path overrides the
-	// driver's default binary (else $PATH); cli_args is tokenised into argv
+	// MAJ-5: consume the agent's ExecutorConfig (cli_args / env_overrides)
+	// when spawning the external CLI. The program comes only from Settings
+	// (resolveRunProgram, r17 §3.6); cli_args is tokenised into argv
 	// (execve, no shell — warn-not-reject on shell-metacharacters); env_overrides
 	// merge into the scrubbed child env (OMNIPUS_* keys are dropped by the driver
 	// env builder, so the master key / agent-identity vars stay protected).

@@ -31,8 +31,11 @@ var judgeAllowedTools = map[string]bool{
 	"inspect_session": true,
 	"ToolSearch":      true,
 	"Skill":           true,
-	"grep":            true,
-	"get_skill":       true, // r15 §10 read floor; data access remains separately gated.
+	// r17 FR-143 / 7.12.1: every agent may read any agent with get_agent,
+	// the Judge included (founder: "everyone").
+	"get_agent": true,
+	"grep":      true,
+	"get_skill": true, // r15 §10 read floor; data access remains separately gated.
 }
 
 // TestSeed_JudgeSystemAgent verifies ADR-049 D3 / US-4 Acceptance Scenario 1,

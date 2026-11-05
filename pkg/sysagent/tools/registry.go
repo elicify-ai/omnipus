@@ -17,14 +17,12 @@ import (
 // writes through a properly-guarded path (refusing locked core agents).
 func AllTools(d *Deps) []tools.Tool {
 	return []tools.Tool{
-		// Agent management (6: includes ADR-090 configuration and tool readback)
+		// Agent management (5: get_agent is the single reader, r17 §7.12)
 		NewAgentCreateTool(d),
 		NewAgentGetTool(d),
-		NewAgentGetToolsTool(d),
 		NewAgentUpdateTool(d),
 		NewAgentPermissionsTool(d),
 		NewAgentDeleteTool(d),
-		NewAgentReadMetadataTool(d),
 
 		// Workspace management (5)
 		NewWorkspaceCreateTool(d),

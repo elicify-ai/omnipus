@@ -1,0 +1,67 @@
+title: AgentExecutorSettingsResult
+description: >
+  Executor-settings block of a create_agent or update_agent tool result,
+  present when executor settings were supplied. Never carries an
+  environment value: only names.
+type: object
+additionalProperties: false
+properties:
+  env:
+    type: object
+    additionalProperties: false
+    required: [added, replaced, removed, absent_removed]
+    description: Environment names by outcome.
+    properties:
+      added:
+        type: array
+        items:
+          type: string
+        description: Names that were not stored before and are now set.
+      replaced:
+        type: array
+        items:
+          type: string
+        description: Names whose stored value was replaced.
+      removed:
+        type: array
+        items:
+          type: string
+        description: Names removed through env_overrides_remove.
+      absent_removed:
+        type: array
+        items:
+          type: string
+        description: Names listed in env_overrides_remove that were not stored (reported, not refused).
+  cli_args:
+    type: object
+    additionalProperties: false
+    required: [argv, dropped_at_run]
+    properties:
+      argv:
+        type: array
+        items:
+          type: string
+        description: The stored cli_args after tokenisation, in order.
+      dropped_at_run:
+        type: array
+        description: Tokens the safety filter will drop at run time, with its reason.
+        items:
+          type: object
+          additionalProperties: false
+          required: [flag, reason]
+          properties:
+            flag:
+              type: string
+            reason:
+              type: string
+  runnable:
+    type: boolean
+    description: >
+      create_agent only. True when a run would start now; false when the
+      Settings program path for the agent's CLI is missing or fails its
+      checks (program_warning then carries the text).
+  program_warning:
+    type: string
+    description: >
+      The exact text a run of this agent would be refused with right now (see
+      ExecutorConfig.program_warning). Absent when a run would start.

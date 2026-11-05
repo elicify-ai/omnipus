@@ -105,6 +105,9 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// read-boundary-consistency-spec.md FR-012; the superseded
 			// unified-search-and-grep-spec.md FR-020 no longer applies).
 			"grep": allow,
+			// r17 §7.12.1 (founder: "everyone"): every agent may read any
+			// agent with get_agent; env values stay masked.
+			"get_agent": allow,
 			// Skills spec r15 §10: get_skill, the read of one skill, is
 			// allowed everywhere, hidden engine agents included. edit_skill
 			// stays deny through denyAllThenOverride.
@@ -248,8 +251,13 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// founder ruling's explicit, unqualified "every agent tier ...
 			// system agents" roster.
 			"grep": allow,
-			// Skills spec r15 §10: get_skill is allowed everywhere, hidden
-			// engine agents included; edit_skill stays deny.
+			// r17 §7.12.1 (founder: "everyone"): the deliberate FIFTH grant —
+			// every agent, the system agents included, may read any agent
+			// with get_agent (read-only; env values stay masked).
+			"get_agent": allow,
+			// Skills spec r15 §10: the deliberate SIXTH grant — get_skill is
+			// allowed everywhere, hidden engine agents included; edit_skill
+			// stays deny.
 			"get_skill": allow,
 		})
 	default:
