@@ -45,6 +45,9 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 			// retry, no fallback substitution, no markTurnFailed; finalContent
 			// stays "" and the write choke points below persist a zero-content
 			// entry for the former post-hoc truncation rewrite to find.
+		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+			// #1534 Q1 = A: a turn the user stopped before anything new was
+			// shown has nothing more to say — no fallback text, not failed.
 		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() >= rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations && rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations > 0 {
 			// Genuine failure: tool-iteration ceiling hit without a final response.
 			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
@@ -70,13 +73,17 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setFinalContent(rz.rc.rx.finalContent)
 	// Harness notices are chat-only. A hidden system-role model slot would be
 	// sanitized away and break later archive-address mapping and context relief.
+	// #1534: a stopped turn with nothing new to say adds no empty answer.
+	stoppedSilent := rz.rc.rx.finalContent == "" && rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load()
 	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && !iterationLimitNotice {
 		finalMsg := providers.Message{Role: "assistant", Content: rz.rc.rx.finalContent}
 		// #1178 (amendment §4.2): a failed final write is a failed turn,
 		// never a false success. Wrap with the existing assistant
 		// save-error wrapper, run the session_save error path below and
 		// markTurnFailed — DoneStats.TurnFailed must be true.
-		if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.appendFinalModelResponse(finalMsg.Content, rz.rc.rx.rr.rq.ri.rf.response); addErr != nil {
+		if stoppedSilent {
+			// Nothing to append; the session is still saved below.
+		} else if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.appendFinalModelResponse(finalMsg.Content, rz.rc.rx.rr.rq.ri.rf.response); addErr != nil {
 			notSaved := &messageNotSavedError{role: finalMsg.Role, cause: addErr}
 			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
@@ -462,6 +469,11 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 		return agentLoopRunTurnConductorReturn, true
 	}
 	rp.rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTurnWorkspaceDir(rp.rc.rx.rr.rq.ri.rf.rt.turnCtx, rp.rc.rx.rr.rq.ri.wsDir)
+	// Skills `needs` (r15 §5.7) checks the PATH this agent's bash child gets.
+	turnTools := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Tools
+	rp.rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithAgentBashPATH(rp.rc.rx.rr.rq.ri.rf.rt.turnCtx, func(ctx context.Context) string {
+		return tools.BashChildPATH(ctx, turnTools)
+	})
 
 	// FR-011, FR-012: detect a per-thread model switch via the inbound message
 	// metadata. When the user-selected model differs from the agent's currently
@@ -1568,6 +1580,9 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		providerCancel()
 		rt.ts.clearProviderCancel(providerCancel)
 	}()
+	// Issue #1478: tell the chat when the provider goes silent (provider_status).
+	providerCtx, stopSilenceWatch := rt.startProviderSilenceWatch(providerCtx)
+	defer stopSilenceWatch()
 
 	if !rt.al.beginActiveRequest() {
 		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
@@ -1608,25 +1623,12 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		// retry as one provider_retry frame from named fields only
 		// (C-2 — never an error string).
 		retryCtx := providers.WithWaitBudget(providerCtx, rt.ts.turnWaitBudgetForChain())
-		retryCtx = providers.WithRetryObserver(retryCtx, func(info providers.RetryInfo) {
-			rt.al.emitEvent(
-				EventKindProviderRetry,
-				rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-				LLMRetryPayload{
-					Attempt:     info.Attempt,
-					Reason:      info.Reason,
-					Provider:    info.Provider,
-					Model:       info.Model,
-					RetryAt:     info.RetryAt,
-					SentAt:      info.SentAt,
-					MaxAttempts: info.MaxAttempts,
-					SessionID:   string(rt.ts.routingSessionID),
-				},
-			)
-		})
+		retryCtx = providers.WithRetryObserver(retryCtx, rt.providerRetryObserver())
 		retryCtx = providers.WithStreamedBytesCheck(retryCtx, func() int64 {
 			return rt.providerCallStreamedBytes.Load()
 		})
+		// Issue #1485: per-attempt limit fits this request (see attemptTimeoutResolver).
+		retryCtx = providers.WithAttemptTimeout(retryCtx, rt.attemptTimeoutResolver(messagesForCall, toolDefsForCall))
 		// F1 (read paths): one image attach per candidate, reused across the
 		// §7.4 in-place retries of that candidate — the retry must re-send
 		// the same request, and a re-attach re-runs the authorization
@@ -1684,6 +1686,11 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					if err != nil {
 						return nil, err
 					}
+					// Issue #1435 R1: this candidate's own budget applies to
+					// ordinary inline image media too — a tighter fallback
+					// candidate must not receive the looser primary's image
+					// bytes. Request-local fit; history stays canonical.
+					m = fitOrdinaryImageMediaToBudget(m, budget)
 					if rt.providerCallAttachCache != nil {
 						rt.providerCallAttachCache[attachKey] = m
 					}
@@ -1725,6 +1732,7 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 			// at turn end, after the assistant answer — MIN-103).
 			rt.ts.queueProviderFallbackNote(fbResult.Model, fbResult.Attempts)
 		}
+		rt.noteProviderRecovered(fbResult.Retries) // #1280: "reconnected after N retries"
 		// Phase 1B FR-013: record the model that actually produced
 		// the response (may differ from the agent's primary model
 		// when a fallback candidate was used).

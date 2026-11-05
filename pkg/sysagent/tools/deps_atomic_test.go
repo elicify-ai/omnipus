@@ -25,7 +25,7 @@ import (
 //
 // Concretely this test:
 //  1. Verifies Deps has exactly one exported field of type *atomic.Pointer[Deps].
-//  2. Verifies AllTools(nil) returns exactly 35 tools (supply side intact).
+//  2. Verifies AllTools(nil) returns exactly 32 tools (supply side intact).
 //  3. Verifies a non-nil *Deps with Live wired can Load() without panicking
 //     (the reload path invariant).
 //
@@ -34,7 +34,7 @@ import (
 //	When reflected for atomic.Pointer[Deps] fields,
 //	Then at least one such field exists (FR-050 structural guarantee).
 //	When AllTools is called with a valid Deps,
-//	Then it returns == 35 tools and none panic on Name()/Description().
+//	Then it returns == 32 tools and none panic on Name()/Description().
 //
 // Traces to: FR-050 (atomic-pointer deps), FR-001/FR-002 (supply side).
 func TestRegistry_ToolDepsContract(t *testing.T) {
@@ -60,10 +60,22 @@ func TestRegistry_ToolDepsContract(t *testing.T) {
 		}
 	})
 
-	t.Run("AllTools_returns_exactly_35", func(t *testing.T) {
+	t.Run("AllTools_returns_exactly_32", func(t *testing.T) {
+		// r17 7.12: 35 - get_agent_tools - read_agent_metadata = 33;
+		// r15 §10: 33 - create_skill - remove_skill + get_skill = 32.
 		all := AllTools(nil)
-		if len(all) != 35 {
-			t.Errorf("AllTools(nil) returned %d tools; want == 32 (FR-001/FR-002; the four *_in_workspace tools retired by DEL-23; omnipus-system-agent FR-024 added set_agent_permissions)", len(all))
+		if len(all) != 32 {
+			t.Errorf("AllTools(nil) returned %d tools; want == 32 (r17 7.12 removed get_agent_tools and read_agent_metadata; r15 §10 replaced create_skill/remove_skill with get_skill)", len(all))
+		}
+		for _, retired := range []string{"create_skill", "remove_skill"} {
+			if hasToolNamed(all, retired) {
+				t.Errorf("r15 §10: retired tool %q is still registered", retired)
+			}
+		}
+		for _, active := range []string{"get_skill", "edit_skill"} {
+			if !hasToolNamed(all, active) {
+				t.Errorf("r15 §10: active tool %q is missing", active)
+			}
 		}
 		if !hasToolNamed(all, "set_agent_permissions") {
 			t.Errorf("FR-024: AllTools(nil) must include set_agent_permissions")

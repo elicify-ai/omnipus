@@ -20,6 +20,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/rooms"
@@ -40,6 +41,9 @@ type roomsHub struct {
 func newRoomsHub(h *WSHandler, home string) *roomsHub {
 	hub := &roomsHub{subs: map[string]map[*wsConn]struct{}{}}
 	hub.svc = rooms.New(rooms.NewFileJournal(rooms.DefaultDir(home)), rooms.DepsFrom(&gatewayRoomDeps{h: h, home: home, hub: hub}))
+	// #1449 TD-3: answer files are staged in the room service's own data,
+	// never in an agent-reachable tree.
+	hub.svc.SetStagingDir(rooms.DefaultStagingDir(home))
 	if h.agentLoop != nil {
 		h.agentLoop.SetRoomRuntime(agentRoomRuntime{svc: hub.svc})
 	}
@@ -147,6 +151,7 @@ func (d *gatewayRoomDeps) Admit(ctx context.Context, a rooms.Admission) (rooms.A
 	res, err := d.h.agentLoop.AdmitRoomRequest(ctx, agent.RoomRequestAdmission{
 		Receiver: a.Receiver, DeliveryID: a.DeliveryID, RoomID: a.RoomID, RoomName: a.RoomName,
 		Sender: a.Sender, SenderLabel: a.SenderLabel, DisplayText: a.DisplayText, ModelText: a.ModelText,
+		Media: a.Media, Attachments: a.Attachments,
 		OnAwaitingApproval: a.OnAwaitingApproval, BeforeCommit: a.BeforeCommit,
 	})
 	if err != nil {
@@ -189,7 +194,7 @@ func (d *gatewayRoomDeps) Discard(sessionID, requestID string) error {
 
 // Mirror writes an answer once into the responder's main chat.
 func (d *gatewayRoomDeps) Mirror(m rooms.Mirror) error {
-	return d.h.agentLoop.MirrorRoomAnswer(m.MainSessionID, m.MirrorID, m.Author, m.Ref, m.Content)
+	return d.h.agentLoop.MirrorRoomAnswerWithFiles(m.MainSessionID, m.MirrorID, m.Author, m.Ref, m.Content, m.Attachments)
 }
 
 // Publish delivers a room frame to the attached connections.
@@ -296,8 +301,13 @@ func (rt agentRoomRuntime) RoomTurnCost(c agent.RoomTurnCost) {
 func (rt agentRoomRuntime) DeliverRoomAnswer(ctx context.Context, a agent.RoomAnswer) (tools.ReplyReceipt, error) {
 	receipt, err := rt.svc.DeliverAnswer(ctx, rooms.Answer{
 		RoomID: a.RoomID, RequestID: a.RequestID, Responder: a.Responder,
-		ResponderSessionID: a.ResponderSessionID, Content: a.Content,
+		ResponderSessionID: a.ResponderSessionID, Content: a.Content, Files: answerFiles(a.Files),
 	})
+	if errors.Is(err, rooms.ErrAnswerCompleting) {
+		// FR-078 (5): accepted and completing, not "nothing posted".
+		return tools.ReplyReceipt{ReplyID: receipt.AnswerID, Destination: "the group chat " + receipt.RoomName},
+			errors.Join(tools.ErrReplyCompleting, err)
+	}
 	if err != nil {
 		return tools.ReplyReceipt{}, err
 	}
@@ -322,6 +332,21 @@ func (h *WSHandler) roomCard(sessionID, cardID string, pending bool) {
 		return
 	}
 	h.rooms.svc.CardResolved(mainID, cardID)
+}
+
+// roomCardFor is roomCard for a card that may carry a group reference
+// (#1449 FR-053, ADR C-I7): a referenced card flips only its own request;
+// any other card keeps the per-main behaviour (helpers, unrelated work, and a
+// step that answered two groups, D28, which then lights up both).
+func (h *WSHandler) roomCardFor(sessionID string, ref *generated.RoomRef, cardID string, pending bool) {
+	if ref == nil || ref.RoomId == "" || ref.RequestId == "" {
+		h.roomCard(sessionID, cardID, pending)
+		return
+	}
+	if h == nil || h.rooms == nil || h.rooms.svc == nil {
+		return
+	}
+	h.rooms.svc.CardForRequest(ref.RoomId, ref.RequestId, cardID, pending)
 }
 
 // mainSessionOf walks ParentSessionID up to the main session a helper

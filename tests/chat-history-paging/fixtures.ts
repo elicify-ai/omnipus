@@ -14,7 +14,7 @@ type SessionHistoryPageInfo = SessionHistoryResponse['page_info']
 
 export const SID = 'history-paging-session'
 export const STAMP = '2026-10-21T10:00:00Z'
-export const UNAVAILABLE = 'Session history is unavailable. Retry after the operator restores its index.'
+export const UNAVAILABLE = 'This conversation\'s history could not be loaded.'
 
 // Synthetic server-issued selectors: hash only fixture labels, NOT the product's
 // D2 encoding. They deliberately have no useful lexical/acceptance-order relation.
@@ -59,7 +59,7 @@ export function page(entries: Message[], options: PageOptions = {}): SessionHist
       // Default datasets are one narration row per whole source group. Tool
       // datasets supply their independently counted drawn weight explicitly.
       row_count: options.rows ?? entries.length, source_group_count: entries.length,
-      soft_byte_budget: 4194304, projected_bytes: 0, byte_budget_exceeded: false,
+      soft_byte_budget: 4194304, byte_ceiling: 8_388_608, projected_bytes: 0, byte_budget_exceeded: false,
       stop_reason: options.earlier ? 'row_target' : 'end', retention_generation: 'fixture-retained-1',
       context: { spans: [], duplicate_ids: [] },
       ...(first ? { first_position: first, last_position: last } : {}),

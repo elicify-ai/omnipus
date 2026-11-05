@@ -46,7 +46,10 @@ async function openOlderReader() {
   await act(async () => response.resolve(json(wirePage([entry(79), entry(80)]))))
   await screen.findByText('Saved row 79', { exact: true })
   const input = screen.getByTestId('chat-input')
-  await user.type(input, DRAFT)
+  // D7a/D9 require retaining a pre-existing draft, not per-key setup.
+  // Use the real clipboard/input path; post-failure keyboard editing stays below.
+  await user.click(input)
+  await user.paste(DRAFT)
   const region = screen.getByLabelText('Conversation history', { exact: true })
   // Logical DOM scroll sentinel only: two synthetic80px rows, not pixel/UAT proof.
   fireEvent.scroll(region, { target: { scrollTop: 160 } })
@@ -145,17 +148,22 @@ describe('seam U — historical cached reader receives unsolicited unavailable h
 
     const latest = screen.getByRole('button', latestName)
     await user.click(latest)
-    expect(Object.fromEntries(await latestRequest.promise), 'D9 explicit Return reads a fresh bounded latest page').toStrictEqual({ limit: '40', min_rows: '20' })
+    expect(Object.fromEntries(await latestRequest.promise), 'D9 explicit Return reads a fresh bounded latest page').toStrictEqual({ limit: '30', min_rows: '20' })
     await user.keyboard('{Enter}')
-    expect(explicitLatestQueries, 'D8 exactly ONE explicit latest read; a configured but unused opening response is not a request').toStrictEqual([{ limit: '40', min_rows: '20' }])
+    expect(explicitLatestQueries, 'D8 exactly ONE explicit latest read; a configured but unused opening response is not a request').toStrictEqual([{ limit: '30', min_rows: '20' }])
     expectCachedReader()
     expect(latest).toHaveFocus()
     expect(latest).not.toBeDisabled()
     expect(latest).toHaveAttribute('aria-disabled', 'true')
-    await act(async () => latestResponse.resolve(json(fresh)))
+    // D5: H800/A80 requests30 recent rows; the separate recovery snapshot
+    // above keeps its server-default40. Do not answer this30-row read with40.
+    const latestPage = page(Array.from({ length: 30 }, (_, index) => entry(131 + index)), {
+      sessionId: MAIN_ID, earlier: true, info: { limit: 30, min_rows: 20 },
+    })
+    await act(async () => latestResponse.resolve(json(latestPage)))
     await screen.findByText('Saved row 160', { exact: true })
     expect(useChatStore.getState().history.viewMode).toBe('latest')
-    expect(useChatStore.getState().messages.map(message => message.id)).toStrictEqual(Array.from({ length: 40 }, (_, index) => `history-${121 + index}`))
+    expect(useChatStore.getState().messages.map(message => message.id)).toStrictEqual(Array.from({ length: 30 }, (_, index) => `history-${131 + index}`))
     expect(screen.queryByText('Saved row 79', { exact: true })).not.toBeInTheDocument()
     expect(region, 'D8 successful Return moves focus to labelled history with no composer theft').toHaveFocus()
     expect(input).toHaveValue(DRAFT)
@@ -180,7 +188,7 @@ describe('seam U — historical cached reader receives unsolicited unavailable h
       await user.click(action)
       await user.keyboard('{Enter}')
       await waitFor(() => expect(queries).toHaveLength(attempt))
-      expect(queries, 'Return/latest-read Retry reads latest, not older/window or recovery attach').toStrictEqual(Array.from({ length: attempt }, () => ({ limit: '40', min_rows: '20' })))
+      expect(queries, 'Return/latest-read Retry reads latest, not older/window or recovery attach').toStrictEqual(Array.from({ length: attempt }, () => ({ limit: '30', min_rows: '20' })))
       expect(action, 'D8 focused action remains mounted and guarded while pending').toHaveFocus()
       expect(action).not.toBeDisabled()
       expect(action).toHaveAttribute('aria-disabled', 'true')

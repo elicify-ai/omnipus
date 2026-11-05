@@ -827,7 +827,7 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 	// filesystem/network signature at all), so a qualifying command asks
 	// exactly once, never twice.
 	if !sandbox.TurnPolicyBaseInstalled() {
-		if commandIsNoSandboxReadOnly(command) {
+		if commandIsNoSandboxReadOnlyFor(command, t.noSandboxSkillFolders(ctx)) {
 			return result, nil
 		}
 		if _, ok := ClassifyPathOperations(command); !ok {

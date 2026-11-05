@@ -45,12 +45,17 @@ properties:
       - done
       - failed
       - skipped
+      - missed
     description: >
       Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has
       no producer today; a stuck-run reaper closes abandoned runs to
       `failed`). `skipped` records a scheduled fire that never ran at all
       because the overlap guard found the previous occurrence still
-      `in_progress` — a purely bookkeeping close, not a failure.
+      `in_progress` — a purely bookkeeping close, not a failure. `missed`
+      records a scheduled fire that came due while the server was down and
+      could never run: recorded once at the next boot for the missed
+      instant, never replayed (founder decision 2026-10-29 — a missed
+      Calendar run stays skipped, never replayed).
     example: "done"
   result:
     type: string

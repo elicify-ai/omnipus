@@ -189,6 +189,7 @@ describe('API contract: agent and supporting resource shapes', () => {
 
   it('Skill mock shape satisfies interface', () => {
     const mock = {
+      has_local_changes: false,
       revision: '0'.repeat(64),
       id: 'my-skill',
       name: 'My Skill',

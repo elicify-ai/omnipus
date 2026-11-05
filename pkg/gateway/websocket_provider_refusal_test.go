@@ -157,6 +157,11 @@ func newRefusingTestWSHandler(t *testing.T) (*WSHandler, *rateLimitedStreamingPr
 	msgBus := bus.NewMessageBus()
 	provider := &rateLimitedStreamingProvider{}
 	al := mustAgentLoop(t, cfg, msgBus, provider)
+	// Issue #1280: a refused single model runs the retry plan — 1 call plus
+	// 5 retries with waits of 2, 5, 10, 20 and 40 s. The frames under test
+	// do not depend on the wall-clock waits, so they return at once (a
+	// cancelled ctx still ends them).
+	al.SetProviderRetryWait(func(ctx context.Context, _ time.Duration) error { return ctx.Err() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runDone := make(chan struct{})
@@ -292,21 +297,16 @@ func runRefusedWebchatTurn(t *testing.T) []collectedFrame {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	// §7.4 C-8 (gate finding F1): a root turn now retries a refused provider
-	// IN PLACE — 3 total calls with standard backoff 2s × 2^(n-1) (±25%
-	// jitter) when the refusal carries no Retry-After. Exhaustion therefore
-	// takes ~7s of wall clock (2s + 4s waits), and the terminal error/done
-	// frames land AFTER a ≥3s silence — longer than this collector's quiet
-	// window used to be. 2s of quiet stopped collection mid-backoff (the red
-	// run's last frame was provider_retry with retry_after_seconds: 4), so
-	// the tests "failed" while the production path was about to deliver
-	// exactly the frames they demand. 8s of quiet survives any single
-	// backoff step (max 5s) and still bounds each test at ~16s.
+	// Issue #1280 (founder decision Q1): a root turn retries a refused single
+	// model IN PLACE with the retry plan — 1 call plus 5 retries. The harness
+	// skips the plan's wall-clock waits (newRefusingTestWSHandler), so the
+	// terminal error/done frames follow the sixth refusal quickly; 8 s of
+	// quiet still bounds the collection.
 	frames := collectWSFrames(t, conn, 8*time.Second, 45*time.Second)
 
-	require.Positive(t, provider.calls.Load(),
-		"fixture check: the provider was never called, so no refusal was ever produced — "+
-			"the turn did not reach the LLM call at all (routing/workspace refusal?)")
+	require.Equal(t, int32(6), provider.calls.Load(),
+		"fixture check: the refused single model must get exactly the #1280 retry plan — "+
+			"1 call plus 5 retries (0 calls means the turn never reached the LLM call)")
 	require.NotEmpty(t, frames, "fixture check: the client received no frames at all")
 	t.Logf("frames received by the client: %v", collectedFrameTypes(frames))
 	// Dump the raw frames too: the ORDER and the session_id tagging of this

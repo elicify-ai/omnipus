@@ -1,0 +1,48 @@
+title: ChannelConfigureResponse
+description: >
+  200 body of PUT /api/v1/channels/{id}/configure: the updated channel
+  configuration with credential fields redacted (structure varies by channel
+  type), plus how the save was applied to the running connection (channels
+  spec T-6, FR-050, FR-052).
+type: object
+additionalProperties: true
+required:
+  - apply_outcome
+properties:
+  apply_outcome:
+    type: string
+    description: >
+      applied = reload confirmed and the connection is running.
+      applied_not_running = reload confirmed but the connection is not
+      running (apply_reason says why). unconfirmed = the reload was not
+      confirmed within the wait window. failed = the reload returned an error
+      (apply_reason is a fixed, secret-free phrase, never the raw error text);
+      it does not claim the old settings are still running.
+      no_reload_needed = the instance is disabled, or
+      nothing changed, no credential was stored and the connection is current.
+    enum:
+      - applied
+      - applied_not_running
+      - unconfirmed
+      - failed
+      - no_reload_needed
+    example: applied
+  apply_reason:
+    type: string
+    description: >
+      Present for applied_not_running (the availability reason) and failed
+      (a fixed, secret-free phrase, never the raw error text). For failed, use
+      "the configuration reload failed; details are in the server log", or,
+      when the applied/current predicate reaches the pending-disposal leg,
+      "the previous connection did not finish shutting down; the next save
+      retries it". A config-changing save uses the reload phrase because the
+      applied-hash check precedes the disposal check. An identical save with
+      matching applied settings while a disposal remains pending uses the
+      disposal phrase. Error details stay in the server log. Never a secret.
+  apply_note:
+    type: string
+    description: >
+      Present whenever a reload was attempted (every outcome except
+      no_reload_needed): "A connection restart was attempted; other
+      connections and scheduled services may have paused briefly while it
+      ran."

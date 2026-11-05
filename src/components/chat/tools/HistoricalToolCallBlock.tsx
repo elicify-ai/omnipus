@@ -15,6 +15,8 @@ import { WebSearchBlock } from './WebSearchResult'
 import { WebFetchBlock } from './WebFetchPreview'
 import { GoalSetupFailureLine } from './GoalSetupFailureLine'
 import { delegationSlotted } from '../DelegationEventLine'
+import { isHistoryResultPreview } from '@/lib/historyPreview'
+import { HistoryPreviewToolCall } from './HistoryPreviewToolCall'
 
 /**
  * F2: derives the replay MessagePartStatus object from the store's resolved
@@ -28,19 +30,13 @@ import { delegationSlotted } from '../DelegationEventLine'
  * `status.type` to 'incomplete' here does not reopen #617 — it is never
  * consulted for the error bit once an explicit `isError` prop is supplied.
  */
-function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled'): MessagePartStatus {
+function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled', running: boolean): MessagePartStatus {
+  // 6c Done card: a live running call is not complete.
+  if (running) return { type: 'running' }
   return status === 'cancelled' ? { type: 'incomplete', reason: 'cancelled' } : { type: 'complete' }
 }
 
-export function renderHistoricalToolCall({
-  tc,
-  callId,
-  inlineEvents,
-  activeSessionId,
-  verboseChatEnabled,
-  goalRecordEmpty,
-  liteMode,
-}: {
+interface HistoricalToolCallArgs {
   tc: ToolCall
   callId: string
   inlineEvents: readonly DelegationEvent[] | undefined
@@ -48,7 +44,38 @@ export function renderHistoricalToolCall({
   verboseChatEnabled: boolean
   goalRecordEmpty: boolean
   liteMode: boolean
-}): ReactNode {
+  /** The saved occurrence owning this call (#1452 D2: addresses its full result). */
+  historyPosition?: string
+  /** 6c Done card: the call is still executing in the live turn (decided by the row). */
+  running?: boolean
+}
+
+export function renderHistoricalToolCall(args: HistoricalToolCallArgs): ReactNode {
+  const { tc, callId, inlineEvents, activeSessionId, verboseChatEnabled, historyPosition } = args
+  // #1452 D2 A2.4: a result the history page shortened reaches no
+  // tool-specific renderer (they would try to parse the marker as their own
+  // result shape); every tool falls back to the one preview display.
+  // The thread's one visibility filter still applies (toolVisibility.ts).
+  if (isHistoryResultPreview(tc.result)) {
+    const visible = shouldRenderToolCall(tc.tool, tc.params as Record<string, unknown> | undefined, verboseChatEnabled, tc.status === 'error')
+    return delegationSlotted(callId, inlineEvents, visible ? (
+      <HistoryPreviewToolCall key={callId} tc={tc} marker={tc.result} sessionId={activeSessionId ?? ''} historyPosition={historyPosition} />
+    ) : null)
+  }
+  return renderSavedToolCall(args)
+}
+
+/** The tool-specific replay renderers, for a result that was not shortened. */
+function renderSavedToolCall({
+  tc,
+  callId,
+  inlineEvents,
+  activeSessionId,
+  verboseChatEnabled,
+  goalRecordEmpty,
+  liteMode,
+  running = false,
+}: HistoricalToolCallArgs): ReactNode {
   // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
   // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
   // here too, so replayed sessions render the preview link (or the malformed
@@ -59,7 +86,7 @@ export function renderHistoricalToolCall({
         key={callId}
         args={(tc.params ?? {}) as { path?: string; command?: string; port?: number; duration_seconds?: number }}
         result={tc.result ?? null}
-        isRunning={false}
+        isRunning={running}
         // Issue #617: replay must reflect the tool call's real
         // outcome, mirroring GenericToolCall's `error={tc.error}`
         // below — previously this row always rendered "Done"
@@ -102,7 +129,7 @@ export function renderHistoricalToolCall({
         toolName={tc.tool}
         args={tc.params}
         result={tc.result}
-        status={replayPartStatus(tc.status)}
+        status={replayPartStatus(tc.status, running)}
         isError={tc.status === 'error'}
       />
     ))
@@ -125,7 +152,7 @@ export function renderHistoricalToolCall({
         key={callId}
         args={tc.params}
         result={tc.result}
-        status={replayPartStatus(tc.status)}
+        status={replayPartStatus(tc.status, running)}
         isRunning={tc.status === 'running'}
         isError={tc.status === 'error'}
         error={tc.error}
@@ -150,7 +177,7 @@ export function renderHistoricalToolCall({
         toolName={tc.tool}
         args={(tc.params ?? {}) as { command?: string; description?: string; action?: string }}
         result={tc.result}
-        isRunning={false}
+        isRunning={running}
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
@@ -163,7 +190,7 @@ export function renderHistoricalToolCall({
         toolName={tc.tool}
         args={(tc.params ?? {}) as { path?: string }}
         result={tc.result}
-        isRunning={false}
+        isRunning={running}
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
@@ -176,7 +203,7 @@ export function renderHistoricalToolCall({
         toolName={tc.tool}
         args={(tc.params ?? {}) as { path?: string }}
         result={tc.result}
-        isRunning={false}
+        isRunning={running}
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
@@ -189,7 +216,7 @@ export function renderHistoricalToolCall({
         toolName={tc.tool}
         args={(tc.params ?? {}) as { query?: string }}
         result={tc.result}
-        isRunning={false}
+        isRunning={running}
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
@@ -202,7 +229,7 @@ export function renderHistoricalToolCall({
         toolName={tc.tool}
         args={(tc.params ?? {}) as { url?: string }}
         result={tc.result}
-        isRunning={false}
+        isRunning={running}
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
@@ -219,7 +246,7 @@ export function renderHistoricalToolCall({
           toolName={tc.tool}
           args={tc.params}
           result={tc.result}
-          status={replayPartStatus(tc.status)}
+          status={replayPartStatus(tc.status, running)}
           error={tc.error}
           isError={tc.status === 'error'}
           durationMs={tc.duration_ms}
@@ -255,7 +282,7 @@ export function renderHistoricalToolCall({
       toolName={tc.tool}
       args={tc.params}
       result={tc.result}
-      status={replayPartStatus(tc.status)}
+      status={replayPartStatus(tc.status, running)}
       error={tc.error}
       // Issue #617: pass the store's real outcome explicitly rather
       // than letting GenericToolCall infer it from `status`/`error`

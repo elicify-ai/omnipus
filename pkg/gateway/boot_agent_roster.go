@@ -65,7 +65,7 @@ import (
 //     cfg.SeededSkillGrants slice and is persisted by this same call; the
 //     matching skill-DIRECTORY cleanup (deleting the orphaned
 //     $OMNIPUS_HOME/skills/define-done/) is a separate, later step — see the
-//     call to skills.SeedDefaults in RunContextWithOptions. The agent-side
+//     skills start-up step (bootSkills) in RunContextWithOptions. The agent-side
 //     appends were just persisted by persistSeededCoreAgents; this writes the
 //     marker into config.json so the migration never re-runs. Best-effort:
 //     a failure only means the (idempotent, additive) check runs again next

@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
@@ -436,9 +438,7 @@ func TerminateTaskGoalRecord(
 	}
 	slog.Info("task goal: paired goal record terminated with its task",
 		"task_id", taskID, "goal_id", g.GoalID, "goal_state", string(state))
-	if hook := taskGoalEndedHook.Load(); hook != nil {
-		(*hook)(*updated, status)
-	}
+	notifyTaskGoalEnded(*updated, status)
 }
 
 // taskGoalEndedHook is TerminateTaskGoalRecord's after-transition observer:
@@ -461,6 +461,74 @@ func SetTaskGoalEndedHook(fn func(ended goal.Goal, taskStatus task.Status)) (res
 	}
 	prev := taskGoalEndedHook.Swap(next)
 	return func() { taskGoalEndedHook.Store(prev) }
+}
+
+// heldTaskGoalEnded holds goal transitions TerminateTaskGoalRecord made while
+// no observer was installed, between HoldTaskGoalEndedUntilReplay and
+// ReplayHeldTaskGoalEnded.
+var heldTaskGoalEnded struct {
+	mu      sync.Mutex
+	holding bool
+	ended   []heldGoalEnded
+}
+
+type heldGoalEnded struct {
+	goal   goal.Goal
+	status task.Status
+}
+
+// HoldTaskGoalEndedUntilReplay makes TerminateTaskGoalRecord keep, rather
+// than drop, every transition it makes while no after-transition observer is
+// installed, until ReplayHeldTaskGoalEnded. The gateway boot calls it before
+// it reconciles interrupted tasks — which must happen before any task
+// producer starts and therefore before the goal outcome recorder and its
+// session stores are wired — so those transitions still get their lasting
+// goal_outcome line (6b re-review N2).
+func HoldTaskGoalEndedUntilReplay() {
+	heldTaskGoalEnded.mu.Lock()
+	heldTaskGoalEnded.holding = true
+	heldTaskGoalEnded.mu.Unlock()
+}
+
+// ReplayHeldTaskGoalEnded ends the hold and hands every held transition, in
+// order, to the installed observer. Call it once the observer and everything
+// it writes through are wired. With no observer installed the held
+// transitions stay held, the hold stays on, and the call reports an error.
+func ReplayHeldTaskGoalEnded() error {
+	heldTaskGoalEnded.mu.Lock()
+	hook := taskGoalEndedHook.Load()
+	if hook == nil {
+		n := len(heldTaskGoalEnded.ended)
+		heldTaskGoalEnded.mu.Unlock()
+		if n == 0 {
+			return nil
+		}
+		return fmt.Errorf("task goal: %d held goal transition(s) cannot be replayed: no outcome observer installed", n)
+	}
+	held := heldTaskGoalEnded.ended
+	heldTaskGoalEnded.ended = nil
+	heldTaskGoalEnded.holding = false
+	heldTaskGoalEnded.mu.Unlock()
+	for _, h := range held {
+		(*hook)(h.goal, h.status)
+	}
+	return nil
+}
+
+// notifyTaskGoalEnded delivers one transition to the installed observer, or
+// holds it while a boot hold is on and no observer is installed yet.
+func notifyTaskGoalEnded(ended goal.Goal, status task.Status) {
+	heldTaskGoalEnded.mu.Lock()
+	hook := taskGoalEndedHook.Load()
+	if hook == nil && heldTaskGoalEnded.holding {
+		heldTaskGoalEnded.ended = append(heldTaskGoalEnded.ended, heldGoalEnded{goal: ended, status: status})
+		heldTaskGoalEnded.mu.Unlock()
+		return
+	}
+	heldTaskGoalEnded.mu.Unlock()
+	if hook != nil {
+		(*hook)(ended, status)
+	}
 }
 
 // TaskCreateTool creates a task and delegates it to another agent.
@@ -508,6 +576,9 @@ type TaskCreateTool struct {
 	// pkg/agent/loop.go (registerSharedTools); unwired (nil, e.g. a bare unit
 	// test) falls back to config.DefaultGoalMaxRounds.
 	goalMaxRoundsFn func() int
+	// planningFn reads the live planning configuration for the max_attempts
+	// ceiling (r17 TK-05); see SetPlanningConfigFn.
+	planningFn PlanningConfigFn
 }
 
 func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
@@ -708,8 +779,16 @@ func (t *TaskCreateTool) Description() string {
 		"If every criterion is kind=check, the assignee's effective bash policy " +
 		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +
 		"never run can never adjudicate MET). A task created in your own current workspace lands as a visible card in " +
-		"status `next` (triaged and dispatchable), never `inbox`. A task delivered to a DIFFERENT workspace " +
-		"(workspace_id) lands in `inbox` as not-started work for that workspace's team; it launches no run."
+		"status `next` (triaged and dispatchable), unless it carries a schedule. A task delivered to a DIFFERENT workspace " +
+		"(workspace_id) lands in `inbox` as not-started work for that workspace's team; it launches no run. " +
+		"Optional fields: description; tags (at most 16, each up to 64 characters, lower-cased and de-duplicated); " +
+		"run_isolated (true runs the task in its own isolated session); max_attempts (the retry limit, at least 1 and " +
+		"at most the global limit in Settings; omit it to use the global limit). Only the creating agent can later " +
+		"change prompt, criteria, dod or max_attempts. " +
+		"Schedule with trigger: {type: \"manual\", config: {}} is no schedule; {type: \"once\", config: {at_ms}} runs once; " +
+		"{type: \"recurring\", config: {rrule, dtstart_ms, tz}} repeats. A task created with a once or recurring trigger " +
+		"lands in `inbox` and waits for its occurrence. A once or recurring trigger on a task for a different workspace " +
+		"is refused."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -747,6 +826,7 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Due date/time in RFC 3339 format (optional)",
 			},
+			"trigger": triggerParameter("When the task runs (optional; omit or manual to run it now)."),
 			"parent_task_id": map[string]any{
 				"type":        "string",
 				"description": "ID of the parent task (optional) — set when this is a subtask of another task",
@@ -842,6 +922,26 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 					"standing quality gates, DISTINCT from criteria and never mixed into it, judged " +
 					"identically. REQUIRED: at least one item — an agent-created task with zero dod " +
 					"items is rejected.",
+			},
+			// r17 TK-02, TK-05, TK-08, TK-10: added to create as well as update.
+			"description": map[string]any{
+				"type":        "string",
+				"description": "Human-facing notes (optional, up to 2000 characters).",
+			},
+			"tags": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Tags (optional; at most 16, each up to 64 characters; lower-cased and de-duplicated).",
+			},
+			"run_isolated": map[string]any{
+				"type":        "boolean",
+				"description": "true runs the task in its own isolated session.",
+			},
+			"max_attempts": map[string]any{
+				"type":    "integer",
+				"minimum": 1,
+				"description": "How many fresh runs this task gets (its retry limit; optional). It must be at most " +
+					"the global limit in Settings. Omit to use the global limit.",
 			},
 		},
 		"required": []string{"title", "prompt", "agent_id", "criteria", "dod"},
@@ -1020,6 +1120,8 @@ type taskCreateToolExecute struct {
 	wsID string
 	// wsResolved is true once wsID/foreign hold the resolved target.
 	wsResolved bool
+	// trigger is the validated optional trigger (task_trigger.go).
+	trigger *task.Trigger
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -1122,6 +1224,9 @@ func (tc *taskCreateToolExecute) validateRequest() (*ToolResult, bool) {
 			Policy:        DenyTrustSet,
 			TargetAgentID: tc.agentID,
 		}), true
+	}
+	if r0, stop := tc.applyCreateTrigger(); stop {
+		return r0, true
 	}
 
 	// FR-6/D5 strict criteria enforcement (ADR-049, SD-A7, review r1 major
@@ -1290,7 +1395,9 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	// chooses local pickup under its own policy — the creator is not the
 	// starter, parent or recipient (FR-048/BDD-08.5).
 	landingStatus := task.StatusNext
-	if foreign {
+	if foreign || scheduledTrigger(tc.trigger) {
+		// r17 TK-30: a once/recurring trigger lands the scheduler-owned
+		// waiting state, never next; only its occurrence releases it.
 		landingStatus = task.StatusInbox
 	}
 	// Owner attribution (DEL-23 "preserve ... owner"): the retired sysagent
@@ -1323,6 +1430,7 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 		Status:          landingStatus,
 		DelegationDepth: tc.childDepth,
 		Criteria:        tc.criteria,
+		Trigger:         tc.trigger,
 	}
 	// A FOREIGN delivery carries no link back to the creator (FR-048/049): not
 	// its session or call, not its chat (the finished task's result text is
@@ -1394,7 +1502,7 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	if isJoin, ok := tc.args["is_join"].(bool); ok {
 		tc.entity.IsJoin = isJoin
 	}
-	return nil, false
+	return tc.applyCreateFields()
 }
 
 // persistAndRespond persists the task and paired goal, invokes the creation observer, and returns the created task identity.
@@ -1493,10 +1601,34 @@ type TaskUpdateTool struct {
 	// assigneeCannotFinish mirrors TaskCreateTool.assigneeCannotFinish (set via
 	// SetAssigneeReadinessChecker).
 	assigneeCannotFinish AssigneeReadinessChecker
+	// planningFn reads the live planning configuration for the max_attempts
+	// ceiling (r17 TK-05); see SetPlanningConfigFn.
+	planningFn PlanningConfigFn
+	// planStore backs plan_id attach / re-parent validation (r17 TK-11). A nil
+	// store fails closed (ValidateTaskPlanMembership); detaching needs none.
+	planStore *plan.Store
+	// scheduleReconciler re-arms the live trigger scheduler under the task's
+	// coordination lock after a trigger write (r17 TK-30); see
+	// SetScheduleReconciler. Nil means no live scheduler is wired.
+	scheduleReconciler ScheduleReconciler
+	// auditLogger receives the shared trigger audit event (r17 TK-30).
+	auditLogger *audit.Logger
 }
 
 func NewTaskUpdateTool(store *task.Store) *TaskUpdateTool {
 	return &TaskUpdateTool{store: store}
+}
+
+// SetScheduleReconciler installs reconciliation step 3 for trigger writes
+// (r17 TK-30). fn runs with the task's coordination lock held.
+func (t *TaskUpdateTool) SetScheduleReconciler(fn ScheduleReconciler) {
+	t.scheduleReconciler = fn
+}
+
+// SetAuditLogger installs the audit logger the shared trigger audit writes
+// to (registry injection, auditLoggerAware).
+func (t *TaskUpdateTool) SetAuditLogger(logger *audit.Logger) {
+	t.auditLogger = logger
 }
 
 // SetGoalMaxRoundsFn installs the live Settings -> Performance goal-round
@@ -1531,16 +1663,12 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 // read that function's doc comment for the full rule, the four frozen parts of
 // the judged contract, and the reasoning for what deliberately stays mutable.
 //
-// The two entry points enforce the same rule over different field sets simply
-// because they expose different fields. update_task's schema carries NO
-// `prompt` and no `description` argument at all, so the only frozen-set fields
-// reachable from here are `criteria` and `dod`. Nothing is enumerated for the
-// fields this tool cannot touch: a guard for an argument that does not exist
-// would be dead code, and adding a frozen argument to the schema later must
-// carry adding it here in the same change.
+// Both entry points read the frozen set from Table T-TASK
+// (pkg/task/fieldrules.go::FrozenWhileRunningProperties, r17 §7.1), so they
+// cannot drift.
 //
-// Presence is decided with the SAME type assertion the apply path below uses
-// (`args[k].([]any)`), so the gate refuses exactly what would otherwise be
+// Presence is decided with the SAME type assertion the apply path uses
+// (definitionArgSent), so the gate refuses exactly what would otherwise be
 // written — never more. A `criteria` argument of the wrong JSON shape changes
 // nothing downstream, so it is not something to refuse.
 //
@@ -1548,14 +1676,9 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 // working the task must be able to advance its own status, its todos (a
 // separate tool), its result and its artifacts while it runs.
 func frozenUpdateTaskDefinitionFields(args map[string]any) []string {
-	var frozen []string
-	if _, ok := args["criteria"].([]any); ok {
-		frozen = append(frozen, "criteria")
-	}
-	if _, ok := args["dod"].([]any); ok {
-		frozen = append(frozen, "dod")
-	}
-	return frozen
+	return task.SentProperties(task.FrozenWhileRunningProperties(), func(property string) bool {
+		return definitionArgSent(args, property)
+	})
 }
 
 // runningTaskFrozenFieldToolMessage is the tool-side refusal, deliberately
@@ -1597,11 +1720,19 @@ func (t *TaskUpdateTool) Scope() ToolScope { return ScopeGeneral }
 func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskUpdateTool) Description() string {
-	return "Update a task assigned to you or that you created: status, title, priority, due date, agent_id, or blocked_by.\n" +
+	return "Update a task assigned to you or that you created: status, title, description, prompt, tags, priority, due date, run_isolated, agent_id, blocked_by, criteria, dod or retry limit.\n" +
+		"Only the agent that created a task can change what it asks for (prompt, criteria, dod, max_attempts).\n" +
 		"Status: failed ends a task you are NOT currently running; done on a task with acceptance criteria " +
 		"is refused outside its own run (the judge decides completion there), and while a task's own run is " +
 		"in flight you cannot write its status at all — claim completion with the goal_claim tool instead " +
-		"(status \"met\" with evidence, or \"blocked\" when you cannot proceed). Only provided fields are updated."
+		"(status \"met\" with evidence, or \"blocked\" when you cannot proceed). Only provided fields are updated.\n" +
+		"Retry limit: max_attempts is at least 1 and at most the global limit in Settings; clear_max_attempts: true " +
+		"returns to the global limit (never send both). tags: at most 16, each up to 64 characters, lower-cased and " +
+		"de-duplicated. Other fields: plan_id moves the task into a draft plan (\"\" takes it out), clear_due removes the due date.\n" +
+		"Schedule with trigger: {type: \"manual\", config: {}} removes the schedule and keeps the status; " +
+		"{type: \"once\", config: {at_ms}} or {type: \"recurring\", config: {rrule, dtstart_ms, tz}} sets one. A future " +
+		"trigger moves a `next` task to `inbox` in the same save; blocked, running and finished tasks keep their " +
+		"status. A once or recurring trigger on a task in a different workspace is refused."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -1614,9 +1745,11 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 			},
 			"status": map[string]any{
 				"type": "string",
-				"enum": []string{"done", "failed"},
-				"description": "New status for the task. in_progress is NOT settable here (issue #593) — " +
-					"it is only ever reached through real dispatch; use run_task to actually start this task.",
+				"enum": []string{"inbox", "next", "done", "failed"},
+				"description": "New status for the task: inbox, next (ready to run), done or failed. The store's " +
+					"transition rules apply (done is terminal; failed may go back to next or inbox). in_progress is " +
+					"NOT settable here (issue #593) — it is only ever reached through real dispatch; use run_task to " +
+					"actually start this task. blocked is set only by the engine.",
 			},
 			"result": map[string]any{
 				"type":        "string",
@@ -1629,7 +1762,30 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 			},
 			"title": map[string]any{
 				"type":        "string",
-				"description": "New title for the task (1-200 chars)",
+				"description": "New title for the task (1-200 characters). An empty title is refused.",
+			},
+			"description": map[string]any{
+				"type":        "string",
+				"description": "New human-facing notes (up to 2000 characters). Pass \"\" to clear.",
+			},
+			"prompt": map[string]any{
+				"type": "string",
+				"description": "New instruction the assigned agent runs (up to 10000 characters). Only the agent " +
+					"that created the task may change it, and not while the task is running. A paired goal " +
+					"follows it (its first 4000 characters).",
+			},
+			"tags": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Replacement tag list (at most 16, each up to 64 characters; lower-cased and de-duplicated). Pass [] to clear.",
+			},
+			"run_isolated": map[string]any{
+				"type":        "boolean",
+				"description": "true runs the task in its own isolated session.",
+			},
+			"clear_due": map[string]any{
+				"type":        "boolean",
+				"description": "true removes the due date. A due value in the same call wins.",
 			},
 			"priority": map[string]any{
 				"type":        "integer",
@@ -1641,6 +1797,7 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Due date/time in RFC 3339 format",
 			},
+			"trigger": triggerParameter("Change when the task runs; {type: \"manual\", config: {}} removes the schedule."),
 			"agent_id": map[string]any{
 				"type":        "string",
 				"description": "ID of the agent to reassign the task to",
@@ -1663,6 +1820,11 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
 				"description": "Replacement set of concrete paths this plan member creates/edits. Pass the full list to REPLACE; pass [] to CLEAR; omit to leave unchanged. Meaningful only alongside plan_id.",
+			},
+			"plan_id": map[string]any{
+				"type": "string",
+				"description": "Move the task into a draft plan of its own workspace, or pass \"\" to take it out of " +
+					"its plan (always allowed). Taking it out without a status in the same call returns it to inbox.",
 			},
 			"stream": map[string]any{
 				"type":        "string",
@@ -1704,6 +1866,17 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 					"FROZEN WHILE THE TASK IS RUNNING: once the task is in_progress this field cannot be " +
 					"changed (the Judge scores the finished work against it), and supplying it is refused. " +
 					"Your status, todos, result and artifacts stay editable throughout.",
+			},
+			"max_attempts": map[string]any{
+				"type":    "integer",
+				"minimum": 1,
+				"description": "How many fresh runs this task gets (its retry limit). Only the agent that created " +
+					"the task may change it. It must be at most the global limit in Settings, even when it lowers " +
+					"a higher value a person set. Stays editable while the task runs.",
+			},
+			"clear_max_attempts": map[string]any{
+				"type":        "boolean",
+				"description": "true clears the task's own retry limit so it inherits the global limit. Always accepted from the creator.",
 			},
 			"dod": map[string]any{
 				"type": "array",
@@ -1753,11 +1926,16 @@ type taskUpdateToolExecute struct {
 	patch            task.Patch
 	updatedFields    []string
 	newStatus        task.Status
+	detachResets     bool
 	newDoD           []task.AcceptanceCriterion
 	criteriaProvided bool
 	dodProvided      bool
 	updated          *task.Task
 	goalSyncWarning  string
+	// triggerSent is true when this call carries a trigger (task_trigger.go).
+	triggerSent bool
+	// scheduleSyncWarning is the scheduler reconciliation failure, if any.
+	scheduleSyncWarning string
 }
 
 func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -1768,6 +1946,10 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	}
 
 	if r0, stop := tu.buildPatchFields(); stop {
+		return r0
+	}
+
+	if r0, stop := tu.applyRetryLimit(); stop {
 		return r0
 	}
 
@@ -1841,7 +2023,11 @@ func (tu *taskUpdateToolExecute) validateAndLoad() (*ToolResult, bool) {
 	// frozenUpdateTaskDefinitionFields for the field mapping and for why the
 	// refusal is whole-request). Checked here, before a single field is copied
 	// into the patch, so a call mixing frozen and mutable fields applies none
-	// of it rather than half of it.
+	// of it rather than half of it. The definition group's creator-only rule
+	// (r17 §7.7) is checked first, on the same whole-request basis.
+	if r0, stop := tu.checkDefinitionAuthority(); stop {
+		return r0, true
+	}
 	if frozen := frozenUpdateTaskDefinitionFields(tu.args); len(frozen) > 0 && tu.existing.Status == task.StatusInProgress {
 		return ErrorResult(runningTaskFrozenFieldToolMessage(frozen)), true
 	}
@@ -1911,6 +2097,9 @@ func (tu *taskUpdateToolExecute) buildPatchFields() (*ToolResult, bool) {
 		if !task.IsValidStatus(st) {
 			return ErrorResult(fmt.Sprintf("invalid status %q", statusStr)), true
 		}
+		if res, stop := tu.checkStatusAuthority(st); stop {
+			return res, true
+		}
 		// Issue #593 (Option A): in_progress is a DISPATCH state, not a
 		// caller-settable status the way done/failed are. The only legitimate
 		// writers are the executor's ClaimForRun, REST's handleTaskPatch,
@@ -1966,10 +2155,13 @@ func (tu *taskUpdateToolExecute) buildPatchFields() (*ToolResult, bool) {
 		tu.updatedFields = append(tu.updatedFields, "artifacts")
 	}
 
-	// Title.
-	if title, ok := tu.args["title"].(string); ok && title != "" {
-		tu.patch.Title = &title
-		tu.updatedFields = append(tu.updatedFields, "title")
+	// Organisation fields: title, description, prompt, tags, run_isolated,
+	// due / clear_due (task_update_fields.go).
+	if res, stop := tu.applyOrganisationFields(); stop {
+		return res, true
+	}
+	if res, stop := tu.applyTriggerField(); stop {
+		return res, true
 	}
 
 	// Priority (1-5). Shared range-check with create_task/create_task_in_
@@ -1981,15 +2173,6 @@ func (tu *taskUpdateToolExecute) buildPatchFields() (*ToolResult, bool) {
 		}
 		tu.patch.Priority = &pr
 		tu.updatedFields = append(tu.updatedFields, "priority")
-	}
-
-	// Due (RFC 3339 string).
-	if due, ok := tu.args["due"].(string); ok && due != "" {
-		if _, pErr := time.Parse(time.RFC3339, due); pErr != nil {
-			return ErrorResult(fmt.Sprintf("invalid due date %q (must be RFC 3339): %v", due, pErr)), true
-		}
-		tu.patch.Due = &due
-		tu.updatedFields = append(tu.updatedFields, "due")
 	}
 
 	// agent_id (reassign): see applyReassignment.
@@ -2045,7 +2228,7 @@ func (tu *taskUpdateToolExecute) buildPatchFields() (*ToolResult, bool) {
 		tu.patch.IsJoin = &isJoin
 		tu.updatedFields = append(tu.updatedFields, "is_join")
 	}
-	return nil, false
+	return tu.applyPlanMembership()
 }
 
 // buildJudgedContract parses criteria and Definition of Done changes and validates the effective judged contract and assignee readiness.
@@ -2129,7 +2312,7 @@ func (tu *taskUpdateToolExecute) buildJudgedContract() (*ToolResult, bool) {
 func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	if len(tu.updatedFields) == 0 {
 		return ErrorResult(
-			"no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by, write_set, stream, is_join)",
+			"no updatable fields provided (supply at least one of status, result, artifacts, title, description, prompt, tags, run_isolated, priority, due, clear_due, trigger, agent_id, blocked_by, plan_id, write_set, stream, is_join, criteria, dod, max_attempts, clear_max_attempts)",
 		), true
 	}
 
@@ -2142,25 +2325,49 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 		tu.patch.CompletedAt = &now
 	}
 
-	tu.updated, tu.err = tu.t.store.Update(tu.taskID, tu.patch)
-	if tu.err != nil {
+	// One reconciled write (task_write_reconcile.go): the task write and the
+	// paired goal's synchronisation under the task's coordination lock, so
+	// REST and tool writers of one task are strictly ordered (r17 TK-03).
+	// GOAL-FR-029/FR-030: the criteria/dod change lands on the task record
+	// (dual-write) and then on the paired goal record — creating one if this
+	// is a legacy task's first-ever criteria/dod (see SyncTaskGoalRecord).
+	req := TaskWriteRequest{Patch: tu.patch, Prior: tu.triggerSent}
+	if tu.triggerSent {
+		// r17 TK-30: every update that carries a trigger reconciles the live
+		// scheduler under the same lock hold (step 3).
+		req.ReconcileSchedule = tu.t.scheduleReconciler
+	}
+	if tu.detachResets {
+		req.RetryWithoutStatus = DetachStatusRefused
+	}
+	if tu.criteriaProvided || tu.dodProvided {
+		req.SyncGoalDefinition = func(updated *task.Task) error {
+			return SyncTaskGoalRecord(GoalStoreForTasks(tu.t.store), updated,
+				tu.criteriaProvided, tu.newDoD, tu.dodProvided, tu.t.goalMaxRoundsFn)
+		}
+	}
+	out, wErr := WriteTaskReconciled(tu.t.store, tu.taskID, req)
+	if wErr != nil {
+		tu.err = wErr
 		// WithError carries the store sentinel (task.ErrBlockedByCycle,
 		// ErrValidation, ...) so callers and tests assert identity rather
 		// than the plain-language message wording.
-		return ErrorResult(fmt.Sprintf("task_update failed: %v", tu.err)).WithError(tu.err), true
+		return ErrorResult(fmt.Sprintf("task_update failed: %v", wErr)).WithError(wErr), true
 	}
-
-	// GOAL-FR-029/FR-030: the task record's write already landed above
-	// (dual-write); this is what actually persists the change onto the
-	// task's paired goal record — creating one if this is a legacy task's
-	// first-ever criteria/dod (see SyncTaskGoalRecord's doc comment).
-
-	if tu.criteriaProvided || tu.dodProvided {
-		if gErr := SyncTaskGoalRecord(GoalStoreForTasks(tu.t.store), tu.updated, tu.criteriaProvided, tu.newDoD, tu.dodProvided, tu.t.goalMaxRoundsFn); gErr != nil {
-			slog.Error("update_task: failed to sync paired goal record",
-				"task_id", tu.taskID, "error", gErr)
-			tu.goalSyncWarning = gErr.Error()
-		}
+	tu.updated = out.Updated
+	if gErr := errors.Join(out.GoalDefinitionErr, out.GoalPromptErr); gErr != nil {
+		slog.Error("update_task: failed to sync paired goal record",
+			"task_id", tu.taskID, "error", gErr)
+		tu.goalSyncWarning = gErr.Error()
+	}
+	if out.ScheduleErr != nil {
+		slog.Error("update_task: saved task but could not re-arm its schedule",
+			"task_id", tu.taskID, "error", out.ScheduleErr)
+		tu.scheduleSyncWarning = out.ScheduleErr.Error()
+	}
+	if tu.triggerSent && out.Prior != nil {
+		AuditTriggerChange(tu.t.auditLogger, tu.callerID, tu.taskID,
+			out.Prior.Trigger, out.Updated.Trigger, out.Prior.Status, out.Updated.Status)
 	}
 
 	// GOAL-FR-015/FR-027/FR-028 (review finding C1): this tool is one of the
@@ -2230,8 +2437,15 @@ func (tu *taskUpdateToolExecute) respond() *ToolResult {
 		// silent data loss — but the paired goal record (the authoritative
 		// store per ADR-086 D5) failed to pick up the change, so the caller
 		// must see that explicitly rather than assume both landed together.
-		resultPayload["goal_sync_warning"] = "criteria/dod saved on the task, but the paired goal " +
+		resultPayload["goal_sync_warning"] = "the change was saved on the task, but its paired goal " +
 			"record could not be updated: " + tu.goalSyncWarning
+	}
+	if tu.scheduleSyncWarning != "" {
+		// r17 TK-30 / §7.11: the trigger was saved and stays authoritative,
+		// but the live schedule could not be re-armed; no stale job is left.
+		resultPayload["schedule_sync_warning"] = "the trigger was saved on the task, but its schedule " +
+			"could not be re-armed (" + tu.scheduleSyncWarning + "); the saved trigger stays authoritative — " +
+			"re-save the schedule or restart the gateway"
 	}
 	encoded, mErr := json.Marshal(resultPayload)
 	if mErr != nil {

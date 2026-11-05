@@ -2,6 +2,7 @@
 
 import type { ToolResultRef, TruncatedResult } from '@/lib/api/generated/asyncapi-types'
 import { logDiagnostic } from '@/lib/telemetry'
+import { isHistoryResultPreview } from '@/lib/historyPreview'
 import { evictSpanIndexEntries } from './types'
 import type { ChatMessage, ClientTruncatedResult, SessionChatState } from './types'
 
@@ -9,8 +10,11 @@ import type { ChatMessage, ClientTruncatedResult, SessionChatState } from './typ
 // Older messages are evicted once this limit is exceeded; full transcript is preserved server-side.
 export const MAX_MESSAGES_PER_SESSION = 500
 
-// Maximum byte size of a tool result stored in client state; oversized results become a sentinel.
-const MAX_TOOL_RESULT_BYTES = 50_000
+// Maximum size of a tool result stored in client state, in UTF-8 bytes of its
+// encoding; oversized results become a sentinel. #1452 D2 A2.4: aligned with
+// the server's inline threshold (pkg/session InlineToolResultMaxBytes =
+// 51,200 bytes), so a value the server sent in full is never cut again here.
+const MAX_TOOL_RESULT_BYTES = 51_200
 
 // Preview size for client-side truncated results (4 KiB).
 const CLIENT_TRUNCATION_PREVIEW_BYTES = 4_096
@@ -45,8 +49,8 @@ export function isTruncatedResult(value: unknown): value is TruncatedResult {
 
 /** Clamp a tool result to MAX_TOOL_RESULT_BYTES; pass-through for existing sentinels. */
 export function clampToolResult(result: unknown): unknown {
-  // Pass-through for existing sentinels.
-  if (isToolResultRef(result) || isTruncatedResult(result) || isClientTruncatedResult(result)) {
+  // Pass-through for existing sentinels, including the D2 history preview marker.
+  if (isToolResultRef(result) || isTruncatedResult(result) || isClientTruncatedResult(result) || isHistoryResultPreview(result)) {
     return result
   }
   let serialized: string
@@ -55,11 +59,13 @@ export function clampToolResult(result: unknown): unknown {
   } catch {
     serialized = String(result)
   }
-  if (serialized.length <= MAX_TOOL_RESULT_BYTES) {
+  // UTF-8 bytes, never UTF-16 characters: a character is at least one byte,
+  // so only a string within the limit in characters needs the exact count.
+  const originalSizeBytes = new TextEncoder().encode(serialized).length
+  if (originalSizeBytes <= MAX_TOOL_RESULT_BYTES) {
     return result
   }
   const preview = serialized.slice(0, CLIENT_TRUNCATION_PREVIEW_BYTES)
-  const originalSizeBytes = new TextEncoder().encode(serialized).length
   const sentinel: ClientTruncatedResult = {
     _truncated_client: true,
     original_size_bytes: originalSizeBytes,
@@ -108,6 +114,11 @@ function reportCollapsedDuplicateIds(repeats: Map<string, number>): void {
     reportedDuplicateIds.add(messageId)
     logDiagnostic('chatDuplicateMessageIdCollapsed', { messageId, occurrences })
   }
+}
+
+/** #1452 D1 S1a: a saved record whose id an incompatible display row already holds. */
+export function reportDuplicateMessageId(messageId: string): void {
+  reportCollapsedDuplicateIds(new Map([[messageId, 2]]))
 }
 
 /** Test seam: forget which duplicate ids were already reported. */
@@ -310,11 +321,15 @@ export function advanceEventTime(current: string | null, incoming: string | null
  * straggler's own result can release the busy flag; once a turn has ended
  * (or the user stopped it) a mark whose result never came would later let an
  * unrelated lone tool result blink Stop off mid-turn (R3-SPA-SFH-04).
+ * The provider-retry line retires with the turn too (6b U3c): it describes a
+ * retry of THIS turn, so a later turn shows it only after its own
+ * provider_retry frame.
  */
-export function endTurnState(draft: Pick<SessionChatState, 'activeTurnId' | 'activeTurnAgentId' | 'idleArmedToolCalls'>): void {
+export function endTurnState(draft: Pick<SessionChatState, 'activeTurnId' | 'activeTurnAgentId' | 'idleArmedToolCalls' | 'providerRetryEvent'>): void {
   draft.activeTurnId = null
   draft.activeTurnAgentId = null
   draft.idleArmedToolCalls = undefined
+  draft.providerRetryEvent = null
 }
 
 /**

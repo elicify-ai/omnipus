@@ -199,6 +199,11 @@ type RunOptions struct {
 	// (MAJ-5 / ExecutorConfig.cli_args). These are passed to execve literally —
 	// the dispatch site tokenises the free-form cli_args string (no shell).
 	CLIArgs []string
+	// PresetArgs are the person's Settings preset parameters for this CLI,
+	// tokenised (r17 §3.7). Each driver appends them after the filtered
+	// CLIArgs and never filters them: the last occurrence of a repeated flag
+	// wins, so a person's value beats an agent flag of the same name.
+	PresetArgs []string
 	// EnvOverrides are additional environment variables merged into Env for the
 	// spawned process (MAJ-5 / ExecutorConfig.env_overrides). Omnipus-internal
 	// keys (OMNIPUS_*) are never overridable — the driver's env builder rejects

@@ -25,7 +25,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 
 // react-markdown stays REAL — that is the point: the fence must be parsed and the
@@ -216,8 +216,11 @@ describe('HistoricalMessageMarkdown — copy header on block code', () => {
     // copyText is async; give the microtask queue a tick
     await Promise.resolve()
 
+    // #1449 S-02: Copy contains exactly the code body, not the line break
+    // separating that body from the closing fence, and confirms the copy.
     expect(mockCopyText).toHaveBeenCalledTimes(1)
-    expect(mockCopyText).toHaveBeenCalledWith('const x = 1\n')
+    expect(mockCopyText).toHaveBeenCalledWith('const x = 1')
+    await waitFor(() => expect(copyButton).toHaveTextContent(/copied/i))
   })
 
   it('does NOT render a Copy button for inline code', () => {

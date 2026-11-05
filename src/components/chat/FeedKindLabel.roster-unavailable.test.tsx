@@ -13,7 +13,7 @@
 // Harness copied from FeedKindLabel.main-title.test.tsx.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -122,5 +122,89 @@ describe('FeedKindLabel — an id-fallback line is marked as such (R2-S4-03)', (
       expect(label()?.textContent).toBe('Jim - Main Session')
     })
     expect(label()?.textContent).not.toContain('unavailable')
+  })
+})
+
+// The warning's EXPLANATION has to reach a sighted keyboard user (review
+// round 2, C6/R2-1). The compact glyph stays compact — the explanation is
+// the catalogued Tooltip's job (design-system rule 14): a NAMED, focusable
+// trigger that reveals on focus and on a tap, and that Escape dismisses.
+//
+// The words a screen reader gets (the status region's own accessible name)
+// are unchanged by any of this — the trigger is a SIBLING of the labelled
+// warning text, never a child of it, so the region's name cannot repeat
+// itself.
+describe('FeedKindLabel — the compact warning explains itself (review round 2)', () => {
+  const EXPLANATION = 'Agent names could not be loaded. Reload the page to try again.'
+
+  async function renderFailedRoster(): Promise<HTMLElement> {
+    vi.mocked(fetchAgents).mockRejectedValue(new Error('roster down'))
+    renderLabel()
+    await waitFor(() => {
+      expect(label()?.textContent).toBe('jim - Main Session — agent names unavailable')
+    })
+    return screen.getByTestId('feed-kind-warning')
+  }
+
+  it('keyboard focus reveals the explanation on a named, focusable trigger', async () => {
+    const trigger = await renderFailedRoster()
+    // Named and focusable: the keyboard can reach the explanation at all.
+    expect(trigger).toHaveAttribute('aria-label', 'Agent names unavailable')
+    expect(trigger.tabIndex).toBe(0)
+    // Nothing is revealed before the user asks for it.
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+
+    fireEvent.focus(trigger)
+    expect(screen.getByRole('tooltip')).toHaveTextContent(EXPLANATION)
+  })
+
+  it('a tap reveals the explanation', async () => {
+    const trigger = await renderFailedRoster()
+    fireEvent.click(trigger)
+    expect(screen.getByRole('tooltip')).toHaveTextContent(EXPLANATION)
+  })
+
+  it('the trigger is a real control with a coarse-pointer touch box', async () => {
+    const trigger = await renderFailedRoster()
+    // A real button, not a bare glyph: the keyboard and a finger both need
+    // something to aim at, and a span with a click handler is neither.
+    expect(trigger.tagName).toBe('BUTTON')
+    expect(trigger).toHaveAttribute('type', 'button')
+    // The touch box follows the design system's token (--target-touch-
+    // minimum, 44px) on a coarse pointer. The visible glyph stays 14px —
+    // only the hit box grows, and only for a finger. The GEOMETRY (the box
+    // really is 44px, and the two controls stay apart) is measured in the
+    // browser; jsdom has no layout engine.
+    expect(trigger.className).toContain('pointer-coarse:min-h-[var(--target-touch-minimum)]')
+    expect(trigger.className).toContain('pointer-coarse:min-w-[var(--target-touch-minimum)]')
+  })
+
+  it('Escape dismisses the explanation again', async () => {
+    const trigger = await renderFailedRoster()
+    trigger.focus()
+    fireEvent.focus(trigger)
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    // The operator's keyboard position does not change — only the bubble goes.
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('the status region still names the identity AND the warning, once', async () => {
+    await renderFailedRoster()
+    const region = label()
+    const [identityId, warningId] = (region?.getAttribute('aria-labelledby') ?? '').split(' ')
+    const identity = document.getElementById(identityId ?? '')
+    const warning = document.getElementById(warningId ?? '')
+    expect(identity).not.toBeNull()
+    expect(warning).not.toBeNull()
+    // The trigger is NOT inside the region's name source: a named child there
+    // would repeat itself in the accessible name.
+    expect(warning?.contains(screen.getByTestId('feed-kind-warning'))).toBe(false)
+    // The region's name is the identity plus the warning — the words the
+    // screen reader reads, unchanged by the tooltip.
+    expect(identity?.textContent).toBe('jim - Main Session')
+    expect(warning?.textContent).toContain('agent names unavailable')
   })
 })

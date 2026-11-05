@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/skillname"
 )
 
 // KernelDeniedPathsFor is DeniedPathsFor rendered at the granularity a KERNEL
@@ -115,6 +117,13 @@ func runtimeAllowanceOverridesInventory(home, rawPath string) bool {
 	}
 	if !CoversForDeny(home, clean) {
 		return false // outside the home: the enumeration ignores it anyway
+	}
+	// Skills spec r15 §6.2 item 3: one loadable skill folder — exactly one
+	// level under <home>/skills, a valid slug, never a dot entry — is the
+	// only runtime shape inside the skills registry. The registry root, its
+	// control entries (.staging, .swap, ...) and anything deeper still drop.
+	if SameLocationForDeny(filepath.Dir(clean), filepath.Join(home, "skills")) && skillname.Valid(filepath.Base(clean)) {
+		return false
 	}
 	overlaps := func(root, p string) bool {
 		return CoversForDeny(root, p) || CoversForDeny(p, root)
