@@ -366,15 +366,22 @@ func (a *restAPI) applyOutboundChange(
 		return none, err // a cancelled request never commits later (FR-019)
 	}
 	desired := &config.ChannelOutboundConfig{Policy: string(policy), Targets: canonical}
-	return a.commitOutboundChange(id, desired, expectedRevision, actor)
+	return a.commitOutboundChange(ctx, id, desired, expectedRevision, actor)
 }
 
-// commitOutboundChange is applyOutboundChange's locked phase (steps 2–6).
-func (a *restAPI) commitOutboundChange(id string, desired *config.ChannelOutboundConfig, expectedRevision, actor string) (gen.ChannelOutboundWriteResponse, error) {
+// commitOutboundChange is applyOutboundChange's locked phase (steps 2–6). The
+// request context is checked again once configMu is held (security S2,
+// FR-019): a request cancelled or expired while waiting for the lock commits
+// nothing, durable or live, even when the lock holder left this channel's
+// revision unchanged.
+func (a *restAPI) commitOutboundChange(ctx context.Context, id string, desired *config.ChannelOutboundConfig, expectedRevision, actor string) (gen.ChannelOutboundWriteResponse, error) {
 	var none gen.ChannelOutboundWriteResponse
 	store := a.pairingOrderStore()
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return none, err // cancelled while waiting for the lock: nothing is written (FR-019)
+	}
 	live := a.agentLoop.GetConfig()
 	liveInst, configured := live.Channels[id]
 	if !configured {
