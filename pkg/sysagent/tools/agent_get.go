@@ -13,12 +13,14 @@ package systools
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -46,7 +48,7 @@ func (t *AgentGetTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentGetTool) Description() string {
 	return "Read one agent: pass `fields` with the properties you need, or [\"all\"]. Select it by exact id or exact name; " +
 		"with neither you read yourself. Covers its model and effective model chain, instructions (soul, agent_md), " +
-		"skills, tool permissions (effective policy per tool, plus its stored overrides), connectors, external-worker " +
+		"skills (granted names; stale_skill_grants lists the granted names whose skill was replaced and must be re-granted), tool permissions (effective policy per tool, plus its stored overrides), connectors, external-worker " +
 		"executor (env values masked) and state. With new_agent_type (Main, Subagent, subagent_3p) it previews the " +
 		"tool_permissions and connectors a new agent of that type would get, without creating one."
 }
@@ -187,6 +189,15 @@ func (t *AgentGetTool) detail(ctx context.Context, args map[string]any, selected
 		cfg = t.deps.GetCfg()
 	}
 	full := t.storedDetail(home, state, cfg)
+	if slices.Contains(selected, "stale_skill_grants") {
+		// Same function and root as the REST agent detail (UAT-1 F-9).
+		stale, err := skills.StaleGrants(filepath.Join(home, "skills"), state.Agent.Skills, state.Agent.SkillGrants)
+		if err != nil {
+			return nil, tools.ErrorResult(errorJSON("SKILL_STATUS_UNAVAILABLE",
+				"could not check the agent's skill grants: "+err.Error(), agentReadRecovery))
+		}
+		full["stale_skill_grants"] = nonNilStrings(stale)
+	}
 	if slices.Contains(selected, "tool_permissions") {
 		perms, refusal := t.toolPermissions(state.Agent)
 		if refusal != nil {

@@ -9415,6 +9415,8 @@ export interface components {
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
             skills?: string[];
+            /** @description Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). The same list the REST agent detail returns as `stale_skill_grants`; empty when none is stale. */
+            stale_skill_grants?: string[];
             /** @description Per-tool effective policy and the agent's own stored override. */
             tool_permissions?: components["schemas"]["AgentToolPermission"][];
             /** @description The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included. */
