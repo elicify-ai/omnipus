@@ -249,11 +249,21 @@ type pendingEffect struct {
 // view: chat records with the tool-call effects applied and the cancel
 // truncation derived. It is the single reader behind ReadTranscript.
 func (us *UnifiedStore) readTranscriptMerged(sessionID string) ([]TranscriptEntry, error) {
+	entries, _, err := us.readTranscriptEffective(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return deriveCancelTruncation(entries), nil
+}
+
+// readTranscriptEffective returns the chat records with the tool-call effects
+// applied, and each record's archive address mapped to its index.
+func (us *UnifiedStore) readTranscriptEffective(sessionID string) ([]TranscriptEntry, map[ArchiveAddress]int, error) {
 	parts, err := us.transcriptPartitions(sessionID)
 	if err != nil {
 		// Reading only the current day would present a partial transcript as the
 		// whole one and silently hide retained history, so the failure surfaces.
-		return nil, fmt.Errorf("unified_store: read transcript: list partitions: %w", err)
+		return nil, nil, fmt.Errorf("unified_store: read transcript: list partitions: %w", err)
 	}
 	entries := []TranscriptEntry{}
 	index := map[ArchiveAddress]int{}
@@ -264,7 +274,7 @@ func (us *UnifiedStore) readTranscriptMerged(sessionID string) ([]TranscriptEntr
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return nil, fmt.Errorf("unified_store: read transcript: %w", err)
+			return nil, nil, fmt.Errorf("unified_store: read transcript: %w", err)
 		}
 		for pos := 0; pos < len(data); {
 			end := bytes.IndexByte(data[pos:], '\n')
@@ -282,24 +292,24 @@ func (us *UnifiedStore) readTranscriptMerged(sessionID string) ([]TranscriptEntr
 			var rec ArchiveRecord
 			if err := json.Unmarshal(line, &rec); err != nil {
 				if isContextWindowNoticeLine(line) {
-					return nil, fmt.Errorf("unified_store: read transcript: invalid context_window_notice: %w", err)
+					return nil, nil, fmt.Errorf("unified_store: read transcript: invalid context_window_notice: %w", err)
 				}
 				slog.Warn("unified_store: skipping malformed transcript line", "session_id", sessionID, "error", err)
 				continue
 			}
 			if err := validateContextWindowNotice(sessionID, rec.TranscriptEntry); err != nil {
-				return nil, fmt.Errorf("unified_store: read transcript: %w", err)
+				return nil, nil, fmt.Errorf("unified_store: read transcript: %w", err)
 			}
 			addr := ArchiveAddress{PartitionKey: part.key, ByteOffset: int64(start), EntryID: rec.ID}
 			if rec.Type == EntryTypeToolCallEffect {
 				if rec.ToolCallEffect == nil {
-					return nil, fmt.Errorf("unified_store: read transcript: effect record %s has no effect", rec.ID)
+					return nil, nil, fmt.Errorf("unified_store: read transcript: effect record %s has no effect", rec.ID)
 				}
 				effects = append(effects, pendingEffect{addr: addr, effect: rec.ToolCallEffect})
 				continue
 			}
 			if rec.ViewMembership == "" {
-				return nil, fmt.Errorf("unified_store: read transcript: record %s at %s@%d has no view_membership (an unconverted line; the archive carries no reader default)",
+				return nil, nil, fmt.Errorf("unified_store: read transcript: record %s at %s@%d has no view_membership (an unconverted line; the archive carries no reader default)",
 					rec.ID, part.key, start)
 			}
 			if rec.ViewMembership == ViewMembershipModel || rec.Type == EntryTypeModelRef {
@@ -310,9 +320,59 @@ func (us *UnifiedStore) readTranscriptMerged(sessionID string) ([]TranscriptEntr
 		}
 	}
 	if err := applyToolCallEffects(entries, index, effects, parts); err != nil {
-		return nil, fmt.Errorf("unified_store: read transcript: %w", err)
+		return nil, nil, fmt.Errorf("unified_store: read transcript: %w", err)
 	}
-	return deriveCancelTruncation(entries), nil
+	return entries, index, nil
+}
+
+// Tool-call statuses the boot settle below reads and writes (contracts
+// ToolCall.yaml status enum).
+const (
+	toolCallStatusRunning     = "running"
+	toolCallStatusInterrupted = "interrupted"
+)
+
+// InterruptRunningToolCalls settles, in place, every chat tool call whose
+// merged status is still "running" to "interrupted": one settle effect per
+// call, guarded by IfStatus "running". Boot recovery calls it only for a
+// session whose prior-boot execution is dead, so a dispatch-time running record
+// a crash left behind never reads as running forever. Repeating it is a no-op:
+// a settled call no longer reads as running, and a racing duplicate settle is
+// discarded on read by its guard. Old histories with no running record are
+// read only, never written. It returns how many calls it settled.
+func (us *UnifiedStore) InterruptRunningToolCalls(sessionID string) (int, error) {
+	if err := validateSessionID(sessionID); err != nil {
+		return 0, err
+	}
+	entries, index, err := us.readTranscriptEffective(sessionID)
+	if err != nil {
+		return 0, err
+	}
+	addrs := make([]ArchiveAddress, 0, len(index))
+	for addr, i := range index {
+		for _, tc := range entries[i].ToolCalls {
+			if tc.Status == toolCallStatusRunning {
+				addrs = append(addrs, addr)
+				break
+			}
+		}
+	}
+	sort.Slice(addrs, func(a, b int) bool { return index[addrs[a]] < index[addrs[b]] })
+	settled := 0
+	for _, addr := range addrs {
+		for _, tc := range entries[index[addr]].ToolCalls {
+			if tc.Status != toolCallStatusRunning {
+				continue
+			}
+			post := tc
+			post.Status = toolCallStatusInterrupted
+			if _, err := us.SettleToolCall(sessionID, addr, toolCallStatusRunning, post); err != nil {
+				return settled, fmt.Errorf("unified_store: interrupt running tool call %q: %w", tc.ID, err)
+			}
+			settled++
+		}
+	}
+	return settled, nil
 }
 
 // applyToolCallEffects merges the effects into entries (last writer wins per

@@ -52,6 +52,33 @@ export async function uploadFiles(
   return withCsrfRetry(() => doUploadFiles(formData, signal))
 }
 
+/**
+ * #1449 (ADR-20261028 C-I1, FR-016/FR-017): upload files into a workspace's
+ * media library with NO chat session — the group chat's attachments. The
+ * server stores them exactly like a normal chat upload (chat media copy plus
+ * Library file) and answers 503 when the library is unavailable; it never
+ * falls back to a session (the documented `uploadFiles` workspace branch).
+ */
+export async function uploadWorkspaceFiles(
+  workspaceId: string,
+  files: File[],
+  signal?: AbortSignal,
+): Promise<UploadFilesResponse> {
+  const formData = new FormData()
+  formData.append('workspace_id', workspaceId)
+  for (const file of files) {
+    formData.append('files', file)
+  }
+  if (readCSRFCookie() === null) {
+    throw new ApiError(
+      403,
+      'CSRF cookie missing — cannot upload files. Log in first so the server can issue the CSRF cookie.',
+      { code: 'csrf_missing' },
+    )
+  }
+  return withCsrfRetry(() => doUploadFiles(formData, signal))
+}
+
 async function doUploadFiles(formData: FormData, signal?: AbortSignal): Promise<UploadFilesResponse> {
   // Read fresh — never cache (see readCSRFCookie).
   const csrf = readCSRFCookie()

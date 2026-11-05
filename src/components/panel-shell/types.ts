@@ -3,7 +3,7 @@
 // contract writes it:
 //
 //   PanelDefinition {
-//     id:            'library' | 'browser' | 'mail' | 'tasks' | 'team' | 'calendar'
+//     id:            'library' | 'browser' | 'mail' | 'tasks' | 'team' | 'calendar' | 'participants'
 //     title:         string                          // shell header title
 //     content:       React component (receives shell callbacks via props)
 //     fullScreen:    context ↔ search codec         // shell-owned route state
@@ -14,7 +14,7 @@
 import type { ReactNode } from 'react'
 
 /** The registered panel ids (§8.1; §8.2: valid `?panel=` values are the REGISTERED ids). */
-export type PanelId = 'library' | 'browser' | 'mail' | 'tasks' | 'team' | 'calendar'
+export type PanelId = 'library' | 'browser' | 'mail' | 'tasks' | 'team' | 'calendar' | 'participants'
 
 export type PanelScope = 'workspace' | 'session' | 'app'
 export type PanelSwitchFollows = 'always' | 'when-scoped' | 'never'
@@ -27,6 +27,10 @@ export const PANEL_POLICIES = {
   tasks: { scope: 'workspace', switchFollows: 'always' },
   team: { scope: 'workspace', switchFollows: 'always' },
   calendar: { scope: 'workspace', switchFollows: 'always' },
+  // #1449 D6 / ADR-20261028 A10: a group chat's Participants panel. Opened
+  // only from the group's header button (never a strip entry) and closed
+  // when the person leaves the group, so it never follows a workspace switch.
+  participants: { scope: 'workspace', switchFollows: 'never' },
 } as const satisfies Record<PanelId, { scope: PanelScope; switchFollows: PanelSwitchFollows }>
 
 export type WorkspacePanelId = Exclude<PanelId, 'browser'>
@@ -55,6 +59,8 @@ export interface WorkspacePanelContext {
   folder?: 'inbox' | 'sent' | 'drafts' | null
   /** Mail's opaque selected-message reference. */
   messageRef?: string | null
+  /** #1449: the group chat a Participants panel belongs to. */
+  roomId?: string
   sessionId?: never
   agentId?: never
 }
@@ -68,6 +74,7 @@ export interface BrowserPanelContext {
   path?: never
   folder?: never
   messageRef?: never
+  roomId?: never
 }
 
 export type PanelContext = WorkspacePanelContext | BrowserPanelContext

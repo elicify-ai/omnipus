@@ -73,7 +73,7 @@ it('recomputes unmeasured composite prefixes when only A changes80→40, with st
   const mounted = () => [...region.querySelectorAll<HTMLElement>('[data-index]')]
   expect(mounted().length, 'positive instrument: actual virtual items mount').toBeGreaterThan(0)
   expect(mounted().length, 'positive instrument: unmeasured/unmounted source estimates really remain').toBeLessThan(50)
-  expect(historyAttachSizing(MAIN_ID), 'only tool80 is positive initially; zero narration residual is excluded').toStrictEqual({ history_limit: 40, history_min_rows: 20 })
+  expect(historyAttachSizing(MAIN_ID), 'only tool80 is positive initially; zero narration residual is excluded').toStrictEqual({ history_limit: 30, history_min_rows: 20 })
   expect(mounted().map(row => row.getBoundingClientRect().height), 'known physical outer item height, not an estimate').toStrictEqual(Array(mounted().length).fill(80))
   expect(Number.parseFloat(content.style.height), 'unmeasured two-row estimates initially use2*80, above physical50*80').toBeGreaterThan(4000)
 
@@ -90,7 +90,7 @@ it('recomputes unmeasured composite prefixes when only A changes80→40, with st
   for (const source of sources) layout.state.toolHeights.set(source.tool_calls![0].id, 40)
   await observeLayout()
   await observeLayout()
-  await waitFor(() => expect(historyAttachSizing(MAIN_ID), 'new stable drawn rows establish A40 without width/Verbose/session/source changes').toStrictEqual({ history_limit: 80, history_min_rows: 40 }))
+  await waitFor(() => expect(historyAttachSizing(MAIN_ID), 'new stable drawn rows establish A40 without width/Verbose/session/source changes').toStrictEqual({ history_limit: 60, history_min_rows: 40 }))
   expect(useChatStore.getState().messages, 'no message-array identity change can invalidate the key callback').toBe(messages)
   expect(useChatStore.getState().history.readerPositions, 'no source order/count replacement can invalidate estimates').toBe(positions)
   expect(useChatStore.getState().history.viewGeneration).toBe(generation)

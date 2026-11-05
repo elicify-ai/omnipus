@@ -7,7 +7,8 @@ description: >
   Cross-field invariants are checked by producers and consumers: min_rows <= limit;
   source_group_count matches selected groups and is at most 100; first/last positions
   exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget
-  stop cannot underfill min_rows. No optional absence is serialized as null.
+  stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <=
+  byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
 required:
   - mode
   - limit
@@ -15,6 +16,7 @@ required:
   - row_count
   - source_group_count
   - soft_byte_budget
+  - byte_ceiling
   - projected_bytes
   - byte_budget_exceeded
   - stop_reason
@@ -59,6 +61,19 @@ properties:
     description: >
       Server-owned soft projected-page budget, currently 4194304 bytes (4 MiB).
       Positive integer, deliberately not a one-value enum or a hard response cap.
+  byte_ceiling:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >
+      Server-owned hard page selection ceiling, currently 8388608 bytes (8 MiB),
+      on the same meter as projected_bytes (chat-history paging spec, "Amendment
+      2026-10-27 (founder, #1452 D2)", A2.3). Before adding any further group,
+      selection stops with stop_reason byte_ceiling if the page with that group
+      would exceed it, even below min_rows. The first group is always returned
+      whole, so projected_bytes <= byte_ceiling holds unless source_group_count
+      is 1. A page selection limit, not a heap or absolute response-size
+      guarantee; not an operator setting.
   projected_bytes:
     type: integer
     format: int64
@@ -79,10 +94,14 @@ properties:
       - end
       - range_end
       - byte_budget
+      - byte_ceiling
     description: >
       Actual selection boundary. row_target/source_cap take precedence when their
       boundary coincides with bytes. True end, closed clear/range or source cap may
-      underfill; bytes alone may not cut below min_rows or split a whole group.
+      underfill; the soft byte_budget may not cut below min_rows. byte_ceiling is
+      the one byte stop allowed below min_rows, and it is reported when the next
+      group would exceed both the soft budget and the ceiling. No byte stop
+      splits a whole group.
   budget_override:
     type: string
     enum:
