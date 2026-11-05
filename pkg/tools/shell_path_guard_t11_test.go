@@ -594,13 +594,15 @@ func TestGuard_LongOptionScriptPositionKeptCertain(t *testing.T) {
 // written or launched; /tm must be absent so the glue literal's condition 4
 // holds.
 //
-// Grammar decisions (cited, not guessed):
+// Grammar context (not a test of the scanner's all-digit fd rule):
 //   - `bash2>x` is NOT a shell invocation: under POSIX 2.3 Token Recognition
 //     and 2.7 Redirection an IO_NUMBER is recognized only when the token
 //     immediately before the operator is all digits; `bash2` is an ordinary
 //     command word, so the simple command is "run bash2 with stdout
 //     redirected" and no interpreter reads the pipe. It must stay allowed —
-//     including after the fix.
+//     including after the fix. This guard-level control pins that allowance,
+//     not the all-digit refinement: an ends-in-a-digit classifier can produce
+//     the same guard verdict. That refinement is unpinned here (CHECK W1).
 //   - `bash&>out.txt`: bash lexes `&>` as its combined stdout+stderr
 //     redirection operator; POSIX sh has no `&>` and reads `&` as the async
 //     separator (an asynchronous bash still reading the pipe, then an empty
@@ -646,4 +648,97 @@ func TestGuard_RedirectionGluedToShellStillWithholdsExemption(t *testing.T) {
 		got := tool.guardCommand(context.Background(), cmd, cwd)
 		require.Empty(t, got, "a word that is not an interpreter name (bash2) must not withhold on its own\ncommand: %s\nrefusal: %s", cmd, got)
 	})
+}
+
+// TestGuard_LineContinuationStillWithholdsExemption covers S5c (round 7):
+// GNU Bash Reference Manual, Escape Character, removes an unquoted
+// backslash-newline pair before identifying words. A continued interpreter
+// name therefore still reads the pipe-fed script, so the stand-alone literal
+// exception must remain withheld (spec section 3.1, FR-2). Both proposed S5c
+// fixes must refuse these forms; the test chooses neither implementation.
+//
+// Single Quotes preserves every character, including this pair. Double Quotes
+// still gives backslash its special meaning before newline, so that pair IS
+// removed. The quoted allowance controls put it in a separate harmless string
+// within a direct Python script operand: the absent path stays stand-alone,
+// and neither quote form introduces a stdin-fed shell. No fixture is executed.
+func TestGuard_LineContinuationStillWithholdsExemption(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	require.False(t, t11FirstExists("/tm"), "fixture: /tm exists, so the glue literal's condition 4 would not hold")
+	absent := t11AbsentTop(t)
+	const feed = `echo "echo {'/tm',}p/x" | `
+	continuation := string([]byte{'\\', '\n'})
+	require.Equal(t, []byte{'\\', '\n'}, []byte(continuation), "fixture: an actual backslash byte followed by a newline byte, not the text backslash-n")
+
+	for _, shell := range []struct{ name, head, tail string }{
+		{"bash", "ba", "sh"},
+		{"sh", "s", "h"},
+		{"zsh", "z", "sh"},
+	} {
+		cases := []struct{ name, cmd string }{
+			{"continuation before glued redirection", feed + shell.name + continuation + ">out.txt"},
+			{"continuation before spaced redirection", feed + shell.name + continuation + " >out.txt"},
+			{"split name with redirection", feed + shell.head + continuation + shell.tail + ">out.txt"},
+			{"split name without redirection", feed + shell.head + continuation + shell.tail},
+			{"continuation after pipe with redirection", strings.TrimSuffix(feed, " ") + continuation + shell.name + ">out.txt"},
+			{"continuation after pipe without redirection", strings.TrimSuffix(feed, " ") + continuation + shell.name},
+		}
+		for _, c := range cases {
+			t.Run(shell.name+" "+c.name, func(t *testing.T) {
+				require.Equal(t, 1, strings.Count(c.cmd, continuation), "fixture: exactly one actual continuation pair in %q", c.cmd)
+				t.Logf("command bytes: %q", c.cmd)
+				t11RequireRefused(t, tool, cwd, c.cmd, "path outside working dir",
+					"S5c: removing the unquoted continuation leaves an interpreter reading hidden script text from stdin")
+			})
+		}
+	}
+
+	for _, c := range []struct{ name, suffix string }{
+		{"bare bash", "bash"},
+		{"glued bash redirection", "bash>out.txt"},
+		{"tab before bash redirection", "bash\t>out.txt"},
+		{"ordinary newline before redirection", "bash\n>out.txt"},
+	} {
+		t.Run("refusal control "+c.name, func(t *testing.T) {
+			cmd := feed + c.suffix
+			require.NotContains(t, cmd, continuation, "fixture: the ordinary separator control has no backslash-newline pair")
+			t11RequireRefused(t, tool, cwd, cmd, "path outside working dir",
+				"S5c control: an ordinary pipe-fed bash remains refused, with or without output redirection")
+		})
+	}
+
+	allowed := []struct {
+		name, cmd, why string
+		hasPair        bool
+	}{
+		{
+			"inert stand-alone literal", fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent),
+			"FR-1: the original inert stand-alone literal allowance stays operative", false,
+		},
+		{
+			"escaped operator is part of the command name", feed + `bash\>x`,
+			"Bash Escape Character: the command is literally named bash>x, not a stdin-fed bash with redirection", false,
+		},
+		{
+			"single-quoted pair stays literal", `python3 -c 'print("` + absent + `/v1/users"); print("before` + continuation + `after")'`,
+			"Bash Single Quotes: the pair is literal in a separate harmless string; the absent path stays stand-alone", true,
+		},
+		{
+			"double-quoted pair joins only an inert string", `python3 -c "print('` + absent + `/v1/users'); print('before` + continuation + `after')"`,
+			"Bash Double Quotes: removing this pair only joins a harmless string within a direct Python operand; no stdin-fed interpreter or path concatenation appears", true,
+		},
+	}
+	for _, c := range allowed {
+		t.Run("allowance control "+c.name, func(t *testing.T) {
+			if c.hasPair {
+				require.Equal(t, 1, strings.Count(c.cmd, continuation), "fixture: the quoted control contains exactly one backslash-newline pair")
+			} else {
+				require.NotContains(t, c.cmd, continuation, "fixture: this contrast has no continuation pair")
+			}
+			got := tool.guardCommand(context.Background(), c.cmd, cwd)
+			require.Empty(t, got, "%s\ncommand: %q\nrefusal: %s", c.why, c.cmd, got)
+		})
+	}
 }
