@@ -55,6 +55,13 @@ const (
 	// FR-047, FR-054, FR-074, FR-065 (combined event for batch short-circuit).
 	EventToolPolicyAskDenied = "tool.policy.ask.denied"
 
+	// EventChannelOutboundWrite — INFO. The outcome of one approved
+	// set_channel_outbound call at the shared writer (channels security S3):
+	// saved (with the resulting FR-088 revision) or refused/failed after
+	// approval (with the writer's reason). Correlated with its consent records
+	// by approval_id, tool_call_id and session_id; never carries target values.
+	EventChannelOutboundWrite = "channel.outbound.write"
+
 	// EventToolCollisionMCPRejected — WARN. Central registry refused an MCP
 	// registration because of a name collision with a builtin or a
 	// previously-registered MCP server. FR-034, FR-060.

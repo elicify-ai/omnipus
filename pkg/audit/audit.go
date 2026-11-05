@@ -207,6 +207,7 @@ var validEventNames = map[EventName]struct{}{
 	EventToolPolicyAskRequested:         {},
 	EventToolPolicyAskGranted:           {},
 	EventToolPolicyAskDenied:            {},
+	EventChannelOutboundWrite:           {},
 	EventToolCollisionMCPRejected:       {},
 	EventAgentConfigCorrupt:             {},
 	EventAgentConfigInvalidPolicyValue:  {},

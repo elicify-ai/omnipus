@@ -8,7 +8,10 @@ import (
 	"context"
 	"errors"
 
+	"github.com/elicify-ai/omnipus/pkg/tools"
+
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
@@ -20,6 +23,7 @@ import (
 func (a *restAPI) applyOutboundChangeForTool(ctx context.Context, change systools.ChannelOutboundChange) (systools.ChannelOutboundSaved, error) {
 	resp, err := a.applyOutboundChange(ctx, change.ID, gen.ChannelOutboundUpdateRequestPolicy(change.Policy),
 		change.Targets, change.ExpectedRevision, change.Actor)
+	a.auditOutboundToolOutcome(ctx, change, resp, err)
 	var rejection *outboundRejectionError
 	switch {
 	case err == nil:
@@ -46,4 +50,39 @@ func (a *restAPI) applyOutboundChangeForTool(ctx context.Context, change systool
 	default:
 		return systools.ChannelOutboundSaved{}, err
 	}
+}
+
+// auditOutboundToolOutcome writes the writer outcome of one agent
+// set_channel_outbound call (channels security S3): saved with the resulting
+// revision, refused with the writer's rejection code, or failed. It names the
+// approval the call ran under (from the approval registry's approved-call
+// index), its tool call and session, so approval, successful save and
+// refusal after approval stay distinguishable and correlated. Targets are
+// never recorded — only their count on a save.
+func (a *restAPI) auditOutboundToolOutcome(ctx context.Context, change systools.ChannelOutboundChange, resp gen.ChannelOutboundWriteResponse, err error) {
+	logger := a.agentLoop.AuditLogger()
+	if logger == nil {
+		return
+	}
+	w := audit.ChannelOutboundWrite{
+		ToolCallID: tools.ToolCallID(ctx), SessionID: tools.ToolTranscriptSessionID(ctx),
+		AgentID: change.Actor, TurnID: tools.ToolTurnID(ctx), ChannelID: change.ID,
+	}
+	if a.approvalReg != nil {
+		if call, ok := a.approvalReg.approvedCalls.take(w.SessionID, w.ToolCallID); ok {
+			w.ApprovalID = call.approvalID
+		}
+	}
+	var rejection *outboundRejectionError
+	switch {
+	case err == nil:
+		w.Outcome, w.Policy, w.TargetCount, w.Revision = "saved", string(resp.Outbound.Policy), len(resp.Outbound.Targets), resp.Revision
+	case errors.As(err, &rejection):
+		w.Outcome, w.Reason = "refused", string(rejection.Body.Code)
+	case errors.Is(err, errOutboundNotConfigured):
+		w.Outcome, w.Reason = "refused", "not_configured"
+	default:
+		w.Outcome, w.Reason = "failed", err.Error()
+	}
+	audit.EmitChannelOutboundWrite(context.WithoutCancel(ctx), logger, w)
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -28,6 +29,16 @@ import (
 type policyApproverAdapter struct {
 	reg       *approvalRegistryV2
 	wsHandler *WSHandler
+}
+
+// consentAudit returns the agent loop's live audit logger for the consent
+// records (channels security S3), or nil when audit is off or no loop is
+// wired (pre-loop test harnesses).
+func (a *policyApproverAdapter) consentAudit() *audit.Logger {
+	if a.wsHandler == nil || a.wsHandler.agentLoop == nil {
+		return nil
+	}
+	return a.wsHandler.agentLoop.AuditLogger()
 }
 
 // newPolicyApproverAdapter constructs the adapter.  reg and wsHandler must be non-nil.
@@ -71,6 +82,7 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 	}
 
 	if accepted {
+		auditAskRequested(ctx, a.consentAudit(), entry)
 		// Broadcast the WS frame to connected clients scoped to the session owner (FR-073).
 		a.wsHandler.broadcastToolApprovalRequired(entry)
 		// A member's own approval while it works on a group-chat request shows
@@ -90,10 +102,14 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 	case outcome := <-entry.resultCh:
 		// FR-039: record approval latency on every terminal transition.
 		globalToolMetrics.ObserveApprovalLatency(outcome.Reason, time.Since(approvalStart).Seconds())
+		auditAskDecision(ctx, a.consentAudit(), entry, outcome, time.Since(approvalStart))
 		return outcome.Approved, outcome.Reason, outcome.RecordGrant
 	case <-ctx.Done():
 		// Turn was canceled (hard abort, graceful shutdown, etc.). Cancel the entry.
-		a.reg.resolve(entry.ApprovalID, ApprovalActionCancel, false)
+		if resolved, _ := a.reg.resolve(entry.ApprovalID, ApprovalActionCancel, false); resolved {
+			auditAskDecision(context.WithoutCancel(ctx), a.consentAudit(), entry,
+				ApprovalOutcome{Reason: denialReasonCancel}, time.Since(approvalStart))
+		}
 		globalToolMetrics.ObserveApprovalLatency("cancel", time.Since(approvalStart).Seconds())
 		return false, "cancel", false
 	}

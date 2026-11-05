@@ -559,7 +559,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	// scope against; release's ws_tool_approval.go has no audience rule.
 
 	// Attempt the state transition.
-	resolved, gone := a.approvalReg.resolve(approvalID, action, recordGrant)
+	resolved, gone := a.approvalReg.resolveBy(approvalID, action, recordGrant, requestUsername(r))
 	if gone {
 		// Entry already in terminal state — FR-018.
 		logsafeWarn("tool-approval: late action on resolved approval",
