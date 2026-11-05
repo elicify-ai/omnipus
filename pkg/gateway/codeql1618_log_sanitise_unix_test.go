@@ -94,11 +94,11 @@ func codeQL1618StoredRefLibrary(t *testing.T, home, workspaceID, control string)
 	require.NoError(t, err)
 	_, canonicalID, ok := media.ParseWorkspaceRef(ref)
 	require.True(t, ok)
-	mediaID := canonicalID
 	if control != "" {
-		mediaID = control + canonicalID + "}"
+		mediaID := control + canonicalID + "}"
 		manifestPath := filepath.Join(lib.Path(), "manifest.json")
-		manifestBytes, err := os.ReadFile(manifestPath)
+		var manifestBytes []byte
+		manifestBytes, err = os.ReadFile(manifestPath)
 		require.NoError(t, err)
 		var envelope map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal(manifestBytes, &envelope))

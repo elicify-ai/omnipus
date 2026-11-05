@@ -41,7 +41,7 @@ func TestCodeQL1618_ToolResultWriteResponseLogHasSafeIdentifiers(t *testing.T) {
 				logs := captureRedactionSlog(t)
 				api := &restAPI{homePath: t.TempDir()}
 				sessionID, ref := "session-write-1618", "result-write-1618"
-				inputID := ""
+				var inputID string
 				if field == "session_id" {
 					sessionID += sample.value + "-item"
 					inputID = sessionID
