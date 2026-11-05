@@ -51,6 +51,24 @@ import type {
 export const ONLY_PROVIDER_COPY =
   'This is your only provider and backs the default model; connect another provider and make it the default before removing this one.'
 
+/** Issue #1620: a cold default-model request is not "no default". */
+const CHECKING_DEFAULT_COPY = 'Checking the default model…'
+
+/** Issue #1620: a failed default-model request is not "no default" either. */
+const UNKNOWN_DEFAULT_COPY =
+  "We could not check the default model, so we can't tell where these agents will go."
+
+/** Issue #1620: removing the provider that backs the default, before a replacement is chosen. */
+const CHOOSE_REPLACEMENT_COPY = 'These agents will use the new default you choose below.'
+
+/** The one fallback sentence, for an inherited default or a chosen replacement. */
+function fallbackSentence(providerLabel: string, model: string): string {
+  return `These agents will fall back to the default provider ${providerLabel}, using ${model}.`
+}
+
+/** Settlement of the parent's `['default-model']` query. Omitted means `ready`. */
+export type DefaultModelQueryState = 'loading' | 'error' | 'ready'
+
 /**
  * Role → the sentence that heads that group of dependents (FR-012).
  * Issue #1620: a known default on another provider is a fallback, not an
@@ -64,7 +82,7 @@ export function dependentGroupHeading(
   switch (role) {
     case 'primary':
       return primaryFallback
-        ? `These agents will fall back to the default provider ${primaryFallback.providerLabel}, using ${primaryFallback.model}`
+        ? fallbackSentence(primaryFallback.providerLabel, primaryFallback.model)
         : 'These agents will be left without a model'
     case 'fallback':
       return 'uses as fallback'
@@ -90,10 +108,27 @@ const DEPENDENT_ROLE_ORDER: readonly ProviderDependent['role'][] = [
 ]
 
 /**
+ * Display name for a provider id: the configured row's display name, then
+ * its name, then the catalog label, then the id.
+ */
+function labelForConfiguredProvider(
+  providerId: string,
+  providers: readonly Provider[],
+  catalog: ProvidersCatalog | null | undefined,
+): string {
+  const row = providers.find((candidate) => candidate.id === providerId)
+  const entry = catalogEntryById(catalog?.providers ?? [], providerId)
+  const fromRow = row?.display_name?.trim() || row?.name?.trim()
+  if (fromRow) return fromRow
+  if (row) return providerDisplayName(row, entry)
+  if (entry) return catalogLabel(entry)
+  return providerId
+}
+
+/**
  * The installation default, when it is a complete pair on a provider other
  * than the one being removed. The model is the selected pair, never the
- * first model on that provider's list. The name is the configured row's
- * display name, then its name, then the catalog label.
+ * first model on that provider's list.
  */
 function knownDefaultOnAnotherProvider(
   removedId: string,
@@ -104,18 +139,35 @@ function knownDefaultOnAnotherProvider(
   const providerId = defaultModel?.provider.trim() ?? ''
   const model = defaultModel?.model.trim() ?? ''
   if (!providerId || !model || providerId === removedId) return null
+  return {
+    providerLabel: labelForConfiguredProvider(providerId, otherProviders, catalog),
+    model,
+  }
+}
 
-  const row = otherProviders.find((candidate) => candidate.id === providerId)
-  const entry = catalogEntryById(catalog?.providers ?? [], providerId)
-  const fromRow = row?.display_name?.trim() || row?.name?.trim()
-  const providerLabel = fromRow
-    ? fromRow
-    : row
-      ? providerDisplayName(row, entry)
-      : entry
-        ? catalogLabel(entry)
-        : providerId
-  return { providerLabel, model }
+/**
+ * What the primary-agents heading says. A loading or failed default-model
+ * request is not "no default", and removing the provider that backs the
+ * default names the replacement once one is chosen.
+ */
+function primaryAgentsHeading(input: {
+  state: DefaultModelQueryState
+  needsNewDefault: boolean
+  onlyProvider: boolean
+  replacement: { providerLabel: string; model: string } | null
+  inherited: { providerLabel: string; model: string } | null
+}): string {
+  if (!input.needsNewDefault && input.state === 'loading') return CHECKING_DEFAULT_COPY
+  if (!input.needsNewDefault && input.state === 'error') return UNKNOWN_DEFAULT_COPY
+  if (input.needsNewDefault && !input.onlyProvider) {
+    return input.replacement
+      ? fallbackSentence(input.replacement.providerLabel, input.replacement.model)
+      : CHOOSE_REPLACEMENT_COPY
+  }
+  if (input.inherited && input.state === 'ready') {
+    return fallbackSentence(input.inherited.providerLabel, input.inherited.model)
+  }
+  return 'These agents will be left without a model'
 }
 
 /** Stronger warning for a custom or local endpoint (issue #1620). */
@@ -141,6 +193,12 @@ export interface RemoveProviderDialogProps {
    */
   defaultModel?: DefaultModel | null
   /**
+   * Whether the parent's default-model query has settled. `loading` and
+   * `error` are not a known empty default. Callers that already hold a
+   * settled result omit this (`ready`).
+   */
+  defaultModelState?: DefaultModelQueryState
+  /**
    * Fired on *Remove*. Carries the inline new default when this provider backs
    * the current one, and `undefined` when it does not.
    */
@@ -157,6 +215,7 @@ export function RemoveProviderDialog({
   otherProviders,
   catalog,
   defaultModel,
+  defaultModelState = 'ready',
   onConfirm,
   isRemoving = false,
 }: RemoveProviderDialogProps) {
@@ -201,12 +260,32 @@ export function RemoveProviderDialog({
     catalog,
   )
   const movesConversations =
+    defaultModelState === 'ready' &&
     inheritedDefault !== null &&
+    !needsNewDefault &&
     (provider.custom === true || provider.locality === 'local') &&
     (provider.dependents ?? []).some((dependent) => dependent.role === 'primary')
   const chosenPair: DefaultModelUpdateRequest | undefined =
     activeCandidateId && model ? { provider: activeCandidateId, model } : undefined
-  const canRemove = !isRemoving && !onlyProvider && (!needsNewDefault || chosenPair !== undefined)
+  const chosenReplacement = chosenPair
+    ? {
+        providerLabel: labelForConfiguredProvider(chosenPair.provider, candidates, catalog),
+        model: chosenPair.model,
+      }
+    : null
+  const primaryHeading = primaryAgentsHeading({
+    state: defaultModelState,
+    needsNewDefault,
+    onlyProvider,
+    replacement: chosenReplacement,
+    inherited: inheritedDefault,
+  })
+  // A cold default-model request has not settled, so removal waits. A failed
+  // request has settled: Remove stays available. Replacing the default is
+  // already gated on the chosen pair.
+  const waitingForDefault = !needsNewDefault && defaultModelState === 'loading'
+  const canRemove =
+    !isRemoving && !onlyProvider && !waitingForDefault && (!needsNewDefault || chosenPair !== undefined)
 
   const grouped = React.useMemo(() => {
     const byRole = new Map<ProviderDependent['role'], ProviderDependent[]>()
@@ -256,11 +335,7 @@ export function RemoveProviderDialog({
             {grouped.map(({ role, dependents }) => (
               <div key={role} data-testid={`dependent-group-${role}`} className="space-y-[var(--space-1)]">
                 <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
-                  {dependentGroupHeading(
-                    role,
-                    displayName,
-                    role === 'primary' ? inheritedDefault ?? undefined : undefined,
-                  )}
+                  {role === 'primary' ? primaryHeading : dependentGroupHeading(role, displayName)}
                 </p>
                 <ul className="max-h-40 overflow-y-auto space-y-[var(--space-0-5)]">
                   {dependents.map((dependent) => (
