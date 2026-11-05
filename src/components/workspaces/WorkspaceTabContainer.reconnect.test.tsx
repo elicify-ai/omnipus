@@ -93,7 +93,7 @@ async function advanceClock(ms: number) {
 async function expectInitialFailure() {
   await mountWorkspace()
   expect(await screen.findByText(ERROR_TEXT, { exact: true })).toBeVisible()
-  expect(screen.getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible()
   expect(requests).toEqual([{ method: 'GET', path: ACTIVE_PATH }])
   expect(queryClient.getQueryState(ACTIVE_KEY)).toMatchObject({ status: 'error', fetchStatus: 'idle' })
   const error = queryClient.getQueryState(ACTIVE_KEY)?.error
@@ -103,7 +103,7 @@ async function expectInitialFailure() {
 }
 
 async function expectRecoveredWorkspace() {
-  expect(await screen.findByRole('heading', { name: WORKSPACE.name, exact: true })).toBeVisible()
+  expect(await screen.findByRole('heading', { name: WORKSPACE.name })).toBeVisible()
   expect(screen.getByTestId('workspace-reconnect-content')).toHaveTextContent(WORKSPACE.id)
   expect(screen.getByTestId('workspace-top-bar')).toBeVisible()
   expect(screen.queryByText(ERROR_TEXT, { exact: true })).toBeNull()
@@ -205,7 +205,7 @@ describe('WorkspaceTabContainer — gateway reconnect (#1632)', () => {
     expect(screen.getByText(ERROR_TEXT, { exact: true })).toBeVisible()
     vi.useRealTimers()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await expectRecoveredWorkspace()
     expect(requests).toEqual([{ method: 'GET', path: ACTIVE_PATH }, { method: 'GET', path: ACTIVE_PATH }])
     expect(useConnectionStore.getState().isConnected).toBe(false)
