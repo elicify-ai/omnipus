@@ -8,7 +8,6 @@
  * supplies that generated pair without making this RED a TypeScript error;
  * the real dialog currently ignores it. No component or resolver is mocked.
  */
-import * as React from 'react'
 import { expect, it, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import type { DefaultModel, Provider } from '@/lib/api/generated/openapi-types'

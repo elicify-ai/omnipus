@@ -8,7 +8,6 @@
  * parent. The spread allows a semantic RED against the real dialog without
  * editing its production interface or mocking the unit under test.
  */
-import * as React from 'react'
 import { expect, it, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import type { DefaultModel, Provider } from '@/lib/api/generated/openapi-types'
