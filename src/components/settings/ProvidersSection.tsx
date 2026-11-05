@@ -1375,6 +1375,7 @@ export function ProvidersSection() {
           })()}
           otherProviders={providers.filter((p) => p.id !== removeTarget.id)}
           catalog={catalogDoc}
+          defaultModel={defaultModel}
           isRemoving={isRemoving}
           onConfirm={(newDefault) => removeProvider({ id: removeTarget.id, newDefault })}
         />

@@ -32,9 +32,11 @@ import {
 } from '@/components/ui/alert-dialog'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
-import { buildProviderModelGroups } from '@/lib/providerModelGroups'
+import { catalogEntryById, catalogLabel } from '@/lib/catalogDisplay'
+import { buildProviderModelGroups, providerDisplayName } from '@/lib/providerModelGroups'
 import { isEligibleNewDefault, providerStatusLabel } from '@/lib/providerStatus'
 import type {
+  DefaultModel,
   DefaultModelUpdateRequest,
   Provider,
   ProviderDependent,
@@ -49,14 +51,21 @@ import type {
 export const ONLY_PROVIDER_COPY =
   'This is your only provider and backs the default model; connect another provider and make it the default before removing this one.'
 
-/** Role → the sentence that heads that group of dependents (FR-012). */
+/**
+ * Role → the sentence that heads that group of dependents (FR-012).
+ * Issue #1620: a known default on another provider is a fallback, not an
+ * agent left without a model. No such default keeps the original sentence.
+ */
 export function dependentGroupHeading(
   role: ProviderDependent['role'],
   providerName: string,
+  primaryFallback?: { providerLabel: string; model: string },
 ): string {
   switch (role) {
     case 'primary':
-      return 'These agents will be left without a model'
+      return primaryFallback
+        ? `These agents will fall back to the default provider ${primaryFallback.providerLabel}, using ${primaryFallback.model}`
+        : 'These agents will be left without a model'
     case 'fallback':
       return 'uses as fallback'
     case 'passthrough':
@@ -80,6 +89,40 @@ const DEPENDENT_ROLE_ORDER: readonly ProviderDependent['role'][] = [
   'voice',
 ]
 
+/**
+ * The installation default, when it is a complete pair on a provider other
+ * than the one being removed. The model is the selected pair, never the
+ * first model on that provider's list. The name is the configured row's
+ * display name, then its name, then the catalog label.
+ */
+function knownDefaultOnAnotherProvider(
+  removedId: string,
+  defaultModel: DefaultModel | null | undefined,
+  otherProviders: readonly Provider[],
+  catalog: ProvidersCatalog | null | undefined,
+): { providerLabel: string; model: string } | null {
+  const providerId = defaultModel?.provider.trim() ?? ''
+  const model = defaultModel?.model.trim() ?? ''
+  if (!providerId || !model || providerId === removedId) return null
+
+  const row = otherProviders.find((candidate) => candidate.id === providerId)
+  const entry = catalogEntryById(catalog?.providers ?? [], providerId)
+  const fromRow = row?.display_name?.trim() || row?.name?.trim()
+  const providerLabel = fromRow
+    ? fromRow
+    : row
+      ? providerDisplayName(row, entry)
+      : entry
+        ? catalogLabel(entry)
+        : providerId
+  return { providerLabel, model }
+}
+
+/** Stronger warning for a custom or local endpoint (issue #1620). */
+function conversationDestinationCopy(providerLabel: string): string {
+  return `Their conversations will go to the default provider ${providerLabel} instead.`
+}
+
 export interface RemoveProviderDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -91,6 +134,12 @@ export interface RemoveProviderDialogProps {
   otherProviders: readonly Provider[]
   /** Registry-fed catalog, for the new-default selector's model lists. */
   catalog?: ProvidersCatalog | null
+  /**
+   * The installation's current default pair, from the parent's
+   * `['default-model']` query. Absent or incomplete means there is no
+   * default to name.
+   */
+  defaultModel?: DefaultModel | null
   /**
    * Fired on *Remove*. Carries the inline new default when this provider backs
    * the current one, and `undefined` when it does not.
@@ -107,6 +156,7 @@ export function RemoveProviderDialog({
   displayName,
   otherProviders,
   catalog,
+  defaultModel,
   onConfirm,
   isRemoving = false,
 }: RemoveProviderDialogProps) {
@@ -142,6 +192,18 @@ export function RemoveProviderDialog({
 
   const needsNewDefault = provider.backs_default
   const onlyProvider = needsNewDefault && candidates.length === 0
+  // Issue #1620: name the default these agents inherit, when it lives on
+  // another provider. The pair being removed is not a destination.
+  const inheritedDefault = knownDefaultOnAnotherProvider(
+    provider.id,
+    defaultModel,
+    otherProviders,
+    catalog,
+  )
+  const movesConversations =
+    inheritedDefault !== null &&
+    (provider.custom === true || provider.locality === 'local') &&
+    (provider.dependents ?? []).some((dependent) => dependent.role === 'primary')
   const chosenPair: DefaultModelUpdateRequest | undefined =
     activeCandidateId && model ? { provider: activeCandidateId, model } : undefined
   const canRemove = !isRemoving && !onlyProvider && (!needsNewDefault || chosenPair !== undefined)
@@ -194,7 +256,11 @@ export function RemoveProviderDialog({
             {grouped.map(({ role, dependents }) => (
               <div key={role} data-testid={`dependent-group-${role}`} className="space-y-[var(--space-1)]">
                 <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
-                  {dependentGroupHeading(role, displayName)}
+                  {dependentGroupHeading(
+                    role,
+                    displayName,
+                    role === 'primary' ? inheritedDefault ?? undefined : undefined,
+                  )}
                 </p>
                 <ul className="max-h-40 overflow-y-auto space-y-[var(--space-0-5)]">
                   {dependents.map((dependent) => (
@@ -210,6 +276,15 @@ export function RemoveProviderDialog({
               </div>
             ))}
           </div>
+        )}
+
+        {movesConversations && inheritedDefault && (
+          <p
+            data-testid="remove-provider-conversation-warning"
+            className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
+          >
+            {conversationDestinationCopy(inheritedDefault.providerLabel)}
+          </p>
         )}
 
         {needsNewDefault && !onlyProvider && (
