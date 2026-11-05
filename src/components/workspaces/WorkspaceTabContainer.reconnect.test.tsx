@@ -271,4 +271,104 @@ describe('WorkspaceTabContainer — gateway reconnect (#1632)', () => {
     expect(screen.getByTestId('workspace-reconnect-content')).toBe(content)
     expect(commits.slice(firstReconnectCommit).every((commit) => commit.header === header && commit.content === content)).toBe(true)
   })
+
+  // Round 2 oracles: team-lead's explicit F1/F2/F3 requirements for issue #1632.
+  it('F1: reconnect keeps loaded content mounted when any background refresh fails', async () => {
+    const commits: { header: Element | null; content: Element | null; error: Element | null }[] = []
+    act(() => useConnectionStore.getState().setConnected(true))
+    responseMode = 'held'
+    await mountWorkspace(() => {
+      commits.push({
+        header: document.querySelector('[data-testid="workspace-top-bar"]'),
+        content: document.querySelector('[data-testid="workspace-reconnect-content"]'),
+        error: document.querySelector('[data-testid="workspace-container-error"]'),
+      })
+    })
+    await waitFor(() => expect(heldResponses).toHaveLength(1))
+    // Positive control: this observer sees unloaded DOM, not only final content.
+    expect(commits.some(({ header, content }) => header === null && content === null)).toBe(true)
+    await act(async () => { heldResponses.splice(0).forEach((resolve) => resolve(workspaceResponse())) })
+    await expectRecoveredWorkspace()
+    const header = screen.getByTestId('workspace-top-bar')
+    const content = screen.getByTestId('workspace-reconnect-content')
+    expect(commits.some((commit) => commit.header === header && commit.content === content)).toBe(true)
+    const firstOutageCommit = commits.length
+
+    // Do not force a refresh: a healthy screen need not refetch on reconnect.
+    // Unlike T3, every subsequent HTTP attempt here fails at the raw boundary.
+    responseMode = 'failure'
+    vi.useFakeTimers()
+    act(() => useConnectionStore.getState().recordDisconnect(null))
+    await advanceClock(OUTAGE_MS)
+    act(() => useConnectionStore.getState().setConnected(true))
+    await advanceClock(OUTAGE_MS)
+
+    expect(queryClient.getQueryState(ACTIVE_KEY)?.fetchStatus, 'any reconnect refresh must have settled').toBe('idle')
+    expect(queryClient.getQueryData(ACTIVE_KEY)).toEqual([WORKSPACE])
+    expect(screen.getByTestId('workspace-top-bar')).toBe(header)
+    expect(screen.getByTestId('workspace-reconnect-content')).toBe(content)
+    expect(screen.getByRole('heading', { name: WORKSPACE.name })).toBeVisible()
+    expect(screen.queryByText(ERROR_TEXT, { exact: true })).toBeNull()
+    expect(screen.queryByTestId('workspace-container-error')).toBeNull()
+    const outageCommits = commits.slice(firstOutageCommit)
+    expect(outageCommits.length, 'observe reconnect renders rather than an empty history').toBeGreaterThan(0)
+    expect(outageCommits.every((commit) => commit.header === header && commit.content === content && commit.error === null),
+      'every outage/reconnect commit must retain loaded content without an error-screen flash').toBe(true)
+  })
+
+  it('F2: a second reconnect issues exactly one new request and recovers after the first recovery fails', async () => {
+    await expectInitialFailure()
+    vi.useFakeTimers()
+    const beforeFirstReconnect = requests.length
+    act(() => useConnectionStore.getState().setConnected(true))
+    await advanceClock(OUTAGE_MS)
+    expect(requests.length - beforeFirstReconnect, 'first reconnect must issue exactly one failed recovery GET').toBe(1)
+    expect(queryClient.getQueryState(ACTIVE_KEY)).toMatchObject({ status: 'error', fetchStatus: 'idle' })
+    expect(screen.getByText(ERROR_TEXT, { exact: true })).toBeVisible()
+
+    const beforeSecondReconnect = requests.length
+    act(() => useConnectionStore.getState().recordDisconnect(null))
+    await advanceClock(OUTAGE_MS)
+    expect(requests, 'no request while waiting for the second reconnect').toHaveLength(beforeSecondReconnect)
+    responseMode = 'held'
+    act(() => useConnectionStore.getState().setConnected(true))
+    await advanceClock(OUTAGE_MS)
+    expect(requests.length - beforeSecondReconnect, 'second reconnect must issue exactly one new recovery GET').toBe(1)
+    expect(heldResponses).toHaveLength(1)
+    expect(requests).toEqual([
+      { method: 'GET', path: ACTIVE_PATH },
+      { method: 'GET', path: ACTIVE_PATH },
+      { method: 'GET', path: ACTIVE_PATH },
+    ])
+
+    // Only resolve HTTP: no Retry click, remount, or manual invalidation.
+    await act(async () => { heldResponses.splice(0).forEach((resolve) => resolve(workspaceResponse())) })
+    await advanceClock(OUTAGE_MS)
+    vi.useRealTimers()
+    await expectRecoveredWorkspace()
+    expect(requests, 'successful recovery must not start an additional request').toHaveLength(3)
+    expect(useConnectionStore.getState().isConnected).toBe(true)
+  })
+
+  it('F3: an initial failure while already connected waits for Retry rather than automatically refetching', async () => {
+    act(() => useConnectionStore.getState().setConnected(true))
+    await expectInitialFailure()
+    responseMode = 'success'
+    vi.useFakeTimers()
+    await advanceClock(OUTAGE_MS)
+    expect(useConnectionStore.getState().isConnected).toBe(true)
+    expect(requests, 'mount/error with no reconnect edge must not cause a second GET').toEqual([
+      { method: 'GET', path: ACTIVE_PATH },
+    ])
+    expect(queryClient.getQueryState(ACTIVE_KEY)).toMatchObject({ status: 'error', fetchStatus: 'idle' })
+    expect(screen.getByText(ERROR_TEXT, { exact: true })).toBeVisible()
+    expect(screen.getByTestId('workspace-container-error')).toBeVisible()
+    expect(screen.queryByTestId('workspace-top-bar')).toBeNull()
+    vi.useRealTimers()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await expectRecoveredWorkspace()
+    expect(requests).toEqual([{ method: 'GET', path: ACTIVE_PATH }, { method: 'GET', path: ACTIVE_PATH }])
+    expect(useConnectionStore.getState().isConnected).toBe(true)
+  })
 })
