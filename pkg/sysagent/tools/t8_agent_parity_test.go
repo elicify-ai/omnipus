@@ -137,7 +137,7 @@ func TestGetAgent_DetailAndModelChain(t *testing.T) {
 	assert.Contains(t, last["warning"], "no configured provider")
 }
 func TestGetAgent_FieldValidation_ThroughRegistry(t *testing.T) {
-	const valid = "name, description, type, locked, figure, role, color, voice, model, provider, fallback_models, model_chain, model_params, max_tool_iterations, context_window_override, memory_enabled, soul, agent_md, skills, tool_permissions, stored_overrides, connectors, executor, runnable, program_warning, activation_status, editable_fields, has_main_chat"
+	const valid = "name, description, type, locked, figure, role, color, voice, model, provider, fallback_models, model_chain, model_params, max_tool_iterations, context_window_override, memory_enabled, soul, agent_md, skills, stale_skill_grants, tool_permissions, stored_overrides, connectors, executor, runnable, program_warning, activation_status, editable_fields, has_main_chat"
 	for _, tc := range []struct {
 		name    string
 		fields  any
