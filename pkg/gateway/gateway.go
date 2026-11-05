@@ -1344,6 +1344,21 @@ func (rc *runContextWithOptions) wireSystemTools() {
 			}
 			return rc.runningServices.restAPIRef.applyOutboundChangeForTool(ctx, change)
 		},
+		// Channels Q2-B: the read-only preview before the approval card and
+		// the audit of the tool's own refusals before it.
+		PreviewChannelOutbound: func(ctx context.Context, change systools.ChannelOutboundChange) (systools.ChannelOutboundPreview, error) {
+			if rc.runningServices == nil || rc.runningServices.restAPIRef == nil {
+				return systools.ChannelOutboundPreview{}, errors.New("the outbound preview is not wired")
+			}
+			return rc.runningServices.restAPIRef.previewOutboundChange(ctx, change)
+		},
+		AuditChannelOutboundRefusal: func(ctx context.Context, change systools.ChannelOutboundChange, reason string) {
+			if rc.runningServices == nil || rc.runningServices.restAPIRef == nil {
+				slog.Error("gateway: channel outbound refusal audit is not wired", "channel", change.ID, "reason", reason)
+				return
+			}
+			rc.runningServices.restAPIRef.auditOutboundRefusalBeforeApproval(ctx, change, reason)
+		},
 		// EnsureWorkspaceMains (final-gate H2): create_agent's team join gives the
 		// new member its main chat through the workspace-save path. Resolved at
 		// call time through the one restAPI (the same method boot stores in

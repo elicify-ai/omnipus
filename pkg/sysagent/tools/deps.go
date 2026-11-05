@@ -121,6 +121,19 @@ type Deps struct {
 	// before the file write. Nil (unit tests) makes set_channel_outbound
 	// refuse with CONFIG_SAVE_FAILED.
 	ApplyChannelOutbound func(ctx context.Context, change ChannelOutboundChange) (ChannelOutboundSaved, error)
+	// PreviewChannelOutbound is the read-only run of the writer's checks
+	// before the approval card (Channels Q2-B): the gateway wires it to
+	// restAPI.previewOutboundChange, which shares its validation with the
+	// writer, audits its own refusals as refused_before_approval and
+	// returns errors in the same neutral types as ApplyChannelOutbound.
+	// change.ExpectedRevision empty means "use the current revision". Nil
+	// (unit tests) makes set_channel_outbound refuse before the card.
+	PreviewChannelOutbound func(ctx context.Context, change ChannelOutboundChange) (ChannelOutboundPreview, error)
+	// AuditChannelOutboundRefusal records one of set_channel_outbound's own
+	// refusals before the card (omnipus_only, invalid_input,
+	// own_connection) as channel.outbound.write, outcome
+	// refused_before_approval. Nil (unit tests) records nothing.
+	AuditChannelOutboundRefusal func(ctx context.Context, change ChannelOutboundChange, reason string)
 	// URLChecker is the SSRF guard for outbound checks a change tool makes to
 	// an operator- or agent-supplied endpoint (configure_provider's model
 	// listing, FR-031). A row whose catalog locality is local always uses

@@ -62,12 +62,15 @@ func EmitToolPolicyAskDeniedForCall(ctx context.Context, logger *Logger, d AskDe
 	Emit(ctx, logger, EventToolPolicyAskDenied, SeverityInfo, fields)
 }
 
-// ChannelOutboundWrite is the writer outcome of one approved
-// set_channel_outbound call. Outcome is "saved", "refused" (a writer
-// rejection before anything was written) or "failed" (any other error, with
-// nothing reported as saved). Revision is the channel's resulting FR-088
-// revision when saved; Reason the writer's rejection code otherwise. No
-// target value is ever recorded here.
+// ChannelOutboundWrite is the writer outcome of one set_channel_outbound
+// call. Outcome is "saved", "refused" (a writer rejection after approval,
+// before anything was written), "refused_before_approval" (Channels Q2-B: a
+// refusal before any approval card; ApprovalID is empty) or "failed" (any
+// other error, with nothing reported as saved). Revision is the channel's
+// resulting FR-088 revision when saved; Reason the refusal code otherwise.
+// TargetVerifications (Q2-B amendment A1, saved only) holds one result per
+// saved target, in saved order: TargetVerifiedBeforeApproval or
+// TargetVerificationNotRequired. No target value is ever recorded here.
 type ChannelOutboundWrite struct {
 	ApprovalID  string
 	ToolCallID  string
@@ -80,7 +83,16 @@ type ChannelOutboundWrite struct {
 	TargetCount int
 	Revision    string
 	Reason      string
+	// TargetVerifications is recorded on a saved outcome only, always as a
+	// list (empty when the saved list is empty).
+	TargetVerifications []string
 }
+
+// Results of ChannelOutboundWrite.TargetVerifications (Q2-B amendment A1).
+const (
+	TargetVerifiedBeforeApproval  = "verified_before_approval"
+	TargetVerificationNotRequired = "not_required"
+)
 
 // EmitChannelOutboundWrite writes channel.outbound.write for w.
 func EmitChannelOutboundWrite(ctx context.Context, logger *Logger, w ChannelOutboundWrite) {
@@ -97,6 +109,7 @@ func EmitChannelOutboundWrite(ctx context.Context, logger *Logger, w ChannelOutb
 		fields["policy"] = w.Policy
 		fields["target_count"] = w.TargetCount
 		fields["revision"] = w.Revision
+		fields["target_verifications"] = append([]string{}, w.TargetVerifications...)
 	} else {
 		fields["reason"] = w.Reason
 	}

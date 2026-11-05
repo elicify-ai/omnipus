@@ -15,41 +15,30 @@ import (
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
-// applyOutboundChangeForTool runs applyOutboundChange for the tool and
-// translates its errors: *outboundRejectionError → *ChannelOutboundRefusalError
-// (the writer's code and safe text, per-target detail kept);
-// errOutboundNotConfigured → ErrChannelOutboundNotConfigured; any other error
-// is returned unchanged (a save failure before the file write).
+// applyOutboundChangeForTool runs the one writer for the tool and translates
+// its errors (outboundToolError). A call running under its approval card's
+// pin passes the Discord targets the card's preview confirmed, so with the
+// revision unchanged there is no second look-up (founder Q1 B).
 func (a *restAPI) applyOutboundChangeForTool(ctx context.Context, change systools.ChannelOutboundChange) (systools.ChannelOutboundSaved, error) {
-	resp, err := a.applyOutboundChange(ctx, change.ID, gen.ChannelOutboundUpdateRequestPolicy(change.Policy),
-		change.Targets, change.ExpectedRevision, change.Actor)
-	a.auditOutboundToolOutcome(ctx, change, resp, err)
-	var rejection *outboundRejectionError
-	switch {
-	case err == nil:
-		saved := systools.ChannelOutboundSaved{
-			Policy:   string(resp.Outbound.Policy),
-			Targets:  append([]string{}, resp.Outbound.Targets...),
-			Revision: resp.Revision,
-		}
-		if resp.Warning != nil {
-			saved.Warning = *resp.Warning
-		}
-		return saved, nil
-	case errors.As(err, &rejection):
-		refusal := &systools.ChannelOutboundRefusalError{Reason: string(rejection.Body.Code), Message: rejection.Body.Error}
-		if rejection.Body.TargetErrors != nil {
-			refusal.TargetErrors = *rejection.Body.TargetErrors
-		}
-		if rejection.Body.OmittedCount != nil {
-			refusal.OmittedCount = *rejection.Body.OmittedCount
-		}
-		return systools.ChannelOutboundSaved{}, refusal
-	case errors.Is(err, errOutboundNotConfigured):
-		return systools.ChannelOutboundSaved{}, systools.ErrChannelOutboundNotConfigured
-	default:
-		return systools.ChannelOutboundSaved{}, err
+	var preVerified []string
+	if change.Pin != nil {
+		preVerified = change.Pin.VerifiedTargets
 	}
+	resp, verified, err := a.applyOutboundChangeVerified(ctx, change.ID, gen.ChannelOutboundUpdateRequestPolicy(change.Policy),
+		change.Targets, change.ExpectedRevision, change.Actor, preVerified)
+	a.auditOutboundToolOutcome(ctx, change, resp, verified, err)
+	if err != nil {
+		return systools.ChannelOutboundSaved{}, outboundToolError(err)
+	}
+	saved := systools.ChannelOutboundSaved{
+		Policy:   string(resp.Outbound.Policy),
+		Targets:  append([]string{}, resp.Outbound.Targets...),
+		Revision: resp.Revision,
+	}
+	if resp.Warning != nil {
+		saved.Warning = *resp.Warning
+	}
+	return saved, nil
 }
 
 // auditOutboundToolOutcome writes the writer outcome of one agent
@@ -58,8 +47,9 @@ func (a *restAPI) applyOutboundChangeForTool(ctx context.Context, change systool
 // approval the call ran under (from the approval registry's approved-call
 // index), its tool call and session, so approval, successful save and
 // refusal after approval stay distinguishable and correlated. Targets are
-// never recorded — only their count on a save.
-func (a *restAPI) auditOutboundToolOutcome(ctx context.Context, change systools.ChannelOutboundChange, resp gen.ChannelOutboundWriteResponse, err error) {
+// never recorded — only their count on a save and, per saved target in
+// saved order, whether a look-up confirmed it (Q2-B amendment A1).
+func (a *restAPI) auditOutboundToolOutcome(ctx context.Context, change systools.ChannelOutboundChange, resp gen.ChannelOutboundWriteResponse, verified []string, err error) {
 	logger := a.agentLoop.AuditLogger()
 	if logger == nil {
 		return
@@ -77,6 +67,7 @@ func (a *restAPI) auditOutboundToolOutcome(ctx context.Context, change systools.
 	switch {
 	case err == nil:
 		w.Outcome, w.Policy, w.TargetCount, w.Revision = "saved", string(resp.Outbound.Policy), len(resp.Outbound.Targets), resp.Revision
+		w.TargetVerifications = outboundTargetVerifications(resp.Outbound.Targets, verified)
 	case errors.As(err, &rejection):
 		w.Outcome, w.Reason = "refused", string(rejection.Body.Code)
 	case errors.Is(err, errOutboundNotConfigured):
@@ -85,4 +76,24 @@ func (a *restAPI) auditOutboundToolOutcome(ctx context.Context, change systools.
 		w.Outcome, w.Reason = "failed", err.Error()
 	}
 	audit.EmitChannelOutboundWrite(context.WithoutCancel(ctx), logger, w)
+}
+
+// outboundTargetVerifications is one result per saved target, in saved
+// order: verified_before_approval for a target a look-up confirmed,
+// not_required for one that needed none (already stored, or not on
+// Discord). Always a list, empty for an empty saved list.
+func outboundTargetVerifications(saved, verified []string) []string {
+	confirmed := make(map[string]bool, len(verified))
+	for _, t := range verified {
+		confirmed[t] = true
+	}
+	out := make([]string, 0, len(saved))
+	for _, t := range saved {
+		if confirmed[t] {
+			out = append(out, audit.TargetVerifiedBeforeApproval)
+		} else {
+			out = append(out, audit.TargetVerificationNotRequired)
+		}
+	}
+	return out
 }

@@ -19,6 +19,13 @@ import (
 // It calls the one gateway writer (applyOutboundChange, shared with PUT
 // /api/v1/channels/{id}/outbound) through Deps.ApplyChannelOutbound; it never
 // writes configuration itself.
+//
+// Channels Q2-B (founder: "The tool must look into it, not the agent
+// itself"): before the approval card, PrepareForApproval reads the current
+// setting through Deps.PreviewChannelOutbound, runs every validity check the
+// writer runs, shows the person current -> new and pins the revision it read.
+// The pin rides the execution context; the model's arguments are never
+// rewritten. expected_revision is optional.
 
 // Request-shape bounds, the same as the REST request schema
 // (ChannelOutboundUpdateRequest: at most 64 raw entries of at most 256
@@ -32,6 +39,21 @@ const (
 const (
 	outboundOmnipusOnlyText = "only Omnipus can change a connection's posting list; ask the operator or Omnipus"
 	outboundOwnConnection   = "a connection's own agent cannot change its posting list; ask the operator"
+	// outboundNoApprovedRevision is the fail-closed refusal of an execution
+	// that carries neither an approval pin nor expected_revision (Q2-B §2).
+	outboundNoApprovedRevision = "no approved revision; nothing was saved"
+	// outboundChangedAfterCard is the only "approved, then refused" result
+	// caused by settings state (Q2-B §2): another writer changed this
+	// connection between the card and the click.
+	outboundChangedAfterCard = "This connection's settings changed after the card was shown; nothing was saved. " +
+		"Make the call again to see a new card with the current settings."
+)
+
+// Audit reasons of the tool's own refusals before the card (Q2-B §3).
+const (
+	outboundReasonOmnipusOnly   = "omnipus_only"
+	outboundReasonInvalidInput  = "invalid_input"
+	outboundReasonOwnConnection = "own_connection"
 )
 
 // ChannelOutboundChange is one set_channel_outbound request handed to the
@@ -43,6 +65,39 @@ type ChannelOutboundChange struct {
 	ExpectedRevision string
 	// Actor names the caller for the writer's logs; it grants nothing.
 	Actor string
+	// Pin is the state the person approved (Channels Q2-B), set by Execute
+	// only when the call runs under the pin of its own approval card and
+	// ExpectedRevision is the pinned revision. With the revision unchanged
+	// the writer then skips the second Discord look-ups (founder Q1 B). Nil
+	// for every other call: the writer re-checks everything.
+	Pin *ChannelOutboundPin
+}
+
+// ChannelOutboundPin is the server-side pin PrepareForApproval returns: the
+// revision the card was built from and the canonical Discord targets that
+// were looked up and confirmed before the card. It is carried on the
+// execution context (tools.WithApprovalPin), never in the arguments, and is
+// never sent to the approver's client or to the agent.
+type ChannelOutboundPin struct {
+	Revision        string
+	VerifiedTargets []string
+}
+
+// ChannelOutboundPreview is the read-only result of the writer's checks
+// before the approval card (Deps.PreviewChannelOutbound): the current
+// setting, the revision it was read at, the canonical new setting exactly as
+// the writer would store it, the targets it adds and removes, and the
+// Discord targets that were looked up and confirmed.
+type ChannelOutboundPreview struct {
+	Platform        string
+	CurrentPolicy   string
+	CurrentTargets  []string
+	Revision        string
+	NewPolicy       string
+	NewTargets      []string
+	Added           []string
+	Removed         []string
+	VerifiedTargets []string
 }
 
 // ChannelOutboundSaved is the writer's success: the stored outbound value,
@@ -100,9 +155,10 @@ func (t *ChannelOutboundTool) Scope() tools.ToolScope       { return tools.Scope
 func (t *ChannelOutboundTool) Category() tools.ToolCategory { return tools.CategoryChannels }
 func (t *ChannelOutboundTool) ReportsChangeOutcome()        {}
 
-// Description is the normative FR-035 text.
+// Description is the normative FR-035 text, as revised by Channels Q2-B
+// (expected_revision is optional; the tool reads the settings itself).
 func (t *ChannelOutboundTool) Description() string {
-	return "Change which people and groups an agent may start messages to on one chat connection, or switch the connection back to only answering. Supply id, policy (reply_only = Only answer; agent_may_start = Answer and also start messages), the whole targets list (exact ids as the allowed-senders list writes them: a person's user id for a direct message, a group's chat id; no @names, no *; at most 20) and expected_revision from list_channels. Only Discord and Telegram can start messages; on Discord, a channel id must be a text channel, announcement channel or thread. Refused for a connection bound to you. It always shows an approval card, even in God Mode, and every approval applies to that one request only — it is never remembered."
+	return "Change which people and groups an agent may start messages to on one chat connection, or switch the connection back to only answering. Supply id, policy (reply_only = Only answer; agent_may_start = Answer and also start messages) and the whole targets list (exact ids as the allowed-senders list writes them: a person's user id for a direct message, a group's chat id; no @names, no *; at most 20). expected_revision is optional: leave it out, the tool reads the current settings itself and shows the person the current and the new list on the approval card. Only Discord and Telegram can start messages; on Discord, a channel id must be a text channel, announcement channel or thread. Refused for a connection bound to you. It always shows an approval card, even in God Mode, and every approval applies to that one request only — it is never remembered."
 }
 
 func (t *ChannelOutboundTool) Parameters() map[string]any {
@@ -118,25 +174,41 @@ func (t *ChannelOutboundTool) Parameters() map[string]any {
 				"type": "array", "items": map[string]any{"type": "string"},
 				"description": "The whole list of people and groups the agent may start messages to; replaces the stored list",
 			},
-			expectedRevisionParam: channelRevisionProperty(),
+			expectedRevisionParam: map[string]any{
+				"type":        "string",
+				"description": "Leave it out; the tool reads the current settings itself. Pass it only if you read it with list_channels.",
+			},
 		},
-		"required":             []string{"id", "policy", "targets", expectedRevisionParam},
+		"required":             []string{"id", "policy", "targets"},
 		"additionalProperties": false,
 	}
 }
 
 func (t *ChannelOutboundTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
 	defer func() { res = finalizeChangeResult(t.Name(), res) }()
-	change, refusal := t.admit(ctx, args)
+	change, refusal, _ := t.admit(ctx, args)
 	if refusal != nil {
 		return refusal
+	}
+	// Q2-B §2: the revision is the supplied one, else the pin of this call's
+	// own approval card. Execute never reads the current revision as a
+	// substitute: a path that skipped the card gets nothing written.
+	pin, _ := tools.ApprovalPinFrom(ctx).(*ChannelOutboundPin)
+	if change.ExpectedRevision == "" {
+		if pin == nil || pin.Revision == "" {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", outboundNoApprovedRevision, ""))
+		}
+		change.ExpectedRevision = pin.Revision
+	}
+	if pin != nil && pin.Revision == change.ExpectedRevision {
+		change.Pin = pin
 	}
 	if t.deps.ApplyChannelOutbound == nil {
 		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED", "the outbound writer is not wired; nothing was saved", ""))
 	}
 	saved, err := t.deps.ApplyChannelOutbound(ctx, change)
 	if err != nil {
-		return outboundErrorResult(change.ID, err)
+		return outboundErrorResult(change.ID, err, change.Pin != nil)
 	}
 	fields := map[string]any{
 		"status":   "saved",
@@ -152,45 +224,71 @@ func (t *ChannelOutboundTool) Execute(ctx context.Context, args map[string]any) 
 	return tools.ChangeSuccessResult(fields, outcome)
 }
 
-// CheckBeforeApproval implements tools.PreApprovalChecker: a request that can
-// never run is refused before any approval card (founder Q4 / FD-11). Beyond
-// the execution admission it also requires the id to name a configured
-// connection, so the card only ever shows a real connection (security S1): an
-// id that would resolve only after the registry rewrote it is refused here,
-// never approved and then repaired (the registry also refuses any repair of an
-// approved always-ask call).
-func (t *ChannelOutboundTool) CheckBeforeApproval(ctx context.Context, args map[string]any) *tools.ToolResult {
-	change, refusal := t.admit(ctx, args)
-	if refusal == nil {
-		if _, ok := t.deps.GetCfg().Channels[change.ID]; !ok {
-			refusal = outboundErrorResult(change.ID, ErrChannelOutboundNotConfigured)
+// PrepareForApproval implements tools.ApprovalPreparer (Channels Q2-B): the
+// tool, not the agent, reads the current setting. One read through
+// Deps.PreviewChannelOutbound runs every check the writer runs (shape,
+// own connection, configured connection, revision when supplied, targets,
+// platform, connection running, Discord look-ups, saved/live
+// correspondence), yields the card facts and the pin. A refusal is the
+// call's final result, audited as refused_before_approval, and no card is
+// shown. The facts reach the approval request only: never the executed
+// arguments, the transcript or the tool result.
+func (t *ChannelOutboundTool) PrepareForApproval(ctx context.Context, args map[string]any) (map[string]any, any, *tools.ToolResult) {
+	change, refusal, reason := t.admit(ctx, args)
+	if refusal != nil {
+		if t.deps.AuditChannelOutboundRefusal != nil {
+			t.deps.AuditChannelOutboundRefusal(ctx, change, reason)
 		}
+		return nil, nil, refusal
 	}
-	if refusal == nil {
-		return nil
+	if t.deps.PreviewChannelOutbound == nil {
+		return nil, nil, finalizeChangeResult(t.Name(), tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED",
+			"the outbound preview is not wired; nothing was saved", "")))
 	}
-	return finalizeChangeResult(t.Name(), refusal)
+	preview, err := t.deps.PreviewChannelOutbound(ctx, change)
+	if err != nil {
+		return nil, nil, finalizeChangeResult(t.Name(), outboundErrorResult(change.ID, err, false))
+	}
+	facts := map[string]any{
+		"connection":       map[string]any{"id": change.ID, "platform": preview.Platform},
+		"current_outbound": map[string]any{"policy": preview.CurrentPolicy, "targets": nonNilStrings(preview.CurrentTargets)},
+		"new_outbound":     map[string]any{"policy": preview.NewPolicy, "targets": nonNilStrings(preview.NewTargets)},
+		"added":            nonNilStrings(preview.Added),
+		"removed":          nonNilStrings(preview.Removed),
+		"revision":         preview.Revision,
+	}
+	pin := &ChannelOutboundPin{Revision: preview.Revision, VerifiedTargets: nonNilStrings(preview.VerifiedTargets)}
+	return facts, pin, nil
 }
 
 // admit applies the checks that need no writer: the caller's identity, the
 // request shape (FR-030) and the own-connection refusal (FD-11). Founder Q4
 // (2026-11-03) lets every identified chat-capable agent use this tool with a
-// fresh approval; an unidentified caller keeps the OMNIPUS_ONLY refusal.
-func (t *ChannelOutboundTool) admit(ctx context.Context, args map[string]any) (ChannelOutboundChange, *tools.ToolResult) {
+// fresh approval; an unidentified caller keeps the OMNIPUS_ONLY refusal. On a
+// refusal, reason is its audit reason and change carries whatever was
+// readable (the id and the caller) for that audit record.
+func (t *ChannelOutboundTool) admit(ctx context.Context, args map[string]any) (ChannelOutboundChange, *tools.ToolResult, string) {
 	caller := strings.TrimSpace(tools.ToolAgentID(ctx))
 	if caller == "" {
-		return ChannelOutboundChange{}, tools.ErrorResult(errorJSON("OMNIPUS_ONLY", outboundOmnipusOnlyText, ""))
+		var change ChannelOutboundChange
+		if id, ok := args["id"].(string); ok {
+			change.ID = strings.TrimSpace(id)
+		}
+		return change, finalizeChangeResult(t.Name(), tools.ErrorResult(errorJSON("OMNIPUS_ONLY", outboundOmnipusOnlyText, ""))),
+			outboundReasonOmnipusOnly
 	}
 	change, invalid := outboundChangeArgs(args)
-	if invalid != "" {
-		return change, tools.ErrorResult(errorJSON("INVALID_INPUT", invalid+"; nothing was saved", "Supply id, policy, the whole targets list and expected_revision from list_channels"))
-	}
 	change.Actor = caller
+	if invalid != "" {
+		return change, finalizeChangeResult(t.Name(), tools.ErrorResult(errorJSON("INVALID_INPUT", invalid+"; nothing was saved",
+			"Supply id, policy and the whole targets list"))), outboundReasonInvalidInput
+	}
 	if inst, ok := t.deps.GetCfg().Channels[change.ID]; ok && inst.Identity != nil &&
 		strings.TrimSpace(inst.Identity.ID) == caller {
-		return change, tools.ErrorResult(errorJSON("OWN_CONNECTION", outboundOwnConnection, ""))
+		return change, finalizeChangeResult(t.Name(), tools.ErrorResult(errorJSON("OWN_CONNECTION", outboundOwnConnection, ""))),
+			outboundReasonOwnConnection
 	}
-	return change, nil
+	return change, nil, ""
 }
 
 // outboundChangeArgs validates the request shape (FR-030: every shape error
@@ -212,10 +310,15 @@ func outboundChangeArgs(args map[string]any) (ChannelOutboundChange, string) {
 	if change.Policy, ok = args["policy"].(string); !ok || (change.Policy != "reply_only" && change.Policy != "agent_may_start") {
 		return change, "policy must be reply_only or agent_may_start"
 	}
-	if change.ExpectedRevision, ok = args[expectedRevisionParam].(string); !ok || strings.TrimSpace(change.ExpectedRevision) == "" {
-		return change, expectedRevisionParam + " is required; read it with list_channels"
+	// Q2-B §1: optional. Omitted, empty or blank means "use the revision the
+	// tool read for the card"; a supplied value is honoured.
+	if raw, present := args[expectedRevisionParam]; present {
+		revision, isString := raw.(string)
+		if !isString {
+			return change, expectedRevisionParam + " must be a string"
+		}
+		change.ExpectedRevision = strings.TrimSpace(revision)
 	}
-	change.ExpectedRevision = strings.TrimSpace(change.ExpectedRevision)
 	targets, reason := outboundTargetsArg(args["targets"])
 	if reason != "" {
 		return change, reason
@@ -257,7 +360,11 @@ func outboundTargetsArg(raw any) ([]string, string) {
 // outboundErrorResult renders a writer error with its FR-030 code. The
 // writer's own reason is kept in the detail (r9 Q7-Q2 A), so the two CONFLICT
 // causes and the translated codes stay distinguishable.
-func outboundErrorResult(id string, err error) *tools.ToolResult {
+//
+// afterCard is true when the call runs under its own approval card's pin: a
+// stale_revision is then the one legitimate "approved, then refused" case
+// and says so (Q2-B §2).
+func outboundErrorResult(id string, err error, afterCard bool) *tools.ToolResult {
 	var refusal *ChannelOutboundRefusalError
 	switch {
 	case errors.As(err, &refusal):
@@ -267,15 +374,20 @@ func outboundErrorResult(id string, err error) *tools.ToolResult {
 			// before the write; never present it as a save failure.
 			code = "INVALID_INPUT"
 		}
-		detail := map[string]any{"code": code, "message": refusal.Message, "reason": refusal.Reason}
+		message := refusal.Message
+		if afterCard && refusal.Reason == "stale_revision" {
+			message = outboundChangedAfterCard
+		}
+		detail := map[string]any{"code": code, "message": message, "reason": refusal.Reason}
 		if refusal.TargetErrors != nil {
 			detail["target_errors"] = refusal.TargetErrors
 		}
 		if refusal.OmittedCount > 0 {
 			detail["omitted_count"] = refusal.OmittedCount
 		}
-		if code == "CONFLICT" {
-			detail["suggestion"] = "Read the channel again with list_channels, revise the plan and confirm it again before retrying"
+		if refusal.Reason == "stale_revision" {
+			// Q2-B §2: a chat agent may not read channels; it never needs to.
+			detail["suggestion"] = "Make the call again; the tool reads the current settings itself and shows a new card"
 		}
 		return tools.ErrorResult(outboundJSON(map[string]any{"success": false, "error": detail}))
 	case errors.Is(err, ErrChannelOutboundNotConfigured):
