@@ -68,16 +68,16 @@ func (a *restAPI) HandleToolResults(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, ErrToolResultTooLarge) {
 			slog.Error("rest: tool-results: stored result exceeds the retrieval cap",
-				"session_id", sessionID,
-				"ref", ref,
+				"session_id", safeLogValue(sessionID),
+				"ref", safeLogValue(ref),
 			)
 			jsonErr(w, http.StatusInternalServerError, "could not read tool result")
 			return
 		}
 		slog.Error("rest: tool-results: read failed",
-			"session_id", sessionID,
-			"ref", ref,
-			"error", err,
+			"session_id", safeLogValue(sessionID),
+			"ref", safeLogValue(ref),
+			"error", safeLogValue(err.Error()),
 		)
 		jsonErr(w, http.StatusInternalServerError, "could not read tool result")
 		return
