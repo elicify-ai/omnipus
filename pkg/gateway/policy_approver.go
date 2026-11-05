@@ -106,10 +106,18 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		return outcome.Approved, outcome.Reason, outcome.RecordGrant
 	case <-ctx.Done():
 		// Turn was canceled (hard abort, graceful shutdown, etc.). Cancel the entry.
-		if resolved, _ := a.reg.resolve(entry.ApprovalID, ApprovalActionCancel, false); resolved {
-			auditAskDecision(context.WithoutCancel(ctx), a.consentAudit(), entry,
-				ApprovalOutcome{Reason: denialReasonCancel}, time.Since(approvalStart))
+		outcome := ApprovalOutcome{Reason: denialReasonCancel}
+		if resolved, _ := a.reg.resolve(entry.ApprovalID, ApprovalActionCancel, false); !resolved {
+			// Another path (a session Stop's CancelPendingApprovals, a
+			// click, the timeout) made the entry terminal first. Every
+			// terminal transition delivers exactly one outcome on the
+			// buffered resultCh, after the registry lock is released, so it
+			// may not have arrived yet; this goroutine is its only reader.
+			// Receive it so the terminal decision is audited exactly once,
+			// here, whichever path resolved the card (channels S3, CHECK F1).
+			outcome = <-entry.resultCh
 		}
+		auditAskDecision(context.WithoutCancel(ctx), a.consentAudit(), entry, outcome, time.Since(approvalStart))
 		globalToolMetrics.ObserveApprovalLatency("cancel", time.Since(approvalStart).Seconds())
 		return false, "cancel", false
 	}
