@@ -660,49 +660,51 @@ let AUTH_FILE: string
 
 // A fixture dependency starts the local model BEFORE canonicalGateway onboards.
 // Only (c) uses this extension; (a), (b), (d) retain their original provider and assertions.
-const attachTest = test.extend<{ replayAttachProvider: ReplayAttachProvider }>({
+// not-wire-format: test-owned viewers and passive native observation state.
+type AttachViewers = {
+  sessionId: string
+  page2: Page
+  traffic1: ReturnType<typeof observeReplayAttach>
+  traffic2: ReturnType<typeof observeReplayAttach>
+  readiness2: ReturnType<typeof observeAddressedAttachReadiness>
+  atAttach: { firstText: string; doneCount: number; providerFinished: boolean }[]
+  startTurn(): number
+  arm(): void
+}
+
+const attachTest = test.extend<{ replayAttachProvider: ReplayAttachProvider; replayAttachViewers: AttachViewers }>({
   replayAttachProvider: async ({ browserName }, use, info) => {
     await info.attach('scripted-provider-browser', { body: browserName, contentType: 'text/plain' })
     const provider = await startReplayAttachProvider()
     try { await use(provider) } finally { await provider.close() }
   },
   canonicalProviderBase: async ({ replayAttachProvider }, use) => { await use(replayAttachProvider.url) },
-})
-
-attachTest(
-  '(c) attach-during-active-turn: second browser context receives all events without loss',
-  async ({ page, browser, replayAttachProvider: provider }, testInfo) => {
-    // Scenario 9 / TDD row 25 (archived sprint-i-historical-replay-fidelity-spec).
-    // 120 s total / 15 s per reply replaces 360 s / 180 s: two cold SPA
-    // viewers need startup headroom on a shared runner, but the local scripted
-    // stream takes only 1.25 s, with no paid-model latency or queue. Completion
-    // is gated by observed frames, never a guessed sleep duration.
-    test.setTimeout(120_000)
+  // Playwright gives an explicitly timed fixture its own timeout slot. Cold
+  // startup therefore cannot consume the active experiment's 60 s budget.
+  replayAttachViewers: [async ({ page, browser, canonicalGateway, replayAttachProvider: provider }, use) => {
+    BASE_URL = canonicalGateway.baseURL
+    AUTH_FILE = canonicalHistoryAuthFile()
     const sessionId = await createSession(page)
     const warmSessionId = await createSession(page)
     await renameSession(page, sessionId, `replay-fidelity-test-c-${Date.now()}`)
-    // Observe before this document opens its socket. Explicit empty sessions
-    // avoid depending on whether a fresh install's root route attaches at all.
     const traffic1 = observeReplayAttach(page, sessionId)
     const readiness1 = observeAddressedAttachReadiness(page)
     const firstReady = readiness1.arm(sessionId)
     try {
-      // Gate DOM checks on native catch-up, not a cold renderer's paint speed.
-      // Keep openSession's exact route/composer assertions and their 15 s limits.
       await Promise.all([page.goto(`/#/sessions/${sessionId}`), firstReady.wait()])
       await expect(page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({ timeout: 15_000 })
       await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
       await waitForWsConnected(page)
     } finally { firstReady.cancel(); readiness1.dispose() }
 
-    // Warm the second viewer on a DIFFERENT explicit session. Its catch-up
-    // is not evidence that it attached to the target session during the turn.
+    // Warm viewer 2 on a DIFFERENT explicit session. A fresh install's root
+    // route need not attach, and an early target attach would invalidate R2.
     const context2 = await browser.newContext({ storageState: AUTH_FILE, baseURL: BASE_URL })
     const page2 = await context2.newPage()
     const readiness2 = observeAddressedAttachReadiness(page2)
     let armed = false
     let turnStart = 0
-    const atAttach: { firstText: string; doneCount: number; providerFinished: boolean }[] = []
+    const atAttach: AttachViewers['atAttach'] = []
     const traffic2 = observeReplayAttach(page2, sessionId, () => {
       if (!armed) return
       atAttach.push({
@@ -722,8 +724,31 @@ attachTest(
           'PREREQUISITE: warm viewer renders the session whose attach actually completed').toBeVisible()
         await waitForWsConnected(page2)
       } finally { warmReady.cancel() }
+      await use({ sessionId, page2, traffic1, traffic2, readiness2, atAttach,
+        startTurn() { turnStart = traffic1.received.length; return turnStart },
+        arm() { armed = true },
+      })
+    } finally {
+      traffic1.dispose()
+      traffic2.dispose()
+      readiness2.dispose()
+      await context2.close()
+    }
+  }, { timeout: 120_000 }],
+})
 
-      turnStart = traffic1.received.length
+attachTest(
+  '(c) attach-during-active-turn: second browser context receives all events without loss',
+  async ({ page, replayAttachProvider: provider, replayAttachViewers: viewers }, testInfo) => {
+    // Scenario 9 / TDD row 25 (archived sprint-i-historical-replay-fidelity-spec).
+    // 60 s active experiment / 15 s reply waits replaces 360 s / 180 s:
+    // the local stream takes 1.25 s, with no paid-model latency or queue.
+    // The bounded cold-start fixture above has a separate 120 s setup slot;
+    // no startup delay can consume or enlarge the actual event-loss window.
+    test.setTimeout(60_000)
+    const { sessionId, page2, traffic1, traffic2, readiness2, atAttach } = viewers
+    const turnStart = viewers.startTurn()
+    try {
       await waitForConnected(page, { timeout: 10_000 })
       await chatInput(page).fill('Start the replay attach experiment.')
       await chatInput(page).press('Enter')
@@ -736,7 +761,7 @@ attachTest(
       if (!turnId) throw new Error('PREREQUISITE: live token has no turn id')
 
       const afterAttach1 = traffic1.received.length
-      armed = true
+      viewers.arm()
       const targetReady = readiness2.arm(sessionId)
       try {
         const [, proof] = await Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()])
@@ -801,10 +826,6 @@ attachTest(
         first: { tokens: traffic1.liveTokens(turnStart), attaches: traffic1.attaches, failures: traffic1.failures },
         second: { tokens: traffic2.liveTokens(), attaches: traffic2.attaches, failures: traffic2.failures },
       }) })
-      traffic1.dispose()
-      traffic2.dispose()
-      readiness2.dispose()
-      await context2.close()
     }
   },
 )
