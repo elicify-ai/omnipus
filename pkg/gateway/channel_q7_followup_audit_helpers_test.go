@@ -194,18 +194,27 @@ func q7AuditSavedOutbound(t *testing.T, f *wu6Fixture, request func(string, stri
 
 func q7AuditPrivateArguments(t *testing.T, rows []map[string]any, toolName string) {
 	t.Helper()
+	requestedPreviews := 0
 	for _, row := range rows {
-		if row["event"] != audit.EventToolCall || row["tool"] != toolName {
-			continue
-		}
+		// R-S3 / CHECK F3: inspect EVERY audit row, not only tool_call. This
+		// includes args_preview at any nesting depth and future event names;
+		// the real request event must not leak an array of private targets.
 		raw, err := json.Marshal(row)
 		require.NoError(t, err)
-		require.NotContains(t, string(raw), `"987654321"`, "R-S3: raw target payload is not a general tool-call argument")
-		require.NotContains(t, string(raw), `"telegram:987654321"`, "R-S3: canonical target payload is also private in the general argument log")
-		details, _ := row["details"].(map[string]any)
-		arguments, _ := details["args"].(map[string]any)
-		require.NotContains(t, arguments, "targets", "R-S3: do not widen the general identifying-argument allowlist")
+		require.NotContains(t, string(raw), `"987654321"`, "R-S3: raw target payload is not a general tool-call argument (event=%v)", row["event"])
+		require.NotContains(t, string(raw), `"telegram:987654321"`, "R-S3: canonical target payload is also private in the general argument log (event=%v)", row["event"])
+		fields, _ := row["fields"].(map[string]any)
+		if row["event"] == audit.EventToolPolicyAskRequested && fields["tool_name"] == toolName {
+			require.Contains(t, fields, "args_preview", "instrument: the real request's argument preview is actually inspected")
+			requestedPreviews++
+		}
+		if row["event"] == audit.EventToolCall && row["tool"] == toolName {
+			details, _ := row["details"].(map[string]any)
+			arguments, _ := details["args"].(map[string]any)
+			require.NotContains(t, arguments, "targets", "R-S3: do not widen the general identifying-argument allowlist")
+		}
 	}
+	require.Positive(t, requestedPreviews, "instrument: privacy assertions saw a tool.policy.ask.requested preview, not an empty log")
 }
 
 func q7AuditContainsValue(value any, want string) bool {
