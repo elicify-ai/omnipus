@@ -10,7 +10,8 @@
         "tests/e2e/provider-retry.spec.ts",
         "tests/e2e/truncation-notice-live.spec.ts",
         "tests/e2e/terminal-outcome.spec.ts",
-        "tests/e2e/parent-wake-stream.spec.ts"
+        "tests/e2e/parent-wake-stream.spec.ts",
+        "tests/e2e/groupchat1449-remote-image.spec.ts"
       ]
     },
     {
@@ -179,7 +180,8 @@
         "tests/e2e/web-serve-canonical.spec.ts",
         "tests/e2e/web-serve-malformed.spec.ts",
         "tests/e2e/chat-history-paging.soft-budget-screen-coverage.spec.ts",
-        "tests/e2e/chat-history-paging.usage-reload.spec.ts"
+        "tests/e2e/chat-history-paging.usage-reload.spec.ts",
+        "tests/e2e/chat-history-paging.large-output-preview.spec.ts"
       ]
     },
     {

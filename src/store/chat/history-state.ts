@@ -22,6 +22,9 @@ export function mergeHistoryEntry(entry: SessionHistoryEntry, current: ChatMessa
   if (!current) return entry
   const liveWins = current !== baseline || current.isStreaming === true || current.status === 'streaming'
   const merged = { ...entry, ...(liveWins ? current : {}), id: entry.id, historyPosition: entry.historyPosition } as ChatMessage
+  // #1452 D2: the saved preview size describes the saved text only. When the
+  // current text wins, the row keeps the current text's own size marker.
+  if (liveWins) merged.contentOriginalSizeBytes = current.contentOriginalSizeBytes
   if (entry.role === 'assistant' && current.role === 'assistant' && (entry.tool_calls || current.tool_calls)) {
     const calls = new Map((entry.tool_calls ?? []).map(call => [call.id, call]))
     for (const call of current.tool_calls ?? []) {

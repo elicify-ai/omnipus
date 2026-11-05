@@ -230,6 +230,28 @@ export const test = base.extend<{ history: HistoryHarness; historyControlKind: '
 // Per-file test.use/retries are explicit in each spec: module caching means
 // top-level configuration in this shared import only reaches its first importer.
 
+/** Q-T7: canonical fixture construction has its OWN setup slot, never the
+ * behaviour test's 240s slot. Issue #1452 reports ~332s for the 3400-row
+ * real durable writer. This 10-minute setup-only budget does not raise test.setTimeout
+ * or bound any UI assertion; setup failures remain failures, never skips.
+ * Playwright pauses this fixture's timer while await use(history) runs the test.
+ */
+export function seededHistoryTest(seed: Seed, parent = test) {
+  // An injectable parent lets the timeout instrument exercise THIS decorator
+  // without booting a gateway; normal specs keep the real history fixture.
+  return parent.extend({
+    history: [async ({ history }, use, info) => {
+      const started = performance.now();
+      await history.seed(seed);
+      await info.attach('canonical-seed-setup', { contentType: 'application/json', body: JSON.stringify({
+        session_id: history.sessionId, seed, duration_ms: performance.now() - started,
+        behaviour_timeout_ms: info.timeout, setup_timeout_ms: 600_000,
+      }) });
+      await use(history);
+    }, { scope: 'test', timeout: 600_000 }],
+  });
+}
+
 export function assertPage(page: ReturnType<typeof SessionHistoryResponse.parse>) {
   expect(page.page_info.soft_byte_budget, 'D4a positive budget').toBeGreaterThan(0);
   expect(page.entries.length, 'server source-group request cap').toBeLessThanOrEqual(100);

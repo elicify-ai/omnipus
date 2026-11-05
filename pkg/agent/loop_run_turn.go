@@ -45,6 +45,9 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 			// retry, no fallback substitution, no markTurnFailed; finalContent
 			// stays "" and the write choke points below persist a zero-content
 			// entry for the former post-hoc truncation rewrite to find.
+		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+			// #1534 Q1 = A: a turn the user stopped before anything new was
+			// shown has nothing more to say — no fallback text, not failed.
 		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() >= rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations && rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations > 0 {
 			// Genuine failure: tool-iteration ceiling hit without a final response.
 			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
@@ -70,13 +73,17 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setFinalContent(rz.rc.rx.finalContent)
 	// Harness notices are chat-only. A hidden system-role model slot would be
 	// sanitized away and break later archive-address mapping and context relief.
+	// #1534: a stopped turn with nothing new to say adds no empty answer.
+	stoppedSilent := rz.rc.rx.finalContent == "" && rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load()
 	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && !iterationLimitNotice {
 		finalMsg := providers.Message{Role: "assistant", Content: rz.rc.rx.finalContent}
 		// #1178 (amendment §4.2): a failed final write is a failed turn,
 		// never a false success. Wrap with the existing assistant
 		// save-error wrapper, run the session_save error path below and
 		// markTurnFailed — DoneStats.TurnFailed must be true.
-		if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.appendFinalModelResponse(finalMsg.Content, rz.rc.rx.rr.rq.ri.rf.response); addErr != nil {
+		if stoppedSilent {
+			// Nothing to append; the session is still saved below.
+		} else if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.appendFinalModelResponse(finalMsg.Content, rz.rc.rx.rr.rq.ri.rf.response); addErr != nil {
 			notSaved := &messageNotSavedError{role: finalMsg.Role, cause: addErr}
 			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError

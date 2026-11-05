@@ -1,51 +1,100 @@
 import { expect } from '@playwright/test';
 import { SessionHistoryResponse } from '../../src/lib/api/generated/schemas';
 import { test, BUDGET, anchor, expectAnchor, geometry, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
+import { INLINE_RESULT_BYTES, inlineToolMessage, utcDay } from './fixtures/chat-history-paging/day-fixtures';
 
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
 test.describe.configure({ retries: 0 });
 
-// T28; D-B1/B1b/B2/B3: independently authored ASCII result sizes. The fixture
-// uses real tool projection. No mocked page weights, styles or virtual rows.
-test('T28 B37:200KiB tool results byte-cut at20 whole groups after the20-row floor', async ({ history }) => {
-  await history.seed({ label: 'byte-cut', count: 100, shape: 'tools', bodyBytes: 200 * 1024 });
+// T28; D-B1/B1b/B2/B3, re-derived per D2 A2.7. Real canonical writer,
+// shortening and max-carrier projection; no mocked weights, styles or rows.
+test('T28 B37:five inline50KiB results byte-cut at16 whole groups exactly at the80-row floor', async ({ history }) => {
+  const entries = Array.from({ length: 100 }, (_, n) => inlineToolMessage('byte-cut', n, history.ids.agent.id));
+  await history.seedDays([{ day: utcDay(0), entries }]);
   await history.authenticate();
-  const response = await history.read({ limit: 100, min_rows: 20 });
-  // D-B1:20×201KiB+8KiB <4MiB,21×200KiB >4MiB.
-  expect(20 * 201 * 1024 + 8 * 1024).toBeLessThan(BUDGET);
-  expect(21 * 200 * 1024).toBeGreaterThan(BUDGET);
-  expect(response.entries.map((entry) => entry.id)).toEqual(Array.from({ length: 20 }, (_, n) => `byte-cut-${String(80 + n).padStart(6, '0')}`));
+  const response = await history.read({ limit: 100, min_rows: 80 });
+  // D-B1/A2.7:5 calls/group =250KiB and5 rows.16×255KiB +8KiB
+  // envelope headroom <4MiB;17×250KiB >4MiB, even before envelopes.
+  expect(16 * 255 * 1024 + 8 * 1024).toBeLessThan(BUDGET);
+  expect(17 * 5 * INLINE_RESULT_BYTES).toBeGreaterThan(BUDGET);
+  expect(response.entries.map((entry) => entry.id)).toEqual(entries.slice(-16).map((entry) => entry.id));
   expect(response.page_info).toMatchObject({
-    limit: 100, min_rows: 20, row_count: 20, source_group_count: 20,
+    limit: 100, min_rows: 80, row_count: 80, source_group_count: 16,
     soft_byte_budget: BUDGET, stop_reason: 'byte_budget', byte_budget_exceeded: false,
   });
   expect(response.page_info.budget_override).toBeUndefined();
-  expect(response.page_info.projected_bytes).toBeGreaterThanOrEqual(20 * 200 * 1024);
+  expect(response.page_info.projected_bytes).toBeGreaterThanOrEqual(16 * 5 * INLINE_RESULT_BYTES);
   expect(response.page_info.projected_bytes).toBeLessThanOrEqual(BUDGET);
   expect(response.has_earlier).toBe(true);
   expect(response.next_before).toBe(response.entries[0].history_position);
-  for (const entry of response.entries) {
-    expect(entry.tool_calls?.map((call) => ({ id: call.id, status: call.status })))
-      .toEqual([{ id: `call-${entry.id}`, status: 'success' }]);
+  for (let n = 0; n < response.entries.length; n++) {
+    const entry = response.entries[n];
+    // Exact original calls include ids, statuses, parameters AND full results;
+    // a shortened marker, dropped call or reordered result cannot pass.
+    expect(entry.tool_calls).toEqual(entries[84 + n].tool_calls);
+    for (const call of entry.tool_calls ?? []) expect(Buffer.byteLength(JSON.stringify(call.result))).toBe(INLINE_RESULT_BYTES);
     const encoded = Buffer.byteLength(JSON.stringify(entry));
-    expect(encoded, 'fixture lower bound independently pins a real large projected group').toBeGreaterThanOrEqual(200 * 1024);
-    expect(encoded, 'D-B1 fixture upper headroom, not an observed expected byte count').toBeLessThanOrEqual(201 * 1024);
+    expect(encoded, 'five real inline results contribute at least250KiB').toBeGreaterThanOrEqual(5 * INLINE_RESULT_BYTES);
+    expect(encoded, 'independent5KiB/group envelope headroom, not an observed byte count').toBeLessThanOrEqual(255 * 1024);
   }
 });
 
-test('T28 B37:256KiB results keep20 whole rows above5MiB instead of cutting the height floor', async ({ history }) => {
-  await history.seed({ label: 'floor', count: 40, shape: 'tools', bodyBytes: 256 * 1024 });
+test('T28 B37:inline50KiB results plus64KiB texts keep96 whole rows above5MiB instead of cutting the height floor', async ({ history }) => {
+  // D-B1b/A2.7: one inline result + one unshortened64-KiB text =114KiB
+  // and2 rows/owner.48 owners meet floor96;49 would be unnecessary.
+  const entries = Array.from({ length: 80 }, (_, n) => inlineToolMessage('floor', n, history.ids.agent.id, 1, 'x'.repeat(65_536)));
+  expect(48 * (INLINE_RESULT_BYTES + 65_536)).toBeGreaterThan(5 * 1024 * 1024);
+  await history.seedDays([{ day: utcDay(0), entries }]);
   await history.authenticate();
-  const response = await history.read({ limit: 40, min_rows: 20 });
-  expect(response.entries.map((entry) => entry.id)).toEqual(Array.from({ length: 20 }, (_, n) => `floor-${String(20 + n).padStart(6, '0')}`));
+  const response = await history.read({ limit: 100, min_rows: 96 });
+  expect(response.entries.map((entry) => entry.id)).toEqual(entries.slice(-48).map((entry) => entry.id));
   expect(response.page_info).toMatchObject({
-    min_rows: 20, row_count: 20, source_group_count: 20, soft_byte_budget: BUDGET,
+    limit: 100, min_rows: 96, row_count: 96, source_group_count: 48, soft_byte_budget: BUDGET,
     stop_reason: 'byte_budget', byte_budget_exceeded: true, budget_override: 'height_floor',
   });
   expect(response.page_info.projected_bytes).toBeGreaterThan(5 * 1024 * 1024);
+  expect(response.has_earlier).toBe(true);
   expect(response.next_before).toBe(response.entries[0].history_position);
-  expect(response.entries.flatMap((e) => e.tool_calls ?? []).map((t) => t.id))
-    .toEqual(response.entries.map((e) => `call-${e.id}`));
+  expect(response.entries.flatMap((e) => e.tool_calls ?? []))
+    .toEqual(entries.slice(-48).flatMap((e) => e.tool_calls ?? []));
+  expect(response.entries.map((e) => e.content)).toEqual(entries.slice(-48).map((e) => e.content));
+});
+
+test('T28 B37 D-B1c:one101-row atomic owner keeps all100 inline results above4MiB', async ({ history }) => {
+  // A2.7:100×51,200 inline bytes >4MiB but <8MiB;100 tool rows
+  // plus one narration row exceed limit20 without splitting the owner.
+  const old = inlineToolMessage('atomic', 0, history.ids.agent.id, 1);
+  const owner = inlineToolMessage('atomic', 1, history.ids.agent.id, 100, 'one narration row');
+  await history.seedDays([{ day: utcDay(0), entries: [old, owner] }]);
+  await history.authenticate();
+  const response = await history.read({ limit: 20, min_rows: 20 });
+  expect(response.entries.map((entry) => entry.id)).toEqual([owner.id]);
+  expect(response.entries[0].content).toBe(owner.content);
+  expect(response.entries[0].tool_calls).toEqual(owner.tool_calls);
+  expect(response.page_info).toMatchObject({ row_count: 101, source_group_count: 1,
+    soft_byte_budget: BUDGET, byte_budget_exceeded: true, budget_override: 'atomic_group' });
+  expect(response.page_info.projected_bytes).toBeGreaterThan(BUDGET);
+  expect(response.page_info.projected_bytes).toBeLessThan(8 * 1024 * 1024);
+  expect(response.has_earlier).toBe(true);
+  expect(response.next_before).toBe(response.entries[0].history_position);
+});
+
+test('T28 B37 D-B1c:one oversized row still admits19 following rows to meet floor20', async ({ history }) => {
+  // A2.1 leaves non-message system content whole. That gives a valid one-row
+  // group >4MiB after shortening, without an over-bound ordinary text/result.
+  const entries = Array.from({ length: 21 }, (_, n) => inlineToolMessage('atomic-floor', n, history.ids.agent.id, 0, `small-${n}`));
+  entries[20] = { ...entries[20], type: 'system', role: 'system', content: 'x'.repeat(5 * 1024 * 1024) };
+  await history.seedDays([{ day: utcDay(0), entries }]);
+  await history.authenticate();
+  const response = await history.read({ limit: 40, min_rows: 20 });
+  expect(response.entries.map((entry) => entry.id)).toEqual(entries.slice(1).map((entry) => entry.id));
+  expect(response.entries.map((entry) => entry.content)).toEqual(entries.slice(1).map((entry) => entry.content));
+  expect(response.page_info).toMatchObject({ min_rows: 20, row_count: 20, source_group_count: 20,
+    soft_byte_budget: BUDGET, stop_reason: 'byte_budget', byte_budget_exceeded: true, budget_override: 'height_floor' });
+  expect(response.page_info.projected_bytes).toBeGreaterThan(5 * 1024 * 1024);
+  expect(response.page_info.projected_bytes).toBeLessThan(8 * 1024 * 1024);
+  expect(response.has_earlier).toBe(true);
+  expect(response.next_before).toBe(response.entries[0].history_position);
 });
 
 test('T28 B38:normal40-row opening fits4MiB unchanged, with no byte override', async ({ history, page }) => {
@@ -64,15 +113,25 @@ test('T28 B38:normal40-row opening fits4MiB unchanged, with no byte override', a
 });
 
 test('T28 B39:byte-shortened open and simultaneous2H observer top-up share ONE contiguous chain; prefetch adds2H', async ({ history, page }) => {
-  await history.seed({ label: 'fill', count: 260, shape: 'tools', bodyBytes: 256 * 1024 });
+  // D5: after the default40-row snapshot, H/A around44 makes the opening
+  // remainder3H-40A about92A, with floor2H/A about88. A top-up therefore
+  // asks for82..100 rows:80 inline50-KiB rows fit4MiB;85 do not. The tall
+  // real viewport supplies that geometry without fake styles/measurements.
+  // Assert the actual byte stop below, so a row-cap-only fixture cannot pass.
+  await page.setViewportSize({ width: 1280, height: 2450 });
+  await history.seedDays([{ day: utcDay(0), entries: Array.from({ length: 260 }, (_, n) => inlineToolMessage('fill', n, history.ids.agent.id)) }]);
   await history.authenticate();
   await history.open();
   await expect.poll(async () => { const g = await geometry(page); return g.height / g.H; },
-    { message: 'byte cuts cannot declare opening ready with only2H content' }).toBeGreaterThanOrEqual(4);
+    // Founder amendment2026-10-30 (#1452), spec header and D5: opening3H;
+    // a2H-only implementation still fails. Prefetch remains2H below.
+    { message: 'byte cuts cannot declare opening ready with only2H content' }).toBeGreaterThanOrEqual(3);
   const snapshot = history.snapshot();
   expect(snapshot.page_info.soft_byte_budget).toBe(BUDGET);
   const openingPages = history.traffic.pages.filter((r) => r.status === 200).map((r) => ({ url: new URL(r.url), page: SessionHistoryResponse.parse(r.body) }));
   expect(openingPages.length, 'positive control: fixture actually forced at least one opening top-up').toBeGreaterThan(0);
+  expect(openingPages.some((response) => response.page.page_info.stop_reason === 'byte_budget'),
+    'positive control: opening really byte-cuts, not merely row-target/source-cap top-up').toBe(true);
   let expectedBoundary = snapshot.next_before;
   for (const response of openingPages) {
     expect(response.url.searchParams.get('before'), 'each physical chunk starts at the immediate prior lower edge').toBe(expectedBoundary);

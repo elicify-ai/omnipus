@@ -123,6 +123,22 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine .
 			}
 		}
 	}
+	// A dispatched call's outcome settles its dispatch-time running record in
+	// place (started_tool_outcome.go::beginStartedTool), keeping one record
+	// per call at the position it started. The guard makes a second settle a
+	// no-op on read; a settle failure is returned, never a second record.
+	if tc.Status != toolCallStatusRunning {
+		if rec, known := ts.callRecordFor(tc.ID); known && rec.tc.Status == toolCallStatusRunning {
+			if _, settleErr := ts.transcriptStore.SettleToolCall(ts.transcriptSessionID, rec.addr, toolCallStatusRunning, tc); settleErr != nil {
+				return settleErr
+			}
+			ts.rememberCallRecord(tc, rec.addr)
+			if recordAddr != nil {
+				return recordAddr(rec.addr)
+			}
+			return nil
+		}
+	}
 	entry := session.TranscriptEntry{
 		ID: string(tc.ID), Type: session.EntryTypeToolCall,
 		AgentID: ts.resolveActiveAgentID(), Timestamp: time.Now().UTC(),
