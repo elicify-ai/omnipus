@@ -135,7 +135,6 @@ func TestADR090CreateAgentAcceptsSparsePolicyAndMCPPresence(t *testing.T) {
 	}
 	api.agentLoop.GetConfig().Tools.MCP.Servers["docs"] = config.MCPServerConfig{Enabled: true, Command: "test"}
 	api.agentLoop.GetConfig().Sandbox.ToolPolicies["get_agent"] = string(config.ToolPolicyDeny)
-	api.agentLoop.GetConfig().Sandbox.ToolPolicies["get_agent_tools"] = string(config.ToolPolicyDeny)
 	body := `{"name":"Configured","type":"Main","soul":"persona","mcp_servers":[{"id":"docs","tools":[]}],"tool_policy_changes":{"set":{"bash":"deny"}}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))

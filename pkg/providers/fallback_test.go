@@ -84,6 +84,9 @@ func TestFallback_SecondCandidateSuccess(t *testing.T) {
 func TestFallback_AllFail(t *testing.T) {
 	ct := NewCooldownTracker()
 	fc := NewFallbackChain(ct)
+	// Issue #1280: the last candidate runs the retry plan (waits of 2-40 s);
+	// this test is about the attempt list, not the waits.
+	fc.waitFunc = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 
 	candidates := []FallbackCandidate{
 		makeCandidate("openai", "gpt-4"),

@@ -161,6 +161,12 @@ const (
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
 
+	// EventExternalCLIRun — INFO. One external-CLI spawn (r17 §3.10): agent,
+	// CLI, entered and resolved program, agent flags the filter dropped,
+	// the person's preset as typed, and whether a preset token bypassed the
+	// filter.
+	EventExternalCLIRun = "external_cli.run"
+
 	// EventBrowserInstanceCreated — INFO. A workspace's browser instance came
 	// into existence: the first turn to resolve a browser for a given
 	// BrowsingKey established it (ADR-075 FR-027). Fires exactly ONCE per
@@ -548,6 +554,16 @@ const (
 	// user (empty for a change driven by a workspace edit). Fields:
 	// {room_id, workspace_id, action, agent_ids}.
 	EventRoomChanged = "room.changed"
+
+	// EventTaskTriggerFireNotStarted — WARN. A scheduled task fire that was
+	// held at gateway start-up until the agents were ready could not start
+	// when it was released (6b U2b). Emitted by
+	// pkg/agent/task_trigger_boot_hold.go. Fields: {task_id, job_id, reason,
+	// error}. reason is one of task_deleted (the task is gone; the fire is
+	// dropped), task_unreadable or dispatch_failed (the fire is kept and runs
+	// at the next start), or agent_missing (the task's agent is gone; a failed
+	// run is recorded on the task).
+	EventTaskTriggerFireNotStarted = "task.trigger.fire_not_started"
 )
 
 // ---------------------------------------------------------------------------

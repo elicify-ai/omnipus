@@ -184,6 +184,10 @@ search failed
 Providers that support depth: tavily
 ```
 
+## Agent-facing task and plan tools
+
+`get_task`, `get_plan`, `get_goal`, `update_plan` and `set_agent_permissions` have no `tools.*` switch of their own. They follow the normal `sandbox.tool_policies` ceiling and per-agent overrides, like every other built-in tool. On a fresh install `get_task`, `get_plan`, `get_goal` and `update_plan` are `allow`, and `set_agent_permissions` is `ask`.
+
 ## Browser Tools
 
 Each workspace has its own browser: a separate Chrome process with its own profile directory on disk, holding its own cookies and its own logins. A workspace cannot see or use another workspace's. Agents on one workspace share that workspace's browser.

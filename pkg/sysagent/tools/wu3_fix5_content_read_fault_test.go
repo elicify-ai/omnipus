@@ -12,35 +12,17 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// CHECK R4-01 (fix round 4 audit): a valid project skill whose path RESOLVES
-// and whose directories LIST, but whose CONTENT cannot be read, is silently
-// dropped from the checked shelf — the metadata reader loses the read error,
-// the unknown description then fails metadata validation, and the candidate
-// is skipped WITHOUT marking the scan incomplete. A workspace-scoped
-// edit_skill consequently edits the byte-identical installation-wide copy
-// (same revision) and reports working, changing a shared resource that other
-// workspaces read. A content-read failure is neither confirmed absence nor
-// invalid metadata: checked discovery must report it, and workspace-scoped
-// edit_skill / remove_skill / management list_skills must refuse READ_FAILED
-// ("failed: nothing saved" for the change tools) before any global resource
-// is selected.
-//
-// The fault is a real, root-independent I/O failure: the valid SKILL.md moves
-// aside inside its own skill directory and an empty directory is planted at
-// its exact path, so path resolution and both directory listings still
-// succeed while os.ReadFile genuinely fails on every supported platform. No
-// permission bit is touched and no errno string is pinned.
-//
-// Oracles: FR-030 truthful change outcomes ("failed: nothing saved"); FR-042
-// target-shelf resolution; ADR-072 D4.1/D6 — only a COMPLETE scan may prove a
-// slug absent, so a readable valid project skill must still win over the
-// identical global copy, a confirmed absence must still fall back to it, and
-// a readable but invalid-metadata candidate must keep the existing
-// invalid-skill exclusion instead of a read-failure refusal.
+// r15 §§5.1–5.5/§15: preserve the real content-read fault separately
+// from resolution failure and invalid metadata. File edits, project writer
+// deletion and management discovery must not change the identically named
+// global/anchor copies. The old automatic mutation fallback is withdrawn;
+// supported installed reads/deletes name the registry object explicitly.
+// The fault is root-independent: a directory replaces a readable SKILL.md.
 
 // wu3fix5InvalidNoDescription is a READABLE SKILL.md with no description in
 // its frontmatter and an empty body, so the loader contract's metadata
@@ -233,127 +215,87 @@ func wu3fix5AssertRefusalChangedNothing(t *testing.T, s wu3fix5ContentFault) {
 }
 
 func TestWU3ProjectContentReadFailureRefusesWorkspaceSkillActions(t *testing.T) {
-	t.Run("edit refuses instead of editing the identical global copy", func(t *testing.T) {
+	t.Run("explicit project file edit refuses without touching global", func(t *testing.T) {
 		s := wu3fix5SalesShelfWithContentFault(t, wu3fix5MakeProjectContentUnreadable)
-		edit := systools.NewSkillEditTool(s.deps).Execute(s.ctx, map[string]any{
-			"name":         "crm",
-			"content":      string(s.projectBefore) + "\nMust not land globally.\n",
-			"revision":     s.revision,
-			"workspace_id": "sales",
-		})
-		wu3Error(t, edit, "READ_FAILED")
-		wu3Outcome(t, edit, "failed: nothing saved")
+		edit := tools.NewEditFileTool(s.mountRoot, true).Execute(s.ctx, map[string]any{"path": s.projectSkill, "old_text": string(s.projectBefore), "new_text": "Must not land globally."})
+		require.True(t, edit.IsError, "unreadable project file must refuse: %s", edit.ForLLM)
 		wu3fix5AssertRefusalChangedNothing(t, s)
 	})
-
-	t.Run("remove refuses instead of deleting the identical global copy", func(t *testing.T) {
+	t.Run("project writer deletion refuses without touching global", func(t *testing.T) {
 		s := wu3fix5SalesShelfWithContentFault(t, wu3fix5MakeProjectContentUnreadable)
-		remove := systools.NewSkillRemoveTool(s.deps).Execute(s.ctx, map[string]any{
-			"name": "crm", "revision": s.revision, "confirm": true, "workspace_id": "sales",
-		})
-		wu3Error(t, remove, "READ_FAILED")
-		wu3Outcome(t, remove, "failed: nothing saved")
+		require.Error(t, skills.NewSkillWriter(s.projectRoot).RemoveSkillReviewed("crm", s.revision))
 		wu3fix5AssertRefusalChangedNothing(t, s)
 	})
-
-	t.Run("management listing refuses instead of presenting the global copy", func(t *testing.T) {
+	t.Run("management list refuses incomplete shelf", func(t *testing.T) {
 		s := wu3fix5SalesShelfWithContentFault(t, wu3fix5MakeProjectContentUnreadable)
-		list := systools.NewSkillListTool(s.deps).Execute(s.ctx, map[string]any{
-			"scope": "management", "name": "crm", "workspace_id": "sales",
-		})
-		wu3Error(t, list, "READ_FAILED")
+		result := systools.NewSkillListTool(s.deps).Execute(s.ctx, map[string]any{"scope": "management", "workspace_id": "sales"})
+		wu3Error(t, result, "READ_FAILED")
 		wu3fix5AssertRefusalChangedNothing(t, s)
 	})
-
-	// The seam the required action names: checked discovery itself must report
-	// the content-read failure instead of returning an apparently complete
-	// shelf — through the exported API and real stores, no production seam.
-	t.Run("checked discovery reports the content-read failure instead of a complete scan", func(t *testing.T) {
+	t.Run("checked discovery reports read failure rather than complete scan", func(t *testing.T) {
 		s := wu3fix5SalesShelfWithContentFault(t, wu3fix5MakeProjectContentUnreadable)
 		_, _, err := skills.MergeProjectSkillsChecked([]skills.ProjectMount{{Name: "sales", Root: s.mountRoot}})
-		require.Error(t, err, "checked discovery must not present an incomplete scan as complete")
+		require.Error(t, err)
 		wu3fix5AssertRefusalChangedNothing(t, s)
 	})
-
-	// Control (healthy precedence): with the project skill readable it still
-	// wins over the byte-identical global copy. The refusal must stay tied to
-	// the read-error class, never weaken project-shelf resolution.
-	t.Run("readable valid project skill still wins over the identical global copy", func(t *testing.T) {
+	t.Run("healthy project edit changes only explicit mount file", func(t *testing.T) {
 		s := wu3fix5SalesShelfWithContentFault(t, nil)
-		projectRevision, err := skills.NewSkillWriter(s.projectRoot).SkillRevision("crm")
+		shelf, collisions, err := skills.LookupProjectSkillChecked([]skills.ProjectMount{{Name: "sales", Root: s.mountRoot}}, "crm")
 		require.NoError(t, err)
-		content := string(s.projectBefore) + "\nEdited in the sales mount only.\n"
-		edit := systools.NewSkillEditTool(s.deps).Execute(s.ctx, map[string]any{
-			"name": "crm", "content": content, "revision": projectRevision, "workspace_id": "sales",
-		})
-		wu3Success(t, edit)
-		wu3Outcome(t, edit, "working")
-		assert.Equal(t, content, string(wu3ReadFile(t, s.projectSkill)), "the readable project copy is the edit target")
-		assert.Equal(t, string(s.globalBefore), string(wu3ReadFile(t, s.globalSkill)),
-			"the identical global copy is untouched while the project skill is readable")
-		assert.Equal(t, string(s.anchorBefore), string(wu3ReadFile(t, s.anchorSkill)), "the anchor workspace's project copy is untouched")
+		require.Len(t, shelf, 1)
+		assert.Empty(t, collisions)
+		content := string(s.projectBefore) + "\nEdited Sales only.\n"
+		result := tools.NewEditFileTool(s.mountRoot, true).Execute(s.ctx, map[string]any{"path": s.projectSkill, "old_text": string(s.projectBefore), "new_text": content})
+		require.False(t, result.IsError, result.ForLLM)
+		assert.Equal(t, content, string(wu3ReadFile(t, s.projectSkill)))
+		assert.Equal(t, s.globalBefore, wu3ReadFile(t, s.globalSkill))
+		assert.Equal(t, s.anchorBefore, wu3ReadFile(t, s.anchorSkill))
 	})
-
-	// Control (documented fallback, edit): with the project candidate genuinely
-	// gone — NotExist, not an unreadable file — the installation-wide copy is
-	// the edit target, as documented. The refusal above must stay tied to the
-	// read-error class.
-	t.Run("confirmed absence of the project skill still falls back to the global copy", func(t *testing.T) {
+	t.Run("absent project is complete and installed read stays explicit", func(t *testing.T) {
 		s := wu3fix5SalesShelfWithContentFault(t, func(t *testing.T, s wu3fix5ContentFault) {
 			require.NoError(t, os.RemoveAll(s.projectDir))
-			_, statErr := os.Stat(s.projectSkill)
-			require.ErrorIs(t, statErr, os.ErrNotExist, "the project candidate is genuinely absent")
+			_, err := os.Stat(s.projectSkill)
+			require.ErrorIs(t, err, os.ErrNotExist)
 		})
-		content := string(s.projectBefore) + "\nEdited globally after confirmed absence.\n"
-		edit := systools.NewSkillEditTool(s.deps).Execute(s.ctx, map[string]any{
-			"name": "crm", "content": content, "revision": s.revision, "workspace_id": "sales",
-		})
-		wu3Success(t, edit)
-		wu3Outcome(t, edit, "working")
-		assert.Equal(t, content, string(wu3ReadFile(t, s.globalSkill)),
-			"absence is confirmed, so the documented global fallback applies")
+		shelf, _, err := skills.LookupProjectSkillChecked([]skills.ProjectMount{{Name: "sales", Root: s.mountRoot}}, "crm")
+		require.NoError(t, err)
+		assert.Empty(t, shelf)
+		result := systools.NewGetSkillTool(s.deps).Execute(s.ctx, map[string]any{"id": "crm", "fields": []any{"shelf", "instructions"}})
+		body := wu3Success(t, result)
+		assert.Equal(t, "registry", body["shelf"])
+		assert.Contains(t, body["instructions"], "sales-only-body")
+		assert.Equal(t, s.globalBefore, wu3ReadFile(t, s.globalSkill))
+		assert.Equal(t, s.anchorBefore, wu3ReadFile(t, s.anchorSkill))
 	})
-
-	// Control (documented fallback, remove): the same confirmed absence leaves
-	// the installation-wide copy as the remove target, so the remove refusal
-	// above can never be a blanket refusal of workspace-scoped removal.
-	t.Run("confirmed project absence still falls back to global for remove_skill", func(t *testing.T) {
-		s := wu3fix5SalesShelfWithContentFault(t, func(t *testing.T, s wu3fix5ContentFault) {
-			require.NoError(t, os.RemoveAll(s.projectDir))
-		})
-		remove := systools.NewSkillRemoveTool(s.deps).Execute(s.ctx, map[string]any{
-			"name": "crm", "revision": s.revision, "confirm": true, "workspace_id": "sales",
-		})
-		wu3Success(t, remove)
-		wu3Outcome(t, remove, "working")
-		_, statErr := os.Stat(s.globalSkill)
-		assert.ErrorIs(t, statErr, os.ErrNotExist, "the confirmed absence leaves the global copy as the remove target")
-		assert.Equal(t, string(s.anchorBefore), string(wu3ReadFile(t, s.anchorSkill)), "the anchor workspace's project copy is untouched")
+	t.Run("explicit installed delete works despite absent project", func(t *testing.T) {
+		s := wu3fix5SalesShelfWithContentFault(t, func(t *testing.T, s wu3fix5ContentFault) { require.NoError(t, os.RemoveAll(s.projectDir)) })
+		s.ctx = observeSkillForMutation(t, s.deps, readCtx("omnipus"), "crm")
+		result := systools.NewSkillEditTool(s.deps).Execute(s.ctx, map[string]any{"action": "delete", "skill": "crm"})
+		wu3Success(t, result)
+		wu3Outcome(t, result, "working")
+		assert.NoFileExists(t, s.globalSkill)
+		assert.Equal(t, s.anchorBefore, wu3ReadFile(t, s.anchorSkill))
 	})
-
-	// Control (invalid metadata is not a read error): a READABLE candidate the
-	// loader contract rejects for a missing description keeps the existing
-	// invalid-skill exclusion — the scan stays complete and the documented
-	// global fallback applies. The fix must not widen the refusal to this
-	// class.
-	t.Run("readable invalid-metadata candidate keeps the invalid-skill exclusion", func(t *testing.T) {
+	t.Run("readable invalid metadata is excluded without read failure", func(t *testing.T) {
 		s := wu3fix5SalesShelfWithContentFault(t, func(t *testing.T, s wu3fix5ContentFault) {
 			require.NoError(t, os.WriteFile(s.projectSkill, []byte(wu3fix5InvalidNoDescription), 0o600))
-			data, readErr := os.ReadFile(s.projectSkill)
-			require.NoError(t, readErr, "this candidate is readable — it is the invalid-metadata class, not the content-read fault")
-			require.Equal(t, wu3fix5InvalidNoDescription, string(data), "the candidate parses as metadata without any description")
-			found, _ := skills.DiscoverProjectSkills("sales", s.mountRoot)
-			assert.Empty(t, found, "discovery excludes the invalid candidate while the read itself succeeds")
 		})
-		content := string(s.projectBefore) + "\nEdited globally past an invalid project candidate.\n"
-		edit := systools.NewSkillEditTool(s.deps).Execute(s.ctx, map[string]any{
-			"name": "crm", "content": content, "revision": s.revision, "workspace_id": "sales",
-		})
-		wu3Success(t, edit)
-		wu3Outcome(t, edit, "working")
-		assert.Equal(t, content, string(wu3ReadFile(t, s.globalSkill)),
-			"the invalid-skill exclusion keeps the documented global fallback")
-		assert.Equal(t, wu3fix5InvalidNoDescription, string(wu3ReadFile(t, s.projectSkill)),
-			"the invalid project candidate itself is left untouched")
+		assert.Equal(t, wu3fix5InvalidNoDescription, string(wu3ReadFile(t, s.projectSkill)), "readable but invalid, not an I/O fault")
+		shelf, _, err := skills.LookupProjectSkillChecked([]skills.ProjectMount{{Name: "sales", Root: s.mountRoot}}, "crm")
+		require.NoError(t, err)
+		assert.Empty(t, shelf)
+		result := systools.NewSkillListTool(s.deps).Execute(s.ctx, map[string]any{"scope": "management", "workspace_id": "sales"})
+		body := wu3Success(t, result)
+		rows, ok := body["skills"].([]any)
+		require.True(t, ok)
+		for _, value := range rows {
+			row := wu3Object(t, value)
+			if row["id"] == "crm" {
+				assert.NotEqual(t, "project", row["origin"], "invalid project candidate cannot appear as valid")
+			}
+		}
+		assert.Equal(t, wu3fix5InvalidNoDescription, string(wu3ReadFile(t, s.projectSkill)))
+		assert.Equal(t, s.globalBefore, wu3ReadFile(t, s.globalSkill))
+		assert.Equal(t, s.anchorBefore, wu3ReadFile(t, s.anchorSkill))
 	})
 }

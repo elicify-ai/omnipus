@@ -13,7 +13,7 @@ import (
 )
 
 // Oracle: spec C-REPLY "Return authorization" — a rebound, deleted or
-// unauthorized capture refuses with no replacement; OwnershipChecked alone and
+// unauthorized capture refuses with no replacement; OperationChecked alone and
 // the system-origin exemption are insufficient; the author's own pair grants
 // nothing (BDD-08.9: no guest grant, I2 negative recipient).
 
@@ -30,7 +30,7 @@ func answer(instance string) bus.OutboundMessage {
 	return bus.OutboundMessage{
 		Channel: instance, ChatID: "chat-1", Content: "the answer",
 		AgentID: "jim", WorkspaceID: "ws-1", // the GUEST author
-		OwnershipChecked: true, // must not matter
+		Operation: bus.OperationChecked, // must not matter
 		Return: &bus.ReturnRoute{
 			RequestID: "q1", SourceSessionID: "main-session-ws-1+mia",
 			OwnerWorkspaceID: "ws-1", OwnerAgentID: "mia",

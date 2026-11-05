@@ -26,6 +26,7 @@ import {
   Circle,
   Clock,
   SkipForward,
+  MinusCircle,
 } from '@phosphor-icons/react'
 
 import '@/styles/fullcalendar-theme.css'
@@ -58,6 +59,7 @@ const ICON_MAP: Record<StatusIconKey, IconComponent> = {
   Circle,
   Clock,
   SkipForward,
+  MinusCircle,
 }
 
 /**
@@ -79,6 +81,11 @@ export function occurrenceStatusLabel(status: string): string {
   // silently fall back to `STATUS_LABELS.inbox` ("Inbox") for it, exactly
   // the class of bug this function exists to prevent (see doc comment above).
   if (status === 'skipped') return 'Skipped'
+  // `missed` (founder decision 2026-10-29, Calendar 6b) is a real
+  // `TaskRun.status` value the base `statusLabel` would render as the raw
+  // lowercase string — same class of silent mislabel this function exists
+  // to prevent.
+  if (status === 'missed') return 'Missed'
   return statusLabel(status)
 }
 

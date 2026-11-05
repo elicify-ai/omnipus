@@ -90,7 +90,7 @@ func TestGoalClaimDefaultsToAllow_EveryAgentCreationPath(t *testing.T) {
 	}{
 		{"Main", `{"name":"Default Main","type":"Main","soul":"s"}`},
 		{"Subagent", `{"name":"Default Subagent","type":"Subagent","description":"default policy check","soul":"s"}`},
-		{"subagent_3p", `{"name":"Default External","type":"subagent_3p","description":"default policy check","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"}}`},
+		{"subagent_3p", `{"name":"Default External","type":"subagent_3p","description":"default policy check","executor":{"cli":"codex"}}`},
 	} {
 		t.Run("REST POST /api/v1/agents without tools_cfg: "+tc.kind, func(t *testing.T) {
 			api := buildExecutorTestAPI(t)

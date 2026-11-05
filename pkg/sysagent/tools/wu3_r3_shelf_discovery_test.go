@@ -16,9 +16,9 @@ import (
 // silent-failure-hunter SF-01 (remaining part): the mount record is readable,
 // but discovery inside the mounted project is incomplete — the project folder
 // is unavailable, its recognised skills folder cannot be listed, or the record
-// had entries dropped as invalid. A workspace-specific edit/remove/listing must
-// then refuse with READ_FAILED, never fall back to an identical global copy
-// (same revision) and report working.
+// had entries dropped as invalid. r15 §5.3 management listing must refuse
+// READ_FAILED; §5.4 removed mutation targeting must reject its old arguments.
+// The old automatic mutation fallback has no r15 contract.
 func TestWU3IncompleteProjectDiscoveryRefusesInsteadOfGlobalFallback(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -51,38 +51,34 @@ func TestWU3IncompleteProjectDiscoveryRefusesInsteadOfGlobalFallback(t *testing.
 			require.NoError(t, os.MkdirAll(globalDir, 0o700))
 			globalBody := wu3ReadFile(t, filepath.Join(target, "crm", "SKILL.md"))
 			require.NoError(t, os.WriteFile(filepath.Join(globalDir, "SKILL.md"), globalBody, 0o600))
-			revision, err := skills.NewSkillWriter(filepath.Join(d.Home, "skills")).SkillRevision("crm")
+			_, err := skills.NewSkillWriter(filepath.Join(d.Home, "skills")).SkillRevision("crm")
 			require.NoError(t, err)
 
 			tc.break_(t, d.Home, target)
 
-			edit := systools.NewSkillEditTool(d).Execute(ctx, map[string]any{
-				"name": "crm", "content": validSkill("crm") + "\nEdited.\n", "revision": revision, "workspace_id": "sales",
-			})
-			wu3Error(t, edit, "READ_FAILED")
-			wu3Outcome(t, edit, "failed: nothing saved")
-			remove := systools.NewSkillRemoveTool(d).Execute(ctx, map[string]any{
-				"name": "crm", "revision": revision, "confirm": true, "workspace_id": "sales",
-			})
-			wu3Error(t, remove, "READ_FAILED")
-			list := systools.NewSkillListTool(d).Execute(ctx, map[string]any{"scope": "management", "name": "crm", "workspace_id": "sales"})
+			assertRemovedSkillMutationArgs(t, d, ctx, "crm", "sales")
+			list := systools.NewSkillListTool(d).Execute(ctx, map[string]any{"scope": "management", "workspace_id": "sales"})
 			wu3Error(t, list, "READ_FAILED")
+
 			assert.Equal(t, globalBody, wu3ReadFile(t, filepath.Join(globalDir, "SKILL.md")), "global copy untouched")
 		})
 	}
 }
 
-// Control: a healthy, fully inspected project that has no such skill still
-// falls back to the installation-wide copy, as documented.
-func TestWU3HealthyProjectWithoutTheSkillStillFallsBackToGlobal(t *testing.T) {
-	d, ctx, _, _ := wu3ProjectTarget(t)
-	globalRoot := filepath.Join(d.Home, "skills")
-	_, revision, err := skills.NewSkillWriter(globalRoot).CreateSkillReviewed("solo", validSkill("solo"))
+// A healthy complete project scan can establish absence; the explicit
+// installed reader still works. No obsolete slug-to-project write fallback.
+func TestWU3HealthyProjectWithoutTheSkillAllowsInstalledRead(t *testing.T) {
+	d, ctx, _, target := wu3ProjectTarget(t)
+	root := filepath.Join(d.Home, "skills")
+	_, _, err := skills.NewSkillWriter(root).CreateSkillReviewed("solo", validSkill("solo"))
 	require.NoError(t, err)
-	content := validSkill("solo") + "\nEdited globally.\n"
-	res := systools.NewSkillEditTool(d).Execute(ctx, map[string]any{
-		"name": "solo", "content": content, "revision": revision, "workspace_id": "sales",
-	})
-	wu3Outcome(t, res, "working")
-	assert.Equal(t, content, string(wu3ReadFile(t, filepath.Join(globalRoot, "solo", "SKILL.md"))))
+	shelf, collisions, err := skills.LookupProjectSkillChecked([]skills.ProjectMount{{Name: "sales", Root: filepath.Dir(filepath.Dir(target))}}, "solo")
+	require.NoError(t, err)
+	assert.Empty(t, shelf)
+	assert.Empty(t, collisions)
+	result := systools.NewGetSkillTool(d).Execute(ctx, map[string]any{"id": "solo", "fields": []any{"instructions", "shelf"}})
+	body := wu3Success(t, result)
+	assert.Equal(t, "registry", body["shelf"])
+	assert.Contains(t, body["instructions"], "Does the thing.")
+	assert.Equal(t, validSkill("solo"), string(wu3ReadFile(t, filepath.Join(root, "solo", "SKILL.md"))))
 }

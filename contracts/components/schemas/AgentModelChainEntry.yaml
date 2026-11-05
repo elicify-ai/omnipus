@@ -1,0 +1,45 @@
+title: AgentModelChainEntry
+description: >
+  One entry of an agent's EFFECTIVE model chain as reported by get_agent
+  (AgentDetail.model_chain): the primary first, then each fallback in order.
+  Derived through the real resolver (ResolveModelPairCfg and the agent's
+  fallback selection), never guessed: a value that is not known is null.
+type: object
+additionalProperties: false
+required: [position, model, provider, provider_configured, model_offered, accepts_images]
+properties:
+  position:
+    type: string
+    pattern: '^(primary|fallback_[1-9][0-9]*)$'
+    description: '"primary", or "fallback_<n>" counting from 1 in chain order.'
+    example: "fallback_1"
+  model:
+    type: string
+    description: The model slug this entry routes to (the resolved default when the agent inherits its primary).
+    example: "deepseek/deepseek-v4.1-flash"
+  provider:
+    type: string
+    nullable: true
+    description: The resolved provider key; null when it cannot be resolved.
+    example: "openrouter"
+  provider_configured:
+    type: boolean
+    description: True when the provider is configured on this install.
+    example: true
+  model_offered:
+    type: boolean
+    nullable: true
+    description: True when the provider offers the model; null when not known.
+    example: true
+  accepts_images:
+    type: boolean
+    nullable: true
+    description: The resolved model's image-input capability; null when not known.
+    example: false
+  warning:
+    type: string
+    description: >
+      Present when this entry cannot be used as configured, e.g. "fallback 2
+      has no configured provider — will never be used", "primary model "x" is
+      not offered by provider "y"", or for a legacy model-only fallback "not
+      paired with a provider — reported, never routed". Absent otherwise.

@@ -407,9 +407,9 @@ func isSkillDirectory(name string) bool {
 // / M-6), so the only thing this function can ever remove is one well-formed
 // skill directory sitting directly under <workspace>/skills.
 //
-// Callers get defence at two layers, not one: the remove_skill tool rejects
-// path separators and ".." up front (validateID) and the REST handler rejects
-// them via validateEntityID, but neither of those rejects "." — this guard is
+// Callers get defence at two layers, not one: a caller such as the REST handler
+// rejects path separators and ".." up front (validateEntityID), but that does
+// not reject "." — this guard is
 // what makes the destructive operation itself safe regardless of caller.
 func (si *SkillInstaller) Uninstall(skillName string) error {
 	// An absolute path is never a skill id. Without this, the segment split
@@ -435,8 +435,8 @@ func (si *SkillInstaller) Uninstall(skillName string) error {
 	}
 
 	// Resolve + confine. The error deliberately does NOT contain "not found":
-	// callers (remove_skill's isNotFound, the REST delete handler) map that
-	// substring to a 404/NOT_FOUND, and a refused traversal is a rejection, not
+	// callers that map the substring "not found" to a 404/NOT_FOUND must not
+	// see it here, because a refused traversal is a rejection, not
 	// a missing skill.
 	skillDir, err := NewSkillWriter(filepath.Join(si.workspace, "skills")).resolveSkillDir(finalSkillName)
 	if err != nil {
@@ -452,8 +452,7 @@ func (si *SkillInstaller) Uninstall(skillName string) error {
 		// NOT accepted here: every "which skills are installed" surface
 		// (ListSkills, the <skills> context block, list_skills) already
 		// surfaces id as the primary, addressable identifier and documents
-		// that name is for display only (SkillRemoveTool's own Description()
-		// tells the caller to pass "the skill id as reported by list_skills").
+		// that name is for display only.
 		// A prior version of this function tried to paper over a caller
 		// passing the display name instead by scanning for a frontmatter-name
 		// match — that was a workaround for an ambiguity the ID/Name split

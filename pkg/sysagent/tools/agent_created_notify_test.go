@@ -319,28 +319,11 @@ func TestAgentCreate_NilNotifyAgentCreatedIsSafe(t *testing.T) {
 	}
 }
 
-// TestAgentCreate_HeartbeatWriteFailure_DoesNotNotifyAgentCreated proves
-// NotifyAgentCreated does not fire when persistAndJoin's HEARTBEAT.md write
-// step fails AFTER agentstore.CreateState + InitAgentHome have both
-// durably persisted the entity and its home — the THIRD of persistAndJoin's
-// three post-CreateState failure branches.
-//
-// The pre-existing TestCreateAgent_HeartbeatWriteFailureReportsPartial
-// (pkg/sysagent/tools/agent_create_integrity_test.go) checks the response
-// envelope's persistence_status / error_stage / revision / entity-still-readable
-// but uses newTestDeps() which doesn't wire an observable NotifyAgentCreated
-// — so a regression that hoisted the notify call above this failure gate
-// would pass that test. This test wires the spy and asserts zero calls,
-// mirroring the InitAgentHome and DefaultSingleton tests above.
-//
-// Setup: pre-create the EXACT path persistAndJoin will try to WriteFile
-// (home/agents/<id>/HEARTBEAT.md) as a DIRECTORY — os.WriteFile on a
-// directory path fails deterministically and portably (no reliance on
-// permission bits). The test-only name-keyed id generator
-// (UseNameKeyedAgentIDsForTest) makes "Hb Notify Fail Agent" yield the id
-// "hb-notify-fail-agent"; production ids are random UUIDs.
-func TestAgentCreate_HeartbeatWriteFailure_DoesNotNotifyAgentCreated(t *testing.T) {
-	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+// r17 AG-06 removes the late heartbeat-write stage. Retain its other
+// invariant: a durable but partially initialized agent must never notify.
+// A memory-directory collision exercises real InitAgentHome after protected
+// creation; the sessions-directory failure has its own companion above.
+func TestAgentCreate_MemoryHomeFailure_DoesNotNotifyAgentCreated(t *testing.T) {
 	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
@@ -352,49 +335,51 @@ func TestAgentCreate_HeartbeatWriteFailure_DoesNotNotifyAgentCreated(t *testing.
 	var notifyCalls atomic.Int32
 	deps.NotifyAgentCreated = func(string) { notifyCalls.Add(1) }
 
-	const agentID = "hb-notify-fail-agent"
-	hbPath := filepath.Join(home, "agents", agentID, "HEARTBEAT.md")
-	if err := os.MkdirAll(hbPath, 0o700); err != nil {
-		t.Fatalf("setup: mkdir %s as a directory so WriteFile will fail: %v", hbPath, err)
+	const agentID = "memory-notify-fail-agent"
+	memory := filepath.Join(home, "agents", agentID, "memory")
+	if err := os.MkdirAll(filepath.Dir(memory), 0o700); err != nil {
+		t.Fatalf("setup agent home: %v", err)
+	}
+	if err := os.WriteFile(memory, []byte("not-a-directory"), 0o600); err != nil {
+		t.Fatalf("setup memory collision at %s: %v", memory, err)
 	}
 
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
-		"name":        "Hb Notify Fail Agent",
-		"description": "proves a HEARTBEAT.md write failure after entity save never notifies",
+		"name":        "Memory Notify Fail Agent",
+		"description": "proves partial home initialization after entity save never notifies",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
 		"color":       "#6E8BA8",
-		"heartbeat":   "ping every morning",
 	})
 	if !result.IsError {
-		t.Fatalf("create_agent with heartbeat must fail when HEARTBEAT.md cannot be written "+
-			"(collision at %s), got success: %s", hbPath, result.ForLLM)
+		t.Fatalf("home initialization must fail at %s, got success: %s", memory, result.ForLLM)
 	}
 	if got := notifyCalls.Load(); got != 0 {
-		t.Fatalf("a persistAndJoin failure at the HEARTBEAT.md gate must not call "+
-			"NotifyAgentCreated (the agent is durable but not yet listable); got %d calls", got)
+		t.Fatalf("a durable but partially initialized agent must not notify; got %d calls", got)
 	}
 
-	// PARTIAL envelope shape — assert the specifics of the
-	// createHeartbeatPartialResult branch, not just a generic IsError, so a
-	// regression that re-routed the failure to a different stop=true path
-	// would still be caught by THIS test.
 	partial := createIntegrityPartialBody(t, result.ForLLM)
 	if partial["persistence_status"] != string(agentstore.PersistencePartial) {
-		t.Errorf("persistence_status=%v, want %s (the HEARTBEAT.md-failure partial envelope)",
-			partial["persistence_status"], agentstore.PersistencePartial)
+		t.Errorf("persistence_status=%v, want %s", partial["persistence_status"], agentstore.PersistencePartial)
 	}
-	if partial["error_stage"] != "heartbeat" {
-		t.Errorf("error_stage=%v, want heartbeat (proves the HEARTBEAT.md branch was actually reached)",
-			partial["error_stage"])
+	if partial["error_stage"] != "init_home" {
+		t.Errorf("error_stage=%v, want init_home (not an earlier validation failure)", partial["error_stage"])
 	}
 	if partial["activation_status"] != string(agentstore.ActivationNotAttempted) {
-		t.Errorf("activation_status=%v, want %s (HEARTBEAT.md failure never attempts live publish)",
-			partial["activation_status"], agentstore.ActivationNotAttempted)
+		t.Errorf("activation_status=%v, want %s", partial["activation_status"], agentstore.ActivationNotAttempted)
 	}
-	if msg, _ := partial["message"].(string); !strings.Contains(msg, "HEARTBEAT.md could not be written") {
-		t.Errorf("message=%q, want it to contain 'HEARTBEAT.md could not be written' "+
-			"(createHeartbeatPartialResult's shape)", msg)
+	if msg, _ := partial["message"].(string); !strings.Contains(msg, "agent home could not be initialized") {
+		t.Errorf("message=%q, want the home-initialization failure", msg)
+	}
+	state, err := agentstore.New(home).ReadState(agentID)
+	if err != nil {
+		t.Fatalf("partial creation must retain its protected entity: %v", err)
+	}
+	if state.Agent == nil || state.Agent.Name != "Memory Notify Fail Agent" {
+		t.Fatalf("the partial envelope must describe a real stored entity: %#v", state.Agent)
+	}
+	if state.Revision == "" || partial["revision"] != state.Revision {
+		t.Errorf("partial revision=%v, want current readable revision %q", partial["revision"], state.Revision)
 	}
 }
 

@@ -10,6 +10,8 @@ import "github.com/elicify-ai/omnipus/pkg/config"
 // The writer holds config-write -> affected channel orders. Merge only unchanged
 // channels' metadata under al.mu so an unrelated direct admission is preserved.
 func (al *AgentLoop) SwapWrittenConfig(candidate *config.Config) {
+	// r17 SR-2: the saved roster's env values join the masking set.
+	al.bindAgentEnvSensitive(candidate)
 	al.mu.Lock()
 	candidate.MergeUnchangedChannelOrders(al.cfg)
 	al.cfg = candidate

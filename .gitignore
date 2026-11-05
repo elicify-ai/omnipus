@@ -125,3 +125,7 @@ docs/internal/uat/screenshots/
 
 # TanStack Router CLI tool cache (route codegen scratch state; regenerated).
 .tanstack/
+
+# Python bytecode (scripts/gateway-test-shards.py was once committed compiled)
+__pycache__/
+*.pyc

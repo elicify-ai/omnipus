@@ -199,6 +199,11 @@ type Config struct {
 	// credentials are also scrubbed from LLM output and audit logs.
 	registeredSensitive   []string
 	storedSensitiveSource func() ([]string, error)
+	// agentEnvSource reads every stored external-worker env value (r17
+	// SR-2); agentEnvValues is its last successful read, the env part of
+	// the masking set. See agent_env_sensitive.go.
+	agentEnvSource func() ([]string, error)
+	agentEnvValues []string
 }
 
 // OmnipusStorageConfig holds storage-related settings per Appendix E §E.5.4.
@@ -300,6 +305,8 @@ func (c *Config) Clone() (*Config, error) {
 	c.sensitiveMu.RLock()
 	registered := append([]string(nil), c.registeredSensitive...)
 	clone.storedSensitiveSource = c.storedSensitiveSource
+	clone.agentEnvSource = c.agentEnvSource
+	clone.agentEnvValues = append([]string(nil), c.agentEnvValues...)
 	c.sensitiveMu.RUnlock()
 	if len(registered) > 0 {
 		clone.RegisterSensitiveValues(registered)
@@ -628,9 +635,14 @@ type AgentConfig struct {
 	// This field previously existed only on the wire and in raw config.json —
 	// it was silently dropped on load and never applied by the runtime
 	// (P0 bug, fixed 2026-07-03).
-	MaxToolIterations int              `json:"max_tool_iterations,omitempty"`
-	Skills            []string         `json:"skills,omitempty"`
-	Subagents         *SubagentsConfig `json:"subagents,omitempty"`
+	MaxToolIterations int      `json:"max_tool_iterations,omitempty"`
+	Skills            []string `json:"skills,omitempty"`
+	// SkillGrants binds each granted skill key to the folder generation it
+	// was granted against (skills spec r15 §5.13a, SD-30). Written by the
+	// server at every agent save; an absent entry is unbound and authorizes
+	// nothing for a stamped folder.
+	SkillGrants map[string]string `json:"skill_grants,omitempty"`
+	Subagents   *SubagentsConfig  `json:"subagents,omitempty"`
 	// FallbackModels is the ordered fallback chain tried when the primary
 	// model returns an error. Each entry carries its own provider so a
 	// fallback can route through a different provider than the primary (e.g.
@@ -1090,6 +1102,10 @@ type ChannelInstanceConfig struct {
 	Identity *ChannelIdentity `json:"identity,omitempty"`
 	// WorkspaceID binds this instance to one workspace (ADR-029). Empty = unbound.
 	WorkspaceID string `json:"workspace_id,omitempty"`
+	// Outbound is the operator's start-messages setting (channels spec
+	// FR-010). Absent = reply_only. Only the dedicated outbound writer may
+	// change it; set_config refuses channels.*.outbound (FR-024).
+	Outbound *ChannelOutboundConfig `json:"outbound,omitempty"`
 
 	// --- Common per-channel fields shared across multiple channel types ---
 	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`
@@ -1208,6 +1224,12 @@ type ChannelInstanceConfig struct {
 	// Both IRC and email use the same password_ref JSON key for their connection
 	// password, which is stored encrypted in the credential store.
 	EmailUsername string `json:"username,omitempty"`
+
+	// allowFromText keeps an allowed-sender field saved as one string while
+	// the instance's type is not yet known (no "type" key), so loading can
+	// split it with the effective type's separators (channel_allow_from.go).
+	// Never serialized; CanonicalChannelInstance clears it.
+	allowFromText *pendingAllowFromText
 }
 
 // CredentialRefs returns every credential-reference field this instance

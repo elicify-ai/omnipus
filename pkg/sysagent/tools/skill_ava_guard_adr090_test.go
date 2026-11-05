@@ -37,28 +37,24 @@ func skillTreeBytes(t *testing.T, root string) map[string]string {
 	return files
 }
 
-func TestADR090_AvaSkillWritesDoNotRequireOwnerSession(t *testing.T) {
-	for _, operation := range []string{"create", "edit", "remove"} {
+// r15 replaces legacy create/edit/remove with copy/delete_file/delete.
+// Delegation and unattended context do not impose an owner-session gate.
+// Missing session is now explicitly distinguished by the §7.3 seen rule.
+func TestR15SkillActions_ContextAndSeenRequirements(t *testing.T) {
+	for _, operation := range []string{"copy", "delete_file", "delete"} {
 		for _, mode := range []string{"attended", "delegated", "unattended", "missing-session"} {
 			t.Run(operation+"/"+mode, func(t *testing.T) {
 				root := t.TempDir()
 				global := filepath.Join(root, "skills")
-				require.NoError(t, os.MkdirAll(global, 0755))
+				require.NoError(t, os.MkdirAll(global, 0o755))
 				deps := newAuthoringDeps(t, global, "")
-				installer, err := skills.NewSkillInstaller(root, "", "")
-				require.NoError(t, err)
-				deps.SkillInstaller = installer
 				const name = "guard-test"
-				revision := ""
-				if operation != "create" {
-					_, err := deps.SkillWriter.CreateSkill(name, validSkill(name))
-					require.NoError(t, err)
-					revision, err = deps.SkillWriter.SkillRevision(name)
-					require.NoError(t, err)
-				}
-				ctx := tools.WithAgentID(context.Background(), "ava")
+				validSkillFixture(t, global, name, "A context safety fixture")
+				helper := filepath.Join(global, name, "helper.txt")
+				require.NoError(t, os.WriteFile(helper, []byte("helper"), 0o600))
+				ctx := tools.WithAgentID(context.Background(), "editor")
 				if mode != "missing-session" {
-					ctx = tools.WithTranscriptSessionID(ctx, "owner-session")
+					ctx = tools.WithTranscriptSessionID(ctx, t.Name())
 				}
 				if mode == "delegated" {
 					ctx = tools.WithDelegationDepth(ctx, 1)
@@ -66,29 +62,45 @@ func TestADR090_AvaSkillWritesDoNotRequireOwnerSession(t *testing.T) {
 				if mode == "unattended" {
 					ctx = tools.WithAutoDenyAsk(ctx, true)
 				}
-				var tool tools.Tool
-				switch operation {
-				case "create":
-					tool = systools.NewSkillCreateTool(deps)
-				case "edit":
-					tool = systools.NewSkillEditTool(deps)
-				case "remove":
-					tool = systools.NewSkillRemoveTool(deps)
+				if operation != "copy" {
+					ctx = observeSkillForMutation(t, deps, ctx, name)
+				}
+				args := map[string]any{"action": operation, "skill": name}
+				if operation == "copy" {
+					args["to"] = "guard-copy"
+					deps.ResolveToolPolicy = func(_, _ string) (string, bool) { return "allow", true }
+				}
+				if operation == "delete_file" {
+					args["path"] = "helper.txt"
 				}
 				before := skillTreeBytes(t, root)
-				result := tool.Execute(ctx, map[string]any{"name": name, "content": validSkill(name) + "\nChanged.\n", "confirm": true, "revision": revision})
+				result := systools.NewSkillEditTool(deps).Execute(ctx, args)
 				after := skillTreeBytes(t, root)
-				require.False(t, result.IsError, result.ForLLM)
-				require.NotEqual(t, before, after, "each allowed execution context must perform the requested write")
-				skillPath := filepath.Join(global, name, "SKILL.md")
-				if operation == "remove" {
-					require.NoFileExists(t, skillPath)
-				} else {
-					content, err := os.ReadFile(skillPath)
-					require.NoError(t, err)
-					require.Contains(t, string(content), "Changed.")
+				if mode == "missing-session" && operation != "copy" {
+					wu3Error(t, result, "SKILL_NOT_READ")
+					require.Equal(t, before, after, "missing seen record must refuse without any disk changes")
+					return
+				}
+				wu3Success(t, result)
+				require.NotEqual(t, before, after, "an allowed supported action must change real bytes")
+				switch operation {
+				case "copy":
+					require.Equal(t, validSkillBody(t, global, name), validSkillBody(t, global, "guard-copy"))
+					require.FileExists(t, helper)
+				case "delete_file":
+					require.NoFileExists(t, helper)
+					require.FileExists(t, filepath.Join(global, name, "SKILL.md"))
+				case "delete":
+					require.NoDirExists(t, filepath.Join(global, name))
 				}
 			})
 		}
 	}
+}
+
+func validSkillBody(t *testing.T, root, slug string) string {
+	t.Helper()
+	body, ok := skills.NewSkillsLoader("", root, "").LoadSkill(slug)
+	require.True(t, ok, "committed source/copy must load")
+	return body
 }

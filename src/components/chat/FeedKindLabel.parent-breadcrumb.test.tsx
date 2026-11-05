@@ -1,9 +1,15 @@
 /**
  * FeedKindLabel — the child-chat breadcrumb back to the parent (founder
- * decision 2026-10-20, "Breadcrumb"): a helper or task run reads
- * "<parent title> › Helper"; the parent part opens the parent chat through
- * the shared session-selection path. When the parent cannot be resolved the
- * plain kind label shows with no link — never a fabricated name.
+ * decision 2026-10-20, "Breadcrumb"), re-shaped by #1449 D13 (2026-10-28):
+ * the grey bar above the feed is gone and the breadcrumb reads
+ * "‹ <parent title> / Helper" in the workspace header line's right-end slot;
+ * the parent part still opens the parent chat through the shared
+ * session-selection path. When the parent cannot be resolved the plain kind
+ * label shows with no link — never a fabricated name.
+ *
+ * The separator changed from "›" to "/" (and a leading caret) with the
+ * founder's minimal-header decision; the LINK TARGET and every honest-state
+ * rule are unchanged.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
@@ -71,7 +77,7 @@ describe('FeedKindLabel — child chat breadcrumb', () => {
     ])
     renderLabel()
     await waitFor(() => {
-      expect(label()?.textContent).toBe('Mia - Main Session › Helper')
+      expect(label()?.textContent).toBe('Mia - Main Session / Helper')
     })
     await userEvent.click(screen.getByRole('button', { name: 'Mia - Main Session' }))
     expect(selectSession).toHaveBeenCalledTimes(1)
@@ -121,7 +127,7 @@ describe('FeedKindLabel — child chat breadcrumb', () => {
     ])
     renderLabel()
     await waitFor(() => {
-      expect(label()?.textContent).toBe('Launch notes › Task run')
+      expect(label()?.textContent).toBe('Launch notes / Task run')
     })
   })
 

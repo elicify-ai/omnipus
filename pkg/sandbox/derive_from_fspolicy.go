@@ -310,7 +310,7 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 		writeDenied = nil
 	}
 	policy.DeniedPaths = denied
-	policy.WriteDeniedPaths = writeDenied
+	policy.WriteDeniedPaths = withSkillsWriteDeny(writeDenied, in.HomePath)
 
 	// The directory NODES on the chain down to each allowed branch, plus the
 	// home itself (amendment §2 D5: the home is a denied node — reachable,
@@ -466,7 +466,7 @@ func deriveFloorPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput, policy Sa
 	// runtime shapes — a published shared generation is rx for a God child
 	// exactly as for an ordinary one (round-1 chief ruling; the workflow test
 	// chmods the program owner-writable so only the kernel can deny).
-	policy.WriteDeniedPaths = writeDenied
+	policy.WriteDeniedPaths = withSkillsWriteDeny(writeDenied, in.HomePath)
 	policy.DeniedNodes = fspolicy.KernelDeniedNodesFor(in.HomePath, floorWork, allowanceBranchRoots...)
 	// The read-only branches must also survive the LINUX grant expansion: a
 	// branch root is granted with ITS access class instead of the blanket
@@ -558,4 +558,22 @@ func pathGrantIsDenied(cleanPath string, deniedPaths, deniedNodes []string) bool
 		}
 	}
 	return false
+}
+
+// withSkillsWriteDeny appends <home>/skills to the subtree write-deny list
+// (skills spec r15 §6.2 item 4) on the ordinary and the God path: a child may
+// read and execute a granted skill folder but never write the registry. On
+// macOS this renders as a subtree write deny; on Linux it keeps the expansion
+// from giving any branch under it a write bit. Idempotent; no home, no entry.
+func withSkillsWriteDeny(writeDenied []string, home string) []string {
+	if home == "" {
+		return writeDenied
+	}
+	root := filepath.Join(filepath.Clean(home), "skills")
+	for _, p := range writeDenied {
+		if p == root {
+			return writeDenied
+		}
+	}
+	return append(writeDenied, root)
 }

@@ -55,6 +55,13 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 		if imageErr != nil {
 			return nil, imageErr
 		}
+		// Issue #1435 R1: ordinary inline image media (fresh tool results
+		// and history replays alike) must fit THIS candidate's budget at
+		// the actual send boundary — admission fitting used the tool
+		// round's selection, which can be looser than the candidate now
+		// being attempted. Request-local copy; canonical history bytes are
+		// untouched (the R1 send matrix pins that).
+		messagesForCall = fitOrdinaryImageMediaToBudget(messagesForCall, budget)
 		if rt.providerCallAttachCache != nil {
 			rt.providerCallAttachCache[attachKey] = messagesForCall
 		}
@@ -97,7 +104,16 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 			// visible to anyone.
 			rt.ts.nextRoundMessageID()
 			rt.ts.stampStreamerMessageID(streamer)
+			// #1534: register this round's streamer as the turn's last one
+			// BEFORE any token flows, so a Stop claimed mid-stream
+			// (claimCancel → CutoffAtStop) cuts the streamer that is
+			// actually receiving the deltas, and the tail flush below runs
+			// after that cut.
+			rt.ts.setLastStreamer(streamer)
 			var lastChunk string
+			// #1534: the visible text this attempt showed before a Stop
+			// claim — the part of a stopped answer the turn must keep.
+			var shownBeforeStop string
 			// Residual native tool-call markup must never reach the
 			// live view. This is not only a rendering concern: the
 			// gateway streamer PERSISTS what it accumulated from these
@@ -142,6 +158,7 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 					// Update so an attempted partial emit fails closed even if the
 					// client disconnects during the write.
 					streamed.Add(int64(len(delta)))
+					rt.ts.recordAttemptShown(&shownBeforeStop, delta)
 					if err := streamer.Update(ctx, delta); err != nil {
 						logger.DebugCF("agent", "Streaming update error (client may have disconnected)", map[string]any{"error": err.Error()})
 					}
@@ -159,6 +176,7 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 					finalVisible = om.Prose
 				}
 				if len(finalVisible) > len(lastChunk) && strings.HasPrefix(finalVisible, lastChunk) {
+					rt.ts.recordAttemptShown(&shownBeforeStop, finalVisible[len(lastChunk):])
 					if err := streamer.Update(ctx, finalVisible[len(lastChunk):]); err != nil {
 						logger.DebugCF("agent", "Streaming tail flush error (client may have disconnected)", map[string]any{"error": err.Error()})
 					}
@@ -168,12 +186,13 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 			// Store the streamer so the turn-level code can finalize once,
 			// after the last LLM call, preventing premature "done" frames
 			// that tell the frontend the response is complete mid-turn.
-			rt.ts.setLastStreamer(streamer)
+			// (Registered as the turn's last streamer before streaming.)
 			rt.ts.setLastProducedModel(model)
 			rt.ts.setLastProducedProvider(providerName)
 			// FR-013: also push to the streamer so Finalize stamps the
 			// per-turn Model field on the streamed assistant entry.
 			rt.ts.markLastStreamerProducedModel(model)
+			rt.ts.setStopShown(shownBeforeStop, streamErr == nil)
 			return resp, streamErr
 		}
 	}

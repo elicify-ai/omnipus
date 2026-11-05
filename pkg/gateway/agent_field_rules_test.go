@@ -143,6 +143,10 @@ func TestSubagent3pCreateVsUpdateForbiddenFieldsDrift(t *testing.T) {
 		forbidden[f] = true
 	}
 
+	assert.True(t, forbidden["soul"], "r17 AG-04: external workers must reject SOUL updates, not exempt them")
+	_, soulExempt := subagent3pCreateOnlyExemptFields["soul"]
+	assert.False(t, soulExempt, "SOUL is forbidden, not create-only")
+
 	set3p := jsonFieldNames(t, reflect.TypeOf(gen.AgentCreateRequestSubagent3p{}))
 	setMain := jsonFieldNames(t, reflect.TypeOf(gen.AgentCreateRequestMain{}))
 

@@ -71,8 +71,16 @@ type TaskExecutor struct {
 	// mainResolver answers which (workspace, agent) pairs own a visible main
 	// (session-core U6, D-U6.1); nil leaves every run ISOLATED.
 	mainResolver MainSessionResolver
-	mu           sync.Mutex
-	running      map[string]*taskSlot
+	// planeWaiters are boot-owed trigger fires held until the session plane
+	// (launcher, lifecycle store, main resolver) is wired
+	// (task_trigger_boot_hold.go). Guarded by mu.
+	planeWaiters []func()
+	// planeExpected is set by ExpectSessionPlane: the gateway will wire the
+	// session plane, so the drain waits for it (task_trigger_boot_hold.go).
+	// Guarded by mu.
+	planeExpected bool
+	mu            sync.Mutex
+	running       map[string]*taskSlot
 	// dispatchSema is the ONLY concurrency gate on task dispatch. It bounds
 	// the total number of concurrently dispatched tasks across all agents and
 	// resolves from the single central authority
@@ -218,10 +226,16 @@ type TaskExecutor struct {
 
 // SetSessionLauncher installs ADR-091's single session launch/dispatch
 // primitive. StartTaskNow is its task-front consumer.
+// It is one of the three session-plane parts a held boot-owed fire waits for
+// (releaseSessionPlaneWaiters).
 func (te *TaskExecutor) SetSessionLauncher(launcher steer.SessionLauncher) {
-	if te != nil {
-		te.launcher = launcher
+	if te == nil {
+		return
 	}
+	te.mu.Lock()
+	te.launcher = launcher
+	te.mu.Unlock()
+	te.releaseSessionPlaneWaiters()
 }
 
 // newTaskExecutor creates a TaskExecutor over the unified task store.
@@ -350,6 +364,7 @@ func (te *TaskExecutor) SetLifecycleStore(ls *session.LifecycleStore) {
 	te.mu.Lock()
 	te.lifecycleStore = ls
 	te.mu.Unlock()
+	te.releaseSessionPlaneWaiters()
 }
 
 // getLifecycleStore returns the installed lifecycle store (nil if unset),
@@ -1814,6 +1829,14 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 	// so every task it dispatches this tick runs headless. Stamped once here,
 	// the sole call site of this method (pkg/heartbeat/task_drain.go).
 	ctx = tools.WithAutoDenyAsk(ctx, true)
+	// Boot window: the gateway starts this drain before it wires the session
+	// plane. A task dispatched now would run in the wrong mode and without its
+	// runtime classification, so it stays queued; the first tick after the
+	// plane is wired dispatches it (ExpectSessionPlane).
+	if te.awaitingSessionPlane() {
+		logger.InfoCF("task_executor", "Heartbeat: session plane not wired yet, queued tasks wait for the next tick", nil)
+		return
+	}
 	queued, err := te.store.List(task.Filter{Status: task.StatusNext})
 	if err != nil {
 		logger.WarnCF("task_executor", "Check queued tasks: list failed",
@@ -1945,6 +1968,18 @@ func (al *AgentLoop) NotifyTaskUpserted(t *task.Task) {
 	if s := al.taskTriggerScheduler(); s != nil && t != nil {
 		s.OnTaskUpserted(t)
 	}
+}
+
+// ReconcileTaskScheduleLocked is reconciliation step 3 of the shared task
+// write (tools.WriteTaskReconciled, r17 TK-30): it brings the live trigger
+// scheduler in line with t's persisted trigger. The caller holds t's
+// coordination lock. A nil scheduler (tests, early boot) is a no-op success.
+func (al *AgentLoop) ReconcileTaskScheduleLocked(t *task.Task) error {
+	s := al.taskTriggerScheduler()
+	if s == nil || t == nil {
+		return nil
+	}
+	return s.ReconcileTaskLocked(t.ID)
 }
 
 // NotifyTaskDeleted removes the task's time-trigger cron job after a delete.

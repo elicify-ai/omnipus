@@ -52,6 +52,11 @@ type Result struct {
 	Installed bool
 	// Path is the absolute, symlink-resolved path to the binary when Installed.
 	Path string
+	// LinkPath is the absolute path as found on $PATH or in a well-known
+	// folder, BEFORE symlink resolution (equal to Path when no link is
+	// involved). Settings pre-fills from it so a versioned target is never
+	// saved (tool-parity spec r17 §3.2).
+	LinkPath string
 	// Source is SourcePath or SourceWellKnown when Installed, "" otherwise.
 	Source Source
 }
@@ -153,7 +158,11 @@ func (d *detector) resolve(raw string, source Source) Result {
 		// filepath.Abs effectively never fails, but never drop a real hit.
 		abs = resolved
 	}
-	return Result{Installed: true, Path: abs, Source: source}
+	link, err := filepath.Abs(raw)
+	if err != nil {
+		link = raw
+	}
+	return Result{Installed: true, Path: abs, LinkPath: link, Source: source}
 }
 
 // isExecutableFile reports whether fi is a regular file the OS would execute.

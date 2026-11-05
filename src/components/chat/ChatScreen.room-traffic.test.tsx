@@ -72,7 +72,9 @@ async function mountChat(messages: WireMessage[], layout: 'plain' | 'virtualized
   } else {
     // Browser edge only, as in the stage-1 harness: the real TanStack
     // virtualizer needs a nonzero viewport. 800 is fixture geometry, not an
-    // expected production measurement. resetRealStores supplies ResizeObserver.
+    // expected production measurement. Supply the observer only for this branch;
+    // the shared room harness deliberately leaves ResizeObserver absent.
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
     // jsdom lacks Element.scrollTo; implement only that browser edge, not the
     // AssistantUI auto-follow hook. This case asserts rendering, not pixels.
     if (!Element.prototype.scrollTo) {
