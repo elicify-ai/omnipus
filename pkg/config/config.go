@@ -199,6 +199,11 @@ type Config struct {
 	// credentials are also scrubbed from LLM output and audit logs.
 	registeredSensitive   []string
 	storedSensitiveSource func() ([]string, error)
+	// agentEnvSource reads every stored external-worker env value (r17
+	// SR-2); agentEnvValues is its last successful read, the env part of
+	// the masking set. See agent_env_sensitive.go.
+	agentEnvSource func() ([]string, error)
+	agentEnvValues []string
 }
 
 // OmnipusStorageConfig holds storage-related settings per Appendix E §E.5.4.
@@ -300,6 +305,8 @@ func (c *Config) Clone() (*Config, error) {
 	c.sensitiveMu.RLock()
 	registered := append([]string(nil), c.registeredSensitive...)
 	clone.storedSensitiveSource = c.storedSensitiveSource
+	clone.agentEnvSource = c.agentEnvSource
+	clone.agentEnvValues = append([]string(nil), c.agentEnvValues...)
 	c.sensitiveMu.RUnlock()
 	if len(registered) > 0 {
 		clone.RegisterSensitiveValues(registered)

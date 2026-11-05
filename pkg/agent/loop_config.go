@@ -147,6 +147,8 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	if err != nil {
 		return err
 	}
+	// r17 SR-2: the reloaded roster's env values join the masking set.
+	al.bindAgentEnvSensitive(cfg)
 	// Atomically swap the config and registry under write lock.
 	al.mu.Lock()
 	oldRegistry := al.registry
@@ -235,6 +237,10 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 // and cfg.RegisterSensitiveValues before SwapConfig — this method only does
 // the atomic pointer swap.
 func (al *AgentLoop) SwapConfig(newCfg *config.Config) {
+	if newCfg != nil {
+		// r17 SR-2: the published roster's env values join the masking set.
+		al.bindAgentEnvSensitive(newCfg)
+	}
 	al.mu.Lock()
 	al.cfg = newCfg
 	// DEFECT 2 fix (concurrency review): bump configGen so a concurrent
@@ -284,6 +290,9 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 	if err := fn(clone); err != nil {
 		return err
 	}
+	// r17 SR-2: a roster change adds or removes stored env values from the
+	// masking set before the clone goes live.
+	al.bindAgentEnvSensitive(clone)
 	// Publish via pointer-swap + configGen bump — the SAME shape SwapConfig
 	// (al.cfg replace alone) and ReloadProviderAndConfig (al.cfg + al.registry)
 	// use — so a concurrent UpsertAgentFast sees this change via its configGen

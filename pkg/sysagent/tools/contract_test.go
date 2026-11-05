@@ -20,7 +20,7 @@ import (
 // plus destructive-op confirmation — not a role-based fence. The role-based
 // admin-ask fence is retired (there is no admin role).
 //
-// BDD: Given all 34 tools returned by AllTools(),
+// BDD: Given all 32 tools returned by AllTools(),
 //
 //	When Category() is called on each,
 //	Then it returns a domain category (NOT CategorySystem) for every tool (FR-059).
@@ -29,11 +29,11 @@ import (
 //
 // Traces to: pkg/sysagent/tools/category.go — Category (FR-059).
 func TestRegistry_AllSysagentToolsCategory(t *testing.T) {
-	// r15 §10: 35 - create_skill - remove_skill + get_skill = 34.
+	// r17 7.12 (-get_agent_tools, -read_agent_metadata) and r15 §10 (-create_skill, -remove_skill, +get_skill): 35 - 4 + 1 = 32.
 	all := AllTools(nil)
 
-	if len(all) != 34 {
-		t.Errorf("expected exactly 34 system tools (omnipus-system-agent FR-024 added set_agent_permissions; the secret/connect work added select_secret_version (FR-086), remove_secret (WU-6) and connect_channel (WU-7)), got %d", len(all))
+	if len(all) != 32 {
+		t.Errorf("expected exactly 32 system tools (r17 7.12 removed get_agent_tools and read_agent_metadata; skills r15 §10 removed create_skill and remove_skill and added get_skill: 35 - 2 - 2 + 1 = 32), got %d", len(all))
 	}
 	for _, retired := range []string{"create_skill", "remove_skill"} {
 		if hasToolNamed(all, retired) {
@@ -46,7 +46,7 @@ func TestRegistry_AllSysagentToolsCategory(t *testing.T) {
 		}
 	}
 	if !hasToolNamed(all, "set_agent_permissions") {
-		t.Errorf("FR-024: set_agent_permissions must be one of the 34 system tools")
+		t.Errorf("FR-024: set_agent_permissions must be one of the 32 system tools")
 	}
 
 	for _, tool := range all {
@@ -142,8 +142,8 @@ func TestRegistry_AllSysagentToolsCategory_CentralRegistry(t *testing.T) {
 	reg := BuildRegistry(nil)
 	allTools := reg.GetAll()
 
-	if len(allTools) != 34 {
-		t.Errorf("central BuiltinRegistry has %d tools; want == 34 (FR-001; the four *_in_workspace tools retired by DEL-23; omnipus-system-agent FR-024 added set_agent_permissions; the secret/connect work added select_secret_version (FR-086), remove_secret (WU-6) and connect_channel (WU-7))", len(allTools))
+	if len(allTools) != 32 {
+		t.Errorf("central BuiltinRegistry has %d tools; want == 32 (r17 7.12 removed get_agent_tools and read_agent_metadata; skills r15 §10 removed create_skill and remove_skill and added get_skill: 35 - 2 - 2 + 1 = 32)", len(allTools))
 	}
 	if !hasToolNamed(allTools, "set_agent_permissions") {
 		t.Errorf("FR-024: the central registry must carry set_agent_permissions")

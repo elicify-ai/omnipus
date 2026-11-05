@@ -796,6 +796,9 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 		currentAgentID := agentID
 
 		agent.Tools.RegisterReplacing(tools.NewTaskListTool(rw.rs.al.taskStore))
+		// r17 §7.9: get_task and get_goal, rebuilt on every registration pass
+		// (boot and reload) like the other task tools.
+		rw.rs.al.registerTaskReadTools(agent)
 
 		taskCreate := tools.NewTaskCreateTool(rw.rs.al.taskStore)
 		// Resolve the real default workspace (is_default ULID) when a
@@ -875,13 +878,23 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			rw.rs.al.NotifyTaskUpserted(entity)
 		})
 		taskCreate.SetInitiatorFn(func(ctx context.Context) *task.Initiator { return rw.rs.al.initiatorFor(ctx, currentAgentID) })
+		// r17 TK-05: create_task's max_attempts ceiling reads the LIVE global.
+		taskCreate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(rw.rs.al) })
 		agent.Tools.RegisterReplacing(taskCreate)
 
 		taskUpdate := tools.NewTaskUpdateTool(rw.rs.al.taskStore)
 		// Same live goal try limit as taskCreate above, for the goal record
 		// update_task creates when a legacy task gets criteria/dod.
 		taskUpdate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(rw.rs.al) })
+		// r17 TK-05: the max_attempts ceiling reads the LIVE global.
+		// r17 TK-11: plan_id attach is checked against the plan store; the
+		// SetPlanStore late-binding pass re-wires it once the store exists.
+		taskUpdate.SetPlanStore(rw.rs.al.GetPlanStore())
+		taskUpdate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(rw.rs.al) })
 		taskUpdate.SetAssigneeReadinessChecker(rw.rs.al.TaskAssigneeCannotFinish)
+		// r17 TK-30: a trigger write reconciles the live scheduler under the
+		// task's coordination lock (reconciliation step 3).
+		taskUpdate.SetScheduleReconciler(rw.rs.al.ReconcileTaskScheduleLocked)
 		taskUpdate.SetOnComplete(func(t *task.Task) {
 			if rw.rs.al.taskExecutor != nil {
 				rw.rs.al.taskExecutor.onTaskComplete(t)
@@ -1754,7 +1767,20 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	planCreate.SetOwnerValidator(func(ownerAgentID string) error {
 		return validatePlanOwnerAgentForTool(al.GetConfig(), ownerAgentID)
 	})
+	planCreate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(al) })
 	agent.Tools.RegisterReplacing(planCreate)
+
+	// update_plan (r17 §7.3): same owner validator and live bounds ceiling.
+	planUpdate := tools.NewPlanUpdateTool(planStore)
+	planUpdate.SetOwnerValidator(func(ownerAgentID string) error {
+		return validatePlanOwnerAgentForTool(al.GetConfig(), ownerAgentID)
+	})
+	planUpdate.SetPlanningConfigFn(func() config.PlanningConfig { return planningConfigOf(al) })
+	agent.Tools.RegisterReplacing(planUpdate)
+
+	// get_plan (r17 PL-12, §7.8): reads a plan the caller owns, created, or
+	// has a task in; the task store serves membership and progress.
+	agent.Tools.RegisterReplacing(tools.NewPlanGetTool(planStore, al.taskStore))
 
 	// execute_plan (FR-003/004/030, US-3): SD-A7 tiered-DoD gate's isAgentID
 	// checker (SetIsAgentIDChecker) mirrors gateway's restAPI.isAgentID.

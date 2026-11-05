@@ -3,9 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -17,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This is catalog INPUT, not a mock of the formatter. The real get_agent_tools
+// This is catalog INPUT, not a mock of the formatter. The real get_agent
 // reader and policy resolver run. Parameters/Execute must never be consulted.
 type defaultToolsMetadata struct {
 	tools.BaseTool
@@ -34,73 +32,101 @@ func (m defaultToolsMetadata) Execute(context.Context, map[string]any) *tools.To
 	panic("compact inventory must not execute a catalog tool")
 }
 
-// The new typed metadata seam is absent at c90310f1f. Reflection keeps the RED
-// pack compiling on that base, so it can assert on the real old JSON output.
-// Once implemented, the SAME tests supply real catalog inputs through the seam.
+// defaultToolsInstallCatalog supplies the read-only tool metadata callback of
+// the real get_agent reader (spec r17 7.12.1: tool_permissions is built from
+// this catalog).
 func defaultToolsInstallCatalog(t *testing.T, deps *systools.Deps, catalog []tools.Tool) {
 	t.Helper()
-	field := reflect.ValueOf(deps).Elem().FieldByName("ToolCatalog")
-	if field.IsValid() {
-		callback := reflect.ValueOf(func() []tools.Tool { return catalog })
-		require.True(t, callback.Type().AssignableTo(field.Type()), "ToolCatalog must accept the agreed read-only metadata callback")
-		field.Set(callback)
-	} else {
-		t.Log("BASELINE: ToolCatalog seam absent; asserting compact contract against the real current reader")
-	}
+	require.NotNil(t, deps)
+	deps.ToolCatalog = func() []tools.Tool { return catalog }
 }
 
+// defaultToolsInventory runs the real get_agent reader for fields
+// ["tool_permissions"] (r17 7.12: it replaced get_agent_tools) and returns its
+// JSON result. args carries the selector: id, name or new_agent_type.
 func defaultToolsInventory(t *testing.T, home string, cfg *config.Config, catalog []tools.Tool, args map[string]any) string {
 	t.Helper()
 	deps := &systools.Deps{Home: home, GetCfg: func() *config.Config { return cfg }}
 	defaultToolsInstallCatalog(t, deps, catalog)
-	result := systools.NewAgentGetToolsTool(deps).Execute(context.Background(), args)
+	call := map[string]any{"fields": []any{"tool_permissions"}}
+	for k, v := range args {
+		call[k] = v
+	}
+	result := systools.NewAgentGetTool(deps).Execute(context.Background(), call)
 	require.NotNil(t, result)
-	require.False(t, result.IsError, "get_agent_tools must return the required inventory: %s", result.ForLLM)
+	require.False(t, result.IsError, "get_agent must return the required inventory: %s", result.ForLLM)
 	characters := utf8.RuneCountInString(result.ForLLM)
 	// Approximate tokens use the explicit characters/4 heuristic, not a model tokenizer.
-	t.Logf("INVENTORY_SIZE bytes=%d characters=%d approx_tokens_char4=%d lines=%d requested=%v", len(result.ForLLM), characters, (characters+3)/4, strings.Count(strings.TrimSuffix(result.ForLLM, "\n"), "\n")+1, args)
+	t.Logf("INVENTORY_SIZE bytes=%d characters=%d approx_tokens_char4=%d requested=%v", len(result.ForLLM), characters, (characters+3)/4, args)
 	return result.ForLLM
 }
 
-func defaultToolsParseCompact(t *testing.T, raw, header string, catalog []tools.Tool) map[string]string {
+// defaultToolsEntry is one tool_permissions entry: {tool, effective, override, description?}.
+type defaultToolsEntry struct {
+	Tool        string  `json:"tool"`
+	Effective   string  `json:"effective"`
+	Override    *string `json:"override"`
+	Description *string `json:"description"`
+}
+
+// defaultToolsDecode parses a get_agent tool_permissions result: the identity
+// keys (an existing agent: id and revision; a preview: preview_of) plus the
+// inventory entries. It also proves the result carries nothing else.
+func defaultToolsDecode(t *testing.T, raw string) (map[string]any, []defaultToolsEntry) {
 	t.Helper()
-	assert.False(t, json.Valid([]byte(raw)), "SPEC.md compact output is plain text, never a JSON metadata object")
-	lines := strings.Split(strings.TrimSuffix(raw, "\n"), "\n")
-	require.Equal(t, header, lines[0], "SPEC.md compact identity header")
-	require.Len(t, lines, len(catalog)+1, "exactly one header and one row per catalog tool; no extra sections")
-	policies := make(map[string]string, len(catalog))
-	names := slices.Grow([]string(nil), len(lines)-1)
-	for _, line := range lines[1:] {
-		parts := strings.SplitN(line, " | ", 3)
-		require.GreaterOrEqual(t, len(parts), 2, "SPEC.md Q21=D tool row must contain name and policy: %q", line)
-		require.NotEmpty(t, parts[0], "tool names cannot disappear")
-		_, duplicate := policies[parts[0]]
-		assert.False(t, duplicate, "each tool appears once: %s", parts[0])
-		assert.Contains(t, []string{"allow", "ask", "deny"}, parts[1], "policy is an exact enum value")
-		if parts[1] == "deny" {
-			// SPEC.md Q21=D: Deny rows contain name and policy only, not even an empty description field.
-			require.Len(t, parts, 2, "denied tool %s must not include a description", parts[0])
-		} else {
-			// SPEC.md Q21=D: Allow/Ask keep a normalized first-sentence description, capped at 40 characters.
-			require.Len(t, parts, 3, "permitted tool %s must include its short description", parts[0])
-			assert.Equal(t, strings.Join(strings.Fields(parts[2]), " "), parts[2], "description whitespace must collapse")
-			assert.LessOrEqual(t, utf8.RuneCountInString(parts[2]), 40, "Q21=D caps Allow/Ask descriptions at 40 characters")
+	require.True(t, json.Valid([]byte(raw)), "r17 7.12.1: get_agent returns one JSON object, never the retired compact text")
+	var object map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(raw), &object))
+	identity := map[string]any{}
+	for _, key := range []string{"id", "revision", "preview_of"} {
+		if value, ok := object[key]; ok {
+			var decoded any
+			require.NoError(t, json.Unmarshal(value, &decoded))
+			identity[key] = decoded
 		}
-		policies[parts[0]] = parts[1]
-		names = append(names, parts[0])
 	}
-	expectedNames := slices.Grow([]string(nil), len(catalog))
-	maxRunes := utf8.RuneCountInString(header) + 1
+	var entries []defaultToolsEntry
+	require.Contains(t, object, "tool_permissions", "the requested property must be present")
+	require.NoError(t, json.Unmarshal(object["tool_permissions"], &entries))
+	for key := range object {
+		assert.Contains(t, []string{"id", "revision", "preview_of", "tool_permissions", "connectors"}, key,
+			"r17 7.12.1: the result carries the identity keys and the requested properties, nothing else")
+	}
+	return identity, entries
+}
+
+// defaultToolsParseInventory checks the inventory contract of r17 7.12.1 and
+// returns tool -> effective policy. identity is the expected identity keys:
+// {"id","revision"} for an existing agent or {"preview_of"} for a preview.
+func defaultToolsParseInventory(t *testing.T, raw string, identity map[string]any, catalog []tools.Tool) map[string]string {
+	t.Helper()
+	gotIdentity, entries := defaultToolsDecode(t, raw)
+	assert.Equal(t, identity, gotIdentity, "r17 7.12.1 identity keys")
+	require.Len(t, entries, len(catalog), "exactly one entry per catalog tool; denied tools are kept")
+	policies := make(map[string]string, len(entries))
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		require.NotEmpty(t, entry.Tool, "tool names cannot disappear")
+		_, duplicate := policies[entry.Tool]
+		assert.False(t, duplicate, "each tool appears once: %s", entry.Tool)
+		assert.Contains(t, []string{"allow", "ask", "deny"}, entry.Effective, "policy is an exact enum value")
+		if entry.Effective == "deny" {
+			// r17 7.12.1: description is omitted on deny.
+			assert.Nil(t, entry.Description, "denied tool %s must not include a description", entry.Tool)
+		} else {
+			// r17 7.12.1: Allow/Ask keep a normalized first-sentence description of at most 40 characters.
+			require.NotNil(t, entry.Description, "permitted tool %s must include its short description", entry.Tool)
+			assert.Equal(t, strings.Join(strings.Fields(*entry.Description), " "), *entry.Description, "description whitespace must collapse")
+			assert.LessOrEqual(t, utf8.RuneCountInString(*entry.Description), 40, "descriptions are capped at 40 characters")
+		}
+		policies[entry.Tool] = entry.Effective
+		names = append(names, entry.Tool)
+	}
+	expectedNames := make([]string, 0, len(catalog))
 	for _, tool := range catalog {
 		expectedNames = append(expectedNames, tool.Name())
-		// SPEC.md Q21=D: one separator for Deny; otherwise two separators and at most 40 description characters.
-		maxRunes += utf8.RuneCountInString(tool.Name()) + len(" | ") + len("allow") + 1
-		if policies[tool.Name()] != "deny" {
-			maxRunes += len(" | ") + 40
-		}
 	}
-	sort.Strings(expectedNames)
-	assert.Equal(t, expectedNames, names, "all catalog tools, including Deny entries, appear in byte-sorted order")
-	assert.LessOrEqual(t, utf8.RuneCountInString(raw), maxRunes, "compact output must stay within its per-row size budget")
+	slices.Sort(expectedNames)
+	assert.Equal(t, expectedNames, names, "all catalog tools, including deny entries, appear sorted by name")
 	return policies
 }

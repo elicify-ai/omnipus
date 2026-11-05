@@ -2489,20 +2489,14 @@ func FixtureAgentCreateRequestSubagent_InvalidType() AgentCreateRequestSubagent 
 }
 
 // FixtureAgentCreateRequestSubagent3p_Populated — every field this variant
-// allows: type/name/description/model/provider/color/rate_limits/soul/
-// executor. executor is REQUIRED.
+// allows: type/name/description/model/provider/color/executor.
+// executor is REQUIRED.
 func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3p {
 	color := AgentColorHashCDBA96
 	model := "claude-sonnet-4-6"
 	provider := "anthropic"
 	description := "External-CLI delegation-only worker"
-	enabled := true
-	maxCost := 5.0
-	maxCalls := 100
-	maxTools := 60
 	cli := ExternalCliToolClaudeCode
-	cliPath := "/usr/local/bin/claude"
-
 	return AgentCreateRequestSubagent3p{
 		Name:        "Claude Code Worker",
 		Type:        AgentCreateRequestSubagent3pTypeSubagent3p,
@@ -2510,27 +2504,12 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 		Model:       &model,
 		Provider:    &provider,
 		Color:       &color,
-		Soul:        "You are a focused worker running on the claude-code CLI.",
-		RateLimits: &struct {
-			MaxCostPerDay         *float64 `json:"max_cost_per_day,omitempty"`
-			MaxLlmCallsPerHour    *int     `json:"max_llm_calls_per_hour,omitempty"`
-			MaxToolCallsPerMinute *int     `json:"max_tool_calls_per_minute,omitempty"`
-			UseGlobalDefaults     *bool    `json:"use_global_defaults,omitempty"`
-		}{
-			UseGlobalDefaults:     &enabled,
-			MaxCostPerDay:         &maxCost,
-			MaxLlmCallsPerHour:    &maxCalls,
-			MaxToolCallsPerMinute: &maxTools,
-		},
 		Executor: struct {
-			Cli          *ExternalCliTool                          `json:"cli,omitempty"`
-			CliArgs      *string                                   `json:"cli_args,omitempty"`
-			CliPath      *string                                   `json:"cli_path,omitempty"`
-			EnvOverrides *map[string]string                        `json:"env_overrides,omitempty"`
-			Kind         *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
+			Cli          ExternalCliTool    `json:"cli"`
+			CliArgs      *string            `json:"cli_args,omitempty"`
+			EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 		}{
-			Cli:     &cli,
-			CliPath: &cliPath,
+			Cli: cli,
 		},
 	}
 }
@@ -2540,20 +2519,15 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 // reject it.
 func FixtureAgentCreateRequestSubagent3p_InvalidType() AgentCreateRequestSubagent3p {
 	cli := ExternalCliToolCodex
-	cliPath := "/usr/local/bin/codex"
 	return AgentCreateRequestSubagent3p{
 		Name: "Bad Type",
 		Type: AgentCreateRequestSubagent3pType("not-a-valid-type"),
-		Soul: "Valid soul content.",
 		Executor: struct {
-			Cli          *ExternalCliTool                          `json:"cli,omitempty"`
-			CliArgs      *string                                   `json:"cli_args,omitempty"`
-			CliPath      *string                                   `json:"cli_path,omitempty"`
-			EnvOverrides *map[string]string                        `json:"env_overrides,omitempty"`
-			Kind         *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
+			Cli          ExternalCliTool    `json:"cli"`
+			CliArgs      *string            `json:"cli_args,omitempty"`
+			EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 		}{
-			Cli:     &cli,
-			CliPath: &cliPath,
+			Cli: cli,
 		},
 	}
 }
@@ -2671,6 +2645,7 @@ func FixtureCliDetect_Populated() CliDetect {
 	return CliDetect{
 		Claude: struct {
 			Installed bool                   `json:"installed"`
+			LinkPath  *string                `json:"link_path,omitempty"`
 			Path      *string                `json:"path,omitempty"`
 			Source    *CliDetectClaudeSource `json:"source,omitempty"`
 		}{
@@ -2680,6 +2655,7 @@ func FixtureCliDetect_Populated() CliDetect {
 		},
 		Codex: struct {
 			Installed bool                  `json:"installed"`
+			LinkPath  *string               `json:"link_path,omitempty"`
 			Path      *string               `json:"path,omitempty"`
 			Source    *CliDetectCodexSource `json:"source,omitempty"`
 		}{
@@ -2687,6 +2663,7 @@ func FixtureCliDetect_Populated() CliDetect {
 		},
 		Opencode: struct {
 			Installed bool                     `json:"installed"`
+			LinkPath  *string                  `json:"link_path,omitempty"`
 			Path      *string                  `json:"path,omitempty"`
 			Source    *CliDetectOpencodeSource `json:"source,omitempty"`
 		}{

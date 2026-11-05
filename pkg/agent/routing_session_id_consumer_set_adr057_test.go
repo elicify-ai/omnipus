@@ -290,6 +290,10 @@ var u19RoutingSessionIDScanFiles = []string{
 	// ErrorPayload stamps predate an earlier derivation and the file was
 	// simply never on the list at the time — see wantTotal below.
 	"external_dispatch.go",
+	// external_run_program.go joined the list with r17 area 4 (T8):
+	// reportProgramRefusal stamps the program refusal ErrorPayload.SessionID
+	// exactly like external_dispatch.go's own two stamps.
+	"external_run_program.go",
 	"loop_run_turn.go",
 	"loop_run_turn_iterations.go",
 	"loop_run_turn_response.go",
@@ -429,7 +433,7 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 		// FR-016's two direct citations both live in the same pre-arm
 		// key-building function.
 		return u19BucketPreArm
-	case "loop.go", "external_dispatch.go", "loop_run_turn.go",
+	case "loop.go", "external_dispatch.go", "external_run_program.go", "loop_run_turn.go",
 		"loop_run_turn_iterations.go", "loop_run_turn_response.go",
 		"loop_run_turn_tools.go":
 		// ADR-091 re-derivation (2026-09-24): loop.go's remaining 5 sites are
@@ -645,8 +649,8 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"steered-child reconstruction path (steer_reconstruct.go) does not build or read a pre-arm "+
 			"key from a live turnState at all)", got)
 	}
-	if got := counts[u19BucketWSStamping]; got != 23 {
-		t.Errorf("WS-payload-stamping reads = %d, want 23 (22 + provider_status.go::emitProviderStatus's ProviderStatusPayload.SessionID stamp, d1e265543, 2026-10-31 amendment; provider_retry_plan.go::providerRetryObserver is the relocated callProviderOnce provider_retry stamp, not an addition. Before that 22: previously 23; fallback_note.go::queueProviderFallbackNote now addresses the producing transcriptSessionID, not routingSessionID). The historical derivation includes loop_empty_tool_envelope.go::handleEmptyToolEnvelope, #1278, 2026-10-12, and turn_exit.go::reportSessionSaveFailure, #1178, 2026-10-14. The eighteen pre-2026-09-24 sites were "+
+	if got := counts[u19BucketWSStamping]; got != 24 {
+		t.Errorf("WS-payload-stamping reads = %d, want 24 (23 + external_run_program.go::reportProgramRefusal ErrorPayload.SessionID stamp, r17 area 4, 2026-11-02 amendment; 22 + provider_status.go::emitProviderStatus's ProviderStatusPayload.SessionID stamp, d1e265543, 2026-10-31 amendment; provider_retry_plan.go::providerRetryObserver is the relocated callProviderOnce provider_retry stamp, not an addition. Before that 22: previously 23; fallback_note.go::queueProviderFallbackNote now addresses the producing transcriptSessionID, not routingSessionID). The historical derivation includes loop_empty_tool_envelope.go::handleEmptyToolEnvelope, #1278, 2026-10-12, and turn_exit.go::reportSessionSaveFailure, #1178, 2026-10-14. The eighteen pre-2026-09-24 sites were "+
 			"loop.go x5, its four loop_run_turn*.go siblings x11, and external_dispatch.go x2 "+
 			"(the classifier's own comment on this bucket has the per-site breakdown). Three verified "+
 			"additions since, each re-read site-by-site in the 2026-10-02 QA repair: the nineteenth is "+
@@ -755,7 +759,10 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	// providerRetryObserver (relocation, count unchanged), and #1478
 	// (d1e265543) added provider_status.go::emitProviderStatus's
 	// ProviderStatusPayload stamp: WS-stamping 22 -> 23, total 32 -> 33.
-	const wantTotal = 33 // 7 role-B + 2 pre-arm + 23 WS-stamping + 0 inheritance + 1 browser gate
+	// 2026-11-02 r17 area 4 (T8) amendment: external_run_program.go::
+	// reportProgramRefusal adds one ErrorPayload.SessionID stamp: WS-stamping
+	// 23 -> 24, total 33 -> 34.
+	const wantTotal = 34 // 7 role-B + 2 pre-arm + 24 WS-stamping + 0 inheritance + 1 browser gate
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the named buckets, or one of the buckets "+

@@ -31,8 +31,12 @@ type agentLoopRunTurnToolsExecute struct {
 	setGoalSucceededThisRound bool
 	toolName                  string
 	toolArgs                  map[string]any
-	ledgerToolName            string
-	toctouPolicy              string
+	// recordArgs is the r17 SR-3 record copy of toolArgs (recordToolCalls):
+	// every transcript record, log, event and approval request of this call
+	// uses it. toolArgs stays the execution copy.
+	recordArgs     map[string]any
+	ledgerToolName string
+	toctouPolicy   string
 	// skillWriteKey is the skill key a file-tool write into a skill folder
 	// targets (skills spec r15 §10.1), set by enforceExecutionPolicy's
 	// composition step; it rides the tool's context as the backstop marker
@@ -331,6 +335,10 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 	// for Anthropic/Azure API compatibility (e.g., "browser_navigate" → "browser.navigate").
 	ex.toolName = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.UnsanitizeToolName(tc.Name)
 	ex.toolArgs = cloneStringAnyMap(tc.Arguments)
+	ex.recordArgs = ex.toolArgs
+	if i < len(ex.rx.rr.recordToolArgs) {
+		ex.recordArgs = cloneStringAnyMap(ex.rx.rr.recordToolArgs[i])
+	}
 
 	// pkg/agent/verifier_budget.go::VerifierBudget (JUDGE-FR-051/
 	// FR-052): once a verifier adjudication's tool-call or byte cap
@@ -485,7 +493,7 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 		// handles that "no placeholder" case by appending directly
 		// (the same shape the headless auto-deny site below relies
 		// on for the identical reason).
-		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, qReason)
+		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, qReason)
 		// ADR-066 D4: denied results enter through the choke point on the
 		// builtin-failure surface (FR-009); it persists the line itself.
 		if err := ex.admitAndCheckpoint(toolResultAdmission{
@@ -529,7 +537,7 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 			},
 		)
 		exhaustedMsg := browserControlGateExhaustedMessage(ex.toolName)
-		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, exhaustedMsg)
+		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, exhaustedMsg)
 		if err := ex.admitAndCheckpoint(toolResultAdmission{
 			Tool: tc.Name, ToolCallID: tc.ID, Content: exhaustedMsg, IsError: false, ParallelN: len(ex.rx.rr.normalizedToolCalls),
 		}); err != nil {
@@ -551,6 +559,9 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 			if toolReq != nil {
 				ex.toolName = toolReq.Tool
 				ex.toolArgs = toolReq.Arguments
+				if refusal := ex.recordArgsAfterHook(); refusal != nil {
+					return ex.admitPlaintextRefusal(tc, refusal)
+				}
 			}
 		case HookActionDenyTool:
 			denyContent := hookDeniedToolContent("Tool execution denied by hook", decision.Reason)
@@ -735,6 +746,9 @@ func (ex *agentLoopRunTurnToolsExecute) enforceExecutionPolicy(tc providers.Tool
 		}
 	}
 	if ex.toctouPolicy == "deny" {
+		if canonical, retired := tools.RetiredToolCanonical(ex.toolName); retired {
+			return ex.refuseRetiredToolName(tc, canonical)
+		}
 		// Policy flipped to deny between filter-time and exec-time.
 		// ADR-058 site 1: this branch has no approver-supplied
 		// reason at all, so it uses the fixed loop pseudo-reason
@@ -837,7 +851,7 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	// requestAskApproval ran unconditionally, before its own
 	// CheckGrantOrRequestApproval call ever consulted the grant store).
 	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
-	grantLookupArgs := ex.toolArgs
+	grantLookupArgs := ex.recordArgs
 	if ruleAsk {
 		grantLookupArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
 	}
@@ -885,7 +899,7 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 // second time.
 func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall, rules bashRuleVerdict) agentLoopRunTurnToolsExecuteFlow {
 	rt := ex.rx.rr.rq.ri.rf.rt
-	requestArgs := ex.toolArgs
+	requestArgs := ex.recordArgs
 	decisionKind := "classic_ask"
 	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
 	if ruleAsk {
@@ -926,7 +940,7 @@ func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall
 	// the tool_approval_required WS frame is live-only and does not survive a
 	// refresh. Reached only now that the standing-grant check above has
 	// already ruled out a grant settling this call without ever asking.
-	recordAskPendingToolCall(rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs)
+	recordAskPendingToolCall(rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs)
 	// The third return (recordGrant, review finding #5) is consumed only by
 	// pkg/tools' D7/D8 pre-flight escalation call sites, reached through
 	// ShellPermissionGate.RequestShellApproval — this classic ask-policy
@@ -1008,7 +1022,7 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 	// the audit log. settleAskToolCallTranscript appends when it
 	// finds no placeholder, which is exactly this case.
 	settleAskToolCallTranscript(
-		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, denialReason)
 	// ADR-066 D4: denied results enter through the choke point on the
 	// builtin-failure surface (FR-009); it persists the line itself.
 	if err := ex.admitAndCheckpoint(toolResultAdmission{
@@ -1040,7 +1054,7 @@ func (ex *agentLoopRunTurnToolsExecute) denyAskedCall(tc providers.ToolCall, den
 	// minutes with nobody watching" are distinguishable in the
 	// thread and on replay.
 	settleAskToolCallTranscript(
-		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, denialReason)
 	// ADR-058 site 3 — the original defect: denialReason here
 	// is verbatim from CheckGrantOrRequestApproval, so it is
 	// classified for real rather than assumed to be a user
@@ -1103,7 +1117,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 		ex.rx.ctx, steer.BoundarySyncToolText, ts,
 	)
 
-	argsJSON, marshalErr := json.Marshal(ex.toolArgs)
+	argsJSON, marshalErr := json.Marshal(ex.recordArgs)
 	if marshalErr != nil {
 		logger.WarnCF("agent", "failed to marshal tool args for preview", map[string]any{"tool": ex.toolName, "error": marshalErr.Error()})
 		argsJSON = []byte("{}")
@@ -1128,7 +1142,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 			// tool-producing session's own transcript identity.
 			SessionID:         toolExecSID,
 			Tool:              ex.toolName,
-			Arguments:         cloneEventArguments(ex.toolArgs),
+			Arguments:         cloneEventArguments(ex.recordArgs),
 			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
 			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 		},
@@ -1995,7 +2009,7 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		Tool:             ex.toolName,
 		Status:           tcStatus,
 		DurationMS:       ex.toolDuration.Milliseconds(),
-		Parameters:       cloneEventArguments(ex.toolArgs),
+		Parameters:       cloneEventArguments(ex.recordArgs),
 		ParentToolCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
 	}
 	// Persist media descriptors so replay can re-emit the `media`

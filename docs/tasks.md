@@ -95,13 +95,37 @@ A supplied `active_form` must be a string: on `set_todos` and through the API (t
 
 The normalized phrase survives saved-task reloads and is included when the checklist is read back. Each call still replaces the entire checklist, so every item of every `set_todos` call must carry `active_form` again; previously supplied phrases are not carried over automatically.
 
+### Tasks an agent creates or changes
+
+An agent creates a task with `create_task` and changes one it created or is assigned to with `update_task`. Besides the fields on the form, it can set:
+
+- `description` — a longer note about the task.
+- `tags` — at most 16, each at most 64 characters. They are lower-cased, and repeats are dropped.
+- `run_isolated` — `true` runs the task in its own isolated session.
+- `max_attempts` — how many fresh runs the task gets (its retry limit). It must be at least 1 and no higher than the global limit in Settings. Left out, the task uses the global limit, which is three by default. On `update_task`, `clear_max_attempts: true` returns a task to the global limit; the two cannot be sent together.
+
+Only the agent that created a task may change what it asks for — its instruction (`prompt`), criteria, definition of done or retry limit. The assigned agent is refused with a message that says so; the other fields stay open to both.
+
+**Scheduling by an agent.** An agent schedules a task with `trigger`, in the same shape the web app uses:
+
+| `trigger` | What it means |
+|---|---|
+| `{"type": "manual", "config": {}}` | No schedule. The task runs when someone starts it |
+| `{"type": "once", "config": {"at_ms": …}}` | One run at that time (milliseconds since 1970, UTC) |
+| `{"type": "recurring", "config": {"rrule": …, "dtstart_ms": …, "tz": …}}` | A repeating series, managed like any series on the [Calendar](calendar.md) |
+
+- A task created with a schedule begins in **Inbox** and waits there for its occurrence.
+- Adding a future schedule to a task in **Next** moves it to **Inbox** in the same save, so it cannot start early. Blocked, running and finished tasks keep their status.
+- An agent cannot schedule a task in another workspace: creating one with a schedule there, or adding a schedule to one, is refused and nothing is saved. Only the assignee there or a person can schedule it.
+- To stop a schedule, send `{"type": "manual", "config": {}}`. The schedule is removed and the task keeps its current status.
+
 ## Task statuses
 
 The Board has one column per status; the List has a Status column.
 
 | Status | What it means | How it changes |
 |---|---|---|
-| Inbox | Captured, not triaged | Tasks created through the web form begin in Inbox. Agent-created tasks in the agent's current workspace begin in Next. Tasks delivered by an agent to another workspace begin in Inbox, awaiting local pickup. |
+| Inbox | Captured, not triaged | Tasks created through the web form begin in Inbox. Agent-created tasks in the agent's current workspace begin in Next — unless the create carries a schedule (a `trigger` other than manual), which begins in Inbox and waits there for its first occurrence. Tasks delivered by an agent to another workspace begin in Inbox, awaiting local pickup. |
 | Next | Triaged and ready | You move it, or an agent does |
 | In Progress | A run is working on it | You start it, or a plan reaches it |
 | Blocked | A dependency is unmet | Set and cleared automatically |

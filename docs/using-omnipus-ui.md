@@ -238,6 +238,12 @@ Secret cards are available independently of the agent profile's **Private secret
 
 The approval pop-up shows the request's origin when the server supplies it: **for group Sales**, **while answering Anna on Telegram**, or **asked by Jim**, for example. The label remains available after reconnecting, including on a request whose other details are unavailable. A web-origin request without such a label gets no guessed origin. Pending requests still appear one at a time over the app, including on Settings; showing the label does not approve the action.
 
+### Approving an agent change
+
+When an agent asks to create or change another agent (`create_agent` or `update_agent`), the approval card adds a short summary above the **Arguments** block. **Environment variables** lists each variable by name only, with a mask and the words **value hidden**; the value is never shown on the card. **Extra command-line flags** lists the flags one per line, with a flag's values on its line (for example `--model x` and `--verbose` appear as two lines). Anything the summary does not explain, such as an unknown argument, the agent's name or its instructions, stays in the raw **Arguments** block, so nothing in the request is hidden from you. The summary is the same after you reload the page.
+
+**Limit of the masking:** only environment values are masked. Values of command-line flags are shown exactly as given, on the card and in the **Arguments** block, so do not put secrets in flags; put them in the agent's environment variables instead.
+
 ### Who is replying
 
 Replies in the web app's chat show the agent's name above the text with a small portrait of that agent beside it — the same mark the sidebar and the @-mention menu use — including streaming replies, saved history, and another agent's replies in the same chat. The name and portrait are the whole label: no status word is printed next to them. When the reply records its author, the name follows that author rather than the current agent selection. Replies without a recorded author fall back to the chat's current agent. If an agent's details cannot be found, its stored ID can appear instead of a name, and the portrait falls back to the general Omnipus mark.
@@ -441,6 +447,8 @@ Library and Mail ask before an app-initiated close, panel switch, expansion, or 
 ## Where settings and account live
 
 App-wide settings live behind **Settings** in the account menu, on tabs from providers and models to security, data, and chat behavior; [settings](settings.md) walks each one. Opening Settings stays on Settings, including while the app is still opening your workspace after sign-in. Your **Profile** (preferences, password, and what agents should know about you) and **Usage** (token history) are separate entries in the same menu. Settings for one workspace live in that workspace, under its name.
+
+For an external worker (Claude Code, Codex or OpenCode), the agent editor shows a read-only **Program** line: the saved program path for that worker's tool, or **Not set**. When a run would be refused, the reason appears under it, for example "This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex." You cannot change the program in the editor: change it, or the standard parameters, in **Settings → Third-party agents** (see [settings](settings.md#third-party-agents)). A **Change in Settings** link beside the Program line opens Settings. For what an agent-change approval card shows, see [Approving an agent change](#approving-an-agent-change).
 
 ## Limits and things to watch
 

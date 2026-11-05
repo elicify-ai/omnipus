@@ -71,6 +71,13 @@ The chat switch is the one place that can turn Auto-approve **on** when the glob
 
 **Exception: external command-line workers.** A worker that runs on Claude Code, Codex or OpenCode does not use Omnipus's tool approval dialog at all. Omnipus automatically approves the permission requests the external tool reports, so turning Auto-approve off is not a way to make an external worker ask you before each action. Omnipus Allow/Ask/Deny rules govern Omnipus tools only and do not reach inside the external tool. Treat delegating to an external command-line worker as its own trust decision.
 
+**What a person keeps control of for external workers.**
+
+- **The program and its standard parameters are person-only.** They are set in **Settings → Third-party agents** (see [settings](settings.md#third-party-agents)). An agent that sends a `cli_path` is refused, and a worker's kind and command-line tool cannot change after it is created.
+- **Environment values are always masked.** A worker's stored environment values are shown as `••••••` when they are read back, in the web app or through `get_agent`.
+- **Standard parameters are shown in clear and are not filtered.** Your value is passed exactly as typed, so keys and passwords belong in the worker's masked environment, never in the standard parameters.
+- **Agents can look, not change.** An agent can read a worker's saved program and parameters, read-only, and whether a run would start.
+
 ### Auto-approve and the kernel sandbox
 
 **Auto-approve does not need a kernel sandbox to work.** A kernel sandbox is protection enforced by the operating system itself: Landlock on Linux, Seatbelt on macOS, with the Process Sandbox set to **Enforce**. Auto-approve also works on Windows, which has no Omnipus kernel sandbox, and when the sandbox is unavailable or set to Permissive or Off. Without an enforcing kernel sandbox, shell commands face the stricter approval checks below.

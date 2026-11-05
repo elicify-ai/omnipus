@@ -81,6 +81,7 @@ An agent heartbeat is separate from scheduled task work and does not appear on t
 - Monthly on day 29, 30, or 31 lands on the last day of shorter months, so nothing is skipped in February.
 - Times hold their wall-clock position across daylight-saving changes. New rules use your browser's time zone.
 - Tasks created before this editor existed, or through agent tools, can carry an old internal schedule format. They keep firing and appear on the calendar; opening one shows an old-schedule note with its next run and a fresh repeat picker. Saving a new rule replaces the old schedule, and the fire times may shift.
+- A task an agent schedules with `create_task` or `update_task` follows the same Calendar rules. An agent stops its schedule by setting the task's trigger to manual; see [tasks an agent creates or changes](tasks.md#tasks-an-agent-creates-or-changes).
 - No schedule syntax is ever shown or typed anywhere in the product. You always work with the repeat picker and its plain-English summary.
 
 ## Related pages

@@ -50,6 +50,10 @@ func TestToolPolicy_ExecutePlanSeed(t *testing.T) {
 			if id == coreagent.IDMia && tool != "run_task" {
 				want = "allow"
 			}
+			// r17 7.14.2 change 1: Omnipus gains the task tools, run_task included.
+			if id == coreagent.IDOmnipus && tool == "run_task" {
+				want = "allow"
+			}
 			assert.Equalf(t, want, resolveFor(t, cfg, string(id), tool, nil), "%s plan tool %q", id, tool)
 		}
 	}

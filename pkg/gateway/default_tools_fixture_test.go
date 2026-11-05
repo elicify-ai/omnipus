@@ -39,7 +39,7 @@ func defaultToolsSpecRows(t *testing.T, catalog *tools.BuiltinRegistry) []defaul
 	}{
 		{
 			names: "AskUserQuestion send_message message_parent set_todos goal_claim " +
-				"remember recall_memory recall_conversation delegate list_agents get_agent get_agent_tools inspect_session list_jobs " +
+				"remember recall_memory recall_conversation delegate list_agents get_agent inspect_session list_jobs " +
 				"list_tasks update_task Skill ToolSearch find_skills list_skills search_web fetch_url " +
 				"read_file list_directory grep list_mounts library_list library_read write_file edit_file append_file send_file serve_web " +
 				"read_inbox search_email read_message create_email_draft list_email_attachments read_email_attachment download_email_attachment " +
@@ -95,7 +95,7 @@ func defaultToolsSpecRows(t *testing.T, catalog *tools.BuiltinRegistry) []defaul
 // channel and MCP-server families. Read-only workspace/agent/skill tools in
 // earlier Table rows are intentionally NOT classified as management tools.
 func defaultToolsAdminOnlyNames() []string {
-	return strings.Fields("create_agent update_agent delete_agent set_agent_permissions read_agent_metadata " +
+	return strings.Fields("create_agent update_agent delete_agent set_agent_permissions " +
 		"get_config set_config run_doctor get_usage create_workspace update_workspace delete_workspace " +
 		"configure_provider list_providers test_provider list_models " +
 		"enable_channel configure_channel disable_channel list_channels test_channel connect_channel " +
@@ -115,9 +115,8 @@ func defaultToolsCreateREST(t *testing.T, api *restAPI, kind string) *config.Age
 	case "Subagent":
 		payload = gen.AgentCreateRequestSubagent{Type: "Subagent", Name: "Default Native Worker", Description: &description, Soul: "Complete the delegated task."}
 	case "subagent_3p":
-		request := gen.AgentCreateRequestSubagent3p{Type: "subagent_3p", Name: "Default External Worker", Description: &description, Soul: "Complete the delegated task."}
-		cli, executable := gen.ExternalCliToolCodex, defaultToolsExecutable(t)
-		request.Executor.Cli, request.Executor.CliPath = &cli, &executable
+		request := gen.AgentCreateRequestSubagent3p{Type: "subagent_3p", Name: "Default External Worker", Description: &description}
+		request.Executor.Cli = gen.ExternalCliToolCodex
 		payload = request
 	default:
 		t.Fatalf("unknown test kind %q", kind)
@@ -151,9 +150,17 @@ func defaultToolsCreateTool(t *testing.T, api *restAPI, kind string) *config.Age
 		"agent_type": kind, "name": "Default Tool Subject", "description": "Checks default policies.", "model": "scripted-model",
 	}
 	if kind == "subagent_3p" {
-		// create_agent's external variant takes cli/cli_path and no native soul.
-		// The executable is validated but never launched by this test.
-		args["cli"], args["cli_path"] = "codex", defaultToolsExecutable(t)
+		// create_agent's external variant takes cli and no native soul; r17
+		// area 4 removed cli_path, so the program comes from the saved
+		// Settings -> Third-party agents row. The executable is validated but
+		// never launched by this test.
+		args["cli"] = "codex"
+		require.NoError(t, deps.MutateConfig(func(cfg *config.Config) error {
+			cfg.Sandbox.ThirdPartyAgents = &config.ThirdPartyAgentsConfig{CLIs: map[string]config.ThirdPartyCLIConfig{
+				"codex": {Path: defaultToolsExecutable(t)},
+			}}
+			return nil
+		}))
 	} else {
 		args["soul"] = "Complete the user's task."
 	}

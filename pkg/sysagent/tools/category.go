@@ -13,12 +13,10 @@ import "github.com/elicify-ai/omnipus/pkg/tools"
 
 // Agent tools
 
-func (*AgentCreateTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
-func (*AgentGetTool) Category() tools.ToolCategory          { return tools.CategoryAgents }
-func (*AgentGetToolsTool) Category() tools.ToolCategory     { return tools.CategoryAgents }
-func (*AgentUpdateTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
-func (*AgentDeleteTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
-func (*AgentReadMetadataTool) Category() tools.ToolCategory { return tools.CategoryAgents }
+func (*AgentCreateTool) Category() tools.ToolCategory { return tools.CategoryAgents }
+func (*AgentGetTool) Category() tools.ToolCategory    { return tools.CategoryAgents }
+func (*AgentUpdateTool) Category() tools.ToolCategory { return tools.CategoryAgents }
+func (*AgentDeleteTool) Category() tools.ToolCategory { return tools.CategoryAgents }
 
 // Channel tools
 

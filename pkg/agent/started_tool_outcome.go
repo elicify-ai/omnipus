@@ -33,7 +33,7 @@ func (ex *agentLoopRunTurnToolsExecute) beginStartedTool(tc providers.ToolCall, 
 		ts: ts, al: ex.rx.rr.rq.ri.rf.rt.al, startedAt: at,
 		call: session.ToolCall{
 			ID: session.ToolCallID(tc.ID), Tool: ex.toolName,
-			Parameters:       cloneEventArguments(ex.toolArgs),
+			Parameters:       cloneEventArguments(ex.recordArgs),
 			ParentToolCallID: session.ToolCallID(ts.parentSpawnCallID),
 		},
 	}

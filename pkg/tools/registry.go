@@ -510,6 +510,23 @@ var retiredToolCanonicalNames = map[string]string{
 	// deleted with edit_skill action=delete.
 	"create_skill": "write_file",
 	"remove_skill": "edit_skill",
+	// Tool-parity r17 §7.12.3: get_agent is the single agent reader
+	// (fields ["tool_permissions"], ["soul"], ["agent_md"]).
+	"get_agent_tools":     "get_agent",
+	"read_agent_metadata": "get_agent",
+}
+
+// RetiredToolCanonical returns the current replacement of a tool name retired
+// by a rename, and whether name is such a retired name. It never makes the
+// retired name callable (see retiredToolCanonicalNames).
+func RetiredToolCanonical(name string) (canonical string, ok bool) {
+	canonical, ok = retiredToolCanonicalNames[name]
+	return canonical, ok
+}
+
+// RetiredToolMessage is the tool result a call to a retired name gets.
+func RetiredToolMessage(name, canonical string) string {
+	return fmt.Sprintf("tool %q was renamed to %q — call %q instead", name, canonical, canonical)
 }
 
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
@@ -524,16 +541,23 @@ func (r *ToolRegistry) ExecuteWithContext(
 	asyncCallback AsyncCallback,
 ) *ToolResult {
 	tool, ok := r.Get(name)
+	logArgs := args
 	if ok {
 		// Rejected secret-shaped inputs never enter the args log below.
 		if refusal := ToolArgumentRefusal(tool, args); refusal != nil {
 			return refusal
 		}
+		// r17 SR-3: the log carries the record copy; execution keeps args.
+		recorded, err := RecordArguments(tool, args)
+		if err != nil {
+			return RedactionRefusal(tool, err)
+		}
+		logArgs = recorded
 	}
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
 			"tool": name,
-			"args": args,
+			"args": logArgs,
 		})
 
 	// Capture the registry's injected dependencies once, under a single read
@@ -552,7 +576,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 					"tool":      name,
 					"canonical": canonical,
 				})
-			return ErrorResult(fmt.Sprintf("tool %q was renamed to %q — call %q instead", name, canonical, canonical)).
+			return ErrorResult(RetiredToolMessage(name, canonical)).
 				WithError(fmt.Errorf("tool %q was renamed to %q", name, canonical))
 		}
 		logger.ErrorCF("tool", "Tool not found",
@@ -582,6 +606,16 @@ func (r *ToolRegistry) ExecuteWithContext(
 		args = repaired
 		logger.WarnCF("tool", "repaired leaked tool-call template tokens in arguments",
 			map[string]any{"tool": name})
+	}
+
+	// A read tool's `fields` argument is checked by the one shared helper
+	// before generic schema validation, so the agent sees the §7.13 text
+	// (tool-parity spec r17, scenario 20.10) rather than the generic refusal,
+	// and the tool's Execute is not reached on a bad selection.
+	if selecting, ok := tool.(FieldSelecting); ok {
+		if _, refusal := ValidateFieldsArg(args, selecting.FieldSpecFor(args)); refusal != nil {
+			return refusal
+		}
 	}
 
 	// Validate arguments against the tool's declared schema.

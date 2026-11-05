@@ -7,7 +7,7 @@ metadata:
 # Create an agent in this workspace (W1)
 
 ## Prerequisites
-Read before planning: `tool:list_agents` and `tool:get_agent` for a fitting existing agent; `tool:list_skills` and `tool:find_skills` for coverage; `tool:list_mcp_servers` for connectors; `tool:list_providers` for models; `tool:get_workspace` for the target team. The target workspace comes from the request (the Add agent button names it) — confirm it when free text leaves it open, and never change your own session's workspace. For a new agent, preview its defaults before drafting: `tool:get_agent_tools` with `new_agent_type` set to `Main` (main defaults), `Subagent` or `subagent_3p` (worker defaults). Never invent an existing id or create a throwaway agent to inspect defaults.
+Read before planning: `tool:list_agents`, then `tool:get_agent` with the `fields` you need (for example `["description", "skills"]`) for a fitting existing agent; `tool:list_skills` and `tool:find_skills` for coverage; `tool:list_mcp_servers` for connectors; `tool:list_providers` for models; `tool:get_workspace` for the target team. The target workspace comes from the request (the Add agent button names it) — confirm it when free text leaves it open, and never change your own session's workspace. For a new agent, preview its defaults before drafting: `tool:get_agent` with `new_agent_type` set to `Main` (main defaults), `Subagent` or `subagent_3p` (worker defaults) and `fields: ["tool_permissions"]`. Never invent an existing id or create a throwaway agent to inspect defaults.
 
 ## Steps
 1. Ask what the agent should do in this workspace.
