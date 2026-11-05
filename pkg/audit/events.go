@@ -644,6 +644,12 @@ const (
 	// AskDenyReasonScheduled so a task refusal never reads as a cron job with
 	// missing identity.
 	AskDenyReasonTaskRun AskDenyReason = "task_run"
+
+	// AskDenyReasonMissingTurnID — the request carried no turn id, so no
+	// client could ever render its card (D-03); the registry refuses it
+	// before admission. Its request record is written too, so the refusal
+	// is the terminal decision paired with it (channels security S3).
+	AskDenyReasonMissingTurnID AskDenyReason = "missing_turn_id"
 )
 
 // IsValidAskDenyReason reports whether `r` is one of the known enum values
@@ -657,7 +663,8 @@ func IsValidAskDenyReason(r AskDenyReason) bool {
 		AskDenyReasonSaturated,
 		AskDenyReasonBatchShortCircuit,
 		AskDenyReasonScheduled,
-		AskDenyReasonTaskRun:
+		AskDenyReasonTaskRun,
+		AskDenyReasonMissingTurnID:
 		return true
 	}
 	return false

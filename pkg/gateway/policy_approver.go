@@ -119,6 +119,12 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 			// may not have arrived yet; this goroutine is its only reader.
 			// Receive it so the terminal decision is audited exactly once,
 			// here, whichever path resolved the card (channels S3, CHECK F1).
+			//
+			// GUARD: this receive blocks with no timeout. It relies on the
+			// registry invariant that EVERY transition out of pending
+			// delivers EXACTLY ONE outcome on resultCh. A new terminal
+			// transition that skips the send hangs this turn forever; one
+			// that sends twice blocks its sender on the full buffer.
 			outcome = <-entry.resultCh
 		}
 		auditAskDecision(context.WithoutCancel(ctx), a.consentAudit(), entry, outcome, time.Since(approvalStart))
