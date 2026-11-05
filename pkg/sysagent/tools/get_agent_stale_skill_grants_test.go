@@ -66,3 +66,24 @@ func TestGetAgent_StaleSkillGrantsEmptyWhenNoneStale(t *testing.T) {
 	got := wu3Success(t, r)
 	assert.Equal(t, []any{}, got["stale_skill_grants"], "an empty list, not absent")
 }
+
+func TestGetAgent_StaleSkillGrantsFailureLeaksNoPath(t *testing.T) {
+	d, cfg := newTestDeps(t)
+	staleGrantSkill(t, d.Home, "broken", "11111111-1111-1111-1111-111111111111")
+	a := config.AgentConfig{ID: "sg3", Name: "SG3", Type: config.AgentTypeCustom, Skills: []string{"broken"}}
+	_, err := agentstore.New(d.Home).CreateState(a.ID, &a, "soul")
+	require.NoError(t, err)
+	cfg.Agents.List = append(cfg.Agents.List, a)
+	// The generation file becomes unreadable (a directory), so the check fails.
+	identity := filepath.Join(d.Home, "skills", "broken", ".omnipus-identity")
+	require.NoError(t, os.Remove(identity))
+	require.NoError(t, os.Mkdir(identity, 0o755))
+
+	r := systools.NewAgentGetTool(d).Execute(context.Background(),
+		map[string]any{"id": "sg3", "fields": []any{"stale_skill_grants"}})
+	require.True(t, r.IsError, "the failed check is reported, not swallowed: %s", r.ForLLM)
+	assert.Contains(t, r.ForLLM, "SKILL_STATUS_UNAVAILABLE")
+	assert.NotContains(t, r.ForLLM, d.Home, "no absolute path reaches the agent")
+	assert.NotContains(t, r.ForLLM, ".omnipus-identity")
+	assert.NotContains(t, r.ForLLM, "read skill generation")
+}

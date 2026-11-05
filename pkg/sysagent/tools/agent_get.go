@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -193,8 +194,14 @@ func (t *AgentGetTool) detail(ctx context.Context, args map[string]any, selected
 		// Same function and root as the REST agent detail (UAT-1 F-9).
 		stale, err := skills.StaleGrants(filepath.Join(home, "skills"), state.Agent.Skills, state.Agent.SkillGrants)
 		if err != nil {
+			// The cause (it carries filesystem paths) goes to the server log
+			// only, as the REST agent detail does.
+			logger.ErrorCF("sysagent", "get_agent: skill grant check failed", map[string]any{
+				"agent_id": state.Agent.ID, "error": err.Error(),
+			})
 			return nil, tools.ErrorResult(errorJSON("SKILL_STATUS_UNAVAILABLE",
-				"could not check the agent's skill grants: "+err.Error(), agentReadRecovery))
+				"could not check the agent's skill grants: server storage or configuration failed. Details are in the server log.",
+				agentReadRecovery))
 		}
 		full["stale_skill_grants"] = nonNilStrings(stale)
 	}
