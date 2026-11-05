@@ -316,6 +316,7 @@ func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
 	kept, dropped := filterDangerousCLIArgs("opencode", opts.CLIArgs)
 	logDroppedCLIArgs("runner/opencode", "opencode", opts.RunID, dropped)
 	args = append(args, kept...)
+	args = append(args, opts.PresetArgs...) // r17 §3.7: unfiltered, after the agent args
 	// ADR-032 fix N-1: the literal "--" end-of-options separator forces
 	// everything after it to be treated as positional message content,
 	// regardless of what it looks like — see the buildArgs doc comment above.

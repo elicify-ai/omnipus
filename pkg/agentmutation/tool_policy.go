@@ -19,6 +19,21 @@ func validPolicy(p config.ToolPolicy) bool {
 	return p == config.ToolPolicyAllow || p == config.ToolPolicyAsk || p == config.ToolPolicyDeny
 }
 
+// acceptedPolicyName is the one name rule for every caller of
+// ApplyToolPolicyChanges (tool-parity spec r17 §7.5 AG-07, FR-132, dataset
+// D-10, #1295): a built-in tool name or an MCP policy key (prefix "mcp_",
+// patterns included), the same rule as SelectOverrides.
+func acceptedPolicyName(name string, known map[string]struct{}) bool {
+	if _, builtin := known[name]; builtin {
+		return true
+	}
+	return strings.HasPrefix(name, config.MCPToolPolicyKeyPrefix)
+}
+
+// ApplyToolPolicyChanges applies set and remove to a copy of current. .set
+// takes acceptedPolicyName; .remove takes the same plus any key currently
+// stored on the agent, so stale entries can be removed (r17 FR-132, D-10).
+// current is never mutated, including on refusal.
 func ApplyToolPolicyChanges(current map[string]config.ToolPolicy, patch ToolPolicyChanges, known map[string]struct{}) (map[string]config.ToolPolicy, error) {
 	seenRemove := make(map[string]struct{}, len(patch.Remove))
 	for _, name := range patch.Remove {
@@ -26,7 +41,7 @@ func ApplyToolPolicyChanges(current map[string]config.ToolPolicy, patch ToolPoli
 			return nil, &FieldError{Code: InvalidInput, Fields: []string{"tool_policy_changes.remove"}, Reason: "duplicate removal: " + name}
 		}
 		seenRemove[name] = struct{}{}
-		if _, exists := known[name]; !exists {
+		if _, stored := current[name]; !stored && !acceptedPolicyName(name, known) {
 			return nil, &FieldError{Code: InvalidInput, Fields: []string{"tool_policy_changes.remove"}, Reason: "unknown tool: " + name}
 		}
 		if _, overlap := patch.Set[name]; overlap {
@@ -34,7 +49,7 @@ func ApplyToolPolicyChanges(current map[string]config.ToolPolicy, patch ToolPoli
 		}
 	}
 	for name, policy := range patch.Set {
-		if _, exists := known[name]; !exists {
+		if !acceptedPolicyName(name, known) {
 			return nil, &FieldError{Code: InvalidInput, Fields: []string{"tool_policy_changes.set"}, Reason: "unknown tool: " + name}
 		}
 		if !validPolicy(policy) {

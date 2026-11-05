@@ -184,6 +184,10 @@ func GeneralBuiltinMetadata() []Tool {
 	out = append(out, NewTaskCreateTool(nil))
 	out = append(out, NewTaskUpdateTool(nil))
 	out = append(out, NewTaskDeleteTool(nil))
+	// r17 §7.9 read-back tools (TK-31, PL-12, GL-04), with field selection.
+	out = append(out, NewTaskGetTool(nil))
+	out = append(out, NewPlanGetTool(nil, nil))
+	out = append(out, NewGoalGetTool(nil))
 	out = append(out, NewAgentListTool(nil))
 
 	// --- Plan tools (CategoryTasks) — ADR-052 autonomous agent plan
@@ -193,6 +197,7 @@ func GeneralBuiltinMetadata() []Tool {
 	// metadata catalog, at the per-agent tool-dispatch gate. ---
 	out = append(out, NewPlanCreateTool(nil))
 	out = append(out, NewPlanExecuteTool(nil, nil))
+	out = append(out, NewPlanUpdateTool(nil))
 	out = append(out, NewTaskRunTool(nil))
 	// inspect_session: verifier-role-only (ceiling-deny for every ordinary
 	// agent); listed here purely as a capability-reference entry.

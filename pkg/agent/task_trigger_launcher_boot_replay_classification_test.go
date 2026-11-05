@@ -984,13 +984,18 @@ func TestU2bBootReplay_HeldFire_TriggerEditedWhileHeld_Superseded_OldFireNeverRu
 	// once-task on a trigger-only edit, so the trigger change rides the same
 	// normal-path update that re-queues the task — exactly what a person does
 	// when re-scheduling a failed task: set it back to queued with a new once
-	// time.
+	// time. Chief ruling TK-30 (store rule b677708e8): a write that sends
+	// status next together with a changed FUTURE once trigger is stored
+	// `inbox` — the edit re-queues the failed task into the scheduler-owned
+	// waiting state. The substance is unchanged: the old fire never runs and
+	// the edited trigger's job fires once.
 	next := task.StatusNext
 	newAt := p2.clock.Now().Add(time.Minute).UnixMilli()
 	newTrigger := &task.Trigger{Type: task.TriggerOnce, Config: task.TriggerConfig{AtMs: &newAt}}
 	edited, err := p2.loop.taskStore.Update(fire.taskID, task.Patch{Status: &next, Trigger: &newTrigger})
 	require.NoError(t, err)
-	require.Equal(t, task.StatusNext, edited.Status, "instrument: the edit re-queues the failed task")
+	require.Equal(t, task.StatusInbox, edited.Status,
+		"TK-30: next + changed future once trigger is stored inbox — the edit re-queues the failed task into the scheduler-owned waiting state")
 	p2.loop.NotifyTaskUpserted(edited)
 	editedJobs := p2.storedJobs(t, fire.taskID)
 	require.Len(t, editedJobs, 1, "C2b: the edit leaves exactly the edited trigger's job")

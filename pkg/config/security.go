@@ -101,7 +101,7 @@ func (sec *Config) RegisterSensitiveValues(values []string) {
 	sec.registeredSensitive = unique(sec.registeredSensitive)
 	// Invalidate the cache so the next SensitiveDataReplacer() call rebuilds.
 	sec.sensitiveCache = nil
-	logger.SetSensitiveValueReplacer(newSensitiveReplacer(sec.registeredSensitive))
+	logger.SetSensitiveValueReplacer(newSensitiveReplacer(sec.publishedSensitiveValues()))
 }
 
 // EnsureSensitiveValues adds any of values not yet in the registered masking
@@ -133,7 +133,7 @@ func (sec *Config) EnsureSensitiveValues(values []string) {
 		return
 	}
 	sec.sensitiveCache = nil
-	logger.SetSensitiveValueReplacer(newSensitiveReplacer(sec.registeredSensitive))
+	logger.SetSensitiveValueReplacer(newSensitiveReplacer(sec.publishedSensitiveValues()))
 }
 
 // sensitiveReplacementPairs builds the old/new pairs of a credential replacer:
@@ -168,6 +168,8 @@ func (sec *Config) buildAndPopulateSensitiveCache() {
 	values := sec.collectSensitiveValues()
 	// (b) Runtime-registered plaintexts — read under the already-held write lock.
 	values = unique(append(values, sec.registeredSensitive...))
+	// (c) r17 SR-2: every external worker's stored env value in this roster.
+	values = unique(append(values, sec.agentEnvSensitiveValues()...))
 
 	if len(values) == 0 {
 		cache.replacer = strings.NewReplacer()

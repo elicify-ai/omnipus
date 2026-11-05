@@ -321,7 +321,6 @@ function ToolApprovalCard({
     [approvalId, dequeue, markResolved, addToast, submitting, isShellCommand, scope],
   )
 
-  const argsJson = JSON.stringify(args, null, 2)
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
 
@@ -365,9 +364,12 @@ function ToolApprovalCard({
   const resolvedAgentName = actingAgentName || cachedAgentName || fetchedAgentName || agentId
   const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
   const replaceEntry = previewEntry?.mode === 'replace' ? previewEntry : undefined
+  // The card shows only the entry's redacted copy (summary and raw dump alike).
+  const shownArgs = previewEntry?.redactArgs ? previewEntry.redactArgs(args) : args
+  const argsJson = JSON.stringify(shownArgs, null, 2)
   const previewCtx: ToolApprovalPreviewContext = {
     toolName,
-    args,
+    args: shownArgs,
     agentId,
     agentName: resolvedAgentName,
     sessionId,

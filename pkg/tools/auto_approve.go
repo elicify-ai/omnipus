@@ -192,6 +192,7 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"list_agents":     AutoRuns,
 	"create_plan":     AutoRuns,
 	"execute_plan":    AutoRuns,
+	"update_plan":     AutoRuns,
 	"plan_correct":    AutoRuns,
 	"stop_plan":       AutoRuns,
 	"run_task":        AutoRuns,
@@ -199,6 +200,9 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"update_task":     AutoRuns,
 	"delete_task":     AutoAsks,
 	"list_tasks":      AutoRuns,
+	"get_task":        AutoRuns,
+	"get_plan":        AutoRuns,
+	"get_goal":        AutoRuns,
 	"list_jobs":       AutoRuns,
 	"inspect_session": AutoRuns,
 	"set_goal":        AutoRuns,
@@ -267,12 +271,10 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"remove_mcp_server": AutoAsks,
 
 	// System (agents)
-	"get_agent":           AutoRuns,
-	"get_agent_tools":     AutoRuns,
-	"read_agent_metadata": AutoRuns,
-	"create_agent":        AutoAsks,
-	"update_agent":        AutoAsks,
-	"delete_agent":        AutoAsks,
+	"get_agent":    AutoRuns,
+	"create_agent": AutoAsks,
+	"update_agent": AutoAsks,
+	"delete_agent": AutoAsks,
 
 	// System (workspaces)
 	"list_workspaces":  AutoRuns,

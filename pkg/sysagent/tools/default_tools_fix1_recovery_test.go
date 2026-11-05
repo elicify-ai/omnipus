@@ -22,7 +22,7 @@ func TestAgentToolsUnavailableConfigIncludesRecoveryInstruction(t *testing.T) {
 			home := t.TempDir()
 			deps := &systools.Deps{Home: home, GetCfg: row.get}
 			defaultToolsWirePreviewCatalog(t, deps)
-			result := systools.NewAgentGetToolsTool(deps).Execute(context.Background(), map[string]any{"new_agent_type": "Main"})
+			result := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"new_agent_type": "Main", "fields": []any{"tool_permissions"}})
 			body := wu3Error(t, result, "CONFIG_UNAVAILABLE")
 			suggestion, ok := body["suggestion"].(string)
 			require.True(t, ok, "SF-3: recovery instruction must be a string")

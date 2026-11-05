@@ -1534,13 +1534,16 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 	}
 
 	// (3) targeted_retry resets the specific failed member. Idempotent by way
-	// of RestartReset's own contract: it errors on a non-failed task, which on
-	// a re-apply is the correct no-op (the member is already `next`), so this
-	// is logged rather than returned — mirroring the live apply exactly.
+	// of the reset's own contract: it errors on a non-failed task, which on
+	// a re-apply is the correct no-op (the member is already reset), so this
+	// is logged rather than returned — mirroring the live apply exactly. The
+	// replay is automatic (nobody asked at boot), so it shares the live
+	// path's autoResetFailedMember: a future trigger occurrence keeps the
+	// member waiting in `inbox` (r17 TK-30).
 	if rec.Revision.Verb == plan.RevisionTargetedRetry && rec.Revision.RetriedMemberID != "" {
-		if _, err := pe.taskStore.RestartReset(rec.Revision.RetriedMemberID); err != nil {
-			logger.DebugCF("plan_engine", "intent replay: targeted-retry reset (may be an idempotent no-op)",
-				map[string]any{"plan_id": rec.PlanID, "task_id": rec.Revision.RetriedMemberID, "error": err.Error()})
+		if err := pe.autoResetFailedMember(rec.Revision.RetriedMemberID); err != nil {
+			logAutoResetError("intent replay: targeted-retry reset",
+				map[string]any{"plan_id": rec.PlanID, "task_id": rec.Revision.RetriedMemberID}, err)
 		}
 	}
 

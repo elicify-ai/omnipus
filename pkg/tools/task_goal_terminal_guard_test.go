@@ -114,10 +114,12 @@ var knownStatusWriters = []statusWriter{
 			"attempts-exhausted branch delegates the terminal write to completeTaskWithResult, which " +
 			"carries the hook.",
 	},
-	{
-		where: "pkg/agent.PlanEngine.promoteInboxMembers",
-		why:   "writes task.StatusNext only — inbox -> next promotion.",
-	},
+	// pkg/agent.PlanEngine.promoteInboxMembers had a row here while it built a
+	// Patch itself. It now calls task.Store.PromoteInboxIfReleased, which does
+	// the inbox -> next write inside pkg/task (a package this scanner skips by
+	// design, see the pkgDir == "pkg/task" case below), so the function no
+	// longer writes task.Patch.Status and the row was removed per this
+	// guard's own instruction.
 	{
 		where: "pkg/gateway.restAPI.detachMemberOnPlanDelete",
 		why: "writes task.StatusInbox only — detaching a member from a deleted plan. " +

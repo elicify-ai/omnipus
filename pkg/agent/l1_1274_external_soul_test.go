@@ -12,8 +12,7 @@ func TestL11274ExternalSoulRefusesWithModelVisibleUnsupportedFieldReason(t *test
 	for _, cli := range []string{"claude-code", "codex", "opencode"} {
 		t.Run(cli, func(t *testing.T) {
 			f := newL11274Fixture(t, "", false)
-			path := l11274Executable(t, f.home, cli, true)
-			args := l11274CreateArgs("Unsupported soul", cli, path)
+			args := l11274CreateArgs("Unsupported soul", cli)
 			args["soul"] = l11274Soul
 			result := f.execute(t, "create_agent", args)
 			message := l11274FailureDetails(t, result, "INVALID_INPUT")

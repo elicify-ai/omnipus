@@ -627,6 +627,9 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 			}
 			continue
 		}
+		// r17 SR-2: the published roster (this agent's new env values, or
+		// their removal) re-derives the masking set before it goes live.
+		al.bindAgentEnvSensitive(cfg)
 		al.cfg = cfg
 		al.registry = newRegistry
 		al.mu.Unlock()

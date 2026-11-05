@@ -902,22 +902,10 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 		fmt.Println("  ✓ Plan engine restarted")
 	}
 
-	// Restart the task time-trigger scheduler on its dedicated CronService. The
-	// previous instance was already Stop()'d in stopAndCleanupServices(isReload).
-	if tStore := agent.GetTaskStore(rs.al); tStore != nil {
-		triggerStorePath := filepath.Join(rs.homePath, "tasks_triggers", "jobs.json")
-		rs.runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
-			triggerStorePath, tStore, agent.GetTaskExecutor(rs.al),
-		)
-		if startErr := rs.runningServices.TaskTrigger.Start(); startErr != nil {
-			return fmt.Errorf("error restarting task trigger scheduler: %w", startErr), true
-		}
-		rs.al.SetTaskTriggerScheduler(rs.runningServices.TaskTrigger)
-		if recErr := rs.runningServices.TaskTrigger.Reconcile(); recErr != nil {
-			slog.Error("gateway: task trigger reconcile failed on reload", "error", recErr)
-		}
-		fmt.Println("  ✓ Task trigger scheduler restarted")
-	}
+	// The task time-trigger scheduler is NOT restarted: a configuration reload
+	// keeps the one live instance (r17 TK-30, 18.40; stopAndCleanupServices
+	// skips it on reload), so ownership of an armed or queued occurrence never
+	// changes hands within a process.
 
 	// Restart the /loop scheduler on a fresh dedicated CronService (ADR-049
 	// D6/D7). The previous instance was already Stop()'d in

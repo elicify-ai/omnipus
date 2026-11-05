@@ -205,6 +205,9 @@ type CronService struct {
 	store     *CronStore
 	mu        sync.RWMutex
 	running   bool
+	// testHooks are the test-only barrier seams (test_hooks.go); all nil in
+	// production. Guarded by mu.
+	testHooks cronTestHooks
 	// runWindowUsed prevents a physical-boot restore on a service reused after Stop.
 	runWindowUsed bool
 	stopChan      chan struct{}
@@ -675,6 +678,14 @@ func (cs *CronService) RunDueJobs(now time.Time) {
 			cs.store.Jobs[i].State.NextRunAtMS = nil
 		}
 	}
+	// The same critical section that consumes each due occurrence publishes
+	// its dispatch-pending reservation (tool-parity spec r17 §7.2 TK-30, r12),
+	// so no observer can see a collected occurrence owned by neither its next
+	// run nor JobDispatchInFlight. dispatch's goroutine releases it on every
+	// settle path.
+	for _, jobID := range dueJobIDs {
+		cs.markDispatchPendingUnsafe(jobID)
+	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
 		slog.Error("cron failed to save store", "job_ids", dueJobIDs, "error", err)
@@ -741,9 +752,13 @@ func (cs *CronService) dispatch(jobID string, win laneWindow) {
 		laneCtx = context.Background()
 	}
 
-	cs.markDispatchPending(jobID)
+	// The dispatch-pending reservation was published by RunDueJobs in the
+	// collection critical section (its only caller).
 	go func() {
 		defer cs.laneDone(win.runs)
+		if hook := cs.dispatchEntryHook(); hook != nil {
+			hook(jobID)
+		}
 		// Cleared on every exit: run finished, lane cancelled while queued,
 		// or a panic (deferred calls run while panicking, and the recover
 		// below stops the panic here).
@@ -765,6 +780,9 @@ func (cs *CronService) dispatch(jobID string, win laneWindow) {
 		}
 		defer func() { <-sem }()
 
+		if hook := cs.beforeRunHook(); hook != nil {
+			hook(jobID)
+		}
 		cs.executeJobByID(laneCtx, jobID)
 	}()
 }
@@ -1154,6 +1172,11 @@ func (cs *CronService) loadStore() error {
 }
 
 func (cs *CronService) saveStoreUnsafe() error {
+	if hook := cs.testHooks.saveStore; hook != nil {
+		if err := hook(); err != nil {
+			return err
+		}
+	}
 	data, err := json.MarshalIndent(cs.store, "", "  ")
 	if err != nil {
 		return err
@@ -1489,6 +1512,11 @@ func generateID() string {
 func (cs *CronService) markDispatchPending(jobID string) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+	cs.markDispatchPendingUnsafe(jobID)
+}
+
+// markDispatchPendingUnsafe is markDispatchPending with mu already held.
+func (cs *CronService) markDispatchPendingUnsafe(jobID string) {
 	if cs.dispatchPending == nil {
 		cs.dispatchPending = make(map[string]int)
 	}

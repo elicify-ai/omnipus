@@ -406,12 +406,11 @@ func defaultToolPoliciesBrowser() map[string]string {
 func defaultToolPoliciesSysagent() map[string]string {
 	return map[string]string{
 		// --- Sysagent management tools ---
-		"create_workspace":    "allow",
-		"update_workspace":    "allow",
-		"delete_workspace":    "ask", // irreversible delete
-		"list_workspaces":     "allow",
-		"get_workspace":       "allow",
-		"read_agent_metadata": "allow",
+		"create_workspace": "allow",
+		"update_workspace": "allow",
+		"delete_workspace": "ask", // irreversible delete
+		"list_workspaces":  "allow",
+		"get_workspace":    "allow",
 		// omnipus-system-agent FR-020: provider, connector, channel, skill and
 		// agent removals/changes on this list ship "ask" — Omnipus confirms the
 		// whole plan once with Go, and each of these still raises its own
@@ -451,7 +450,6 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"get_config":        "allow",
 		"set_config":        "allow",
 		"get_agent":         "allow",
-		"get_agent_tools":   "allow",
 		"create_agent":      "allow",
 		"update_agent":      "allow",
 		"delete_agent":      "ask", // FR-020
@@ -524,8 +522,15 @@ func defaultToolPoliciesPlanning() map[string]string {
 		// is refused regardless of its stored policy.
 		"create_plan":     "allow",
 		"execute_plan":    "allow",
+		"update_plan":     "allow",
 		"run_task":        "allow",
 		"inspect_session": "allow",
+		// r17 §7.9/§16 D-7: the read-back tools. Every ordinary agent may
+		// read the tasks, plans and goals the visibility rule (§7.8) shows
+		// it; the hidden system roles are denied by their own seeds.
+		"get_task": "allow",
+		"get_plan": "allow",
+		"get_goal": "allow",
 	}
 }
 

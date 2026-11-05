@@ -723,7 +723,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 			copy(grantedSkills, ac.Skills)
 			ag.Skills = &grantedSkills
 		}
-		setAgentExecutorResponse(&ag, ac.Subagents)
+		setAgentExecutorResponse(&ag, ac.Subagents, cfg, a.homePath)
 		if ac.UpdatedAt != nil {
 			ag.UpdatedAt = ac.UpdatedAt
 		}
@@ -797,7 +797,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if len(stale) > 0 {
 				ag.StaleSkillGrants = &stale
 			}
-			setAgentExecutorResponse(&ag, ac.Subagents)
+			setAgentExecutorResponse(&ag, ac.Subagents, cfg, a.homePath)
 			if ac.UpdatedAt != nil {
 				ag.UpdatedAt = ac.UpdatedAt
 			}

@@ -21,13 +21,7 @@ func valueFreeRefusedToolCall(registry *tools.ToolRegistry, call providers.ToolC
 	if refusal == nil {
 		return call, nil
 	}
-	call.Arguments = map[string]any{}
-	if call.Function != nil {
-		function := *call.Function
-		function.Arguments = "{}"
-		call.Function = &function
-	}
-	return call, refusal
+	return withoutArguments(call), refusal
 }
 
 // refusePlaintextToolCall uses the normal synthetic-result admission path before

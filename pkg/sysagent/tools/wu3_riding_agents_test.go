@@ -84,13 +84,19 @@ func TestWU3PhantomMetadataWriterIsNotAdvertised(t *testing.T) {
 			assert.False(t, exists, "phantom grant on %s", ac.ID)
 		}
 	}
-	// SPEC.md compact output: the real catalog is now name/policy rows, never verbose JSON blocks.
+	// r17 7.12.1: the real catalog is read through get_agent tool_permissions.
 	defaultToolsWireCatalog(t, d, append(systools.AllTools(d), tools.GeneralBuiltinMetadata()...))
-	result := systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"new_agent_type": "Main"})
+	result := systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"new_agent_type": "Main", "fields": []any{"tool_permissions"}})
 	require.False(t, result.IsError, result.ForLLM)
-	preview := defaultToolsCompactPolicies(t, result.ForLLM, "preview: Main | kind: main")
+	identity, entries := defaultToolsEntries(t, result.ForLLM)
+	assert.Equal(t, map[string]any{"preview_of": "Main"}, identity)
+	preview := map[string]string{}
+	for _, entry := range entries {
+		preview[entry["tool"].(string)], _ = entry["effective"].(string)
+	}
 	assert.NotContains(t, preview, "write_agent_metadata")
-	assert.Contains(t, preview, "read_agent_metadata", "nonempty catalog instrument")
+	assert.NotContains(t, preview, "read_agent_metadata", "r17 7.12: the retired reader is not in the catalog")
+	assert.Contains(t, preview, "get_agent", "nonempty catalog instrument")
 }
 
 // #1064 + chief ruling Q2 (HANDOFFS, 2026-10-15T02:25Z): update_agent
@@ -108,9 +114,9 @@ func TestWU3UpdateAgentWritesEveryMetadataFile(t *testing.T) {
 	result := systools.NewAgentUpdateTool(d).Execute(context.Background(), args)
 	body := wu3Success(t, result)
 	assert.NotEqual(t, before["revision"], body["revision"], "metadata change advances the revision")
-	for field, file := range map[string]string{"soul": "soul", "agent_md": "agent"} {
-		read := wu3Success(t, systools.NewAgentReadMetadataTool(d).Execute(context.Background(), map[string]any{"agent_id": id, "file": file}))
-		assert.Equal(t, want[field], read["content"], "dedicated public metadata read of %s", field)
+	for field := range want {
+		read := wu3Success(t, systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"id": id, "fields": []any{field}}))
+		assert.Equal(t, want[field], read[field], "get_agent read of %s", field)
 	}
 	wu3Error(t, systools.NewAgentUpdateTool(d).Execute(context.Background(), args), "CONFLICT")
 
@@ -133,20 +139,22 @@ func TestWU3UpdateAgentWritesEveryMetadataFile(t *testing.T) {
 	} else {
 		assert.ErrorIs(t, heartbeatAfterErr, os.ErrNotExist, "heartbeat refusal must not create HEARTBEAT.md")
 	}
-	for field, file := range map[string]string{"soul": "soul", "agent_md": "agent"} {
-		read := wu3Success(t, systools.NewAgentReadMetadataTool(d).Execute(context.Background(), map[string]any{"agent_id": id, "file": file}))
-		assert.Equal(t, want[field], read["content"], "heartbeat refusal must preserve metadata %s", field)
+	for field := range want {
+		read := wu3Success(t, systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"id": id, "fields": []any{field}}))
+		assert.Equal(t, want[field], read[field], "heartbeat refusal must preserve metadata %s", field)
 	}
 }
 
-// #1032 F-3: missing identity is not the same as a missing file of a real agent.
+// #1032 F-3: a missing agent is AGENT_NOT_FOUND, and an existing agent's
+// absent instruction file is not a missing agent. r17 7.12.1 removed the
+// HEARTBEAT.md read; a field the full object lacks is named in absent_fields.
 func TestWU3MetadataReadDistinguishesMissingAgentFromMissingFile(t *testing.T) {
 	d, cfg := wu3Deps(t)
 	id := wu3CreateAgent(t, d, cfg, "Real metadata owner")
-	tool := systools.NewAgentReadMetadataTool(d)
-	known := wu3Error(t, tool.Execute(context.Background(), map[string]any{"agent_id": id, "file": "heartbeat"}), "NOT_FOUND")
-	assert.Contains(t, known["message"], "HEARTBEAT.md")
-	unknown := wu3Error(t, tool.Execute(context.Background(), map[string]any{"agent_id": "missing-agent", "file": "heartbeat"}), "AGENT_NOT_FOUND")
+	tool := systools.NewAgentGetTool(d)
+	known := wu3Success(t, tool.Execute(context.Background(), map[string]any{"id": id, "fields": []any{"agent_md"}}))
+	assert.Equal(t, id, known["id"], "an existing agent answers")
+	unknown := wu3Error(t, tool.Execute(context.Background(), map[string]any{"id": "missing-agent", "fields": []any{"agent_md"}}), "AGENT_NOT_FOUND")
 	assert.Contains(t, unknown["message"], "missing-agent")
 }
 
@@ -156,48 +164,48 @@ func TestWU3AgentReadDoesNotAliasIdentityByFilesystemCase(t *testing.T) {
 	d, cfg := wu3Deps(t)
 	id := wu3CaseAgent(t, d, cfg)
 	upper := strings.ToUpper(id)
-	wu3Error(t, systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"id": upper}), "AGENT_NOT_FOUND")
-	wu3Error(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"id": upper}), "AGENT_NOT_FOUND")
-	wu3Error(t, systools.NewAgentReadMetadataTool(d).Execute(context.Background(), map[string]any{"agent_id": upper, "file": "soul"}), "AGENT_NOT_FOUND")
+	wu3Error(t, systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"id": upper, "fields": []any{"soul"}}), "AGENT_NOT_FOUND")
 }
 
 func TestWU3AgentReadSurfacesRejectUnsafeIDsConsistently(t *testing.T) {
 	for _, id := range []string{"../../etc/passwd", "worker/../other", "worker\\other", "nul\x00agent"} {
 		t.Run(fmt.Sprintf("%q", id), func(t *testing.T) {
 			d, _ := wu3Deps(t)
-			wu3Error(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"id": id}), "INVALID_INPUT")
-			wu3Error(t, systools.NewAgentReadMetadataTool(d).Execute(context.Background(), map[string]any{"agent_id": id, "file": "soul"}), "INVALID_INPUT")
+			wu3Error(t, systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"id": id, "fields": []any{"soul"}}), "INVALID_INPUT")
 		})
 	}
 }
 
 // #1032 F-1/F-4, binding shape ruling Q4: exact display-name resolution, no fuzzy.
-func TestWU3GetAgentToolsResolvesExactNameWithoutCrossAgentResponse(t *testing.T) {
+func TestWU3GetAgentResolvesExactNameWithoutCrossAgentResponse(t *testing.T) {
 	d, cfg := wu3Deps(t)
 	id := wu3CreateAgent(t, d, cfg, "General Purpose fixture")
 	wu3CreateAgent(t, d, cfg, "Different agent")
-	tool := systools.NewAgentGetToolsTool(d)
-	// SPEC.md compact output: exact-name lookup still equals id lookup, now as compact text.
+	tool := systools.NewAgentGetTool(d)
+	// Exact-name lookup still equals id lookup.
 	byID, _ := defaultToolsExistingBody(t, d, id, map[string]any{"id": id})
 	for attempt := 0; attempt < 6; attempt++ {
 		byName, _ := defaultToolsExistingBody(t, d, id, map[string]any{"name": "General Purpose fixture"})
 		assert.Equal(t, byID, byName, "exact name lookup must be identical to id lookup on every call")
 	}
-	wu3Error(t, tool.Execute(context.Background(), map[string]any{"name": "General"}), "AGENT_NOT_FOUND")
-	wu3Error(t, tool.Execute(context.Background(), map[string]any{"id": "General Purpose fixture"}), "AGENT_NOT_FOUND")
+	wu3Error(t, tool.Execute(context.Background(), map[string]any{"name": "General", "fields": []any{"name"}}), "AGENT_NOT_FOUND")
+	wu3Error(t, tool.Execute(context.Background(), map[string]any{"id": "General Purpose fixture", "fields": []any{"name"}}), "AGENT_NOT_FOUND")
 }
 
-func TestWU3GetAgentToolsRejectsAmbiguousNameAndMixedSelectors(t *testing.T) {
+func TestWU3GetAgentRejectsAmbiguousNameAndMixedSelectors(t *testing.T) {
 	d, cfg := wu3Deps(t)
 	first := wu3CreateAgent(t, d, cfg, "First agent")
 	second := wu3CreateAgent(t, d, cfg, "Second agent")
 	read := wu3AgentRead(t, d, second)
 	wu3Success(t, systools.NewAgentUpdateTool(d).Execute(context.Background(), map[string]any{"id": second, "revision": read["revision"], "name": "First agent"}))
-	tool := systools.NewAgentGetToolsTool(d)
-	wu3Error(t, tool.Execute(context.Background(), map[string]any{"name": "First agent"}), "AMBIGUOUS")
+	tool := systools.NewAgentGetTool(d)
+	wu3Error(t, tool.Execute(context.Background(), map[string]any{"name": "First agent", "fields": []any{"name"}}), "AMBIGUOUS")
+	// r17 7.12.1: two selectors are refused; no selector at all reads the caller.
 	for _, args := range []map[string]any{
-		{}, {"id": first, "name": "First agent"}, {"name": "First agent", "new_agent_type": "Main"}, {"id": first, "new_agent_type": "Main"},
+		{"id": first, "name": "First agent"}, {"name": "First agent", "new_agent_type": "Main"}, {"id": first, "new_agent_type": "Main"},
 	} {
+		args["fields"] = []any{"name"}
 		wu3Error(t, tool.Execute(context.Background(), args), "INVALID_INPUT")
 	}
+	wu3Error(t, tool.Execute(context.Background(), map[string]any{"fields": []any{"name"}}), "INVALID_INPUT") // no caller in context
 }

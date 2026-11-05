@@ -31,7 +31,7 @@ func TestL11274SchemaDeclaresNativeSoulAndOptionalExternalPath(t *testing.T) {
 	if !set["name"] || !set["description"] || !set["model"] {
 		t.Fatalf("instrument: cannot see the known universally required fields: %v", required)
 	}
-	for _, conditional := range []string{"soul", "cli", "cli_path"} {
+	for _, conditional := range []string{"soul", "cli"} {
 		if set[conditional] {
 			t.Errorf("%s is not universally required; schema must preserve the runtime-specific rule", conditional)
 		}
@@ -64,15 +64,11 @@ func TestL11274SchemaDeclaresNativeSoulAndOptionalExternalPath(t *testing.T) {
 	if !requirement.MatchString(cliText) || !regexp.MustCompile(`(?i)\b(external|subagent_3p)\b`).MatchString(cliText) {
 		t.Errorf("cli guidance must associate its requirement with the external runtime, got %q", cliText)
 	}
-	pathText := description("cli_path")
-	if !regexp.MustCompile(`(?i)\b(optional|empty|omit|omitted|default)\b`).MatchString(pathText) {
-		t.Errorf("cli_path guidance must name its optional/default-PATH rule, got %q", pathText)
+	if _, present := properties["cli_path"]; present {
+		t.Error("create_agent must not declare cli_path: the program is set by a person in Settings (r17 area 4)")
 	}
 	typeText := description("agent_type")
-	// Keep the optional marker in the cli_path clause, rather than accepting
-	// the unrelated "Main (default)" marker elsewhere in the description.
-	optionalPathClause := regexp.MustCompile(`(?i)(\bcli_path\b[^.!?;\n]*\b(optional|empty|omit|omitted|default)\b)|(\b(optional|empty|omit|omitted)\b[^.!?;\n]*\bcli_path\b)`)
-	if !strings.Contains(typeText, "subagent_3p") || !optionalPathClause.MatchString(typeText) {
-		t.Errorf("agent_type guidance must preserve cli-required / cli_path-optional conditional rule, got %q", typeText)
+	if !strings.Contains(typeText, "subagent_3p") || !strings.Contains(typeText, "Settings") || !strings.Contains(typeText, "requires cli") {
+		t.Errorf("agent_type guidance must keep cli-required and name Settings as the program source, got %q", typeText)
 	}
 }

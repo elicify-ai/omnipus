@@ -45,6 +45,7 @@ func (t *AgentPermissionsTool) Description() string {
 		"Send id, revision (the opaque revision returned by get_agent), and at least one of tool_policy_changes or mcp_servers. A stale revision or any other input field is refused; re-read the agent before retrying a stale write. " +
 		"tool_policy_changes is a sparse patch: set maps tool names to allow|ask|deny, and remove lists per-agent override names to delete. Unknown tools and invalid policy values are rejected; per-agent policies cannot widen the global tool policy. " +
 		"mcp_servers replaces the full connector-assignment list; [] clears all bindings. Each entry is {id, tools?}: omitted tools grants all tools of that assigned server, an empty tools list grants none. Unknown servers or unknown/unavailable tool names are rejected. " +
+		"An agent cannot change its own permissions: an id equal to the calling agent is refused. " +
 		"External CLI workers reject these capability fields; Judge and Plan Supervisor keep fixed capabilities. Omnipus refuses any per-agent ask as a whole — use deny, or set ask on the global tool policy."
 }
 
@@ -62,12 +63,20 @@ func (t *AgentPermissionsTool) Parameters() map[string]any {
 	}
 }
 
-func (t *AgentPermissionsTool) Execute(_ context.Context, args map[string]any) (res *tools.ToolResult) {
+// selfPermissionChangeRefusal is the r17 §7.12.2 text, byte for byte.
+const selfPermissionChangeRefusal = "An agent cannot change its own permissions. Ask a person or another agent that holds set_agent_permissions."
+
+func (t *AgentPermissionsTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
 	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	id, _ := args["id"].(string)
 	revision, _ := args["revision"].(string)
 	if err := validateID(id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
+	}
+	// r17 §7.12.2: an agent never changes its own permissions, whether or not
+	// approval would be given. Refused before any read or write.
+	if caller := tools.ToolAgentID(ctx); caller != "" && caller == id {
+		return tools.ErrorResult(errorJSON("SELF_PERMISSION_CHANGE", selfPermissionChangeRefusal, ""))
 	}
 	if revision == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "revision is required", "Call get_agent and retry with its revision"))

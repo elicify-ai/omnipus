@@ -37,7 +37,9 @@ func TestQ7FollowupS3_RealAuditBindsEachConsentDecisionToItsCall(t *testing.T) {
 			toolName := "set_channel_outbound"
 			args := q7Args("telegram", "agent_may_start", t14Read(t, f, "telegram").Revision, []string{"987654321"})
 			if tc.nonChannels {
-				toolName, args = "get_agent", map[string]any{"id": "mia"}
+				// T8 r17 made get_agent's fields parameter required (merge of
+				// release/v0.1.1): name the one property the read needs.
+				toolName, args = "get_agent", map[string]any{"id": "mia", "fields": []any{"name"}}
 				require.NoError(t, f.al.MutateConfig(func(cfg *config.Config) error {
 					cfg.Sandbox.ToolPolicies[toolName] = "ask"
 					return config.SaveConfig(f.f1277.configPath, cfg)
