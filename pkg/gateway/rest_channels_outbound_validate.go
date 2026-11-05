@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -23,14 +24,15 @@ import (
 // outboundValidation is validateOutboundChange's result: the live instance
 // it checked, its platform, the canonical requested list, the targets that
 // list adds to the stored one and the added Discord targets confirmed by a
-// look-up (in this call, or before the approval card under the same
-// revision).
+// look-up. verifiedBeforeCard is true when that confirmation is the approval
+// card's own (preVerified, same revision) rather than a look-up in this call.
 type outboundValidation struct {
-	inst      config.ChannelInstanceConfig
-	platform  string
-	canonical []string
-	added     []string
-	verified  []string
+	inst               config.ChannelInstanceConfig
+	platform           string
+	canonical          []string
+	added              []string
+	verified           []string
+	verifiedBeforeCard bool
 }
 
 // validateOutboundChange is the writer's step 1 on one live configuration
@@ -94,6 +96,7 @@ func (a *restAPI) validateOutboundChange(
 	}
 	if containsAllTargets(preVerified, added) {
 		v.verified = append([]string{}, added...)
+		v.verifiedBeforeCard = true
 		return v, nil
 	}
 	if a.channelAvailability(id).State != channels.AvailabilityRunning {
@@ -153,7 +156,9 @@ func (a *restAPI) applyOutboundChange(
 
 // applyOutboundChangeVerified is applyOutboundChange with the approval
 // card's pre-verified Discord targets (see validateOutboundChange). It also
-// returns the added Discord targets that were confirmed by a look-up.
+// returns how each added Discord target was confirmed: canonical target ->
+// audit.TargetVerifiedBeforeApproval (the card's preview) or
+// audit.TargetVerifiedAtSave (a look-up by this write, Q2-B A2.4).
 func (a *restAPI) applyOutboundChangeVerified(
 	ctx context.Context,
 	id string,
@@ -161,7 +166,7 @@ func (a *restAPI) applyOutboundChangeVerified(
 	targets []string,
 	expectedRevision, actor string,
 	preVerified []string,
-) (gen.ChannelOutboundWriteResponse, []string, error) {
+) (gen.ChannelOutboundWriteResponse, map[string]string, error) {
 	var none gen.ChannelOutboundWriteResponse
 	v, err := a.validateOutboundChange(ctx, a.agentLoop.GetConfig(), id, policy, targets, expectedRevision, preVerified)
 	if err != nil {
@@ -172,7 +177,15 @@ func (a *restAPI) applyOutboundChangeVerified(
 	}
 	desired := &config.ChannelOutboundConfig{Policy: string(policy), Targets: v.canonical}
 	resp, err := a.commitOutboundChange(ctx, id, desired, expectedRevision, actor)
-	return resp, v.verified, err
+	result := audit.TargetVerifiedAtSave
+	if v.verifiedBeforeCard {
+		result = audit.TargetVerifiedBeforeApproval
+	}
+	verified := make(map[string]string, len(v.verified))
+	for _, target := range v.verified {
+		verified[target] = result
+	}
+	return resp, verified, err
 }
 
 // previewOutboundChange is set_channel_outbound's read-only run of the
@@ -186,7 +199,15 @@ func (a *restAPI) applyOutboundChangeVerified(
 func (a *restAPI) previewOutboundChange(ctx context.Context, change systools.ChannelOutboundChange) (systools.ChannelOutboundPreview, error) {
 	preview, err := a.previewOutboundChangeChecked(ctx, change)
 	if err != nil {
-		a.auditOutboundRefusalBeforeApproval(ctx, change, outboundRefusalReason(err))
+		reason := outboundRefusalReason(err)
+		a.auditOutboundRefusalBeforeApproval(ctx, change, reason)
+		if reason == outboundReasonPreviewFailed {
+			// Q2-B A2.5: the cause (it may name an internal path) goes to the
+			// server log; the agent gets only the fixed safe text.
+			slog.Error("rest: channel outbound preview could not run; refused before the card",
+				"channel", change.ID, "actor", change.Actor, "error", err)
+			return systools.ChannelOutboundPreview{}, systools.ErrChannelOutboundPreviewFailed
+		}
 		return systools.ChannelOutboundPreview{}, outboundToolError(err)
 	}
 	return preview, nil
@@ -278,9 +299,13 @@ func outboundRefusalReason(err error) string {
 	case errors.Is(err, errOutboundNotConfigured):
 		return "not_configured"
 	default:
-		return "preview_failed"
+		return outboundReasonPreviewFailed
 	}
 }
+
+// outboundReasonPreviewFailed is the audit reason of a preview that could not
+// run its checks (Q2-B A2.5).
+const outboundReasonPreviewFailed = "preview_failed"
 
 // outboundToolError translates a writer error to the sysagent tool
 // package's neutral types: *outboundRejectionError →

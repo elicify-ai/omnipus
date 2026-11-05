@@ -848,6 +848,19 @@ func EmitToolPolicyAskRequested(
 	approvalID, toolCallID, toolName, agentID, sessionID, turnID string,
 	args map[string]any,
 ) {
+	EmitToolPolicyAskRequestedWithPreview(ctx, logger, approvalID, toolCallID, toolName, agentID, sessionID, turnID, args, args)
+}
+
+// EmitToolPolicyAskRequestedWithPreview is EmitToolPolicyAskRequested with a
+// separate preview source: args_hash still covers the full `args` the card
+// showed, while args_preview is ArgsPreview(previewArgs) — a tool-specific
+// projection that keeps private values out of the audit log (Q2-B A2.1).
+func EmitToolPolicyAskRequestedWithPreview(
+	ctx context.Context,
+	logger *Logger,
+	approvalID, toolCallID, toolName, agentID, sessionID, turnID string,
+	args, previewArgs map[string]any,
+) {
 	hash, hashErr := ArgsHash(args)
 	if hashErr != nil {
 		// A hashing failure means args_hash below will be empty — log it so
@@ -863,7 +876,7 @@ func EmitToolPolicyAskRequested(
 		"session_id":   sessionID,
 		"turn_id":      turnID,
 		"args_hash":    hash,
-		"args_preview": ArgsPreview(args),
+		"args_preview": ArgsPreview(previewArgs),
 	}
 	Emit(ctx, logger, EventToolPolicyAskRequested, SeverityInfo, fields)
 }

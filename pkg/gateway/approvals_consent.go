@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -107,8 +108,14 @@ func auditAskRequested(ctx context.Context, logger *audit.Logger, e *approvalEnt
 	if logger == nil {
 		return
 	}
-	audit.EmitToolPolicyAskRequested(ctx, logger, e.ApprovalID, e.ToolCallID, e.ToolName,
-		e.AgentID, e.SessionID, e.TurnID, e.Args)
+	preview := e.Args
+	if e.ToolName == systools.ChannelOutboundToolName {
+		// Q2-B A2.1: the card shows the person the private lists; the
+		// audit preview carries only their readable non-target facts.
+		preview = systools.ChannelOutboundAskAuditArgs(e.Args)
+	}
+	audit.EmitToolPolicyAskRequestedWithPreview(ctx, logger, e.ApprovalID, e.ToolCallID, e.ToolName,
+		e.AgentID, e.SessionID, e.TurnID, e.Args, preview)
 }
 
 // auditAskDecision writes the terminal record for outcome. An approval is

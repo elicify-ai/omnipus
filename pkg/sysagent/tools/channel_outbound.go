@@ -129,6 +129,16 @@ func (e *ChannelOutboundRefusalError) Error() string { return e.Reason + ": " + 
 // no configuration entry.
 var ErrChannelOutboundNotConfigured = errors.New("channel is not configured")
 
+// ErrChannelOutboundPreviewFailed is the preview's answer when it could not
+// run its checks (for example the saved settings could not be read; Q2-B
+// A2.5). The cause is logged and audited by the gateway; the agent only gets
+// outboundPreviewFailedText, never an internal path or error.
+var ErrChannelOutboundPreviewFailed = errors.New("the outbound preview could not run")
+
+// outboundPreviewFailedText is the fixed agent-facing text of
+// ErrChannelOutboundPreviewFailed (Q2-B A2.5).
+const outboundPreviewFailedText = "could not save; nothing was changed"
+
 // outboundReasonCodes maps the writer's rejection reasons to the tool's
 // FR-030 error codes (r9, Q7-Q2 A: too_many_targets and
 // platform_cannot_message_people translate to existing codes; no new codes).
@@ -143,6 +153,9 @@ var outboundReasonCodes = map[string]string{
 	"lookup_unavailable":             "LOOKUP_UNAVAILABLE",
 }
 
+// ChannelOutboundToolName is set_channel_outbound's registered name.
+const ChannelOutboundToolName = "set_channel_outbound"
+
 // ChannelOutboundTool is set_channel_outbound.
 type ChannelOutboundTool struct {
 	deps *Deps
@@ -150,7 +163,7 @@ type ChannelOutboundTool struct {
 
 func NewChannelOutboundTool(d *Deps) *ChannelOutboundTool { return &ChannelOutboundTool{deps: d} }
 
-func (t *ChannelOutboundTool) Name() string                 { return "set_channel_outbound" }
+func (t *ChannelOutboundTool) Name() string                 { return ChannelOutboundToolName }
 func (t *ChannelOutboundTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *ChannelOutboundTool) Category() tools.ToolCategory { return tools.CategoryChannels }
 func (t *ChannelOutboundTool) ReportsChangeOutcome()        {}
@@ -259,6 +272,62 @@ func (t *ChannelOutboundTool) PrepareForApproval(ctx context.Context, args map[s
 	}
 	pin := &ChannelOutboundPin{Revision: preview.Revision, VerifiedTargets: nonNilStrings(preview.VerifiedTargets)}
 	return facts, pin, nil
+}
+
+// outboundCardFactKeys are the approval-card facts PrepareForApproval adds
+// next to the model's arguments (Q2-B section 4).
+var outboundCardFactKeys = []string{"connection", "current_outbound", "new_outbound", "added", "removed", "revision"}
+
+// ChannelOutboundAskAuditArgs projects an approval request of this tool for
+// the ask audit preview (Q2-B A2.1, R-S3): the model's own arguments (the
+// preview summarizes their target list to a count) plus only the readable
+// non-target card facts — connection_id, platform, current_policy,
+// new_policy, added_count, removed_count and revision. The card's target
+// lists never reach an audit row. The card itself (requestArgs) is unchanged.
+func ChannelOutboundAskAuditArgs(requestArgs map[string]any) map[string]any {
+	out := make(map[string]any, len(requestArgs)+3)
+	for k, v := range requestArgs {
+		out[k] = v
+	}
+	for _, k := range outboundCardFactKeys {
+		delete(out, k)
+	}
+	if conn, ok := requestArgs["connection"].(map[string]any); ok {
+		if id, ok := conn["id"].(string); ok {
+			out["connection_id"] = id
+		}
+		if platform, ok := conn["platform"].(string); ok {
+			out["platform"] = platform
+		}
+	}
+	for fact, key := range map[string]string{"current_outbound": "current_policy", "new_outbound": "new_policy"} {
+		if outbound, ok := requestArgs[fact].(map[string]any); ok {
+			if policy, ok := outbound["policy"].(string); ok {
+				out[key] = policy
+			}
+		}
+	}
+	for fact, key := range map[string]string{"added": "added_count", "removed": "removed_count"} {
+		if n, ok := listLen(requestArgs[fact]); ok {
+			out[key] = n
+		}
+	}
+	if revision, ok := requestArgs["revision"].(string); ok {
+		out["revision"] = revision
+	}
+	return out
+}
+
+// listLen is the length of a card fact list, whether in-process ([]string)
+// or decoded from JSON ([]any).
+func listLen(v any) (int, bool) {
+	switch list := v.(type) {
+	case []string:
+		return len(list), true
+	case []any:
+		return len(list), true
+	}
+	return 0, false
 }
 
 // admit applies the checks that need no writer: the caller's identity, the
@@ -390,6 +459,8 @@ func outboundErrorResult(id string, err error, afterCard bool) *tools.ToolResult
 			detail["suggestion"] = "Make the call again; the tool reads the current settings itself and shows a new card"
 		}
 		return tools.ErrorResult(outboundJSON(map[string]any{"success": false, "error": detail}))
+	case errors.Is(err, ErrChannelOutboundPreviewFailed):
+		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED", outboundPreviewFailedText, ""))
 	case errors.Is(err, ErrChannelOutboundNotConfigured):
 		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND",
 			fmt.Sprintf("channel %q is not configured; nothing was saved", id), "Read list_channels for valid ids"))

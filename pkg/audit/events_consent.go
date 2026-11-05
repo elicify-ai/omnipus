@@ -68,9 +68,10 @@ func EmitToolPolicyAskDeniedForCall(ctx context.Context, logger *Logger, d AskDe
 // refusal before any approval card; ApprovalID is empty) or "failed" (any
 // other error, with nothing reported as saved). Revision is the channel's
 // resulting FR-088 revision when saved; Reason the refusal code otherwise.
-// TargetVerifications (Q2-B amendment A1, saved only) holds one result per
-// saved target, in saved order: TargetVerifiedBeforeApproval or
-// TargetVerificationNotRequired. No target value is ever recorded here.
+// TargetVerifications (Q2-B amendments A1 and A2.4, saved only) holds one
+// result per saved target, in saved order: TargetVerifiedBeforeApproval,
+// TargetVerifiedAtSave or TargetVerificationNotRequired. No target value is
+// ever recorded here.
 type ChannelOutboundWrite struct {
 	ApprovalID  string
 	ToolCallID  string
@@ -88,9 +89,12 @@ type ChannelOutboundWrite struct {
 	TargetVerifications []string
 }
 
-// Results of ChannelOutboundWrite.TargetVerifications (Q2-B amendment A1).
+// Results of ChannelOutboundWrite.TargetVerifications (Q2-B amendments A1
+// and A2.4): looked up before the approval card, looked up by the writer at
+// save time (a call without a card), or no look-up needed.
 const (
 	TargetVerifiedBeforeApproval  = "verified_before_approval"
+	TargetVerifiedAtSave          = "verified_at_save"
 	TargetVerificationNotRequired = "not_required"
 )
 

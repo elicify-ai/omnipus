@@ -49,7 +49,7 @@ func (a *restAPI) applyOutboundChangeForTool(ctx context.Context, change systool
 // refusal after approval stay distinguishable and correlated. Targets are
 // never recorded — only their count on a save and, per saved target in
 // saved order, whether a look-up confirmed it (Q2-B amendment A1).
-func (a *restAPI) auditOutboundToolOutcome(ctx context.Context, change systools.ChannelOutboundChange, resp gen.ChannelOutboundWriteResponse, verified []string, err error) {
+func (a *restAPI) auditOutboundToolOutcome(ctx context.Context, change systools.ChannelOutboundChange, resp gen.ChannelOutboundWriteResponse, verified map[string]string, err error) {
 	logger := a.agentLoop.AuditLogger()
 	if logger == nil {
 		return
@@ -79,18 +79,15 @@ func (a *restAPI) auditOutboundToolOutcome(ctx context.Context, change systools.
 }
 
 // outboundTargetVerifications is one result per saved target, in saved
-// order: verified_before_approval for a target a look-up confirmed,
-// not_required for one that needed none (already stored, or not on
-// Discord). Always a list, empty for an empty saved list.
-func outboundTargetVerifications(saved, verified []string) []string {
-	confirmed := make(map[string]bool, len(verified))
-	for _, t := range verified {
-		confirmed[t] = true
-	}
+// order (Q2-B A1, A2.4): the look-up result the writer reported for a
+// confirmed target (verified_before_approval or verified_at_save), else
+// not_required (already stored, or not on Discord). Always a list, empty for
+// an empty saved list.
+func outboundTargetVerifications(saved []string, verified map[string]string) []string {
 	out := make([]string, 0, len(saved))
 	for _, t := range saved {
-		if confirmed[t] {
-			out = append(out, audit.TargetVerifiedBeforeApproval)
+		if result, ok := verified[t]; ok {
+			out = append(out, result)
 		} else {
 			out = append(out, audit.TargetVerificationNotRequired)
 		}
