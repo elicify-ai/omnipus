@@ -78,7 +78,7 @@
   },
   {
     "name": "get_agent",
-    "description": "Read one agent: pass `fields` with the properties you need, or [\"all\"]. Select it by exact id or exact name; with neither you read yourself. Covers its model and effective model chain, instructions (soul, agent_md), skills, tool permissions (effective policy per tool, plus its stored overrides), connectors, external-worker executor (env values masked) and state. With new_agent_type (Main, Subagent, subagent_3p) it previews the tool_permissions and connectors a new agent of that type would get, without creating one.",
+    "description": "Read one agent: pass `fields` with the properties you need, or [\"all\"]. Select it by exact id or exact name; with neither you read yourself. Covers its model and effective model chain, instructions (soul, agent_md), skills (granted names; stale_skill_grants lists the granted names whose skill was replaced and must be re-granted), tool permissions (effective policy per tool, plus its stored overrides), connectors, external-worker executor (env values masked) and state. With new_agent_type (Main, Subagent, subagent_3p) it previews the tool_permissions and connectors a new agent of that type would get, without creating one.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"

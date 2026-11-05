@@ -55,13 +55,13 @@ const (
 // preview's own refusal text (§7.13 error table, row 4).
 const AgentPreviewObject = "agent preview"
 
-// AgentFieldNames are the 28 selectable names of AgentDetail (§7.12.1), in
+// AgentFieldNames are the 29 selectable names of AgentDetail (§7.12.1), in
 // schema order: get_agent's Valid list.
 var AgentFieldNames = []string{
 	"name", "description", "type", "locked", "figure", "role", "color", "voice",
 	"model", "provider", "fallback_models", "model_chain", "model_params",
 	"max_tool_iterations", "context_window_override", "memory_enabled",
-	"soul", "agent_md", "skills", "tool_permissions", "stored_overrides",
+	"soul", "agent_md", "skills", "stale_skill_grants", "tool_permissions", "stored_overrides",
 	"connectors", "executor", "runnable", "program_warning",
 	"activation_status", "editable_fields", "has_main_chat",
 }
