@@ -12,8 +12,13 @@ import (
 // OmnipusPerAgentAskRefusal is the exact refusal text for a per-agent "ask"
 // policy on Omnipus (spec FR-022, §6.2: 422 on REST, an error result on the
 // agent tools). Omnipus never carries a per-agent ask: its ask list rides the
-// global ceiling, and "deny" stays accepted.
-const OmnipusPerAgentAskRefusal = "Omnipus takes no per-agent Ask; set Ask globally or use Deny"
+// global ceiling, and "deny" stays accepted. The second sentence is the
+// recovery guidance of channels-spec-r8 S-39 row 16 / T-10 row 9: clearing the
+// entry restores inheritance, which asks again for an always-ask tool only
+// while the global policy is not Deny.
+const OmnipusPerAgentAskRefusal = "Omnipus takes no per-agent Ask; set Ask globally or use Deny. " +
+	"To return to the inherited behaviour, clear the entry: Omnipus then inherits the global policy, " +
+	"and an always-ask tool asks again only while the global policy is not Deny"
 
 // OmnipusPerAgentAskViolation reports the first tool (sorted, so the message is
 // deterministic) whose per-agent policy is "ask" when agentID is Omnipus. For
