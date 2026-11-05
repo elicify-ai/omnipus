@@ -4,9 +4,9 @@
  * `custom` and `locality` are the generated Provider contract's markers;
  * custom/cloud and catalog/local exercise the two conditions independently.
  *
- * As in T3, `defaultModel` is the missing input already available to the
- * parent. The spread allows a semantic RED against the real dialog without
- * editing its production interface or mocking the unit under test.
+ * Regression coverage after the #1620 implementation: `defaultModel` carries
+ * the parent's selected pair into the real dialog. As in T3, no component or
+ * resolver is mocked; the original semantic RED receipt is preserved.
  */
 import { expect, it, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'

@@ -3,10 +3,10 @@
  * clearing a primary with an available installation default means inheritance,
  * not an agent left without a model. Assert facts, not one exact sentence.
  *
- * Missing production input: ProvidersSection already has `defaultModel`, but
- * RemoveProviderDialogProps and its caller do not pass it. The props spread
- * supplies that generated pair without making this RED a TypeScript error;
- * the real dialog currently ignores it. No component or resolver is mocked.
+ * Regression coverage after the #1620 implementation: the parent passes its
+ * queried `defaultModel` pair into the dialog. This component-level test
+ * supplies the same generated pair; the real dialog and resolver are not
+ * mocked. The original semantic RED receipt is preserved in the handoff.
  */
 import { expect, it, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
