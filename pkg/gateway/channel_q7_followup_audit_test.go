@@ -59,11 +59,15 @@ func TestQ7FollowupS3_RealAuditBindsEachConsentDecisionToItsCall(t *testing.T) {
 			})
 			events := q7StartTurn(t, f, sid)
 			entry := q7PendingOrFailOnTurnEnd(t, f, events, sid, callID)
-			require.Equal(t, args, entry.Args, "instrument: digest covers the exact displayed request")
+			if tc.nonChannels {
+				require.Equal(t, args, entry.Args, "instrument: non-Channels card still contains only the model arguments")
+			} else {
+				cq2RequireCardModelArguments(t, args, entry.Args)
+			}
 			// These arguments contain only ASCII keys/string values and arrays.
 			// JSON's sorted map keys/no whitespace equal FR-080 canonicaljson here;
 			// no production hashing helper is used to manufacture the oracle.
-			approvedHash := q7FollowupDigest(t, args)
+			approvedHash := q7FollowupDigest(t, entry.Args) // A2.2: fingerprint the full displayed request, including facts.
 			require.False(t, f.al.ApprovalGrants().IsAllowed(sid, "omnipus", toolName, args))
 			if tc.stale {
 				expectedRevision, ok := args["expected_revision"].(string)

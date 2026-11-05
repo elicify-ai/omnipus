@@ -155,7 +155,11 @@ func TestChannelsQ2B14_CardFactsStayOutOfTranscriptAndModelContext(t *testing.T)
 				for _, tc := range msg.ToolCalls {
 					if tc.ID == callID {
 						seenCall = true
-						assert.Equal(t, cq2JSON(t, args), cq2JSON(t, tc.Arguments))
+						require.NotNil(t, tc.Function, "instrument: inspect the actual provider-history function call")
+						require.NotEmpty(t, tc.Function.Arguments, "instrument: empty provider-history arguments must not pass privacy checks")
+						var historyArgs map[string]any
+						require.NoError(t, json.Unmarshal([]byte(tc.Function.Arguments), &historyArgs))
+						assert.Equal(t, cq2JSON(t, args), historyArgs)
 					}
 				}
 				if msg.Role == "tool" && msg.ToolCallID == callID {

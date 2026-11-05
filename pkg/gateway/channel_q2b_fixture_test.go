@@ -196,7 +196,7 @@ func (o *cq2ExecuteObserver) AfterTool(_ context.Context, result *agent.ToolResu
 // Structural interface deliberately lets RED compile before the new hook
 // exists. A missing implementation is a loud assertion-level BLOCKED failure.
 type cq2Preparer interface {
-	PrepareForApproval(context.Context, map[string]any) (map[string]any, any, *tools.ToolResult)
+	PrepareForApproval(ctx context.Context, args map[string]any) (map[string]any, any, *tools.ToolResult)
 }
 
 func cq2RealPreparer(t *testing.T, f *wu6Fixture) cq2Preparer {

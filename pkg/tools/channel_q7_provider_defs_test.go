@@ -9,11 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Literal oracle: channels-spec-r8 FR-035, with founder Q4 (2026-11-03)
-// deleting only the obsolete "Only Omnipus holds this tool." sentence. No
-// replacement wording is invented. Neither this text nor the golden entry
-// is generated from the tool implementation or accepted with -update.
-const q7OutboundDescription = "Change which people and groups an agent may start messages to on one chat connection, or switch the connection back to only answering. Supply id, policy (reply_only = Only answer; agent_may_start = Answer and also start messages), the whole targets list (exact ids as the allowed-senders list writes them: a person's user id for a direct message, a group's chat id; no @names, no *; at most 20) and expected_revision from list_channels. Only Discord and Telegram can start messages; on Discord, a channel id must be a text channel, announcement channel or thread. Refused for a connection bound to you. It always shows an approval card, even in God Mode, and every approval applies to that one request only — it is never remembered."
+// Literal oracle: channels-spec-r8 FR-035, founder Q4 (2026-11-03), and
+// Q2-B contract Amendment A2.3 ratifying the optional-revision description.
+// Keep an exact independent literal, never a dynamic tool.Description value
+// or a golden accepted by this test with -update.
+const q7OutboundDescription = "Change which people and groups an agent may start messages to on one chat connection, or switch the connection back to only answering. Supply id, policy (reply_only = Only answer; agent_may_start = Answer and also start messages) and the whole targets list (exact ids as the allowed-senders list writes them: a person's user id for a direct message, a group's chat id; no @names, no *; at most 20). expected_revision is optional: leave it out, the tool reads the current settings itself and shows the person the current and the new list on the approval card. Only Discord and Telegram can start messages; on Discord, a channel id must be a text channel, announcement channel or thread. Refused for a connection bound to you. It always shows an approval card, even in God Mode, and every approval applies to that one request only — it is never remembered."
 
 func TestQ7T27_ProviderDefinitionsIncludeTheNormativeOutboundEntry(t *testing.T) {
 	reg := buildTestBuiltinRegistry()

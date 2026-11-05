@@ -202,7 +202,7 @@ func TestQ7T22_RealTurnsAlwaysAskAndApproveOnceRepeatsIdentically(t *testing.T) 
 				_, _, _, active := f.al.ActiveForegroundTurnInfo(sid)
 				require.True(t, active, "instrument: foreground-turn observation sees the pending real turn")
 				require.NotEqual(t, previous, entry.ApprovalID, "FR-038: identical repeats need distinct fresh approval identities")
-				require.Equal(t, args, entry.Args)
+				cq2RequireCardModelArguments(t, args, entry.Args)
 				previous = entry.ApprovalID
 				rec := t14Request(t, f, http.MethodPost, "/api/v1/tool-approvals/"+entry.ApprovalID, `{"action":"allow_once"}`, true)
 				require.Equal(t, http.StatusOK, rec.Code, "real registered approval endpoint: %s", rec.Body.String())

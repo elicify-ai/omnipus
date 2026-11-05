@@ -90,9 +90,12 @@ func TestChannelsQ2B08_AllWriterValidityChecksPrecedeApproval(t *testing.T) {
 			cq2RefusedAudit(t, f, sid, "mia", callID, tc.platform, tc.reason)
 			failure := cq2Failure(t, f.provider.lastToolResult(), tc.code, tc.reason)
 			if tc.name == "not_found" || tc.name == "unsupported_channel_kind" {
-				items := cq2JSON(t, failure["target_errors"]).([]any)
+				items, itemsOK := cq2JSON(t, failure["target_errors"]).([]any)
+				require.True(t, itemsOK, "instrument: target errors are a JSON array")
 				require.Len(t, items, 1)
-				require.Equal(t, tc.name, items[0].(map[string]any)["code"], "Q2-B: per-target rejection is preserved")
+				item, itemOK := items[0].(map[string]any)
+				require.True(t, itemOK, "instrument: per-target error is an object")
+				require.Equal(t, tc.name, item["code"], "Q2-B: per-target rejection is preserved")
 			}
 		})
 	}
@@ -156,7 +159,9 @@ func TestChannelsQ2B10_PreCardRefusalsHaveExactlyOneCorrelatedAudit(t *testing.T
 			events := cq2Start(t, f, sid, "mia", callID, args)
 			cq2NoCard(t, f, events, sid, callID)
 			cq2Failure(t, f.provider.lastToolResult(), code, "")
-			cq2RefusedAudit(t, f, sid, "mia", callID, args["id"].(string), kind)
+			channelID, channelIDOK := args["id"].(string)
+			require.True(t, channelIDOK, "instrument: refusal fixture identifies a string channel id")
+			cq2RefusedAudit(t, f, sid, "mia", callID, channelID, kind)
 			t13Unchanged(t, f, before)
 		})
 	}
@@ -201,8 +206,10 @@ func TestChannelsQ2B17_PreviewAndWriterHaveIdenticalRefusalCodeAndText(t *testin
 			previewFailure := cq2Failure(t, refusal.ForLLM, tc.code, tc.reason)
 			// Compare the actual shared validator/writer, not the tool adapter's
 			// deliberately different after-card conflict explanation (§2).
+			expectedRevision, revisionOK := args["expected_revision"].(string)
+			require.True(t, revisionOK, "instrument: parity fixture supplies an explicit string revision")
 			_, err := f.api.applyOutboundChange(ctx, tc.platform, gen.ChannelOutboundUpdateRequestPolicyAgentMayStart,
-				tc.targets, args["expected_revision"].(string), "mia")
+				tc.targets, expectedRevision, "mia")
 			var writer *outboundRejectionError
 			require.True(t, errors.As(err, &writer), "Q2-B: real one-writer refuses this input with its structured rejection: %v", err)
 			assert.Equal(t, tc.reason, string(writer.Body.Code))
