@@ -1,0 +1,3 @@
+# Copy Button
+
+`CopyButton` is the copy-to-clipboard control (W2-1, R41, #855): an `IconButton` with a `Tooltip`. A click writes the resolved `value` to the clipboard; success swaps the icon to a check, changes the tooltip to `copiedLabel` and announces it in a polite status region; a rejected write, or a page without `navigator.clipboard` (plain-HTTP LAN), shows the error icon, announces `failedLabel` and passes the error to `onCopyError` — there is no silent failure. Feedback lasts `COPY_FEEDBACK_MS` (2000ms); a second click restarts it. The accessible name stays `label` throughout. The control grows to the 44px touch minimum on a coarse pointer.
