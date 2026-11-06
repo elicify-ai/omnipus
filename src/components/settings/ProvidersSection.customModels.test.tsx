@@ -7,7 +7,7 @@
  * jsdom visibility cannot establish Sheet/overlay occlusion in a real browser.
  */
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router'
 import type { AppState, Provider, GodModeStatus, NotificationList, VersionResponse } from '@/lib/api/generated/openapi-types'
@@ -271,4 +271,48 @@ it('visibly explains a 400 model-save refusal and keeps the custom model draft w
   expect(notices.filter((notice) => notice.variant === 'success'), 'a refused save must never announce success').toEqual([])
   expect(screen.queryByText('Provider saved', { exact: true })).not.toBeInTheDocument()
   expect(client.getQueryData(['providers']), 'the saved catalogue must not pretend the rejected draft was persisted').toEqual([CUSTOM_PROVIDER])
+})
+
+it('dismisses the refusal toast by pointer without closing the Sheet or losing the unsaved model', async () => {
+  // Oracle: ruling B rule 6 and Round 4 F2. A toast press is not an
+  // instruction to discard the editor; an actual overlay press still is.
+  const sent = installServer(() => [CUSTOM_PROVIDER], () => jsonResponse(REFUSAL_BODY, 400))
+  renderProviders()
+  await addModelAndSave()
+  await waitFor(() => expect(client.isMutating()).toBe(0))
+  expect(sent, 'the refusal comes from the real editor request').toEqual([{ models: [MODEL_SLUG] }])
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+  const refusal = await screen.findByText(SERVER_REFUSAL, { exact: true })
+  const toast = refusal.closest<HTMLElement>('[role="alert"]')
+  if (!toast) throw new Error('F2 prerequisite: the server refusal must render in the real error toast')
+  // Radix currently aria-hides the shell while its modal Sheet is open
+  // (developer finding F1). A label query reaches this actual control without
+  // pretending this pointer test establishes screen-reader accessibility.
+  const dismiss = within(toast).getByLabelText('Dismiss', { exact: true })
+  expect(screen.getByTestId('provider-config-sheet')).toHaveAttribute('data-state', 'open')
+  expect(screen.getByTestId(`model-list-${CUSTOM_ID}`)).toHaveTextContent(MODEL_SLUG)
+
+  // DismissableLayer installs document.pointerdown on setTimeout(0). Drain
+  // that task after the nested consent closes, not a guessed settling sleep.
+  await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)) })
+  fireEvent.pointerDown(dismiss, { button: 0, pointerType: 'mouse', pointerId: 1 })
+  fireEvent.pointerUp(dismiss, { button: 0, pointerType: 'mouse', pointerId: 1 })
+  fireEvent.click(dismiss, { button: 0 })
+  // Left-button outside-press handling may finish in the click's queued task.
+  await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)) })
+
+  expect(screen.queryByText(SERVER_REFUSAL, { exact: true }), 'Dismiss must remove the toast').not.toBeInTheDocument()
+  expect(screen.getByTestId('provider-config-sheet'), 'toast pointerdown must not dismiss the editor').toHaveAttribute('data-state', 'open')
+  expect(screen.getByTestId('provider-config-sheet')).toBeVisible()
+  expect(within(screen.getByTestId(`model-list-${CUSTOM_ID}`)).getByText(MODEL_SLUG, { exact: true }), 'the unsaved name survives Dismiss').toBeVisible()
+  expect(client.getQueryData(['providers']), 'dismissing a refusal must not persist the draft').toEqual([CUSTOM_PROVIDER])
+
+  // Instrument control: prove the SAME real Sheet can receive an ordinary
+  // outside press. Otherwise a missing Radix listener could hide mutant g.
+  const overlay = screen.getByTestId('sheet-overlay')
+  fireEvent.pointerDown(overlay, { button: 0, pointerType: 'mouse', pointerId: 1 })
+  fireEvent.pointerUp(overlay, { button: 0, pointerType: 'mouse', pointerId: 1 })
+  fireEvent.click(overlay, { button: 0 })
+  await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)) })
+  await waitFor(() => expect(screen.queryByTestId('provider-config-sheet'), 'control: an actual outside press must close this Sheet').not.toBeInTheDocument())
 })

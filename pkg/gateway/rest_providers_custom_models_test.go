@@ -204,7 +204,7 @@ func assertCustomModelsStored(t *testing.T, f customModelsFixture, base, protoco
 	t.Helper()
 	stored := persistedProviderRow(t, f.api, customModelsProviderID)
 	assert.Equal(t, base, stored["api_base"], "stored base must be the expected original/explicit value")
-	assert.Equal(t, protocol, stored["protocol"], "omitted protocol must keep the original value")
+	assert.Equal(t, protocol, stored["protocol"], "stored protocol must be the expected original/explicit value")
 	assert.Equal(t, true, stored["custom"], "model edits must not declassify the custom row")
 	assert.Equal(t, f.ref, stored["api_key_ref"], "editing models/identity must not rotate the key")
 	wantModels := make([]any, len(models))
@@ -309,6 +309,21 @@ func TestRestProviders_CustomModels_R3PartialIdentity(t *testing.T) {
 		assertCustomModelsFileUnchanged(t, f.api.configPath(), configBefore)
 		assertCustomModelsFileUnchanged(t, f.api.credentialsStorePath(), credentialsBefore)
 		assert.Equal(t, int32(1), f.probes.Load(), "R3: rejected protocol must not probe the key")
+	})
+	t.Run("valid_protocol_only_keeps_stored_base", func(t *testing.T) {
+		// Ruling B's partial-identity rule combines the supplied valid protocol
+		// with the stored base; CHECK F3 / Round 4 explicitly require this case.
+		f := newStoredCustomModelsFixture(t)
+		credentialsBefore := snapshotCustomModelsFile(t, f.api.credentialsStorePath())
+		protocol := gen.ProviderUpdateRequestProtocolAnthropic
+		w := doPutProvider(t, f.api, customModelsProviderID, customModelsRequestJSON(t, gen.ProviderUpdateRequest{Protocol: &protocol}))
+		require.Equal(t, http.StatusOK, w.Code, "R3: valid protocol-only update keeps the stored base: %s", w.Body.String())
+		var response gen.Provider
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.NotNil(t, response.Protocol)
+		assert.Equal(t, gen.ProviderProtocolAnthropic, *response.Protocol, "R3: PUT must expose the explicitly changed protocol")
+		assertCustomModelsStored(t, f, f.base, "anthropic", []string{"test/original"})
+		assertCustomModelsFileUnchanged(t, f.api.credentialsStorePath(), credentialsBefore)
 	})
 	t.Run("base_only_keeps_stored_protocol", func(t *testing.T) {
 		f := newStoredCustomModelsFixture(t)
