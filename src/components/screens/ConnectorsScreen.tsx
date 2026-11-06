@@ -215,7 +215,10 @@ const STATUS_BADGE: Record<ConnectionStatus, { variant: 'error' | 'success' | 'm
 }
 
 function connectionStatusOf(channel: ChannelEntry): ConnectionStatus {
-  if (channel.degraded === true) return 'degraded'
+  // "Failed to start" is the status of an enabled connector only. A disabled
+  // connector is Off even when the gateway still reports a routing drop
+  // (degraded stays on the channel; it is not the card's status while off).
+  if (channel.enabled && channel.degraded === true) return 'degraded'
   if (channel.enabled) return 'enabled'
   return 'off'
 }
