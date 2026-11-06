@@ -87,6 +87,17 @@ function transportFixture(
       const stubRead = behavior[id] ?? {}
       if (stubRead.hold) return new Promise<Response>(() => { /* held: never settles */ })
       if (stubRead.fail) return json({ error: 'controlled saved-settings read failure' }, 503)
+      if (stubRead.sentinel) {
+        // `sentinel: true` = the read SUCCEEDS and reports a STORED credential:
+        // the redacted config read carries the "[configured]" marker on a
+        // credential field (rest_channels.go::redactChannelConfig —
+        // configHasSavedCredential checks for exactly that value), the same
+        // body shape the D1 saved-credential test serves; the ref name follows
+        // the channel_<type>_token convention and only the sentinel value is
+        // load-bearing. An EMPTY body stays a never-configured body — pass
+        // `configs[id]` (or nothing) for that, never `sentinel`.
+        return json({ token: CONFIGURED_SENTINEL, token_ref: `channel_${id}_token` })
+      }
       return json(configs[id] ?? {})
     }
     if (path === '/api/v1/mailboxes') return json({ mailboxes: [] })
