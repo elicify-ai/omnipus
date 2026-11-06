@@ -9,8 +9,10 @@ import { cn } from '@/lib/utils'
 // a page where `navigator.clipboard` does not exist (plain-HTTP LAN), shows
 // the error state, announces `failedLabel` and hands the error to
 // `onCopyError`. Feedback lasts COPY_FEEDBACK_MS, then returns to idle; the
-// accessible name stays `label` throughout (the result is announced through
-// a polite status region instead of renaming the control).
+// accessible name stays `label` throughout. The result is announced through
+// the kit Button's own polite status region (button.tsx::ActionAnnouncement,
+// via its `announcement` input), so the control has exactly one region:
+// empty when idle, "Copied" / "Copy failed" during feedback (K2).
 
 /** How long the success/failure feedback stays before returning to idle. */
 export const COPY_FEEDBACK_MS = 2000
@@ -75,36 +77,32 @@ export function CopyButton({
     onCopied?.()
   }
 
-  const announcement = state === 'copied' ? copiedLabel : state === 'failed' ? failedLabel : null
+  const announcement = state === 'copied' ? copiedLabel : state === 'failed' ? failedLabel : undefined
   const tooltipText = announcement ?? label
 
   return (
-    <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <IconButton
-            aria-label={label}
-            size={size}
-            disabled={disabled}
-            data-testid={testId}
-            data-copy-state={state}
-            onClick={() => { void handleClick() }}
-            className={cn('pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]', className)}
-          >
-            {state === 'copied' ? (
-              <Check data-testid="copy-button-success" aria-hidden="true" className="size-[var(--icon-size-medium)] text-[var(--color-success)]" />
-            ) : state === 'failed' ? (
-              <WarningCircle data-testid="copy-button-failure" aria-hidden="true" className="size-[var(--icon-size-medium)] text-[var(--color-error)]" />
-            ) : (
-              <Copy aria-hidden="true" className="size-[var(--icon-size-medium)]" />
-            )}
-          </IconButton>
-        </TooltipTrigger>
-        <TooltipContent>{tooltipText}</TooltipContent>
-      </Tooltip>
-      {announcement !== null ? (
-        <span role="status" className="sr-only">{announcement}</span>
-      ) : null}
-    </>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <IconButton
+          aria-label={label}
+          size={size}
+          disabled={disabled}
+          data-testid={testId}
+          data-copy-state={state}
+          announcement={announcement}
+          onClick={() => { void handleClick() }}
+          className={cn('pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]', className)}
+        >
+          {state === 'copied' ? (
+            <Check data-testid="copy-button-success" aria-hidden="true" className="size-[var(--icon-size-medium)] text-[var(--color-success)]" />
+          ) : state === 'failed' ? (
+            <WarningCircle data-testid="copy-button-failure" aria-hidden="true" className="size-[var(--icon-size-medium)] text-[var(--color-error)]" />
+          ) : (
+            <Copy aria-hidden="true" className="size-[var(--icon-size-medium)]" />
+          )}
+        </IconButton>
+      </TooltipTrigger>
+      <TooltipContent>{tooltipText}</TooltipContent>
+    </Tooltip>
   )
 }
