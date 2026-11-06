@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 )
@@ -10,6 +11,14 @@ import (
 func safeLogString(value string) string {
 	value = strings.ReplaceAll(value, "\n", "\\n")
 	return strings.ReplaceAll(value, "\r", "\\r")
+}
+
+// safeLogValue quotes value with Go %q so a slog attribute cannot contain a
+// raw ASCII control (U+0000-U+001F or U+007F). Printable text stays readable
+// inside the quotes. The result is for log records only: do not return it to
+// a client, and do not wrap it into an error that is returned to a caller.
+func safeLogValue(value string) string {
+	return fmt.Sprintf("%q", value)
 }
 
 // logsafe makes request-derived strings and errors safe for structured logs.
