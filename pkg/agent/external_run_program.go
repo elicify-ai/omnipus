@@ -84,9 +84,13 @@ func (ed *runExternalCLISubTurnState) reportProgramRefusal(text string) error {
 	return refusal
 }
 
+// presetUseNote is the plain-text note on the external_cli.run entry of every
+// run that applies preset parameters (T11 §4 Audit, FR-10).
+const presetUseNote = "person preset used; flag filter bypassed for preset parameters"
+
 // auditRunSpawn writes the external_cli.run audit entry for one spawn
 // (r17 §3.10): agent, CLI, entered and resolved program, the agent flags the
-// filter drops, the preset as typed when set, and
+// filter drops, the preset as typed and presetUseNote when set, and
 // filter_bypassed_by_person_preset with the filter's reasons whenever a
 // preset token is one the filter would drop from an agent. Write failures
 // are logged by audit.Emit.
@@ -106,6 +110,7 @@ func (ed *runExternalCLISubTurnState) auditRunSpawn(ctx context.Context, cli str
 	}
 	if ed.presetText != "" {
 		fields["preset_args"] = ed.presetText
+		fields["note"] = presetUseNote
 		if _, bypassed := runner.FilterDangerousCLIArgsDetailed(key, ed.presetArgs); len(bypassed) > 0 {
 			reasons := make([]string, 0, len(bypassed))
 			for _, d := range bypassed {

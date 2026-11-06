@@ -84,7 +84,7 @@ The program each external tool runs, and the standard parameters added to every 
 
 The standard parameters may hold **any** parameter the tool accepts; Omnipus does not filter them and shows no warning. **Omnipus does not sandbox external command-line tools**: they start in their working folder with a reduced environment and their web traffic routed through Omnipus's egress proxy, but no Omnipus file confinement applies to them, and a working folder is not a boundary. Claude Code already runs with its own permission prompts turned off. A Codex parameter such as `--dangerously-bypass-approvals-and-sandbox` also turns off Codex's own sandbox, and Codex can then read and write anything the user account running Omnipus can. Add such a parameter only if you accept that.
 
-Every external-worker run writes one audit entry with the program, the flags the safety filter dropped from the agent's own flags, and the standard parameters exactly as typed. When a standard parameter is one the filter would drop from an agent, the entry says so and gives the reason.
+Every external-worker run writes one audit entry with the program, the flags the safety filter dropped from the agent's own flags, and the standard parameters exactly as typed. A run that uses standard parameters also carries the note "person preset used; flag filter bypassed for preset parameters", even when no parameter is one the filter would drop. When a standard parameter is one the filter would drop from an agent, the entry also says so and gives the reason.
 
 ### Auto-approve and the kernel sandbox
 
