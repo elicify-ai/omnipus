@@ -163,8 +163,9 @@ const (
 
 	// EventExternalCLIRun — INFO. One external-CLI spawn (r17 §3.10): agent,
 	// CLI, entered and resolved program, agent flags the filter dropped,
-	// the person's preset through the sensitive-data filter with a plain-text
-	// note when one is applied, and whether a preset token bypassed the filter.
+	// the person's preset through thirdpartycli.PresetAuditFilter with a
+	// plain-text note when one is applied, and whether a preset token bypassed
+	// the filter.
 	EventExternalCLIRun = "external_cli.run"
 
 	// EventBrowserInstanceCreated — INFO. A workspace's browser instance came
