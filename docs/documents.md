@@ -133,25 +133,50 @@ reads any other file.
   workspace folders, workspace mounts, the sandbox's allowed paths, the write
   allowances in `tools.allow_write_paths`, write access you approved for the
   rest of a chat, and the previewing agent's own access. A path that is a
-  link into the component's folder counts as that folder. Omnipus checks this
-  again before every preview, so access added later (a settings change or a
-  new approval) turns the component off until that access is removed; the
-  preview then says which access is in the way.
+  link into the component's folder counts as that folder.
+- **Agents can never get write access to a program folder.** The program
+  folders are every place a packaged component can sit, whether or not anything
+  is installed there, plus each folder you registered. New write access that
+  is, lies inside or contains one of them is refused where it would be created:
+  - **A shell command that needs to write there**, under Auto-approve. No
+    approval card appears, so neither **Allow** nor **Allow once** is possible.
+    The command result is
+    `Command blocked by safety guard (preview program folder): <path> — agents can never get write access to the <component> program folder <folder>.`
+  - **A mount**, whether from the Library, the API or the `request_mount` tool,
+    including a folder that merely contains a program folder, such as `/`. The
+    reason is `that folder cannot be mounted: it is, contains or lies inside the <component> program folder (<folder>), and agents can never get write access there. Mount a folder that does not include it.`
+    The folder picker greys the folder with
+    `Contains or lies inside a document preview program folder — agents can never write there.`
+  - **A new or changed entry** in `tools.allow_write_paths` or
+    `sandbox.allowed_paths`, on a settings save or a reload. Nothing is written
+    and the current settings stay in force. The text is
+    `config error: <field> entry "<entry>" would give agents write access to the <component> program folder <folder>; agents can never get write access there.`
+    An entry Omnipus cannot reduce to a folder is refused too:
+    `config error: <field> entry "<entry>": Omnipus cannot tell which folders it covers, so it may include a document preview program folder; write it as ^/<folder>(?:/\|$).`
+- Access that was already there is not refused: settings in force when Omnipus
+  started, entries a reload leaves unchanged, and a mount or a remembered chat
+  approval made before the folder became a program folder. Omnipus checks for
+  these before every preview. Any overlap turns the component off for everyone
+  until that access is removed; the preview then says which access is in the
+  way.
 - A write allowance that names the start of a path rather than a whole folder
   (for example `^/srv/data`, which also matches `/srv/data2`) counts as
   covering the folder it sits in (`/srv`). A pattern Omnipus cannot reduce to
   a folder (for example one without a leading `^/…` folder, one with
   alternatives at the top level, or one that ignores letter case) counts as
-  covering every folder, so previews stay off while it is set. The same
-  applies when Omnipus cannot read a source of write access: an unreadable
+  covering every folder, so previews stay off while it is set, and a new entry
+  like that is refused. The same applies to previews when Omnipus cannot read a source of write access: an unreadable
   settings file refuses registration, and an unreadable or partly invalid
   mount record keeps previews off.
 - `omnipus doctor` warns when a component is `… damaged (<reason>)` or `… is in a folder an agent can write (<access>)`, each with what it means for previews and how to fix it: `WARN-PREVIEW-001` for the PDF renderer, `WARN-PREVIEW-002` for LibreOffice. On Linux it also warns `WARN-PREVIEW-003` `Document preview memory limit not enforced: <reason>` when the kernel does not apply the memory limit (see "Limits and isolation"). `WARN-PREVIEW-000` means doctor could not check the components at all (it could not find the Omnipus program's own path). A component that is simply not installed is not a warning: previews report it when they are used. Like every doctor warning, these make `omnipus doctor` finish with exit code 1. Doctor never starts either program.
-- What the check does not cover yet: an **Allow once** approval for a single
-  command that is still running in another chat, access granted while a
-  preview is already running (it is seen by the next preview), and links
-  inside the component's own folder that point to a folder an agent can
-  write.
+- What these checks do not cover: a command that is still running and was
+  given write access to a folder before that folder became a program folder
+  (also a command still running after its mount was removed); a folder agents
+  can already write that is redirected by a link into a program folder while a
+  preview runs (the next preview sees it and refuses, the running preview is
+  not stopped); and links inside the component's own folder that point to a
+  folder an agent can write. Nothing stops a running preview when access
+  appears: because new access is refused, there is nothing to stop it for.
 
 ### Limits and isolation
 

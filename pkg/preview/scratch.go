@@ -55,11 +55,18 @@ func scratchRoot(home string) string { return filepath.Join(home, "tmp", "previe
 
 // call is one preview call's scratch folder and owner record.
 type call struct {
-	dir        string
+	dir string
+	// realDir is dir with its links resolved, recorded before the first start.
+	realDir string
+	// root is the handle on dir, opened before the first start. After any
+	// LibreOffice start every gateway operation in the folder goes through it
+	// (spec §3.1 D3.7); it stays open until finish.
+	root       *os.Root
 	socketDir  string
 	mu         sync.Mutex
 	rec        ownerRecord
 	unconfined string
+	finished   bool
 }
 
 // noteUnconfined keeps the first "without sandbox" reason of any program run
@@ -100,8 +107,19 @@ func newCall(home string, gatewayPID int, gatewayStart string) (*call, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create preview scratch: %w", err)
 	}
-	c := &call{dir: dir, rec: ownerRecord{State: statePreparing, GatewayPID: gatewayPID, GatewayStart: gatewayStart}}
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, fmt.Errorf("resolve preview scratch: %w", err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, fmt.Errorf("open preview scratch: %w", err)
+	}
+	c := &call{dir: dir, realDir: realDir, root: root, rec: ownerRecord{State: statePreparing, GatewayPID: gatewayPID, GatewayStart: gatewayStart}}
 	if err := c.publish(); err != nil {
+		_ = root.Close()
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
@@ -141,9 +159,15 @@ func (c *call) idle() error {
 }
 
 // finish marks the call done and removes its folders (AD-8 step 5). A
-// removal failure is logged; startup recovery retries it.
+// removal failure is logged; startup recovery retries it. Only the first call
+// acts: the handle on the scratch folder is closed after it.
 func (c *call) finish() {
 	c.mu.Lock()
+	if c.finished {
+		c.mu.Unlock()
+		return
+	}
+	c.finished = true
 	c.rec.State = stateDone
 	c.rec.Launcher = nil
 	_ = c.publish()
@@ -153,7 +177,7 @@ func (c *call) finish() {
 			logger.WarnCF("preview", "removing preview socket folder failed", map[string]any{"error": err.Error()})
 		}
 	}
-	if err := os.RemoveAll(c.dir); err != nil {
+	if err := c.removeScratch(); err != nil {
 		logger.WarnCF("preview", "removing preview scratch failed", map[string]any{"error": err.Error()})
 	}
 }

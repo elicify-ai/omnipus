@@ -6,6 +6,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -162,6 +163,10 @@ func (t *RequestMountTool) Execute(ctx context.Context, args map[string]any) *To
 	// second chance for the three to disagree.
 	resolved, warning, err := workspace.CheckMountTarget(hostPath, t.homePath)
 	if err != nil {
+		var program *workspace.ProgramFolderRefusal
+		if errors.As(err, &program) {
+			return ErrorResult(program.Reason())
+		}
 		return ErrorResult(fmt.Sprintf("request_mount: %v", err))
 	}
 

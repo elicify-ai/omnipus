@@ -194,10 +194,15 @@ func (a *restAPI) writeMountCreateError(w http.ResponseWriter, id, name string, 
 	}
 }
 
-// mountRefusalText is the fixed client reason for a refused mount target. The
-// two classes the workspace package refuses are told apart by the stable phrase
-// it uses for the operating-system class.
+// mountRefusalText is the fixed client reason for a refused mount target. A
+// preview program folder carries its own sentence; the other two classes the
+// workspace package refuses are told apart by the stable phrase it uses for
+// the operating-system class.
 func mountRefusalText(err error) string {
+	var program *workspace.ProgramFolderRefusal
+	if errors.As(err, &program) {
+		return program.Reason()
+	}
 	if strings.Contains(err.Error(), "operating-system directory") {
 		return "that folder is an operating-system directory - no agent workspace lives there, and writing into it " +
 			"changes the whole machine. Mount a specific folder inside it if you really need one."

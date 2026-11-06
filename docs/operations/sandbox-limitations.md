@@ -40,6 +40,28 @@ resource-limited processes. Their memory limit differs by platform:
 When the kernel sandbox cannot be set up for these programs, they run with
 the limits only and the result says `converted without sandbox: <reason>`.
 
+Agents can never get write access to these programs' folders: shell approvals
+(**Allow** and **Allow once**), mounts (including one that contains a program
+folder, such as `/`) and new or changed write allowances that would give it, or
+that Omnipus cannot reduce to a folder, are refused where they would be created
+(the texts are in [Documents in chat](../documents.md#what-previews-need)).
+Access already in force is not refused: before every preview Omnipus checks for
+it and turns the component off for everyone.
+
+Limits of this protection:
+
+- On Windows, and when these programs run without the sandbox, the kernel does
+  not stop an agent's `bash` from writing an install folder. The refusal covers
+  only the writes Omnipus can see in the command text.
+- The shell refusal is part of the Auto-approve check. In God Mode that check
+  does not run.
+- A command that is still running and was given write access to a folder before
+  that folder became a program folder keeps that access. So does a command
+  still running after its mount was removed.
+- A folder agents can already write that is redirected by a link into a program
+  folder while a preview runs is seen by the next preview, which refuses; the
+  running preview is not stopped.
+
 ## Landlock rights are gated by kernel version
 
 Omnipus asks the kernel for a set of Landlock rights when it applies the sandbox. Each right arrived with a specific kernel version, so an older kernel may not know all of them. The ABI (application binary interface — here, the version of Landlock's interface your kernel exposes) is reported by the kernel; Omnipus asks only for the rights that version supports.

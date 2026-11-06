@@ -270,7 +270,6 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 		Start:   hooks.start,
 		Stdout:  io.Discard,
 	}
-	out := filepath.Join(dirs["out"], "document.pdf")
 	defer func() { _ = o.call.idle() }()
 	// At most two starts (spec §3.1 D3): soffice.bin exits 81 ("restart
 	// requested") on its first start with a fresh profile, and LibreOffice's
@@ -284,14 +283,15 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 			return nil, hooks.unconfined, fail
 		}
 		waitErr := proc.Wait() // already waited: returns the recorded result
-		pdf, readable := readConvertedPDF(out)
+		pdf, readable := readConvertedPDF(o.call)
 		if readable {
 			return pdf, hooks.unconfined, nil
 		}
 		if attempt == 1 && proc.ExitCode() == officeRestartExit {
 			// "out/ holds no document.pdf before the retry" (D3.3): an
-			// unreadable leftover is removed; a removal failure ends here.
-			if err := os.Remove(out); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// unreadable leftover is removed; a removal failure ends here, and
+			// so does a link leading outside scratch (D3.7).
+			if err := o.call.removeInside(officeOutput); err != nil {
 				return nil, hooks.unconfined, programFailure("conversion failed: scratch unavailable")
 			}
 			// "The profile's macro, link and recalculation settings (AD-7)
@@ -299,7 +299,7 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 			// start may rewrite registrymodifications.xcu, so the seeded
 			// settings are written again before the retry; a failure ends
 			// here rather than starting with an unknown profile.
-			if err := reseedOfficeProfile(dirs["profile/user"]); err != nil {
+			if err := reseedOfficeProfile(o.call); err != nil {
 				return nil, hooks.unconfined, programFailure("conversion failed: " + err.Error())
 			}
 			if err := o.call.idle(); err != nil {
@@ -319,35 +319,26 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 	}
 }
 
-// reseedOfficeProfile writes the AD-7 settings into dir again before the
-// exit-81 second start. It runs after the first start's process group was
-// killed (launcher.Process.Wait), so nothing can change the folder while it
-// runs; the first start could still have replaced the folder or the file with
-// a link, so a folder that is not a plain directory is refused and the old
-// file (or link) is removed and the settings are created fresh, never written
+// reseedOfficeProfile writes the AD-7 settings again before the exit-81
+// second start, through the call's scratch handle (spec §3.1 D3.7). It runs
+// after the first start's process group was killed (launcher.Process.Wait).
+// The first start could still have replaced any part of the path with a link,
+// so a link leading outside fails here, and the old file (or a link staying
+// inside) is removed and the settings are created fresh, never written
 // through whatever the first start left there.
-func reseedOfficeProfile(dir string) error {
-	fi, err := os.Lstat(dir)
-	if err != nil || !fi.IsDir() {
-		return errors.New("the LibreOffice profile folder was replaced during the first start")
-	}
-	name := filepath.Join(dir, "registrymodifications.xcu")
-	if err = os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return errors.New("the LibreOffice profile settings could not be restored")
-	}
-	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return errors.New("the LibreOffice profile settings could not be restored")
-	}
-	if _, err = f.WriteString(profileSettings); err != nil {
-		_ = f.Close()
-		return errors.New("the LibreOffice profile settings could not be restored")
-	}
-	if err = f.Close(); err != nil {
+func reseedOfficeProfile(c *call) error {
+	if c.removeInside(officeSettings) != nil || c.createInside(officeSettings, []byte(profileSettings)) != nil {
 		return errors.New("the LibreOffice profile settings could not be restored")
 	}
 	return nil
 }
+
+// The two files the gateway touches after a LibreOffice start, relative to the
+// call's scratch folder.
+var (
+	officeOutput   = filepath.Join("out", "document.pdf")
+	officeSettings = filepath.Join("profile", "user", "registrymodifications.xcu")
+)
 
 // officeRestartExit is LibreOffice's EXITHELPER_NORMAL_RESTART
 // (include/desktop/exithelper.h).
@@ -393,15 +384,20 @@ func (o officeConversion) startOnce(ctx context.Context, spec launcher.Spec) (*l
 	return proc, nil
 }
 
-// readConvertedPDF returns the converted document when out holds a regular,
-// non-empty, size-capped file that starts like a PDF (FR-011: validity is
-// judged by the output, never by exit codes).
-func readConvertedPDF(out string) ([]byte, bool) {
-	info, err := os.Lstat(out)
+// readConvertedPDF returns the converted document when the call's output is a
+// regular, non-empty, size-capped file that starts like a PDF (FR-011:
+// validity is judged by the output, never by exit codes). An output reached
+// through a link leading outside scratch is not readable (spec §3.1 D3.7).
+func readConvertedPDF(c *call) ([]byte, bool) {
+	out, err := c.inside(officeOutput)
+	if err != nil {
+		return nil, false
+	}
+	info, err := c.root.Lstat(out)
 	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > officeOutputLimit {
 		return nil, false
 	}
-	pdf, err := os.ReadFile(out)
+	pdf, err := c.root.ReadFile(out)
 	if err != nil || !bytes.HasPrefix(pdf, []byte("%PDF-")) {
 		return nil, false
 	}

@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -271,6 +272,11 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}); err != nil {
+		var refusal *requestRefusalError
+		if errors.As(err, &refusal) {
+			jsonErr(ps.w, http.StatusBadRequest, refusal.Error())
+			return
+		}
 		slog.Error("rest: update sandbox config", "error", err)
 		jsonErr(ps.w, http.StatusInternalServerError, "could not save config")
 		return

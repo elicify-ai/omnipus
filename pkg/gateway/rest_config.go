@@ -384,6 +384,13 @@ func (a *restAPI) writeConfigJSONLocked(mutate func(m map[string]any) error) ([]
 	if err != nil {
 		return nil, fmt.Errorf("serialize config: %w", err)
 	}
+	var candidate config.Config
+	if parseErr := json.Unmarshal(out, &candidate); parseErr != nil {
+		return nil, fmt.Errorf("parse candidate config: %w", parseErr)
+	}
+	if refused := a.refuseNewProgramAccess(&candidate); refused != nil {
+		return nil, refused
+	}
 	if writeErr := fileutil.WriteFileAtomic(a.configPath(), out, 0o600); writeErr != nil {
 		return nil, writeErr
 	}

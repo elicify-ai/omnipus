@@ -554,6 +554,10 @@ Every change to a skill is checked before it is saved. If a check fails, nothing
 
 The secret check has an honest limit: it finds a stored value written out in full. A value that was encoded or split into pieces is not caught.
 
+### Document preview program folders
+
+Agents can never get write access to the folders that hold LibreOffice and the PDF renderer. A shell approval, a mount or a new or changed write allowance that would give it is refused where it would be created, and access already in force keeps the component off for everyone. The rules, exact texts and limits are in [Documents in chat](documents.md#what-previews-need) and [Sandbox limitations](operations/sandbox-limitations.md#document-preview-programs).
+
 ### Limits of the protection
 
 - **macOS:** a file the gateway creates in the data directory *after* a command started is not in that command's deny list, so a long-running command could reach it. The next command sees it denied. Omnipus names its lazily-created directories in the protected set, so this window is narrow in practice.
