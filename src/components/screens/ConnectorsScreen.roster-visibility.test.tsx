@@ -63,8 +63,6 @@ function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-type Fixture = ReturnType<typeof transportFixture>
-
 function transportFixture(list: ChannelEntry[], configs: Record<string, Record<string, unknown>> = {}) {
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const path = new URL(String(input), 'http://localhost').pathname

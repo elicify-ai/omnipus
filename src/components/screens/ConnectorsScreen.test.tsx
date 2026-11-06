@@ -301,17 +301,31 @@ describe('ConnectorsScreen — type-grouped rows (US-9 AS-1)', () => {
     expect(screen.queryByTestId('channel-type-group-discord')).not.toBeInTheDocument()
   })
 
-  it('does not render the empty-state roster when at least one type is configured (B2 — mutual exclusivity)', async () => {
+  it('renders the unconfigured types\' Configure tiles alongside the configured connector (#1569 — unconfigured types stay discoverable)', async () => {
     // Mixed state: one configured type (telegram) + one unconfigured type
-    // (discord). FR-010's grouped-list/roster split is mutually exclusive —
-    // the grouped list wins as soon as ANY instance is configured, so the
-    // roster must be completely absent, not just missing a discord entry.
+    // (discord). Issue #1569 "Expected": "…unconfigured types stay
+    // discoverable." The pre-#1569 rule asserted the opposite (B2 mutual
+    // exclusivity: the roster disappears entirely once ANY instance is
+    // configured — the exact behaviour the issue reports: "Once one
+    // connector is configured, the tiles of the other, unconfigured
+    // connector types disappear from Connectors; they can only be reached
+    // through 'Add channel'."). The unconfigured type stays discoverable as
+    // a roster Configure tile beside the configured group — never as an
+    // instance group of its own.
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM, STUB_DISCORD_UNCONFIGURED])
     const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await screen.findByTestId('channel-type-group-telegram')
-    expect(screen.queryByTestId('channel-roster')).not.toBeInTheDocument()
+    // The configured connector still renders as its grouped card…
+    expect(screen.getByTestId('channel-card-telegram')).toBeInTheDocument()
+    // …an unconfigured type gains NO instance group…
+    expect(screen.queryByTestId('channel-type-group-discord')).not.toBeInTheDocument()
+    // …and its roster Configure tile stays visible alongside it (the
+    // roster container renders in both states — the inverse of the retired
+    // mutual-exclusivity absence assertion).
+    expect(screen.getByTestId('channel-roster')).toBeInTheDocument()
+    expect(screen.getByTestId('channel-roster-connect-discord')).toBeInTheDocument()
   })
 
   it('resolves each row\'s workspace→agent binding independently via its own instance id (B1)', async () => {
