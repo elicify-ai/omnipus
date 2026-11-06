@@ -1,0 +1,311 @@
+# probe-minimax-stream — CI-only instrumented streaming probe.
+#
+# Question it settles: does the CI primary (provider minimax-coding-plan,
+# model from tests/e2e/e2e-model.json) emit ANSWER text incrementally when
+# called with "stream":true, or only at the end?
+#
+# It makes EXACTLY ONE API call per run: no retry, no second attempt, no
+# fallback to another provider. Endpoint, protocol, headers and the auth
+# form mirror scripts/e2e-model.sh preflight (catalog URL + /messages,
+# anthropic-version header, x-api-key passed to curl on stdin via
+# `curl --config -` — never on the command line, never echoed, masked with
+# ::add-mask:: before any output).
+#
+# Evidence per SSE line: arrival offset in milliseconds since request start,
+# the event type, the delta kind (thinking / text / signature) and the
+# decoded character count of that delta. Payload text is never printed.
+#
+# Verdict at the end (6-line summary): "incremental" when there are >= 5
+# text deltas spread over more than 1 second (first->last text delta),
+# "bunched" otherwise, and "inconclusive" when the stream contained no
+# answer text at all (a reasoning model that exhausted max_tokens during
+# thinking proves nothing about text timing). jq provides the authoritative
+# text-delta count and character total; awk provides all timings.
+# max_tokens is 6000: with 600 the CI primary spent the whole budget on
+# thinking (observed 2026-11-06, stop_reason=max_tokens, zero text deltas).
+#
+# Self-triggered: the only trigger is pull_request with a path filter on
+# THIS file, so editing the file in a PR runs the probe exactly once per
+# push, and nothing else in the repository can start it. Remove this file
+# once the question is settled (owner: cloud chief).
+
+name: probe-minimax-stream
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-minimax-stream.yml'
+
+# A newer push to the same PR branch cancels the previous run, so the probe
+# never makes two concurrent calls for the same head.
+concurrency:
+  group: probe-minimax-stream-${{ github.event.pull_request.head.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: One streamed 150-word answer — incremental or bunched?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (probe reads the model file and the provider catalog)
+        uses: actions/checkout@v7
+
+      - name: One streamed call to the CI primary
+        env:
+          MINIMAX_API_KEY_CI: ${{ secrets.MINIMAX_API_KEY_CI }}
+        run: |
+          set -uo pipefail
+
+          model_file=tests/e2e/e2e-model.json
+          catalog=pkg/providers/catalog/data/providers_catalog.json
+
+          [ -f "$model_file" ] || { echo "::error::missing $model_file"; exit 1; }
+          [ -f "$catalog" ] || { echo "::error::missing $catalog"; exit 1; }
+
+          provider=$(jq -r '.primary.provider // empty' "$model_file")
+          model=$(jq -r '.primary.model // empty' "$model_file")
+          if [ -z "$provider" ] || [ -z "$model" ]; then
+            echo "::error::tests/e2e/e2e-model.json has no primary provider/model"
+            exit 1
+          fi
+
+          # Scoped to the MiniMax coding-plan row; refuse anything else
+          # instead of guessing an endpoint.
+          if [ "$provider" != "minimax-coding-plan" ]; then
+            echo "::error::probe is scoped to provider 'minimax-coding-plan'; the primary is now '$provider'"
+            exit 1
+          fi
+
+          # Same catalog lookup as scripts/e2e-model.sh catalog_field().
+          proto=$(jq -r --arg id "$provider" '[.providers[] | select(.id == $id)][0].protocol // empty' "$catalog")
+          base=$(jq -r --arg id "$provider" '[.providers[] | select(.id == $id)][0].api // empty' "$catalog")
+          if [ "$proto" != "anthropic" ]; then
+            echo "::error::provider '$provider' is not an Anthropic-protocol catalog provider; extend the probe first"
+            exit 1
+          fi
+          case "$base" in
+            https://*) ;;
+            *) echo "::error::catalog URL for '$provider' is not https; refusing to send the key"; exit 1 ;;
+          esac
+          url="${base%/}/messages"
+
+          key="${MINIMAX_API_KEY_CI:-}"
+          if [ -z "$key" ]; then
+            echo "::error::MINIMAX_API_KEY_CI is not set — the probe cannot run (no fallback, no retry, by design)"
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$key"
+
+          work=$(mktemp -d "${TMPDIR:-/tmp}/minimax-stream-probe.XXXXXX")
+          trap 'rm -rf "$work"' EXIT
+          fifo="$work/sse.fifo"
+          mkfifo "$fifo"
+
+          # max_tokens 6000, not 600: one real call on 2026-11-06 showed
+          # MiniMax-M3.1-Flash-Preview spends 600 tokens entirely on
+          # thinking (stop_reason=max_tokens, zero text deltas), so a
+          # 600-token probe can never observe answer text at all.
+          body=$(jq -cn --arg m "$model" \
+            '{model: $m, max_tokens: 6000, stream: true, messages: [{role: "user", content: "Write 150 words about rivers."}]}')
+
+          start_ns=$(date +%s%N)
+
+          # Stamper: prefix every arriving SSE line with its epoch-nanosecond
+          # arrival time so the second pass can compute all timings.
+          while IFS= read -r line || [ -n "$line" ]; do
+            printf '%s\t%s\n' "$(date +%s%N)" "$line"
+          done < "$fifo" > "$work/stamped.log" &
+          stamper=$!
+
+          # THE one call. Auth form copied from scripts/e2e-model.sh
+          # preflight: key reaches curl on stdin as a config header.
+          status="$(printf 'header = "x-api-key: %s"\n' "$(printf '%s' "$key" | sed 's/[\\"]/\\&/g')" \
+            | curl -s -N --config - -o "$fifo" -w '%{http_code}' --max-time 150 \
+                -X POST -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' \
+                --data "$body" "$url" 2> "$work/curl.err")"
+          crc=$?
+          unset key
+          wait "$stamper" || true
+          end_ns=$(date +%s%N)
+
+          case "$crc" in
+            0) crc_label="ok" ;;
+            7) crc_label="connection_refused" ;;
+            6) crc_label="could_not_resolve_host" ;;
+            28) crc_label="timeout" ;;
+            5|35|52|55|56) crc_label="connection_error" ;;
+            *) crc_label="curl_error" ;;
+          esac
+          echo "model:          $model"
+          echo "provider:       $provider"
+          echo "endpoint:       $url"
+          echo "http status:    ${status:-none}"
+          echo "curl exit:      $crc ($crc_label)"
+          echo "wall time ms:   $(( (end_ns - start_ns) / 1000000 ))"
+
+          case "$status" in
+            2*) ;;
+            *)
+              etype=$(awk '{i = index($0, "\t"); raw = substr($0, i + 1)} raw ~ /^\{/ {print raw; exit}' "$work/stamped.log" \
+                | jq -r '.error.type // empty')
+              echo "::error::HTTP ${status:-none} (curl exit $crc $crc_label, provider error type: ${etype:-unknown}) — one call only: no retry, no fallback"
+              exit 1
+              ;;
+          esac
+          if [ "$crc" -ne 0 ]; then
+            echo "::error::curl exited $crc ($crc_label) — one call only: no retry, no fallback"
+            exit 1
+          fi
+
+          # Pass 2: per-line log (ms offset, event type, delta kind, decoded
+          # char count) plus first/last timings into $work/stats.txt.
+          awk -v start="$start_ns" -v statsfile="$work/stats.txt" '
+            function str_from(s, key,   pat, i, j, n, out, c) {
+              pat = "\"" key "\":"
+              i = index(s, pat)
+              if (i == 0) return ""
+              i += length(pat)
+              while (substr(s, i, 1) == " " || substr(s, i, 1) == "\t") i++
+              if (substr(s, i, 1) != "\"") return ""
+              i++; n = length(s); out = ""
+              for (j = i; j <= n; j++) {
+                c = substr(s, j, 1)
+                if (c == "\\") { out = out substr(s, j, 2); j++ }
+                else if (c == "\"") break
+                else out = out c
+              }
+              return out
+            }
+            function decoded_len(str,   t) {
+              t = str
+              gsub(/\\u[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]/, "@", t)
+              gsub(/\\./, "@", t)
+              return length(t)
+            }
+            {
+              i = index($0, "\t")
+              if (i == 0) next
+              ts = substr($0, 1, i - 1) + 0
+              raw = substr($0, i + 1)
+              ms = int((ts - start) / 1000000)
+              lines++
+              if (raw == "") next
+              if (substr(raw, 1, 1) == ":") { printf "%6d ms  comment\n", ms; next }
+              if (raw ~ /^event: /) { printf "%6d ms  event=%s\n", ms, substr(raw, 8); events++; if (first_event_ms == "") first_event_ms = ms; next }
+              if (raw ~ /^data: /) {
+                payload = substr(raw, 7)
+                dtype = str_from(payload, "type")
+                kind = "-"; chars = "-"
+                if (payload ~ /"thinking_delta"/) {
+                  kind = "thinking"
+                  chars = decoded_len(str_from(payload, "thinking"))
+                  think++; last_delta_ms = ms
+                  if (first_think_ms == "") first_think_ms = ms
+                } else if (payload ~ /"text_delta"/) {
+                  kind = "text"
+                  chars = decoded_len(str_from(payload, "text"))
+                  text++; last_delta_ms = ms; last_text_ms = ms
+                  if (first_text_ms == "") first_text_ms = ms
+                } else if (payload ~ /"signature_delta"/) {
+                  kind = "signature"
+                  chars = decoded_len(str_from(payload, "signature"))
+                  sig++; last_delta_ms = ms
+                }
+                printf "%6d ms  data %-20s kind=%-9s chars=%s\n", ms, dtype, kind, chars
+                datas++
+                next
+              }
+              if (substr(raw, 1, 1) == "{") { printf "%6d ms  json-body %d bytes (not printed)\n", ms, length(raw); next }
+              printf "%6d ms  other %.60s\n", ms, raw
+            }
+            END {
+              print "FIRST_EVENT_MS=" (first_event_ms == "" ? "na" : first_event_ms) > statsfile
+              print "FIRST_THINK_MS=" (first_think_ms == "" ? "na" : first_think_ms) > statsfile
+              print "FIRST_TEXT_MS=" (first_text_ms == "" ? "na" : first_text_ms) > statsfile
+              print "LAST_TEXT_MS=" (last_text_ms == "" ? "na" : last_text_ms) > statsfile
+              print "LAST_DELTA_MS=" (last_delta_ms == "" ? "na" : last_delta_ms) > statsfile
+              print "THINK_DELTAS=" think + 0 > statsfile
+              print "TEXT_DELTAS_AWK=" text + 0 > statsfile
+              print "SIG_DELTAS=" sig + 0 > statsfile
+              print "EVENT_LINES=" events + 0 > statsfile
+              print "DATA_LINES=" datas + 0 > statsfile
+              print "STREAM_LINES=" lines + 0 > statsfile
+            }
+          ' "$work/stamped.log" > "$work/perline.log"
+
+          if [ ! -s "$work/stats.txt" ]; then
+            echo "::error::internal: awk produced no stats — cannot judge the stream"
+            exit 1
+          fi
+          if [ -n "$(awk '/^[A-Z_]+=(na|[0-9]+)$/ {next} {print}' "$work/stats.txt")" ]; then
+            echo "::error::internal: awk stats output malformed:"
+            cat "$work/stats.txt"
+            exit 1
+          fi
+          # Generated above; validated to contain only KEY=na or KEY=<digits>
+          # lines before sourcing.
+          # shellcheck disable=SC1091
+          . "$work/stats.txt"
+
+          # Authoritative totals: jq parses the raw JSON stream natively,
+          # so the data payloads feed straight into the filters.
+          awk '{i = index($0, "\t"); raw = substr($0, i + 1)} raw ~ /^data: / {print substr(raw, 7)}' "$work/stamped.log" \
+            | jq -s '{
+                text_deltas: ([.[] | select(.type == "content_block_delta" and .delta.type == "text_delta")] | length),
+                total_text_chars: ([.[] | select(.type == "content_block_delta" and .delta.type == "text_delta") | ((.delta.text // "") | length)] | add // 0),
+                stop_reason: ([.[] | select(.type == "message_delta") | (.delta.stop_reason // null)] | last // null),
+                output_tokens: ([.[] | select(.type == "message_delta") | (.usage.output_tokens // null)] | last // null)
+              }' > "$work/totals.json"
+          text_deltas=$(jq -r '.text_deltas' "$work/totals.json")
+          total_chars=$(jq -r '.total_text_chars' "$work/totals.json")
+          stop_reason=$(jq -r '.stop_reason // "none"' "$work/totals.json")
+          output_tokens=$(jq -r '.output_tokens // "unknown"' "$work/totals.json")
+          case "$text_deltas" in '' | *[!0-9]*) text_deltas=0 ;; esac
+          case "$total_chars" in '' | *[!0-9]*) total_chars=0 ;; esac
+
+          # Mid-stream SSE error events, if any (type only, never the body).
+          stream_err=$(awk '{i = index($0, "\t"); raw = substr($0, i + 1)} raw ~ /^data: / {print substr(raw, 7)}' "$work/stamped.log" \
+            | jq -rs '[.[] | select(.type == "error") | .error.type] | first // empty')
+          [ -n "$stream_err" ] && echo "mid-stream error: $stream_err"
+
+          echo "----- per-SSE-line arrival log ($STREAM_LINES stream lines: $EVENT_LINES event lines, $DATA_LINES data lines) -----"
+          cat "$work/perline.log"
+          echo "----- end per-line log -----"
+
+          if [ "$FIRST_TEXT_MS" != "na" ] && [ "$LAST_TEXT_MS" != "na" ]; then
+            spread=$(( LAST_TEXT_MS - FIRST_TEXT_MS ))
+          else
+            spread=0
+          fi
+          if [ "$text_deltas" -eq 0 ]; then
+            # No answer text arrived at all — reporting "bunched" here would
+            # be a false reading (most likely stop_reason=max_tokens while
+            # the reasoning model was still thinking).
+            verdict="inconclusive (no answer text in the stream; stop_reason=$stop_reason, output_tokens=$output_tokens)"
+          elif [ "$text_deltas" -ge 5 ] && [ "$spread" -gt 1000 ]; then
+            verdict="incremental"
+          else
+            verdict="bunched"
+          fi
+
+          echo "----- PROBE SUMMARY (provider=$provider model=$model) -----"
+          echo "time_to_first_thinking_delta_ms: $FIRST_THINK_MS"
+          echo "time_to_first_text_delta_ms: $FIRST_TEXT_MS"
+          echo "time_to_last_delta_ms: $LAST_DELTA_MS"
+          echo "text_delta_count: $text_deltas (jq authoritative; awk saw $TEXT_DELTAS_AWK)"
+          echo "total_text_chars: $total_chars (jq authoritative)"
+          echo "verdict: $verdict"
+          echo "----- context -----"
+          echo "text_spread_ms: $spread (first->last text delta; rule: >=5 text deltas AND spread >1000 ms)"
+          echo "http_status=${status:-none} curl_exit=$crc wall_ms=$(( (end_ns - start_ns) / 1000000 )) first_event_ms=$FIRST_EVENT_MS"
+          echo "stop_reason=$stop_reason output_tokens=$output_tokens thinking_deltas=$THINK_DELTAS signature_deltas=$SIG_DELTAS"
+          echo "exactly one API call was made: no retry, no fallback, no other provider"
+          exit 0
