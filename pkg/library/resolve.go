@@ -103,12 +103,12 @@ func ResolveHostPath(scope ResolveScope, hostPath string) HostRef {
 	if _, bad := pathsafe.FirstControlRune(hostPath); bad {
 		return HostRef{Kind: HostRefOutside}
 	}
-	real, ok := evalDeepest(hostPath)
+	realPath, ok := evalDeepest(hostPath)
 	if !ok {
 		return HostRef{Kind: HostRefOutside}
 	}
 	for _, c := range resolveCandidates(scope) {
-		if ref, found := resolveInCandidate(scope.Home, c, real); found {
+		if ref, found := resolveInCandidate(scope.Home, c, realPath); found {
 			return ref
 		}
 	}
@@ -167,9 +167,9 @@ func resolveCandidates(scope ResolveScope) []resolveCandidate {
 // arrives through the in-tree mount entry (work/<mount>/c.md) evaluates to the
 // mount's host path, which is not under the work tree, so it reaches the mount
 // check and gets the same answer as the host path.
-func resolveInCandidate(home string, c resolveCandidate, real string) (HostRef, bool) {
+func resolveInCandidate(home string, c resolveCandidate, realPath string) (HostRef, bool) {
 	if workReal, ok := evalDeepest(c.workDir); ok {
-		if sub, under := relUnder(workReal, real); under {
+		if sub, under := relUnder(workReal, realPath); under {
 			sub = foldRelToDisk(workReal, sub)
 			if sub != "" && home != "" && shadowedByMount(home, c.workspaceID, sub) {
 				// A real folder in work/ that carries a declared mount's name
@@ -185,7 +185,7 @@ func resolveInCandidate(home string, c resolveCandidate, real string) (HostRef, 
 		return HostRef{}, false
 	}
 	if homeReal, ok := evalDeepest(home); ok {
-		if _, inHome := relUnder(homeReal, real); inHome {
+		if _, inHome := relUnder(homeReal, realPath); inHome {
 			return HostRef{}, false
 		}
 	}
@@ -201,7 +201,7 @@ func resolveInCandidate(home string, c resolveCandidate, real string) (HostRef, 
 		if !mok {
 			continue
 		}
-		sub, under := relUnder(mountReal, real)
+		sub, under := relUnder(mountReal, realPath)
 		if !under {
 			continue
 		}
@@ -243,11 +243,11 @@ func evalDeepest(p string) (string, bool) {
 	cur := filepath.Clean(p)
 	var tail []string
 	for {
-		if real, err := filepath.EvalSymlinks(cur); err == nil {
+		if realPath, err := filepath.EvalSymlinks(cur); err == nil {
 			for i := len(tail) - 1; i >= 0; i-- {
-				real = filepath.Join(real, tail[i])
+				realPath = filepath.Join(realPath, tail[i])
 			}
-			return real, true
+			return realPath, true
 		}
 		if _, err := os.Lstat(cur); err == nil || !errors.Is(err, fs.ErrNotExist) {
 			return "", false

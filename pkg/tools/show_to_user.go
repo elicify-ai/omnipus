@@ -248,16 +248,14 @@ func (t *ShowToUserTool) openChecked(call showToUserCall, host string) *ToolResu
 }
 
 // showToUserCarveOut reports whether host is a secret carve-out by any of its
-// forms: the real path when it resolves, the real path through the deepest
-// existing ancestor (a missing file under a symlinked directory), and the
-// cleaned lexical path (a missing file whose parents do not resolve either).
+// forms: the real path through the deepest existing ancestor (the file's own
+// real path when it resolves; for a missing file under a symlinked directory,
+// the parent's real path plus the missing tail), and the cleaned lexical path
+// (a missing file whose parents do not resolve either).
 // Checking every form makes a missing secret indistinguishable from an
 // existing one.
 func showToUserCarveOut(host string, policy fspolicy.FSPolicy) bool {
 	candidates := []string{filepath.Clean(host)}
-	if real, err := filepath.EvalSymlinks(host); err == nil {
-		candidates = append(candidates, real)
-	}
 	if deepest, ok := library.RealPathDeepest(host); ok {
 		candidates = append(candidates, deepest)
 	}

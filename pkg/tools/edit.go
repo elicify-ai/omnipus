@@ -226,11 +226,11 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 // handleLinkLine is LinkLine for a resolved path handle: the handle's real
 // path (advisory, used only to compute the link) decides the Library.
 func handleLinkLine(ctx context.Context, handle *PathHandle) string {
-	real, err := handle.RealPath()
-	if err != nil || real == "" {
+	realPath, err := handle.RealPath()
+	if err != nil || realPath == "" {
 		return ""
 	}
-	return LinkLine(ctx, config.OmnipusHomeDir(), real)
+	return LinkLine(ctx, config.OmnipusHomeDir(), realPath)
 }
 
 // editFile reads the file via handle, performs the replacement, and writes
