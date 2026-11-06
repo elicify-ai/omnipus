@@ -86,6 +86,8 @@ async function waitTurnDone(page: Page) {
 }
 
 test.describe('reconnect mid-turn (ADR-082)', () => {
+  // Shared-page scenarios only; the deterministic S-10 describe below has
+  // its own isolated gateway and no shared baseURL to navigate.
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
   })
@@ -281,6 +283,7 @@ test.describe('reconnect mid-turn (ADR-082) — deterministic held stream (#1661
     }
   })
 })
+
 // Harness-only regressions for S-09. Static HTML replaces application rendering,
 // not the browser or Locator API. These run in the existing Chromium E2E shard:
 // the ordinary Vitest jobs do not provision a Playwright browser.

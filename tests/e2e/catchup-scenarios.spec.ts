@@ -278,11 +278,15 @@ async function openHeldCatchupChat(page: Page, provider: HeldStreamProvider): Pr
   }
 }
 
-test.beforeEach(async ({ page }) => {
-  await page.goto('/')
-})
-
 test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  // Shared-page scenarios only. The #1661 deterministic describe below
+  // deliberately has NO such hook: its tests point the page at their own
+  // isolated gateways, and a file-level goto('/') needs a shared baseURL
+  // the keyless private runner does not have.
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/')
+  })
+
   test('a: clean network cut mid-turn, 30s, then back — incremental catch-up', async ({ page, context }) => {
     test.setTimeout(420_000)
     const before = await startLongTurn(page)
@@ -320,6 +324,10 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
 })
 
 test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/')
+  })
+
   test('e: two tabs on one chat — second tab shows the user message and the identical answer, cursors equal', async ({ page, context }) => {
     test.setTimeout(420_000)
     await startLongTurn(page)
@@ -611,8 +619,8 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         await waitForConnected(page)
         await freshChat(page)
         await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-        // Token delay plus the explicit running precondition make a finite
-        // answer long enough to interrupt, and still let its manual retry finish.
+        // The held-stream provider keeps the answer open until the SIGKILL,
+        // so the explicit running precondition below cannot race completion.
         await input.fill(LONG_PROMPT)
         await input.press('Enter', { timeout: 15_000 })
         await expect(stopButton(page)).toBeVisible({ timeout: 15_000 })
@@ -724,6 +732,10 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
 })
 
 test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/')
+  })
+
   test('i: message typed while offline — appears at the end, then its answer; no duplicate; ticks received → working', async ({ page, context }) => {
     test.setTimeout(180_000)
     const input = chatInput(page)
