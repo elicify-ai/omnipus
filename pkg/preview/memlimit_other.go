@@ -7,5 +7,7 @@
 package preview
 
 // HostMemoryLimitUnenforced: the data-limit check is Linux only (macOS
-// memory is best effort and disclosed in the docs; Windows uses a job).
-func HostMemoryLimitUnenforced() (reason, note string) { return "", "" }
+// memory is best effort and disclosed in the docs; Windows uses a job). It is
+// a variable only so the doctor test can inject an unenforcing host; production
+// code never assigns it.
+var HostMemoryLimitUnenforced = func() (reason, note string) { return "", "" }

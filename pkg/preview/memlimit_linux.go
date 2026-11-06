@@ -14,8 +14,10 @@ import (
 
 const ignoreRlimitDataParam = "/sys/module/kernel/parameters/ignore_rlimit_data"
 
-// HostMemoryLimitUnenforced runs the §3.1 D1.4 check on this host.
-func HostMemoryLimitUnenforced() (reason, note string) {
+// HostMemoryLimitUnenforced runs the §3.1 D1.4 check on this host. It is a
+// variable only so the doctor test can inject an unenforcing host; production
+// code never assigns it.
+var HostMemoryLimitUnenforced = func() (reason, note string) {
 	var uts unix.Utsname
 	var release string
 	err := unix.Uname(&uts)
