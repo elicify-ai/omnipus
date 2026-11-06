@@ -775,23 +775,63 @@ func readE2EOfferResponse(t *testing.T, conn *websocket.Conn, want string) []byt
 // TestReadE2EOfferResponseNamesReasonDetail proves readE2EOfferResponse puts
 // the existing reason_detail wire field into its failure message. The child
 // process is the real reader: t.Fatalf cannot be intercepted in-process.
+// Each case asserts the exact formatted line, so a raw-frame dump cannot pass.
 func TestReadE2EOfferResponseNamesReasonDetail(t *testing.T) {
 	const detail = "capture session: stopped while starting"
-	absent := e2eOfferFailureText("error", "", false)
-	require.Contains(t, absent, "reason_detail absent")
-	require.NotContains(t, absent, detail)
+	cases := []struct {
+		name      string
+		available bool
+		detail    string
+		want      string
+	}{
+		{
+			name:      "available_false",
+			available: false,
+			detail:    detail,
+			want:      "offer failed: error: " + detail + " (available=false)",
+		},
+		{
+			name:      "available_true",
+			available: true,
+			detail:    detail,
+			want:      "offer failed: error: " + detail + " (available=true)",
+		},
+		{
+			name:      "reason_detail_absent",
+			available: false,
+			want:      "offer failed: error (reason_detail absent, available=false)",
+		},
+	}
 
 	if os.Getenv("E2E_OFFER_FAIL_CHILD") != "1" {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestReadE2EOfferResponseNamesReasonDetail$", "-test.count=1", "-test.v")
-		cmd.Env = append(os.Environ(), "E2E_OFFER_FAIL_CHILD=1")
-		out, err := cmd.CombinedOutput()
-		require.Error(t, err, "child must fail on a reason=error state frame; output:\n%s", out)
-		require.Contains(t, string(out), detail)
-		require.Contains(t, string(out), "available=false")
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				cmd := exec.Command(os.Args[0], "-test.run=^TestReadE2EOfferResponseNamesReasonDetail$", "-test.count=1", "-test.v")
+				cmd.Env = append(os.Environ(),
+					"E2E_OFFER_FAIL_CHILD=1",
+					"E2E_OFFER_FAIL_AVAILABLE="+fmt.Sprintf("%t", tc.available),
+					"E2E_OFFER_FAIL_DETAIL="+tc.detail,
+				)
+				out, err := cmd.CombinedOutput()
+				require.Error(t, err, "child must fail on a reason=error state frame; output:\n%s", out)
+				require.Contains(t, string(out), tc.want)
+			})
+		}
 		return
 	}
 
-	payload := []byte(`{"type":"browser_webrtc_state","available":false,"reason":"error","reason_detail":"` + detail + `"}`)
+	available := os.Getenv("E2E_OFFER_FAIL_AVAILABLE") == "true"
+	detailEnv := os.Getenv("E2E_OFFER_FAIL_DETAIL")
+	body := map[string]any{
+		"type":      "browser_webrtc_state",
+		"available": available,
+		"reason":    "error",
+	}
+	if detailEnv != "" {
+		body["reason_detail"] = detailEnv
+	}
+	payload, err := json.Marshal(body)
+	require.NoError(t, err)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, upgradeErr := (&websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}).Upgrade(w, r, nil)
 		if upgradeErr != nil {
@@ -805,11 +845,11 @@ func TestReadE2EOfferResponseNamesReasonDetail(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, dialErr := websocket.DefaultDialer.Dial(wsURL, nil)
 	if resp != nil {
 		resp.Body.Close()
 	}
-	require.NoError(t, err)
+	require.NoError(t, dialErr)
 	defer conn.Close()
 	readE2EOfferResponse(t, conn, string(generated.WsFrameTypeBrowserWebrtcAnswer))
 	t.Fatal("readE2EOfferResponse returned on an error state frame")
