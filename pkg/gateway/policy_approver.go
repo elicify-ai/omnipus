@@ -77,8 +77,10 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		// the room "waiting for you in <Agent>'s main chat" (FR-169). A room's
 		// pre-admission card is not the member's work and does not count.
 		if !entry.RoomPreAdmission {
-			a.wsHandler.roomCard(entry.SessionID, entry.ApprovalID, true)
-			defer a.wsHandler.roomCard(entry.SessionID, entry.ApprovalID, false)
+			// #1449 FR-053: a card that carries this group's reference flips
+			// only its own request.
+			a.wsHandler.roomCardFor(entry.SessionID, entry.RoomRef, entry.ApprovalID, true)
+			defer a.wsHandler.roomCardFor(entry.SessionID, entry.RoomRef, entry.ApprovalID, false)
 		}
 	}
 	// accepted==false → saturated; no WS broadcast, outcome pre-delivered.

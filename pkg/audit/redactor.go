@@ -114,6 +114,25 @@ func NewRedactor(customPatterns []string) (*Redactor, error) {
 	return newRedactorFrom(plainRules(defaultPatterns), customPatterns)
 }
 
+// NewSecretShapeRedactor returns NewRedactor(nil)'s unanchored SEC-16 set
+// minus the email-address pattern. The Judge's evidence scrubber uses it
+// (founder decision Q14 B, 2026-10-30): a goal such as "email the order to
+// supplier@x.com" must be verifiable, so recipients stay visible while every
+// credential shape is still replaced.
+func NewSecretShapeRedactor() *Redactor {
+	patterns := make([]string, 0, len(defaultPatterns))
+	for i, p := range defaultPatterns {
+		if defaultPatternLabels[i] != emailPatternLabel {
+			patterns = append(patterns, p)
+		}
+	}
+	r, err := newRedactorFrom(plainRules(patterns), nil)
+	if err != nil {
+		panic(fmt.Sprintf("BUG: secret-shape redactor with no custom patterns failed: %v", err))
+	}
+	return r
+}
+
 // auditKeyBoundaryPrefix makes a credential pattern match only when the
 // credential starts the string or follows a separator, so
 // "project-task-management" or "risk-assessment" is not read as an "sk-"

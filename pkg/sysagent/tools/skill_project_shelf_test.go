@@ -1,6 +1,6 @@
-// Omnipus — integration tests for ADR-072 R3 fix: edit_skill/remove_skill
-// resolving against the current workspace's mounted project skills before
-// falling back to the central registry.
+// Skills r15 §§5.1–5.5, §15: project skills are plain mounted files.
+// Retired slug-to-project mutation routing is replaced by explicit file paths;
+// deletion confinement is exercised at the existing project-writer boundary.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -76,142 +76,72 @@ func seedProjectShelfFixture(t *testing.T, home, wsID, mountName, mountRoot, slu
 	}
 }
 
-// TestSkillEditTool_ProjectShelf_WritesIntoMount is the R3 regression test
-// for edit_skill: before this fix, edit_skill/create_skill/remove_skill never
-// called skills.ResolveProjectSkillWriter (zero production callers) —
-// confirmed live in
-// docs/internal/qa/uat-report-skill-activation-batch2-groupD-2026-09-02.md
-// (S27: edit_skill(name="db-migrate", ...) -> NOT_FOUND against a real
-// mounted skill, mount file untouched). This drives the REAL tool
-// (SkillEditTool.Execute, wired the way production wires it — via
-// tools.WithWorkspaceID(ctx, wsID), the same context key the agent loop
-// carries — against a real workspace/mount record and a real SKILL.md on
-// disk) and proves the edit lands DIRECTLY in the mount, per D6.1 ("the
-// write goes into that project's own file... it does not fork a copy into
-// the central registry").
-func TestSkillEditTool_ProjectShelf_WritesIntoMount(t *testing.T) {
-	home := t.TempDir()
-	mountRoot := t.TempDir()
-	globalDir := t.TempDir() // the ordinary (registry) SkillWriter root
-
+// Project writes use the real file tool. No registry shadow or history.
+func TestSkillFileTool_ProjectShelf_WritesIntoMount(t *testing.T) {
+	home, mountRoot, globalDir := t.TempDir(), t.TempDir(), t.TempDir()
 	const wsID = "01SKILLPROJSHELF00000001"
-	seedProjectShelfFixture(t, home, wsID, "acme", mountRoot, "db-migrate", "Use when the user asks to run a database migration")
-
-	deps := newAuthoringDeps(t, globalDir, "")
-	deps.Home = home
-
-	edit := systools.NewSkillEditTool(deps)
+	seedProjectShelfFixture(t, home, wsID, "acme", mountRoot, "db-migrate", "A project migration")
+	path := filepath.Join(mountRoot, ".claude", "skills", "db-migrate", "SKILL.md")
 	ctx := tools.WithWorkspaceID(context.Background(), wsID)
-	newContent := "---\nname: db-migrate\ndescription: EDITED-BY-R3-TEST, long enough to pass validation.\n---\n\nEdited body.\n"
-	revision, _ := skills.NewSkillWriter(filepath.Join(mountRoot, ".claude", "skills")).SkillRevision("db-migrate")
-	res := edit.Execute(ctx, map[string]any{"name": "db-migrate", "content": newContent, "revision": revision})
-
-	m := parseSuccess(t, res.ForLLM)
-	if m["shelf"] != "project" {
-		t.Fatalf("expected shelf=project, got %v (resp=%s)", m["shelf"], res.ForLLM)
+	content := validSkill("db-migrate") + "\nEdited in the mount.\n"
+	result := tools.NewWriteFileTool(mountRoot, true).Execute(ctx, map[string]any{"path": path, "content": content, "overwrite": true})
+	if result.IsError {
+		t.Fatal(result.ForLLM)
 	}
-	if m["mount"] != "acme" {
-		t.Fatalf("expected mount=acme, got %v (resp=%s)", m["mount"], res.ForLLM)
+	if string(wu3ReadFile(t, path)) != content {
+		t.Fatalf("mount bytes not changed: %s", result.ForLLM)
 	}
-	if m["action"] != "edited" {
-		t.Fatalf("expected action=edited, got %v (resp=%s)", m["action"], res.ForLLM)
-	}
-
-	// The mount's own file must carry the new content.
-	mountSkillPath := filepath.Join(mountRoot, ".claude", "skills", "db-migrate", "SKILL.md")
-	got, err := os.ReadFile(mountSkillPath)
-	if err != nil {
-		t.Fatalf("read mount SKILL.md: %v", err)
-	}
-	if string(got) != newContent {
-		t.Fatalf("mount SKILL.md not updated:\ngot:  %q\nwant: %q", string(got), newContent)
-	}
-
-	// D6.1: no shadow copy in the central registry.
 	if _, err := os.Stat(filepath.Join(globalDir, "db-migrate")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("edit_skill must NOT fork a copy into the central registry; found err=%v", err)
+		t.Fatalf("project write forked registry shadow: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "system", "skill-history")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("project must not enter registry pipeline: %v", err)
 	}
 }
 
-// TestSkillEditTool_ProjectShelf_UnmountedSlugFallsThroughToRegistry proves
-// the fallback direction still works: a slug absent from the current
-// workspace's project shelf resolves through the ordinary global-root path
-// exactly as it did before this fix.
-func TestSkillEditTool_ProjectShelf_UnmountedSlugFallsThroughToRegistry(t *testing.T) {
-	home := t.TempDir()
-	mountRoot := t.TempDir()
-	globalDir := t.TempDir()
-
+// The former implicit global-fallback behavior is withdrawn (§5.4); the
+// supported reader explicitly selects the installed object, independent of
+// the current project shelf. Its data and session observation are real.
+func TestGetSkill_ProjectNameDoesNotRetargetInstalledRead(t *testing.T) {
+	home, mountRoot := t.TempDir(), t.TempDir()
+	globalDir := filepath.Join(home, "skills")
 	const wsID = "01SKILLPROJSHELF00000002"
-	seedProjectShelfFixture(t, home, wsID, "acme", mountRoot, "db-migrate", "Use when the user asks to run a database migration")
-
+	seedProjectShelfFixture(t, home, wsID, "acme", mountRoot, "db-migrate", "A project migration")
+	validSkillFixture(t, globalDir, "db-migrate", "The separate installed skill")
 	deps := newAuthoringDeps(t, globalDir, "")
 	deps.Home = home
-
-	create := systools.NewSkillCreateTool(deps)
-	ctx := tools.WithWorkspaceID(context.Background(), wsID)
-	createRes := create.Execute(ctx, map[string]any{
-		"name":    "unrelated-skill",
-		"content": validSkill("unrelated-skill"),
-	})
-	cm := parseSuccess(t, createRes.ForLLM)
-	if cm["action"] != "created" {
-		t.Fatalf("expected create to succeed via the registry path, got resp=%s", createRes.ForLLM)
-	}
-
-	edit := systools.NewSkillEditTool(deps)
-	revision, _ := deps.SkillWriter.SkillRevision("unrelated-skill")
-	res := edit.Execute(ctx, map[string]any{
-		"name":     "unrelated-skill",
-		"content":  "---\nname: unrelated-skill\ndescription: Edited via the registry path, long enough to pass.\n---\n\nEdited.\n",
-		"revision": revision,
-	})
-	m := parseSuccess(t, res.ForLLM)
-	if _, hasShelf := m["shelf"]; hasShelf {
-		t.Fatalf("a non-project skill must not carry a shelf=project tag; resp=%s", res.ForLLM)
-	}
-	if m["action"] != "edited" {
-		t.Fatalf("expected action=edited via the registry path, got %v (resp=%s)", m["action"], res.ForLLM)
-	}
-	if _, err := os.Stat(filepath.Join(globalDir, "unrelated-skill", "SKILL.md")); err != nil {
-		t.Fatalf("registry-shelf edit must still land in the global dir: %v", err)
+	deps.ResolveToolPolicy = func(_, _ string) (string, bool) { return "allow", true }
+	ctx := tools.WithWorkspaceID(readCtx("editor"), wsID)
+	result := systools.NewGetSkillTool(deps).Execute(ctx, map[string]any{"id": "db-migrate", "fields": []any{"description", "shelf"}})
+	body := wu3Success(t, result)
+	if body["shelf"] != "registry" || body["description"] != "The separate installed skill" {
+		t.Fatalf("get_skill retargeted to project: %s", result.ForLLM)
 	}
 }
 
-// TestSkillRemoveTool_ProjectShelf_DeletesMountFile is the R3 regression test
-// for remove_skill (D6.1: "remove_skill follows the same rule — deleting a
-// project skill deletes the project's file"). Before this fix, remove_skill
-// only ever called deps.SkillInstaller.Uninstall against the central
-// registry, so a mounted project skill returned NOT_FOUND
-// (docs/internal/qa/uat-report-skill-activation-batch2-groupD-2026-09-02.md
-// S29) even though it plainly existed on disk.
-func TestSkillRemoveTool_ProjectShelf_DeletesMountFile(t *testing.T) {
-	home := t.TempDir()
-	mountRoot := t.TempDir()
-
+// Project skills have no T9 object mutation API. Keep actual directory deletion
+// and confinement coverage at the existing project writer, not a fake router.
+func TestProjectSkillWriter_DeletesOnlyMountSkill(t *testing.T) {
+	home, mountRoot := t.TempDir(), t.TempDir()
 	const wsID = "01SKILLPROJSHELF00000003"
-	seedProjectShelfFixture(t, home, wsID, "acme", mountRoot, "db-migrate", "Use when the user asks to run a database migration")
-
-	deps, _ := newTestDeps(t)
-	deps.Home = home
-	// remove_skill's project-shelf branch does not need SkillInstaller at
-	// all — deliberately leave it nil to prove that.
-
-	remove := systools.NewSkillRemoveTool(deps)
-	ctx := tools.WithWorkspaceID(context.Background(), wsID)
-	revision, _ := skills.NewSkillWriter(filepath.Join(mountRoot, ".claude", "skills")).SkillRevision("db-migrate")
-	res := remove.Execute(ctx, map[string]any{"name": "db-migrate", "confirm": true, "revision": revision})
-
-	m := parseSuccess(t, res.ForLLM)
-	if m["shelf"] != "project" {
-		t.Fatalf("expected shelf=project, got %v (resp=%s)", m["shelf"], res.ForLLM)
+	seedProjectShelfFixture(t, home, wsID, "acme", mountRoot, "db-migrate", "A project migration")
+	skillRoot := filepath.Join(mountRoot, ".claude", "skills")
+	operator := filepath.Join(mountRoot, "operator.txt")
+	if err := os.WriteFile(operator, []byte("operator data"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if m["mount"] != "acme" {
-		t.Fatalf("expected mount=acme, got %v (resp=%s)", m["mount"], res.ForLLM)
+	writer := skills.NewSkillWriter(skillRoot)
+	revision, err := writer.SkillRevision("db-migrate")
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	mountSkillDir := filepath.Join(mountRoot, ".claude", "skills", "db-migrate")
-	if _, err := os.Stat(mountSkillDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected the mount's own skill directory to be removed, stat err=%v", err)
+	if err := writer.RemoveSkillReviewed("db-migrate", revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(skillRoot, "db-migrate")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("project skill not removed: %v", err)
+	}
+	if string(wu3ReadFile(t, operator)) != "operator data" {
+		t.Fatal("project deletion changed operator data")
 	}
 }

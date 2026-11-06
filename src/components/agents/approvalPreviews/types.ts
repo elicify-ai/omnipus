@@ -41,6 +41,13 @@ export interface ToolApprovalPreviewEntry {
   primaryLabel?: string
   /** 'replace' only — overrides the Deny button's label. The dispatched action is always 'deny' regardless of label. */
   secondaryLabel?: string
+  /**
+   * Optional: returns the copy of args the card may show. Applied before both
+   * Body and the raw Arguments JSON dump, so a tool whose args can carry a
+   * secret (create_agent/update_agent env_overrides) never renders it.
+   * Absent: args are shown as received.
+   */
+  redactArgs?: (args: Record<string, unknown>) => Record<string, unknown>
   /** 'replace' only — whether to keep offering Cancel. Defaults to true; request_mount sets this false (see RequestMountApprovalPreview.tsx). */
   showCancel?: boolean
 }

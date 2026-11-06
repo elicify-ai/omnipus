@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,9 @@ import (
 // gateway/carrier history_page_measurement receipt required by T18/UAT.
 // Both owned flushers are stopped/joined; construction is outside measurement.
 func TestChatHistoryIndex_PrefixIndependentCoreAllocations(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows-deferred #1465: hangs on the hosted Windows runner; founder accepted red plus skip 2026-10-30, register #1504")
+	}
 	var allocated [2]int64
 	for k, prefix := range []int{1000, 100000} {
 		s, sid := newEffectsSession(t)

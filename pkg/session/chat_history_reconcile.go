@@ -14,6 +14,12 @@ import (
 type historyCapturedStream struct {
 	key, path string
 	end       int64
+	// emptyKnown marks an earlier day partition the checkpoint does not know
+	// that is EMPTY (0 bytes). It holds no record address, so it cannot
+	// re-point one: it is known-and-empty, the rule the offline builder
+	// applies (PrepareChatHistoryIndex records every stream end, empty ones
+	// included).
+	emptyKnown bool
 }
 type historyMutation struct {
 	record         *ArchiveRecord
@@ -22,6 +28,9 @@ type historyMutation struct {
 	disposition    *InputDisposition
 	dispositionRef historyDispositionRef
 	expired        string
+	// empty is a known-empty earlier partition: a catalog fact with no
+	// canonical content, whose end (0) the checkpoint records.
+	empty string
 }
 
 func filepathJoinDisposition(dir string) string { return filepath.Join(dir, inputDispositionFileName) }
@@ -74,7 +83,15 @@ func historyCaptureStreams(dir string, cp historyCheckpoint) ([]historyCapturedS
 	streams := make([]historyCapturedStream, 0, len(actual))
 	for key, s := range actual {
 		if _, known := cp.ArchiveEnds[key]; !known && cp.CurrentKey != "" && key < cp.CurrentKey {
-			return nil, 0, nil, "", errors.New("archive catalog repointed")
+			if s.end != 0 {
+				return nil, 0, nil, "", errors.New("archive catalog repointed")
+			}
+			// An earlier day partition that is EMPTY holds no record address, so
+			// it cannot re-point one. It is known-and-empty, exactly as the
+			// offline builder records it (chat_history_build.go records every
+			// stream end, empty ones included); the reconcile records its end
+			// (0) on the next publish.
+			s.emptyKnown = true
 		}
 		streams = append(streams, s)
 	}
@@ -187,6 +204,7 @@ func historyValidateAnchor(ctx context.Context, dir string, cp historyCheckpoint
 }
 func historyCollectMutations(ctx context.Context, dir string, cp historyCheckpoint, streams []historyCapturedStream, dispEnd int64, expired []string) ([]historyMutation, chatHistoryReconcileResult, error) {
 	var result chatHistoryReconcileResult
+	var empty []historyMutation
 	items := make([]historyMutation, 0, chatHistoryRecoveryMaxItems+1)
 	add := func(m historyMutation) bool {
 		items = append(items, m)
@@ -202,6 +220,13 @@ func historyCollectMutations(ctx context.Context, dir string, cp historyCheckpoi
 		}
 	}
 	for _, s := range streams {
+		if s.emptyKnown {
+			// A known-empty earlier partition is a catalog fact, not canonical
+			// content: it carries no bytes to walk and does not consume the
+			// bounded catch-up allowance.
+			empty = append(empty, historyMutation{empty: s.key})
+			continue
+		}
 		off := cp.ArchiveEnds[s.key]
 		for off < s.end {
 			purpose := "suffix"
@@ -243,6 +268,11 @@ func historyCollectMutations(ctx context.Context, dir string, cp historyCheckpoi
 		}
 		off += int64(len(b))
 	}
+	// The known-empty coverage facts are appended last: they are catalog facts
+	// with no canonical content, so they never consume the bounded catch-up
+	// allowance that counts the archive and disposition facts above.
+	items = append(items, empty...)
+	result.ObservedItems = len(items)
 	return items, result, nil
 }
 func historyApplyMutations(t *chatHistoryIndexTree, cp *historyCheckpoint, items []historyMutation) error {
@@ -264,6 +294,12 @@ func historyApplyMutations(t *chatHistoryIndexTree, cp *historyCheckpoint, items
 		case m.expired != "":
 			delete(cp.ArchiveEnds, m.expired)
 			cp.Facts = append(cp.Facts, "expired/"+m.expired)
+		case m.empty != "":
+			// A known-empty earlier partition carries no record address. The
+			// checkpoint records its end (0), exactly as the offline builder
+			// records every stream end.
+			cp.ArchiveEnds[m.empty] = 0
+			cp.Facts = append(cp.Facts, "empty/"+m.empty)
 		}
 	}
 	return nil
@@ -293,6 +329,31 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 	if err = historyValidateAnchor(ctx, dir, cp, expired); err != nil {
 		return result, historyUnavailable("index_inconsistent", err)
 	}
+	// Derived-index damage is checked BEFORE the bounded collection, so a
+	// damaged index is refused as index_inconsistent whatever the lag; only a
+	// pure catchup_limit may trigger the demand self-heal. This first pass
+	// never trims: a torn or uncommitted unpublished tail is still discarded
+	// below, only once the canonical 64-fact bound has been enforced.
+	t, err := historyOpenTree(ctx, dir, cp, true)
+	if err != nil {
+		return result, historyUnavailable("index_inconsistent", err)
+	}
+	// The published generation's handle. The expiry path closes it as soon as
+	// compaction has read it, before that file is retired: Windows refuses
+	// to remove a file this process still holds open.
+	published := t.file
+	defer func() {
+		if published != nil {
+			// As before this change, a close error here is not returned:
+			// published writes through this handle (tail trim, publish)
+			// were synced first, and an unpublished tail is discarded by
+			// the next reconcile, so the close cannot lose published data.
+			_ = published.Close()
+		}
+	}()
+	if _, _, err = historyValidateIndexTail(t, cp, false); err != nil {
+		return result, historyUnavailable("index_inconsistent", err)
+	}
 	items, result, err := historyCollectMutations(ctx, dir, cp, streams, dispEnd, expired)
 	if err != nil {
 		if errors.Is(err, ErrChatHistoryUnavailable) || ctx.Err() != nil {
@@ -300,12 +361,7 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 		}
 		return result, historyUnavailable("index_inconsistent", err)
 	}
-	t, err := historyOpenTree(ctx, dir, cp, true)
-	if err != nil {
-		return result, historyUnavailable("index_inconsistent", err)
-	}
-	defer t.file.Close()
-	saved, hasSaved, err := historyValidateIndexTail(t, cp)
+	saved, hasSaved, err := historyValidateIndexTail(t, cp, true)
 	if err != nil {
 		return result, historyUnavailable("index_inconsistent", err)
 	}
@@ -332,6 +388,11 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 			return result, historyUnavailable("index_inconsistent", err)
 		}
 		defer t.file.Close()
+		closeErr := published.Close()
+		published = nil
+		if closeErr != nil {
+			return result, historyUnavailable("storage_error", closeErr)
+		}
 	}
 	reuseOnly := false
 	if hasSaved && len(expired) == 0 {

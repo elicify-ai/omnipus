@@ -249,17 +249,16 @@ type pendingEffect struct {
 // view: chat records with the tool-call effects applied and the cancel
 // truncation derived. It is the single reader behind ReadTranscript.
 func (us *UnifiedStore) readTranscriptMerged(sessionID string) ([]TranscriptEntry, error) {
-	entries, _, err := us.readTranscriptIndexed(sessionID)
+	entries, _, err := us.readTranscriptEffective(sessionID)
 	if err != nil {
 		return nil, err
 	}
 	return deriveCancelTruncation(entries), nil
 }
 
-// readTranscriptIndexed is readTranscriptMerged before the cancel truncation:
-// the chat records with the tool-call effects applied, and each record's
-// archive address mapped to its index in entries.
-func (us *UnifiedStore) readTranscriptIndexed(sessionID string) ([]TranscriptEntry, map[ArchiveAddress]int, error) {
+// readTranscriptEffective returns the chat records with the tool-call effects
+// applied, and each record's archive address mapped to its index.
+func (us *UnifiedStore) readTranscriptEffective(sessionID string) ([]TranscriptEntry, map[ArchiveAddress]int, error) {
 	parts, err := us.transcriptPartitions(sessionID)
 	if err != nil {
 		// Reading only the current day would present a partial transcript as the
@@ -326,6 +325,56 @@ func (us *UnifiedStore) readTranscriptIndexed(sessionID string) ([]TranscriptEnt
 	return entries, index, nil
 }
 
+// Tool-call statuses the boot settle below reads and writes (contracts
+// ToolCall.yaml status enum).
+const (
+	toolCallStatusRunning     = "running"
+	toolCallStatusInterrupted = "interrupted"
+)
+
+// InterruptRunningToolCalls settles, in place, every chat tool call whose
+// merged status is still "running" to "interrupted": one settle effect per
+// call, guarded by IfStatus "running". Boot recovery calls it only for a
+// session whose prior-boot execution is dead, so a dispatch-time running record
+// a crash left behind never reads as running forever. Repeating it is a no-op:
+// a settled call no longer reads as running, and a racing duplicate settle is
+// discarded on read by its guard. Old histories with no running record are
+// read only, never written. It returns how many calls it settled.
+func (us *UnifiedStore) InterruptRunningToolCalls(sessionID string) (int, error) {
+	if err := validateSessionID(sessionID); err != nil {
+		return 0, err
+	}
+	entries, index, err := us.readTranscriptEffective(sessionID)
+	if err != nil {
+		return 0, err
+	}
+	addrs := make([]ArchiveAddress, 0, len(index))
+	for addr, i := range index {
+		for _, tc := range entries[i].ToolCalls {
+			if tc.Status == toolCallStatusRunning {
+				addrs = append(addrs, addr)
+				break
+			}
+		}
+	}
+	sort.Slice(addrs, func(a, b int) bool { return index[addrs[a]] < index[addrs[b]] })
+	settled := 0
+	for _, addr := range addrs {
+		for _, tc := range entries[index[addr]].ToolCalls {
+			if tc.Status != toolCallStatusRunning {
+				continue
+			}
+			post := tc
+			post.Status = toolCallStatusInterrupted
+			if _, err := us.SettleToolCall(sessionID, addr, toolCallStatusRunning, post); err != nil {
+				return settled, fmt.Errorf("unified_store: interrupt running tool call %q: %w", tc.ID, err)
+			}
+			settled++
+		}
+	}
+	return settled, nil
+}
+
 // LocateChatToolCall returns the address of the chat record carrying tool
 // call id and that call as currently merged (every settle and projection
 // applied), for a later SettleToolCall against it. found is false when no
@@ -334,7 +383,7 @@ func (us *UnifiedStore) LocateChatToolCall(sessionID string, id ToolCallID) (add
 	if err = validateSessionID(sessionID); err != nil {
 		return ArchiveAddress{}, ToolCall{}, false, err
 	}
-	entries, index, err := us.readTranscriptIndexed(sessionID)
+	entries, index, err := us.readTranscriptEffective(sessionID)
 	if err != nil {
 		return ArchiveAddress{}, ToolCall{}, false, err
 	}

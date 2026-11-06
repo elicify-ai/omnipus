@@ -1,16 +1,20 @@
 package documentruntime
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // The office-preview AD-14 layout specifies these 17 shipped assets. Pin their
 // presence, not an obsolete count from the former four-package distribution.
 // This list is independent of DocumentSkillIDs and the provisioner's inventory.
+// Skills spec r15 §11 moved the package out of the toolchain: it ships from the
+// embedded registry source, and the toolchain inventory must hold no skill.
 func assertOfficePackageInventory(t *testing.T, manifest Manifest) {
 	t.Helper()
-	paths := make(map[string]bool, len(manifest.Assets))
-	for _, asset := range manifest.Assets {
-		paths[asset.Path] = true
-	}
+	embedded := filepath.Join("..", "skills", "embedded")
 	for _, path := range []string{
 		"SKILL.md", "LICENSE", "evals/evals.json",
 		"knowledge/docx-create.md", "knowledge/docx-edit.md",
@@ -21,14 +25,18 @@ func assertOfficePackageInventory(t *testing.T, manifest Manifest) {
 		"scripts/inspect_docx.py", "scripts/inspect_workbook.py",
 		"scripts/inspect_pptx.py", "scripts/inspect_pdf.py",
 	} {
-		rel := "skills/elicify-office/" + path
-		if !paths[rel] {
-			t.Errorf("document inventory lacks required AD-14 asset %s", rel)
+		if _, err := os.Stat(filepath.Join(embedded, "elicify-office", filepath.FromSlash(path))); err != nil {
+			t.Errorf("office package lacks required AD-14 asset %s: %v", path, err)
+		}
+	}
+	for _, asset := range manifest.Assets {
+		if strings.HasPrefix(asset.Path, "skills/") {
+			t.Errorf("skill copy in the toolchain inventory: %s", asset.Path)
 		}
 	}
 	for _, old := range []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"} {
-		if paths["skills/"+old+"/SKILL.md"] {
-			t.Errorf("retired package %s survived fresh provisioning (AD-14: no aliases)", old)
+		if _, err := os.Stat(filepath.Join(embedded, old, "SKILL.md")); !os.IsNotExist(err) {
+			t.Errorf("retired package %s survived (AD-14: no aliases): %v", old, err)
 		}
 	}
 }

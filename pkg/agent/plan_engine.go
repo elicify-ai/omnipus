@@ -1561,6 +1561,13 @@ func (pe *PlanEngine) idleExpireOneLocked(planID string, cfg config.PlanningConf
 	// nothing in flight. A member task running or queued to run, a plan judge
 	// round, or an owner/supervisor turn still working means the plan is not
 	// idle, however long ago its last recorded activity was.
+	// r17 TK-30 / 18.29: a plan waiting only for its scheduled members is not
+	// abandoned. The sweep skips it and writes no activity.
+	if pe.planOnlyExpectedWaiting(p.ID, now) {
+		logger.InfoCF("plan_engine", "idle sweep: plan past its idle bound but waiting for a scheduled occurrence — not expiring",
+			map[string]any{"plan_id": p.ID})
+		return
+	}
 	if busy, why := pe.planWorkInFlight(p.ID); busy {
 		logger.InfoCF("plan_engine", "idle sweep: plan past its idle bound but work is in flight — not expiring",
 			map[string]any{"plan_id": p.ID, "work": why})

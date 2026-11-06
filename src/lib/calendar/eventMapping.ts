@@ -27,6 +27,7 @@ import {
   SCHEDULED_STYLE,
   NO_RECORD_STYLE,
   SKIPPED_STYLE,
+  MISSED_STYLE,
   type CalendarEventExtProps,
   type ChipStyle,
   type OccurrenceChipStatus,
@@ -41,6 +42,15 @@ const CHIP_TEXT_COLOR = 'var(--color-primary)'
 
 /** One entry of `TaskOccurrenceSet.occurrence_runs[]` — the per-instant run overlay. */
 type OccurrenceRunEntry = NonNullable<TaskOccurrenceSet['occurrence_runs']>[number]
+
+/**
+ * The pinned tooltip on a `missed` occurrence chip (founder decision
+ * 2026-10-29, Q1 A — Calendar 6b): the fire came due while Omnipus was
+ * not running; it stays skipped and is never replayed. The retention-
+ * pruned no_record tooltip below is deliberately a DIFFERENT sentence.
+ */
+export const MISSED_TOOLTIP =
+  'Omnipus was not running at this time; the run was skipped and will not be replayed.'
 
 /** `DayBucket.run_counts` — the per-day run-status tally overlay. */
 type RunCounts = NonNullable<DayBucket['run_counts']>
@@ -235,16 +245,42 @@ function resolveOccurrenceChipState(
   tooltip?: string
 } {
   if (run) {
-    // `skipped` is a real `TaskRun.status` value but NOT a `TaskStatus`
-    // member — `STATUS_STYLE` (keyed by the 7-state `TaskStatus`) must not
-    // gain a `skipped` entry (that would wrongly imply it's a valid
-    // `Task.status`). Resolve it to its own dedicated style instead of
-    // falling through to `STATUS_STYLE[run.status] ?? STATUS_STYLE_FALLBACK`,
-    // which would silently render it as the grey fallback.
-    const style = run.status === 'skipped' ? SKIPPED_STYLE : (STATUS_STYLE[run.status] ?? STATUS_STYLE_FALLBACK)
+    // `skipped` and `missed` are real `TaskRun.status` values but NOT
+    // `TaskStatus` members — `STATUS_STYLE` (keyed by the 7-state
+    // `TaskStatus`) must not gain entries for them (that would wrongly
+    // imply they're valid `Task.status` values). Each resolves to its own
+    // dedicated style instead of falling through to
+    // `STATUS_STYLE[run.status] ?? STATUS_STYLE_FALLBACK`, which would
+    // silently render it as the grey fallback.
+    //
+    // `missed` (founder decision 2026-10-29, Q1 A — Calendar 6b) is a fire
+    // that came due while Omnipus was down: the chip carries the pinned
+    // downtime tooltip so the missed note is VISIBLE, not just a colour.
+    // The retention-pruned `no_record` state below keeps its own,
+    // different tooltip — a run whose record aged out is a different
+    // situation from a run that could never happen.
+    if (run.status === 'skipped') {
+      return {
+        status: run.status,
+        chipStyle: SKIPPED_STYLE,
+        runId: run.run_id,
+        sessionId: run.session_id,
+        hasResult: run.has_result,
+      }
+    }
+    if (run.status === 'missed') {
+      return {
+        status: run.status,
+        chipStyle: MISSED_STYLE,
+        runId: run.run_id,
+        sessionId: run.session_id,
+        hasResult: run.has_result,
+        tooltip: MISSED_TOOLTIP,
+      }
+    }
     return {
       status: run.status,
-      chipStyle: style,
+      chipStyle: STATUS_STYLE[run.status] ?? STATUS_STYLE_FALLBACK,
       runId: run.run_id,
       sessionId: run.session_id,
       hasResult: run.has_result,

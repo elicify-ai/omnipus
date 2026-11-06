@@ -24,10 +24,11 @@ const (
 // (nil when the record is missing or incomplete — the frame then still
 // replays as a group, without the record).
 func replayPreviewGroup(tc session.ToolCall) (*generated.MediaPreview, bool) {
-	if presentation, _ := tc.Result["presentation"].(string); presentation != previewPresentationPageThumbnails {
+	presentation, group := historyToolCallPreviewGroup(tc)
+	if presentation != previewPresentationPageThumbnails {
 		return nil, false
 	}
-	raw, ok := tc.Result["preview"].(map[string]any)
+	raw, ok := group.(map[string]any)
 	if !ok {
 		return nil, true
 	}

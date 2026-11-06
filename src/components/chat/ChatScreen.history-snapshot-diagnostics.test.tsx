@@ -197,7 +197,7 @@ describe('F8 snapshot commit failure classification and visible recovery', () =>
     await waitFor(() => expect(useChatStore.getState().history.historyLoaded, 'real bounded Retry completes despite the earlier exception').toBe(true))
     const reads = app!.network.requests.filter(read => read.path === `/api/v1/sessions/${MAIN_ID}/messages`)
     expect(reads, 'one real Retry read, not silent retrying or a reused success flag').toHaveLength(beforeReads + 1)
-    expect(Object.fromEntries(new URLSearchParams(reads.at(-1)!.query)), 'D5 unknown geometry latest40/20, no unbounded history request').toStrictEqual({ limit: '40', min_rows: '20' })
+    expect(Object.fromEntries(new URLSearchParams(reads.at(-1)!.query)), 'D5 three-screen Retry at H800/A80: ceil(3*800/80)=30, two-screen floor20, no unbounded history request').toStrictEqual({ limit: '30', min_rows: '20' })
     expect(useChatStore.getState().history.readerPositions, 'successful Retry now deliberately replaces the old reader').toStrictEqual([POSITION])
     expect(within(region).getByText(BODY, { exact: true })).toBeVisible()
     expect(within(region).queryByRole('alert'), 'successful Retry clears the failure surface').not.toBeInTheDocument()

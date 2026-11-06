@@ -135,6 +135,14 @@ type Manager struct {
 	config   *config.Config
 	// liveCfg mirrors config for lock-free reads from workers (see liveConfig).
 	liveCfg atomic.Pointer[config.Config]
+	// policySource is the live policy source of the dispatch and dequeue
+	// start checks (FR-044, SetPolicySource); read lock-free.
+	policySource atomic.Pointer[func() *config.Config]
+	// Test-only observation points (manager_test_hooks.go); nil in production.
+	beforeDequeueStartHook    atomic.Pointer[func(msg bus.OutboundMessage)]
+	reloadWriteLockHook       atomic.Pointer[func(stage string)]
+	workerJoinHook            atomic.Pointer[func(instance, phase string)]
+	workerJoinObservationHook atomic.Pointer[func(WorkerJoinObservation)]
 	// returnRefusalObserver is told about answers the return-route check refused.
 	returnRefusalObserver atomic.Pointer[ReturnRefusalObserver]
 	secrets               credentials.SecretBundle // resolved plaintext secrets; never written to env
@@ -194,6 +202,9 @@ type Manager struct {
 	// startErrors keeps each channel's last Start failure (cleared when it
 	// starts), so an approved connect can name the cause (gate r2 T2-SF-10).
 	startErrors map[string]error
+	// applied is the pending-application marker state (FR-050 leg 5;
+	// manager_applied.go). It has its own lock.
+	applied applicationMarkers
 	// reloadHandoffHook is a test seam (gate r3 CR-T2-R3-01): it runs while a
 	// reload waits for the old dispatchers with m.mu released. Nil in production.
 	reloadHandoffHook func()
@@ -1571,9 +1582,18 @@ func (m *Manager) sendWithRetry(
 	if !m.refuseReturnRoute(m.liveConfig(), msg, "pre-send") {
 		return
 	}
+	// FR-044 dequeue start check, lock-free, before preSend. A start never
+	// enters preSend's reply bookkeeping (T-11, S-85): it always goes to Send.
+	isStart := msg.Operation == bus.OperationStart
+	if isStart {
+		m.observeBeforeDequeueStart(msg)
+		if !m.startMayProceed(msg, w.ch, startStageDequeue) {
+			return
+		}
+	}
 
 	// Pre-send: stop typing and try to edit placeholder
-	if m.preSend(ctx, name, msg, w.ch) {
+	if !isStart && m.preSend(ctx, name, msg, w.ch) {
 		return // placeholder was edited successfully, skip Send
 	}
 
@@ -1637,7 +1657,9 @@ func (m *Manager) sendWithRetry(
 	// fallback that itself fails to send does not recurse into a notice storm. The
 	// publish is non-blocking (see notifyDrop) to avoid stalling the worker when
 	// the bus is saturated.
-	if !isNotice {
+	// FR-048 (S-87): no fallback is derived from a start; it would post as
+	// unrestricted system traffic. The error log above is the signal.
+	if !isNotice && !isStart {
 		m.notifyDrop(name, msg.ChatID, "[message delivery failed]")
 	}
 }
@@ -1739,8 +1761,9 @@ func (m *Manager) enqueueOutbound(ctx context.Context, w *channelWorker, msg bus
 		logger.ErrorCF("channels", "Outbound queue full, message dropped",
 			map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID})
 		// Don't re-notify if a drop notice itself got dropped (avoids
-		// an amplification loop).
-		if !strings.HasPrefix(msg.Content, dropNoticePrefix) {
+		// an amplification loop). FR-048 (S-86): no notice is derived from a
+		// dropped start either.
+		if !strings.HasPrefix(msg.Content, dropNoticePrefix) && msg.Operation != bus.OperationStart {
 			m.notifyDrop(msg.Channel, msg.ChatID, "[message dropped: channel is overloaded, please retry]")
 		}
 		return true
@@ -1764,6 +1787,11 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 			// channel, permanently, on the first refused send. Skip the
 			// message; keep the loop alive.
 			if !m.authorizeOutbound(msg) {
+				return true
+			}
+			// FR-044 dispatch start check, on the worker this loop resolved;
+			// a refusal skips the message and keeps the loop alive too.
+			if msg.Operation == bus.OperationStart && !m.startMayProceed(msg, w.ch, startStageDispatch) {
 				return true
 			}
 			return m.enqueueOutbound(ctx, w, msg)
@@ -2079,6 +2107,9 @@ func (m *Manager) wirePairingAttemptsLocked(instanceID string, ch Channel) {
 
 // ChannelRevision returns name's configuration revision in cfg (its config
 // hash): what a pairing admission binds to and its start must match (M14).
+// It is the adapter-view hash (FR-015): an outbound-only change does not move
+// it. The user-facing FR-088 conflict token, which includes outbound, is
+// config.ChannelConfigRevision.
 func ChannelRevision(cfg *config.Config, name string) string {
 	return toChannelHashes(cfg)[name]
 }
@@ -2138,6 +2169,10 @@ type managerReload struct {
 	removedInstances map[string]Channel
 	cc               map[string]config.ChannelInstanceConfig
 	startCleanupErr  error
+	// captureVersion is the credential-write version stamped before secrets
+	// were resolved (FR-050 (ii)); it bounds which markers a completed
+	// rebuild may acknowledge.
+	captureVersion uint64
 }
 
 // Reload applies configuration changes to the channel manager. It compares
@@ -2145,10 +2180,19 @@ type managerReload struct {
 // stopped, added channels are initialized and started, and existing (unchanged)
 // channel workers are restarted on a fresh context to ensure continued routing.
 func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets credentials.SecretBundle) error {
-	mr := &managerReload{m: m, ctx: ctx, cfg: cfg, secrets: secrets}
+	return m.ReloadCaptured(ctx, cfg, secrets, NoCredentialCapture)
+}
+
+// ReloadCaptured is Reload for a bundle whose credential capture was stamped
+// with CredentialWriteVersion before it was resolved: a rebuilt adapter that
+// starts acknowledges only the pending-application markers that capture
+// includes (FR-050 (iii)).
+func (m *Manager) ReloadCaptured(ctx context.Context, cfg *config.Config, secrets credentials.SecretBundle, captureVersion uint64) error {
+	mr := &managerReload{m: m, ctx: ctx, cfg: cfg, secrets: secrets, captureVersion: captureVersion}
 
 	mr.m.mu.Lock()
 	defer mr.m.mu.Unlock()
+	mr.m.observeReloadWriteLock(reloadLockAcquired)
 
 	if !mr.publishConfigSnapshot() {
 		return nil // obsolete continuation; the coalesced current reload owns the effect
@@ -2295,6 +2339,7 @@ func (mr *managerReload) quiesceDispatch() {
 		}
 		mr.oldTask.wg.Wait() // OLD dispatchers have EXITED; nothing can send on a removed channel's queue now
 		mr.m.mu.Lock()
+		mr.m.observeReloadWriteLock(reloadLockReacquired)
 	}
 }
 

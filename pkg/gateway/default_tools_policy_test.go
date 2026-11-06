@@ -89,11 +89,14 @@ func defaultToolsWant(row defaultToolsPolicyCase, kind string) string {
 func defaultToolsAssertCeiling(t *testing.T, rows []defaultToolsPolicyCase) {
 	t.Helper()
 	ceiling := config.DefaultConfig().Sandbox.ToolPolicies
+	for _, retired := range []string{"create_skill", "remove_skill"} {
+		assert.NotContains(t, ceiling, retired, "r15 §10")
+	}
 	// Exact changes from Global ceiling changes, plus the unchanged bash row.
 	for _, row := range []struct{ name, want string }{
 		{"send_email", "ask"}, {"reply", "ask"}, {"download_email_attachment", "allow"},
-		// SPEC.md Q22=B: skill authoring asks per agent; the global ceiling remains Allow.
-		{"create_skill", "allow"}, {"edit_skill", "allow"}, {"bash", "ask"},
+		// Skills r15 §10 supersedes Q22: fresh edit Ask, get Allow.
+		{"get_skill", "allow"}, {"edit_skill", "ask"}, {"bash", "ask"},
 	} {
 		t.Run("exact/"+row.name, func(t *testing.T) {
 			assert.Equal(t, row.want, ceiling[row.name], "Global ceiling changes: %s", row.name)

@@ -1,4 +1,4 @@
-// Omnipus — System Agent Tool Tests: remove_skill path traversal
+// Omnipus — System Agent Tool Tests: edit_skill action=delete path traversal
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -17,8 +17,8 @@ import (
 
 // newRemoveSkillFixture builds a workspace that looks like a live install — an
 // operator data file at the workspace root plus one real installed skill — and
-// wires a remove_skill tool against it.
-func newRemoveSkillFixture(t *testing.T) (tool *systools.SkillRemoveTool, workspace, operatorFile, installedSkill string) {
+// wires a edit_skill action=delete tool against it.
+func newRemoveSkillFixture(t *testing.T) (tool *systools.SkillEditTool, workspace, operatorFile, installedSkill string) {
 	t.Helper()
 	workspace = t.TempDir()
 
@@ -32,7 +32,7 @@ func newRemoveSkillFixture(t *testing.T) (tool *systools.SkillRemoveTool, worksp
 		t.Fatalf("seed skill dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(installedSkill, "SKILL.md"),
-		[]byte("# keep-me\n\nA skill that must survive.\n"), 0o644); err != nil {
+		[]byte(validSkill("keep-me")), 0o644); err != nil {
 		t.Fatalf("seed SKILL.md: %v", err)
 	}
 
@@ -42,18 +42,19 @@ func newRemoveSkillFixture(t *testing.T) (tool *systools.SkillRemoveTool, worksp
 	}
 	deps, _ := newTestDeps(t)
 	deps.SkillInstaller = installer
-	return systools.NewSkillRemoveTool(deps), workspace, operatorFile, installedSkill
+	deps.SkillWriter = skills.NewSkillWriter(filepath.Join(workspace, "skills"))
+	return systools.NewSkillEditTool(deps), workspace, operatorFile, installedSkill
 }
 
-// TestSkillRemoveTool_RefusesPathTraversal is the end-to-end proof for the HIGH
-// severity finding: remove_skill passed the LLM-supplied name straight to the
+// TestSkillDeleteTool_RefusesPathTraversal is the end-to-end proof for the HIGH
+// severity finding: edit_skill action=delete passed the LLM-supplied name straight to the
 // installer with no validation, and the installer's split-on-"/" only stripped
 // separators. name=".." resolved to the workspace root and os.RemoveAll deleted
 // the operator's whole workspace; name="." wiped every installed skill.
 //
 // The confirmation prompt was no defence — a seeded "ask" policy renders as a
 // benign-looking "remove skill '..'".
-func TestSkillRemoveTool_RefusesPathTraversal(t *testing.T) {
+func TestSkillDeleteTool_RefusesPathTraversal(t *testing.T) {
 	malicious := []struct {
 		name   string
 		effect string
@@ -74,53 +75,46 @@ func TestSkillRemoveTool_RefusesPathTraversal(t *testing.T) {
 			tool, workspace, operatorFile, installedSkill := newRemoveSkillFixture(t)
 
 			result := tool.Execute(context.Background(), map[string]any{
-				"name":    m.name,
-				"confirm": true,
+				"skill":  m.name,
+				"action": "delete",
 			})
 			if !result.IsError {
-				t.Fatalf("remove_skill(%q) succeeded — it %s: %s", m.name, m.effect, result.ForLLM)
+				t.Fatalf("edit_skill action=delete(%q) succeeded — it %s: %s", m.name, m.effect, result.ForLLM)
 			}
 			// A refused traversal must never be reported as a missing skill: that
 			// presents an attack as a benign typo in both the tool result and the
 			// audit trail.
 			m2 := parseError(t, result.ForLLM)
 			errBlock, _ := m2["error"].(map[string]any)
-			if code, _ := errBlock["code"].(string); code == "NOT_FOUND" {
-				t.Errorf("remove_skill(%q) reported NOT_FOUND for a refused traversal: %s",
+			if code, _ := errBlock["code"].(string); code != "INVALID_INPUT" {
+				t.Errorf("edit_skill action=delete(%q) must report INVALID_INPUT for a refused traversal: %s",
 					m.name, result.ForLLM)
 			}
 
 			// The blast radius the finding described, asserted directly.
 			if _, err := os.Stat(workspace); err != nil {
-				t.Fatalf("the operator workspace was deleted by remove_skill(%q): %v", m.name, err)
+				t.Fatalf("the operator workspace was deleted by edit_skill action=delete(%q): %v", m.name, err)
 			}
 			if _, err := os.Stat(operatorFile); err != nil {
-				t.Fatalf("the operator's data file was deleted by remove_skill(%q): %v", m.name, err)
+				t.Fatalf("the operator's data file was deleted by edit_skill action=delete(%q): %v", m.name, err)
 			}
 			if _, err := os.Stat(installedSkill); err != nil {
-				t.Fatalf("the installed skill was deleted by remove_skill(%q): %v", m.name, err)
+				t.Fatalf("the installed skill was deleted by edit_skill action=delete(%q): %v", m.name, err)
 			}
 		})
 	}
 }
 
-// TestSkillRemoveTool_LegitimateRemovalStillWorks is the positive control:
+// TestSkillDeleteTool_LegitimateRemovalStillWorks is the positive control:
 // without it every assertion above would also pass against a build that refuses
 // every name, which would be a broken tool rather than a fixed one.
-func TestSkillRemoveTool_LegitimateRemovalStillWorks(t *testing.T) {
+func TestSkillDeleteTool_LegitimateRemovalStillWorks(t *testing.T) {
 	tool, workspace, operatorFile, installedSkill := newRemoveSkillFixture(t)
-	revision, err := skills.NewSkillWriter(filepath.Join(workspace, "skills")).SkillRevision("keep-me")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result := tool.Execute(context.Background(), map[string]any{
-		"name":     "keep-me",
-		"confirm":  true,
-		"revision": revision,
-	})
+	deps := newAuthoringDeps(t, filepath.Join(workspace, "skills"), "")
+	ctx := observeSkillForMutation(t, deps, readCtx("editor"), "keep-me")
+	result := tool.Execute(ctx, map[string]any{"action": "delete", "skill": "keep-me"})
 	if result.IsError {
-		t.Fatalf("remove_skill(keep-me) failed: %s", result.ForLLM)
+		t.Fatalf("edit_skill action=delete(keep-me) failed: %s", result.ForLLM)
 	}
 	m := parseSuccess(t, result.ForLLM)
 	if success, _ := m["success"].(bool); !success {

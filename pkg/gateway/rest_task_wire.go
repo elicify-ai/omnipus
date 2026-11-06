@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/taskwire"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -107,24 +107,7 @@ func (a *restAPI) taskLastActivityAt(t task.Task) (time.Time, bool) {
 			}
 		}
 	}
-	// Local-time skew defence: a stamp from the future (clock jump between
-	// nodes) still renders as "just now", never a negative age.
-	now := time.Now()
-	switch {
-	case live.After(transcript) && !live.After(now):
-		return live, true
-	case transcript.After(live) && !transcript.After(now):
-		return transcript, true
-	case live.After(now) || transcript.After(now):
-		// Both candidates in the future — fall back to the later one anyway;
-		// the SPA clamps negative ages to "just now".
-		if live.After(transcript) {
-			return live, true
-		}
-		return transcript, true
-	default:
-		return time.Time{}, false
-	}
+	return taskwire.LastActivityAt(t.Status, live, transcript, time.Now())
 }
 
 // taskAssigneeWarning resolves Task.assignee_warning (founder decision
@@ -159,40 +142,6 @@ func (a *restAPI) taskAssigneeWarning(t task.Task, g *goal.Goal) string {
 
 // --- wire mapping -----------------------------------------------------------
 
-// wireTodo mirrors the gen.Task.Todos element inline type.
-// not-wire-format: this is a local alias for the generated inline struct; see
-// the gen.Task.Todos field for the authoritative shape.
-type wireTodo = struct {
-	ActiveForm *string             `json:"active_form,omitempty"`
-	Status     gen.TaskTodosStatus `json:"status"`
-	Text       string              `json:"text"`
-}
-
-// setWireListFields copies a task's list-valued fields (blocked_by, todos,
-// write_set, tags) onto its wire form. Each is omitted when empty and copied,
-// never aliased.
-func setWireListFields(out *gen.Task, t task.Task) {
-	if len(t.BlockedBy) > 0 {
-		bb := append([]string{}, t.BlockedBy...)
-		out.BlockedBy = &bb
-	}
-	if len(t.Todos) > 0 {
-		todos := make([]wireTodo, 0, len(t.Todos))
-		for _, td := range t.Todos {
-			todos = append(todos, toWireTodo(td))
-		}
-		out.Todos = &todos
-	}
-	if len(t.WriteSet) > 0 {
-		ws := append([]string{}, t.WriteSet...)
-		out.WriteSet = &ws
-	}
-	if len(t.Tags) > 0 {
-		tags := append([]string{}, t.Tags...)
-		out.Tags = &tags
-	}
-}
-
 // toWireTask converts an internal task.Task to the generated wire type, filling
 // the read-time agent_name and rollup fields from the registry / store. idx is
 // an optional shared rollupIndex (see its doc comment) for batch callers; pass
@@ -211,63 +160,10 @@ func setWireListFields(out *gen.Task, t task.Task) {
 // goal.ErrOwnerNotFound is NOT an error here: a task with no goal record at all
 // really does have no dod, which is the normal state for a pre-D-C task.
 func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (gen.Task, error) {
-	out := gen.Task{
-		Id:          t.ID,
-		Title:       t.Title,
-		Action:      gen.TaskAction(t.Action),
-		Status:      gen.TaskStatus(t.Status),
-		WorkspaceId: t.WorkspaceID,
-		Owner:       t.Owner,
-		CreatedBy:   t.CreatedBy,
-	}
-	if out.Action == "" {
-		out.Action = gen.TaskAction(task.ActionLLM)
-	}
-
-	prio := t.EffectivePriority()
-	out.Priority = &prio
-	if t.RunIsolated {
-		out.RunIsolated = ptr(true)
-	}
-	surface := gen.TaskSurface(t.EffectiveSurface())
-	out.Surface = &surface
-
-	if t.Description != "" {
-		out.Description = ptr(t.Description)
-	}
-	if t.Prompt != "" {
-		out.Prompt = ptr(t.Prompt)
-	}
-	if t.AgentID != "" {
-		out.AgentId = ptr(t.AgentID)
-		if name := a.resolveAgentName(t.AgentID); name != "" {
-			out.AgentName = ptr(name)
-		}
-	}
-	setWireListFields(&out, t)
-	if t.ParentTaskID != "" {
-		out.ParentTaskId = ptr(t.ParentTaskID)
-	}
-	if t.PlanID != "" {
-		out.PlanId = ptr(t.PlanID)
-	}
-	if t.Stream != "" {
-		out.Stream = ptr(t.Stream)
-	}
-	if t.IsJoin {
-		out.IsJoin = ptr(t.IsJoin)
-	}
-	// GOAL-FR-003/FR-029/FR-048 (ADR-086 D5): BOTH judged lists — criteria
-	// and Definition of Done — live on the task's paired goal record and the
-	// wire reads them from there, one source of truth. The task record's own
-	// Criteria dual-write is write-only for the not-yet-repointed writers;
-	// reading it here is what made a retried task's card show the previous
-	// run's criterion ticks beside a freshly-reset DoD (the goal record is
-	// the side Reactivate resets). gidx (batch caller) or a direct GetByOwner
-	// (single-task caller) resolves the record; a task with no goal record at
-	// all (a legacy, pre-D-C task — GOAL-FR-023/FR-048) has neither list,
-	// which is the normal, non-error state, and falls back to the task
-	// record's criteria for continuity.
+	// GOAL-FR-003/FR-029/FR-048 (ADR-086 D5): the judged lists live on the
+	// task's paired goal record. gidx (batch caller) or a direct GetByOwner
+	// (single-task caller) resolves it; a task with no goal record at all (a
+	// legacy, pre-D-C task) is the normal, non-error state.
 	var g *goal.Goal
 	if gidx != nil {
 		g = gidx[t.ID]
@@ -279,112 +175,33 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 		case errors.Is(gErr, goal.ErrOwnerNotFound):
 			// Genuinely no paired record. Normal state, not an error.
 		default:
-			// A real read failure. Do NOT fall through and emit a task with
-			// judged lists read from a possibly-stale second copy — that is
-			// indistinguishable from a task that has none (SF-6).
+			// A real read failure. Do NOT emit a task with judged lists read
+			// from a possibly-stale second copy — that is indistinguishable
+			// from a task that has none (SF-6).
 			return gen.Task{}, fmt.Errorf(
 				"read paired goal record for task %q: %w", t.ID, gErr)
 		}
 	}
-	if g != nil && len(g.Criteria) > 0 {
-		out.Criteria = toWireCriteria(g.Criteria)
-	} else if len(t.Criteria) > 0 {
-		out.Criteria = toWireCriteria(t.Criteria)
-	}
-	if g != nil && len(g.DoD) > 0 {
-		out.Dod = toWireDod(g.DoD)
-	}
-	// Founder decision 2026-09-15: a task whose agent cannot finish it as
-	// configured says so, next to the agent picker. Read-time only; it warns
-	// and never refuses (see taskAssigneeWarning).
-	if msg := a.taskAssigneeWarning(t, g); msg != "" {
-		out.AssigneeWarning = &struct {
-			Field   gen.TaskAssigneeWarningField `json:"field"`
-			Message string                       `json:"message"`
-		}{Field: gen.TaskAssigneeWarningFieldAgentId, Message: msg}
-	}
-	// The goal's tries (issue #710): the tries its current (or last) run has
-	// used and the try limit that run started with, both read off the goal
-	// record — the card shows them beside the task attempt counter, never
-	// mixed with it.
-	if g != nil {
-		if g.Round > 0 {
-			out.JudgeRounds = ptr(g.Round)
-		}
-		if g.MaxRounds >= 1 {
-			out.GoalMaxRounds = ptr(g.MaxRounds)
-		}
-	}
-	if t.AttemptCount > 0 {
-		out.AttemptCount = ptr(t.AttemptCount)
-	}
-	if t.MaxAttempts != nil {
-		out.MaxAttempts = ptr(*t.MaxAttempts)
-	}
-	// effective_max_attempts: the task attempt limit (how many fresh runs this
-	// task gets), resolved by the SAME function the task executor enforces
-	// (tools.EffectiveTaskMaxAttempts): the task's own max_attempts, else the
-	// global planning.task_max_attempts, else the default of 3. It is not the
-	// goal try limit — goal tries and task attempts are separate limits
-	// (founder decision 2026-09-14, issue #710).
+	// effective_max_attempts resolves through the SAME function the task
+	// executor enforces (tools.EffectiveTaskMaxAttempts).
 	var planning config.PlanningConfig
 	if a.agentLoop != nil {
 		if cfg := a.agentLoop.GetConfig(); cfg != nil {
 			planning = cfg.Planning
 		}
 	}
-	out.EffectiveMaxAttempts = ptr(tools.EffectiveTaskMaxAttempts(planning, &t))
-	if t.Trigger != nil {
-		out.Trigger = toWireTrigger(t.Trigger)
+	x := taskwire.TaskExtras{
+		AssigneeWarning:      a.taskAssigneeWarning(t, g),
+		EffectiveMaxAttempts: tools.EffectiveTaskMaxAttempts(planning, &t),
+		Rollup:               a.computeRollup(t.ID, idx),
 	}
-	if t.Due != "" {
-		if ts, err := time.Parse(time.RFC3339, t.Due); err == nil {
-			out.Due = &ts
-		}
+	if t.AgentID != "" {
+		x.AgentName = a.resolveAgentName(t.AgentID)
 	}
-	if t.SourceChannel != "" {
-		out.SourceChannel = ptr(t.SourceChannel)
-	}
-	if t.SourceChatID != "" {
-		out.SourceChatId = ptr(t.SourceChatID)
-	}
-	if t.SessionID != "" {
-		out.SessionId = ptr(t.SessionID)
-	}
-	if t.Result != "" {
-		out.Result = ptr(t.Result)
-	}
-	if t.CancelReason != "" {
-		cr := gen.TaskCancelReason(t.CancelReason)
-		out.CancelReason = &cr
-	}
-	if len(t.Artifacts) > 0 {
-		arts := append([]string{}, t.Artifacts...)
-		out.Artifacts = &arts
-	}
-
-	out.CreatedAt = parseTimeOrNow(t.CreatedAt)
-	out.UpdatedAt = parseTimeOrNow(t.UpdatedAt)
-	if t.StartedAt != "" {
-		if ts, err := time.Parse(time.RFC3339, t.StartedAt); err == nil {
-			out.StartedAt = &ts
-		}
-	}
-	if t.CompletedAt != "" {
-		if ts, err := time.Parse(time.RFC3339, t.CompletedAt); err == nil {
-			out.CompletedAt = &ts
-		}
-	}
-	// Founder decision 2026-09-14: last_activity_at, read-time only, only
-	// while the task is in progress (see taskLastActivityAt).
 	if at, ok := a.taskLastActivityAt(t); ok {
-		at = at.UTC()
-		out.LastActivityAt = &at
+		x.LastActivityAt = &at
 	}
-
-	// Read-time rollup: live child sub-agent runs (parent_task_id == t.ID).
-	out.Rollup = a.computeRollup(t.ID, idx)
-	return out, nil
+	return taskwire.Task(t, g, x), nil
 }
 
 // writeWireTask renders t and writes it as the response body, or answers 500
@@ -410,239 +227,6 @@ func (a *restAPI) writeWireTask(w http.ResponseWriter, status int, t task.Task) 
 		return
 	}
 	jsonOK(w, wire)
-}
-
-// toWireTrigger maps an internal trigger to the gen.Task.Trigger inline type.
-// The field type is an anonymous struct wrapping gen.Task_Trigger_Config so we
-// build it in place and return via a temp gen.Task to extract the pointer type.
-func toWireTrigger(tr *task.Trigger) *struct {
-	Config gen.Task_Trigger_Config `json:"config"`
-	Type   gen.TaskTriggerType     `json:"type"`
-} {
-	cfg := gen.Task_Trigger_Config{}
-	if tr.Config.AtMs != nil {
-		v := *tr.Config.AtMs
-		cfg.AtMs = &v
-	}
-	if tr.Config.Rrule != nil {
-		v := *tr.Config.Rrule
-		cfg.Rrule = &v
-	}
-	if tr.Config.DtstartMs != nil {
-		v := *tr.Config.DtstartMs
-		cfg.DtstartMs = &v
-	}
-	if tr.Config.Tz != nil {
-		v := *tr.Config.Tz
-		cfg.Tz = &v
-	}
-	return &struct {
-		Config gen.Task_Trigger_Config `json:"config"`
-		Type   gen.TaskTriggerType     `json:"type"`
-	}{Config: cfg, Type: gen.TaskTriggerType(tr.Type)}
-}
-
-// legacyTimingKeysMessage reports the removed trigger keys (session-core DEL-19
-// / C-TIMING) found in a trigger config's undeclared properties. The wire
-// schema keeps `config` open, so a client that still sends `every_ms` or
-// `cron_expr` is not rejected by decoding; it is refused here, by name, instead
-// of being accepted and silently never firing. Empty means none present.
-func legacyTimingKeysMessage(extra map[string]any) string {
-	var found []string
-	for _, key := range []string{"every_ms", "cron_expr"} {
-		if _, ok := extra[key]; ok {
-			found = append(found, key)
-		}
-	}
-	if len(found) == 0 {
-		return ""
-	}
-	return "trigger config." + strings.Join(found, ", config.") +
-		" is no longer supported; use a recurring trigger with config.rrule"
-}
-
-// buildTrigger constructs an internal trigger from its primitive parts. The
-// three generated request structs (Task/TaskCreateRequest/TaskUpdateRequest) each
-// have their own anonymous trigger type with an identically-shaped config, so
-// the callers decompose them and pass the primitives here.
-func buildTrigger(
-	kind string,
-	atMs *int64,
-	rrule *string,
-	dtstartMs *int64,
-	tz *string,
-) *task.Trigger {
-	tr := &task.Trigger{Type: task.TriggerType(kind)}
-	if atMs != nil {
-		v := *atMs
-		tr.Config.AtMs = &v
-	}
-	if rrule != nil {
-		v := *rrule
-		tr.Config.Rrule = &v
-	}
-	if dtstartMs != nil {
-		v := *dtstartMs
-		tr.Config.DtstartMs = &v
-	}
-	if tz != nil {
-		v := *tz
-		tr.Config.Tz = &v
-	}
-	return tr
-}
-
-// toWireCriteria converts internal acceptance criteria to the gen.Task.Criteria
-// inline wire shape (read path — GET/POST/PATCH responses).
-// wireCriterionJudgment returns a criterion's judgment for the wire, backfilling
-// it via task.InferJudgment when empty. Persisted criteria authored before the
-// ADR-080 judgment field carry no judgment; the response schema requires one
-// (enum {boolean,quantitative,artifact}), so emitting "" makes the SPA's zod
-// validation reject the whole payload. Mirrors goal_status_criteria.go's
-// defensive backfill so a legacy task/plan is never returned schema-invalid.
-func wireCriterionJudgment(c task.AcceptanceCriterion) task.JudgmentKind {
-	if c.Judgment != "" {
-		return c.Judgment
-	}
-	// Resolve an empty (legacy) judgment inline — mirrors task.InferJudgment's
-	// correlation (behavior→quantitative, check/prose→boolean). Inlined rather
-	// than calling InferJudgment so this defensive wire backfill is not a new
-	// central-inference call site (TestInferJudgment_CallSitesPinned).
-	if c.Kind == task.KindBehavior {
-		return task.JudgmentQuantitative
-	}
-	return task.JudgmentBoolean
-}
-
-func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
-	Author struct {
-		Id   string                     `json:"id"`
-		Kind gen.TaskCriteriaAuthorKind `json:"kind"`
-	} `json:"author"`
-	Behavior *struct {
-		MaxCount *int                           `json:"max_count,omitempty"`
-		MinCount *int                           `json:"min_count,omitempty"`
-		Scope    *gen.TaskCriteriaBehaviorScope `json:"scope,omitempty"`
-		Tool     string                         `json:"tool"`
-	} `json:"behavior,omitempty"`
-	Check *struct {
-		Command          string `json:"command"`
-		ExpectedExitCode int    `json:"expected_exit_code"`
-	} `json:"check,omitempty"`
-	ClauseCount *int                        `json:"clause_count,omitempty"`
-	Id          *string                     `json:"id,omitempty"`
-	Judgment    gen.TaskCriteriaJudgment    `json:"judgment"`
-	Kind        gen.TaskCriteriaKind        `json:"kind"`
-	Provenance  *gen.TaskCriteriaProvenance `json:"provenance,omitempty"`
-	Status      gen.TaskCriteriaStatus      `json:"status"`
-	Text        string                      `json:"text"`
-} {
-	out := make([]struct {
-		Author struct {
-			Id   string                     `json:"id"`
-			Kind gen.TaskCriteriaAuthorKind `json:"kind"`
-		} `json:"author"`
-		Behavior *struct {
-			MaxCount *int                           `json:"max_count,omitempty"`
-			MinCount *int                           `json:"min_count,omitempty"`
-			Scope    *gen.TaskCriteriaBehaviorScope `json:"scope,omitempty"`
-			Tool     string                         `json:"tool"`
-		} `json:"behavior,omitempty"`
-		Check *struct {
-			Command          string `json:"command"`
-			ExpectedExitCode int    `json:"expected_exit_code"`
-		} `json:"check,omitempty"`
-		ClauseCount *int                        `json:"clause_count,omitempty"`
-		Id          *string                     `json:"id,omitempty"`
-		Judgment    gen.TaskCriteriaJudgment    `json:"judgment"`
-		Kind        gen.TaskCriteriaKind        `json:"kind"`
-		Provenance  *gen.TaskCriteriaProvenance `json:"provenance,omitempty"`
-		Status      gen.TaskCriteriaStatus      `json:"status"`
-		Text        string                      `json:"text"`
-	}, 0, len(cs))
-	for _, c := range cs {
-		item := struct { // not-wire-format: intermediate value built to match gen.Task.Criteria's oapi-codegen anonymous element type, not a parallel wire type
-			Author struct {
-				Id   string                     `json:"id"`
-				Kind gen.TaskCriteriaAuthorKind `json:"kind"`
-			} `json:"author"`
-			Behavior *struct {
-				MaxCount *int                           `json:"max_count,omitempty"`
-				MinCount *int                           `json:"min_count,omitempty"`
-				Scope    *gen.TaskCriteriaBehaviorScope `json:"scope,omitempty"`
-				Tool     string                         `json:"tool"`
-			} `json:"behavior,omitempty"`
-			Check *struct {
-				Command          string `json:"command"`
-				ExpectedExitCode int    `json:"expected_exit_code"`
-			} `json:"check,omitempty"`
-			ClauseCount *int                        `json:"clause_count,omitempty"`
-			Id          *string                     `json:"id,omitempty"`
-			Judgment    gen.TaskCriteriaJudgment    `json:"judgment"`
-			Kind        gen.TaskCriteriaKind        `json:"kind"`
-			Provenance  *gen.TaskCriteriaProvenance `json:"provenance,omitempty"`
-			Status      gen.TaskCriteriaStatus      `json:"status"`
-			Text        string                      `json:"text"`
-		}{
-			Kind:     gen.TaskCriteriaKind(c.Kind),
-			Judgment: gen.TaskCriteriaJudgment(wireCriterionJudgment(c)),
-			Status:   gen.TaskCriteriaStatus(c.Status),
-			Text:     c.Text,
-		}
-		if c.Provenance != "" {
-			p := gen.TaskCriteriaProvenance(c.Provenance)
-			item.Provenance = &p
-		}
-		// C-58/JUDGE-FR-006b: this field was declared in the anonymous wire
-		// shape (matching the generated type) but never actually populated —
-		// a real GET response carried clause_count:null even though the
-		// persisted criterion always has one. ClauseCount is minimum:1 on
-		// the schema, so a zero (never-normalized, pre-FR-006b) value is
-		// left absent rather than emitted as an invalid 0.
-		if c.ClauseCount > 0 {
-			cc := c.ClauseCount
-			item.ClauseCount = &cc
-		}
-		item.Author.Id = c.Author.ID
-		item.Author.Kind = gen.TaskCriteriaAuthorKind(c.Author.Kind)
-		if c.ID != "" {
-			item.Id = ptr(c.ID)
-		}
-		if c.Check != nil {
-			item.Check = &struct {
-				Command          string `json:"command"`
-				ExpectedExitCode int    `json:"expected_exit_code"`
-			}{Command: c.Check.Command, ExpectedExitCode: c.Check.ExpectedExitCode}
-		}
-		if c.Behavior != nil {
-			beh := &struct { // not-wire-format: intermediate value built to match gen.Task.Criteria's oapi-codegen anonymous element type, not a parallel wire type
-				MaxCount *int                           `json:"max_count,omitempty"`
-				MinCount *int                           `json:"min_count,omitempty"`
-				Scope    *gen.TaskCriteriaBehaviorScope `json:"scope,omitempty"`
-				Tool     string                         `json:"tool"`
-			}{
-				// MinCount/MaxCount are passed straight through — both are
-				// already *int on task.CriterionBehavior (fix-wave finding
-				// #5), so no ptr()-wrap is needed (or type-correct: wrapping
-				// an already-*int value would produce **int). This also
-				// preserves the nil/0 distinction on read: an
-				// explicitly-zero MinCount round-trips as 0, not defaulted —
-				// the wire's own `default: 1` (schema) is authoritative only
-				// for an ABSENT create/update request field, never for what
-				// GET echoes back (fix-wave finding #6).
-				Tool:     c.Behavior.Tool,
-				MinCount: c.Behavior.MinCount,
-				MaxCount: c.Behavior.MaxCount,
-			}
-			if c.Behavior.Scope != "" {
-				s := gen.TaskCriteriaBehaviorScope(c.Behavior.Scope)
-				beh.Scope = &s
-			}
-			item.Behavior = beh
-		}
-		out = append(out, item)
-	}
-	return &out
 }
 
 // criteriaFromCreateWire converts the gen.TaskCreateRequest.Criteria inline
@@ -763,137 +347,9 @@ func criteriaFromUpdateWire(items []struct {
 	return out
 }
 
-// toWireDod converts internal Definition-of-Done criteria to the gen.Task.Dod
-// inline wire shape (read path — GET/POST/PATCH responses). GOAL-FR-021/
-// FR-029/FR-048: dod is a NEW field (ADR-086) — the task's DoD list lives on
-// its paired goal record (pkg/goal), never on the task record itself, so
-// callers of this function read from a *goal.Goal, not from task.Task.
-//
-// This is a distinct, near-duplicate function rather than a shared one with
-// toWireCriteria because oapi-codegen emits TWO separate named anonymous-
-// struct-element types for Task.Criteria and Task.Dod even though their
-// shapes are structurally identical (same reason toWireCriteria/
-// toWirePlanDoD in rest_plans.go cannot be shared either — see toWirePlanDoD's
-// own doc comment).
-func toWireDod(cs []task.AcceptanceCriterion) *[]struct {
-	Author struct {
-		Id   string                `json:"id"`
-		Kind gen.TaskDodAuthorKind `json:"kind"`
-	} `json:"author"`
-	Behavior *struct {
-		MaxCount *int                      `json:"max_count,omitempty"`
-		MinCount *int                      `json:"min_count,omitempty"`
-		Scope    *gen.TaskDodBehaviorScope `json:"scope,omitempty"`
-		Tool     string                    `json:"tool"`
-	} `json:"behavior,omitempty"`
-	Check *struct {
-		Command          string `json:"command"`
-		ExpectedExitCode int    `json:"expected_exit_code"`
-	} `json:"check,omitempty"`
-	ClauseCount *int                   `json:"clause_count,omitempty"`
-	Id          *string                `json:"id,omitempty"`
-	Judgment    gen.TaskDodJudgment    `json:"judgment"`
-	Kind        gen.TaskDodKind        `json:"kind"`
-	Provenance  *gen.TaskDodProvenance `json:"provenance,omitempty"`
-	Status      gen.TaskDodStatus      `json:"status"`
-	Text        string                 `json:"text"`
-} {
-	out := make([]struct {
-		Author struct {
-			Id   string                `json:"id"`
-			Kind gen.TaskDodAuthorKind `json:"kind"`
-		} `json:"author"`
-		Behavior *struct {
-			MaxCount *int                      `json:"max_count,omitempty"`
-			MinCount *int                      `json:"min_count,omitempty"`
-			Scope    *gen.TaskDodBehaviorScope `json:"scope,omitempty"`
-			Tool     string                    `json:"tool"`
-		} `json:"behavior,omitempty"`
-		Check *struct {
-			Command          string `json:"command"`
-			ExpectedExitCode int    `json:"expected_exit_code"`
-		} `json:"check,omitempty"`
-		ClauseCount *int                   `json:"clause_count,omitempty"`
-		Id          *string                `json:"id,omitempty"`
-		Judgment    gen.TaskDodJudgment    `json:"judgment"`
-		Kind        gen.TaskDodKind        `json:"kind"`
-		Provenance  *gen.TaskDodProvenance `json:"provenance,omitempty"`
-		Status      gen.TaskDodStatus      `json:"status"`
-		Text        string                 `json:"text"`
-	}, 0, len(cs))
-	for _, c := range cs {
-		item := struct { // not-wire-format: intermediate value built to match gen.Task.Dod's oapi-codegen anonymous element type, not a parallel wire type
-			Author struct {
-				Id   string                `json:"id"`
-				Kind gen.TaskDodAuthorKind `json:"kind"`
-			} `json:"author"`
-			Behavior *struct {
-				MaxCount *int                      `json:"max_count,omitempty"`
-				MinCount *int                      `json:"min_count,omitempty"`
-				Scope    *gen.TaskDodBehaviorScope `json:"scope,omitempty"`
-				Tool     string                    `json:"tool"`
-			} `json:"behavior,omitempty"`
-			Check *struct {
-				Command          string `json:"command"`
-				ExpectedExitCode int    `json:"expected_exit_code"`
-			} `json:"check,omitempty"`
-			ClauseCount *int                   `json:"clause_count,omitempty"`
-			Id          *string                `json:"id,omitempty"`
-			Judgment    gen.TaskDodJudgment    `json:"judgment"`
-			Kind        gen.TaskDodKind        `json:"kind"`
-			Provenance  *gen.TaskDodProvenance `json:"provenance,omitempty"`
-			Status      gen.TaskDodStatus      `json:"status"`
-			Text        string                 `json:"text"`
-		}{
-			Kind:     gen.TaskDodKind(c.Kind),
-			Judgment: gen.TaskDodJudgment(wireCriterionJudgment(c)),
-			Status:   gen.TaskDodStatus(c.Status),
-			Text:     c.Text,
-		}
-		if c.Provenance != "" {
-			p := gen.TaskDodProvenance(c.Provenance)
-			item.Provenance = &p
-		}
-		if c.ClauseCount > 0 {
-			cc := c.ClauseCount
-			item.ClauseCount = &cc
-		}
-		item.Author.Id = c.Author.ID
-		item.Author.Kind = gen.TaskDodAuthorKind(c.Author.Kind)
-		if c.ID != "" {
-			item.Id = ptr(c.ID)
-		}
-		if c.Check != nil {
-			item.Check = &struct {
-				Command          string `json:"command"`
-				ExpectedExitCode int    `json:"expected_exit_code"`
-			}{Command: c.Check.Command, ExpectedExitCode: c.Check.ExpectedExitCode}
-		}
-		if c.Behavior != nil {
-			beh := &struct { // not-wire-format: intermediate value built to match gen.Task.Dod's oapi-codegen anonymous element type, not a parallel wire type
-				MaxCount *int                      `json:"max_count,omitempty"`
-				MinCount *int                      `json:"min_count,omitempty"`
-				Scope    *gen.TaskDodBehaviorScope `json:"scope,omitempty"`
-				Tool     string                    `json:"tool"`
-			}{
-				Tool:     c.Behavior.Tool,
-				MinCount: c.Behavior.MinCount,
-				MaxCount: c.Behavior.MaxCount,
-			}
-			if c.Behavior.Scope != "" {
-				s := gen.TaskDodBehaviorScope(c.Behavior.Scope)
-				beh.Scope = &s
-			}
-			item.Behavior = beh
-		}
-		out = append(out, item)
-	}
-	return &out
-}
-
 // dodFromCreateWire converts the gen.TaskCreateRequest.Dod inline wire shape
 // to internal acceptance criteria (create path). Mirrors criteriaFromCreateWire
-// exactly — see toWireDod's doc comment for why this cannot be shared.
+// exactly — see taskwire.Dod's doc comment for why this cannot be shared.
 func dodFromCreateWire(items []struct {
 	Author struct {
 		Id   string                             `json:"id"`
@@ -949,7 +405,7 @@ func dodFromCreateWire(items []struct {
 
 // dodFromUpdateWire converts the gen.TaskUpdateRequest.Dod inline wire shape
 // to internal acceptance criteria (PATCH path). Mirrors criteriaFromUpdateWire
-// exactly — see toWireDod's doc comment for why this cannot be shared.
+// exactly — see taskwire.Dod's doc comment for why this cannot be shared.
 func dodFromUpdateWire(items []struct {
 	Author struct {
 		Id   string                             `json:"id"`
@@ -1012,11 +468,7 @@ func dodFromUpdateWire(items []struct {
 // built from ONE Store.List call — instead of issuing a fresh List call here.
 // idx == nil (every single-task call site) preserves the original behavior:
 // one bounded List call scoped to this parentID.
-func (a *restAPI) computeRollup(parentID string, idx rollupIndex) *[]struct {
-	AgentId string               `json:"agent_id"`
-	Label   string               `json:"label"`
-	Status  gen.TaskRollupStatus `json:"status"`
-} {
+func (a *restAPI) computeRollup(parentID string, idx rollupIndex) *taskwire.RollupItems {
 	var children []task.Task
 	if idx != nil {
 		children = idx[parentID]
@@ -1027,29 +479,7 @@ func (a *restAPI) computeRollup(parentID string, idx rollupIndex) *[]struct {
 			return nil
 		}
 	}
-	if len(children) == 0 {
-		return nil
-	}
-	type rollupItem = struct {
-		AgentId string               `json:"agent_id"`
-		Label   string               `json:"label"`
-		Status  gen.TaskRollupStatus `json:"status"`
-	}
-	items := make([]rollupItem, 0, len(children))
-	for _, c := range children {
-		if task.IsTerminal(c.Status) {
-			continue
-		}
-		items = append(items, rollupItem{
-			AgentId: c.AgentID,
-			Label:   c.Title,
-			Status:  gen.TaskRollupStatus(c.Status),
-		})
-	}
-	if len(items) == 0 {
-		return nil
-	}
-	return &items
+	return taskwire.Rollup(children)
 }
 
 // The REST surface has NO plan-linkage validator of its own. POST /tasks and
@@ -1260,4 +690,10 @@ func toWireJudgeVerdict(v task.JudgeVerdict) gen.JudgeVerdict {
 		})
 	}
 	return out
+}
+
+// wireCriterionJudgment is taskwire.CriterionJudgment (the shared read-path
+// backfill), kept under its gateway name for this package's callers.
+func wireCriterionJudgment(c task.AcceptanceCriterion) task.JudgmentKind {
+	return taskwire.CriterionJudgment(c)
 }

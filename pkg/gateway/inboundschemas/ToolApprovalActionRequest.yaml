@@ -18,8 +18,11 @@ properties:
       allow_once — allow this single invocation only, no grant recorded.
       allow      — allow this invocation AND record a session-scoped grant
       per `scope` below so future matching calls in the same session
-      auto-approve without re-prompting.
-      cancel     — dismiss this approval without approving the invocation.
+      auto-approve without re-prompting. Refused with 400 for an
+      always-ask tool (today exactly set_channel_outbound): its approvals
+      are never remembered, so only allow_once, deny and cancel apply
+      (channels spec FR-038).
+      cancel    — dismiss this approval without approving the invocation.
       It remains a distinct wire value from deny.
     enum:
       - deny

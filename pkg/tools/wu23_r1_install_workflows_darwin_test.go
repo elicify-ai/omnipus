@@ -8,11 +8,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/environmentsetup"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	fixture "github.com/elicify-ai/omnipus/tests/l1_red/protectedfixture"
 )
 
@@ -116,6 +120,44 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	}
 	f := wu23R1Fixture(t)
 	layout := wu23R1DocumentLayout(t, f)
+	// r15 §11: execute the shipped inspector from its one registry folder.
+	// Persist a real matching grant; the runtime prefix is not a second copy
+	// or an alternative source of permission to read/execute the package.
+	registryRoot := filepath.Join(f.Home, "skills")
+	if _, err := skills.SyncBuiltins(registryRoot, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The generic protected-path fixture seeds a non-JSON actor placeholder.
+	// Replace only that exact test sentinel before creating the real record;
+	// Create must still reject a pre-existing actual agent, not overwrite one.
+	actorRecord := filepath.Join(f.Home, "entities", "agents", "self.json")
+	placeholder, placeholderErr := os.ReadFile(actorRecord)
+	if placeholderErr != nil || string(placeholder) != fixture.Sentinel {
+		t.Fatalf("expected only the protected-fixture actor sentinel before grant setup: %v", placeholderErr)
+	}
+	if removeErr := os.Remove(actorRecord); removeErr != nil {
+		t.Fatal(removeErr)
+	}
+	store := agentstore.New(f.Home)
+	agentCfg := config.AgentConfig{ID: "self", Home: f.AgentHome, Skills: []string{"elicify-office"}, Tools: &config.AgentToolsCfg{}}
+	agentCfg.Tools.Builtin.Policies = map[string]config.ToolPolicy{"bash": config.ToolPolicyAllow, "edit_skill": config.ToolPolicyDeny}
+	if err := store.Create(agentCfg.ID, &agentCfg); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.Get(agentCfg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp, err := os.ReadFile(filepath.Join(registryRoot, "elicify-office", ".omnipus-identity"))
+	if err != nil || strings.TrimSpace(string(stamp)) == "" || persisted.SkillGrants["elicify-office"] != strings.TrimSpace(string(stamp)) {
+		t.Fatalf("document inspector needs a real bound registry grant: err=%v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Sandbox.ToolPolicies["bash"] = string(config.ToolPolicyAllow)
+	cfg.Agents.List = []config.AgentConfig{*persisted}
+	if err := config.SaveConfig(filepath.Join(f.Home, "config.json"), cfg); err != nil {
+		t.Fatal(err)
+	}
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Fatalf("BLOCKED: real Python interpreter unavailable — required by founder's document-tool execution test: %v", err)
@@ -126,7 +168,7 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	wu23R1OwnerWritable(t, filepath.Join(layout.Bin, "python"))
 	input := filepath.Join(f.Work, "input.docx")
 	original := wu23R1DocumentArtifact(t, input)
-	inspector := filepath.Join(layout.Skills, "elicify-office", "scripts", "inspect_docx.py")
+	inspector := filepath.Join(registryRoot, "elicify-office", "scripts", "inspect_docx.py")
 	want := map[string]any{"paragraphs": float64(2), "tables": float64(1), "revision_marks": float64(0), "field_instructions": float64(0), "external_relationships": []any{}, "media_parts": []any{}}
 	t.Run("real_unsandboxed_inspector_control", func(t *testing.T) {
 		cmd := exec.Command(python, "-I", inspector, input)
@@ -144,7 +186,7 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	})
 	// The helper is reached from the actual document environment, not a host
 	// PATH fallback or fake interpreter. The input is a literal Word package.
-	code := `import os,runpy,sys; cache=os.environ["XDG_CACHE_HOME"]; open(os.path.join(cache,"document-cache.txt"),"w").write("document-cache"); assert open(os.path.join(cache,"document-cache.txt")).read()=="document-cache"; sys.argv=["inspect_docx.py","input.docx"]; runpy.run_path(os.path.join(os.environ["OMNIPUS_DOCUMENT_SKILLS"],"elicify-office","scripts","inspect_docx.py"),run_name="__main__")`
+	code := `import os,runpy,sys; cache=os.environ["XDG_CACHE_HOME"]; open(os.path.join(cache,"document-cache.txt"),"w").write("document-cache"); assert open(os.path.join(cache,"document-cache.txt")).read()=="document-cache"; sys.argv=["inspect_docx.py","input.docx"]; runpy.run_path(` + strconv.Quote(inspector) + `,run_name="__main__")`
 	result := wu23R1Bash(t, bash, ctx, "python -I -c "+wu23R1Quote(code))
 	if result.IsError || result.ExitCode == nil || *result.ExitCode != 0 {
 		t.Fatalf("real managed document tool must execute under god=%t: %s", god, result.ForLLM)

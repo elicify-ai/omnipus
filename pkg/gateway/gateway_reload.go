@@ -89,6 +89,7 @@ func (s *services) reloadDegradedStatus() (bool, string) {
 // mutate, so they can be atomically restored on reload failure.
 type servicesSnapshot struct {
 	bundle         credentials.SecretBundle
+	bundleCapture  uint64
 	ChannelManager *channels.Manager
 	CronService    *cron.CronService
 	TaskTrigger    *agent.TaskTriggerScheduler
@@ -99,6 +100,7 @@ type servicesSnapshot struct {
 func snapshotServices(svc *services) servicesSnapshot {
 	return servicesSnapshot{
 		bundle:         svc.bundle,
+		bundleCapture:  svc.bundleCaptureVersion,
 		ChannelManager: svc.ChannelManager,
 		CronService:    svc.CronService,
 		TaskTrigger:    svc.TaskTrigger,
@@ -109,6 +111,7 @@ func snapshotServices(svc *services) servicesSnapshot {
 
 func restoreServices(svc *services, snap servicesSnapshot) {
 	svc.bundle = snap.bundle
+	svc.bundleCaptureVersion = snap.bundleCapture
 	svc.ChannelManager = snap.ChannelManager
 	svc.CronService = snap.CronService
 	svc.TaskTrigger = snap.TaskTrigger
@@ -466,6 +469,18 @@ func executeReload(
 // markDegraded restores the bundle snapshot). Called for the config a reload
 // was handed and again, under restAPI.configMu, for handleConfigReload's
 // swap-time re-read.
+// reloadCredentialCaptureHook is a test seam (channels spec S-88 case g,
+// R8-MIN-001; test-only hook point, no sleeps): prepareReloadConfig calls it
+// with "stamped" after recording the credential-write version and before
+// resolving the channel bundle, and with "captured" after resolving it;
+// reloadChannels calls it with "rebuild" after the final capture, with the
+// config-write lock released, right before the channel rebuild. A test
+// blocks inside it to interleave a Configure credential write with the
+// capture (the swap-time capture holds configMu, which Configure also takes,
+// so the stale-bundle window of S-88 case g is "rebuild"). Nil in
+// production; never assign it outside tests.
+var reloadCredentialCaptureHook func(stage string)
+
 func prepareReloadConfig(newCfg *config.Config, runningServices *services) error {
 	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: a
 	// config reload (file-watcher poll via configReloadChan, or manual
@@ -536,7 +551,20 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 		// sentinel lets /health's degraded reason name the store without
 		// leaking the underlying error.
 		enabledRefs := buildEnabledRefMap(newCfg)
+		// FR-050 (ii): stamp the credential-write version BEFORE resolving,
+		// so a write marked after this point is never acknowledged by a
+		// rebuild that consumes this bundle (even if the resolver saw it).
+		captureVersion := channels.NoCredentialCapture
+		if mgr := runningServices.ChannelManager; mgr != nil {
+			captureVersion = mgr.CredentialWriteVersion()
+		}
+		if reloadCredentialCaptureHook != nil {
+			reloadCredentialCaptureHook("stamped") // test seam (S-88 case g)
+		}
 		newBundle, bundleErrs := credentials.ResolveBundle(newCfg, cs)
+		if reloadCredentialCaptureHook != nil {
+			reloadCredentialCaptureHook("captured") // test seam (S-88 case g)
+		}
 		bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
 		if healthErr := storeHealthFailure("reload", cs.HealthCheck()); healthErr != nil {
 			return fmt.Errorf("reload rejected: %w", fatalStoreWideAuthFailure(healthErr,
@@ -569,6 +597,7 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 			return fmt.Errorf("reload rejected: %w", fatalStoreWideAuthFailure(e, nil))
 		}
 		runningServices.bundle = newBundle
+		runningServices.bundleCaptureVersion = captureVersion
 
 		// Re-register the complete plaintext set so the scrubber stays current
 		// after reload: config refs, enabled MCP env values, and OAuth grants
@@ -873,22 +902,10 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 		fmt.Println("  ✓ Plan engine restarted")
 	}
 
-	// Restart the task time-trigger scheduler on its dedicated CronService. The
-	// previous instance was already Stop()'d in stopAndCleanupServices(isReload).
-	if tStore := agent.GetTaskStore(rs.al); tStore != nil {
-		triggerStorePath := filepath.Join(rs.homePath, "tasks_triggers", "jobs.json")
-		rs.runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
-			triggerStorePath, tStore, agent.GetTaskExecutor(rs.al),
-		)
-		if startErr := rs.runningServices.TaskTrigger.Start(); startErr != nil {
-			return fmt.Errorf("error restarting task trigger scheduler: %w", startErr), true
-		}
-		rs.al.SetTaskTriggerScheduler(rs.runningServices.TaskTrigger)
-		if recErr := rs.runningServices.TaskTrigger.Reconcile(); recErr != nil {
-			slog.Error("gateway: task trigger reconcile failed on reload", "error", recErr)
-		}
-		fmt.Println("  ✓ Task trigger scheduler restarted")
-	}
+	// The task time-trigger scheduler is NOT restarted: a configuration reload
+	// keeps the one live instance (r17 TK-30, 18.40; stopAndCleanupServices
+	// skips it on reload), so ownership of an armed or queued occurrence never
+	// changes hands within a process.
 
 	// Restart the /loop scheduler on a fresh dedicated CronService (ADR-049
 	// D6/D7). The previous instance was already Stop()'d in
@@ -934,6 +951,16 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 }
 
 // replaceMediaStore installs a fresh media store before flushing and stopping the previous store.
+//
+// #1439: refs that lived only in the outgoing store's memory — created inside
+// the last saveDebounce window, or after its last successful save — reach
+// registry.json in the old store's Stop flush below, AFTER the new store's
+// LoadRegistry has already read the file, so no live consumer ever sees them.
+// HandoverTo (step 2) moves that in-memory state into the new store before the
+// swap and retires the old store's save machinery, which also makes the final
+// Stop a save no-op: it cannot overwrite a newer snapshot the new store writes
+// after the pointer flip. Copy, not move: a turn in flight across the reload
+// keeps resolving through its turnMediaStore snapshot (the old store).
 func (rs *restartServicesState) replaceMediaStore() {
 	// N-D fix: build and wire the NEW store BEFORE stopping the old one so that
 	// any upload whose scheduleSave fires in the narrow window between the Stop
@@ -942,12 +969,15 @@ func (rs *restartServicesState) replaceMediaStore() {
 	//
 	// Order:
 	//   1. Create new store (inactive; Start() below begins the cleanup goroutine).
-	//   2. Swap the agent-loop pointer so new uploads land in the new store.
-	//   3. Flush the old store (pending debounced saves) and stop its goroutines.
+	//   2. Hand over the old store's live ref state (#1439) and load the
+	//      persisted registry.
+	//   3. Swap the agent-loop pointer so new uploads land in the new store.
+	//   4. Stop the old store: saves were retired at handover, so this only
+	//      closes its cleanup goroutine.
 	//
 	// The old store is retained via oldStore until after Stop() completes so the
-	// GC does not reclaim it while the debounced save goroutine may still be
-	// running.
+	// GC does not reclaim it while a turn in flight across the swap may still
+	// resolve refs through it.
 	oldStore := rs.runningServices.MediaStore
 	rs.runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  rs.cfg.Tools.MediaCleanup.Enabled,
@@ -960,6 +990,13 @@ func (rs *restartServicesState) replaceMediaStore() {
 		// Best-effort — a load failure should not block boot.
 		if loadErr := fms.LoadRegistry(); loadErr != nil {
 			slog.Warn("media: failed to load persisted registry", "error", loadErr)
+		}
+		// #1439: the old store's in-memory refs are authoritative over the
+		// just-loaded file (it is a superset, and may have released refs the
+		// file still contains) — hand them over before the swap. No-op when
+		// the outgoing store is not a FileMediaStore.
+		if oldFMS, ok := oldStore.(*media.FileMediaStore); ok {
+			oldFMS.HandoverTo(fms)
 		}
 		fms.Start()
 		// Re-wire workspace-library provider onto the new store (same shared
@@ -991,7 +1028,11 @@ func (rs *restartServicesState) reloadChannels() (error, bool) {
 	// PairingObserver set when they first emit events.
 	wireChannelManager(rs.runningServices.ChannelManager, rs.al)
 
-	if rs.err = rs.runningServices.ChannelManager.Reload(context.Background(), rs.cfg, rs.runningServices.bundle); rs.err != nil {
+	if reloadCredentialCaptureHook != nil {
+		reloadCredentialCaptureHook("rebuild") // test seam (S-88 case g)
+	}
+	if rs.err = rs.runningServices.ChannelManager.ReloadCaptured(context.Background(), rs.cfg,
+		rs.runningServices.bundle, rs.runningServices.bundleCaptureVersion); rs.err != nil {
 		return fmt.Errorf("error reload channels: %w", rs.err), true
 	}
 	// Post-Reload re-wire: Reload() may have recreated channel instances (new

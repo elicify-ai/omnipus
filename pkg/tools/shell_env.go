@@ -132,8 +132,8 @@ func (t *ExecTool) documentEnvTurn(baseDir string) documentEnvLayer {
 // existed only post-derivation (amendment §2 D3's rule, fix round 1). The
 // kernel enumeration marks them as internal runtime input and drops any that
 // would reopen protected inventory.
-func turnAllowRoots(rt environmentsetup.RuntimeEnv, doc documentEnvLayer) []fspolicy.AllowRoot {
-	roots := make([]fspolicy.AllowRoot, 0, len(rt.ReadExec)+2)
+func turnAllowRoots(rt environmentsetup.RuntimeEnv, doc documentEnvLayer, skillFolders []string) []fspolicy.AllowRoot {
+	roots := make([]fspolicy.AllowRoot, 0, len(rt.ReadExec)+2+len(skillFolders))
 	for _, dir := range rt.ReadExec {
 		if strings.TrimSpace(dir) == "" {
 			continue
@@ -145,6 +145,15 @@ func turnAllowRoots(rt environmentsetup.RuntimeEnv, doc documentEnvLayer) []fspo
 			fspolicy.AllowRoot{Path: filepath.Clean(doc.layout.Prefix), Writable: false},
 			fspolicy.AllowRoot{Path: filepath.Clean(doc.layout.Cache), Writable: true},
 		)
+	}
+	// Skills spec r15 §6.2 item 1: each loadable skill folder (its real path)
+	// is read+execute for the child, on the ordinary and the God path alike;
+	// the registry root itself is never granted.
+	for _, dir := range skillFolders {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		roots = append(roots, fspolicy.AllowRoot{Path: filepath.Clean(dir), Writable: false})
 	}
 	return roots
 }

@@ -571,7 +571,8 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// Metadata guard: reject reads of agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
-	// via generic file tools — callers must use read_agent_metadata instead.
+	// via generic file tools — callers must use get_agent (fields soul,
+	// agent_md) instead.
 	// A re-rooted workspace turn has no AGENT metadata files, so the guard
 	// is a safe no-op there (it only ever matches the four canonical
 	// agents/<id>/ files).
@@ -1073,7 +1074,11 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	var clobberNote string
 	if !overwrite {
-		if _, statErr := handle.Stat(); statErr == nil {
+		// A write into an installed skill folder is decided by the skill
+		// change pipeline's one precondition (skills spec r15 §7.3: the
+		// session's seen revision, SKILL_NOT_READ without one), not by the
+		// overwrite flag, which is no skill-change intent (V-40).
+		if _, statErr := handle.Stat(); statErr == nil && handle.skillWrite == nil {
 			// A PRECONDITION refusal, not a genuine I/O failure: the file is
 			// already there. The prose alone was the same shape as the real
 			// write failure two branches below (ErrorResult(err.Error())), so
@@ -1113,7 +1118,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	emitFileWriteAudit(ctx, t.auditLogger, t.Name(), canonicalPath)
 
-	return SilentResult(fmt.Sprintf("File written: %s", path) + clobberNote)
+	return SilentResult(fmt.Sprintf("File written: %s", path) + clobberNote + handle.SkillChangeNote())
 }
 
 type ListDirTool struct {

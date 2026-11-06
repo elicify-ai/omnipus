@@ -28,6 +28,8 @@ type Answer struct {
 	Responder          addressing.Pair
 	ResponderSessionID string
 	Content            string
+	// Files are the answer's files (#1449 FR-020); none for a text answer.
+	Files []AnswerFile
 }
 
 // AnswerReceipt is what the answering agent is told.
@@ -41,12 +43,15 @@ type AnswerReceipt struct {
 // responder's main chat, and its resolved @-mentions are fanned out (none
 // for an "after pause" answer, FR-170). No agent owner is woken (a room has
 // none). Ids are derived from the request and the answer occurrence.
-func (s *Service) DeliverAnswer(_ context.Context, a Answer) (AnswerReceipt, error) {
+func (s *Service) DeliverAnswer(ctx context.Context, a Answer) (AnswerReceipt, error) {
 	if limit := s.bodyLimit(); len(a.Content) > limit {
 		// FR-176: the same effective limit as a person's room message. Nothing
 		// is posted, mirrored or passed on.
 		return AnswerReceipt{}, fmt.Errorf("%w: your answer is %d bytes; a group message can be at most %d bytes. "+
 			"Shorten it and call answer_request again", ErrAnswerTooLarge, len(a.Content), limit)
+	}
+	if len(a.Files) > 0 {
+		return s.deliverAnswerWithFiles(ctx, a)
 	}
 	r, ws, err := s.openRoom(a.RoomID)
 	if err != nil {
@@ -145,6 +150,11 @@ func unmirroredAnswer(r *room, a Answer) (storedEntry, bool) {
 		if e.AnswersRequest != a.RequestID {
 			continue
 		}
+		if e.fromIntent() {
+			// An answer with files is matched by its intent, never by text
+			// (FR-022): a text-only call is a different answer.
+			return storedEntry{}, false
+		}
 		if !r.mirrored[e.Entry.Id] && e.Entry.Text == a.Content {
 			return e, true
 		}
@@ -168,9 +178,10 @@ func (s *Service) mirrorAnswer(r *room, se storedEntry) error {
 	if d != nil {
 		m = Mirror{
 			MainSessionID: d.SessionID, MirrorID: deriveID("mirror", se.Entry.Id),
-			Author:  addressing.Pair{WorkspaceID: r.rec.WorkspaceID, AgentID: d.AgentID},
-			Ref:     generated.RoomRef{RoomId: r.rec.ID, RoomName: r.rec.Name, RequestId: d.RequestID, Role: "answer"},
-			Content: se.Entry.Text,
+			Author:      addressing.Pair{WorkspaceID: r.rec.WorkspaceID, AgentID: d.AgentID},
+			Ref:         generated.RoomRef{RoomId: r.rec.ID, RoomName: r.rec.Name, RequestId: d.RequestID, Role: "answer"},
+			Content:     se.Entry.Text,
+			Attachments: se.Entry.Attachments,
 		}
 	}
 	r.mu.Unlock()
@@ -445,11 +456,59 @@ func (s *Service) cardChanged(sessionID, cardID string, pending bool) {
 			switch {
 			case waiting && d.State == StateWorking:
 				s.updateState(r, d, StateWaitingOnUser, "")
-			case !waiting && d.State == StateWaitingOnUser:
+			case !waiting && d.State == StateWaitingOnUser && !s.requestWaiting(d):
 				s.updateState(r, d, StateWorking, "")
 			}
 		})
 	}
+}
+
+// cardTarget is the one request a group-referenced card belongs to.
+type cardTarget struct{ roomID, requestID string }
+
+// CardForRequest tracks a card that carries this group's reference (#1449
+// FR-053, ADR C-I7): it flips only its own request to "waiting for you" and
+// back, never the member's other room requests. Idempotent per card id.
+func (s *Service) CardForRequest(roomID, requestID, cardID string, pending bool) {
+	if roomID == "" || requestID == "" || cardID == "" {
+		return
+	}
+	target := cardTarget{roomID, requestID}
+	s.cardMu.Lock()
+	if pending {
+		s.reqCards[cardID] = target
+	} else {
+		delete(s.reqCards, cardID)
+	}
+	s.cardMu.Unlock()
+	s.withDelivery(roomID, requestID, func(r *room, d *deliveryRecord) {
+		if r.rec.PendingReleases[requestID] || s.settlementPending(r, requestID) {
+			return
+		}
+		waiting := s.requestWaiting(d)
+		switch {
+		case waiting && d.State == StateWorking:
+			s.updateState(r, d, StateWaitingOnUser, "")
+		case !waiting && d.State == StateWaitingOnUser:
+			s.updateState(r, d, StateWorking, "")
+		}
+	})
+}
+
+// requestWaiting: a card of this request, or an unreferenced card in the
+// member's main chat, is pending.
+func (s *Service) requestWaiting(d *deliveryRecord) bool {
+	s.cardMu.Lock()
+	defer s.cardMu.Unlock()
+	if len(s.pending[d.SessionID]) > 0 {
+		return true
+	}
+	for _, t := range s.reqCards {
+		if t.requestID == d.RequestID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) forgetWorking(sessionID, requestID string) {

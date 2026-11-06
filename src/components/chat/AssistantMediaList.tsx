@@ -5,8 +5,8 @@
 // plain row, which used to carry two copies of the inline markup.
 
 import { useMemo } from 'react'
-import { File } from '@phosphor-icons/react'
 import type { MediaAttachment } from '@/store/chat'
+import { ChatFileAttachment } from './ChatFileAttachment'
 import { ChatImage } from './ChatImage'
 import { PreviewThumbnailGroup } from './PreviewThumbnailGroup'
 import { partitionMedia } from './previewGroups'
@@ -22,17 +22,8 @@ function InlineMediaItem({ item }: { item: MediaAttachment }) {
       </div>
     )
   }
-  return (
-    <a
-      tabIndex={0}
-      href={item.url}
-      download={item.filename}
-      className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-    >
-      <File size={14} />
-      {item.filename}
-    </a>
-  )
+  // FR-002/FR-081: the same keyboard-operable file card on every row.
+  return <ChatFileAttachment media={item} />
 }
 
 export interface AssistantMediaListProps {

@@ -13,12 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
-	wkspace "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // --- File upload ---
@@ -189,7 +187,9 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 						// pkg/logger instead.
 						logger.ErrorCF("rest", "upload: workspace library load failed",
 							map[string]any{"workspace_id": ru.workspaceID, "error": libErr})
-						jsonServerFailure(ru.w, http.StatusInternalServerError, "workspace media library unavailable", libErr)
+						// #1449 C-I1, FR-017: an explicit 503, never a
+						// fallback to the session path.
+						jsonServerFailure(ru.w, http.StatusServiceUnavailable, "workspace media library unavailable", libErr)
 						return
 					}
 					ru.workspaceLib = lib
@@ -206,10 +206,12 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 				continue
 			}
-			// workspace_id set but library unavailable → fall through to the
-			// legacy session-scoped path (graceful degradation).
-			slog.Warn("rest: upload: workspace library unavailable, falling back to session-scoped path",
-				"workspace_id", ru.workspaceID)
+			// #1449 C-I1, FR-017: workspace_id set but no library → an
+			// explicit 503. A workspace upload never falls back to the
+			// session-scoped path (it would need a session and create none).
+			part.Close()
+			jsonErr(ru.w, http.StatusServiceUnavailable, "workspace media library unavailable")
+			return
 		}
 
 		// --- Legacy session-scoped path ---
@@ -369,7 +371,19 @@ func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string
 		jsonServerFailure(ru.w, http.StatusInternalServerError, "could not stage uploaded file for agent access", stageErr)
 		return restAPIHandleUploadReturn
 	}
-	agent.RecordUploadWorkPath(ref, workRelPath)
+	// #1449 D26, FR-077: the durable association between the two copies.
+	if assocErr := associateLibraryFile(ru.workspaceLib, ref, mediaID, workRelPath); assocErr != nil {
+		logger.ErrorCF("rest", "upload: could not record the library file of the upload",
+			map[string]any{"workspace_id": ru.workspaceID, "media_id": mediaID, "error": assocErr.Error()})
+		if _, delErr := ru.workspaceLib.Delete(mediaID); delErr != nil {
+			slog.Warn("rest: upload: rollback of media-library entry failed after association failure",
+				"media_id", mediaID, "error", delErr)
+		}
+		removeLibraryFile(ru.a.homePath, ru.workspaceID, workRelPath)
+		ru.a.cleanupWorkspaceUploads(&ru.resp, ru.workspaceLib)
+		jsonServerFailure(ru.w, http.StatusInternalServerError, "could not record the uploaded file", assocErr)
+		return restAPIHandleUploadReturn
+	}
 
 	var refPtr *string
 	if ref != "" {
@@ -501,19 +515,6 @@ func (a *restAPI) stageWorkspaceUploadCopy(
 	workspaceID, mediaID, filename string,
 	lib *library.Library,
 ) (string, error) {
-	sanitized, err := agent.SanitizeUploadFilename(filename)
-	if err != nil {
-		return "", fmt.Errorf("sanitize filename: %w", err)
-	}
-	workDir, err := wkspace.SafeWorkDir(a.homePath, workspaceID)
-	if err != nil {
-		return "", fmt.Errorf("resolve workspace work dir: %w", err)
-	}
-	libraryDir := filepath.Join(workDir, agent.LibraryDirName())
-	if mkErr := os.MkdirAll(libraryDir, 0o700); mkErr != nil {
-		return "", fmt.Errorf("create workspace library dir: %w", mkErr)
-	}
-
 	// Read back the FULL, sha256-verified bytes rather than tee-ing the
 	// original multipart reader — the multipart part is already fully
 	// consumed by lib.Upload above by the time this is called, and
@@ -525,54 +526,8 @@ func (a *restAPI) stageWorkspaceUploadCopy(
 	if err != nil {
 		return "", fmt.Errorf("read back uploaded bytes: %w", err)
 	}
-
-	ext := filepath.Ext(sanitized)
-	base := strings.TrimSuffix(sanitized, ext)
-	const maxDedupAttempts = 1000
-
-	destName := sanitized
-	var destFile *os.File
-	var destPath string
-	for attempt := 1; ; attempt++ {
-		destPath = filepath.Join(libraryDir, destName)
-		f, openErr := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if openErr == nil {
-			destFile = f
-			break
-		}
-		if !errors.Is(openErr, os.ErrExist) {
-			return "", fmt.Errorf("create workspace library file: %w", openErr)
-		}
-		if attempt > maxDedupAttempts {
-			return "", fmt.Errorf("too many filename collisions for %q in workspace library", sanitized)
-		}
-		destName = fmt.Sprintf("%s (%d)%s", base, attempt, ext)
-	}
-
-	// keepFile flips to true only once the write AND close both succeed —
-	// any earlier return leaves it false, so the deferred cleanup below
-	// removes the just-created (possibly empty or partially-written) file
-	// rather than stranding it.
-	keepFile := false
-	defer func() {
-		if !keepFile {
-			if rmErr := os.Remove(destPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-				logger.WarnCF("rest", "upload: cleanup partial workspace library file failed",
-					map[string]any{"path": destPath, "error": rmErr.Error()})
-			}
-		}
-	}()
-
-	if _, writeErr := destFile.Write(data); writeErr != nil {
-		destFile.Close()
-		return "", fmt.Errorf("write workspace library file: %w", writeErr)
-	}
-	if closeErr := destFile.Close(); closeErr != nil {
-		return "", fmt.Errorf("close workspace library file: %w", closeErr)
-	}
-	keepFile = true
-
-	return agent.LibraryDirName() + "/" + destName, nil
+	// #1449 FR-077: the one shared publication path (library_publication.go).
+	return writeLibraryFile(a.homePath, workspaceID, filename, data, true)
 }
 
 func (a *restAPI) cleanupWorkspaceUploads(resp *gen.UploadFilesResponse, lib *library.Library) {

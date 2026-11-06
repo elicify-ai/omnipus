@@ -58,7 +58,8 @@ func TestApplySandboxAccessScopesDocumentIPCToAuthorizedWorkDir(t *testing.T) {
 	}
 }
 
-func TestProvisionInstallsSkillsAndSandboxAccessIsWorkerOnly(t *testing.T) {
+// r15 §11 retires the toolchain skill copy, not read-only runtime/cache policy.
+func TestProvisionKeepsSkillsOutOfRuntimeAndPreservesWorkerSandbox(t *testing.T) {
 	l, _ := ResolveLayout(t.TempDir(), ManifestRevision, "mia")
 	manifest, err := ProvisionFirstParty(l)
 	if err != nil {
@@ -67,12 +68,17 @@ func TestProvisionInstallsSkillsAndSandboxAccessIsWorkerOnly(t *testing.T) {
 	if err = VerifyAssets(l.Prefix, manifest.Assets); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range DocumentSkillIDs {
-		for _, rel := range []string{"SKILL.md", "LICENSE"} {
-			if _, err = os.Stat(filepath.Join(l.Skills, id, rel)); err != nil {
-				t.Fatalf("%s/%s: %v", id, rel, err)
-			}
+	if _, err = os.Stat(filepath.Join(l.Prefix, "skills")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("r15 §11 forbids a second skills tree under the runtime prefix: %v", err)
+	}
+	for _, asset := range manifest.Assets {
+		if strings.HasPrefix(asset.Path, "skills/") {
+			t.Fatalf("manifest retained a retired toolchain skill copy: %s", asset.Path)
 		}
+	}
+	probeMain := filepath.Join(l.Lib, "python", "omnipus_document_probe", "__main__.py")
+	if _, err = os.Stat(probeMain); err != nil {
+		t.Fatalf("the retained probe must still be provisioned: %v", err)
 	}
 	// A base rule that overlaps the managed prefix must not give agents write
 	// access to it — even when their ordinary workspace policy says otherwise.
@@ -91,7 +97,7 @@ func TestProvisionInstallsSkillsAndSandboxAccessIsWorkerOnly(t *testing.T) {
 		t.Fatalf("worker cache must stay writable: %v", worker.FilesystemRules)
 	}
 	// A tampered asset is detected by checksum.
-	if err := os.WriteFile(filepath.Join(l.Skills, DocumentSkillIDs[0], "SKILL.md"), []byte("mutated"), 0o644); err != nil {
+	if err := os.WriteFile(probeMain, []byte("mutated"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := VerifyAssets(l.Prefix, manifest.Assets); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
@@ -126,6 +132,11 @@ func TestProvisionFirstPartyIsProbeableBeforeDependencies(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertOfficePackageInventory(t, manifest) // AD-14 replaces the four-package count.
+	// r15 §11 removes the copied document packages and their old asset-count
+	// prerequisite; the retained probe inventory must still be nonempty.
+	if len(manifest.Assets) == 0 {
+		t.Fatal("the retained runtime probe must have a checksummed inventory")
+	}
 	if _, err := os.Stat(filepath.Join(layout.Lib, "python", "omnipus_document_probe", "__main__.py")); err != nil {
 		t.Fatal(err)
 	}

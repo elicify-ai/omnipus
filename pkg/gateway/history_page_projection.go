@@ -43,6 +43,43 @@ type historyPageRequest struct {
 	lifecycle *historyReadOnlyLifecycle
 	// Captured once before selection, included in every actual carrier weight.
 	sessionTokensTotal *int
+	// keep names the one carrier copy the caller still sends; Read releases
+	// the others as soon as the page is validated and encoded.
+	keep historyCarrierKeep
+}
+
+// historyCarrierKeep is the carrier copy a prepared page keeps after Read.
+// Preparation builds the source page, generated messages, the encoded REST
+// body and the replay frames; each caller sends only one of them, so holding
+// the rest while a slow client is served wastes server memory (#1452).
+type historyCarrierKeep int
+
+const (
+	// historyKeepAll keeps every copy (direct preparation probes).
+	historyKeepAll historyCarrierKeep = iota
+	// historyKeepBody keeps only the encoded REST messages body.
+	historyKeepBody
+	// historyKeepMessages keeps only the generated messages (session detail).
+	historyKeepMessages
+	// historyKeepFrames keeps only the replay frames (WebSocket attach).
+	historyKeepFrames
+)
+
+// release drops every carrier copy keep does not name. Page metadata
+// (page_info counts, continuation flags) stays for the diagnostics summary.
+func (p *preparedHistoryPage) release(keep historyCarrierKeep) {
+	if keep == historyKeepAll {
+		return
+	}
+	p.Page.Entries = nil
+	p.Page.PageInfo.Context = session.ChatHistoryContext{}
+	if keep != historyKeepMessages {
+		p.Response.Entries = nil
+	}
+	if keep != historyKeepFrames {
+		p.ReplayFrames = nil
+		p.emitted = nil
+	}
 }
 
 func newHistoryPageRequest(sessionID string, opts session.ChatHistoryPageOptions, deps historyPageProjectionDeps) (*historyPageRequest, error) {
@@ -108,10 +145,34 @@ func (r *historyPageRequest) weigh(ctx context.Context, p session.ChatHistoryPag
 	}
 	return weight, nil
 }
+
+// historyPreparationLimit bounds concurrent history page preparations per
+// process, so the near-admission working set is held at most this many times.
+const historyPreparationLimit = 2
+
+var historyPreparationSlots = make(chan struct{}, historyPreparationLimit)
+
 func (r *historyPageRequest) Read(ctx context.Context, store *session.UnifiedStore) (preparedHistoryPage, error) {
 	if store == nil {
 		return preparedHistoryPage{}, historyProjectionError(errors.New("history store unavailable"))
 	}
+	// At most historyPreparationLimit page preparations run at once in this
+	// process; others wait for a slot until their request ends, and are
+	// never refused (A2.8, founder decision 2026-10-30). A free slot is taken
+	// first: select picks at random among ready cases, so an already
+	// cancelled request would otherwise skip the read at random, and with it
+	// a pending cleanup's storage failure, which outranks the cancellation
+	// (#1452 B69).
+	select {
+	case historyPreparationSlots <- struct{}{}:
+	default:
+		select {
+		case historyPreparationSlots <- struct{}{}:
+		case <-ctx.Done():
+			return preparedHistoryPage{}, ctx.Err()
+		}
+	}
+	defer func() { <-historyPreparationSlots }()
 	defer func() { r.memo = nil; r.media = nil; r.lifecycle = nil }()
 	r.reset("")
 	r.sessionTokensTotal = store.ReadSessionTokensTotal(r.sessionID)
@@ -135,8 +196,16 @@ func (r *historyPageRequest) Read(ctx context.Context, store *session.UnifiedSto
 	if err != nil {
 		return preparedHistoryPage{}, historyProjectionError(err)
 	}
+	// The memoized group encodings are now copied into the body, and the
+	// schema check below reads only the body: release what the caller's
+	// carrier does not send before that check allocates.
+	r.memo = nil
+	prepared.release(r.keep)
 	if msg, _ := validateBodyAgainstSchema("SessionHistoryResponse", prepared.encodedResponse); msg != "" {
 		return preparedHistoryPage{}, errHistoryPageProtocol
+	}
+	if r.keep == historyKeepMessages || r.keep == historyKeepFrames {
+		prepared.encodedResponse = nil
 	}
 	// An unselected lookahead and all request-local preparation are not retained
 	// by the store or a global/session cache after this carrier is returned.
