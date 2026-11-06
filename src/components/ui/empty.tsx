@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 // elements with className passthrough and a data-slot equal to their
 // kebab-case name. Static content, no role: a caller that needs the state
 // announced (search "no results") puts role="status" on its own wrapper.
-// Supersedes EmptyState, which stays published until W2-7 removes it.
+// Replaced EmptyState in W2-1: its callers moved here and EmptyState was removed.
 
 function Empty({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (

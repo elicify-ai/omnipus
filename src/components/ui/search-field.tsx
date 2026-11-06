@@ -15,10 +15,14 @@ import { cn } from '@/lib/utils'
 // closes as usual. The whole rule is gated by `clearable` and lives in
 // `clearsOnEscape` below, so a different answer is a one-line change.
 //
-// Caveat recorded for the dispatcher: Radix dismissable layers (Dialog,
-// Sheet, Popover) listen for Escape on `document` in the CAPTURE phase, so
-// they see the key before this input does; stopping propagation here keeps
-// bubble-phase listeners from closing, not a Radix Dialog.
+// Keeping an enclosing pop-up open (contract §2.1): Radix dismissable layers
+// (Dialog, Sheet, Popover, every DismissableLayer) listen for Escape on
+// `document` in the CAPTURE phase, before this input's own handler runs, and
+// dismiss unless the event is already `defaultPrevented`. So while Escape
+// would clear text, a window capture-phase listener (window runs before
+// document) marks that Escape `defaultPrevented`; every layer then skips its
+// dismissal, without any layer having to know about SearchField. The input's
+// own handler does the clear and stops bubble-phase listeners.
 export interface SearchFieldProps {
   value: string
   onValueChange: (value: string) => void
@@ -84,6 +88,22 @@ const SearchField = React.forwardRef<HTMLInputElement, SearchFieldProps>(functio
   }, [forwardedRef])
 
   const showClear = clearable && !disabled && value !== ''
+
+  // Latest rule for the capture listener below, without re-subscribing.
+  const clearsRef = React.useRef(false)
+  React.useEffect(() => {
+    clearsRef.current = clearsOnEscape(clearable, value)
+  }, [clearable, value])
+  React.useEffect(() => {
+    const view = inputRef.current?.ownerDocument.defaultView
+    if (!view) return
+    function claimEscape(event: KeyboardEvent) {
+      if (event.key !== 'Escape' || event.target !== inputRef.current || !clearsRef.current) return
+      event.preventDefault()
+    }
+    view.addEventListener('keydown', claimEscape, { capture: true })
+    return () => view.removeEventListener('keydown', claimEscape, { capture: true })
+  }, [])
   const inToolbar = React.useContext(SearchToolbarContext)
 
   return (

@@ -3,8 +3,8 @@
  *
  * RED on 69aa07d9a: `src/components/ui/empty.tsx` does not exist yet
  * (contract §2.5 names it as a new file) — fails at import for the right
- * reason. EmptyState (the superseded component) is NOT touched here; it
- * stays published until W2-7 deletes it (§2.5 Relation).
+ * reason. EmptyState (the superseded component) was removed in W2-1 once
+ * its callers moved to Empty (founder instruction 2026-11-06).
  */
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
