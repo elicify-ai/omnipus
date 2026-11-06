@@ -1,17 +1,27 @@
 /**
- * Issue #1639: custom model edits obey ADR-067 FR-035's PUT identity contract;
- * a refused model save is visible (issue #1639 Expected).
- * Only fetch is replaced. The form, editor, step-up gate, API/error handling,
- * generated response validation, query state and rendered toasts remain real.
+ * Issue #1639, accepted architect ruling B (2026-11-06), rules 1 and 6:
+ * model edits send only models; the server keeps stored custom identity.
+ * A refused save visibly explains the reason and retains the draft.
+ * Only HTTP/WebSocket process edges and browser shims are replaced. AppShell,
+ * its existing toast host, the form/editor, step-up gate and API/store stay real.
+ * jsdom visibility cannot establish Sheet/overlay occlusion in a real browser.
  */
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { AppState, Provider } from '@/lib/api/generated/openapi-types'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router'
+import type { AppState, Provider, GodModeStatus, NotificationList, VersionResponse } from '@/lib/api/generated/openapi-types'
+import { queryClient } from '@/lib/queryClient'
 import { ApiError } from '@/lib/api'
 import { resetProvidersCatalogCache } from '@/lib/api/providers'
 import { useUiStore, type Toast } from '@/store/ui'
-import { ToastContainer } from '@/components/ui/toast-container'
+import { useSidebarStore } from '@/store/sidebar'
+import { useSessionStore } from '@/store/session'
+import { useConnectionStore } from '@/store/connection'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useChatStore } from '@/store/chat'
+import { useAuthStore } from '@/store/auth'
+import { AppShell } from '@/components/layout/AppShell'
 import { PROVIDERS_CATALOG } from '@/test/fixtures/providersCatalog'
 import { ProvidersSection } from './ProvidersSection'
 
@@ -54,17 +64,55 @@ const CUSTOM_PROVIDER: Provider = {
   backs_default: false,
 }
 
-let client: QueryClient
+const client = queryClient
+const originalDefaults = client.getDefaultOptions()
 let stopNotices: (() => void) | undefined
+let unexpectedEdges: string[]
+
+// AppShell's real WsLifecycle may start, but this raw edge never connects or
+// fabricates a server frame. The provider assertions do not depend on a socket.
+class OfflineWebSocket extends EventTarget {
+  static CONNECTING = 0
+  static OPEN = 1
+  static CLOSING = 2
+  static CLOSED = 3
+  readyState = OfflineWebSocket.CONNECTING
+  onopen: ((event: Event) => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: ((event: Event) => void) | null = null
+  onclose: ((event: CloseEvent) => void) | null = null
+  constructor(readonly url: string) { super() }
+  send(body: string) {
+    unexpectedEdges.push(`WebSocket send: ${body}`)
+    throw new Error('The provider fixture never opens its raw transport')
+  }
+  close() { this.readyState = OfflineWebSocket.CLOSED }
+}
 
 function clearToasts() {
   for (const toast of useUiStore.getState().toasts) useUiStore.getState().removeToast(toast.id)
 }
 
 beforeEach(() => {
+  localStorage.clear()
   clearToasts()
   resetProvidersCatalogCache()
-  client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  client.clear()
+  client.setDefaultOptions({ queries: { retry: false }, mutations: { retry: false } })
+  unexpectedEdges = []
+  vi.stubGlobal('WebSocket', OfflineWebSocket)
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: query.includes('min-width'), media: query, onchange: null,
+    addListener: () => {}, removeListener: () => {}, addEventListener: () => {},
+    removeEventListener: () => {}, dispatchEvent: () => false,
+  }))
+  useUiStore.setState(useUiStore.getInitialState(), true)
+  useSidebarStore.setState({ isOpen: false, isPinned: false })
+  useSessionStore.setState(useSessionStore.getInitialState(), true)
+  useConnectionStore.setState(useConnectionStore.getInitialState(), true)
+  useChatStore.setState(useChatStore.getInitialState(), true)
+  useWorkspacesStore.setState({ activeWorkspaceId: null })
+  useAuthStore.setState({ username: 'custom-models-test' })
   document.cookie = 'csrf=custom-models-test; Path=/'
 })
 
@@ -73,10 +121,18 @@ afterEach(() => {
   stopNotices = undefined
   cleanup()
   client.clear()
+  client.setDefaultOptions(originalDefaults)
   clearToasts()
   resetProvidersCatalogCache()
+  useConnectionStore.setState(useConnectionStore.getInitialState(), true)
+  useSessionStore.setState(useSessionStore.getInitialState(), true)
+  useChatStore.setState(useChatStore.getInitialState(), true)
+  useUiStore.setState(useUiStore.getInitialState(), true)
+  useAuthStore.setState(useAuthStore.getInitialState(), true)
+  localStorage.clear()
   document.cookie = 'csrf=; Path=/; Max-Age=0'
   vi.unstubAllGlobals()
+  expect(unexpectedEdges, 'all HTTP/socket process edges must be explicit; no real network').toEqual([])
 })
 
 function jsonResponse(body: unknown, status = 200) {
@@ -90,6 +146,22 @@ function installServer(providers: () => Provider[], onPut: () => Response) {
     const path = new URL(url, 'http://localhost').pathname
     const method = init?.method ?? 'GET'
     if (method === 'GET' && path === '/api/v1/state') return jsonResponse(APP_STATE)
+    // Companion AppShell APIs stay real; only their HTTP responses are fixtures.
+    if (method === 'GET' && ['/api/v1/agents', '/api/v1/tasks', '/api/v1/workspaces', '/api/v1/skills'].includes(path)) {
+      return jsonResponse([])
+    }
+    if (method === 'GET' && path === '/api/v1/sessions') return jsonResponse({ sessions: [] })
+    if (method === 'GET' && path === '/api/v1/activity') return jsonResponse({ events: [] })
+    if (method === 'GET' && path === '/api/v1/performance') return jsonResponse({})
+    if (method === 'GET' && path === '/api/v1/notifications') {
+      return jsonResponse({ notifications: [], unread_count: 0 } satisfies NotificationList)
+    }
+    if (method === 'GET' && path === '/api/v1/version') {
+      return jsonResponse({ version: '0.1.1', build_sha: 'dev' } satisfies VersionResponse)
+    }
+    if (method === 'GET' && path === '/api/v1/gateway/god-mode') {
+      return jsonResponse({ enabled: false, persisted: false, supported: true, available: true } satisfies GodModeStatus)
+    }
     if (method === 'GET' && path === '/api/v1/providers') return jsonResponse(providers())
     if (method === 'GET' && path === '/api/v1/providers/catalog') return jsonResponse(PROVIDERS_CATALOG)
     if (method === 'GET' && path === '/api/v1/providers/default-model') {
@@ -99,13 +171,22 @@ function installServer(providers: () => Provider[], onPut: () => Response) {
       putBodies.push(JSON.parse(String(init?.body)))
       return onPut()
     }
+    unexpectedEdges.push(`${method} ${path}`)
     throw new Error(`Unexpected network request: ${method} ${path}`)
   }))
   return putBodies
 }
 
 function renderProviders() {
-  render(<QueryClientProvider client={client}><ProvidersSection /><ToastContainer /></QueryClientProvider>)
+  // The app's existing host owns ToastContainer; this test imports no private
+  // design-system export and mounts the editor beneath the real routed shell.
+  const root = createRootRoute({ component: AppShell })
+  const page = createRoute({ getParentRoute: () => root, path: '/', component: ProvidersSection })
+  const router = createRouter({
+    routeTree: root.addChildren([page]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>)
 }
 
 async function addModelAndSave() {
@@ -118,7 +199,7 @@ async function addModelAndSave() {
   fireEvent.click(await screen.findByRole('button', { name: /^Save API key$/ }))
 }
 
-it('resends the custom base and protocol, but not the key, when saving models after normal creation', async () => {
+it('sends only models, not custom identity or a key, when saving models after normal creation', async () => {
   let configured: Provider[] = []
   let saves = 0
   const sent = installServer(() => configured, () => {
@@ -149,12 +230,10 @@ it('resends the custom base and protocol, but not the key, when saving models af
 
   await addModelAndSave()
   await waitFor(() => expect(sent, 'one create and one model-save PUT must reach the network boundary').toHaveLength(2))
-  // Oracle: ProviderUpdateRequest.api_base/protocol are required for custom PUT;
-  // omitting api_key on an existing row preserves the encrypted key.
-  expect(sent[1], 'a custom model-save PUT needs both identity fields, not just models').toEqual({
+  // Oracle: accepted architect ruling B, rule 1 and its frontend T1 ruling.
+  // The server retains stored identity and key; none belongs in this model edit.
+  expect(sent[1], 'ruling B: a model edit sends only models, never base, protocol or key').toEqual({
     models: [MODEL_SLUG],
-    api_base: CUSTOM_BASE,
-    protocol: 'openai-compatible',
   })
   await waitFor(() => expect(client.getQueryData(['providers'])).toEqual([
     { ...CUSTOM_PROVIDER, models: [MODEL_SLUG] },
