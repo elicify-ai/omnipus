@@ -52,6 +52,11 @@ func fullBuiltinPolicyMap(policy string) map[string]string {
 	out := make(map[string]string, len(known))
 	for name := range known {
 		out[name] = policy
+		// Channels FR-037: this always-ask tool cannot store Allow. Keep
+		// the fixture valid except for each test's deliberate coverage gap.
+		if name == "set_channel_outbound" && policy == "allow" {
+			out[name] = "ask"
+		}
 	}
 	return out
 }
@@ -89,8 +94,8 @@ func seedGlobalCeiling(t *testing.T, api *restAPI) {
 func seedAgentWithFullPolicy(t *testing.T, api *restAPI, agentID string) *agentstore.Store {
 	t.Helper()
 	policies := make(map[string]config.ToolPolicy)
-	for name := range buildKnownBuiltinToolNames() {
-		policies[name] = config.ToolPolicyAllow
+	for name, policy := range fullBuiltinPolicyMap("allow") {
+		policies[name] = config.ToolPolicy(policy)
 	}
 	policies["bash"] = config.ToolPolicyDeny
 	store := agentstore.New(api.homePath)

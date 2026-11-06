@@ -7,7 +7,7 @@
 //
 // These tests live in pkg/gateway because they must import both:
 //   - pkg/tools (GeneralBuiltinMetadata, BuiltinRegistry)
-//   - pkg/sysagent/tools (AllTools — the 32 system.* tools)
+//   - pkg/sysagent/tools (AllTools — the 33 system.* tools)
 //
 // pkg/tools cannot import pkg/sysagent/tools (import cycle), so the
 // combined registry test belongs in a package that can import both.
@@ -27,7 +27,7 @@ import (
 // BuiltinRegistry populated the same way as gateway boot (system tools first,
 // then general-builtin metadata) satisfies Spec-1 SC-101:
 //   - contains all general builtins (exec, read_file, web_search, web_fetch minimum)
-//   - contains all 32 system.* tools
+//   - contains all 33 system.* tools
 //   - total count > 35
 //   - no tool name appears twice (duplicate guard — prevents the double-count regression)
 //
@@ -42,7 +42,7 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 	// Mirror the gateway boot sequence: system tools first, then general.
 	reg := tools.NewBuiltinRegistry()
 
-	// Register all 32 system tools with nil deps (metadata-only mode, same as boot).
+	// Register all 33 system tools with nil deps (metadata-only mode, same as boot).
 	sysToolList := systools.AllTools(nil)
 	for _, tool := range sysToolList {
 		err := reg.RegisterBuiltin(tool)
@@ -50,8 +50,8 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 			"system tool %q must register without error in metadata mode", tool.Name())
 	}
 	systemCount := reg.Count()
-	assert.Equal(t, 32, systemCount,
-		"systools.AllTools must produce exactly 32 system tools (see sysagent/tools/registry.go) — r17 7.12 retired get_agent_tools and read_agent_metadata (35 - 2) and skills r15 §10 retired create_skill and remove_skill and added get_skill (- 2 + 1); the four *_in_workspace tools were retired by DEL-23 (ADR-090 had taken the count to 35), omnipus-system-agent FR-024 added set_agent_permissions, and the secret/connect work added the three most recent: select_secret_version (8fd5a0f79, FR-086), remove_secret (a1536fba0, WU-6/FR-077) and connect_channel (c899884c5, WU-7)")
+	assert.Equal(t, 33, systemCount,
+		"systools.AllTools must produce exactly 33 system tools (see sysagent/tools/registry.go) — channels Q7 FR-032 added set_channel_outbound (32 + 1); r17 7.12 retired get_agent_tools and read_agent_metadata (35 - 2) and skills r15 §10 retired create_skill and remove_skill and added get_skill (- 2 + 1); the four *_in_workspace tools were retired by DEL-23 (ADR-090 had taken the count to 35), omnipus-system-agent FR-024 added set_agent_permissions, and the secret/connect work added the three most recent: select_secret_version (8fd5a0f79, FR-086), remove_secret (a1536fba0, WU-6/FR-077) and connect_channel (c899884c5, WU-7)")
 	_, hasPermissions := reg.Get("set_agent_permissions")
 	assert.True(t, hasPermissions, "FR-024: set_agent_permissions is a system tool")
 
@@ -97,13 +97,13 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 }
 
 // TestCentralBuiltinRegistry_NoDoubleCountSystemTools asserts that registering
-// system tools exactly once produces exactly 32 system entries — guards the
+// system tools exactly once produces exactly 33 system entries — guards the
 // double-count regression described in Issue #350.
 //
 // BDD: Given systools.AllTools registered exactly once,
 //
 //	When Count() is called,
-//	Then it returns 32 (not 70 or any other value).
+//	Then it returns 33 (not 70 or any other value).
 //
 // Traces to: Issue #350 double-count bug, FR-101, TDD T2.
 func TestCentralBuiltinRegistry_NoDoubleCountSystemTools(t *testing.T) {
@@ -113,6 +113,6 @@ func TestCentralBuiltinRegistry_NoDoubleCountSystemTools(t *testing.T) {
 			t.Logf("skipping system tool %q (err: %v)", tool.Name(), err)
 		}
 	}
-	assert.Equal(t, 32, reg.Count(),
-		"system tools registered once must produce exactly 32 entries — no double-count (Issue #350); the four *_in_workspace tools were retired by DEL-23, omnipus-system-agent FR-024 added set_agent_permissions, select_secret_version (FR-086), remove_secret (WU-6) and connect_channel (WU-7) were added, r17 7.12 retired get_agent_tools and read_agent_metadata, and skills r15 §10 replaced create_skill/remove_skill with get_skill")
+	assert.Equal(t, 33, reg.Count(),
+		"system tools registered once must produce exactly 33 entries — no double-count (Issue #350); channels Q7 FR-032 added set_channel_outbound (32 + 1); the four *_in_workspace tools were retired by DEL-23, omnipus-system-agent FR-024 added set_agent_permissions, select_secret_version (FR-086), remove_secret (WU-6) and connect_channel (WU-7) were added, r17 7.12 retired get_agent_tools and read_agent_metadata, and skills r15 §10 replaced create_skill/remove_skill with get_skill")
 }
