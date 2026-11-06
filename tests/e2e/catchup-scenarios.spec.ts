@@ -44,6 +44,12 @@
  * after each published token, so the turn now stays genuinely mid-stream
  * for many seconds — plenty of margin for kill9()/restart() and a
  * Playwright poll, without touching the assertion itself.
+ *
+ * STATUS (#1661, 2026-11-06): the token-delay knob is retired for b/c/h.
+ * The held-stream provider (fixtures/held-stream-provider.ts) scripts the
+ * stream itself and holds the mid-turn window open by construction, so the
+ * mid-turn gates no longer depend on any model's emission profile (on the
+ * CI primary model the whole answer used to arrive only at completion).
  */
 
 import { expect, type Page } from '@playwright/test'
@@ -52,6 +58,13 @@ import { chatInput, waitForConnected, assistantMessages, userMessages } from './
 import { freshChat, openSessionByDeepLink, originOf } from './fixtures/session-setup'
 import { installFreezeProxy } from './helpers/freezeProxy'
 import { GatewayProcess } from './fixtures/gateway-process'
+import { E2E_FALLBACK } from './fixtures/e2e-model'
+import {
+  attachHeldStreamEvidence,
+  expectTurnHeldMidStream,
+  startHeldStreamProvider,
+  type HeldStreamProvider,
+} from './fixtures/held-stream-provider'
 
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]')
 const assistantConnectionStatus = (page: Page) => page.getByTestId('assistant-connection-status')
@@ -246,18 +259,21 @@ async function assertNoDuplicateOrGapText(page: Page, before: string, after: str
   expect(norm(reloaded)).toBe(norm(after))
 }
 
-/** b/c need a real turn that remains in flight while the UI is moved away.
- * Pace only their own gateway's real outbound tokens using the existing h
- * fixture knob. Model output, turn engine, persistence, and reattach stay real.
- */
-async function openPacedCatchupChat(page: Page): Promise<GatewayProcess> {
-  const gw = await GatewayProcess.start({ env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '100' } })
+/** b/c need a real turn that remains in flight while the UI is moved away —
+ * for as long as the test wants, independent of any model's emission profile
+ * (#1661): their gateway is pointed at the held-stream provider, which keeps
+ * the scripted stream open until the test calls release(). Turn engine,
+ * persistence, reattach and catch-up stay real. Fails safe: a failed boot or
+ * navigation stops the provider along with the gateway. */
+async function openHeldCatchupChat(page: Page, provider: HeldStreamProvider): Promise<GatewayProcess> {
+  const gw = await GatewayProcess.start({ apiBase: provider.url, model: E2E_FALLBACK.model })
   try {
     await page.context().addCookies((await gw.browserStorageState()).cookies)
     await page.goto(gw.baseURL)
     return gw
   } catch (error) {
     await gw.stop()
+    await provider.close()
     throw error
   }
 }
@@ -281,107 +297,6 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     // "catch_up mode=incremental" — the design leaves the exact
     // surfacing mechanism to Lane A/C's own diagnostics; this scenario
     // asserts the user-visible outcome, which is the contract.
-  })
-
-  test('b: dead connection ~60s, server still thinks attached — new connection catches up, no duplicate', async ({ page }) => {
-    test.setTimeout(420_000)
-    const freeze = await installFreezeProxy(page)
-    const gw = await openPacedCatchupChat(page)
-    try {
-      const before = await startLongTurn(page, LONG_PROMPT, { requireRunning: true })
-      await expect(stopButton(page), 'the turn must still be running before the outage or switch').toBeVisible()
-      // Real-browser follow-up (orchestrator): a hard reload lands on the
-      // welcome/empty chat, not the previous session — the tab does not
-      // reopen the last session on its own (checked: this is release
-      // behaviour too, not something to change the product for). Capture
-      // chat A's real, server-assigned sidebar title BEFORE the reload, the
-      // same way scenario c already does, so it can be reopened afterward.
-      const titleA = await activeChatSessionId(page)
-      await expect(stopButton(page), 'freeze begins during the real turn, not after done').toBeVisible()
-      await freeze.freeze()
-      await page.waitForTimeout(60_000)
-      // The new connection (opened by a reload) attaches independently while
-      // the frozen one is still nominally bound server-side.
-      await page.reload()
-      await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
-      await waitForConnected(page)
-      // Reopen chat A via the sidebar — the same real navigation scenario c
-      // uses, not page.goto (a second reload would just repeat the same
-      // welcome-screen landing).
-      await switchToSession(page, titleA)
-      await waitTurnDoneAfterReload(page)
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-      const after = (await bubbleText(assistantMessages(page).first())).trim()
-      await assertNoDuplicateOrGapText(page, before, after, titleA)
-    } finally {
-      await gw.stop()
-    }
-  })
-
-  test('c: tab switched to another chat while the turn finishes — incremental on return', async ({ page }) => {
-    test.setTimeout(420_000)
-    const gw = await openPacedCatchupChat(page)
-    try {
-      const before = await startLongTurn(page, LONG_PROMPT, { requireRunning: true })
-      await expect(stopButton(page), 'the turn must still be running before the outage or switch').toBeVisible()
-      // Capture chat A's real, server-assigned sidebar title BEFORE switching
-      // away — this is what makes finding it again reliable (see
-      // activeChatSessionId's own comment on why this beats guessing).
-      const titleA = await activeChatSessionId(page)
-      // Switch to a fresh chat B while chat A's turn is still running
-      // server-side (the turn never depends on a UI connection, ADR-082 P1 —
-      // switching the VIEW away changes nothing about it).
-      // The sidebar "New chat" button this used to click is REMOVED (founder
-      // decision D7 — no New-chat UI entry anywhere; the /new palette item
-      // filters itself out while streaming anyway), so chat B comes from
-      // freshChat: a public-REST create opened through the SPA's own
-      // /#/sessions/<id> deep-link route. That goto is hash-only on the
-      // origin the page is already on, the router is a hash router
-      // (createHashHistory, src/main.tsx), and Playwright defines a
-      // same-URL-different-hash goto as a same-document navigation — so the
-      // view switches WITHOUT the document reload that would clear the
-      // in-memory cursor and reduce the return below to the full-replay
-      // path (the trap the switch-back comment names). The surviving
-      // marker assertion after the return makes that precondition
-      // machine-checked, not argued.
-      await expect(stopButton(page), 'the view switches away while chat A is still running').toBeVisible()
-      await page.evaluate(() => { (window as { navCatchupMark?: string }).navCatchupMark = 'scenario-c' })
-      const chatB = await freshChat(page)
-      await expect(
-        page.locator(`[data-active-session-id="${chatB.sessionId}"]`),
-        'the view switched to fresh chat B (bound) without a page reload',
-      ).toBeVisible({ timeout: 15_000 })
-      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-      // Switch back to chat A via the sidebar (not page.goto — a reload would
-      // clear the in-memory cursor and defeat the point of this scenario; see
-      // reconnect-mid-turn.spec.ts's own S-11 note on the same trap). Escape
-      // is never pressed — it cancels the running turn.
-      await switchToSession(page, titleA)
-      await expect(stopButton(page), 'reattach reconstructs the still-running turn').toBeVisible()
-      // The window marker set before the switch survived: no document reload
-      // happened across the away-and-back round trip, so the catch-up below
-      // really exercises the in-memory cursor. A reload would silently turn
-      // this scenario into the post-reload replay path — the exact weaker
-      // behaviour this scenario exists to distinguish — and pass vacuously.
-      // awaited: expect(<Promise>).toBe(...) compares the Promise object itself
-      // ("Received: Promise {}"), so this check could never pass - the scenario
-      // never got far enough before to expose it.
-      expect(
-        await page.evaluate(() => (window as { navCatchupMark?: string }).navCatchupMark),
-        'no reload across the away-and-back switch',
-      ).toBe('scenario-c')
-      // Only NOW does the DOM reflect chat A again, so only now does
-      // waitTurnDone's stop-button check actually observe chat A's own
-      // state — checking it while chat B was active (the previous draft's
-      // sequencing) would have passed immediately regardless of whether A's
-      // turn had genuinely finished, since chat B never shows a stop button.
-      await waitTurnDone(page)
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-      const after = (await bubbleText(assistantMessages(page).first())).trim()
-      await assertNoDuplicateOrGapText(page, before, after, titleA)
-    } finally {
-      await gw.stop()
-    }
   })
 
   test('d: no tab at all while the turn finishes (laptop sleep) — reopen shows the complete answer', async ({ page, context }) => {
@@ -468,12 +383,171 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
 })
 
 test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  // #1661: these are the deterministic held-stream scenarios — b, c and h
+  // (both orderings, below) now script ONLY the external provider
+  // (fixtures/held-stream-provider.ts) behind their own GatewayProcess,
+  // because on the CI primary model (MiniMax-M3.1-Flash-Preview) the
+  // ">80 chars while running" mid-turn window never opens: answer text
+  // becomes visible only at/near completion, so the old gates failed every
+  // attempt even though the gateway streams correctly. Scenario titles,
+  // preconditions and assertions are unchanged; the mid-turn proof is now
+  // the provider evidence (expectTurnHeldMidStream) on top of the unchanged
+  // UI gates, and is model-independent. Zero retries: a broken catch-up is
+  // a property no retry establishes.
+  test.describe.configure({ retries: 0 })
+
+  test('b: dead connection ~60s, server still thinks attached — new connection catches up, no duplicate', async ({ page }, info) => {
+    test.setTimeout(420_000)
+    const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROMPT })
+    const freeze = await installFreezeProxy(page)
+    const gw = await openHeldCatchupChat(page, provider)
+    try {
+      const before = await startLongTurn(page, LONG_PROMPT, { requireRunning: true })
+      await expect(stopButton(page), 'the turn must still be running before the outage or switch').toBeVisible()
+      // MID-TURN SIGNAL (#1661): the held-stream provider proves the turn is
+      // genuinely still streaming (stream open, deltas flowing). The old
+      // ">80 chars while running" gate could coincide with completion on a
+      // burst-emitting model; this evidence cannot.
+      expectTurnHeldMidStream(provider, 'catchup b')
+      // Real-browser follow-up (orchestrator): a hard reload lands on the
+      // welcome/empty chat, not the previous session — the tab does not
+      // reopen the last session on its own (checked: this is release
+      // behaviour too, not something to change the product for). Capture
+      // chat A's real, server-assigned sidebar title BEFORE the reload, the
+      // same way scenario c already does, so it can be reopened afterward.
+      const titleA = await activeChatSessionId(page)
+      await expect(stopButton(page), 'freeze begins during the real turn, not after done').toBeVisible()
+      await freeze.freeze()
+      await page.waitForTimeout(60_000)
+      // The new connection (opened by a reload) attaches independently while
+      // the frozen one is still nominally bound server-side.
+      await page.reload()
+      await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
+      await waitForConnected(page)
+      // Reopen chat A via the sidebar — the same real navigation scenario c
+      // uses, not page.goto (a second reload would just repeat the same
+      // welcome-screen landing).
+      await switchToSession(page, titleA)
+      // Chat A is reattached and its turn is STILL live — the freeze only cut
+      // the browser side; the provider stream never ended. Release it now so
+      // the remaining deltas and the completion must arrive over the
+      // reattached connection to satisfy the assertions below. release() ends
+      // the SAME stream, so anything the turn loses here is a real catch-up
+      // defect, not a fixture artifact.
+      provider.release()
+      await waitTurnDoneAfterReload(page)
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      const after = (await bubbleText(assistantMessages(page).first())).trim()
+      await assertNoDuplicateOrGapText(page, before, after, titleA)
+      // The turn ran to its scripted end and was delivered complete: exactly
+      // one held stream, finished by the scripted release, nothing unexpected.
+      expect(provider.evidence.streamRequests, 'catchup b: exactly the scripted turn reached the provider').toBe(1)
+      expect(provider.evidence.released, 'catchup b: the finish came from the scripted release').toBe(1)
+      expect(provider.evidence.errors, 'catchup b: no unexpected scripted-provider request').toEqual([])
+    } finally {
+      try {
+        await attachHeldStreamEvidence(info, 'catchup-b', provider)
+      } finally {
+        await gw.stop()
+        await provider.close()
+      }
+    }
+  })
+
+  test('c: tab switched to another chat while the turn finishes — incremental on return', async ({ page }, info) => {
+    test.setTimeout(420_000)
+    const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROMPT })
+    const gw = await openHeldCatchupChat(page, provider)
+    try {
+      const before = await startLongTurn(page, LONG_PROMPT, { requireRunning: true })
+      await expect(stopButton(page), 'the turn must still be running before the outage or switch').toBeVisible()
+      // MID-TURN SIGNAL (#1661) — same as scenario b: the provider evidence
+      // proves the turn is genuinely still streaming before the UI moves.
+      expectTurnHeldMidStream(provider, 'catchup c')
+      // Capture chat A's real, server-assigned sidebar title BEFORE switching
+      // away — this is what makes finding it again reliable (see
+      // activeChatSessionId's own comment on why this beats guessing).
+      const titleA = await activeChatSessionId(page)
+      // Switch to a fresh chat B while chat A's turn is still running
+      // server-side (the turn never depends on a UI connection, ADR-082 P1 —
+      // switching the VIEW away changes nothing about it).
+      // The sidebar "New chat" button this used to click is REMOVED (founder
+      // decision D7 — no New-chat UI entry anywhere; the /new palette item
+      // filters itself out while streaming anyway), so chat B comes from
+      // freshChat: a public-REST create opened through the SPA's own
+      // /#/sessions/<id> deep-link route. That goto is hash-only on the
+      // origin the page is already on, the router is a hash router
+      // (createHashHistory, src/main.tsx), and Playwright defines a
+      // same-URL-different-hash goto as a same-document navigation — so the
+      // view switches WITHOUT the document reload that would clear the
+      // in-memory cursor and reduce the return below to the full-replay
+      // path (the trap the switch-back comment names). The surviving
+      // marker assertion after the return makes that precondition
+      // machine-checked, not argued.
+      await expect(stopButton(page), 'the view switches away while chat A is still running').toBeVisible()
+      await page.evaluate(() => { (window as { navCatchupMark?: string }).navCatchupMark = 'scenario-c' })
+      const chatB = await freshChat(page)
+      await expect(
+        page.locator(`[data-active-session-id="${chatB.sessionId}"]`),
+        'the view switched to fresh chat B (bound) without a page reload',
+      ).toBeVisible({ timeout: 15_000 })
+      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+      // Switch back to chat A via the sidebar (not page.goto — a reload would
+      // clear the in-memory cursor and defeat the point of this scenario; see
+      // reconnect-mid-turn.spec.ts's own S-11 note on the same trap). Escape
+      // is never pressed — it cancels the running turn.
+      await switchToSession(page, titleA)
+      await expect(stopButton(page), 'reattach reconstructs the still-running turn').toBeVisible()
+      // The window marker set before the switch survived: no document reload
+      // happened across the away-and-back round trip, so the catch-up below
+      // really exercises the in-memory cursor. A reload would silently turn
+      // this scenario into the post-reload replay path — the exact weaker
+      // behaviour this scenario exists to distinguish — and pass vacuously.
+      // awaited: expect(<Promise>).toBe(...) compares the Promise object itself
+      // ("Received: Promise {}"), so this check could never pass - the scenario
+      // never got far enough before to expose it.
+      expect(
+        await page.evaluate(() => (window as { navCatchupMark?: string }).navCatchupMark),
+        'no reload across the away-and-back switch',
+      ).toBe('scenario-c')
+      // Only NOW does the DOM reflect chat A again, so only now does
+      // waitTurnDone's stop-button check actually observe chat A's own
+      // state — checking it while chat B was active (the previous draft's
+      // sequencing) would have passed immediately regardless of whether A's
+      // turn had genuinely finished, since chat B never shows a stop button.
+      // Chat A's turn is still live (the provider stream never ended);
+      // release it so the remaining deltas and the completion must arrive
+      // over the reattached in-memory-cursor connection below.
+      provider.release()
+      await waitTurnDone(page)
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      const after = (await bubbleText(assistantMessages(page).first())).trim()
+      await assertNoDuplicateOrGapText(page, before, after, titleA)
+      // The turn ran to its scripted end and was delivered complete: exactly
+      // one held stream, finished by the scripted release, nothing unexpected.
+      expect(provider.evidence.streamRequests, 'catchup c: exactly the scripted turn reached the provider').toBe(1)
+      expect(provider.evidence.released, 'catchup c: the finish came from the scripted release').toBe(1)
+      expect(provider.evidence.errors, 'catchup c: no unexpected scripted-provider request').toEqual([])
+    } finally {
+      try {
+        await attachHeldStreamEvidence(info, 'catchup-c', provider)
+      } finally {
+        await gw.stop()
+        await provider.close()
+      }
+    }
+  })
+
   // F1: the held-open tab must choose the same single status regardless of
   // whether the optional lifecycle list or the boot-mismatch attach arrives first.
   for (const ordering of ['catch-up first', 'lifecycle first'] as const) {
-    test(`h: gateway restart with tab open — Interrupted alone, Generate again completes (${ordering})`, async ({ page }) => {
+    test(`h: gateway restart with tab open — Interrupted alone, Generate again completes (${ordering})`, async ({ page }, info) => {
       test.setTimeout(420_000)
-      const gw = await GatewayProcess.start({ env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300' } })
+      // #1661: the held-stream provider replaces the pass-4 token-delay knob —
+      // the interrupted turn stays mid-stream because the provider holds the
+      // SSE stream open, not because the gateway paces a live model.
+      const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROMPT })
+      const gw = await GatewayProcess.start({ apiBase: provider.url, model: E2E_FALLBACK.model })
       let crashed = false
       let releaseList!: () => void
       let listReachedPage = false
@@ -555,13 +629,17 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         targetSessionId = sessionId
         await expect(liveAnswer).toHaveAttribute('data-status', 'running')
         await expect(stopButton(page)).toBeVisible()
+        // MID-TURN SIGNAL (#1661): the stream is provably still open right
+        // before the SIGKILL — the Interrupted state below is then a real
+        // mid-answer cut, never a post-completion fake.
+        expectTurnHeldMidStream(provider, `catchup h (${ordering})`)
         crashed = true
         await gw.kill9()
-        // Keep the interrupted turn slow, not the completed retry: 300ms per
-        // frame made 800 observed CI frames consume 240s before the reply ended.
-        // At 25ms, the shortest measured 343-frame reply keeps Stop for 8.6s
-        // (>1s polling); a 3,947-delta replay takes ~99s within the same 240s wait.
-        await gw.restart({ relogin: false, env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '25' } })
+        // The old 25ms/frame pacing existed to keep a live-model retry
+        // finishable within the wait budgets; the scripted retry is answered
+        // complete in one deterministic response, so the restart needs no
+        // env knob (#1661).
+        await gw.restart({ relogin: false })
 
         const notice = page.getByTestId('restart-interrupted-notice')
         const generateAgain = page.getByRole('button', { name: /Generate again/i })
@@ -616,13 +694,30 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         await expect(assistantConnectionStatus(page)).toHaveCount(0)
         await expect(page.getByText(/couldn't be finished/i)).toHaveCount(0)
         await test.info().attach(`completed-${ordering}`, { body: await page.screenshot(), contentType: 'image/png' })
+        // End-of-test provider evidence: the SIGKILL tore down the held
+        // stream (streamsClosed, without any release), and "Generate again"
+        // reached the provider exactly once more and was answered complete —
+        // the retry completed deterministically.
+        expect(provider.evidence.streamsClosed, `catchup h (${ordering}): the crash closed the held stream`).toBe(1)
+        expect(provider.evidence.released, `catchup h (${ordering}): no scripted release was involved`).toBe(0)
+        expect(provider.evidence.retried, `catchup h (${ordering}): Generate again was answered complete`).toBe(1)
+        expect(provider.evidence.streamRequests, `catchup h (${ordering}): exactly the held turn and the retry reached the provider`).toBe(2)
+        expect(provider.evidence.errors, `catchup h (${ordering}): no unexpected scripted-provider request`).toEqual([])
       } finally {
         releaseList()
         // done refreshes the lifecycle list. Drain its active route.fetch
         // before stopping the server or letting Playwright close the context;
         // wait preserves handler failures, unlike ignoreErrors.
-        try { await page.unrouteAll({ behavior: 'wait' }) }
-        finally { await gw.stop() }
+        try {
+          try { await page.unrouteAll({ behavior: 'wait' }) }
+          finally { await gw.stop() }
+        } finally {
+          try {
+            await attachHeldStreamEvidence(info, `catchup-h-${ordering}`, provider)
+          } finally {
+            await provider.close()
+          }
+        }
       }
     })
   }
