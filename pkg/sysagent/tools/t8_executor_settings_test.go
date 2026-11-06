@@ -152,9 +152,9 @@ func TestGetAgent_ExternalMaskAndNoSoul(t *testing.T) {
 	assert.NotContains(t, r.ForLLM, "s3cr3t-value-123456")
 	var out map[string]any
 	require.NoError(t, json.Unmarshal([]byte(r.ForLLM), &out))
-	// Scenario 19.2: every one of the independently enumerated 28 names is
+	// Scenario 19.2: every one of the independently enumerated 29 names is
 	// present OR explicitly absent, never silently lost and never both.
-	valid := []string{"name", "description", "type", "locked", "figure", "role", "color", "voice", "model", "provider", "fallback_models", "model_chain", "model_params", "max_tool_iterations", "context_window_override", "memory_enabled", "soul", "agent_md", "skills", "tool_permissions", "stored_overrides", "connectors", "executor", "runnable", "program_warning", "activation_status", "editable_fields", "has_main_chat"}
+	valid := []string{"name", "description", "type", "locked", "figure", "role", "color", "voice", "model", "provider", "fallback_models", "model_chain", "model_params", "max_tool_iterations", "context_window_override", "memory_enabled", "soul", "agent_md", "skills", "stale_skill_grants", "tool_permissions", "stored_overrides", "connectors", "executor", "runnable", "program_warning", "activation_status", "editable_fields", "has_main_chat"}
 	var partition []string
 	for key := range out {
 		if key != "id" && key != "revision" && key != "absent_fields" && key != "truncated_fields" {
@@ -169,7 +169,7 @@ func TestGetAgent_ExternalMaskAndNoSoul(t *testing.T) {
 			partition = append(partition, key)
 		}
 	}
-	assert.ElementsMatch(t, valid, partition, "all 28 fields accounted for, exactly once, no extra properties")
+	assert.ElementsMatch(t, valid, partition, "all 29 fields accounted for, exactly once, no extra properties")
 	assert.Equal(t, "r1", out["id"])
 	executor, ok := out["executor"].(map[string]any)
 	require.True(t, ok, "selected executor must be returned")

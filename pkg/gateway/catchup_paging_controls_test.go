@@ -46,7 +46,7 @@ func catchupPagingControlEvents(t *testing.T) []fixtureEvent {
 	// One actual-source-shaped batch, independently derived from D10's defaults,
 	// closed generated carriers and one plain row. 4096 is a deliberately safe
 	// input above these small encoded frames, not a copied product measurement.
-	snapshot := `{"type":"session_snapshot","session_id":"control","seq":1,"has_earlier":false,"has_later":false,"page_info":{"mode":"latest","limit":40,"min_rows":20,"row_count":1,"source_group_count":1,"soft_byte_budget":4194304,"projected_bytes":4096,"byte_budget_exceeded":false,"stop_reason":"end","retention_generation":"control-generation","context":{"spans":[],"duplicate_ids":[]},"first_position":"` + catchupFixturePosition1 + `","last_position":"` + catchupFixturePosition1 + `"}}`
+	snapshot := `{"type":"session_snapshot","session_id":"control","seq":1,"has_earlier":false,"has_later":false,"page_info":{"mode":"latest","limit":40,"min_rows":20,"row_count":1,"source_group_count":1,"soft_byte_budget":4194304,"byte_ceiling":8388608,"projected_bytes":4096,"byte_budget_exceeded":false,"stop_reason":"end","retention_generation":"control-generation","context":{"spans":[],"duplicate_ids":[]},"first_position":"` + catchupFixturePosition1 + `","last_position":"` + catchupFixturePosition1 + `"}}`
 	frames := []string{
 		snapshot,
 		`{"type":"session_state","session_id":"control","emitted_at":"2026-10-22T12:00:00Z","pending_approvals":[],"user_id":"","history_state":{"status":"available"}}`,

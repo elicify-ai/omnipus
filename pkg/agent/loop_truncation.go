@@ -527,6 +527,13 @@ func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
 		return
 	}
 	accumulated := ts.continuationAccumulated()
+	// #1534: a user Stop ended the current round; the text that round showed
+	// before the Stop is part of the answer the screen showed (stop_turn_end.go).
+	if ts.stopRequested.Load() {
+		if shown := ts.takeStopShown(); shown != "" {
+			accumulated = ts.appendToAccumulator(shown)
+		}
+	}
 	ts.SetFinalContent(accumulated)
 	ts.setTruncationReason(truncationReasonMaxOutputTokens)
 	ts.resolveContinuation()
