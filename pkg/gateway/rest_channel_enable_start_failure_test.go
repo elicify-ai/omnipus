@@ -38,9 +38,11 @@ package gateway
 // the not-a-plain-success assertion fails on the pre-fix code.
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/stretchr/testify/require"
 )
@@ -84,13 +86,87 @@ func TestEnableChannelOrdinary_StartFailureIsReportedNotPlainSuccess(t *testing.
 	require.Contains(t, avail.Reason, "401",
 		"instrument: the recorded start failure is the controlled credential rejection (reason %q)", avail.Reason)
 
-	// ORACLE (issue #1568 Expected): never a plain success while the adapter
-	// is not running.
-	require.NotEqual(t, http.StatusOK, rec.Code,
-		"issue #1568: the enable must not answer a plain 200 success while the adapter failed to start; body: %s", rec.Body.String())
-	// ORACLE: the response carries the start-failure reason. Under the
-	// contract the only legal carrier is the error body; the reason is the
-	// same controlled rejection the manager recorded.
-	require.Contains(t, rec.Body.String(), "401",
-		"issue #1568: the enable response must carry the start-failure reason; body: %s", rec.Body.String())
+	// ORACLE (issue #1568 Expected + round-3 F4, strengthening only): the
+	// documented envelope is 500 ErrorResponse exactly — not merely
+	// "not 200" (the check's 1568-m3 mutant answered 400 and survived the
+	// looser form), and the reason rides ErrorResponse.error, not arbitrary
+	// response text.
+	require.Equal(t, http.StatusInternalServerError, rec.Code,
+		"issue #1568/F4: the enable must answer the contract's documented 500 ErrorResponse while the adapter failed to start; body: %s", rec.Body.String())
+	var errBody gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &errBody),
+		"F4: the 500 body must decode as the generated ErrorResponse; body: %s", rec.Body.String())
+	require.NotEmpty(t, errBody.Error,
+		"F4: the ErrorResponse must carry the failure reason in its error field; body: %s", rec.Body.String())
+	// The reason is the same controlled credential rejection the manager
+	// recorded — not a fixed sentence that hides the cause.
+	require.Contains(t, errBody.Error, "401",
+		"F4: the ErrorResponse error field must carry the start-failure reason; got %q", errBody.Error)
+
+	// The enabled flag stays saved (the fix's honest saved-enabled /
+	// runtime-stopped split): the connector shows enabled in the list, where
+	// its degraded reason is the operator's diagnostic trail.
+	rows := issue1277ChannelRows(t, f.api)
+	row, exists := rows["line.healthy"]
+	require.True(t, exists, "the enabled connector must still be listed")
+	require.True(t, row.Enabled,
+		"a reported start failure must not roll the saved enabled flag back (it stays saved for the retry)")
+}
+
+// TestEnableChannelOrdinary_UnconfirmedRestart_IsNotPlainSuccess covers
+// round-3 D3 (check finding F2): an ordinary NON-pairing enable whose
+// start/reload is not confirmed within the wait must not answer a plain 200
+// success either — that is the same false-success class #1568 removes. The
+// contract already documents this 500 ("the connection is enabled but its
+// restart could not be confirmed yet", openapi.yaml /channels/{id}/enable
+// 500); team-lead decision D3 pins it for the non-pairing path, which today
+// still falls through to jsonOK (the F2 gap).
+//
+// Oracle (D3 + contract): status 500 exactly, the body is the generated
+// ErrorResponse, and its error field says the connector is enabled but its
+// start was not confirmed. The saved enabled setting stays saved.
+//
+// The unconfirmed window is forced deterministically through the same seam
+// the Configure outcome tests use (reloadWaitTimeout = 0 plus a reload
+// trigger that marks the reload pending and never completes) — no wall-clock
+// tolerance, no sleeping.
+func TestEnableChannelOrdinary_UnconfirmedRestart_IsNotPlainSuccess(t *testing.T) {
+	f := t02Fixture(t)
+
+	// A real re-enable: turn the running connector off first (its reload
+	// still runs on the real consumer, so the disable completes normally).
+	rec := f.do(http.MethodPut, "/api/v1/channels/line.healthy/disable", "")
+	require.Equal(t, http.StatusOK, rec.Code, "instrument: disable the running connector first")
+
+	// Force the unconfirmed window deterministically.
+	previous := reloadWaitTimeout
+	reloadWaitTimeout = 0
+	t.Cleanup(func() { reloadWaitTimeout = previous; f.al.ClearReloadPending() })
+	f.al.SetReloadFunc(func() error { f.al.MarkReloadPending(); return nil })
+
+	// The enable under test: the save commits, the reload never confirms.
+	rec = f.do(http.MethodPut, "/api/v1/channels/line.healthy/enable", "")
+
+	// ORACLE (D3): the contract's documented 500, never a plain success.
+	require.Equal(t, http.StatusInternalServerError, rec.Code,
+		"D3/F2: an unconfirmed non-pairing restart must not answer plain 200 success; body: %s", rec.Body.String())
+	var errBody gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &errBody),
+		"D3: the 500 body must decode as the generated ErrorResponse; body: %s", rec.Body.String())
+	require.NotEmpty(t, errBody.Error,
+		"D3: the ErrorResponse must explain the unconfirmed start; body: %s", rec.Body.String())
+	// The reason says the connector IS enabled (the save persists) but its
+	// start was not confirmed — the contract's enabled-but-unconfirmed
+	// wording family, never a bare generic failure.
+	require.Contains(t, errBody.Error, "enabled",
+		"D3: the reason must say the connector is enabled but unconfirmed; got %q", errBody.Error)
+	require.Regexp(t, `(?i)not (yet )?confirmed|could not be confirmed`, errBody.Error,
+		"D3: the reason must say the start was not confirmed; got %q", errBody.Error)
+
+	// The enabled setting stays saved for the operator's retry.
+	rows := issue1277ChannelRows(t, f.api)
+	row, exists := rows["line.healthy"]
+	require.True(t, exists, "the connector must still be listed")
+	require.True(t, row.Enabled,
+		"an unconfirmed restart must not roll the saved enabled flag back")
 }
