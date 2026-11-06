@@ -48,7 +48,6 @@
 @source "../components/ui/collection-state.tsx";
 @source "../components/ui/job-status.tsx";
 @source "../components/ui/RunningIndicator.tsx";
-@source "../components/ui/empty-state.tsx";
 @source "../components/ui/error-state.tsx";
 @source "../components/ui/query-error-state.tsx";
 @source "../components/ui/radio-group.tsx";
@@ -58,6 +57,13 @@
 @source "../components/ui/filter-menu.tsx";
 @source "../components/ui/view-switch.tsx";
 @source "../components/ui/word-boundary-text.tsx";
+@source "../components/ui/search-field.tsx";
+@source "../components/ui/list-group.tsx";
+@source "../components/ui/page-header.tsx";
+@source "../components/ui/empty.tsx";
+@source "../components/ui/callout.tsx";
+@source "../components/ui/spinner.tsx";
+@source "../components/ui/copy-button.tsx";
 
 @theme inline {
   --font-headline: var(--type-page-title-family);
