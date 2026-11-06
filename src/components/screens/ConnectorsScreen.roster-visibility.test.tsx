@@ -582,17 +582,34 @@ describe('Connectors — a Save in Configure refreshes the saved-settings classi
     // ORACLE (D5/F7): the classification follows the save. The stub's
     // read is refreshed (a NEW read for that id after the save) and the
     // Configure tile becomes the Off card with Configure, Enable and Delete —
-    // without leaving the screen. Today the classification query is never
-    // invalidated by the panel's Save (ChannelConfigPanel doSave invalidates
-    // channels / channel-config / channel-outbound only), so the stale empty
-    // read keeps the stub a tile: this fails on HEAD.
+    // without leaving the screen. Before the developer's fix the
+    // classification query was never invalidated by the panel's Save
+    // (ChannelConfigPanel doSave invalidated channels / channel-config /
+    // channel-outbound only), so the stale empty read kept the stub a tile.
     await waitFor(() => {
       expect(f.configReads.filter((id) => id === 'discord').length,
         'D5: the saved-settings classification read must be refreshed after Save — the panel invalidating only channel-config is not enough')
         .toBeGreaterThan(readsBeforeSave)
     })
-    const card = await screen.findByTestId('channel-card-discord')
-    await requireOffBadge(card, 'discord (saved via Configure)')
+
+    // The refreshed card is already in the page behind the sheet…
+    await screen.findByTestId('channel-card-discord')
+    // …and the sheet stays open on Save by design
+    // (ChannelConfigPanel.never-configured-refresh.test.tsx). Close it the way
+    // a user does — the sheet's own close control, through the real Radix
+    // Sheet — then see the Off card. A modal sheet hides the page from the
+    // accessibility tree while open, so the role queries below are honest
+    // only once it is gone.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Configure Discord' }),
+        'instrument: the Configure sheet must be closed before the card is inspected by role').not.toBeInTheDocument()
+    })
+
+    await requireOffBadge(screen.getByTestId('channel-card-discord'), 'discord (saved via Configure)')
+    const card = screen.getByTestId('channel-card-discord')
     expect(within(card).getByRole('button', { name: 'Configure discord' })).toBeInTheDocument()
     expect(within(card).getByTestId('channel-toggle-discord')).toHaveTextContent('Enable')
     expect(within(card).getByTestId('channel-delete-btn-discord')).toBeInTheDocument()
