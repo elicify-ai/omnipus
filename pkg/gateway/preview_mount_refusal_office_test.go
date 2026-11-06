@@ -60,9 +60,9 @@ func TestOfficePreviewMountRESTAndPickerRefuseProgramFolders(t *testing.T) {
 				target = filepath.Join(t.TempDir(), "office-alias")
 				require.NoError(t, os.Symlink(root, target))
 			case "contains_empty_packaged_slot":
-				resolver, err := component.NewResolver(api.homePath)
-				require.NoError(t, err)
-				slot := filepath.Clean(resolver.PackagedCandidates(component.KindOffice)[0])
+				slotResolver, slotErr := component.NewResolver(api.homePath)
+				require.NoError(t, slotErr)
+				slot := filepath.Clean(slotResolver.PackagedCandidates(component.KindOffice)[0])
 				require.NoError(t, os.MkdirAll(slot, 0700))
 				target = filepath.Dir(slot)
 				expected = nil
@@ -73,7 +73,7 @@ func TestOfficePreviewMountRESTAndPickerRefuseProgramFolders(t *testing.T) {
 					if kind == component.KindPDFRenderer {
 						name = "PDF renderer"
 					}
-					for _, candidate := range resolver.PackagedCandidates(kind) {
+					for _, candidate := range slotResolver.PackagedCandidates(kind) {
 						candidate = filepath.Clean(candidate)
 						if filepath.Dir(candidate) == target {
 							expected = append(expected, officepreview.ProgramMountRefusal(name, candidate))

@@ -5,6 +5,7 @@ package preview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,7 +32,7 @@ func scratchLinkOfficeProcess() int {
 		return 71
 	}
 	starts, err := os.ReadFile("scratch-starts")
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return 72
 	}
 	if os.WriteFile("scratch-starts", append(starts, 'x'), 0600) != nil {

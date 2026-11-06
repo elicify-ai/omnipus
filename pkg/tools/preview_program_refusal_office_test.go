@@ -40,9 +40,9 @@ func TestOfficePreviewShellRefusesProgramWriteApproval(t *testing.T) {
 				case "contains":
 					path = filepath.Dir(root)
 				case "empty_packaged_slot":
-					resolver, err := component.NewResolver(home)
-					require.NoError(t, err)
-					root = filepath.Clean(resolver.PackagedCandidates(component.KindOffice)[0])
+					slotResolver, slotErr := component.NewResolver(home)
+					require.NoError(t, slotErr)
+					root = filepath.Clean(slotResolver.PackagedCandidates(component.KindOffice)[0])
 					require.NoError(t, os.MkdirAll(root, 0700))
 					require.NoFileExists(t, filepath.Join(root, "manifest.json"), "instrument: empty slots are protected without a manifest")
 					path = root
@@ -119,7 +119,15 @@ func TestOfficePreviewRequestMountRefusesProgramFolders(t *testing.T) {
 			require.NoError(t, err)
 			entries, err := os.ReadDir(work)
 			require.NoError(t, err)
-			assert.Empty(t, entries, "refused tool call must not create a link")
+			// EnsureWorkDir auto-initializes the git-evidence repository
+			// (FR-151) unless an ancestor of the home already is one — so
+			// `.git` is the only legitimate entry, and its presence depends
+			// on where the test's temporary home lives. Anything else —
+			// above all the mount's own link — must not exist.
+			for _, entry := range entries {
+				assert.Equal(t, ".git", entry.Name(),
+					"refused tool call must create nothing but the evidence layer's own repository")
+			}
 		})
 	}
 }

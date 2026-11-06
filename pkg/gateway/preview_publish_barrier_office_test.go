@@ -30,6 +30,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,7 +89,7 @@ func officePublishChildProcess() int {
 			}
 			publishCoord = plan.Coord
 			break
-		} else if !os.IsNotExist(err) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return 70
 		}
 		if time.Now().After(deadline) {
@@ -97,7 +98,7 @@ func officePublishChildProcess() int {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if _, err := os.Stat(officePublishPath(publishStart1)); err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			return 72
 		}
 		if os.WriteFile(officePublishPath(publishStart1), []byte("first start"), 0600) != nil {
@@ -129,7 +130,7 @@ func officePublishChildProcess() int {
 		return 80
 	}
 	officePublishTrace("start 2: released, producing the PDF")
-	if os.WriteFile(filepath.Join("out", "document.pdf"), []byte(publishPDF), 0600) != nil {
+	if os.WriteFile(filepath.Join("out", "document.pdf"), publishPDF, 0600) != nil {
 		officePublishTrace("write document.pdf failed")
 		return 81
 	}
@@ -158,7 +159,7 @@ func officePublishWaitFor(name string) error {
 	for {
 		if _, err := os.Stat(path); err == nil {
 			return nil
-		} else if !os.IsNotExist(err) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		if time.Now().After(deadline) {
@@ -314,8 +315,8 @@ func TestOfficePreviewRefusesOverlapsPublishedDuringPreview(t *testing.T) {
 	}
 	outcome := make(chan publishOutcome, 1)
 	go func() {
-		result, err := svc.Preview(ctx2, adm, preview.Request{Name: "barrier.docx", Ext: ".docx", Data: []byte("authorized harmless input"), Default: true})
-		outcome <- publishOutcome{result, err}
+		result, previewErr := svc.Preview(ctx2, adm, preview.Request{Name: "barrier.docx", Ext: ".docx", Data: []byte("authorized harmless input"), Default: true})
+		outcome <- publishOutcome{result, previewErr}
 	}()
 
 	// Discover the call's scratch folder as soon as the record exists. The
@@ -330,7 +331,7 @@ func TestOfficePreviewRefusesOverlapsPublishedDuringPreview(t *testing.T) {
 					callDir = filepath.Join(home, "tmp", "preview", e.Name())
 				}
 			}
-		} else if !os.IsNotExist(readErr) {
+		} else if !errors.Is(readErr, os.ErrNotExist) {
 			require.NoError(t, readErr)
 		}
 		require.Less(t, time.Now().UnixNano(), deadline.UnixNano(), "the preview never created its scratch record")
@@ -372,13 +373,13 @@ func TestOfficePreviewRefusesOverlapsPublishedDuringPreview(t *testing.T) {
 	select {
 	case got := <-outcome:
 		require.NoError(t, got.err, "R4: the preview must complete untouched by the refused overlaps")
-		require.Equal(t, []byte(publishPDF), got.result.PDF, "the converted PDF must be exactly the target's output")
+		require.Equal(t, publishPDF, got.result.PDF, "the converted PDF must be exactly the target's output")
 	case <-time.After(60 * time.Second):
 		t.Fatal("the conversion never finished after all barriers were released")
 	}
 	waitForPublishFile(t, officePublishPath(publishDone))
 	require.Eventually(t, func() bool {
 		_, statErr := os.Stat(callDir)
-		return os.IsNotExist(statErr)
+		return errors.Is(statErr, os.ErrNotExist)
 	}, 10*time.Second, 2*time.Millisecond, "AD-8: the call's scratch folder is removed at the end")
 }

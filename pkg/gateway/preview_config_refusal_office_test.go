@@ -89,10 +89,11 @@ func TestOfficePreviewConfigWritersRefuseProgramFolderAccess(t *testing.T) {
 			t.Run(shape.name, func(t *testing.T) {
 				f := newOfficeConfigFixture(t)
 				entry := officeAllowancePattern(f.root)
-				if shape.name == "inside" {
+				switch shape.name {
+				case "inside":
 					require.NoError(t, os.MkdirAll(filepath.Join(f.root, "sub"), 0700))
 					entry = officeAllowancePattern(filepath.Join(f.root, "sub"))
-				} else if shape.name == "contains" {
+				case "contains":
 					entry = officeAllowancePattern(filepath.Dir(f.root))
 				}
 				before := f.configBytes(t)
@@ -201,10 +202,19 @@ func TestOfficePreviewConfigWritersRefuseProgramFolderAccess(t *testing.T) {
 // §3.2 point 4: an entry present at gateway start and left unchanged is
 // accepted by later saves and reloads; the component is reported "unsafe
 // location" by doctor (its row lives in the doctor package's own test).
+// OMNIPUS_HOME points at the fixture home so the §3.2 writers actually SEE
+// the registered office — without it both acceptances below would be
+// vacuous (nothing protected in view). The new-overlap refusal in the
+// middle is the contrast: acceptance comes from point 4, not from blindness.
 func TestOfficePreviewConfigEntryInForceAtStartIsAccepted(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
-	entry := "^" + filepath.Join(tmpDir, "office") + "(?:/|$)"
+	t.Setenv(config.EnvHome, tmpDir)
+	root := filepath.Join(tmpDir, "office")
+	officepreview.TrustedOffice(t, tmpDir, root)
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+	entry := officeAllowancePattern(resolvedRoot)
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
@@ -212,8 +222,6 @@ func TestOfficePreviewConfigEntryInForceAtStartIsAccepted(t *testing.T) {
 		}},
 		Tools: config.ToolsConfig{AllowWritePaths: []string{entry}},
 	}
-	root := filepath.Join(tmpDir, "office")
-	officepreview.TrustedOffice(t, tmpDir, root)
 	configPath := filepath.Join(tmpDir, "config.json")
 	require.NoError(t, config.SaveConfig(configPath, cfg), "the in-force entry is persisted before start")
 
@@ -238,11 +246,29 @@ func TestOfficePreviewConfigEntryInForceAtStartIsAccepted(t *testing.T) {
 		return nil
 	}), "T-87 (e): an unrelated save must not be refused by the in-force overlap")
 
+	// A NEW overlapping entry is refused at the same save path that just
+	// accepted the unrelated one: the in-force entry's acceptance is §3.2
+	// point 4, never an office the check could not see.
+	newOverlap := officeAllowancePattern(filepath.Join(resolvedRoot, "sub"))
+	before, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	saveErr := api.safeUpdateConfigJSON(func(m map[string]any) error {
+		return officeAllowWriteMutate(m, newOverlap)
+	})
+	require.Error(t, saveErr, "T-87 (e): a NEW overlapping entry must still be refused")
+	assert.Equal(t, officepreview.ConfigEntryRefusal("tools.allow_write_paths", newOverlap, "LibreOffice", resolvedRoot), saveErr.Error())
+	after, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	require.Equal(t, before, after, "the refused save must not write config.json")
+
 	// A reload that leaves the entry unchanged is accepted (both reload
-	// triggers funnel through prepareReloadConfig).
+	// triggers funnel through prepareReloadConfig). On a RUNNING gateway that
+	// funnel measures the candidate against the PUBLISHED configuration via
+	// services.restAPIRef — the path an operator's unchanged reload actually
+	// takes; with no running REST API every entry counts as new.
 	candidate, err := config.LoadConfig(configPath)
 	require.NoError(t, err)
 	require.Contains(t, candidate.Tools.AllowWritePaths, entry, "instrument: the reloaded candidate still carries the entry")
-	require.NoError(t, prepareReloadConfig(candidate, &services{}),
+	require.NoError(t, prepareReloadConfig(candidate, &services{restAPIRef: api}),
 		"T-87 (e): a reload leaving the entry unchanged must be accepted")
 }
