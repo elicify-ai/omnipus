@@ -740,67 +740,110 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
 })
 
 test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/')
-  })
+  // #1661: scenario i joins the deterministic held-stream scenarios — it
+  // scripts ONLY the external provider (fixtures/held-stream-provider.ts)
+  // behind its own GatewayProcess, via the same openHeldCatchupChat harness
+  // b and c use. Reason: on the CI primary model (see tests/e2e/e2e-model.json)
+  // the offline-typed turn completed within roughly 430 ms of delivery, so the
+  // transient "working" delivery tick was already gone (turn done) before its
+  // 30 s check ran (CI llm-agents: flaky on #1668). With the held stream the
+  // delivered message's turn stays open until the scripted release(), so the
+  // tick, once shown, stays observable — completion cannot race the check.
+  // Scenario title, preconditions and every post-event assertion are
+  // unchanged; the added proof is provider evidence (expectTurnHeldMidStream
+  // + the end-of-test counters), which is model-independent. Zero retries: a
+  // lost or duplicated offline-typed message is a property no retry establishes.
+  test.describe.configure({ retries: 0 })
 
-  test('i: message typed while offline — appears at the end, then its answer; no duplicate; ticks received → working', async ({ page, context }) => {
+  test('i: message typed while offline — appears at the end, then its answer; no duplicate; ticks received → working', async ({ page, context }, info) => {
     test.setTimeout(180_000)
-    const input = chatInput(page)
-    await expect(input).toBeVisible({ timeout: 15_000 })
-    await waitForConnected(page)
-    await freshChat(page)
-    await context.setOffline(true)
-    await page.evaluate(() => window.dispatchEvent(new Event('offline')))
-    await input.fill('typed while offline')
-    await input.press('Enter', { timeout: 15_000 })
-    // Real-browser follow-up (orchestrator): the previous version of this
-    // scenario asserted the CONNECTION banner (`connection-status-line`)
-    // within 20s of going offline. That contradicts the quiet-disconnect
-    // design on purpose (ConnectionStatus.tsx's own CHAT_NOTICE_MS = 120s —
-    // no chat-connection indicator is SUPPOSED to appear for a drop this
-    // short, to avoid flickering a banner for a brief blip; #833/ADR-082).
-    // Not a product regression — a test asserting behaviour the design
-    // deliberately prevents. The scenario's OWN title names the real
-    // signal: the per-message delivery ticks
-    // (`user-message-delivery-status`, ConnectionStatus.tsx's
-    // UserMessageDeliveryStatus) — 'queued' while offline ("Not sent yet,
-    // will be sent automatically"), transitioning to 'working' once the
-    // agent picks it up after the reconnect delivers it.
-    //
-    // Real-browser follow-up (orchestrator): UserMessageDeliveryStatus's
-    // own text is not a visible text node at all — StatusTooltip renders
-    // only an icon as the visible child and puts the whole description on
-    // the inner IconButton's aria-label (ConnectionStatus.tsx's
-    // StatusTooltip). toHaveText() on the container therefore always saw
-    // an empty string (CI: "Received string: \"\""). Read the accessible
-    // name instead, via the role query that actually matches how this
-    // renders.
-    const deliveryStatus = page.getByTestId('user-message-delivery-status')
-    await expect(deliveryStatus.getByRole('button', { name: /not sent yet/i })).toBeVisible({ timeout: 15_000 })
-    await context.setOffline(false)
-    await page.evaluate(() => window.dispatchEvent(new Event('online')))
-    await expect(deliveryStatus.getByRole('button', { name: /is working on it/i })).toBeVisible({ timeout: 30_000 })
-    await waitTurnDone(page)
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    // The user's own message is the pending tail (§4.7) — it must render at
-    // the end of history, never duplicated, once user_message reconciles it.
-    //
-    // Real-browser follow-up (orchestrator): an unscoped page.getByText
-    // resolved to 2 elements — investigated (Sidebar.tsx's isPinned
-    // defaults false, so the drawer isn't rendered at all without an
-    // explicit open, ruling out a stale sidebar row; the two sr-only
-    // aria-live announcers in ChatScreen.tsx don't echo user message text
-    // either) without being able to pin down the second match from CI
-    // evidence alone (the 382MB trace artifact did not finish downloading
-    // in time — noted honestly, not guessed past). Scoped to actual
-    // message bubbles specifically (userMessages — every real chat row
-    // carries data-message-id, which nothing else on the page does) rather
-    // than broad page text — this directly answers what this assertion is
-    // actually for ("is the message duplicated IN THE CHAT"), and does NOT
-    // mask a real duplicate: if both of CI's two matches turn out to be
-    // actual message bubbles, this scoped locator still finds both and
-    // still fails.
-    await expect(userMessages(page).filter({ hasText: 'typed while offline' })).toHaveCount(1)
+    const provider = await startHeldStreamProvider({ promptIncludes: 'typed while offline' })
+    const gw = await openHeldCatchupChat(page, provider)
+    try {
+      const input = chatInput(page)
+      await expect(input).toBeVisible({ timeout: 15_000 })
+      await waitForConnected(page)
+      await freshChat(page)
+      await context.setOffline(true)
+      await page.evaluate(() => window.dispatchEvent(new Event('offline')))
+      await input.fill('typed while offline')
+      await input.press('Enter', { timeout: 15_000 })
+      // Real-browser follow-up (orchestrator): the previous version of this
+      // scenario asserted the CONNECTION banner (`connection-status-line`)
+      // within 20s of going offline. That contradicts the quiet-disconnect
+      // design on purpose (ConnectionStatus.tsx's own CHAT_NOTICE_MS = 120s —
+      // no chat-connection indicator is SUPPOSED to appear for a drop this
+      // short, to avoid flickering a banner for a brief blip; #833/ADR-082).
+      // Not a product regression — a test asserting behaviour the design
+      // deliberately prevents. The scenario's OWN title names the real
+      // signal: the per-message delivery ticks
+      // (`user-message-delivery-status`, ConnectionStatus.tsx's
+      // UserMessageDeliveryStatus) — 'queued' while offline ("Not sent yet,
+      // will be sent automatically"), transitioning to 'working' once the
+      // agent picks it up after the reconnect delivers it.
+      //
+      // Real-browser follow-up (orchestrator): UserMessageDeliveryStatus's
+      // own text is not a visible text node at all — StatusTooltip renders
+      // only an icon as the visible child and puts the whole description on
+      // the inner IconButton's aria-label (ConnectionStatus.tsx's
+      // StatusTooltip). toHaveText() on the container therefore always saw
+      // an empty string (CI: "Received string: \"\""). Read the accessible
+      // name instead, via the role query that actually matches how this
+      // renders.
+      const deliveryStatus = page.getByTestId('user-message-delivery-status')
+      await expect(deliveryStatus.getByRole('button', { name: /not sent yet/i })).toBeVisible({ timeout: 15_000 })
+      await context.setOffline(false)
+      await page.evaluate(() => window.dispatchEvent(new Event('online')))
+      // MID-TURN SIGNAL (#1661): the reconnect delivers the queued message
+      // and the held stream keeps that turn open until release() below — so
+      // the "working" tick below cannot be racing completion, and the gate
+      // right after proves the tick meant something real: exactly one
+      // provider stream, deltas flowing, still open. A turn that never
+      // started cannot show the tick at all; a turn that already finished
+      // cannot pass the gate (its stream would be closed before the check).
+      await expect(deliveryStatus.getByRole('button', { name: /is working on it/i })).toBeVisible({ timeout: 30_000 })
+      await expectTurnHeldMidStream(provider, 'catchup i')
+      // The tick is observed and the turn is provably live mid-stream.
+      // release() ends the SAME stream, so the remaining deltas and the
+      // completion must arrive over the reconnected connection to satisfy
+      // the assertions below; anything lost here is a real catch-up defect,
+      // not a fixture artifact.
+      provider.release()
+      await waitTurnDone(page)
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      // The user's own message is the pending tail (§4.7) — it must render at
+      // the end of history, never duplicated, once user_message reconciles it.
+      //
+      // Real-browser follow-up (orchestrator): an unscoped page.getByText
+      // resolved to 2 elements — investigated (Sidebar.tsx's isPinned
+      // defaults false, so the drawer isn't rendered at all without an
+      // explicit open, ruling out a stale sidebar row; the two sr-only
+      // aria-live announcers in ChatScreen.tsx don't echo user message text
+      // either) without being able to pin down the second match from CI
+      // evidence alone (the 382MB trace artifact did not finish downloading
+      // in time — noted honestly, not guessed past). Scoped to actual
+      // message bubbles specifically (userMessages — every real chat row
+      // carries data-message-id, which nothing else on the page does) rather
+      // than broad page text — this directly answers what this assertion is
+      // actually for ("is the message duplicated IN THE CHAT"), and does NOT
+      // mask a real duplicate: if both of CI's two matches turn out to be
+      // actual message bubbles, this scoped locator still finds both and
+      // still fails.
+      await expect(userMessages(page).filter({ hasText: 'typed while offline' })).toHaveCount(1)
+      // End-of-test provider evidence: the offline-typed message really
+      // started the turn (exactly one request reached the provider) and the
+      // answer was finished by the scripted release — never by an early
+      // model answer racing the tick check.
+      expect(provider.evidence.streamRequests, 'catchup i: exactly the scripted turn reached the provider').toBe(1)
+      expect(provider.evidence.released, 'catchup i: the finish came from the scripted release').toBe(1)
+      expect(provider.evidence.errors, 'catchup i: no unexpected scripted-provider request').toEqual([])
+    } finally {
+      try {
+        await attachHeldStreamEvidence(info, 'catchup-i', provider)
+      } finally {
+        await gw.stop()
+        await provider.close()
+      }
+    }
   })
 })
