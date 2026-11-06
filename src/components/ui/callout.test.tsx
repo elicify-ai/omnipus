@@ -18,11 +18,14 @@ import { Button } from './button'
 import { Callout, CalloutActions, CalloutDescription, CalloutTitle, calloutVariants } from './callout'
 
 // Walk every element inside the root, normalizing Tailwind's underscore
-// spaces so contract CSS values can be matched as written.
+// spaces so contract CSS values can be matched as written. The class string
+// is read from the class ATTRIBUTE for every element: an SVG's `className`
+// property is an SVGAnimatedString, not a string, and the Callout icon IS an
+// SVG (K1) — reading the attribute is correct for HTML and SVG alike.
 function classString(root: Element): string {
-  let out = root.className.replace(/_/g, ' ')
-  for (const el of root.querySelectorAll('*')) out += ' ' + el.className.replace(/_/g, ' ')
-  return out
+  const parts: string[] = [root.getAttribute('class') ?? '']
+  for (const el of root.querySelectorAll('*')) parts.push(el.getAttribute('class') ?? '')
+  return parts.join(' ').replace(/_/g, ' ')
 }
 
 function renderCallout(
@@ -169,7 +172,7 @@ describe('Callout — title, description, actions', () => {
   })
 
   it('actions sit in DOM order and are enabled (jsdom proxy for the keyboard/browser manifest kinds)', () => {
-    const { container } = render(
+    render(
       <Callout variant="error">
         <CalloutActions>
           <Button type="button" data-testid="act-a">Retry</Button>
@@ -188,7 +191,7 @@ describe('Callout — title, description, actions', () => {
 describe('Callout — exports and passthrough', () => {
   it('exports calloutVariants covering the four variants', () => {
     expect(typeof calloutVariants).toBe('function')
-    for (const variant of ['info', 'warning', 'error', 'success']) {
+    for (const variant of ['info', 'warning', 'error', 'success'] as const) {
       expect(calloutVariants({ variant })).toBeTruthy()
     }
   })

@@ -17,7 +17,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { Button } from './button'
 import { ListGroup } from './list-group'
 
-function renderGroup(overrides: Parameters<typeof ListGroup>[0] = {}) {
+// Overrides are Partial: `label` and `children` stay REQUIRED on
+// ListGroupProps (weakening them would loosen the contract API — K6 says
+// fix the test-side type, never the component prop).
+function renderGroup(overrides: Partial<Parameters<typeof ListGroup>[0]> = {}) {
   const props = {
     label: 'Telegram',
     children: <div data-testid="group-child">Channel one</div>,

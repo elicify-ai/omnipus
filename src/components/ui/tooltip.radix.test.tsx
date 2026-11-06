@@ -90,12 +90,24 @@ describe('Tooltip (Radix) — open/close behaviour (§2.9)', () => {
     expect(trigger).toHaveAttribute('aria-describedby', bubble.id)
   })
 
-  it('closes on pointer leave and clears aria-describedby', () => {
+  // Hoverable content (WCAG 1.4.13; contract §2.9): the bubble must survive
+  // the pointer travelling from the trigger onto it, so Radix does NOT close
+  // on a bare pointer leave — leaving the trigger creates a grace area, and
+  // the bubble closes only when a LATER pointer move lands outside both the
+  // trigger and the bubble (Radix 1.2.14 dist: the document-level
+  // pointermove handler drops the grace area and calls onClose).
+  it('closes when the pointer moves away outside the trigger and bubble; a bare pointer leave toward the bubble does not close it', () => {
     renderTooltip()
     const trigger = screen.getByTestId('trigger')
     hover(trigger)
     expect(screen.getByRole('tooltip')).toBeInTheDocument()
-    fireEvent.pointerLeave(trigger, { pointerType: 'mouse' })
+
+    // Leaving the trigger alone creates the grace area; the bubble stays.
+    fireEvent.pointerLeave(trigger, { pointerType: 'mouse', pointerId: 1 })
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
+
+    // A pointer move outside both trigger and bubble closes it.
+    fireEvent.pointerMove(document.body, { pointerType: 'mouse', pointerId: 1, clientX: 300, clientY: 300 })
     act(() => vi.advanceTimersByTime(1))
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
     expect(trigger).not.toHaveAttribute('aria-describedby')
