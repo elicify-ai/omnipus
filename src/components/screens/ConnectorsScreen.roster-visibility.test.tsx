@@ -66,18 +66,46 @@ function json(value: unknown, status = 200) {
 function transportFixture(
   list: ChannelEntry[],
   configs: Record<string, Record<string, unknown>> = {},
-  behavior: Record<string, { sentinel?: boolean; fail?: boolean; hold?: boolean }> = {},
+  behavior: Record<string, { sentinel?: boolean; fail?: boolean; hold?: boolean; failOnce?: boolean }> = {},
 ) {
   // Every GET /api/v1/channels/{id} (config shape — routing and channel
   // actions excluded) is recorded here in call order. These are the
   // saved-settings classification reads whose request boundary F6 pins.
   const configReads: string[] = []
+  // Every PUT /api/v1/channels/{id}/configure the real Configure panel's Save
+  // issues (D5/F7). The fixture acts as the server: a served configure marks
+  // the credential stored, so later redacted config reads for that id return
+  // the "[configured]" sentinel — mirroring rest_channels.go
+  // ::redactChannelConfig on a live gateway.
+  const configureCalls: string[] = []
+  const savedCredentials = new Set<string>()
+  // Per-id read counter for failOnce (first read fails, later reads succeed).
+  const readCounts = new Map<string, number>()
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const path = new URL(String(input), 'http://localhost').pathname
     const method = init?.method ?? 'GET'
     if (path === '/api/v1/channels') return json(list)
-    if (/^\/api\/v1\/channels\/[^/]+\/(configure|enable|disable|test|outbound)$/.test(path)) {
+    const configureMatch = path.match(/^\/api\/v1\/channels\/([^/]+)\/configure$/)
+    if (configureMatch && method === 'PUT') {
+      const id = decodeURIComponent(configureMatch[1])
+      configureCalls.push(id)
+      savedCredentials.add(id)
+      // T-6c / ChannelConfigureResponse: a save on a DISABLED instance answers
+      // no_reload_needed — no reload was attempted.
+      return json({ apply_outcome: 'no_reload_needed' })
+    }
+    if (/^\/api\/v1\/channels\/[^/]+\/(enable|disable|test)$/.test(path)) {
       throw new Error(`unexpected HTTP boundary: ${method} ${path}`)
+    }
+    if (/^\/api\/v1\/channels\/[^/]+\/outbound$/.test(path)) {
+      // Served like the real gateway (ChannelOutboundRead shape) so the real
+      // panel's Starting-messages section renders during the D5 Save flow.
+      return json({
+        outbound: { policy: 'reply_only', targets: [] },
+        revision: 'roster-fixture-revision',
+        availability: { state: 'stopped' },
+        start_supported: false,
+      })
     }
     if (/^\/api\/v1\/channels\/[^/]+\/routing$/.test(path)) return json(ROUTING)
     const configMatch = path.match(/^\/api\/v1\/channels\/([^/]+)$/)
@@ -87,6 +115,18 @@ function transportFixture(
       const stubRead = behavior[id] ?? {}
       if (stubRead.hold) return new Promise<Response>(() => { /* held: never settles */ })
       if (stubRead.fail) return json({ error: 'controlled saved-settings read failure' }, 503)
+      if (stubRead.failOnce) {
+        // F8: the FIRST read for this id fails; every later read (the Retry's
+        // refetch) succeeds with a stored-credential body — the honest
+        // failed→recovered path.
+        const reads = (readCounts.get(id) ?? 0) + 1
+        readCounts.set(id, reads)
+        if (reads === 1) return json({ error: 'controlled saved-settings read failure' }, 503)
+        return json({ token: CONFIGURED_SENTINEL, token_ref: `channel_${id}_token` })
+      }
+      if (savedCredentials.has(id)) {
+        return json({ token: CONFIGURED_SENTINEL, token_ref: `channel_${id}_token` })
+      }
       if (stubRead.sentinel) {
         // `sentinel: true` = the read SUCCEEDS and reports a STORED credential:
         // the redacted config read carries the "[configured]" marker on a
@@ -112,7 +152,7 @@ function transportFixture(
   vi.spyOn(connection, 'send').mockReturnValue(true)
   useConnectionStore.setState({ connection, isConnected: true })
   const view = render(<QueryClientProvider client={client}><ConnectorsScreen /></QueryClientProvider>)
-  return { ...view, client, configReads }
+  return { ...view, client, configReads, configureCalls }
 }
 
 beforeEach(() => {
@@ -290,6 +330,61 @@ describe('Connectors — a disabled real connector shows the muted Off badge (D1
   })
 })
 
+// ── Round 5 — D4 (F3 residual): disabled + degraded is still Off ────────────
+//
+// Team-lead decision D4: a disabled connector ALWAYS shows the muted "Off"
+// badge, also when the gateway reports degraded:true for it (a routing drop
+// the gateway retains — pkg/gateway/rest_channels.go::applyRoutingDropOverlay
+// does not filter disabled rows). "Failed to start" is only for an ENABLED
+// connector. The routing diagnostic stays in the data (degraded_reason is on
+// the wire, ChannelEntry); it must not become the card's status while the
+// connector is off.
+//
+// Oracle: D4's own exclusivity rule + D1's muted-Off rule. The reason string
+// is the contract's own routing-drop example (openapi ChannelEntry
+// degraded_reason description), never invented.
+
+describe('Connectors — disabled plus degraded still shows Off (D4/F3 residual)', () => {
+  it('shows Off, muted — never "Failed to start" — for a disabled bound connector the gateway reports degraded', async () => {
+    transportFixture([
+      WEBCHAT,
+      {
+        ...instance('telegram', 'Telegram', false),
+        identity: { kind: 'agent' as const, id: 'mia' },
+        degraded: true,
+        degraded_reason: 'bind this channel to an agent in a workspace',
+      },
+    ])
+    const card = await screen.findByTestId('channel-card-telegram')
+    await requireOffBadge(card, 'telegram (disabled + degraded)')
+    // D4's residual: the degradation must not surface as the card's status
+    // while the connector is off.
+    expect(within(card).queryByText('Failed to start'),
+      'D4: a disabled connector must not show "Failed to start" — Off wins over the retained routing diagnostic').not.toBeInTheDocument()
+  })
+
+  it('shows "Failed to start" only for an ENABLED connector the gateway reports degraded', async () => {
+    // D4's other half: the degraded badge belongs to the enabled state. This
+    // is the current, correct behaviour — pinned so the D4 fix cannot swing
+    // disabled cards' badge rule onto enabled ones.
+    transportFixture([
+      WEBCHAT,
+      {
+        ...instance('whatsapp.sales', 'WhatsApp', true),
+        degraded: true,
+        degraded_reason: 'bind this channel to an agent in a workspace',
+      },
+    ])
+    const card = await screen.findByTestId('channel-card-whatsapp.sales')
+    expect(within(card).getByText('Failed to start'),
+      'D4: an enabled degraded connector reports its start/route failure as the card status').toBeInTheDocument()
+    expect(within(card).queryByText('Off'),
+      'D4: an enabled connector is not Off').not.toBeInTheDocument()
+    expect(within(card).getByText('Failed to start'),
+      'D4: the degraded badge must not render in the muted Off variant').not.toHaveClass(MUTED_BADGE_CLASS)
+  })
+})
+
 // ── Round 3 — D2 (F1): a failed or held saved-settings read strands nothing ──
 //
 // Team-lead decision D2: if the saved-settings read for a disabled bare stub
@@ -338,6 +433,53 @@ describe('Connectors — a failed saved-settings read strands nothing (D2/F1)', 
     const matrixCard = await screen.findByTestId('channel-card-matrix')
     expect(within(matrixCard).getByText('Off')).toBeInTheDocument()
   })
+
+  // ── Round 5 — F8: the Retry control actually retries ──────────────────────
+  //
+  // The check's no-op-Retry production mutant (retry() replaced by a no-op)
+  // passed all ten round-4 roster cases: presence of the button was asserted,
+  // never its operation. This test clicks Retry on the failed card, requires a
+  // NEW saved-settings request for that id, and requires the honest
+  // failed→recovered classification (Off card, controls retained) while
+  // another stub's read is still unresolved.
+  it('clicking Retry re-requests that stub\'s saved settings and recovers the card honestly while another stub stays unresolved', async () => {
+    // Discord's FIRST read fails; its later reads (the Retry's refetch)
+    // succeed with a stored-credential body. Matrix's read never settles.
+    const f = transportFixture(
+      [WEBCHAT, instance('discord', 'Discord', false), instance('matrix', 'Matrix', false)],
+      {},
+      { discord: { failOnce: true }, matrix: { hold: true } },
+    )
+
+    // The failed state: card, controls, notice, Retry — D2's established shape.
+    const failedCard = await screen.findByTestId('channel-card-discord')
+    expect(within(failedCard).getByText(/saved settings could not be/i)).toBeInTheDocument()
+    const readsBeforeRetry = f.configReads.filter((id) => id === 'discord').length
+    expect(readsBeforeRetry, 'instrument: the failed first read for discord settled exactly once').toBe(1)
+
+    // ORACLE (F8): the Retry click must issue a NEW saved-settings request.
+    await act(async () => {
+      fireEvent.click(within(failedCard).getByRole('button', { name: /retry/i }))
+    })
+    await waitFor(() => {
+      expect(f.configReads.filter((id) => id === 'discord').length,
+        'F8: Retry must re-request the failed stub\'s saved settings — a no-op retry is a broken recovery path')
+        .toBeGreaterThan(readsBeforeRetry)
+    })
+
+    // The recovered classification is honest: the re-read found a stored
+    // credential, so the Off card renders — with its controls retained.
+    const recoveredCard = await screen.findByTestId('channel-card-discord')
+    await requireOffBadge(recoveredCard, 'discord (recovered)')
+    expect(within(recoveredCard).getByRole('button', { name: 'Configure discord' })).toBeInTheDocument()
+    expect(within(recoveredCard).getByTestId('channel-toggle-discord')).toHaveTextContent('Enable')
+    expect(within(recoveredCard).getByTestId('channel-delete-btn-discord')).toBeInTheDocument()
+    // The recovery must not strand the unresolved stub: matrix's read never
+    // settled, so matrix stays a roster tile with no card.
+    expect(screen.queryByTestId('channel-card-matrix'),
+      'a still-unresolved stub must not be classified as configured by the recovery').not.toBeInTheDocument()
+    expect(screen.getByTestId('channel-roster-connect-matrix')).toBeInTheDocument()
+  })
 })
 
 // ── Round 3 — F6: the request boundary of the saved-settings reads ───────────
@@ -347,33 +489,114 @@ describe('Connectors — a failed saved-settings read strands nothing (D2/F1)', 
 // rows. The check's 1569-m5 mutant (read every instance) survived round 2.
 
 describe('Connectors — the saved-settings read boundary (F6)', () => {
-  it('reads saved settings only for the disabled bare stubs — never for enabled, namespaced or placeholder rows', async () => {
+  it('reads saved settings only for the disabled bare stubs — never for enabled, namespaced, bound or placeholder rows — exactly once each', async () => {
     const f = transportFixture(
       [
         WEBCHAT,
         instance('telegram', 'Telegram', true),          // enabled instance — no read
         instance('whatsapp.sales', 'WhatsApp', false),   // disabled namespaced — no read
-        instance('discord', 'Discord', false),           // disabled bare stub — read
-        instance('matrix', 'Matrix', false),             // disabled bare stub — read
+        instance('discord', 'Discord', false),           // disabled bare stub — one read
+        instance('matrix', 'Matrix', false),             // disabled bare stub — one read
         placeholder('slack', 'Slack'),                   // placeholder row — no read
+        // Round 5 (F6 WARN residual): a disabled BOUND bare row is a real
+        // connector, not a template stub — the classification must not read
+        // it (its bound card renders without any saved-settings probe).
+        {
+          ...instance('irc', 'IRC', false),
+          identity: { kind: 'agent' as const, id: 'mia' },
+        },
       ],
       { discord: { token: CONFIGURED_SENTINEL, token_ref: 'channel_discord_token' } },
     )
 
-    // Wait until both stub classifications settled (discord's card exists)
-    // and the rendered rows' routing reads are in flight or done.
+    // Wait until every non-stub classification settled: all four cards exist
+    // (discord via its saved-settings read; telegram, whatsapp.sales and irc
+    // via the instance grammar — none of which may probe saved settings).
     await screen.findByTestId('channel-card-discord')
     await waitFor(() => {
       expect(screen.getByTestId('channel-card-telegram')).toBeInTheDocument()
       expect(screen.getByTestId('channel-card-whatsapp.sales')).toBeInTheDocument()
+      expect(screen.getByTestId('channel-card-irc')).toBeInTheDocument()
     })
 
-    // ORACLE: exactly the disabled bare stubs were read — the exact id set
-    // pins both the ids and the count (2). Any read of an enabled instance,
-    // a namespaced instance or a placeholder row fails this equality, and so
-    // does a read of a stub that does not exist.
-    const read = (ids: string[]) => [...new Set(ids)].sort()
-    expect(read(f.configReads), `saved-settings reads must go to exactly the disabled bare stubs; got ${JSON.stringify([...new Set(f.configReads)].sort())}`)
-      .toEqual(['discord', 'matrix'])
+    // ORACLE (F6 residual, count-form): the RAW settled request list is
+    // compared with counts — no Set dedupe. Exactly the two disabled bare
+    // stubs, exactly one read each: an extra read for the bound bare row, a
+    // duplicate classification read, or a read of an enabled/namespaced/
+    // placeholder row all break this equality.
+    expect(f.configReads,
+      `saved-settings reads must be exactly one per disabled bare stub (discord, matrix), nothing else; got ${JSON.stringify(f.configReads)}`)
+      .toEqual(expect.arrayContaining(['discord', 'matrix']))
+    expect(f.configReads, 'exactly one classification read per stub — duplicates erased by Set dedupe are no longer hidden')
+      .toHaveLength(2)
+  })
+})
+
+// ── Round 5 — D5 (F7): a Save in Configure refreshes the classification read ─
+//
+// Team-lead decision D5: saving settings in Configure (the real panel's Save)
+// must refresh that connector's saved-settings classification read, so a
+// credential saved on a disabled bare stub turns the Configure tile into the
+// Off card with Configure, Enable and Delete, without leaving the screen.
+// Each stub's read still settles on its own (D2 covers that; the refetch here
+// is per-id).
+//
+// The flow drives the REAL ChannelConfigPanel over the same transport boundary
+// as the rest of this file (no screen-internal mocks): open the Configure tile,
+// fill the credential field, click Save. The fixture acts as the gateway: the
+// served configure marks the credential stored, so later redacted config reads
+// return the "[configured]" sentinel (rest_channels.go::redactChannelConfig).
+
+describe('Connectors — a Save in Configure refreshes the saved-settings classification (D5/F7)', () => {
+  it('saving a credential on a disabled bare stub turns the Configure tile into the Off card, with a fresh read for that id', async () => {
+    const f = transportFixture(
+      [WEBCHAT, instance('discord', 'Discord', false)],
+      // The stub's saved settings are initially empty — a never-configured
+      // stub rendering as a Configure tile.
+      {},
+    )
+
+    // The tile state: discord is a Configure tile, classified from its settled
+    // (empty) saved-settings read.
+    const tile = await screen.findByTestId('channel-roster-connect-discord')
+    expect(screen.queryByTestId('channel-card-discord')).not.toBeInTheDocument()
+    const readsBeforeSave = f.configReads.filter((id) => id === 'discord').length
+
+    // Open the REAL Configure panel from the tile and save a credential,
+    // staying disabled and unbound (Save, never Save & Enable).
+    await act(async () => { fireEvent.click(tile) })
+    const tokenInput = await screen.findByLabelText(/Bot Token/)
+    await act(async () => {
+      fireEvent.change(tokenInput, { target: { value: 'qa-tok-round5-d5' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    })
+    // The save committed through the real HTTP boundary…
+    await waitFor(() => {
+      expect(f.configureCalls,
+        'instrument: the panel Save must reach PUT /channels/discord/configure').toEqual(['discord'])
+    })
+    // …and the gateway now reports the stored credential on the redacted read.
+
+    // ORACLE (D5/F7): the classification follows the save. The stub's
+    // read is refreshed (a NEW read for that id after the save) and the
+    // Configure tile becomes the Off card with Configure, Enable and Delete —
+    // without leaving the screen. Today the classification query is never
+    // invalidated by the panel's Save (ChannelConfigPanel doSave invalidates
+    // channels / channel-config / channel-outbound only), so the stale empty
+    // read keeps the stub a tile: this fails on HEAD.
+    await waitFor(() => {
+      expect(f.configReads.filter((id) => id === 'discord').length,
+        'D5: the saved-settings classification read must be refreshed after Save — the panel invalidating only channel-config is not enough')
+        .toBeGreaterThan(readsBeforeSave)
+    })
+    const card = await screen.findByTestId('channel-card-discord')
+    await requireOffBadge(card, 'discord (saved via Configure)')
+    expect(within(card).getByRole('button', { name: 'Configure discord' })).toBeInTheDocument()
+    expect(within(card).getByTestId('channel-toggle-discord')).toHaveTextContent('Enable')
+    expect(within(card).getByTestId('channel-delete-btn-discord')).toBeInTheDocument()
+    expect(screen.queryByTestId('channel-roster-connect-discord'),
+      'D5: the Configure tile must be gone once the stub is classified as configured').not.toBeInTheDocument()
   })
 })
