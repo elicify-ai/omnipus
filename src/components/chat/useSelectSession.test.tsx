@@ -175,6 +175,7 @@ describe('useSelectSession — replace option default', () => {
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/workspaces/$workspaceId/chat',
       params: { workspaceId: 'ws-b' },
+      search: { open: 'sess-b' },
       replace: true,
     })
   })
@@ -201,6 +202,7 @@ describe('useSelectSession — workspace-switch branch', () => {
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/workspaces/$workspaceId/chat',
       params: { workspaceId: 'ws-b' },
+      search: { open: 'sess-b' },
     })
   })
 
@@ -221,6 +223,7 @@ describe('useSelectSession — workspace-switch branch', () => {
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/workspaces/$workspaceId/chat',
       params: { workspaceId: 'ws-a' },
+      search: { open: 'sess-a' },
     })
   })
 
@@ -272,6 +275,7 @@ describe('useSelectSession — in-place branch', () => {
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/workspaces/$workspaceId/chat',
       params: { workspaceId: 'ws-a' },
+      search: { open: 'sess-a' },
     })
   })
 

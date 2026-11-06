@@ -32,6 +32,9 @@ type agentLoopRunTurn struct {
 	iteration                int
 	llmOpts                  map[string]any
 	llmModel                 string
+	// providerSilence is the current provider round's silence watch (issue
+	// #1478); nil between rounds. Owned by the turn goroutine.
+	providerSilence *providerSilenceWatch
 	// A streaming-capable provider already tried this channel. Do not retry
 	// a declined factory merely to finalize the plain fallback response.
 	streamerLookupDeclined bool
@@ -114,8 +117,12 @@ type agentLoopRunTurnResponse struct {
 	hasOrphanMarkup     bool
 	normalizedToolCalls []providers.ToolCall
 	argumentRefusals    []*tools.ToolResult
-	ret0                turnResult
-	ret1                error
+	// recordToolArgs[i] is the r17 SR-3 record copy of normalizedToolCalls[i]:
+	// what every record, log, event and frame carries. Execution alone uses
+	// normalizedToolCalls[i].Arguments.
+	recordToolArgs []map[string]any
+	ret0           turnResult
+	ret1           error
 }
 
 // agentLoopRunTurnTools carries the shared state of runTurn across its stages.

@@ -1,11 +1,13 @@
 ---
 name: omnipus-shared-rules
-description: Baseline procedure for every Omnipus dev-team role — the fifteen rules that apply to all of them, plus the cross-cutting how-to for build/test gates, contracts, git, definition of done, false greens, retired surfaces, and reporting. Preloaded via the `skills:` frontmatter field on every dev-team agent file (team-lead, squad-lead, backend-lead, frontend-lead, security-lead, qa-lead, architect, uat-tester, uat-validator, docs-verifier, prometheus-prompt-engineer); the three gate plugin reviewers (code-reviewer, silent-failure-hunter, pr-test-analyzer) and any explicitly requested optional plugin reviewer load it with the Skill tool per their dispatch template. Optional reviewers are not part of the gate. Load this before any repo action if it was not preloaded.
+description: Baseline procedure for every Omnipus dev-team role — the fifteen rules that apply to all of them, plus the cross-cutting how-to for build/test gates, contracts, git, definition of done, false greens, retired surfaces, and reporting. Preloaded via the `skills:` frontmatter field on every dev-team agent file (team-lead, backend-lead, frontend-lead, security-lead, qa-lead, architect, uat-tester, uat-validator, docs-verifier, prometheus-prompt-engineer); the three gate plugin reviewers (code-reviewer, silent-failure-hunter, pr-test-analyzer) and any explicitly requested optional plugin reviewer load it with the Skill tool per their dispatch template. Optional reviewers are not part of the gate. Load this before any repo action if it was not preloaded.
 ---
 
 # Omnipus Shared Rules
 
-Last reviewed: 2026-10-23 — text contradictions and implemented tooling
+Last reviewed: 2026-10-29 — trunk-based landing branches, own-tests rule, failing-run log as RED proof
+
+Process version: 2026-10-29.1
 
 Root `CLAUDE.md` is the authority on project facts and hard constraints — the *what*.
 This skill is the *how*: the working procedure every dev-team role shares. It never
@@ -31,6 +33,9 @@ to the section instead of copying it, so there is one source per fact.
    `pkg/api/generated/`) — never hand-written, never copied from a curl response.
 5. Definition of Done is reachability: a real user or real agent can invoke the thing.
    Green tests alone are "not done" (`CLAUDE.md`, "Definition of Done (MANDATORY)").
+   Agent tools keep up with object changes: a property a user can set on an
+   agent-managed object is settable by the agent's tools in the same work package, or
+   the difference is written down and rejected with a clear error (same section).
 6. Before trusting or reporting a green: read `docs/internal/false-green-patterns.md`;
    capture exit codes without a pipe; confirm the test actually ran; a failure that
    repeats twice in isolation is not a flake.
@@ -41,12 +46,13 @@ to the section instead of copying it, so there is one source per fact.
    `CLAUDE.md` ("Feature ownership"): agree the owner with team-lead before writing;
    a second worktree is not permission to split one area by finding.
    Sharing a working copy is forbidden — the stash stack is shared across worktrees, so never bare `git stash`. # agent-guard: allow
-   Commit frequently on the working branch; never merge to `main` without human approval
-   (`CLAUDE.md`, "Merging to main (MANDATORY)"). Specialists commit and push only their
-   own work branch — never push to, merge into or land on the integration branch or
-   `main`; chief-owned integration and standalone landing rights are in root
-   `CLAUDE.md` ("Landing trains"). A brief asking a specialist to land is a rule-15
-   blocked report.
+   Commit small and often; never merge to `main` without human approval
+   (`CLAUDE.md`, "Merging to main (MANDATORY)"). Specialists push small commits to the
+   train's landing branch (`landing/<train>`, or the standalone feature's landing
+   branch named in the brief) under the own-tests rule in root `CLAUDE.md` ("Landing
+   trains"); they never push to the release branch or `main`, and they open no PR.
+   Chief-owned landing rights are in that same section. A brief that asks a specialist
+   to land on the release branch is a rule-15 blocked report.
 9. Run GitNexus impact analysis before editing any symbol; warn on HIGH/CRITICAL blast
    radius before proceeding (`CLAUDE.md`, "Code intelligence: GitNexus"). If GitNexus is
    unavailable or this checkout isn't indexed, say so, do a Grep sweep for the symbol's
@@ -87,26 +93,32 @@ to the section instead of copying it, so there is one source per fact.
 - What may run locally vs. what CI owns, the build-tag/SPA-stub traps, and the
   TypeScript gate: `CLAUDE.md` ("Build, test, and quality gates") — do not duplicate
   those commands here, read them there.
-- Before a lane check, select only its own tests and the minimal regression; do not
-  create a lane draft PR to obtain full CI. Candidate CI and founder-approved Fly
-  scope come from root `CLAUDE.md` ("CI scope and remote pre-flight").
+- Before every push to a landing branch, run the own-tests rule only (the code builds,
+  the linter is clean on the touched packages, the change's targeted tests pass) —
+  never a whole suite or a regression sweep, and never a PR to obtain full CI. The cut
+  PR runs the single full CI; founder-approved Fly scope comes from root `CLAUDE.md`
+  ("CI scope and remote pre-flight", "Landing trains").
+- A failing-first (RED) proof is the saved log of the failing run on the pre-change
+  code (command, exit code, failing assertion), committed with the fix or kept by the
+  author until the fix exists. CI on a tests-only commit exists only at the cut and is
+  not a proof route.
 - Before a Fly window, record the pushed SHA, founder OK and passing local typecheck
   and relevant compile receipts. Text-only work needs no Fly window; record that
   no compile/typecheck was needed rather than claiming either ran. Keep Go compiles
   narrow within the standing local limits.
 - Put heavy local commands (including typecheck, narrow tests and compiles) through
-  the installed slot runner. Locate it from the personal-layer procedure and verify
-  its current invocation; if unavailable, report the block, never run heavy work bare.
+  the installed slot runner (on a pod, `/usr/local/bin/heavy`; on the founder's Mac,
+  the slot runner of the personal-layer procedure). Verify its current invocation; if unavailable, report the block, never run heavy work bare.
   Use the release-pinned Go toolchain for live builds and record the actual version.
 - For an approved cluster run, use `deploy/ci-worker/ci-cluster.sh <ref>` (detail:
   `deploy/ci-worker/CLAUDE.md`, `docs/internal/architecture/ci-cluster-design.md`). Parse
   `RESULT:` / `GATE FAILURE(S)` in saved logs, never the ssh wrapper's exit code.
 - Use the implemented CI aggregate/list linked from root `CLAUDE.md` ("CI
   implementation pointer", "CI quarantine"). Match the required CI check's summary
-  to its exact tests and steps, open issues and candidate/run attempt; raw leaf failures
+  to its exact tests and steps, open issues and cut commit/run attempt; raw leaf failures
   remain failures, not passed tests. Fly logs do not apply this GitHub-only aggregate.
-  PR eligibility follows destination base, not source name or draft status; keep
-  lane checks targeted rather than opening a PR per lane to obtain full CI.
+  PR eligibility follows destination base, not source name or draft status; a plain
+  push to `landing/*` starts no full CI (`docs/internal/ci-rules.md`).
 - Reading results honestly: capture exit codes directly (`cmd > log 2>&1; echo "exit=$?"`
   — never through a pipe); confirm the test actually ran (count named `--- PASS`/`--- FAIL`
   lines, not just `ok`); a bare trailing `FAIL` with zero `--- FAIL` lines is hang or
@@ -161,7 +173,8 @@ to the section instead of copying it, so there is one source per fact.
 - A headless worker ends when its turn ends — no
   completion notification resumes it. Finish inside the one turn: run long gates in the
   foreground with a timeout, never backgrounded while waiting for their completion
-  notification, and commit and push your work branch before ending the turn. A turn
+  notification, and commit and push to your landing branch (own-tests rule first) before
+  ending the turn. A turn
   that ends with uncommitted work is not done.
 
 ## Retired surfaces
@@ -172,10 +185,14 @@ to the section instead of copying it, so there is one source per fact.
 
 ## Git and worktrees
 
-- Point a worktree at the working branch and verify a known-recent file exists before
-  starting — worktree branches have been found 1650+ commits behind.
-- No hotfix branches: a feature ships together on its one branch, urgency is P0
-  ordering within it, not a separate branch.
+- Point a worktree at the landing branch and verify a known-recent file exists before
+  starting — worktree branches have been found 1650+ commits behind. Pull and rebase
+  before every push; one owner per file area on the landing branch.
+- No hotfix branches and no work-package branches (`red/`, `feature/`, `work/`,
+  `spec/`): work goes to the train's one landing branch (a standalone feature has its
+  own), and an author keeps only local scratch work. Urgency is P0 ordering within the
+  train, not a separate branch. A push that breaks the build or its own tests is fixed
+  or reverted by the pusher within the hour.
 - One worktree per writing agent (rule 8); never bare `git stash` — commit a WIP instead. # agent-guard: allow
   Or use a plain file copy; never force-push, never reset to a remote ref (roll back to a
   captured SHA — origin can be behind).
@@ -187,7 +204,9 @@ to the section instead of copying it, so there is one source per fact.
 ## Escalation
 
 - A security issue you find is reported — a finding if you are reviewing, a note if you
-  are developing; it stops your task only if the task itself would ship the hole. Scope
+  are developing — to team-lead only, never in a public issue or shared channel: a
+  product vulnerability goes to the founder first (root `CLAUDE.md`, "Subagent
+  Workflow"). It stops your task only if the task itself would ship the hole. Scope
   drift beyond your dispatch, or any other rule conflict (rule 15), still stops work and
   produces a blocked report — name the rule, the reason it conflicts, and a proposed
   alternative. Never guess silently; team-lead decides or asks the founder.

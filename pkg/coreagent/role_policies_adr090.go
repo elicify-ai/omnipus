@@ -60,7 +60,7 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		// above) rather than silently defaulting to it.
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "browser_upload_file", "environment_setup", "bash")
 	case IDJim:
-		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "send_file", "create_task", "update_task", "list_tasks", "list_jobs", "set_todos", "delegate", "create_plan", "execute_plan", "stop_plan", "find_skills", "list_skills")...)
+		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "send_file", "create_task", "update_task", "list_tasks", "list_jobs", "set_todos", "delegate", "create_plan", "execute_plan", "update_plan", "stop_plan", "find_skills", "list_skills")...)
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "browser_upload_file")
 	case IDPlanner:
 		grant(allow, append(commonWork, "search_web", "fetch_url", "create_task", "update_task", "list_tasks", "delegate")...)
@@ -79,6 +79,12 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		// intended bash posture is Ask too, listed explicitly rather than
 		// silently defaulting to it.
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "environment_setup", "bash")
+	}
+	// r17 §16 D-7: Planner and Researcher may edit plans they own or created
+	// (the update_plan authority check still applies); the general-purpose
+	// Worker and custom workers may not.
+	if id == IDPlanner || id == IDResearcher {
+		grant(allow, "update_plan")
 	}
 	if id == IDMia || id == IDJim || id == IDWorker {
 		grant(ask, "knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create")
@@ -117,9 +123,8 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 	intended := ADR090RolePolicyInventory(id)
 	ceiling := config.DefaultConfig().Sandbox.ToolPolicies
 	result := make(map[string]config.ToolPolicy)
-	// Q22=B: the ordinary core's create_skill/edit_skill Ask differs from
-	// the Allow ceiling, so this delta persists both local Ask entries.
-	// Omnipus returned above and keeps no local entry for either tool.
+	// Omnipus returned above and keeps no local entry for any tool it
+	// supports, edit_skill included (skills spec r15 §10).
 	for _, name := range allStaticToolNames {
 		if intended[name] != config.ToolPolicy(ceiling[name]) {
 			result[name] = intended[name]
@@ -133,8 +138,11 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 	// their stored ask (until the operator explicitly changes or removes
 	// it via the normal tool_policy edit paths). The deny roles are
 	// unaffected: their deny differs from the ask ceiling and is already
-	// persisted by the delta loop above.
-	for _, name := range []string{"ToolSearch", "Skill", "grep", "send_email", "reply", "add_mcp_server", "environment_setup"} {
+	// persisted by the delta loop above. edit_skill (skills spec r15 §10)
+	// rides this list so Mia and Jim persist an explicit "ask" while the
+	// fresh ceiling is ask, and keep it when an operator raises the
+	// ceiling to allow.
+	for _, name := range []string{"ToolSearch", "Skill", "grep", "send_email", "reply", "add_mcp_server", "environment_setup", "edit_skill"} {
 		result[name] = intended[name]
 	}
 	return result
@@ -145,20 +153,34 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 // per-agent entry — Omnipus never carries a per-agent ask, FR-022); every
 // other static tool is an explicit per-agent deny (FR-007).
 var omnipusSupportedTools = []string{
-	"list_agents", "get_agent", "get_agent_tools", "read_agent_metadata",
+	"list_agents", "get_agent",
 	"list_workspaces", "get_workspace", "list_models", "list_providers", "test_provider",
-	"list_mcp_servers", "list_channels", "test_channel", "list_skills", "find_skills",
+	"list_mcp_servers", "list_channels", "test_channel", "list_skills", "get_skill", "find_skills",
 	"run_doctor", "get_usage", "list_secrets", "AskUserQuestion", "send_message",
 	"answer_request", "message_parent", "delegate", "Skill", "ToolSearch", "remember",
 	"recall_memory", "recall_conversation", "run_retrospective", "set_goal", "goal_claim",
 	"read_file", "write_file", "edit_file", "append_file", "list_directory", "grep",
 	"list_mounts", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list",
 	"search_web", "fetch_url", "create_agent", "update_agent", "delete_agent",
-	"create_workspace", "update_workspace", "create_skill", "edit_skill", "remove_skill", "install_skill",
+	"create_workspace", "update_workspace", "edit_skill", "install_skill",
 	"add_mcp_server", "remove_mcp_server", "configure_provider", "enable_channel",
 	"disable_channel", "configure_channel", "connect_channel", "connect_mailbox",
 	"set_agent_permissions", "request_secret", "select_secret_version", "remove_secret",
 	"read_conversation", "list_mailboxes", "environment_setup", "bash",
+}
+
+// T8OmnipusGrantedTools are the task tools of the parity surface plus the
+// read tool list_jobs that Omnipus gains (r17 §7.14.2 change 1, §16 D-7): it
+// creates and schedules tasks assigned to itself and sees its running
+// helpers. They ride the ceiling (allow; delete_task ask) like every other
+// supported tool. get_plan, get_goal and update_plan stay denied for it.
+// Fresh installs only: pre-T8 records are out of scope (§7.14.7).
+var T8OmnipusGrantedTools = []string{
+	"list_tasks", "get_task", "create_task", "update_task", "run_task", "delete_task", "list_jobs",
+}
+
+func init() {
+	omnipusSupportedTools = append(omnipusSupportedTools, T8OmnipusGrantedTools...)
 }
 
 // OmnipusSupportedTools returns a copy of Omnipus's supporting set (§6.5).

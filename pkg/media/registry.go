@@ -67,11 +67,19 @@ func registryPath() string {
 // (A fixed "registry.json.tmp" shared by concurrent saves is what produced
 // "invalid character 'e' after top-level value" on load.)
 //
+// A store retired by HandoverTo never writes: its successor owns the file.
+//
 // Lock order is registryMu, then s.mu. Must not be called while holding
 // s.mu: the snapshot takes s.mu.RLock.
 func (s *FileMediaStore) SaveRegistry() {
 	s.registryMu.Lock()
 	defer s.registryMu.Unlock()
+
+	if s.retired {
+		// HandoverTo moved this store's state to its successor, which now owns
+		// registry.json; this store's snapshot is stale by definition.
+		return
+	}
 
 	path := registryPath()
 	if path == "" {
@@ -179,7 +187,11 @@ func (s *FileMediaStore) LoadRegistry() error {
 		loaded++
 	}
 
-	logger.InfoCF("media", "registry: loaded persisted refs",
+	// Warn, not info (#1439 step 1): this line is the only place that counts
+	// refs the registry DROPPED because their files are gone — the exact
+	// counter a "media ref not found" investigation needs, and invisible at
+	// the default log level while it was info.
+	logger.WarnCF("media", "registry: loaded",
 		map[string]any{"loaded": loaded, "dropped_missing": dropped, "path": path})
 	return nil
 }

@@ -26,6 +26,7 @@ import {
   InlineCode,
   classifyFence,
   codeText,
+  clipboardCode,
   MermaidDiagram,
   ShikiCodeBlock,
   commonMarkdownComponents,
@@ -55,7 +56,7 @@ function HistoricalCodeBlock({ code, language }: HistoricalCodeBlockProps) {
 
   const handleCopy = async () => {
     try {
-      await copyText(code)
+      await copyText(clipboardCode(code))
       setCopied(true)
       if (resetTimerRef.current) clearTimeout(resetTimerRef.current)
       resetTimerRef.current = setTimeout(() => setCopied(false), 1500)

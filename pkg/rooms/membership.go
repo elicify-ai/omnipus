@@ -77,7 +77,10 @@ func (s *Service) Get(roomID string) (generated.Room, error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return s.roomView(r, ws), nil
+	out := s.roomView(r, ws)
+	// FR-044, FR-079: the summary text is served only here.
+	out.InvitationContext = invitationDetail(r)
+	return out, nil
 }
 
 // openRoom loads a room and its workspace and brings its membership up to
@@ -122,12 +125,22 @@ func (s *Service) openRoom(roomID string) (*room, WorkspaceInfo, error) {
 		return nil, WorkspaceInfo{}, err
 	}
 	resume := s.unsentMentionsLocked(r)
+	resumeIntents := !r.intentsResumed && len(r.intents) > 0
+	r.intentsResumed = true
 	r.mu.Unlock()
 	if len(resume) > 0 {
 		s.inflight.Add(1)
 		go func() {
 			defer s.inflight.Done()
 			s.admitAll(r, ws, resume)
+		}()
+	}
+	if resumeIntents {
+		// FR-078 (6): accepted answers are completed from their records.
+		s.inflight.Add(1)
+		go func() {
+			defer s.inflight.Done()
+			s.resumeIntents(r, ws)
 		}()
 	}
 	return r, ws, nil
@@ -416,7 +429,11 @@ func (s *Service) cancelDelivery(r *room, d *deliveryRecord, reason string) erro
 	// A failed label write is returned to the caller: the request is fenced
 	// off (the dequeue fence re-checks pause, membership and deletion) but
 	// the room would still show its old state.
-	return s.setState(r, d, StateCancelled, reason)
+	err := s.setState(r, d, StateCancelled, reason)
+	// FR-080: a summary reserved for this request is released only when the
+	// receiver's facts show it never got a capture it can run.
+	s.noteInviteGone(r, d)
+	return err
 }
 
 // validateNewMembers checks agent ids against the workspace: known

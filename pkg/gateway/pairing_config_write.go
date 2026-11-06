@@ -39,7 +39,9 @@ func (a *restAPI) prepareConfigJSONLocked(mutate func(map[string]any) error) ([]
 	if err = json.Unmarshal(raw, &before); err != nil {
 		return nil, nil, nil, fmt.Errorf("parse config: %w", err)
 	}
-	if err = mutate(doc); err != nil {
+	// FR-018: the outbound guard runs on every channel save step, before
+	// the file is written (T-8).
+	if err = guardedConfigMutate(mutate, a.outboundDedicatedWrite)(doc); err != nil {
 		return nil, nil, nil, err
 	}
 	if v, ok := doc["version"].(float64); !ok || int(v) < config.CurrentVersion {

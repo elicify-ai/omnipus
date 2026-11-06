@@ -390,6 +390,15 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	ResumeFromCommit string `json:"resume_from_commit,omitempty"`
 	// Trigger is the task's time trigger (nil = manual).
 	Trigger *Trigger `json:"trigger,omitempty"`
+	// LastDeliveredAtMs is the scheduler-delivery marker (tool-parity spec r17
+	// §7.2 TK-22/TK-30): the scheduled instant of the last occurrence the
+	// trigger scheduler's fire path delivered, written under the task's
+	// coordination lock after it validated the fresh persisted trigger. It is
+	// cleared by the same write that changes the trigger (an identical re-save
+	// keeps it) and releases a once trigger only while it equals at_ms
+	// (OnceDelivered). Internal engine field: on no wire schema, never read or
+	// written by REST or a tool.
+	LastDeliveredAtMs *int64 `json:"last_delivered_at_ms,omitempty"`
 	// Due is an optional RFC 3339 UTC deadline (separate from Trigger).
 	Due     string  `json:"due,omitempty"`
 	Surface Surface `json:"surface,omitempty"`

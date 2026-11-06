@@ -48,7 +48,6 @@ var goldenAskList = []string{
 	"configure_channel",
 	"configure_provider",
 	"create_agent",
-	"create_skill",
 	"delete_agent",
 	"delete_task",
 	"delete_workspace",
@@ -58,7 +57,6 @@ var goldenAskList = []string{
 	"environment_setup",
 	"install_skill",
 	"remove_mcp_server",
-	"remove_skill",
 	"reply",
 	"request_mount",
 	"run_doctor",
@@ -437,8 +435,8 @@ func checkAskListLock(table map[string]tools.AutoApproveClass, golden []string) 
 }
 
 func TestAutoApproveClassification_AskListMatchesGoldenCopy(t *testing.T) {
-	if len(goldenAskList) != 32 {
-		t.Fatalf("goldenAskList has %d names, want 32 (founder file tally minus the DEL-23 retired delete_task_in_workspace = 27, plus the five FR-021 ask-list tools)", len(goldenAskList))
+	if len(goldenAskList) != 30 {
+		t.Fatalf("goldenAskList has %d names, want 30 (27 historical asks plus five FR-021, minus two r15 retired skill tools)", len(goldenAskList))
 	}
 	table := tools.AutoApproveClassTable()
 	if errs := checkAskListLock(table, goldenAskList); len(errs) > 0 {

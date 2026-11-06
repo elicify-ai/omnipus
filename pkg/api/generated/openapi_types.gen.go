@@ -710,27 +710,6 @@ func (e AgentCreateRequestSubagentType) Valid() bool {
 	}
 }
 
-// Defines values for AgentCreateRequestSubagent3pExecutorKind.
-const (
-	AgentCreateRequestSubagent3pExecutorKindExternalCli AgentCreateRequestSubagent3pExecutorKind = "external-cli"
-	AgentCreateRequestSubagent3pExecutorKindNative      AgentCreateRequestSubagent3pExecutorKind = "native"
-	AgentCreateRequestSubagent3pExecutorKindRemoteA2a   AgentCreateRequestSubagent3pExecutorKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pExecutorKind enum.
-func (e AgentCreateRequestSubagent3pExecutorKind) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagent3pExecutorKindExternalCli:
-		return true
-	case AgentCreateRequestSubagent3pExecutorKindNative:
-		return true
-	case AgentCreateRequestSubagent3pExecutorKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentCreateRequestSubagent3pType.
 const (
 	AgentCreateRequestSubagent3pTypeSubagent3p AgentCreateRequestSubagent3pType = "subagent_3p"
@@ -800,6 +779,138 @@ func (e AgentDependencyListDependenciesKind) Valid() bool {
 	}
 }
 
+// Defines values for AgentDetailActivationStatus.
+const (
+	AgentDetailActivationStatusActive       AgentDetailActivationStatus = "active"
+	AgentDetailActivationStatusFailed       AgentDetailActivationStatus = "failed"
+	AgentDetailActivationStatusNotAttempted AgentDetailActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailActivationStatus enum.
+func (e AgentDetailActivationStatus) Valid() bool {
+	switch e {
+	case AgentDetailActivationStatusActive:
+		return true
+	case AgentDetailActivationStatusFailed:
+		return true
+	case AgentDetailActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailExecutorKind.
+const (
+	AgentDetailExecutorKindExternalCli AgentDetailExecutorKind = "external-cli"
+	AgentDetailExecutorKindNative      AgentDetailExecutorKind = "native"
+	AgentDetailExecutorKindRemoteA2a   AgentDetailExecutorKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailExecutorKind enum.
+func (e AgentDetailExecutorKind) Valid() bool {
+	switch e {
+	case AgentDetailExecutorKindExternalCli:
+		return true
+	case AgentDetailExecutorKindNative:
+		return true
+	case AgentDetailExecutorKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailStoredOverrides.
+const (
+	AgentDetailStoredOverridesAllow AgentDetailStoredOverrides = "allow"
+	AgentDetailStoredOverridesAsk   AgentDetailStoredOverrides = "ask"
+	AgentDetailStoredOverridesDeny  AgentDetailStoredOverrides = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailStoredOverrides enum.
+func (e AgentDetailStoredOverrides) Valid() bool {
+	switch e {
+	case AgentDetailStoredOverridesAllow:
+		return true
+	case AgentDetailStoredOverridesAsk:
+		return true
+	case AgentDetailStoredOverridesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailToolPermissionsEffective.
+const (
+	AgentDetailToolPermissionsEffectiveAllow AgentDetailToolPermissionsEffective = "allow"
+	AgentDetailToolPermissionsEffectiveAsk   AgentDetailToolPermissionsEffective = "ask"
+	AgentDetailToolPermissionsEffectiveDeny  AgentDetailToolPermissionsEffective = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailToolPermissionsEffective enum.
+func (e AgentDetailToolPermissionsEffective) Valid() bool {
+	switch e {
+	case AgentDetailToolPermissionsEffectiveAllow:
+		return true
+	case AgentDetailToolPermissionsEffectiveAsk:
+		return true
+	case AgentDetailToolPermissionsEffectiveDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailToolPermissionsOverride.
+const (
+	AgentDetailToolPermissionsOverrideAllow AgentDetailToolPermissionsOverride = "allow"
+	AgentDetailToolPermissionsOverrideAsk   AgentDetailToolPermissionsOverride = "ask"
+	AgentDetailToolPermissionsOverrideDeny  AgentDetailToolPermissionsOverride = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailToolPermissionsOverride enum.
+func (e AgentDetailToolPermissionsOverride) Valid() bool {
+	switch e {
+	case AgentDetailToolPermissionsOverrideAllow:
+		return true
+	case AgentDetailToolPermissionsOverrideAsk:
+		return true
+	case AgentDetailToolPermissionsOverrideDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailType.
+const (
+	AgentDetailTypeCore       AgentDetailType = "core"
+	AgentDetailTypeMain       AgentDetailType = "Main"
+	AgentDetailTypeSubagent   AgentDetailType = "Subagent"
+	AgentDetailTypeSubagent3p AgentDetailType = "subagent_3p"
+	AgentDetailTypeSystem     AgentDetailType = "system"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailType enum.
+func (e AgentDetailType) Valid() bool {
+	switch e {
+	case AgentDetailTypeCore:
+		return true
+	case AgentDetailTypeMain:
+		return true
+	case AgentDetailTypeSubagent:
+		return true
+	case AgentDetailTypeSubagent3p:
+		return true
+	case AgentDetailTypeSystem:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentFigure.
 const (
 	AgentFigureMan      AgentFigure = "Man"
@@ -821,6 +932,69 @@ func (e AgentFigure) Valid() bool {
 	case AgentFigureRobot:
 		return true
 	case AgentFigureWoman:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentPreviewPreviewOf.
+const (
+	AgentPreviewPreviewOfMain       AgentPreviewPreviewOf = "Main"
+	AgentPreviewPreviewOfSubagent   AgentPreviewPreviewOf = "Subagent"
+	AgentPreviewPreviewOfSubagent3p AgentPreviewPreviewOf = "subagent_3p"
+)
+
+// Valid indicates whether the value is a known member of the AgentPreviewPreviewOf enum.
+func (e AgentPreviewPreviewOf) Valid() bool {
+	switch e {
+	case AgentPreviewPreviewOfMain:
+		return true
+	case AgentPreviewPreviewOfSubagent:
+		return true
+	case AgentPreviewPreviewOfSubagent3p:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentPreviewToolPermissionsEffective.
+const (
+	AgentPreviewToolPermissionsEffectiveAllow AgentPreviewToolPermissionsEffective = "allow"
+	AgentPreviewToolPermissionsEffectiveAsk   AgentPreviewToolPermissionsEffective = "ask"
+	AgentPreviewToolPermissionsEffectiveDeny  AgentPreviewToolPermissionsEffective = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentPreviewToolPermissionsEffective enum.
+func (e AgentPreviewToolPermissionsEffective) Valid() bool {
+	switch e {
+	case AgentPreviewToolPermissionsEffectiveAllow:
+		return true
+	case AgentPreviewToolPermissionsEffectiveAsk:
+		return true
+	case AgentPreviewToolPermissionsEffectiveDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentPreviewToolPermissionsOverride.
+const (
+	AgentPreviewToolPermissionsOverrideAllow AgentPreviewToolPermissionsOverride = "allow"
+	AgentPreviewToolPermissionsOverrideAsk   AgentPreviewToolPermissionsOverride = "ask"
+	AgentPreviewToolPermissionsOverrideDeny  AgentPreviewToolPermissionsOverride = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentPreviewToolPermissionsOverride enum.
+func (e AgentPreviewToolPermissionsOverride) Valid() bool {
+	switch e {
+	case AgentPreviewToolPermissionsOverrideAllow:
+		return true
+	case AgentPreviewToolPermissionsOverrideAsk:
+		return true
+	case AgentPreviewToolPermissionsOverrideDeny:
 		return true
 	default:
 		return false
@@ -989,6 +1163,48 @@ func (e AgentToolEntryManifestTier) Valid() bool {
 	case AgentToolEntryManifestTierFull:
 		return true
 	case AgentToolEntryManifestTierInfra:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolPermissionEffective.
+const (
+	AgentToolPermissionEffectiveAllow AgentToolPermissionEffective = "allow"
+	AgentToolPermissionEffectiveAsk   AgentToolPermissionEffective = "ask"
+	AgentToolPermissionEffectiveDeny  AgentToolPermissionEffective = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolPermissionEffective enum.
+func (e AgentToolPermissionEffective) Valid() bool {
+	switch e {
+	case AgentToolPermissionEffectiveAllow:
+		return true
+	case AgentToolPermissionEffectiveAsk:
+		return true
+	case AgentToolPermissionEffectiveDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolPermissionOverride.
+const (
+	AgentToolPermissionOverrideAllow AgentToolPermissionOverride = "allow"
+	AgentToolPermissionOverrideAsk   AgentToolPermissionOverride = "ask"
+	AgentToolPermissionOverrideDeny  AgentToolPermissionOverride = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolPermissionOverride enum.
+func (e AgentToolPermissionOverride) Valid() bool {
+	switch e {
+	case AgentToolPermissionOverrideAllow:
+		return true
+	case AgentToolPermissionOverrideAsk:
+		return true
+	case AgentToolPermissionOverrideDeny:
 		return true
 	default:
 		return false
@@ -1202,27 +1418,6 @@ func (e AgentToolsUpdateRequestConfigBuiltinPolicies) Valid() bool {
 	case AgentToolsUpdateRequestConfigBuiltinPoliciesAsk:
 		return true
 	case AgentToolsUpdateRequestConfigBuiltinPoliciesDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestExecutorKind.
-const (
-	AgentUpdateRequestExecutorKindExternalCli AgentUpdateRequestExecutorKind = "external-cli"
-	AgentUpdateRequestExecutorKindNative      AgentUpdateRequestExecutorKind = "native"
-	AgentUpdateRequestExecutorKindRemoteA2a   AgentUpdateRequestExecutorKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestExecutorKind enum.
-func (e AgentUpdateRequestExecutorKind) Valid() bool {
-	switch e {
-	case AgentUpdateRequestExecutorKindExternalCli:
-		return true
-	case AgentUpdateRequestExecutorKindNative:
-		return true
-	case AgentUpdateRequestExecutorKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -1853,6 +2048,48 @@ func (e CatalogProviderRegionGroup) Valid() bool {
 	}
 }
 
+// Defines values for ChannelAvailabilityState.
+const (
+	ChannelAvailabilityStateNotLoaded  ChannelAvailabilityState = "not_loaded"
+	ChannelAvailabilityStateNotRunning ChannelAvailabilityState = "not_running"
+	ChannelAvailabilityStateRunning    ChannelAvailabilityState = "running"
+)
+
+// Valid indicates whether the value is a known member of the ChannelAvailabilityState enum.
+func (e ChannelAvailabilityState) Valid() bool {
+	switch e {
+	case ChannelAvailabilityStateNotLoaded:
+		return true
+	case ChannelAvailabilityStateNotRunning:
+		return true
+	case ChannelAvailabilityStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelConfigureErrorCode.
+const (
+	ChannelConfigureErrorCodeCouldNotSave            ChannelConfigureErrorCode = "could_not_save"
+	ChannelConfigureErrorCodeCredentialSavedNotSaved ChannelConfigureErrorCode = "credential_saved_not_saved"
+	ChannelConfigureErrorCodeSavedNotRefreshed       ChannelConfigureErrorCode = "saved_not_refreshed"
+)
+
+// Valid indicates whether the value is a known member of the ChannelConfigureErrorCode enum.
+func (e ChannelConfigureErrorCode) Valid() bool {
+	switch e {
+	case ChannelConfigureErrorCodeCouldNotSave:
+		return true
+	case ChannelConfigureErrorCodeCredentialSavedNotSaved:
+		return true
+	case ChannelConfigureErrorCodeSavedNotRefreshed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelConfigureRequestIdentityKind.
 const (
 	ChannelConfigureRequestIdentityKindAgent ChannelConfigureRequestIdentityKind = "agent"
@@ -1871,6 +2108,33 @@ func (e ChannelConfigureRequestIdentityKind) Valid() bool {
 	}
 }
 
+// Defines values for ChannelConfigureResponseApplyOutcome.
+const (
+	ChannelConfigureResponseApplyOutcomeApplied           ChannelConfigureResponseApplyOutcome = "applied"
+	ChannelConfigureResponseApplyOutcomeAppliedNotRunning ChannelConfigureResponseApplyOutcome = "applied_not_running"
+	ChannelConfigureResponseApplyOutcomeFailed            ChannelConfigureResponseApplyOutcome = "failed"
+	ChannelConfigureResponseApplyOutcomeNoReloadNeeded    ChannelConfigureResponseApplyOutcome = "no_reload_needed"
+	ChannelConfigureResponseApplyOutcomeUnconfirmed       ChannelConfigureResponseApplyOutcome = "unconfirmed"
+)
+
+// Valid indicates whether the value is a known member of the ChannelConfigureResponseApplyOutcome enum.
+func (e ChannelConfigureResponseApplyOutcome) Valid() bool {
+	switch e {
+	case ChannelConfigureResponseApplyOutcomeApplied:
+		return true
+	case ChannelConfigureResponseApplyOutcomeAppliedNotRunning:
+		return true
+	case ChannelConfigureResponseApplyOutcomeFailed:
+		return true
+	case ChannelConfigureResponseApplyOutcomeNoReloadNeeded:
+		return true
+	case ChannelConfigureResponseApplyOutcomeUnconfirmed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelEntryIdentityKind.
 const (
 	ChannelEntryIdentityKindAgent ChannelEntryIdentityKind = "agent"
@@ -1883,6 +2147,24 @@ func (e ChannelEntryIdentityKind) Valid() bool {
 	case ChannelEntryIdentityKindAgent:
 		return true
 	case ChannelEntryIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelEntryOutboundPolicy.
+const (
+	ChannelEntryOutboundPolicyAgentMayStart ChannelEntryOutboundPolicy = "agent_may_start"
+	ChannelEntryOutboundPolicyReplyOnly     ChannelEntryOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelEntryOutboundPolicy enum.
+func (e ChannelEntryOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelEntryOutboundPolicyAgentMayStart:
+		return true
+	case ChannelEntryOutboundPolicyReplyOnly:
 		return true
 	default:
 		return false
@@ -1937,6 +2219,171 @@ func (e ChannelIdentityKind) Valid() bool {
 	case ChannelIdentityKindAgent:
 		return true
 	case ChannelIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundPolicy.
+const (
+	ChannelOutboundPolicyAgentMayStart ChannelOutboundPolicy = "agent_may_start"
+	ChannelOutboundPolicyReplyOnly     ChannelOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundPolicy enum.
+func (e ChannelOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundReadAvailabilityState.
+const (
+	ChannelOutboundReadAvailabilityStateNotLoaded  ChannelOutboundReadAvailabilityState = "not_loaded"
+	ChannelOutboundReadAvailabilityStateNotRunning ChannelOutboundReadAvailabilityState = "not_running"
+	ChannelOutboundReadAvailabilityStateRunning    ChannelOutboundReadAvailabilityState = "running"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundReadAvailabilityState enum.
+func (e ChannelOutboundReadAvailabilityState) Valid() bool {
+	switch e {
+	case ChannelOutboundReadAvailabilityStateNotLoaded:
+		return true
+	case ChannelOutboundReadAvailabilityStateNotRunning:
+		return true
+	case ChannelOutboundReadAvailabilityStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundReadOutboundPolicy.
+const (
+	ChannelOutboundReadOutboundPolicyAgentMayStart ChannelOutboundReadOutboundPolicy = "agent_may_start"
+	ChannelOutboundReadOutboundPolicyReplyOnly     ChannelOutboundReadOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundReadOutboundPolicy enum.
+func (e ChannelOutboundReadOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundReadOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundReadOutboundPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundRejectionCode.
+const (
+	ChannelOutboundRejectionCodeConnectFirst                ChannelOutboundRejectionCode = "connect_first"
+	ChannelOutboundRejectionCodeInvalidTargets              ChannelOutboundRejectionCode = "invalid_targets"
+	ChannelOutboundRejectionCodeLookupUnavailable           ChannelOutboundRejectionCode = "lookup_unavailable"
+	ChannelOutboundRejectionCodePlatformCannotMessagePeople ChannelOutboundRejectionCode = "platform_cannot_message_people"
+	ChannelOutboundRejectionCodePlatformCannotStart         ChannelOutboundRejectionCode = "platform_cannot_start"
+	ChannelOutboundRejectionCodeSavedLiveMismatch           ChannelOutboundRejectionCode = "saved_live_mismatch"
+	ChannelOutboundRejectionCodeStaleRevision               ChannelOutboundRejectionCode = "stale_revision"
+	ChannelOutboundRejectionCodeTooManyTargets              ChannelOutboundRejectionCode = "too_many_targets"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundRejectionCode enum.
+func (e ChannelOutboundRejectionCode) Valid() bool {
+	switch e {
+	case ChannelOutboundRejectionCodeConnectFirst:
+		return true
+	case ChannelOutboundRejectionCodeInvalidTargets:
+		return true
+	case ChannelOutboundRejectionCodeLookupUnavailable:
+		return true
+	case ChannelOutboundRejectionCodePlatformCannotMessagePeople:
+		return true
+	case ChannelOutboundRejectionCodePlatformCannotStart:
+		return true
+	case ChannelOutboundRejectionCodeSavedLiveMismatch:
+		return true
+	case ChannelOutboundRejectionCodeStaleRevision:
+		return true
+	case ChannelOutboundRejectionCodeTooManyTargets:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundRejectionTargetErrorsCode.
+const (
+	ChannelOutboundRejectionTargetErrorsCodeCannotMessagePeople    ChannelOutboundRejectionTargetErrorsCode = "cannot_message_people"
+	ChannelOutboundRejectionTargetErrorsCodeInvalidId              ChannelOutboundRejectionTargetErrorsCode = "invalid_id"
+	ChannelOutboundRejectionTargetErrorsCodeLookupUnavailable      ChannelOutboundRejectionTargetErrorsCode = "lookup_unavailable"
+	ChannelOutboundRejectionTargetErrorsCodeNotFound               ChannelOutboundRejectionTargetErrorsCode = "not_found"
+	ChannelOutboundRejectionTargetErrorsCodeUnsupportedChannelKind ChannelOutboundRejectionTargetErrorsCode = "unsupported_channel_kind"
+	ChannelOutboundRejectionTargetErrorsCodeUsernameNotAllowed     ChannelOutboundRejectionTargetErrorsCode = "username_not_allowed"
+	ChannelOutboundRejectionTargetErrorsCodeWildcardNotAllowed     ChannelOutboundRejectionTargetErrorsCode = "wildcard_not_allowed"
+	ChannelOutboundRejectionTargetErrorsCodeWrongPlatform          ChannelOutboundRejectionTargetErrorsCode = "wrong_platform"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundRejectionTargetErrorsCode enum.
+func (e ChannelOutboundRejectionTargetErrorsCode) Valid() bool {
+	switch e {
+	case ChannelOutboundRejectionTargetErrorsCodeCannotMessagePeople:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeInvalidId:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeLookupUnavailable:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeNotFound:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeUnsupportedChannelKind:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeUsernameNotAllowed:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeWildcardNotAllowed:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeWrongPlatform:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundUpdateRequestPolicy.
+const (
+	ChannelOutboundUpdateRequestPolicyAgentMayStart ChannelOutboundUpdateRequestPolicy = "agent_may_start"
+	ChannelOutboundUpdateRequestPolicyReplyOnly     ChannelOutboundUpdateRequestPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundUpdateRequestPolicy enum.
+func (e ChannelOutboundUpdateRequestPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundUpdateRequestPolicyAgentMayStart:
+		return true
+	case ChannelOutboundUpdateRequestPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundWriteResponseOutboundPolicy.
+const (
+	ChannelOutboundWriteResponseOutboundPolicyAgentMayStart ChannelOutboundWriteResponseOutboundPolicy = "agent_may_start"
+	ChannelOutboundWriteResponseOutboundPolicyReplyOnly     ChannelOutboundWriteResponseOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundWriteResponseOutboundPolicy enum.
+func (e ChannelOutboundWriteResponseOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundWriteResponseOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundWriteResponseOutboundPolicyReplyOnly:
 		return true
 	default:
 		return false
@@ -2024,6 +2471,24 @@ func (e CliDetectEntrySource) Valid() bool {
 	case CliDetectEntrySourcePath:
 		return true
 	case CliDetectEntrySourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CliPresetViewDetectedSource.
+const (
+	CliPresetViewDetectedSourcePath      CliPresetViewDetectedSource = "path"
+	CliPresetViewDetectedSourceWellKnown CliPresetViewDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the CliPresetViewDetectedSource enum.
+func (e CliPresetViewDetectedSource) Valid() bool {
+	switch e {
+	case CliPresetViewDetectedSourcePath:
+		return true
+	case CliPresetViewDetectedSourceWellKnown:
 		return true
 	default:
 		return false
@@ -9452,6 +9917,27 @@ func (e RoomCreateRequestKind) Valid() bool {
 	}
 }
 
+// Defines values for RoomInvitationStatus.
+const (
+	RoomInvitationStatusGenerating  RoomInvitationStatus = "generating"
+	RoomInvitationStatusReady       RoomInvitationStatus = "ready"
+	RoomInvitationStatusUnavailable RoomInvitationStatus = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the RoomInvitationStatus enum.
+func (e RoomInvitationStatus) Valid() bool {
+	switch e {
+	case RoomInvitationStatusGenerating:
+		return true
+	case RoomInvitationStatusReady:
+		return true
+	case RoomInvitationStatusUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RoomMembersUpdateRequestAction.
 const (
 	RoomMembersUpdateRequestActionAdd    RoomMembersUpdateRequestAction = "add"
@@ -11015,6 +11501,60 @@ func (e SkillStatus) Valid() bool {
 	}
 }
 
+// Defines values for SkillDetailNeedsStatus.
+const (
+	SkillDetailNeedsStatusMissing SkillDetailNeedsStatus = "missing"
+	SkillDetailNeedsStatusPresent SkillDetailNeedsStatus = "present"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailNeedsStatus enum.
+func (e SkillDetailNeedsStatus) Valid() bool {
+	switch e {
+	case SkillDetailNeedsStatusMissing:
+		return true
+	case SkillDetailNeedsStatusPresent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillDetailShelf.
+const (
+	SkillDetailShelfBuiltin  SkillDetailShelf = "builtin"
+	SkillDetailShelfRegistry SkillDetailShelf = "registry"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailShelf enum.
+func (e SkillDetailShelf) Valid() bool {
+	switch e {
+	case SkillDetailShelfBuiltin:
+		return true
+	case SkillDetailShelfRegistry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillDetailState.
+const (
+	SkillDetailStateDeleted   SkillDetailState = "deleted"
+	SkillDetailStateInstalled SkillDetailState = "installed"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailState enum.
+func (e SkillDetailState) Valid() bool {
+	switch e {
+	case SkillDetailStateDeleted:
+		return true
+	case SkillDetailStateInstalled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SkillTrustResponseLevel.
 const (
 	SkillTrustResponseLevelAllowAll        SkillTrustResponseLevel = "allow_all"
@@ -11833,6 +12373,7 @@ const (
 	TaskOccurrenceSetOccurrenceRunsStatusDone       TaskOccurrenceSetOccurrenceRunsStatus = "done"
 	TaskOccurrenceSetOccurrenceRunsStatusFailed     TaskOccurrenceSetOccurrenceRunsStatus = "failed"
 	TaskOccurrenceSetOccurrenceRunsStatusInProgress TaskOccurrenceSetOccurrenceRunsStatus = "in_progress"
+	TaskOccurrenceSetOccurrenceRunsStatusMissed     TaskOccurrenceSetOccurrenceRunsStatus = "missed"
 	TaskOccurrenceSetOccurrenceRunsStatusSkipped    TaskOccurrenceSetOccurrenceRunsStatus = "skipped"
 )
 
@@ -11844,6 +12385,8 @@ func (e TaskOccurrenceSetOccurrenceRunsStatus) Valid() bool {
 	case TaskOccurrenceSetOccurrenceRunsStatusFailed:
 		return true
 	case TaskOccurrenceSetOccurrenceRunsStatusInProgress:
+		return true
+	case TaskOccurrenceSetOccurrenceRunsStatusMissed:
 		return true
 	case TaskOccurrenceSetOccurrenceRunsStatusSkipped:
 		return true
@@ -11875,6 +12418,7 @@ const (
 	TaskRunStatusDone       TaskRunStatus = "done"
 	TaskRunStatusFailed     TaskRunStatus = "failed"
 	TaskRunStatusInProgress TaskRunStatus = "in_progress"
+	TaskRunStatusMissed     TaskRunStatus = "missed"
 	TaskRunStatusSkipped    TaskRunStatus = "skipped"
 )
 
@@ -11886,6 +12430,8 @@ func (e TaskRunStatus) Valid() bool {
 	case TaskRunStatusFailed:
 		return true
 	case TaskRunStatusInProgress:
+		return true
+	case TaskRunStatusMissed:
 		return true
 	case TaskRunStatusSkipped:
 		return true
@@ -12224,6 +12770,60 @@ func (e TaskUpdateRequestTriggerType) Valid() bool {
 	case TaskUpdateRequestTriggerTypeOnce:
 		return true
 	case TaskUpdateRequestTriggerTypeRecurring:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource.
+const (
+	ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourcePath      ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource = "path"
+	ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourceWellKnown ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource enum.
+func (e ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource) Valid() bool {
+	switch e {
+	case ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourcePath:
+		return true
+	case ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ThirdPartyAgentSettingsViewClisCodexDetectedSource.
+const (
+	ThirdPartyAgentSettingsViewClisCodexDetectedSourcePath      ThirdPartyAgentSettingsViewClisCodexDetectedSource = "path"
+	ThirdPartyAgentSettingsViewClisCodexDetectedSourceWellKnown ThirdPartyAgentSettingsViewClisCodexDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the ThirdPartyAgentSettingsViewClisCodexDetectedSource enum.
+func (e ThirdPartyAgentSettingsViewClisCodexDetectedSource) Valid() bool {
+	switch e {
+	case ThirdPartyAgentSettingsViewClisCodexDetectedSourcePath:
+		return true
+	case ThirdPartyAgentSettingsViewClisCodexDetectedSourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ThirdPartyAgentSettingsViewClisOpencodeDetectedSource.
+const (
+	ThirdPartyAgentSettingsViewClisOpencodeDetectedSourcePath      ThirdPartyAgentSettingsViewClisOpencodeDetectedSource = "path"
+	ThirdPartyAgentSettingsViewClisOpencodeDetectedSourceWellKnown ThirdPartyAgentSettingsViewClisOpencodeDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the ThirdPartyAgentSettingsViewClisOpencodeDetectedSource enum.
+func (e ThirdPartyAgentSettingsViewClisOpencodeDetectedSource) Valid() bool {
+	switch e {
+	case ThirdPartyAgentSettingsViewClisOpencodeDetectedSourcePath:
+		return true
+	case ThirdPartyAgentSettingsViewClisOpencodeDetectedSourceWellKnown:
 		return true
 	default:
 		return false
@@ -13947,11 +14547,13 @@ type Agent struct {
 	DegradedReason *AgentDegradedReason `json:"degraded_reason,omitempty"`
 
 	// Description Short description of the agent's purpose.
-	Description    *string                 `json:"description,omitempty"`
+	Description *string `json:"description,omitempty"`
+
+	// EditableFields Per-field editability for this agent. For custom subagent_3p agents the executor descriptors are executor.env_overrides, executor.env_overrides_remove and executor.cli_args (editable; other agents get the reason "Only external-CLI workers have a runtime environment."), executor.cli (never: "Locked after create; create a new agent to switch CLIs."), executor.effective_cli_path (never: "Set in Settings -> Third-party agents.") and executor.kind (never: "Derived from the agent type.").
 	EditableFields *[]AgentFieldDescriptor `json:"editable_fields,omitempty"`
 	ErrorStage     *string                 `json:"error_stage,omitempty"`
 
-	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// Executor Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
 	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
@@ -13962,17 +14564,23 @@ type Agent struct {
 		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
 		Cli *ExternalCliTool `json:"cli,omitempty"`
 
-		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		// CliArgs Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
 		CliArgs *string `json:"cli_args,omitempty"`
 
-		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-		CliPath *string `json:"cli_path,omitempty"`
+		// EffectiveCliPath Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+		EffectiveCliPath *string `json:"effective_cli_path,omitempty"`
 
-		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		// EffectivePresetArgs Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+		EffectivePresetArgs *string `json:"effective_preset_args,omitempty"`
+
+		// EnvOverrides Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
 		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 
 		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 		Kind *AgentExecutorKind `json:"kind,omitempty"`
+
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		ProgramWarning *string `json:"program_warning,omitempty"`
 	} `json:"executor,omitempty"`
 
 	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
@@ -14028,32 +14636,23 @@ type Agent struct {
 	// Provider Explicit routing key for the agent's primary model (O3 two-field model), mirroring fallback_models[].provider. Distinct from any "provider/" prefix embedded in `model`. When set, model resolution uses this provider directly and never infers one. Empty/absent for agents that predate the migration or whose model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
-
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
 	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Role AgentRole `json:"role"`
 
+	// SkillGrants Skill key → generation the grant is bound to (SD-30). Written wholesale by the server at every agent create/update from its own observation of the installed skill folders; requests stay name-only. An absent field or entry is unbound and authorizes nothing.
+	SkillGrants *map[string]string `json:"skill_grants,omitempty"`
+
 	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
 	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null). For `type: system` agents (e.g. the Judge), this is ALSO the judging rubric — one unified soul concept (ADR-052 FR-038, no separate `rubric` field); the Judge's soul is editable while the agent stays otherwise locked.
 	Soul string `json:"soul"`
+
+	// StaleSkillGrants Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). Computed by the server on the agent detail read (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is not listed. Omitted when empty.
+	StaleSkillGrants *[]string `json:"stale_skill_grants,omitempty"`
 
 	// Stats Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
 	Stats *struct {
@@ -14357,7 +14956,7 @@ type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
 // AgentCreateRequestSubagentType Discriminator. Must be exactly "Subagent" for this variant.
 type AgentCreateRequestSubagentType string
 
-// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (ExecutorConfigCreate: cli plus optional env_overrides and cli_args; kind and cli_path are rejected). The program for the chosen CLI is set by a person in Settings -> Third-party agents; creating an agent for a CLI with no usable Settings path succeeds and the echo carries executor.program_warning. There is no soul: a third-party agent has no SOUL.md (soul is rejected as an unknown field).
 // Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
 type AgentCreateRequestSubagent3p struct {
 	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
@@ -14366,28 +14965,16 @@ type AgentCreateRequestSubagent3p struct {
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
 
-	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
-	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
-	// When the agent has no executor block, the default is "native".
+	// Executor Executor block of a subagent_3p create request (WRITE model). `kind` is derived from the agent type and `cli_path` does not exist: the program for each CLI is set by a person in Settings -> Third-party agents. Both are rejected as unknown fields. Creating an agent for a CLI with no usable Settings path succeeds; the echo carries `program_warning`.
 	Executor struct {
 		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
-		Cli *ExternalCliTool `json:"cli,omitempty"`
+		Cli ExternalCliTool `json:"cli"`
 
-		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		// CliArgs Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the safety filter would drop are reported in the tool result's cli_args.dropped_at_run and removed at run time.
 		CliArgs *string `json:"cli_args,omitempty"`
 
-		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-		CliPath *string `json:"cli_path,omitempty"`
-
-		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		// EnvOverrides Environment variables for the spawned CLI process. Names match ^[A-Za-z_][A-Za-z0-9_]*$ and are at most 128 characters; at most 64 entries; each value at most 8,192 characters. OMNIPUS_* names are reserved and refused, naming the key. A value equal to the read mask "••••••" is refused. Values are never echoed: every read masks them.
 		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
-
-		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-		Kind *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
 	} `json:"executor"`
 
 	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
@@ -14405,33 +14992,12 @@ type AgentCreateRequestSubagent3p struct {
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
-
 	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Role *AgentRole `json:"role,omitempty"`
-
-	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
-	Soul string `json:"soul"`
 
 	// Type Discriminator. Must be exactly "subagent_3p" for this variant.
 	Type AgentCreateRequestSubagent3pType `json:"type"`
 }
-
-// AgentCreateRequestSubagent3pExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-type AgentCreateRequestSubagent3pExecutorKind string
 
 // AgentCreateRequestSubagent3pType Discriminator. Must be exactly "subagent_3p" for this variant.
 type AgentCreateRequestSubagent3pType string
@@ -14469,6 +15035,218 @@ type AgentDependencyList struct {
 // AgentDependencyListDependenciesKind defines model for AgentDependencyList.Dependencies.Kind.
 type AgentDependencyListDependenciesKind string
 
+// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Extension point: the effort fields of the effort feature are added here when that feature lands.
+type AgentDetail struct {
+	// AbsentFields Result metadata, never selectable: requested properties the full object does not carry. Absent or empty when none.
+	AbsentFields *[]string `json:"absent_fields,omitempty"`
+
+	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+	ActivationStatus *AgentDetailActivationStatus `json:"activation_status,omitempty"`
+
+	// AgentMd AGENT.md content written beside the record ("" when none).
+	AgentMd *string `json:"agent_md,omitempty"`
+
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
+
+	// Connectors The agent's explicitly assigned connector (MCP server) bindings.
+	Connectors *[]struct {
+		Id string `json:"id"`
+
+		// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+		Tools *[]string `json:"tools,omitempty"`
+	} `json:"connectors,omitempty"`
+
+	// ContextWindowOverride The stored per-agent context-window override; null when none.
+	ContextWindowOverride *int                    `json:"context_window_override,omitempty"`
+	Description           *string                 `json:"description,omitempty"`
+	EditableFields        *[]AgentFieldDescriptor `json:"editable_fields,omitempty"`
+
+	// Executor Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
+	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
+	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
+	// When the agent has no executor block, the default is "native".
+	Executor *struct {
+		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+		Cli *ExternalCliTool `json:"cli,omitempty"`
+
+		// CliArgs Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
+		CliArgs *string `json:"cli_args,omitempty"`
+
+		// EffectiveCliPath Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+		EffectiveCliPath *string `json:"effective_cli_path,omitempty"`
+
+		// EffectivePresetArgs Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+		EffectivePresetArgs *string `json:"effective_preset_args,omitempty"`
+
+		// EnvOverrides Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
+		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+
+		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+		Kind *AgentDetailExecutorKind `json:"kind,omitempty"`
+
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		ProgramWarning *string `json:"program_warning,omitempty"`
+	} `json:"executor,omitempty"`
+
+	// FallbackModels The stored fallback entries, as stored.
+	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
+
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
+	Figure *AgentFigure `json:"figure,omitempty"`
+
+	// HasMainChat True when the agent has a main chat.
+	HasMainChat *bool  `json:"has_main_chat,omitempty"`
+	Id          string `json:"id"`
+
+	// Locked As Agent.locked — identity is fixed on built-ins.
+	Locked *bool `json:"locked,omitempty"`
+
+	// MaxToolIterations The agent's own stored tool-iteration limit; null when it rides the global limit.
+	MaxToolIterations *int  `json:"max_tool_iterations,omitempty"`
+	MemoryEnabled     *bool `json:"memory_enabled,omitempty"`
+
+	// Model The stored primary model slug ("" when the agent inherits the default).
+	Model *string `json:"model,omitempty"`
+
+	// ModelChain The effective model chain: primary first, then each fallback in order, derived through the real resolver; unknown values are null.
+	ModelChain *[]struct {
+		// AcceptsImages The resolved model's image-input capability; null when not known.
+		AcceptsImages *bool `json:"accepts_images"`
+
+		// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
+		Model string `json:"model"`
+
+		// ModelOffered True when the provider offers the model; null when not known.
+		ModelOffered *bool `json:"model_offered"`
+
+		// Position "primary", or "fallback_<n>" counting from 1 in chain order.
+		Position string `json:"position"`
+
+		// Provider The resolved provider key; null when it cannot be resolved.
+		Provider *string `json:"provider"`
+
+		// ProviderConfigured True when the provider is configured on this install.
+		ProviderConfigured bool `json:"provider_configured"`
+
+		// Warning Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise.
+		Warning *string `json:"warning,omitempty"`
+	} `json:"model_chain,omitempty"`
+
+	// ModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
+	ModelParams *struct {
+		// MaxTokens Maximum tokens to generate per turn.
+		MaxTokens *int `json:"max_tokens,omitempty"`
+
+		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+		Temperature *float64 `json:"temperature,omitempty"`
+	} `json:"model_params,omitempty"`
+	Name *string `json:"name,omitempty"`
+
+	// ProgramWarning Same text as executor.program_warning: the exact text a run would be refused with right now. Absent when a run would start.
+	ProgramWarning *string `json:"program_warning,omitempty"`
+
+	// Provider The stored primary provider key ("" when not pinned).
+	Provider *string `json:"provider,omitempty"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
+
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
+
+	// Runnable True when a run of this agent would start now (no program_warning applies).
+	Runnable *bool     `json:"runnable,omitempty"`
+	Skills   *[]string `json:"skills,omitempty"`
+
+	// Soul SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul).
+	Soul *string `json:"soul,omitempty"`
+
+	// StaleSkillGrants Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). The same list the REST agent detail returns as `stale_skill_grants`; empty when none is stale.
+	StaleSkillGrants *[]string `json:"stale_skill_grants,omitempty"`
+
+	// StoredOverrides The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included.
+	StoredOverrides *map[string]AgentDetailStoredOverrides `json:"stored_overrides,omitempty"`
+
+	// ToolPermissions Per-tool effective policy and the agent's own stored override.
+	ToolPermissions *[]struct {
+		// Description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+		Description *string `json:"description,omitempty"`
+
+		// Effective The policy that applies to this agent's calls of the tool.
+		Effective AgentDetailToolPermissionsEffective `json:"effective"`
+
+		// Override The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+		Override *AgentDetailToolPermissionsOverride `json:"override"`
+
+		// Tool The tool name.
+		Tool string `json:"tool"`
+	} `json:"tool_permissions,omitempty"`
+
+	// TruncatedFields Result metadata, never selectable: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]". Absent or empty when nothing was cut.
+	TruncatedFields *[]string `json:"truncated_fields,omitempty"`
+
+	// Type Agent type, as in Agent.type.
+	Type  *AgentDetailType `json:"type,omitempty"`
+	Voice *string          `json:"voice,omitempty"`
+}
+
+// AgentDetailActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type AgentDetailActivationStatus string
+
+// AgentDetailExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+type AgentDetailExecutorKind string
+
+// AgentDetailStoredOverrides defines model for AgentDetail.StoredOverrides.
+type AgentDetailStoredOverrides string
+
+// AgentDetailToolPermissionsEffective The policy that applies to this agent's calls of the tool.
+type AgentDetailToolPermissionsEffective string
+
+// AgentDetailToolPermissionsOverride The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+type AgentDetailToolPermissionsOverride string
+
+// AgentDetailType Agent type, as in Agent.type.
+type AgentDetailType string
+
+// AgentExecutorSettingsResult Executor-settings block of a create_agent or update_agent tool result, present when executor settings were supplied. Never carries an environment value: only names.
+type AgentExecutorSettingsResult struct {
+	CliArgs *struct {
+		// Argv The stored cli_args after tokenisation, in order.
+		Argv []string `json:"argv"`
+
+		// DroppedAtRun Tokens the safety filter will drop at run time, with its reason.
+		DroppedAtRun []struct {
+			Flag   string `json:"flag"`
+			Reason string `json:"reason"`
+		} `json:"dropped_at_run"`
+	} `json:"cli_args,omitempty"`
+
+	// Env Environment names by outcome.
+	Env *struct {
+		// AbsentRemoved Names listed in env_overrides_remove that were not stored (reported, not refused).
+		AbsentRemoved []string `json:"absent_removed"`
+
+		// Added Names that were not stored before and are now set.
+		Added []string `json:"added"`
+
+		// Removed Names removed through env_overrides_remove.
+		Removed []string `json:"removed"`
+
+		// Replaced Names whose stored value was replaced.
+		Replaced []string `json:"replaced"`
+	} `json:"env,omitempty"`
+
+	// ProgramWarning The exact text a run of this agent would be refused with right now (see ExecutorConfig.program_warning). Absent when a run would start.
+	ProgramWarning *string `json:"program_warning,omitempty"`
+
+	// Runnable create_agent only. True when a run would start now; false when the Settings program path for the agent's CLI is missing or fails its checks (program_warning then carries the text).
+	Runnable *bool `json:"runnable,omitempty"`
+}
+
 // AgentFieldDescriptor defines model for AgentFieldDescriptor.
 type AgentFieldDescriptor struct {
 	Editable bool   `json:"editable"`
@@ -14489,6 +15267,30 @@ type AgentMCPBinding struct {
 	Tools *[]string `json:"tools,omitempty"`
 }
 
+// AgentModelChainEntry One entry of an agent's EFFECTIVE model chain as reported by get_agent (AgentDetail.model_chain): the primary first, then each fallback in order. Derived through the real resolver (ResolveModelPairCfg and the agent's fallback selection), never guessed: a value that is not known is null.
+type AgentModelChainEntry struct {
+	// AcceptsImages The resolved model's image-input capability; null when not known.
+	AcceptsImages *bool `json:"accepts_images"`
+
+	// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
+	Model string `json:"model"`
+
+	// ModelOffered True when the provider offers the model; null when not known.
+	ModelOffered *bool `json:"model_offered"`
+
+	// Position "primary", or "fallback_<n>" counting from 1 in chain order.
+	Position string `json:"position"`
+
+	// Provider The resolved provider key; null when it cannot be resolved.
+	Provider *string `json:"provider"`
+
+	// ProviderConfigured True when the provider is configured on this install.
+	ProviderConfigured bool `json:"provider_configured"`
+
+	// Warning Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise.
+	Warning *string `json:"warning,omitempty"`
+}
+
 // AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
 type AgentModelParams struct {
 	// MaxTokens Maximum tokens to generate per turn.
@@ -14498,20 +15300,49 @@ type AgentModelParams struct {
 	Temperature *float64 `json:"temperature,omitempty"`
 }
 
-// AgentRateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
-type AgentRateLimits struct {
-	// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-	MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
+// AgentPreview Result of the get_agent tool with new_agent_type: a preview of what a new agent of that type would get. The agent does not exist, so there is no id and no revision. absent_fields and truncated_fields are result metadata.
+type AgentPreview struct {
+	// AbsentFields Result metadata: requested properties the preview does not carry.
+	AbsentFields *[]string `json:"absent_fields,omitempty"`
 
-	// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-	MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
+	// Connectors Connector (MCP server) bindings a new agent of this type would get.
+	Connectors *[]struct {
+		Id string `json:"id"`
 
-	// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-	MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
+		// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+		Tools *[]string `json:"tools,omitempty"`
+	} `json:"connectors,omitempty"`
 
-	// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-	UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
+	// PreviewOf The agent type being previewed.
+	PreviewOf AgentPreviewPreviewOf `json:"preview_of"`
+
+	// ToolPermissions Per-tool effective policy a new agent of this type would get.
+	ToolPermissions *[]struct {
+		// Description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+		Description *string `json:"description,omitempty"`
+
+		// Effective The policy that applies to this agent's calls of the tool.
+		Effective AgentPreviewToolPermissionsEffective `json:"effective"`
+
+		// Override The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+		Override *AgentPreviewToolPermissionsOverride `json:"override"`
+
+		// Tool The tool name.
+		Tool string `json:"tool"`
+	} `json:"tool_permissions,omitempty"`
+
+	// TruncatedFields Result metadata: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]".
+	TruncatedFields *[]string `json:"truncated_fields,omitempty"`
 }
+
+// AgentPreviewPreviewOf The agent type being previewed.
+type AgentPreviewPreviewOf string
+
+// AgentPreviewToolPermissionsEffective The policy that applies to this agent's calls of the tool.
+type AgentPreviewToolPermissionsEffective string
+
+// AgentPreviewToolPermissionsOverride The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+type AgentPreviewToolPermissionsOverride string
 
 // AgentRole Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 type AgentRole string
@@ -14608,6 +15439,27 @@ type AgentToolEntryEffectivePolicy string
 
 // AgentToolEntryManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolEntryManifestTier string
+
+// AgentToolPermission One tool's permission for an agent, as reported by get_agent (AgentDetail.tool_permissions): the effective policy after the global ceiling and the agent's own override (strictest wins), plus the agent's stored override when it has one.
+type AgentToolPermission struct {
+	// Description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+	Description *string `json:"description,omitempty"`
+
+	// Effective The policy that applies to this agent's calls of the tool.
+	Effective AgentToolPermissionEffective `json:"effective"`
+
+	// Override The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+	Override *AgentToolPermissionOverride `json:"override"`
+
+	// Tool The tool name.
+	Tool string `json:"tool"`
+}
+
+// AgentToolPermissionEffective The policy that applies to this agent's calls of the tool.
+type AgentToolPermissionEffective string
+
+// AgentToolPermissionOverride The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+type AgentToolPermissionOverride string
 
 // AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 type AgentToolsCfg struct {
@@ -14765,28 +15617,16 @@ type AgentUpdateRequest struct {
 	// Description New description. Rejected on locked agents. Empty string removes it. For Subagent / subagent_3p, an empty string after trim is rejected 400 (description is required for workers per the routing contract).
 	Description *string `json:"description,omitempty"`
 
-	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
-	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
-	// When the agent has no executor block, the default is "native".
+	// Executor Executor block of an agent update (WRITE model). Editable for custom subagent_3p agents only ("Only external-CLI workers have a runtime environment."). `kind` (derived from the agent type), `cli` (locked after create; create a new agent to switch CLIs) and `cli_path` (the program is set by a person in Settings -> Third-party agents) are rejected as unknown fields.
 	Executor *struct {
-		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
-		Cli *ExternalCliTool `json:"cli,omitempty"`
-
-		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		// CliArgs Replacement CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse.
 		CliArgs *string `json:"cli_args,omitempty"`
 
-		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-		CliPath *string `json:"cli_path,omitempty"`
-
-		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		// EnvOverrides MERGE: each supplied name is added or its value replaced; names not supplied are kept; {} is a no-op. The merged result obeys the create limits (at most 64 entries, name pattern ^[A-Za-z_][A-Za-z0-9_]*$ and at most 128 characters, value at most 8,192 characters, OMNIPUS_* refused). A value equal to the read mask "••••••" is refused.
 		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 
-		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-		Kind *AgentUpdateRequestExecutorKind `json:"kind,omitempty"`
+		// EnvOverridesRemove Names to remove from the stored environment. A name that is not stored is reported as absent_removed, not refused. A name that is both set in env_overrides and listed here is refused 400.
+		EnvOverridesRemove *[]string `json:"env_overrides_remove,omitempty"`
 	} `json:"executor,omitempty"`
 
 	// FallbackModels Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
@@ -14864,9 +15704,6 @@ type AgentUpdateRequest struct {
 	// Voice Per-agent persona voice identifier. Schema-pinned; not yet active (TTS, tracked #306). Send null to clear. Main only.
 	Voice *string `json:"voice,omitempty"`
 }
-
-// AgentUpdateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-type AgentUpdateRequestExecutorKind string
 
 // AgentUpdateRequestToolPolicyChangesSet defines model for AgentUpdateRequest.ToolPolicyChanges.Set.
 type AgentUpdateRequestToolPolicyChangesSet string
@@ -15376,6 +16213,9 @@ type CatalogResizeLimits struct {
 
 	// MaxBytes Maximum encoded image size in bytes.
 	MaxBytes int `json:"max_bytes"`
+
+	// MaxPatches Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+	MaxPatches *int `json:"max_patches,omitempty"`
 }
 
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
@@ -15387,8 +16227,38 @@ type ChangePasswordRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
+// ChannelAvailability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+type ChannelAvailability struct {
+	// Reason Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+	Reason *string `json:"reason,omitempty"`
+
+	// State running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+	State ChannelAvailabilityState `json:"state"`
+}
+
+// ChannelAvailabilityState running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+type ChannelAvailabilityState string
+
+// ChannelConfigureError 500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056, FR-057, T-6b, T-6c). The code says what the request durably changed.
+type ChannelConfigureError struct {
+	// Code could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+	Code ChannelConfigureErrorCode `json:"code"`
+
+	// Detail Short reason, never a secret.
+	Detail *string `json:"detail,omitempty"`
+
+	// Error The normative text for the code. could_not_save: "could not save config". credential_saved_not_saved: "The credential was saved, but the configuration change was not: nothing else was applied. ..." (T-6b). saved_not_refreshed: "settings saved, but the running configuration could not be refreshed; the connection was not restarted".
+	Error string `json:"error"`
+}
+
+// ChannelConfigureErrorCode could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+type ChannelConfigureErrorCode string
+
 // ChannelConfigureRequest Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
 type ChannelConfigureRequest struct {
+	// AllowFrom Allowed sender ids for this channel instance ("Allow From"), one id per element. An empty list admits every sender. The server saves a list. For compatibility with older clients the server also accepts one string when inbound schema validation is off; it splits that string on commas (",", full-width "，") and, except on WhatsApp, on whitespace, trims each id and drops empty pieces. WhatsApp ids are account ids (digits@s.whatsapp.net or a group JID), not phone numbers, and split on commas only. A null value is refused with 400 and nothing is saved.
+	AllowFrom *[]string `json:"allow_from,omitempty"`
+
 	// AppId Application ID (used by Slack, Discord).
 	AppId *string `json:"app_id,omitempty"`
 
@@ -15438,6 +16308,22 @@ type ChannelConfigureRequest struct {
 
 // ChannelConfigureRequestIdentityKind Routing kind for this channel instance.
 type ChannelConfigureRequestIdentityKind string
+
+// ChannelConfigureResponse 200 body of PUT /api/v1/channels/{id}/configure: the updated channel configuration with credential fields redacted (structure varies by channel type), plus how the save was applied to the running connection (channels spec T-6, FR-050, FR-052).
+type ChannelConfigureResponse struct {
+	// ApplyNote Present whenever a reload was attempted (every outcome except no_reload_needed): "A connection restart was attempted; other connections and scheduled services may have paused briefly while it ran."
+	ApplyNote *string `json:"apply_note,omitempty"`
+
+	// ApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+	ApplyOutcome ChannelConfigureResponseApplyOutcome `json:"apply_outcome"`
+
+	// ApplyReason Present for applied_not_running (the availability reason) and failed (a fixed, secret-free phrase, never the raw error text). For failed, use "the configuration reload failed; details are in the server log", or, when the applied/current predicate reaches the pending-disposal leg, "the previous connection did not finish shutting down; the next save retries it". A config-changing save uses the reload phrase because the applied-hash check precedes the disposal check. An identical save with matching applied settings while a disposal remains pending uses the disposal phrase. Error details stay in the server log. Never a secret.
+	ApplyReason          *string                `json:"apply_reason,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// ChannelConfigureResponseApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+type ChannelConfigureResponseApplyOutcome string
 
 // ChannelCreateRequest Request body for POST /channels — creates a new channel instance. The instance key is derived as "<type>.<slug>" (ADR-029 FR-017).
 type ChannelCreateRequest struct {
@@ -15519,12 +16405,27 @@ type ChannelEntry struct {
 	// NativeAvailable WhatsApp only: whether the native (whatsmeow) transport is compiled into this binary. False on a lite build or an architecture where it is excluded. Omitted for channels to which it does not apply. When false, clients MUST NOT offer native mode (the QR pairing flow cannot work).
 	NativeAvailable *bool `json:"native_available,omitempty"`
 
+	// OutboundPolicy The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+	OutboundPolicy *ChannelEntryOutboundPolicy `json:"outbound_policy,omitempty"`
+
+	// RejectedSenders Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+	RejectedSenders *struct {
+		// Count How many messages were ignored since the adapter started.
+		Count int `json:"count"`
+
+		// Recent Canonical sender ids of the latest ignored senders, most recent first.
+		Recent []string `json:"recent"`
+	} `json:"rejected_senders,omitempty"`
+
 	// Transport Transport mechanism used by this channel.
 	Transport ChannelEntryTransport `json:"transport"`
 }
 
 // ChannelEntryIdentityKind Routing kind for this channel instance.
 type ChannelEntryIdentityKind string
+
+// ChannelEntryOutboundPolicy The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+type ChannelEntryOutboundPolicy string
 
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
@@ -15543,6 +16444,130 @@ type ChannelIdentity struct {
 
 // ChannelIdentityKind Routing kind for this channel instance.
 type ChannelIdentityKind string
+
+// ChannelOutbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+type ChannelOutbound struct {
+	// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+	Policy ChannelOutboundPolicy `json:"policy"`
+
+	// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+	Targets []string `json:"targets"`
+}
+
+// ChannelOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundPolicy string
+
+// ChannelOutboundRead Response of GET /api/v1/channels/{id}/outbound (channels spec FR-021), read from one live configuration snapshot.
+type ChannelOutboundRead struct {
+	// Availability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+	Availability struct {
+		// Reason Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+		Reason *string `json:"reason,omitempty"`
+
+		// State running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+		State ChannelOutboundReadAvailabilityState `json:"state"`
+	} `json:"availability"`
+
+	// Outbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+	Outbound struct {
+		// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+		Policy ChannelOutboundReadOutboundPolicy `json:"policy"`
+
+		// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+		Targets []string `json:"targets"`
+	} `json:"outbound"`
+
+	// Revision The channel revision token (FR-088) computed over the live configuration — the same token list_channels returns and the writer compares against expected_revision. "absent" when the connection is not configured.
+	Revision string `json:"revision"`
+
+	// StartSupported True only for platforms that can start messages in this release (Discord and Telegram). Other platforms show "not supported yet".
+	StartSupported bool `json:"start_supported"`
+}
+
+// ChannelOutboundReadAvailabilityState running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+type ChannelOutboundReadAvailabilityState string
+
+// ChannelOutboundReadOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundReadOutboundPolicy string
+
+// ChannelOutboundRejection Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502 (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
+// Safe-echo set: every string of this schema (error, target_errors[].target, target_errors[].reason) is restricted by its pattern to printable ASCII (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes (double quote, backslash, <, >, &). The server drops any other character before serializing; it never escapes or substitutes. Each string character therefore serializes to exactly one byte, which keeps the worst-case body at about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable characters for its binary sniff.
+type ChannelOutboundRejection struct {
+	// Code Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+	Code ChannelOutboundRejectionCode `json:"code"`
+
+	// Error Human-readable reason, in the safe-echo set. For 502 lookup_unavailable it is "Discord could not be reached to check <ids>; nothing was saved; try again", listing unavailable ids in request order until the next id would exceed 500 characters, then "+<N> more".
+	Error string `json:"error"`
+
+	// OmittedCount Present only when more than 10 entries were invalid: how many invalid entries are not listed in target_errors.
+	OmittedCount *int `json:"omitted_count,omitempty"`
+
+	// TargetErrors Per-target errors: the first 10 invalid entries in request order.
+	TargetErrors *[]struct {
+		// Code Why this entry was refused.
+		Code ChannelOutboundRejectionTargetErrorsCode `json:"code"`
+
+		// Index 0-based position of the entry in the request's targets array (the client shows it on textarea line index + 1). This is the identifier; target is only a hint.
+		Index int `json:"index"`
+
+		// Reason Fixed catalog text for the code, in the safe-echo set (the longest, unsupported_channel_kind's, is 115 characters).
+		Reason *string `json:"reason,omitempty"`
+
+		// Target A sanitized hint of the entry: its first 20 safe-echo characters after dropping every other character, plus "..." when more than 20 survived.
+		Target string `json:"target"`
+	} `json:"target_errors,omitempty"`
+}
+
+// ChannelOutboundRejectionCode Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+type ChannelOutboundRejectionCode string
+
+// ChannelOutboundRejectionTargetErrorsCode Why this entry was refused.
+type ChannelOutboundRejectionTargetErrorsCode string
+
+// ChannelOutboundUpdateRequest Request body of PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-022). The whole target list replaces the stored one. Targets are raw input: the server trims, canonicalizes, removes duplicates and then enforces the limit of 20 (too_many_targets).
+type ChannelOutboundUpdateRequest struct {
+	// ExpectedRevision The revision returned by GET /api/v1/channels/{id}/outbound (or list_channels). A different current revision is refused with 409 stale_revision.
+	ExpectedRevision string `json:"expected_revision"`
+
+	// Policy reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+	Policy ChannelOutboundUpdateRequestPolicy `json:"policy"`
+
+	// Targets Raw target entries, one per textarea line: a bare id or "platform:id". Rejections refer to an entry by its 0-based index in this array.
+	Targets []string `json:"targets"`
+}
+
+// ChannelOutboundUpdateRequestPolicy reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+type ChannelOutboundUpdateRequestPolicy string
+
+// ChannelOutboundWriteResponse Response of a successful PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-027, T-6b).
+type ChannelOutboundWriteResponse struct {
+	// Outbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+	Outbound struct {
+		// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+		Policy ChannelOutboundWriteResponseOutboundPolicy `json:"policy"`
+
+		// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+		Targets []string `json:"targets"`
+	} `json:"outbound"`
+
+	// Revision The new channel revision token (FR-088) over the live configuration.
+	Revision string `json:"revision"`
+
+	// Warning Present only when the file was written but the rest of the running configuration could not be refreshed. The saved list is in force anyway. Text: "Saved and in force for starting messages. Other settings could not be refreshed: <short reason>. Check the server log."
+	Warning *string `json:"warning,omitempty"`
+}
+
+// ChannelOutboundWriteResponseOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundWriteResponseOutboundPolicy string
+
+// ChannelRejectedSenders Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+type ChannelRejectedSenders struct {
+	// Count How many messages were ignored since the adapter started.
+	Count int `json:"count"`
+
+	// Recent Canonical sender ids of the latest ignored senders, most recent first.
+	Recent []string `json:"recent"`
+}
 
 // ChannelRouting Routing configuration for a single communication channel instance, as read back by GET and returned by PUT /channels/{id}/routing. Every channel is bound to a workspace and names that binding's main agent (omnipus-system-agent FR-127, K14); there is no global default agent and no unbound routing mode. An instance that has no binding yet is reported truthfully (FR-128): `bound` is false and both ids are empty strings — never an invented or legacy destination.
 type ChannelRouting struct {
@@ -15594,7 +16619,10 @@ type CliDetect struct {
 		// Installed Whether the binary was located on $PATH or in a well-known install directory.
 		Installed bool `json:"installed"`
 
-		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 		Path *string `json:"path,omitempty"`
 
 		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -15606,7 +16634,10 @@ type CliDetect struct {
 		// Installed Whether the binary was located on $PATH or in a well-known install directory.
 		Installed bool `json:"installed"`
 
-		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 		Path *string `json:"path,omitempty"`
 
 		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -15618,7 +16649,10 @@ type CliDetect struct {
 		// Installed Whether the binary was located on $PATH or in a well-known install directory.
 		Installed bool `json:"installed"`
 
-		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 		Path *string `json:"path,omitempty"`
 
 		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -15640,7 +16674,10 @@ type CliDetectEntry struct {
 	// Installed Whether the binary was located on $PATH or in a well-known install directory.
 	Installed bool `json:"installed"`
 
-	// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+	// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+	LinkPath *string `json:"link_path,omitempty"`
+
+	// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 	Path *string `json:"path,omitempty"`
 
 	// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -15649,6 +16686,42 @@ type CliDetectEntry struct {
 
 // CliDetectEntrySource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
 type CliDetectEntrySource string
+
+// CliPreset One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+type CliPreset struct {
+	// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+	Path string `json:"path"`
+
+	// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+	PresetArgs string `json:"preset_args"`
+}
+
+// CliPresetView One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+type CliPresetView struct {
+	// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+	Detected struct {
+		// Installed Whether the binary was located on $PATH or in a well-known install directory.
+		Installed bool `json:"installed"`
+
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+		Path *string `json:"path,omitempty"`
+
+		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+		Source *CliPresetViewDetectedSource `json:"source,omitempty"`
+	} `json:"detected"`
+
+	// Path The saved program path exactly as entered; "" when nothing is saved.
+	Path string `json:"path"`
+
+	// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+	PresetArgs string `json:"preset_args"`
+}
+
+// CliPresetViewDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type CliPresetViewDetectedSource string
 
 // CliValidateRequest Request body for POST /api/v1/system/cli-validate. Stateless, create-time validation of an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same handshake used by the post-create /agents/{id}/runner/test endpoint.
 type CliValidateRequest struct {
@@ -17118,10 +18191,10 @@ type EnumValueDefGroup string
 
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
-	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
+	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
 	Code *string `json:"code,omitempty"`
 
-	// Details Optional structured details about the error.
+	// Details Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file).
 	Details *map[string]interface{} `json:"details,omitempty"`
 
 	// Error Human-readable error message.
@@ -17227,7 +18300,7 @@ type ExecutorCommandPreviewResponse struct {
 // ExecutorCommandPreviewResponsePromptDelivery How the actual task prompt (soul + instructions, composed at real dispatch time) reaches this CLI — never a --prompt flag on any of the three supported CLIs. claude-code and codex read it from stdin; opencode receives it as the last positional argument after a literal "--" end-of-options separator.
 type ExecutorCommandPreviewResponsePromptDelivery string
 
-// ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+// ExecutorConfig Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
 // "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
 // "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 // "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
@@ -17238,21 +18311,51 @@ type ExecutorConfig struct {
 	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
 	Cli *ExternalCliTool `json:"cli,omitempty"`
 
-	// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+	// CliArgs Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
 	CliArgs *string `json:"cli_args,omitempty"`
 
-	// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-	CliPath *string `json:"cli_path,omitempty"`
+	// EffectiveCliPath Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+	EffectiveCliPath *string `json:"effective_cli_path,omitempty"`
 
-	// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+	// EffectivePresetArgs Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+	EffectivePresetArgs *string `json:"effective_preset_args,omitempty"`
+
+	// EnvOverrides Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
 	EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 
 	// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 	Kind *ExecutorConfigKind `json:"kind,omitempty"`
+
+	// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+	ProgramWarning *string `json:"program_warning,omitempty"`
 }
 
 // ExecutorConfigKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type ExecutorConfigKind string
+
+// ExecutorConfigCreate Executor block of a subagent_3p create request (WRITE model). `kind` is derived from the agent type and `cli_path` does not exist: the program for each CLI is set by a person in Settings -> Third-party agents. Both are rejected as unknown fields. Creating an agent for a CLI with no usable Settings path succeeds; the echo carries `program_warning`.
+type ExecutorConfigCreate struct {
+	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+	Cli ExternalCliTool `json:"cli"`
+
+	// CliArgs Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the safety filter would drop are reported in the tool result's cli_args.dropped_at_run and removed at run time.
+	CliArgs *string `json:"cli_args,omitempty"`
+
+	// EnvOverrides Environment variables for the spawned CLI process. Names match ^[A-Za-z_][A-Za-z0-9_]*$ and are at most 128 characters; at most 64 entries; each value at most 8,192 characters. OMNIPUS_* names are reserved and refused, naming the key. A value equal to the read mask "••••••" is refused. Values are never echoed: every read masks them.
+	EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+}
+
+// ExecutorConfigUpdate Executor block of an agent update (WRITE model). Editable for custom subagent_3p agents only ("Only external-CLI workers have a runtime environment."). `kind` (derived from the agent type), `cli` (locked after create; create a new agent to switch CLIs) and `cli_path` (the program is set by a person in Settings -> Third-party agents) are rejected as unknown fields.
+type ExecutorConfigUpdate struct {
+	// CliArgs Replacement CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse.
+	CliArgs *string `json:"cli_args,omitempty"`
+
+	// EnvOverrides MERGE: each supplied name is added or its value replaced; names not supplied are kept; {} is a no-op. The merged result obeys the create limits (at most 64 entries, name pattern ^[A-Za-z_][A-Za-z0-9_]*$ and at most 128 characters, value at most 8,192 characters, OMNIPUS_* refused). A value equal to the read mask "••••••" is refused.
+	EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+
+	// EnvOverridesRemove Names to remove from the stored environment. A name that is not stored is reported as absent_removed, not refused. A name that is both set in env_overrides and listed here is refused 400.
+	EnvOverridesRemove *[]string `json:"env_overrides_remove,omitempty"`
+}
 
 // ExecutorDefaults Static reference data describing the CLI arguments Omnipus's external-CLI driver automatically applies when spawning a subagent_3p worker on this CLI (kind="external-cli"), as returned by GET /api/v1/agents/executor-defaults. This is READ-ONLY, computed reference information — it does not reflect any particular agent's configuration and there is nothing to write back. It exists so the Agent Profile UI can show operators the REAL, auto-applied flags (not merely HTML placeholder ghost-text) before they add their own executor.cli_args. The values are sourced directly from each driver's buildArgs() (pkg/agent/runner/driver_claude.go, driver_codex.go, driver_opencode.go) and must be kept byte-accurate to that code — this is reference documentation for a running system, not a design aspiration.
 type ExecutorDefaults struct {
@@ -18846,6 +19949,9 @@ type LibraryContentResponse struct {
 
 // LibraryEntry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
 type LibraryEntry struct {
+	// ChatCopy True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+	ChatCopy *bool `json:"chat_copy,omitempty"`
+
 	// IsDir True when this entry is a directory.
 	IsDir bool `json:"is_dir"`
 
@@ -19206,6 +20312,9 @@ type MailAttachmentSaveResponse struct {
 
 	// Entry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
 	Entry struct {
+		// ChatCopy True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+		ChatCopy *bool `json:"chat_copy,omitempty"`
+
 		// IsDir True when this entry is a directory.
 		IsDir bool `json:"is_dir"`
 
@@ -20439,6 +21548,9 @@ type MediaLibraryEntry struct {
 	// LastRefcountSeenAt RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
 	LastRefcountSeenAt *time.Time `json:"last_refcount_seen_at,omitempty"`
 
+	// LibraryPath Workspace-relative path of this entry's Library file (for example .library/shot.png), with the same path rules as LibraryEntry.path (#1449 D26, FR-086). The durable association between the chat copy and the Library file: written when the file is published, kept across a rename or a move inside the workspace, cleared when the Library file is deleted or moved to another workspace. Absent when the entry has no associated Library file.
+	LibraryPath *string `json:"library_path,omitempty"`
+
 	// Mime MIME type sniffed from the stored bytes.
 	Mime *string `json:"mime,omitempty"`
 
@@ -20529,8 +21641,11 @@ type Message struct {
 	// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 
-	// Content Raw markdown/text content of the message.
+	// Content Raw markdown/text content of the message. On a history page this may be a display preview; see content_original_size_bytes.
 	Content *string `json:"content,omitempty"`
+
+	// ContentOriginalSizeBytes Present only when `content` is a read-time display preview of an ordinary user/assistant chat message (entry type `message` or omitted) whose saved text exceeds 65,536 UTF-8 bytes: `content` then holds its first at most 65,536 bytes cut back to a character boundary, and this field is the exact UTF-8 length of the full saved text (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). The full text is read through getSessionHistoryEntry. Unrelated to `truncated`/`truncation_reason`, which mean the turn itself was cut short. Never present on a getSessionHistoryEntry response, which carries the full content.
+	ContentOriginalSizeBytes *int `json:"content_original_size_bytes,omitempty"`
 
 	// ContextWindowNotice Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
 	ContextWindowNotice *struct {
@@ -20881,6 +21996,7 @@ type Message struct {
 		ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
 		// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+		// `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
 		Result *map[string]interface{} `json:"result,omitempty"`
 
 		// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
@@ -23502,7 +24618,7 @@ type RevisionEntry struct {
 // RevisionEntryVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 type RevisionEntryVerb string
 
-// Room A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}.
+// Room A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}. invitation_context_status is present on every room the server returns (#1449 FR-041): only an ad-hoc group started with Add participant from a main chat ever has a summary, every other group reports unavailable. invitation_context (with the text) is returned by GET /api/v1/rooms/{id} only.
 type Room struct {
 	// AllocatedCostMicroUsd Allocated cost in micro-dollars (§6.14).
 	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
@@ -23514,9 +24630,15 @@ type Room struct {
 	Generation int64 `json:"generation"`
 
 	// Hidden Team room below two conversation agents: hidden, history kept.
-	Hidden bool     `json:"hidden"`
-	Id     string   `json:"id"`
-	Kind   RoomKind `json:"kind"`
+	Hidden bool   `json:"hidden"`
+	Id     string `json:"id"`
+
+	// InvitationContext The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+	InvitationContext *RoomInvitationContext `json:"invitation_context,omitempty"`
+
+	// InvitationContextStatus State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+	InvitationContextStatus *RoomInvitationStatus `json:"invitation_context_status,omitempty"`
+	Kind                    RoomKind              `json:"kind"`
 
 	// Members Member agent ids. Never null.
 	Members []string `json:"members"`
@@ -23568,6 +24690,30 @@ type RoomHistoryResponse struct {
 	NextBeforeSeq *int64 `json:"next_before_seq,omitempty"`
 }
 
+// RoomInvitationContext The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+type RoomInvitationContext struct {
+	// AuthorAgentId The starting agent, whose model wrote the summary.
+	AuthorAgentId string `json:"author_agent_id"`
+
+	// CostMicroUsd Cost of the summary call in micro-dollars, counted once into the group's cost. Absent when no call ran.
+	CostMicroUsd *int64 `json:"cost_micro_usd,omitempty"`
+
+	// CostUnpriced True when the summary call ran but reported no price.
+	CostUnpriced *bool `json:"cost_unpriced,omitempty"`
+
+	// GeneratedAt When the summary became ready.
+	GeneratedAt *time.Time `json:"generated_at,omitempty"`
+
+	// Status State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+	Status RoomInvitationStatus `json:"status"`
+
+	// Text The summary text. Present only when status is ready.
+	Text *string `json:"text,omitempty"`
+}
+
+// RoomInvitationStatus State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+type RoomInvitationStatus string
+
 // RoomMembersUpdateRequest Body of PATCH /api/v1/rooms/{id}/members (spec omnipus-system-agent K24; FR-204, FR-207). The team room accepts only mute and unmute; removing a member below two agents follows the two-agent rule (FR-204).
 type RoomMembersUpdateRequest struct {
 	Action   RoomMembersUpdateRequestAction `json:"action"`
@@ -23581,9 +24727,14 @@ type RoomMembersUpdateRequestAction string
 type RoomMessageRequest struct {
 	ClientMessageId string `json:"client_message_id"`
 
+	// Media Files attached to the message (#1449 D3, FR-018): each a media://workspace/<this room's workspace id>/<id> reference returned by POST /upload with workspace_id. Every reference is resolved before anything is recorded; a reference that is not a file of this room's workspace, is missing or is stranded refuses the whole message with 422 and nothing is posted. More than 16 is a 400. The same reference listed twice is kept as listed. Attachments never count toward the text size limit.
+	Media *[]string `json:"media,omitempty"`
+
 	// Mentions Agent ids picked in the @-picker, or the reserved value `all`.
 	Mentions []string `json:"mentions"`
-	Text     string   `json:"text"`
+
+	// Text The message text: at most 65,536 UTF-8 bytes (counted in bytes, not characters); an operator can lower this limit with session_messaging.steer_body, never raise it (#1449 D24, D27). The server enforces the limit in force in UTF-8 bytes before any schema check, with inbound validation on and off, and answers 422 naming the size and the limit; maxLength states the same 65,536 maximum (a byte count is never less than the character count, so the server check always answers first). Text may be empty only when media is not empty: a message with neither non-blank text nor media is refused with 422.
+	Text string `json:"text"`
 }
 
 // RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
@@ -24412,7 +25563,7 @@ type SessionDetail struct {
 	// NextBefore Present iff available and has_earlier; equals the first selected history_position.
 	NextBefore *string `json:"next_before,omitempty"`
 
-	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
 	PageInfo *SessionHistoryPageInfo `json:"page_info,omitempty"`
 
 	// Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
@@ -24609,7 +25760,7 @@ type SessionHistoryResponse struct {
 	// NextBefore Present iff has_earlier, equal to the first selected history_position.
 	NextBefore *string `json:"next_before,omitempty"`
 
-	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
 	PageInfo  SessionHistoryPageInfo `json:"page_info"`
 	SessionId string                 `json:"session_id"`
 
@@ -25378,6 +26529,9 @@ type Skill struct {
 	Description *string `json:"description,omitempty"`
 	ErrorStage  *string `json:"error_stage,omitempty"`
 
+	// HasLocalChanges true when any of: (a) the newest version's kind is not install or install_replace (a restore of an install version counts as a change); (b) the live folder's current content revision differs from the newest version's revision (an outside change not yet recorded) — evaluated at read time, never by writing history; (c) history is missing or unreadable. Always false for built-ins.
+	HasLocalChanges bool `json:"has_local_changes"`
+
 	// Id Unique skill identifier (typically the skill directory name or npm package name).
 	Id string `json:"id"`
 
@@ -25419,8 +26573,82 @@ type SkillSource string
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string
 
+// SkillCopyRequest Request body for POST /api/v1/skills/{name}/copy: the name of the new user-owned copy. The copy starts ungranted.
+type SkillCopyRequest struct {
+	// NewId Slug of the new skill (letters, digits and single hyphens).
+	NewId string `json:"new_id"`
+}
+
+// SkillDetail Tool-only: the complete result envelope of the get_skill agent tool (skills spec §5.2). Not served by any REST route; it exists so the selectable `fields` names are generated and compared, not typed twice.
+type SkillDetail struct {
+	AbsentFields  *[]string `json:"absent_fields,omitempty"`
+	AllowedTools  *[]string `json:"allowed_tools,omitempty"`
+	Compatibility *string   `json:"compatibility,omitempty"`
+	Description   *string   `json:"description,omitempty"`
+	Files         *struct {
+		Items []struct {
+			Exec bool   `json:"exec"`
+			Path string `json:"path"`
+			Size int64  `json:"size"`
+		} `json:"items"`
+		Total int `json:"total"`
+	} `json:"files,omitempty"`
+	Folder          *string `json:"folder,omitempty"`
+	HasLocalChanges *bool   `json:"has_local_changes,omitempty"`
+
+	// Id The skill slug as it is on disk.
+	Id           string  `json:"id"`
+	Instructions *string `json:"instructions,omitempty"`
+	LastChange   *struct {
+		Actor       *string   `json:"actor,omitempty"`
+		At          *string   `json:"at,omitempty"`
+		Paths       *[]string `json:"paths,omitempty"`
+		ShippedWith *string   `json:"shipped_with,omitempty"`
+		Tool        *string   `json:"tool,omitempty"`
+		Unknown     *bool     `json:"unknown,omitempty"`
+	} `json:"last_change,omitempty"`
+	Metadata *map[string]string `json:"metadata,omitempty"`
+	Name     *string            `json:"name,omitempty"`
+	Needs    *[]struct {
+		Path    *string                `json:"path,omitempty"`
+		Program string                 `json:"program"`
+		Status  SkillDetailNeedsStatus `json:"status"`
+	} `json:"needs,omitempty"`
+
+	// Revision Content revision; null only for a deleted skill.
+	Revision        *string           `json:"revision"`
+	Shelf           *SkillDetailShelf `json:"shelf,omitempty"`
+	State           *SkillDetailState `json:"state,omitempty"`
+	TruncatedFields *[]string         `json:"truncated_fields,omitempty"`
+	Versions        *struct {
+		Items []struct {
+			Actor      string   `json:"actor"`
+			At         string   `json:"at"`
+			Id         string   `json:"id"`
+			Kind       string   `json:"kind"`
+			Paths      []string `json:"paths"`
+			PathsTotal int      `json:"paths_total"`
+			Tool       *string  `json:"tool,omitempty"`
+		} `json:"items"`
+		NextBefore *string `json:"next_before"`
+		Total      int     `json:"total"`
+	} `json:"versions,omitempty"`
+}
+
+// SkillDetailNeedsStatus defines model for SkillDetail.Needs.Status.
+type SkillDetailNeedsStatus string
+
+// SkillDetailShelf defines model for SkillDetail.Shelf.
+type SkillDetailShelf string
+
+// SkillDetailState defines model for SkillDetail.State.
+type SkillDetailState string
+
 // SkillInstallRequest Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
 type SkillInstallRequest struct {
+	// ReplaceLocalChanges Required true to replace an installed skill whose has_local_changes is true. Absent means false.
+	ReplaceLocalChanges *bool `json:"replace_local_changes,omitempty"`
+
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision *string `json:"revision,omitempty"`
 
@@ -26253,7 +27481,7 @@ type TaskOccurrenceSet struct {
 		// SessionId The matched run's chat session ID.
 		SessionId string `json:"session_id"`
 
-		// Status The matched run's status.
+		// Status The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
 		Status TaskOccurrenceSetOccurrenceRunsStatus `json:"status"`
 	} `json:"occurrence_runs,omitempty"`
 
@@ -26267,7 +27495,7 @@ type TaskOccurrenceSet struct {
 	Truncated bool `json:"truncated"`
 }
 
-// TaskOccurrenceSetOccurrenceRunsStatus The matched run's status.
+// TaskOccurrenceSetOccurrenceRunsStatus The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
 type TaskOccurrenceSetOccurrenceRunsStatus string
 
 // TaskRun One execution record for a task (ADR-050 / docs/internal/specs/task-run-history-spec.md §2.1) — a purely additive record layer. Runs are append-only and event-sourced: an "open" record is written when a dispatch is claimed (`status: in_progress`, `ended_at: null`) and a "close" record carrying the SAME `run_id` is appended when it finishes (`status: done|failed`, `result`, `ended_at`). Readers fold by `run_id`, last record wins. `Task.status`/`result`/`session_id` keep their existing behaviour completely unchanged (RD2) — TaskRun is read by the calendar occurrence overlay (`occurrence_runs` on TaskOccurrenceSet, `run_counts` on DayBucket) and the task-detail run-history list. Returned by GET /tasks/{id}/runs.
@@ -26296,7 +27524,7 @@ type TaskRun struct {
 	// StartedAt RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
 	StartedAt time.Time `json:"started_at"`
 
-	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
 	Status TaskRunStatus `json:"status"`
 
 	// TaskId The task this run belongs to.
@@ -26306,7 +27534,7 @@ type TaskRun struct {
 // TaskRunKind How the run started — an automatic trigger fire, or a user Run-now.
 type TaskRunKind string
 
-// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
 type TaskRunStatus string
 
 // TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
@@ -26628,6 +27856,125 @@ type TaskUpdateRequest_Trigger_Config struct {
 // TaskUpdateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskUpdateRequestTriggerType string
 
+// ThirdPartyAgentSettings Request body of PUT /api/v1/settings/third-party-agents. Replaces the whole Settings -> Third-party agents section in one call: a CLI key absent from `clis` is saved as {path: "", preset_args: ""}. Every row is validated before anything is written (order claude-code, codex, opencode; path before preset_args); the first failing row and field is returned and nothing is written, valid rows included. No revision and no 409: the last save wins. Stored in config.json under sandbox.third_party_agents.clis.<cli>.
+type ThirdPartyAgentSettings struct {
+	// Clis One row per external CLI, keyed by the agent `cli` enum values (ExternalCliTool). Only these three keys are accepted.
+	Clis struct {
+		// ClaudeCode One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+		ClaudeCode *struct {
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			Path string `json:"path"`
+
+			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+			PresetArgs string `json:"preset_args"`
+		} `json:"claude-code,omitempty"`
+
+		// Codex One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+		Codex *struct {
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			Path string `json:"path"`
+
+			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+			PresetArgs string `json:"preset_args"`
+		} `json:"codex,omitempty"`
+
+		// Opencode One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+		Opencode *struct {
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			Path string `json:"path"`
+
+			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+			PresetArgs string `json:"preset_args"`
+		} `json:"opencode,omitempty"`
+	} `json:"clis"`
+}
+
+// ThirdPartyAgentSettingsView Response of GET and PUT /api/v1/settings/third-party-agents: the saved Settings -> Third-party agents section. All three CLI keys are always present; a CLI with nothing saved has path "" and preset_args "". Each row's `detected` is host detection read live on every request and never stored; the server maps detection key "claude" to "claude-code", so the screen never maps keys itself.
+type ThirdPartyAgentSettingsView struct {
+	Clis struct {
+		// ClaudeCode One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+		ClaudeCode struct {
+			// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+			Detected struct {
+				// Installed Whether the binary was located on $PATH or in a well-known install directory.
+				Installed bool `json:"installed"`
+
+				// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+				LinkPath *string `json:"link_path,omitempty"`
+
+				// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+				Path *string `json:"path,omitempty"`
+
+				// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+				Source *ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource `json:"source,omitempty"`
+			} `json:"detected"`
+
+			// Path The saved program path exactly as entered; "" when nothing is saved.
+			Path string `json:"path"`
+
+			// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+			PresetArgs string `json:"preset_args"`
+		} `json:"claude-code"`
+
+		// Codex One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+		Codex struct {
+			// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+			Detected struct {
+				// Installed Whether the binary was located on $PATH or in a well-known install directory.
+				Installed bool `json:"installed"`
+
+				// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+				LinkPath *string `json:"link_path,omitempty"`
+
+				// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+				Path *string `json:"path,omitempty"`
+
+				// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+				Source *ThirdPartyAgentSettingsViewClisCodexDetectedSource `json:"source,omitempty"`
+			} `json:"detected"`
+
+			// Path The saved program path exactly as entered; "" when nothing is saved.
+			Path string `json:"path"`
+
+			// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+			PresetArgs string `json:"preset_args"`
+		} `json:"codex"`
+
+		// Opencode One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+		Opencode struct {
+			// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+			Detected struct {
+				// Installed Whether the binary was located on $PATH or in a well-known install directory.
+				Installed bool `json:"installed"`
+
+				// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+				LinkPath *string `json:"link_path,omitempty"`
+
+				// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+				Path *string `json:"path,omitempty"`
+
+				// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+				Source *ThirdPartyAgentSettingsViewClisOpencodeDetectedSource `json:"source,omitempty"`
+			} `json:"detected"`
+
+			// Path The saved program path exactly as entered; "" when nothing is saved.
+			Path string `json:"path"`
+
+			// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+			PresetArgs string `json:"preset_args"`
+		} `json:"opencode"`
+	} `json:"clis"`
+}
+
+// ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource string
+
+// ThirdPartyAgentSettingsViewClisCodexDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type ThirdPartyAgentSettingsViewClisCodexDetectedSource string
+
+// ThirdPartyAgentSettingsViewClisOpencodeDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type ThirdPartyAgentSettingsViewClisOpencodeDetectedSource string
+
 // Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need an independent agent/trigger. The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy boolean `done` so a checklist can express work-in-progress (§3 tasks-system refactor — the `set_todos` agent scratchpad rides this same array).
 type Todo struct {
 	// ActiveForm Optional phrasing for the item while it is in progress.
@@ -26752,7 +28099,7 @@ type TokenUsageSummary struct {
 
 // ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `deny` and `cancel` remain distinct non-approval resolution actions.
 type ToolApprovalActionRequest struct {
-	// Action Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+	// Action Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
 	Action ToolApprovalActionRequestAction `json:"action"`
 
 	// Scope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
@@ -26761,7 +28108,7 @@ type ToolApprovalActionRequest struct {
 	Scope *ToolApprovalActionRequestScope `json:"scope,omitempty"`
 }
 
-// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
 type ToolApprovalActionRequestAction string
 
 // ToolApprovalActionRequestScope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
@@ -26818,6 +28165,7 @@ type ToolCall struct {
 	ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
 	// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+	// `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
 	Result *map[string]interface{} `json:"result,omitempty"`
 
 	// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
@@ -28737,12 +30085,18 @@ type UploadFilesMultipartBody struct {
 
 	// SessionId Session ID (alternative to query parameter).
 	SessionId *string `json:"session_id,omitempty"`
+
+	// WorkspaceId Workspace ID (alternative to the query parameter); must precede the file parts.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // UploadFilesParams defines parameters for UploadFiles.
 type UploadFilesParams struct {
-	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
 	SessionId *string `form:"session_id,omitempty" json:"session_id,omitempty"`
+
+	// WorkspaceId Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Takes precedence over session_id.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // TranscribeAudioMultipartBody defines parameters for TranscribeAudio.
@@ -28887,6 +30241,9 @@ type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
 
 // EnableChannelJSONRequestBody defines body for EnableChannel for application/json ContentType.
 type EnableChannelJSONRequestBody = ChannelEnableRequest
+
+// SetChannelOutboundJSONRequestBody defines body for SetChannelOutbound for application/json ContentType.
+type SetChannelOutboundJSONRequestBody = ChannelOutboundUpdateRequest
 
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
 type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest
@@ -29044,8 +30401,14 @@ type UpdateContextSettingsJSONRequestBody = ContextSettingsUpdate
 // UpdateMemorySettingsJSONRequestBody defines body for UpdateMemorySettings for application/json ContentType.
 type UpdateMemorySettingsJSONRequestBody = MemorySettings
 
+// UpdateThirdPartyAgentSettingsJSONRequestBody defines body for UpdateThirdPartyAgentSettings for application/json ContentType.
+type UpdateThirdPartyAgentSettingsJSONRequestBody = ThirdPartyAgentSettings
+
 // InstallSkillJSONRequestBody defines body for InstallSkill for application/json ContentType.
 type InstallSkillJSONRequestBody = SkillInstallRequest
+
+// CopySkillJSONRequestBody defines body for CopySkill for application/json ContentType.
+type CopySkillJSONRequestBody = SkillCopyRequest
 
 // PatchAppStateJSONRequestBody defines body for PatchAppState for application/json ContentType.
 type PatchAppStateJSONRequestBody = AppStatePatchRequest
@@ -29145,6 +30508,14 @@ func (a *ChannelConfigureRequest) UnmarshalJSON(b []byte) error {
 	err := json.Unmarshal(b, &object)
 	if err != nil {
 		return err
+	}
+
+	if raw, found := object["allow_from"]; found {
+		err = json.Unmarshal(raw, &a.AllowFrom)
+		if err != nil {
+			return fmt.Errorf("error reading 'allow_from': %w", err)
+		}
+		delete(object, "allow_from")
 	}
 
 	if raw, found := object["app_id"]; found {
@@ -29270,6 +30641,13 @@ func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
 	var err error
 	object := make(map[string]json.RawMessage)
 
+	if a.AllowFrom != nil {
+		object["allow_from"], err = json.Marshal(a.AllowFrom)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'allow_from': %w", err)
+		}
+	}
+
 	if a.AppId != nil {
 		object["app_id"], err = json.Marshal(a.AppId)
 		if err != nil {
@@ -29358,6 +30736,102 @@ func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
 		object["webhook_secret"], err = json.Marshal(a.WebhookSecret)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'webhook_secret': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ChannelConfigureResponse. Returns the specified
+// element and whether it was found
+func (a ChannelConfigureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ChannelConfigureResponse
+func (a *ChannelConfigureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ChannelConfigureResponse to handle AdditionalProperties
+func (a *ChannelConfigureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["apply_note"]; found {
+		err = json.Unmarshal(raw, &a.ApplyNote)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_note': %w", err)
+		}
+		delete(object, "apply_note")
+	}
+
+	if raw, found := object["apply_outcome"]; found {
+		err = json.Unmarshal(raw, &a.ApplyOutcome)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_outcome': %w", err)
+		}
+		delete(object, "apply_outcome")
+	}
+
+	if raw, found := object["apply_reason"]; found {
+		err = json.Unmarshal(raw, &a.ApplyReason)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_reason': %w", err)
+		}
+		delete(object, "apply_reason")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ChannelConfigureResponse to handle AdditionalProperties
+func (a ChannelConfigureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.ApplyNote != nil {
+		object["apply_note"], err = json.Marshal(a.ApplyNote)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'apply_note': %w", err)
+		}
+	}
+
+	object["apply_outcome"], err = json.Marshal(a.ApplyOutcome)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'apply_outcome': %w", err)
+	}
+
+	if a.ApplyReason != nil {
+		object["apply_reason"], err = json.Marshal(a.ApplyReason)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'apply_reason': %w", err)
 		}
 	}
 
@@ -31343,6 +32817,13 @@ func (t SkillInstallRequest) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if t.ReplaceLocalChanges != nil {
+		object["replace_local_changes"], err = json.Marshal(t.ReplaceLocalChanges)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'replace_local_changes': %w", err)
+		}
+	}
+
 	if t.Revision != nil {
 		object["revision"], err = json.Marshal(t.Revision)
 		if err != nil {
@@ -31383,6 +32864,13 @@ func (t *SkillInstallRequest) UnmarshalJSON(b []byte) error {
 	err = json.Unmarshal(b, &object)
 	if err != nil {
 		return err
+	}
+
+	if raw, found := object["replace_local_changes"]; found {
+		err = json.Unmarshal(raw, &t.ReplaceLocalChanges)
+		if err != nil {
+			return fmt.Errorf("error reading 'replace_local_changes': %w", err)
+		}
 	}
 
 	if raw, found := object["revision"]; found {

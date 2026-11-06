@@ -103,7 +103,7 @@ func wu25Success(t *testing.T, result *tools.ToolResult) map[string]any {
 
 func (h *wu25Harness) read(t *testing.T, id string) map[string]any {
 	t.Helper()
-	return wu25Success(t, h.call(t, "get_agent", map[string]any{"id": id}))
+	return wu25Success(t, h.call(t, "get_agent", map[string]any{"id": id, "fields": wu3AllAgentFields()}))
 }
 
 func (h *wu25Harness) state(t *testing.T, id string) *agentstore.State {

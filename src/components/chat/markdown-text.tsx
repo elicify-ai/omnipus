@@ -14,6 +14,7 @@
 // (historical-markdown.tsx) so the live and reloaded views stay in parity.
 
 import { memo } from 'react'
+import type { SmoothOptions } from '@assistant-ui/react'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -71,8 +72,10 @@ const staticMarkdownComponents = memoizeMarkdownComponents({
 
 // ── MarkdownText component ────────────────────────────────────────────────────
 // Usage: <MarkdownText /> inside MessagePrimitive.Parts (reads text from context).
+// `smooth` tunes the typewriter reveal (default pacing when true); the live
+// reply part passes catch-up pacing while an opened chat is still covered.
 
-function MarkdownTextImpl() {
+function MarkdownTextImpl({ smooth = true }: { smooth?: boolean | SmoothOptions }) {
   return (
     <MarkdownTextPrimitive
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -82,7 +85,7 @@ function MarkdownTextImpl() {
       // Keep valid omnipus://file links (the default transform would blank them);
       // everything else still goes through react-markdown's default transform.
       urlTransform={chatLinkUrlTransform}
-      smooth
+      smooth={smooth}
     />
   )
 }

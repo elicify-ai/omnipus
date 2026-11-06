@@ -9,7 +9,16 @@ properties:
     example: "user not found"
   code:
     type: string
-    description: Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
+    description: >
+      Machine-readable error code for programmatic branching (e.g.
+      "csrf_missing", "rate_limited"). PUT
+      /settings/third-party-agents uses "cli_path_invalid" (field
+      clis.<cli>.path; details.cli, details.check one of not_absolute,
+      not_found, not_regular_file, not_executable, agent_writable_location,
+      writable_by_others, windows_extension, windows_short_name,
+      windows_stream; details.at the path element that failed) and
+      "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli,
+      details.check one of too_long, contains_nul, contains_line_break).
     example: "csrf_missing"
   field:
     type: string
@@ -20,5 +29,9 @@ properties:
     example: "provider"
   details:
     type: object
-    description: Optional structured details about the error.
+    description: >
+      Optional structured details about the error. For cli_path_invalid and
+      cli_preset_invalid: `cli` (claude-code, codex or opencode), `check`
+      (the failed check's name) and, for cli_path_invalid, `at` (the path
+      element that failed: the link or the final file).
     additionalProperties: true

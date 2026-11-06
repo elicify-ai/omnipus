@@ -145,7 +145,7 @@ properties:
       Send null to clear. Main only.
     example: "alloy"
   executor:
-    $ref: './ExecutorConfig.yaml'
+    $ref: './ExecutorConfigUpdate.yaml'
   memory_enabled:
     type: boolean
     description: >

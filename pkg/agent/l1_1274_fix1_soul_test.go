@@ -90,8 +90,7 @@ func TestL11274BlankExternalSoulIsRefusedAsSupplied(t *testing.T) {
 		for _, supplied := range []string{"empty", "whitespace"} {
 			t.Run(cli+"/"+supplied, func(t *testing.T) {
 				f := newL11274Fixture(t, "", false)
-				path := l11274Executable(t, f.home, cli, true)
-				args := l11274CreateArgs("Blank external soul", cli, path)
+				args := l11274CreateArgs("Blank external soul", cli)
 				args["soul"] = ""
 				if supplied == "whitespace" {
 					args["soul"] = " \t\n "

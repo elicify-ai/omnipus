@@ -1,6 +1,7 @@
 import { expect, type BrowserContext, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, dismissStaleDialogOverlay, selectAgent, waitForConnected, watchAndDenyToolApprovals } from './fixtures/selectors'
+import { requireLiveModelKeys } from './fixtures/e2e-model-keys'
 
 const LABEL_A = 'ADR-091 child A'
 const LABEL_B = 'ADR-091 child B'
@@ -8,9 +9,7 @@ const LABEL_C = 'ADR-091 child C'
 const CHILD_ONLY_SENTINEL = 'ADR091_CHILD_VIEW_ONLY'
 
 function requireApiKey(): void {
-  if (!process.env.OPENROUTER_API_KEY_CI) {
-    throw new Error('BLOCKED: OPENROUTER_API_KEY_CI is required for steered-session reachability')
-  }
+  requireLiveModelKeys('steered-session reachability')
 }
 
 

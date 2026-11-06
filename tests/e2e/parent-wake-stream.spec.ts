@@ -18,7 +18,8 @@
 import { expect, type BrowserContext, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { GatewayProcess } from './fixtures/gateway-process';
-import { E2E_MODEL } from './fixtures/e2e-model';
+import { E2E_FALLBACK } from './fixtures/e2e-model';
+import { e2eAgentModelFields } from './fixtures/e2e-agent-model';
 import { assistantMessages, chatInput, userMessages, waitForConnected } from './fixtures/selectors';
 import { openTerminalSession, terminalTranscript } from './fixtures/terminal-outcome-acceptance';
 import { assertSessionHistoryExcludes } from './fixtures/session-history';
@@ -41,7 +42,7 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
   try {
     gw = await GatewayProcess.start({
       apiBase: provider.url,
-      model: E2E_MODEL,
+      model: E2E_FALLBACK.model,
       adminUsername: 'parent-wake-stream',
       env: { OMNIPUS_LOG_LEVEL: 'info', OMNIPUS_LOG_FILE: testInfo.outputPath('gateway.log') },
     });
@@ -50,8 +51,7 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
       name: 'Parent wake',
       tool_policy_changes: { set: { delegate: 'allow', message_parent: 'allow' } },
       soul: 'When asked, delegate the task to yourself with the delegate tool and do not poll for the result.',
-      provider: 'openrouter',
-      model: E2E_MODEL,
+      ...e2eAgentModelFields('mock'),
     } satisfies AgentCreateRequestMain);
     expect(agentResult.ok, agentResult.raw).toBe(true);
     const agent = Agent.parse(agentResult.body);

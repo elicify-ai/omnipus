@@ -7,6 +7,10 @@ package agent
 func (ri *agentLoopRunTurnIteration) noteInTurnSteering(items []steeringQueueItem) {
 	for _, item := range items {
 		if !item.resumeOnly {
+			if !ri.inTurnSteering {
+				// The first in-turn input starts the fold (#1449 D23).
+				ri.inTurnSteeringOrigin.approval = noApprovalOrigin
+			}
 			ri.inTurnSteering = true
 			origin := &ri.inTurnSteeringOrigin
 			if origin.channelPerson == "" && item.origin.channelPerson != "" {

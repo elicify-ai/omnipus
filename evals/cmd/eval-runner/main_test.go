@@ -368,29 +368,68 @@ func TestBootFailureDetailSurvivesAMissingLog(t *testing.T) {
 }
 
 // ── Central e2e model resolution ──────────────────────────────────────────────
+//
+// Rewritten for design.md §4.1 / §7 R1. The source file is primary+fallback,
+// not {"model":...}. centralE2EModelPair is specified in
+// /workspace/ci-minimax/api-contract.md §4. The old openrouter-prefix oracle
+// is the legacy shape, which these tests now reject.
 
-// TestCentralE2EModelReadsTheSingleSourceFile pins the ONE committed source of
-// truth for the real-LLM e2e model id: tests/e2e/e2e-model.json. The returned
-// slug must be provider-prefixed (openrouter/<vendor>/<model>) because the
-// runner's OpenRouter call layer strips exactly that prefix (callJudge), and
-// the workflows' AGENT_MODEL/JUDGE_MODEL convention carries it too.
-func TestCentralE2EModelReadsTheSingleSourceFile(t *testing.T) {
+func writeCentralModel(t *testing.T, body string) {
+	t.Helper()
 	root := t.TempDir()
 	dir := filepath.Join(root, "tests", "e2e")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir tests/e2e: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(`{"model":"vendor/test-model"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(body), 0o600); err != nil {
 		t.Fatalf("write e2e-model.json: %v", err)
 	}
 	t.Chdir(root)
+}
 
-	got, err := centralE2EModel()
+const newShapeFixture = `{
+  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" },
+  "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
+}`
+
+// TestCentralE2EModelReadsTheSingleSourceFile: the new shape parses into the
+// primary slug minimax-coding-plan/MiniMax-M3.1-Flash-Preview and the fallback slug
+// openrouter/deepseek/deepseek-v4.1-flash. design.md §4.2.
+func TestCentralE2EModelReadsTheSingleSourceFile(t *testing.T) {
+	writeCentralModel(t, newShapeFixture)
+
+	got, err := centralE2EModelPair()
 	if err != nil {
-		t.Fatalf("centralE2EModel() error = %v", err)
+		t.Fatalf("centralE2EModelPair() error = %v", err)
 	}
-	if got != "openrouter/vendor/test-model" {
-		t.Fatalf("centralE2EModel() = %q, want %q (the runner needs the openrouter/ prefix; callJudge strips it)", got, "openrouter/vendor/test-model")
+	if got.Primary.Slug() != "minimax-coding-plan/MiniMax-M3.1-Flash-Preview" {
+		t.Errorf("primary slug = %q, want minimax-coding-plan/MiniMax-M3.1-Flash-Preview", got.Primary.Slug())
+	}
+	if got.Fallback.Slug() != "openrouter/deepseek/deepseek-v4.1-flash" {
+		t.Errorf("fallback slug = %q, want openrouter/deepseek/deepseek-v4.1-flash", got.Fallback.Slug())
+	}
+	if got.Primary.KeyRef != "MINIMAX_API_KEY" || got.Fallback.KeyRef != "OPENROUTER_API_KEY" {
+		t.Errorf("key refs = primary %q fallback %q, want MINIMAX_API_KEY and OPENROUTER_API_KEY", got.Primary.KeyRef, got.Fallback.KeyRef)
+	}
+}
+
+// TestCentralE2EModelPairTrimsEveryField: surrounding whitespace is not part
+// of a provider, model or key ref. design.md §4.1 "non-empty trimmed strings".
+func TestCentralE2EModelPairTrimsEveryField(t *testing.T) {
+	writeCentralModel(t, `{
+	  "primary": { "provider": " minimax-coding-plan ", "model": " MiniMax-M3.1-Flash-Preview ", "api_key_ref": " MINIMAX_API_KEY " },
+	  "fallback": { "provider": " openrouter ", "model": " deepseek/deepseek-v4.1-flash ", "api_key_ref": " OPENROUTER_API_KEY " }
+	}`)
+
+	got, err := centralE2EModelPair()
+	if err != nil {
+		t.Fatalf("centralE2EModelPair() error = %v", err)
+	}
+	if got.Primary != (E2EModelSide{Provider: "minimax-coding-plan", Model: "MiniMax-M3.1-Flash-Preview", KeyRef: "MINIMAX_API_KEY"}) {
+		t.Errorf("primary = %+v, want the trimmed MiniMax side", got.Primary)
+	}
+	if got.Fallback != (E2EModelSide{Provider: "openrouter", Model: "deepseek/deepseek-v4.1-flash", KeyRef: "OPENROUTER_API_KEY"}) {
+		t.Errorf("fallback = %+v, want the trimmed DeepSeek side", got.Fallback)
 	}
 }
 
@@ -400,71 +439,102 @@ func TestCentralE2EModelReadsTheSingleSourceFile(t *testing.T) {
 func TestCentralE2EModelFailsClosedOnMissingFile(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	_, err := centralE2EModel()
+	_, err := centralE2EModelPair()
 	if err == nil {
-		t.Fatal("centralE2EModel() with no tests/e2e/e2e-model.json returned nil error; want a loud failure (no hardcoded fallback exists anymore)")
+		t.Fatal("centralE2EModelPair() with no tests/e2e/e2e-model.json returned nil error; want a loud failure")
 	}
-	if !strings.Contains(err.Error(), "AGENT_MODEL") {
-		t.Fatalf("error should name the AGENT_MODEL/JUDGE_MODEL override so the fix is actionable, got: %v", err)
+	if !strings.Contains(err.Error(), "AGENT_MODEL") || !strings.Contains(err.Error(), "JUDGE_MODEL") {
+		t.Fatalf("error should name the AGENT_MODEL and JUDGE_MODEL overrides, got: %v", err)
 	}
 }
 
-// TestCentralE2EModelRejectsAnEmptyModelField: an empty "model" value would
-// resolve to the bare slug "openrouter/" — a config corruption that must not
-// silently pass through.
+// TestCentralE2EModelRejectsAnEmptyModelField: a whitespace-only primary model
+// is empty after trim and must fail naming .primary.model. design.md §4.1.
 func TestCentralE2EModelRejectsAnEmptyModelField(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "tests", "e2e")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir tests/e2e: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(`{"model":""}`), 0o600); err != nil {
-		t.Fatalf("write e2e-model.json: %v", err)
-	}
-	t.Chdir(root)
+	writeCentralModel(t, `{
+	  "primary": { "provider": "minimax-coding-plan", "model": "", "api_key_ref": "MINIMAX_API_KEY" },
+	  "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
+	}`)
 
-	if _, err := centralE2EModel(); err == nil {
-		t.Fatal("centralE2EModel() with an empty model field returned nil error; want a failure")
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() with an empty primary model returned nil error")
+	}
+	if !strings.Contains(err.Error(), ".primary.model") {
+		t.Fatalf("error = %v, want it to name .primary.model", err)
 	}
 }
 
-// TestCentralE2EModelRejectsWhitespaceOnlyModelField: a whitespace-only
-// "model" value passes the bare == "" check and would resolve to the slug
-// "openrouter/   " — the same config corruption as an empty field, one step
-// later in the pipeline (finding E2/L2). The value is trimmed before the
-// emptiness check.
+// TestCentralE2EModelRejectsWhitespaceOnlyModelField: whitespace-only is the
+// same corruption as empty, after trim. design.md §4.1.
 func TestCentralE2EModelRejectsWhitespaceOnlyModelField(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "tests", "e2e")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir tests/e2e: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(`{"model":"   "}`), 0o600); err != nil {
-		t.Fatalf("write e2e-model.json: %v", err)
-	}
-	t.Chdir(root)
+	writeCentralModel(t, `{
+	  "primary": { "provider": "minimax-coding-plan", "model": "   ", "api_key_ref": "MINIMAX_API_KEY" },
+	  "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
+	}`)
 
-	if _, err := centralE2EModel(); err == nil {
-		t.Fatal("centralE2EModel() with a whitespace-only model field returned nil error; want a failure")
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() with a whitespace-only primary model returned nil error")
+	}
+	if !strings.Contains(err.Error(), ".primary.model") {
+		t.Fatalf("error = %v, want it to name .primary.model", err)
 	}
 }
 
 // TestCentralE2EModelRejectsInvalidJSON: a malformed source file is a loud
-// configuration error, never a silent pass-through (finding E1's loader-error
-// tier).
+// configuration error, never a silent pass-through.
 func TestCentralE2EModelRejectsInvalidJSON(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "tests", "e2e")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir tests/e2e: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(`{"model":`), 0o600); err != nil {
-		t.Fatalf("write e2e-model.json: %v", err)
-	}
-	t.Chdir(root)
+	writeCentralModel(t, `{"primary":`)
 
-	if _, err := centralE2EModel(); err == nil {
-		t.Fatal("centralE2EModel() with malformed JSON returned nil error; want a failure")
+	if _, err := centralE2EModelPair(); err == nil {
+		t.Fatal("centralE2EModelPair() with malformed JSON returned nil error; want a failure")
+	}
+}
+
+// TestCentralE2EModelPairRejectsTheOldShape: {"model":"..."} is no longer legal.
+// design.md §4.1 and §7 R1.
+func TestCentralE2EModelPairRejectsTheOldShape(t *testing.T) {
+	writeCentralModel(t, `{"model":"deepseek/deepseek-v4.1-flash"}`)
+
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() accepted the legacy {\"model\":...} shape; want an error")
+	}
+	if !strings.Contains(err.Error(), "old shape") {
+		t.Fatalf("error = %v, want it to contain \"old shape\"", err)
+	}
+}
+
+// TestCentralE2EModelPairRejectsPrimaryEqualFallback: the two pairs must differ.
+// design.md §4.1.
+func TestCentralE2EModelPairRejectsPrimaryEqualFallback(t *testing.T) {
+	writeCentralModel(t, `{
+	  "primary": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" },
+	  "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
+	}`)
+
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() accepted primary == fallback; want an error")
+	}
+	if !strings.Contains(err.Error(), "same provider/model") {
+		t.Fatalf("error = %v, want it to contain \"same provider/model\"", err)
+	}
+}
+
+// TestCentralE2EModelPairRejectsAMissingFallbackObject. design.md §4.1.
+func TestCentralE2EModelPairRejectsAMissingFallbackObject(t *testing.T) {
+	writeCentralModel(t, `{
+	  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" }
+	}`)
+
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() accepted a document with no fallback object")
+	}
+	if !strings.Contains(err.Error(), ".fallback") {
+		t.Fatalf("error = %v, want it to name .fallback", err)
 	}
 }
 

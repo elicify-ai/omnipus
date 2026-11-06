@@ -1,0 +1,174 @@
+name: LLM fallback smoke
+
+# Proves, with real provider keys, that the CI model switch falls back:
+# primary = the MiniMax plan model, fallback = DeepSeek on OpenRouter (both
+# named only in tests/e2e/e2e-model.json, read through scripts/e2e-model.sh).
+# Design: section 5.3 of the CI MiniMax design check.
+#
+# Three variants, one real turn each (scripts/llm-fallback-smoke.mjs):
+#   invalid-key      primary credential = the literal string invalid-smoke-key
+#                    (not a secret; rejected at authentication, so no plan
+#                    quota is used) -> the fallback must answer;
+#   primary-down     primary api_base = a closed local port -> the fallback
+#                    must answer;
+#   positive-control the real MiniMax key, no failure -> the primary must
+#                    answer, with NO fallback (proves the primary path is real).
+#
+# The config is seeded directly (config.json + credentials), and onboarding
+# runs on the FALLBACK pair: onboarding probes the onboarded key, which would
+# block the deliberately invalid primary key. The smoke agent names its own
+# provider/model and fallback_models, so the onboarded pair does not decide
+# which model it uses.
+#
+# Manual dispatch only. It needs the MINIMAX_API_KEY_CI and
+# OPENROUTER_API_KEY_CI secrets; a fork has neither, so the job refuses to
+# run outside this repository.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  llm-fallback-smoke:
+    name: LLM fallback smoke (${{ matrix.variant }})
+    if: github.repository == 'elicify-ai/omnipus'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: invalid-key
+            expect: fallback
+            port: 6090
+          - variant: primary-down
+            expect: fallback
+            port: 6091
+          - variant: positive-control
+            expect: primary
+            port: 6092
+    env:
+      OMNIPUS_HOME: /tmp/omnipus-smoke-${{ matrix.variant }}
+      BASE: http://127.0.0.1:${{ matrix.port }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Build gateway (stub SPA; no browser is used)
+        run: |
+          set -euo pipefail
+          mkdir -p pkg/gateway/spa/assets
+          echo '<!doctype html>' > pkg/gateway/spa/index.html
+          touch pkg/gateway/spa/assets/.keep
+          CGO_ENABLED=0 go build -tags goolm,stdjson -o ./omnipus ./cmd/omnipus/
+
+      - name: Read central e2e model
+        run: |
+          set -euo pipefail
+          bash scripts/e2e-model.sh env >> "$GITHUB_ENV"
+
+      - name: Seed config and credentials (${{ matrix.variant }})
+        env:
+          OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_CI }}
+          MINIMAX_KEY: ${{ secrets.MINIMAX_API_KEY_CI }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY_CI }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_KEY:-}" ]; then
+            echo "::error::OPENROUTER_API_KEY_CI secret is not set (the fallback key)." >&2
+            exit 1
+          fi
+          mkdir -p "$OMNIPUS_HOME"
+          if [ "${{ matrix.variant }}" = "primary-down" ]; then
+            # Port 9 (discard) on loopback: nothing listens, so the primary
+            # call fails with connection refused.
+            bash scripts/e2e-model.sh seed-config ${{ matrix.port }} \
+              | jq '.providers[0].api_base = "http://127.0.0.1:9"' > "$OMNIPUS_HOME/config.json"
+          else
+            bash scripts/e2e-model.sh seed-config ${{ matrix.port }} > "$OMNIPUS_HOME/config.json"
+          fi
+          if [ "${{ matrix.variant }}" = "positive-control" ]; then
+            if [ -z "${MINIMAX_KEY:-}" ]; then
+              echo "::error::MINIMAX_API_KEY_CI secret is not set (the primary key)." >&2
+              exit 1
+            fi
+            primary_key="$MINIMAX_KEY"
+          else
+            primary_key="invalid-smoke-key"
+          fi
+          ./omnipus credentials set "$E2E_PRIMARY_KEYREF" "$primary_key" >/dev/null
+          ./omnipus credentials set "$E2E_FALLBACK_KEYREF" "$OPENROUTER_KEY" >/dev/null
+
+      - name: Start gateway
+        env:
+          OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_CI }}
+        run: |
+          set -euo pipefail
+          ./omnipus start --allow-empty > "/tmp/gw-${{ matrix.variant }}.log" 2>&1 &
+          echo $! > /tmp/gw.pid
+          for i in $(seq 1 60); do
+            curl -sf "$BASE/health" >/dev/null 2>&1 && { echo "ready after ${i}s"; exit 0; }
+            sleep 1
+          done
+          echo "gateway never became ready" >&2
+          tail -60 "/tmp/gw-${{ matrix.variant }}.log" >&2
+          exit 1
+
+      - name: Onboard on the fallback pair
+        env:
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY_CI }}
+        run: |
+          set -euo pipefail
+          code=$(jq -n --arg id "$E2E_FALLBACK_PROVIDER" --arg key "$OPENROUTER_KEY" --arg model "$E2E_FALLBACK_MODEL" \
+              '{provider:{auth_method:"api_key",id:$id,api_key:$key,model:$model},admin:{username:"admin",password:"admin12345"}}' \
+            | curl -s -o /tmp/onboard.json -w '%{http_code}' -X POST "$BASE/api/v1/onboarding/complete" \
+                -H 'Content-Type: application/json' -d @-)
+          if [ "$code" != "200" ]; then
+            echo "::error::onboarding/complete returned HTTP $code" >&2
+            exit 1
+          fi
+          tok=$(jq -r '.token // empty' /tmp/onboard.json)
+          if [ -z "$tok" ]; then
+            echo "::error::onboarding response carried no token" >&2
+            exit 1
+          fi
+          echo "::add-mask::$tok"
+          echo "SMOKE_TOKEN=$tok" >> "$GITHUB_ENV"
+
+      - name: One turn (expect ${{ matrix.expect }})
+        run: |
+          set -euo pipefail
+          node scripts/llm-fallback-smoke.mjs --base "$BASE" --token "$SMOKE_TOKEN" \
+            --expect "${{ matrix.expect }}" --run-id "${{ github.run_id }}-${{ matrix.variant }}" \
+            | tee "/tmp/smoke-${{ matrix.variant }}.txt"
+          # The transcript note is written at turn end, after the answer.
+          note="Answered by the Fallback model (${E2E_FALLBACK_MODEL}) because ${E2E_PRIMARY_MODEL} was unavailable."
+          found=0
+          for _ in $(seq 1 20); do
+            if grep -rqsF "$note" "$OMNIPUS_HOME/sessions"; then found=1; break; fi
+            sleep 1
+          done
+          if [ "${{ matrix.expect }}" = "fallback" ] && [ "$found" -ne 1 ]; then
+            echo "::error::no fallback note in the transcript" >&2
+            exit 1
+          fi
+          if [ "${{ matrix.expect }}" = "primary" ] && [ "$found" -ne 0 ]; then
+            echo "::error::the positive control wrote a fallback note" >&2
+            exit 1
+          fi
+          echo "LLM fallback smoke (${{ matrix.variant }}): PASS" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: llm-fallback-smoke-${{ matrix.variant }}
+          # The smoke output only (frame types, model ids, verdicts). The
+          # gateway log is NOT uploaded: artifacts are not secret-masked.
+          path: /tmp/smoke-${{ matrix.variant }}.txt
+          if-no-files-found: warn

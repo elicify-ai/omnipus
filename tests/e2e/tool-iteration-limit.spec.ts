@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { E2E_MODEL } from './fixtures/e2e-model';
+import { e2eAgentModelFields } from './fixtures/e2e-agent-model';
 
 /**
  * #904 — tool iteration limit, spec test-plan row 17
@@ -95,7 +95,7 @@ test.describe('#904 tool iteration limit', () => {
         name: agentName,
         soul: 'Tool iteration limit e2e soul',
         type: 'Main',
-        model: E2E_MODEL,
+        ...e2eAgentModelFields('live'),
         max_tool_iterations: 50,
       },
     });

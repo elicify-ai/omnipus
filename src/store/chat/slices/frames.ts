@@ -40,6 +40,7 @@ import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
 import { appendErrorNotice, handleJudgeConclusionErrorFrame } from './error-notice-frames'
+import { recordCombinedPart, singlePart } from '../history-parts'
 
 
 
@@ -536,10 +537,31 @@ function rekeyAssistantPlaceholder(draft: SessionChatState, localId: string, mes
   }
 }
 
+/**
+ * #1452 S11b re-key contract, live half: a saved row adopted by its turn's
+ * first text moves to the token's id in this same update, with every index
+ * that names it (tool and span owners, bound history positions, the hidden
+ * live order). Part source ids and positions never change.
+ */
+function rekeyHistoryRow(draft: SessionChatState, fromId: string, toId: string): void {
+  rekeyAssistantPlaceholder(draft, fromId, toId, true)
+  for (const [position, owner] of Object.entries(draft.historySourceAliases ?? {})) if (owner === fromId) draft.historySourceAliases![position] = toId
+  if (draft.historyLiveOrder) draft.historyLiveOrder = draft.historyLiveOrder.map(id => id === fromId ? toId : id)
+}
+
+/** S11b unrecorded seam: a saved row whose last part is a tool-only source after text gets a paragraph break. */
+function savedToolSeam(row: ChatMessage): boolean {
+  const last = row.historyParts?.at(-1)
+  return !!row.content && !!last && last.start === row.content.length && !!last.callIds?.length
+}
+
 function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: TokenFrameType): void {
   const m = draft.messagesById[bubbleId]
   if (frame.replace) {
     m.content = frame.content
+    // A catch-up replace rewrites the whole row; its recorded part offsets
+    // no longer describe the text, so the row merges as a whole again.
+    m.historyParts = undefined
   } else {
     // Opus review round 3 item N3 (MEDIUM-LOW): the #823 rewrite of the
     // token case dropped the paragraph-break insertion `pendingTextBoundary`
@@ -568,6 +590,38 @@ function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: T
   m.isStreaming = true
   m.status = 'streaming'
   draft.isStreaming = true
+}
+
+/**
+ * Step 2's join of a token into the open bubble of its turn segment
+ * (extracted from resolveTokenBubbleByMessageId for its size budget): an
+ * empty local placeholder or a text-less saved row adopts the token's id;
+ * otherwise the id becomes a part and prose alias of the bubble.
+ */
+function joinTurnBubble(draft: SessionChatState, turnBubbleId: string, messageId: string, frame: TokenFrameType): void {
+  const m = draft.messagesById[turnBubbleId]
+  if (m.turnId === undefined) m.turnId = frame.turn_id // now that a token has named the turn
+  m.closedBySteer = false
+  // Empty local placeholders adopt the wire key without replacing a real entry.
+  const rekeyable = !m.content && (m.isStreaming || m.status === 'streaming') && !m.mergedReplayIds?.length && !draft.messagesById[messageId]
+  if (rekeyable) {
+    rekeyAssistantPlaceholder(draft, turnBubbleId, messageId, true)
+    applyTokenContentTo(draft, messageId, frame)
+    return
+  }
+  // #1452 S11c/S11b: a saved row with no text adopts the first text's id
+  // (atomic re-key) instead of listing it as a prose alias.
+  if (m.historyPosition && !m.content && !draft.messagesById[messageId]) {
+    recordCombinedPart(m, messageId, '')
+    rekeyHistoryRow(draft, turnBubbleId, messageId)
+    applyTokenContentTo(draft, messageId, frame)
+    return
+  }
+  if (m.historyPosition && !frame.replace && savedToolSeam(m)) m.pendingTextBoundary = true
+  recordCombinedPart(m, messageId, !frame.replace && m.pendingTextBoundary && m.content ? '\n\n' : '') // #1452 D1 S7/S2a: the joiner the append inserts
+  m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
+  draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
+  applyTokenContentTo(draft, turnBubbleId, frame)
 }
 
 function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFrameType): void {
@@ -676,6 +730,10 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       // stopped looking past the last user message), so matching ANY
       // unstamped bubble here is safe — there is at most one.
       const unstamped = m.turnId === undefined
+      // #1452 S11c saved-row adoption: a saved row joins only under S11a in
+      // full, so a saved row of unknown turn (or one that ends its turn
+      // segment) is never adopted; step 3 then mints a new row.
+      if (m.historyPosition && (unstamped || m.historyBoundary)) continue
       if (!unstamped && m.turnId !== turnId) continue
       if (frame.agent_id && m.agentId && m.agentId !== frame.agent_id) continue
       if (m.status === 'interrupted' || m.status === 'error') continue
@@ -690,19 +748,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       break
     }
     if (turnBubbleId) {
-      const m = draft.messagesById[turnBubbleId]
-      if (m.turnId === undefined) m.turnId = turnId // now that a token has named the turn
-      m.closedBySteer = false
-      // Empty local placeholders adopt the wire key without replacing a real entry.
-      const rekeyable = !m.content && (m.isStreaming || m.status === 'streaming') && !m.mergedReplayIds?.length && !draft.messagesById[messageId]
-      if (rekeyable) {
-        rekeyAssistantPlaceholder(draft, turnBubbleId, messageId, true)
-        applyTokenContentTo(draft, messageId, frame)
-        return
-      }
-      m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
-      draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
-      applyTokenContentTo(draft, turnBubbleId, frame)
+      joinTurnBubble(draft, turnBubbleId, messageId, frame)
       return
     }
   }
@@ -791,7 +837,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
     ...(frame.reply_to_message_id ? { replyToMessageId: frame.reply_to_message_id } : {}),
     ...(frame.reply_to_participant ? { replyToParticipant: frame.reply_to_participant } : {}),
     ...(frame.room_ref ? { roomRef: frame.room_ref } : {}), // K33 / FR-202
-    ...(idCollision ? { mergedReplayIds: [messageId] } : {}),
+    ...(idCollision ? { mergedReplayIds: [messageId], historyParts: singlePart(messageId) } : {}), // #1452 D1 S7: local id shows message_id
   }
   if (idCollision) {
     draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
@@ -808,6 +854,21 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
   // actually sent after).
   insertHistoryMessageId(draft.messageOrder, draft.messagesById, bubble.id)
   draft.isStreaming = true
+}
+
+/**
+ * The assistant bubble a tool_call_start mints when no assistant bubble is open.
+ * C3: behind a user row the server discarded/failed, it is a straggler from the
+ * stopped turn: done, not streaming, so it cannot back the busy flag after the
+ * result. #1452 S11c J2 (6c UAT U-D1-4): a live tool frame carries no turn id,
+ * so a live bubble takes the bucket's known active turn; a mid-turn snapshot
+ * then binds it to its saved segment instead of keeping a second, unstamped
+ * row. The straggler stays unstamped.
+ */
+function liveToolPlaceholder(draft: SessionChatState, agentId: string | undefined, tailUser: boolean): ChatMessage {
+  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: tailUser ? 'done' : 'streaming', isStreaming: !tailUser, agentId: agentId ?? useSessionStore.getState().activeAgentId ?? undefined }
+  if (!tailUser && draft.activeTurnId) ph.turnId = draft.activeTurnId
+  return ph
 }
 
 /**
@@ -1954,6 +2015,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 isStreaming: false,
                 ...(clearReplayingNow ? { isReplaying: false } : {}),
                 activeTurnId: null, activeTurnAgentId: null, idleArmedToolCalls: undefined,
+                // The endTurnState write, spelled out for this spread return.
+                providerRetryEvent: null,
               }
             })
             // FR-030/031 (U10b): an errored turn ends the session's turn
@@ -2072,7 +2135,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   // new one. Its bubble carries the tool but is NOT streaming, so
                   // it cannot back the busy flag after the result.
                   const tailUser = rawTail?.role === 'user' && (rawTail.deliveryStatus === 'discarded' || rawTail.deliveryStatus === 'failed')
-                  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: tailUser ? 'done' : 'streaming', isStreaming: !tailUser, agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined }
+                  const ph = liveToolPlaceholder(draft, frame.agent_id, tailUser)
                   draft.messagesById[ph.id] = ph
                   draft.messageOrder.push(ph.id)
                   ownerMsgId = ph.id

@@ -33,29 +33,53 @@ jobs:
         run: CGO_ENABLED=0 go build -tags goolm,stdjson -o omnipus ./cmd/omnipus/
 
       - name: Read central e2e model
-        # One committed source of truth for the real-LLM model id. Every model
-        # literal in live config is banned (scripts/check-no-hardcoded-e2e-model.sh),
-        # so the run step below derives AGENT_MODEL/JUDGE_MODEL from it.
+        # One committed source of truth for the real-LLM models (a primary and a
+        # fallback pair). Every model or provider literal in live config is banned
+        # (scripts/check-no-hardcoded-e2e-model.sh). The eval-runner reads the same
+        # file itself (agent AND judge default to its primary, with its fallback —
+        # founder decision 2026-09-27); this step exports it for the job-start check.
         run: |
-          m=$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json)
-          if [ -z "$m" ]; then
-            echo "::error::tests/e2e/e2e-model.json: .model is missing, empty, or whitespace-only" >&2
-            exit 1
-          fi
-          echo "OMNIPUS_E2E_MODEL=$m" >> "$GITHUB_ENV"
+          set -euo pipefail
+          bash scripts/e2e-model.sh env >> "$GITHUB_ENV"
+
+      - name: Check the primary LLM (job start)
+        # One 1-token call to the primary (--strict). If it is unavailable (429 / 5xx /
+        # timeout / no connection) the whole run uses the fallback for the agent and
+        # the judge: a ::warning:: and a job-summary line say so. A rejected key
+        # (401/403), any other answer, or a missing key fails the step. Prints only
+        # the status and the error type the provider names, never the body or the key.
+        env:
+          MINIMAX_API_KEY_CI: ${{ secrets.MINIMAX_API_KEY_CI }}
+        run: |
+          set -euo pipefail
+          route=$(bash scripts/e2e-model.sh preflight --strict --route-out "$RUNNER_TEMP/llm-route.json")
+          echo "$route" >> "$GITHUB_ENV"
+
+      - name: Upload LLM route
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: llm-route-evals
+          path: ${{ runner.temp }}/llm-route.json
+          if-no-files-found: ignore
 
       - name: Run evals
         env:
+          # Keys by provider (evals/cmd/eval-runner, evalKeyEnvs): the MiniMax
+          # primary reads MINIMAX_API_KEY_CI (there is no separate eval key), the
+          # OpenRouter fallback reads OPENROUTER_API_KEY_EVAL.
+          MINIMAX_API_KEY_CI: ${{ secrets.MINIMAX_API_KEY_CI }}
           OPENROUTER_API_KEY_EVAL: ${{ secrets.OPENROUTER_API_KEY_EVAL }}
           OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_EVAL }}
           OMNIPUS_BIN: ./omnipus
         run: |
-          # Agent AND judge follow the ONE central setting (founder decision
-          # 2026-09-27) — the openrouter/ prefix matches this runner's slug
-          # convention (callJudge strips it before the API call).
-          : "${OMNIPUS_E2E_MODEL:?OMNIPUS_E2E_MODEL is not set — the 'Read central e2e model' step must run first}"
-          export AGENT_MODEL="openrouter/$OMNIPUS_E2E_MODEL"
-          export JUDGE_MODEL="openrouter/$OMNIPUS_E2E_MODEL"
+          set -euo pipefail
+          : "${LLM_ROUTE:?LLM_ROUTE is not set — the 'Check the primary LLM' step must run first}"
+          if [ "$LLM_ROUTE" = "fallback" ]; then
+            # The primary is unavailable: agent and judge both run on the fallback.
+            export AGENT_MODEL="$E2E_FALLBACK_PROVIDER/$E2E_FALLBACK_MODEL"
+            export JUDGE_MODEL="$E2E_FALLBACK_PROVIDER/$E2E_FALLBACK_MODEL"
+          fi
           mkdir -p evals/results
           go run ./evals/cmd/eval-runner \
             --scenarios evals/scenarios \

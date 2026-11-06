@@ -108,6 +108,26 @@ func (al *AgentLoop) refuseMainConnectorDefaultSend(ctx context.Context, channel
 	}
 }
 
+// #1507 (FR-070): the same reply_to-only rule covers the turn's other
+// publication sites - tool-call feedback, async and sync ForUser text, tool
+// media and the async notifier's origin warning. In a connection-fed main
+// none of them may fall back to the turn's channel/chat (the last sender).
+
+// mainConnectorMediaNote is appended to the model-facing tool result when a
+// main's tool media is kept in the conversation instead of sent (FR-070, m-03).
+func mainConnectorMediaNote(channel string) string {
+	return fmt.Sprintf("Note: the file was not sent to %s: in a main conversation, files stay in this conversation. Nothing was sent outside it.", channel)
+}
+
+// refuseMainConnectorToolOutput records one refused text publication of a
+// main's connector turn: one info line (no text) and the existing refusal
+// counter. Nothing is sent; transcript and model content are unchanged.
+func refuseMainConnectorToolOutput(tool, channel, sessionID string) {
+	connectorDefaultSendRefusals.Add(1)
+	logger.InfoCF("agent", "main connector tool output not sent",
+		map[string]any{"tool": tool, "channel": channel, "session_id": sessionID})
+}
+
 // returnRefusalNotices counts refusals made visible to the responding side.
 var returnRefusalNotices atomic.Int64
 
@@ -129,4 +149,16 @@ func (al *AgentLoop) ReportReturnRefusal(msg bus.OutboundMessage, _ error) {
 		p.PublishSessionError(msg.Return.SourceSessionID,
 			"An answer was not delivered: the chat it was for is no longer connected to this agent.")
 	}
+}
+
+// refuseMainConnectorText reports whether this turn is a connection-fed main
+// and, if so, records the refused text publication for tool (FR-070). Callers
+// test it last, so only a publication that would otherwise happen is counted.
+func (ex *agentLoopRunTurnToolsExecute) refuseMainConnectorText(tool string) bool {
+	rt := ex.rx.rr.rq.ri.rf.rt
+	if !rt.al.mainConnectorTurn(rt.ts.channel, rt.ts.transcriptSessionID) {
+		return false
+	}
+	refuseMainConnectorToolOutput(tool, rt.ts.channel, rt.ts.transcriptSessionID)
+	return true
 }

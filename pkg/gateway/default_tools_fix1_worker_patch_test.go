@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,8 +35,8 @@ func TestDefaultToolsWorkerCreationPreservesOperatorPatch(t *testing.T) {
 			state, err := agentstore.New(api.homePath).ReadState(stored.ID)
 			require.NoError(t, err)
 			raw := defaultToolsInventory(t, api.homePath, api.agentLoop.GetConfig(), api.builtinRegistry.All(), map[string]any{"id": stored.ID})
-			header := fmt.Sprintf("agent: %s | name: FIX1 Patched Worker | kind: worker | revision: %s", stored.ID, state.Revision)
-			readback := fix1InventoryPolicyRows(t, raw, header, api.builtinRegistry.All())
+			identity := map[string]any{"id": stored.ID, "revision": state.Revision}
+			readback := fix1InventoryPolicyRows(t, raw, identity, api.builtinRegistry.All())
 			for name, want := range map[string]string{
 				"set_goal": "allow", "write_file": "deny", // explicit operator patch
 				"create_task": "deny", "read_file": "allow", // untouched Worker defaults

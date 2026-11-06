@@ -201,6 +201,19 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 				"steer: launch: %w: agent %q", tools.ErrDelegateTargetCannotReport, req.TargetAgentID)
 		}
 	}
+	// r17 §3.6 steps 2, 3 and 5 (scenario 9.13): a delegation to an external
+	// CLI worker whose Settings program is missing or fails its check is
+	// refused here, before any session is written, and the parent gets the
+	// NoPath / CheckFailed text as the tool error. The spawn re-checks the
+	// program (resolveRunProgram), so the file that runs is still the file
+	// checked at that moment.
+	if req.Origin.Kind == steer.OriginKindDelegate && targetIs3P {
+		if executor := executorConfigOf(targetAgent); executor != nil {
+			if _, refusal := l.al.runProgramFor(executor.CLI); refusal != "" {
+				return steer.LaunchResult{}, &tools.DelegateProgramRefusalError{Text: refusal}
+			}
+		}
+	}
 	lifecycle := l.al.GetSessionLifecycleStore()
 	sessions := l.al.GetSessionStore()
 	if lifecycle == nil || sessions == nil {

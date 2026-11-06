@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { E2E_MODEL } from './e2e-model';
+import { E2E_FALLBACK } from './e2e-model';
 
 export const TERMINAL_NARRATION = 'I will load the acceptance probe tool.';
 
@@ -33,7 +33,7 @@ export async function startTerminalOutcomeProvider(opts?: { narration?: string }
     req.on('end', () => {
       if (req.method === 'GET' && req.url?.includes('/models')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ object: 'list', data: [{ id: E2E_MODEL, object: 'model' }] }));
+        res.end(JSON.stringify({ object: 'list', data: [{ id: E2E_FALLBACK.model, object: 'model' }] }));
         return;
       }
       if (req.method !== 'POST' || !req.url?.includes('/chat/completions')) {
@@ -56,7 +56,7 @@ export async function startTerminalOutcomeProvider(opts?: { narration?: string }
         // Real onboarding validation is not a chat turn. Answer it honestly.
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-          id: 'terminal-outcome-validation', object: 'chat.completion', model: E2E_MODEL,
+          id: 'terminal-outcome-validation', object: 'chat.completion', model: E2E_FALLBACK.model,
           choices: [{ index: 0, message: { role: 'assistant', content: 'probe ok' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
         }));
@@ -111,7 +111,7 @@ export async function startTerminalOutcomeProvider(opts?: { narration?: string }
 
 function chunk(delta: Record<string, unknown>, finishReason: string | null): string {
   return 'data: ' + JSON.stringify({
-    id: 'terminal-outcome-stream', object: 'chat.completion.chunk', model: E2E_MODEL,
+    id: 'terminal-outcome-stream', object: 'chat.completion.chunk', model: E2E_FALLBACK.model,
     created: Math.floor(Date.now() / 1000),
     choices: [{ index: 0, delta, finish_reason: finishReason }],
   }) + '\n\n';

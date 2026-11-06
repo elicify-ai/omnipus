@@ -7,8 +7,13 @@ description: >
   model_params, shell_policy, and voice do not exist on this variant
   (additionalProperties: false rejects them). max_tool_iterations does exist
   (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a
-  CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (kind external-cli with cli + cli_path; the
-  handler additionally rejects whitespace-only cli_path).
+  CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED
+  (ExecutorConfigCreate: cli plus optional env_overrides and cli_args; kind
+  and cli_path are rejected). The program for the chosen CLI is set by a
+  person in Settings -> Third-party agents; creating an agent for a CLI with
+  no usable Settings path succeeds and the echo carries
+  executor.program_warning. There is no soul: a third-party agent has no
+  SOUL.md (soul is rejected as an unknown field).
 
   Create-input identity normalization (founder ruling 2026-10-09): on this
   create request only, `figure`, `role`, and `color` are lenient at the
@@ -23,7 +28,6 @@ description: >
 required:
   - type
   - name
-  - soul
   - executor
 additionalProperties: false
 properties:
@@ -72,38 +76,8 @@ properties:
   color:
     $ref: './AgentColor.yaml'
     x-go-type: AgentColor
-  rate_limits:
-    type: object
-    description: Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-    properties:
-      use_global_defaults:
-        type: boolean
-        description: When true, global rate limits are used and per-agent overrides are ignored.
-        example: true
-      max_llm_calls_per_hour:
-        type: integer
-        description: Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-        example: 100
-      max_tool_calls_per_minute:
-        type: integer
-        description: Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-        example: 60
-      max_cost_per_day:
-        type: number
-        format: double
-        description: Maximum USD cost per day for this agent. Absent = no per-agent cap.
-        example: 5.0
-  soul:
-    type: string
-    minLength: 1
-    description: >
-      Initial SOUL.md content. Required for every user-creatable type — including
-      Subagent (External), where it is passed as part of the CLI prompt at runtime.
-      The CLI never reads a file from disk. Backend trims before length-validation,
-      so whitespace-only is rejected as minLength violation.
-    example: "You are a focused research assistant..."
   executor:
-    $ref: './ExecutorConfig.yaml'
+    $ref: './ExecutorConfigCreate.yaml'
   max_tool_iterations:
     type: integer
     minimum: 1

@@ -6,8 +6,6 @@ package agent
 
 import (
 	"sync"
-
-	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // Chat-links D-watch: the one line a web chat turn's dynamic context carries
@@ -48,42 +46,6 @@ func (cb *ContextBuilder) userWatchingLine(channel, sessionID string) string {
 // unknown to the caller; a web turn then reads "User watching: no".
 func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, channel, chatID, senderID, senderDisplayName string) string {
 	return cb.buildDynamicContextFor("", delegationDepth, workspaceID, channel, chatID, senderID, senderDisplayName)
-}
-
-// BuildMessages assembles the provider message list for a single agent turn
-// whose transcript session the caller does not name. See buildMessagesFor.
-func (cb *ContextBuilder) BuildMessages(
-	delegationDepth int,
-	history []providers.Message,
-	currentMessage string,
-	media []string,
-	workspaceID string,
-	channel, chatID, senderID, senderDisplayName string,
-	breadcrumb string,
-	recallSpan []providers.Message,
-	activeSkills ...string,
-) []providers.Message {
-	return cb.buildMessagesFor("", delegationDepth, history, currentMessage, media, workspaceID,
-		channel, chatID, senderID, senderDisplayName, breadcrumb, recallSpan, activeSkills...)
-}
-
-// BuildMessagesForSession is BuildMessages for a turn of transcript session
-// sessionID: the "User watching" line reports that session's own bit, never a
-// parent's or a child's.
-func (cb *ContextBuilder) BuildMessagesForSession(
-	sessionID string,
-	delegationDepth int,
-	history []providers.Message,
-	currentMessage string,
-	media []string,
-	workspaceID string,
-	channel, chatID, senderID, senderDisplayName string,
-	breadcrumb string,
-	recallSpan []providers.Message,
-	activeSkills ...string,
-) []providers.Message {
-	return cb.buildMessagesFor(sessionID, delegationDepth, history, currentMessage, media, workspaceID,
-		channel, chatID, senderID, senderDisplayName, breadcrumb, recallSpan, activeSkills...)
 }
 
 // userWatchingByLoop holds each AgentLoop's gateway-injected presence lookup.

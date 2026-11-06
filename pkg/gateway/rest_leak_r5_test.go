@@ -187,14 +187,22 @@ func TestR5_F1_WorkspaceUploadStorageFailuresAreFixedText(t *testing.T) {
 		require.NoError(t, os.MkdirAll(mediaDir, 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(mediaDir, "manifest.json"), []byte("{not valid json"), 0o600))
 		rr := r5Upload(t, api, "ws-r5")
-		require.Equal(t, http.StatusInternalServerError, rr.Code, rr.Body.String())
+		// #1449 FR-017 / 89520c35c: unavailable library is explicitly 503,
+		// never a successful fallback or an undifferentiated storage-write 500.
+		require.Equal(t, http.StatusServiceUnavailable, rr.Code, rr.Body.String())
 		r5AssertClean(t, rr.Body.String(), "ws-r5")
 	})
 	t.Run("media store write fails", func(t *testing.T) {
 		api := newWorkspaceLibraryTestAPI(t)
 		mediaDir := filepath.Join(api.homePath, "workspaces", "ws-r5b", "media")
 		require.NoError(t, os.MkdirAll(mediaDir, 0o700))
+		// Arrange an already-loaded real library before breaking the write
+		// path. Otherwise the fixture hits FR-017's load failure (503), not
+		// the media-store write failure whose 500 and redaction it asserts.
+		lib := api.agentLoop.GetWorkspaceLibrary("ws-r5b")
+		require.NotNil(t, lib, "instrument: the library must load before its write path is blocked")
 		r5Block(t, mediaDir)
+		require.Same(t, lib, api.agentLoop.GetWorkspaceLibrary("ws-r5b"), "instrument: upload must use the loaded library, not retry construction")
 		rr := r5Upload(t, api, "ws-r5b")
 		require.Equal(t, http.StatusInternalServerError, rr.Code, rr.Body.String())
 		r5AssertClean(t, rr.Body.String(), "ws-r5b")

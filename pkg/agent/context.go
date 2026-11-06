@@ -55,6 +55,12 @@ type ContextBuilder struct {
 	// lower-cased, trimmed skill names.
 	skillAllowlist map[string]struct{}
 
+	// skillBindings is the agent's skill key → generation table (skills spec
+	// r15 §5.13a SD-30), set once at construction from AgentConfig.SkillGrants.
+	// A registry/builtin load is served only when the binding equals the
+	// folder's current generation (skills.LoadActivation checks it).
+	skillBindings map[string]string
+
 	// projectShelf is the acting agent's WORKSPACE'S already-merged project
 	// shelf (ADR-072 D4.1 shelf 1 — pkg/skills.ProjectShelf, built by
 	// skills.MergeProjectSkills over that workspace's mounts). nil when no
@@ -95,6 +101,10 @@ type ContextBuilder struct {
 	cachedSystemPrompt  string
 	cachedMemoryContext string    // rendered notes are part of the cache identity
 	cachedAt            time.Time // max observed mtime across tracked paths at cache build time
+	// cachedSkillsGeneration is skills.Generation() when the cache was built:
+	// any committed skill change bumps it, so the next turn rebuilds the
+	// "# Skills" menu (skills spec r15 FR-053) even where mtimes cannot show it.
+	cachedSkillsGeneration uint64
 
 	// existedAtCache tracks which source file paths existed the last time the
 	// cache was built. This lets sourceFilesChanged detect files that are newly
@@ -157,6 +167,11 @@ type ContextBuilder struct {
 	// watchingInjector answers the per-turn "User watching" line (chat-links
 	// D-watch); see context_watching.go.
 	watchingInjector func(sessionID string) bool
+	// channelsInjector returns the per-turn "## Channels" block
+	// (channels-spec-r8 FR-001) for the turn's effective workspace and
+	// transcript session, or "" to omit it. Un-cached path; set via
+	// WithChannelsInjector, wired by wireChannelsInjectors.
+	channelsInjector func(workspaceID, sessionID string) string
 
 	// env carries the environment provider + any per-builder env state. Split
 	// into a nested struct so context_env.go owns the mutation surface without
@@ -211,6 +226,17 @@ func (cb *ContextBuilder) WithWorkingDirInjector(fn func(workspaceID string) str
 // Passing nil disables it.
 func (cb *ContextBuilder) WithModeNoteInjector(fn func() string) *ContextBuilder {
 	cb.modeNoteInjector = fn
+	return cb
+}
+
+// WithChannelsInjector installs the per-turn "## Channels" block callback
+// (FR-001). fn receives the turn's effective workspaceID (may be "") and
+// its transcript session id (may be "": no session to classify), and is
+// called on every turn from buildDynamicContext. The session id lets fn
+// classify the session as steered the same way send_message does (FR-004).
+// Passing nil disables the block.
+func (cb *ContextBuilder) WithChannelsInjector(fn func(workspaceID, sessionID string) string) *ContextBuilder {
+	cb.channelsInjector = fn
 	return cb
 }
 
@@ -279,6 +305,26 @@ func (cb *ContextBuilder) WithSkillAllowlist(allowlist []string) *ContextBuilder
 	}
 	cb.skillAllowlist = set
 	return cb
+}
+
+// WithSkillBindings installs the agent's construction-time skill bindings
+// (SD-30). The map is copied.
+func (cb *ContextBuilder) WithSkillBindings(bindings map[string]string) *ContextBuilder {
+	cp := make(map[string]string, len(bindings))
+	for k, v := range bindings {
+		cp[k] = v
+	}
+	cb.skillBindings = cp
+	return cb
+}
+
+// SkillBindings returns a copy of the agent's construction-time bindings.
+func (cb *ContextBuilder) SkillBindings() map[string]string {
+	cp := make(map[string]string, len(cb.skillBindings))
+	for k, v := range cb.skillBindings {
+		cp[k] = v
+	}
+	return cp
 }
 
 // WithProjectShelf sets the acting agent's workspace project shelf (ADR-072
@@ -748,7 +794,7 @@ func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf, w
 	// (FR-9.4): the prompt advertises only the skills this agent is permitted
 	// to use. The menu is uncapped (D1.1) and lists every currently-available
 	// skill, so there is no "search find_skills for the rest" caveat to make.
-	skillsSummary := cb.skillsLoader.BuildSkillsSummaryFuncWithProject(cb.skillAllowed, shelf)
+	skillsSummary := cb.skillsLoader.BuildSkillsSummaryFuncWithProject(cb.grantedPredicate(cb.skillsLoader.ListSkills()), shelf)
 	if skillsSummary != "" {
 		parts = append(parts, fmt.Sprintf(`# Skills
 
@@ -827,6 +873,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 	cb.cachedSystemPrompt = prompt
 	cb.cachedMemoryContext = longTerm
 	cb.cachedAt = baseline.maxMtime
+	cb.cachedSkillsGeneration = baseline.skillsGeneration
 	cb.existedAtCache = baseline.existed
 	cb.skillFilesAtCache = baseline.skillFiles
 
@@ -854,6 +901,7 @@ func (cb *ContextBuilder) invalidateSystemPromptCacheLocked() {
 	cb.cachedSystemPrompt = ""
 	cb.cachedMemoryContext = ""
 	cb.cachedAt = time.Time{}
+	cb.cachedSkillsGeneration = 0
 	cb.existedAtCache = nil
 	cb.skillFilesAtCache = nil
 }
@@ -890,6 +938,7 @@ type workspacePromptVariant struct {
 	cachedAt          time.Time
 	existedAtCache    map[string]bool
 	skillFilesAtCache map[string]time.Time
+	skillsGeneration  uint64 // skills.Generation() at build time (FR-053)
 	// elem is this variant's node in workspacePromptCache.lru (Value is the
 	// workspace id string), kept for O(1) move-to-back/removal.
 	elem *list.Element
@@ -971,6 +1020,9 @@ func fileChangedSinceBaseline(existedAtCache map[string]bool, cachedAt time.Time
 // Caller MUST hold cb.workspacePromptCache.mu.
 func (cb *ContextBuilder) workspaceVariantStaleLocked(v *workspacePromptVariant, workspaceID string) bool {
 	if v.cachedAt.IsZero() {
+		return true
+	}
+	if v.skillsGeneration != skills.Generation() {
 		return true
 	}
 	if slices.ContainsFunc(cb.sourcePaths(), func(p string) bool {
@@ -1094,6 +1146,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCacheForWorkspace(workspaceID str
 		bytes:             len(prompt),
 		cachedAt:          baseline.maxMtime,
 		existedAtCache:    baseline.existed,
+		skillsGeneration:  baseline.skillsGeneration,
 		skillFilesAtCache: baseline.skillFiles,
 	})
 
@@ -1210,6 +1263,9 @@ type cacheBaseline struct {
 	existed    map[string]bool
 	skillFiles map[string]time.Time
 	maxMtime   time.Time
+	// skillsGeneration is read before any file is examined, so a skill
+	// change committed during the build is seen as a change next turn.
+	skillsGeneration uint64
 }
 
 // buildCacheBaseline records which tracked paths currently exist and computes
@@ -1219,6 +1275,7 @@ type cacheBaseline struct {
 // detects its recap; the legacy ("" form) baseline tracks no carry-forward
 // path at all. Called under write lock when the cache is built.
 func (cb *ContextBuilder) buildCacheBaseline(workspaceID string) cacheBaseline {
+	generation := skills.Generation()
 	skillRoots := cb.skillRoots()
 	srcPaths := cb.sourcePaths()
 
@@ -1279,7 +1336,7 @@ func (cb *ContextBuilder) buildCacheBaseline(workspaceID string) cacheBaseline {
 		maxMtime = time.Unix(1, 0)
 	}
 
-	return cacheBaseline{existed: existed, skillFiles: skillFiles, maxMtime: maxMtime}
+	return cacheBaseline{existed: existed, skillFiles: skillFiles, maxMtime: maxMtime, skillsGeneration: generation}
 }
 
 // sourceFilesChangedLocked checks whether any workspace source file has been
@@ -1291,6 +1348,9 @@ func (cb *ContextBuilder) buildCacheBaseline(workspaceID string) cacheBaseline {
 // which already holds RLock or Lock).
 func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
 	if cb.cachedAt.IsZero() {
+		return true
+	}
+	if cb.cachedSkillsGeneration != skills.Generation() {
 		return true
 	}
 
@@ -1474,6 +1534,14 @@ func (cb *ContextBuilder) buildDynamicContextFor(sessionID string, delegationDep
 		}
 	}
 
+	// Channels block (channels-spec-r8 FR-001): one live snapshot and one
+	// availability per connection, rendered every turn.
+	if cb.channelsInjector != nil {
+		if block := cb.channelsInjector(workspaceID, sessionID); block != "" {
+			fmt.Fprintf(&sb, "\n\n%s", block)
+		}
+	}
+
 	// Mode note (FR-015): read live every turn, so switching God Mode on or
 	// off takes effect on the very next turn.
 	if cb.modeNoteInjector != nil {
@@ -1485,8 +1553,7 @@ func (cb *ContextBuilder) buildDynamicContextFor(sessionID string, delegationDep
 	return sb.String()
 }
 
-// buildMessagesFor assembles the provider message list for a single agent turn
-// (entry points BuildMessages and BuildMessagesForSession, context_watching.go).
+// BuildMessages assembles the provider message list for a single agent turn.
 //
 // Assembly order (FR-006/FR-019):
 //  1. Single system message: static prompt + live metadata + active skills + breadcrumb.
@@ -1514,7 +1581,27 @@ func (cb *ContextBuilder) buildDynamicContextFor(sessionID string, delegationDep
 // recall_conversation (FR-019); pass nil when no recall is active. The span
 // is placed after the breadcrumb and before the sliding window so the model
 // sees recalled (old) context before the most-recent window turns.
-func (cb *ContextBuilder) buildMessagesFor(
+func (cb *ContextBuilder) BuildMessages(
+	delegationDepth int,
+	history []providers.Message,
+	currentMessage string,
+	media []string,
+	workspaceID string,
+	channel, chatID, senderID, senderDisplayName string,
+	breadcrumb string,
+	recallSpan []providers.Message,
+	activeSkills ...string,
+) []providers.Message {
+	return cb.BuildMessagesForSession("", delegationDepth, history, currentMessage, media, workspaceID,
+		channel, chatID, senderID, senderDisplayName, breadcrumb, recallSpan, activeSkills...)
+}
+
+// BuildMessagesForSession is BuildMessages for one turn of transcript
+// session sessionID: the per-turn blocks that depend on the session (the
+// "## Channels" block's steered-session classification, FR-004, and the
+// "User watching" line, which reports that session's own bit, never a
+// parent's or a child's) read it.
+func (cb *ContextBuilder) BuildMessagesForSession(
 	sessionID string,
 	delegationDepth int,
 	history []providers.Message,
@@ -1873,12 +1960,13 @@ func (cb *ContextBuilder) ListSkillNames() []string {
 	}
 
 	allSkills := cb.skillsLoader.ListSkills()
+	granted := cb.grantedPredicate(allSkills)
 	names := make([]string, 0, len(allSkills))
 	for _, skill := range allSkills {
 		// Progressive disclosure: only list skills this agent may use (FR-9.4).
 		// The allowlist and the loadable identity are both keyed on the slug
 		// (ID = directory name), never the human-readable display name.
-		if !cb.skillAllowed(skill.ID) {
+		if !granted(skill.ID) {
 			continue
 		}
 		names = append(names, skill.ID)
@@ -1919,7 +2007,8 @@ func (cb *ContextBuilder) ResolveSkillFullForWorkspace(workspaceID, name string)
 		return skills.ResolvedSkill{}, false
 	}
 
-	resolved, ok, collision := skills.ResolveSkillName(cb.skillsLoader.ListSkills(), cb.skillAllowed, cb.effectiveProjectShelf(workspaceID), name)
+	allSkills := cb.skillsLoader.ListSkills()
+	resolved, ok, collision := skills.ResolveSkillName(allSkills, cb.grantedPredicate(allSkills), cb.effectiveProjectShelf(workspaceID), name)
 	if !ok {
 		logger.WarnCF("agent", "skill resolution denied or not found",
 			map[string]any{
@@ -1984,7 +2073,7 @@ func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 // fallback check, rather than triggering two full scans back-to-back on
 // every failed delegate.run requested_skill.
 func (cb *ContextBuilder) resolveSkillNameWithList(allSkills []skills.SkillInfo, name string) (skills.ResolvedSkill, bool) {
-	resolved, ok, collision := skills.ResolveSkillName(allSkills, cb.skillAllowed, cb.projectShelf, name)
+	resolved, ok, collision := skills.ResolveSkillName(allSkills, cb.grantedPredicate(allSkills), cb.projectShelf, name)
 	if !ok {
 		// FR-9.4/ADR-072 D4: an installed-but-ungranted registry/builtin slug
 		// (or one that exists on no shelf at all) cannot be resolved — so it

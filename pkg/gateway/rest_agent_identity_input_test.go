@@ -151,10 +151,12 @@ func identityInputError(field, operation string, strict bool) map[string]any {
 }
 
 func identityCreateInput(variant, fields string) string {
-	body := fmt.Sprintf(`{"name":"Input Boundary","type":%q,"description":"focused worker","soul":"editable-soul"`, variant)
-	if variant == "subagent_3p" {
+	body := fmt.Sprintf(`{"name":"Input Boundary","type":%q,"description":"focused worker"`, variant)
+	if variant != "subagent_3p" {
+		body += `,"soul":"editable-soul"`
+	} else {
 		// Match the existing executor fixture; creating it never launches a CLI.
-		body += `,"executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"}`
+		body += `,"executor":{"cli":"codex"}`
 	}
 	if fields != "" {
 		body += "," + fields

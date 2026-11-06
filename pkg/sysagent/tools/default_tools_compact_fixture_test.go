@@ -3,8 +3,6 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -29,10 +27,10 @@ func (m defaultToolsPreviewMetadata) Description() string {
 }
 func (m defaultToolsPreviewMetadata) Scope() tools.ToolScope { return tools.ScopeGeneral }
 func (m defaultToolsPreviewMetadata) Parameters() map[string]any {
-	panic("compact inventory must not return parameter schemas")
+	panic("tool inventory must not return parameter schemas")
 }
 func (m defaultToolsPreviewMetadata) Execute(context.Context, map[string]any) *tools.ToolResult {
-	panic("compact inventory must not execute listed tools")
+	panic("tool inventory must not execute listed tools")
 }
 
 func defaultToolsWirePreviewCatalog(t *testing.T, deps *systools.Deps) []string {
@@ -42,100 +40,112 @@ func defaultToolsWirePreviewCatalog(t *testing.T, deps *systools.Deps) []string 
 	for _, name := range names {
 		metadata = append(metadata, defaultToolsPreviewMetadata{name: name})
 	}
-	// Keep the baseline compiling so RED is a real output assertion, not a missing-field error.
-	field := reflect.ValueOf(deps).Elem().FieldByName("ToolCatalog")
-	if field.IsValid() {
-		callback := reflect.ValueOf(func() []tools.Tool { return metadata })
-		require.True(t, callback.Type().AssignableTo(field.Type()))
-		field.Set(callback)
-	}
+	deps.ToolCatalog = func() []tools.Tool { return metadata }
 	sort.Strings(names)
 	return names
 }
 
+// defaultToolsEntries decodes a get_agent tool_permissions result (r17
+// 7.12.1): the identity keys and the {tool, effective, override,
+// description?} entries. Any other top-level key is an error: the result
+// carries the identity and the requested properties, nothing else.
+func defaultToolsEntries(t *testing.T, raw string) (map[string]any, []map[string]any) {
+	t.Helper()
+	require.True(t, json.Valid([]byte(raw)), "get_agent returns one JSON object, never the retired compact text")
+	var object map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &object))
+	identity := map[string]any{}
+	var entries []map[string]any
+	for key, value := range object {
+		switch key {
+		case "id", "revision", "preview_of":
+			identity[key] = value
+		case "tool_permissions":
+			list, ok := value.([]any)
+			require.True(t, ok, "tool_permissions is an array")
+			for _, item := range list {
+				entry, ok := item.(map[string]any)
+				require.True(t, ok)
+				entries = append(entries, entry)
+			}
+		default:
+			t.Errorf("unexpected top-level key %q: only identity and the requested property may be returned", key)
+		}
+	}
+	return identity, entries
+}
+
 func defaultToolsParsePreview(t *testing.T, raw, kind string, names []string) map[string]string {
 	t.Helper()
-	assert.False(t, json.Valid([]byte(raw)), "SPEC.md compact output replaces the verbose JSON blocks")
-	column := "worker"
-	if kind == "Main" {
-		column = "main"
-	}
-	lines := strings.Split(strings.TrimSuffix(raw, "\n"), "\n")
-	require.Equal(t, "preview: "+kind+" | kind: "+column, lines[0], "SPEC.md compact preview identity")
-	require.Len(t, lines, len(names)+1, "SPEC.md no id/revision or extra metadata sections in preview")
+	identity, entries := defaultToolsEntries(t, raw)
+	assert.Equal(t, map[string]any{"preview_of": kind}, identity, "r17 7.12.1: a preview has preview_of and no id or revision")
+	require.Len(t, entries, len(names), "every catalog entry appears once")
 	policies := map[string]string{}
-	actualNames := slices.Grow([]string(nil), len(lines)-1)
-	for _, line := range lines[1:] {
-		parts := strings.SplitN(line, " | ", 3)
-		require.GreaterOrEqual(t, len(parts), 2)
-		if parts[1] == "deny" {
-			// SPEC.md Q21=D: Deny rows contain no description field.
-			require.Len(t, parts, 2)
+	actualNames := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name, _ := entry["tool"].(string)
+		effective, _ := entry["effective"].(string)
+		if effective == "deny" {
+			assert.NotContains(t, entry, "description", "deny entries carry no description")
 		} else {
-			// SPEC.md Q21=D: Allow/Ask descriptions retain only the short first sentence.
-			require.Len(t, parts, 3)
-			assert.Equal(t, "Short description.", parts[2], "Q21=D first sentence only; no schemas or long descriptions")
+			assert.Equal(t, "Short description.", entry["description"], "first sentence only; no schemas or long descriptions")
 		}
-		policies[parts[0]] = parts[1]
-		actualNames = append(actualNames, parts[0])
+		policies[name] = effective
+		actualNames = append(actualNames, name)
 	}
-	assert.Equal(t, names, actualNames, "SPEC.md every catalog entry, name-sorted, including deny")
+	assert.Equal(t, names, actualNames, "every catalog entry, name-sorted, including deny")
 	return policies
 }
 
 func defaultToolsWireCatalog(t *testing.T, deps *systools.Deps, metadata []tools.Tool) {
 	t.Helper()
-	field := reflect.ValueOf(deps).Elem().FieldByName("ToolCatalog")
-	if field.IsValid() {
-		callback := reflect.ValueOf(func() []tools.Tool { return metadata })
-		require.True(t, callback.Type().AssignableTo(field.Type()))
-		field.Set(callback)
-	}
+	deps.ToolCatalog = func() []tools.Tool { return metadata }
 }
 
-// SPEC.md compact output replaces only the read-back carrier. Existing
-// identity, exact-name lookup, permissions and mutation error checks stay real.
+// defaultToolsExistingBody reads an existing agent's tool_permissions through
+// the real get_agent. Identity, exact-name lookup, permissions and mutation
+// error checks stay real; args carries the selector (id or name).
 func defaultToolsExistingBody(t *testing.T, deps *systools.Deps, id string, args map[string]any, extra ...tools.Tool) (string, map[string]string) {
 	t.Helper()
 	metadata := append(systools.AllTools(deps), tools.GeneralBuiltinMetadata()...)
 	metadata = append(metadata, extra...)
 	defaultToolsWireCatalog(t, deps, metadata)
-	result := systools.NewAgentGetToolsTool(deps).Execute(context.Background(), args)
-	require.False(t, result.IsError, "compact read failed: %s", result.ForLLM)
+	call := map[string]any{"fields": []any{"tool_permissions"}}
+	for k, v := range args {
+		call[k] = v
+	}
+	result := systools.NewAgentGetTool(deps).Execute(context.Background(), call)
+	require.False(t, result.IsError, "get_agent read failed: %s", result.ForLLM)
 	state, err := agentstore.New(deps.Home).ReadState(id)
 	require.NoError(t, err)
-	header := fmt.Sprintf("agent: %s | name: %s | kind: main | revision: %s", id, state.Agent.Name, state.Revision)
-	policies := defaultToolsCompactPolicies(t, result.ForLLM, header)
+	policies := defaultToolsCompactPolicies(t, result.ForLLM, map[string]any{"id": id, "revision": state.Revision})
 	return result.ForLLM, policies
 }
 
-func defaultToolsCompactPolicies(t *testing.T, raw, header string) map[string]string {
+// defaultToolsCompactPolicies checks the inventory contract and returns tool -> effective.
+func defaultToolsCompactPolicies(t *testing.T, raw string, identity map[string]any) map[string]string {
 	t.Helper()
-	require.False(t, json.Valid([]byte(raw)), "SPEC.md compact output must not retain JSON blocks")
-	lines := strings.Split(strings.TrimSuffix(raw, "\n"), "\n")
-	require.Equal(t, header, lines[0], "SPEC.md exact identity header")
+	gotIdentity, entries := defaultToolsEntries(t, raw)
+	require.Equal(t, identity, gotIdentity, "exact identity keys")
 	result := map[string]string{}
-	names := slices.Grow([]string(nil), len(lines)-1)
-	for _, line := range lines[1:] {
-		parts := strings.SplitN(line, " | ", 3)
-		require.GreaterOrEqual(t, len(parts), 2, "SPEC.md Q21=D tool row has name and policy")
-		assert.Contains(t, []string{"allow", "ask", "deny"}, parts[1])
-		if parts[1] == "deny" {
-			// SPEC.md Q21=D: Deny has exactly two fields.
-			require.Len(t, parts, 2)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name, _ := entry["tool"].(string)
+		effective, _ := entry["effective"].(string)
+		assert.Contains(t, []string{"allow", "ask", "deny"}, effective)
+		description, hasDescription := entry["description"].(string)
+		if effective == "deny" {
+			assert.False(t, hasDescription, "deny entries carry no description")
 		} else {
-			// SPEC.md Q21=D: Allow/Ask include a normalized description of at most 40 characters.
-			require.Len(t, parts, 3)
-			assert.LessOrEqual(t, utf8.RuneCountInString(parts[2]), 40)
-			assert.Equal(t, strings.Join(strings.Fields(parts[2]), " "), parts[2])
+			require.True(t, hasDescription, "allow/ask entries include a description")
+			assert.LessOrEqual(t, utf8.RuneCountInString(description), 40)
+			assert.Equal(t, strings.Join(strings.Fields(description), " "), description)
 		}
-		_, duplicate := result[parts[0]]
-		assert.False(t, duplicate, "one row per tool")
-		result[parts[0]] = parts[1]
-		names = append(names, parts[0])
+		_, duplicate := result[name]
+		assert.False(t, duplicate, "one entry per tool")
+		result[name] = effective
+		names = append(names, name)
 	}
-	expected := append([]string{}, names...)
-	sort.Strings(expected)
-	assert.Equal(t, expected, names, "SPEC.md name-sorted inventory")
+	assert.True(t, slices.IsSorted(names), "name-sorted inventory")
 	return result
 }

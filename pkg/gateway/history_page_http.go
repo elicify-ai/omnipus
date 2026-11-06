@@ -12,7 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-const historyUnavailableCopy = "Session history is unavailable. Retry after the operator restores its index."
+const historyUnavailableCopy = "This conversation's history could not be loaded."
 const historyStorageCopy = "This session could not be read because session storage failed. Check disk space and permissions, then retry. Details are in the server log."
 
 func historyStateForError(err error) generated.SessionHistoryState {
@@ -67,6 +67,8 @@ func historyHTTPFailure(ctx context.Context, w http.ResponseWriter, id string, e
 		jsonErr(w, 400, "invalid history page range")
 	case errors.Is(err, session.ErrHistoryPositionNotFound):
 		jsonErr(w, 404, "history position not found")
+	case errors.Is(err, session.ErrHistoryEntryExpired):
+		jsonErr(w, 410, "history entry expired")
 	default:
 		state := historyStateForError(err)
 		if state.Message != nil && *state.Message == historyUnavailableCopy {
@@ -86,14 +88,19 @@ func (a *restAPI) historyProjectionDeps(store *session.UnifiedStore, id string) 
 	}
 	return deps
 }
-func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id string) {
+
+// readableSessionStore applies the history page's session access order
+// after the registered auth wrapper and the session-id check: main-session
+// eligibility, then store resolution and session metadata. It writes the
+// refusal and returns nil when the session may not be read.
+func (a *restAPI) readableSessionStore(w http.ResponseWriter, id string) *session.UnifiedStore {
 	if !a.gateMainRead(w, id) {
-		return
+		return nil
 	}
 	store := a.resolveSessionStore(id)
 	if store == nil {
 		jsonErr(w, 404, "session not found")
-		return
+		return nil
 	}
 	if _, err := store.GetMeta(id); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -101,6 +108,60 @@ func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id
 		} else {
 			jsonSessionStorageError(w, "read", id, err)
 		}
+		return nil
+	}
+	return store
+}
+
+// serveSessionHistoryEntry is GET /sessions/{id}/messages/{history_position}
+// (operationId getSessionHistoryEntry; chat-history paging spec, Amendment
+// 2026-10-27 D2, A2.2). Session refusals precede any position work; the full
+// public projection after effects comes from the same projector as a page
+// entry, with display shortening off. Errors keep historyHTTPFailure's
+// storage-primary precedence.
+func (a *restAPI) serveSessionHistoryEntry(w http.ResponseWriter, r *http.Request, id, rawPosition string) {
+	store := a.readableSessionStore(w, id)
+	if store == nil {
+		return
+	}
+	position, err := session.ParseHistoryPosition(rawPosition)
+	if err != nil {
+		historyHTTPFailure(r.Context(), w, id, err)
+		return
+	}
+	entry, err := store.ReadChatHistoryEntry(r.Context(), id, position)
+	if err != nil {
+		historyHTTPFailure(r.Context(), w, id, err)
+		return
+	}
+	// A2.2: the full projection is never a HistoryResultPreview, and an
+	// ordinary (unshortened) result must not carry the reserved key. A saved
+	// result that does — valid marker shape or not — fails the server-side
+	// marker check and becomes the D4 per-item placeholder (#1452 SEC-3).
+	if historySavedMarkerPresent(entry.Entry) {
+		logsafeWarn("history: saved item replaced by its placeholder", "event", "history_item_placeholder", "reason", "saved_preview_marker")
+		entry.Entry = historyPlaceholderSource(entry.Entry)
+		entry.NestedDelegateParents = nil
+	}
+	_, encoded, err := historyWireMessage(id, entry)
+	if err != nil {
+		historyHTTPFailure(r.Context(), w, id, historyProjectionError(err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if _, err = w.Write(encoded); err != nil {
+		slog.Debug("rest: write response body failed", "error", err)
+		return
+	}
+	if _, err = w.Write([]byte("\n")); err != nil {
+		slog.Debug("rest: write newline failed", "error", err)
+	}
+}
+
+func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id string) {
+	store := a.readableSessionStore(w, id)
+	if store == nil {
 		return
 	}
 	attempt := newHistoryPageAttempt("rest_messages")
@@ -121,6 +182,7 @@ func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id
 		historyHTTPFailure(r.Context(), w, id, err)
 		return
 	}
+	request.keep = historyKeepBody
 	prepared, err := request.Read(attempt.context(r.Context()), store)
 	attempt.err = err
 	if err != nil {
@@ -150,6 +212,7 @@ func (a *restAPI) writePagedSessionDetail(w http.ResponseWriter, r *http.Request
 	request, err := newHistoryPageRequest(meta.ID, opts, a.historyProjectionDeps(store, meta.ID))
 	var prepared preparedHistoryPage
 	if err == nil {
+		request.keep = historyKeepMessages
 		prepared, err = request.Read(attempt.context(r.Context()), store)
 	}
 	attempt.err = err

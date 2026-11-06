@@ -899,6 +899,10 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		Role:      entry.Role,
 		Content:   entry.Content,
 	}
+	// A2.1: a history page's shortened ordinary message carries its true size.
+	if n := entry.DisplayContentOriginalSizeBytes(); n > 0 {
+		sr.msgFrame.ContentOriginalSizeBytes = &n
+	}
 	if !entry.Timestamp.IsZero() {
 		timestamp := entry.Timestamp.UTC().Format(time.RFC3339Nano)
 		sr.msgFrame.Timestamp = &timestamp
@@ -1099,11 +1103,10 @@ func (sr *streamReplayState) buildSubagentStart(tc session.ToolCall) {
 	// result shape is defined elsewhere; a missing/differently-keyed
 	// result simply leaves ChildSessionId nil (the open control degrades
 	// gracefully, per the field's own "optional" contract).
-	if tc.Result != nil {
-		if sid, ok := tc.Result["session_id"].(string); ok && sid != "" {
-			sidCopy := sid
-			sr.subStart.ChildSessionId = &sidCopy
-		}
+	// A history page's shortened result keeps this fact from its full value.
+	if sid := historyToolCallChildSessionID(tc); sid != "" {
+		sidCopy := sid
+		sr.subStart.ChildSessionId = &sidCopy
 	}
 }
 
@@ -1176,7 +1179,7 @@ func buildMediaFrame(
 	seenPaths map[string]struct{},
 	libraryHome, libraryWorkspaceID string,
 ) (generated.MediaFrame, bool) {
-	raw, ok := tc.Result["media"]
+	raw, ok := historyToolCallMedia(tc)
 	if !ok {
 		return generated.MediaFrame{}, false
 	}
@@ -1480,7 +1483,8 @@ func applyPersistedFailureReason(f *generated.ToolCallResultFrame, tc session.To
 	//
 	// Only fills Result when nothing richer is already there: a call carrying
 	// media descriptors or a sync-delegate payload keeps its own shape.
-	if tc.Result == nil {
+	// A history-page preview replaced a non-nil full result: keep the marker.
+	if _, preview := tc.HistoryDisplayPreview(); tc.Result == nil && !preview {
 		f.Result = obj
 	}
 	if reason != "" {

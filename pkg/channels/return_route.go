@@ -29,7 +29,7 @@ func ReturnRouteRefusals() int64 { return returnRouteRefusals.Load() }
 // through a connector the source owner no longer owns. Messages without a
 // route are not in scope and pass.
 //
-// It deliberately ignores bus.OutboundMessage.OwnershipChecked and the
+// It deliberately ignores bus.OutboundMessage.Operation and the
 // author's own pair: neither can grant a route. cfg nil refuses (fail
 // closed) — unlike allowAgentOriginatedSend, a missing config here must not
 // become a guessed send.

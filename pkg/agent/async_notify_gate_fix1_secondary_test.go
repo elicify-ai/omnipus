@@ -20,6 +20,10 @@ import (
 // SF-C2's exact safe field/message oracle is the bounded architect addendum.
 // This drives the real finished-tool callback; it never invokes Notify directly.
 func TestGateFix1FinishedCallbackReportsSecondaryNoticeSaveFailure(t *testing.T) {
+	// The three-attempt delivery oracle below (require.Len(primary, 3)) needs
+	// three REAL publish attempts; shorten only the wall-clock timers so they
+	// are real but fast (see b3ShortenPublishRetryTimers).
+	b3ShortenPublishRetryTimers(t)
 	const nativeToolName = "gate1_async_notice_probe"
 	provider := testutil.NewScenario().WithToolCalls([]providers.ToolCall{{ID: "gate1-real-native-async-call", Function: &providers.FunctionCall{Name: nativeToolName, Arguments: "{}"}}}).WithText("gate1 native producer completed")
 	al, mb, _ := newAsyncChildPublicationTestLoop(t, provider, false)
@@ -194,6 +198,10 @@ func gate1OriginCompletedProducer(t *testing.T) (*AgentLoop, *b3AsyncTool, *b3To
 // A failed canonical read is not the same as an intentional nil-error refusal.
 // The architect's existing two-stage diagnostic contract distinguishes them.
 func TestGateFix1FinishedCallbackOriginReadDiagnostics(t *testing.T) {
+	// Both subtests exhaust the original three handoffs (require.Len(primary, 3))
+	// through the real finished callback; shorten only the wall-clock timers
+	// (see b3ShortenPublishRetryTimers). Cleanup restores after both subtests.
+	b3ShortenPublishRetryTimers(t)
 	for _, failRead := range []bool{true, false} {
 		label := "InitialTaskAudienceRefusal"
 		if failRead {

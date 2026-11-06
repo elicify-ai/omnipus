@@ -1,6 +1,8 @@
 # CI eligibility and the issue-tracked failure quarantine
 
-Last reviewed: 2026-10-23
+Last reviewed: 2026-10-29 — trunk-based landing branches, default CI model
+
+Process version: 2026-10-29.1
 
 This implements rules 4 and 7 of the founder-approved process rollout. The chief
 clarified that a standalone feature need not have an `integration/` branch name.
@@ -19,7 +21,10 @@ The existing path/language filters and paid `run-e2e` label selection still appl
 | Pull request opened/updated/reopened | `integration/l1-bundle3` | `release/v0.1.1` | Yes, draft or ready |
 | Pull request opened/updated/reopened | `feature/1266-chat-history-paging` | `release/v0.1.1` or `main` | Yes, draft or ready |
 | Pull request opened/updated/reopened | Any work branch | `integration/l1-bundle3` | No |
+| Pull request opened/updated | `landing/t6` (a train's landing branch, or a standalone feature's such as `landing/effort`) | `release/v0.1.1` | Yes, draft or ready (this is the cut) |
+| Pull request | any branch | `landing/*` | No; direct pushes are the rule, no PR into a landing branch |
 | Push | `main` or `release/v0.1.1` | — | Yes |
+| Push | `landing/*` (trunk-based landing branches) | — | No (by design: no full CI until the cut) |
 | Push | `integration/*`, `feature/*`, `work/*`, another release branch | — | No |
 | Manual full-workflow dispatch | Any branch | — | Removed from the four workflows that had it |
 | Weekly scheduled CodeQL scan | Default `main` | — | Retained |
@@ -31,15 +36,30 @@ PR's now-dead `llm_e2e` input was removed with it. Add `run-e2e` before the next
 PR push or reopen to select paid LLM shards. Release/main pushes retain the full
 shard plan. Unrelated scheduled/manual workflows are unchanged.
 
-Lanes run their own tests and a minimal targeted regression, locally or on Fly
-with founder permission. A local typecheck and compile must pass before a Fly
-window; use the required slot runner for heavy local commands. Full GitHub CI
-belongs to the train or standalone-feature PR, not each plain lane push.
+Trunk-based landing (founder, 2026-10-29): teams push directly to the train's
+`landing/<train>` branch, and those pushes start no full CI. Before each push the
+author runs only the own-tests rule (root `CLAUDE.md`, "Landing trains"): the code
+builds, the linter is clean on the touched packages, and the change's targeted
+tests pass, locally or on Fly with founder permission; nobody runs a whole suite.
+A local typecheck and compile must pass before a Fly window; use the required slot
+runner for heavy local commands (on a pod, `/usr/local/bin/heavy`). The cut, when
+the team leads say the train is ready, is the chief's draft PR from the landing
+branch to `release/v0.1.1`: it starts the single full CI run, on exactly the cut
+commit, and regressions are found there. Add the `run-e2e` label to the cut PR
+before its next push or reopen when the paid LLM shards must run.
+
+## Default CI model
+
+E2E shards use `tests/e2e/e2e-model.json`: primary MiniMax
+`MiniMax-M3.1-Flash-Preview`, fallback `deepseek/deepseek-v4.1-flash` on
+OpenRouter; the secrets are listed in `.github/SECRETS.md`. This is separate from
+the UAT provider rule in root `CLAUDE.md`, which governs the model the app under
+test uses in a hands-on run.
 
 ## One list, no skipped tests
 
 The single aggregate-exception list is
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/.github/ci-quarantine.json`.
+`.github/ci-quarantine.json`.
 Each record carries its test/infrastructure ID, exact check scope, open issue
 number, added date and reason. The list may shrink without approval. Adding an
 entry or broadening an existing entry requires the founder's explicit approval;
@@ -65,7 +85,7 @@ quarantine evidence. It never retries a failure or changes a test assertion.
 
 ## How the aggregate decides
 
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/scripts/ci-quarantine.py::aggregate`
+`scripts/ci-quarantine.py::aggregate`
 uses the direct dependency results, current-run job metadata and exact evidence.
 It first validates **every** list entry through the live GitHub issue API, even
 when all jobs passed. A closed issue, missing issue, pull request masquerading as
@@ -106,7 +126,7 @@ unchanged and blocking. This handles a transport reset, not a test failure, and
 adds nothing to the quarantine list.
 
 The local parsed-workflow proof at
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/scripts/ci-gate-wiring.test.py`
+`scripts/ci-gate-wiring.test.py`
 feeds a failed hermetic gate through the actual declared dependency set and
 exercises first-download success, retry recovery and two failures. It finds
 every step named `Download all evidence artifacts` across the workflows, not
@@ -118,8 +138,8 @@ Run the guard and its dependency-free fixture self-test with Python 3 and the
 authenticated GitHub CLI (set `GH_TOKEN` in CI). No Go build or browser is needed.
 
 ```bash
-GITHUB_REPOSITORY=elicify-ai/omnipus python3 -I /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/scripts/ci-quarantine.py guard
-python3 -I /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/scripts/ci-quarantine.py --self-test
+GITHUB_REPOSITORY=elicify-ai/omnipus python3 -I scripts/ci-quarantine.py guard
+python3 -I scripts/ci-quarantine.py --self-test
 ```
 
 The self-test exercises the real CLI/classifier with only the GitHub process edge
@@ -127,10 +147,13 @@ replaced by fixtures. It includes failed quarantined and failed unlisted jobs,
 closed/missing issues, missing reports, an extra failure in a listed shard, exact
 installation timeout evidence and re-run attempts. It is run inside the required
 CI job before the real aggregate. The separate trigger-table proof at
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/scripts/ci-workflow-triggers.test.py`
+`scripts/ci-workflow-triggers.test.py`
 uses PyYAML for a local, parsed-workflow eligibility check, not a claim that a
 GitHub-hosted run was executed.
 
 This is developer delivery infrastructure, not product behaviour; no user-facing
 product documentation change is required. The Fly worker's raw verdict and log
 parsing are unchanged; it does not apply GitHub's aggregate exceptions.
+
+## Why a landing runs the full CI twice (founder, 2026-10-29)
+The cut PR runs the full CI once without the paid live-model (llm-*) shards unless the PR carries the `run-e2e` label. The push to the release branch at landing always runs the full CI including those live-model shards. That second run is intended and is the run that exercises the live-model tests: do not suppress it. Both runs are on the same commit when the landing is a fast-forward.

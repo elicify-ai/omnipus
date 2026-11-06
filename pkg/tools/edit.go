@@ -121,7 +121,7 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if err := editFile(handle, oldText, newText); err != nil {
 		return ErrorResult(err.Error())
 	}
-	return SilentResult(withLinkLine(fmt.Sprintf("File edited: %s", path), handleLinkLine(ctx, handle)))
+	return SilentResult(withLinkLine(fmt.Sprintf("File edited: %s", path)+handle.SkillChangeNote(), handleLinkLine(ctx, handle)))
 }
 
 type AppendFileTool struct {
@@ -220,7 +220,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if err := appendFile(handle, content); err != nil {
 		return ErrorResult(err.Error())
 	}
-	return SilentResult(withLinkLine(fmt.Sprintf("Appended to %s", path), handleLinkLine(ctx, handle)))
+	return SilentResult(withLinkLine(fmt.Sprintf("Appended to %s", path)+handle.SkillChangeNote(), handleLinkLine(ctx, handle)))
 }
 
 // handleLinkLine is LinkLine for a resolved path handle: the handle's real
