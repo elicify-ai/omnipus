@@ -31,6 +31,12 @@
 // pair before it splits words, so `ba\<newline>sh` is the word bash, while
 // shellQuoteMask reads the pair as one escaped character and would hide it.
 //
+// A here-document's end is found where bash finds it (T11 F1, founder Q8 A):
+// with an unquoted delimiter bash joins backslash-newline pairs before it
+// compares a line with the delimiter, so the text after a split delimiter is
+// shell text, not data. dash and ksh were measured not joining there; ending
+// the document at the joined line then only scans more text as shell.
+//
 // Residual, stated: a non-shell program that hands its own data to a shell
 // (Python's os.system, perl system) is not followed; the guard reads command
 // text only.
@@ -70,15 +76,17 @@ func mayBraceExpand(cmd string, depth int) bool {
 		return true
 	}
 	inBody := make([]bool, len(cmd))
+	inDocument := make([]bool, len(cmd))
 	for _, b := range bodies {
-		for i := b.start; i < b.end; i++ {
-			inBody[i] = true
+		for i := b.start; i < b.skipEnd; i++ {
+			inDocument[i] = true
+			inBody[i] = i < b.end
 		}
 		if b.shell && mayBraceExpand(cmd[b.start:b.end], depth+1) {
 			return true
 		}
 	}
-	if hasUnquotedLineContinuation(cmd, inBody) {
+	if hasUnquotedLineContinuation(cmd, inDocument) {
 		return true
 	}
 	// An unquoted command separator ends a simple command even without
@@ -141,7 +149,8 @@ func mayBraceExpand(cmd string, depth int) bool {
 // by a newline outside quotes, using shellQuoteMask's quoting rules, ignoring
 // positions marked in skip (here-document bodies: a body fed to a shell is
 // scanned on its own by the recursion, a body fed to another program is
-// data). Bash removes such a pair before it identifies words (Bash Reference
+// data; plus an unquoted-delimiter document's ending line, whose pairs bash
+// joins as document text). Bash removes such a pair before it identifies words (Bash Reference
 // Manual, "Escape Character"). Inside single quotes the pair is literal;
 // inside double quotes bash removes it too, but it only joins text within one
 // quoted word and creates no new word, so it does not count here.
@@ -325,17 +334,21 @@ func isRedirectionWord(w string) bool {
 }
 
 // hereDocBody is one here-document body: cmd[start:end], and whether the
-// command consuming it is a shell (its body is then shell text).
+// command consuming it is a shell (its body is then shell text). skipEnd is
+// where the line-continuation scan resumes: past the ending delimiter line
+// for an unquoted delimiter, end otherwise.
 type hereDocBody struct {
-	start, end int
-	shell      bool
+	start, end, skipEnd int
+	shell               bool
 }
 
 // hereDocBodies finds the bodies of the unquoted `<<` / `<<-` here-documents
 // in cmd (not `<<<` here-strings). A body runs from the line after the
 // operator to the line equal to its delimiter (leading tabs ignored for
 // `<<-`), or to the end of the text when no such line exists, which is how
-// the shell treats it. ok is false when a delimiter cannot be read.
+// the shell treats it. With an unquoted delimiter those lines are logical
+// lines (hereDocLine). ok is false when a delimiter cannot be read, or when a
+// line continuation splits it, so the document's end stays undecided.
 func hereDocBodies(cmd string, mask []bool) ([]hereDocBody, bool) {
 	var out []hereDocBody
 	for i := 0; i+1 < len(cmd); i++ {
@@ -356,7 +369,7 @@ func hereDocBodies(cmd string, mask []bool) ([]hereDocBody, bool) {
 		for j < len(cmd) && (cmd[j] == ' ' || cmd[j] == '\t') {
 			j++
 		}
-		delim, next, ok := readHereDocDelimiter(cmd, j)
+		delim, next, quoted, ok := readHereDocDelimiter(cmd, j)
 		if !ok {
 			return nil, false
 		}
@@ -366,36 +379,71 @@ func hereDocBodies(cmd string, mask []bool) ([]hereDocBody, bool) {
 			continue // operator on the last line: no body
 		}
 		start := next + nl + 1
-		end, resume := len(cmd), len(cmd)
-		for pos := start; pos < len(cmd); {
-			lineEnd := strings.IndexByte(cmd[pos:], '\n')
-			line := cmd[pos:]
-			if lineEnd >= 0 {
-				line = cmd[pos : pos+lineEnd]
-			}
-			check := line
-			if stripTabs {
-				check = strings.TrimLeft(line, "\t")
-			}
-			if check == delim {
-				end = pos
-				resume = pos + len(line)
-				break
-			}
-			if lineEnd < 0 {
-				break
-			}
-			pos += lineEnd + 1
+		end, resume := hereDocTerminator(cmd, start, delim, stripTabs, !quoted)
+		skipEnd := resume
+		if quoted {
+			skipEnd = end
 		}
-		out = append(out, hereDocBody{start: start, end: end, shell: hereDocConsumerIsShell(cmd, mask, op)})
+		out = append(out, hereDocBody{start: start, end: end, skipEnd: skipEnd, shell: hereDocConsumerIsShell(cmd, mask, op)})
 		i = resume
 	}
 	return out, true
 }
 
+// hereDocTerminator finds the line ending the document whose body starts at
+// start. It returns that line's start and the index just past its text, or
+// len(cmd) twice when no line matches.
+func hereDocTerminator(cmd string, start int, delim string, stripTabs, joinLines bool) (end, resume int) {
+	for pos := start; pos < len(cmd); {
+		line, lineEnd := hereDocLine(cmd, pos, joinLines)
+		if stripTabs {
+			line = strings.TrimLeft(line, "\t")
+		}
+		if line == delim {
+			return pos, lineEnd
+		}
+		pos = lineEnd + 1
+	}
+	return len(cmd), len(cmd)
+}
+
+// hereDocLine returns the line at cmd[pos:] and the index of the newline that
+// ends it (len(cmd) when none does). With joinLines it reads the logical line
+// of an unquoted-delimiter document as bash does (measured on bash 3.2 and
+// 5.3): a backslash removes a following newline and otherwise escapes the next
+// character, so in `\\<newline>` the second backslash is escaped and the
+// newline still ends the line.
+func hereDocLine(cmd string, pos int, joinLines bool) (string, int) {
+	if !joinLines {
+		if nl := strings.IndexByte(cmd[pos:], '\n'); nl >= 0 {
+			return cmd[pos : pos+nl], pos + nl
+		}
+		return cmd[pos:], len(cmd)
+	}
+	var b strings.Builder
+	for i := pos; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case c == '\n':
+			return b.String(), i
+		case c == '\\' && i+1 < len(cmd):
+			i++
+			if cmd[i] != '\n' {
+				b.WriteByte(c)
+				b.WriteByte(cmd[i])
+			}
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String(), len(cmd)
+}
+
 // readHereDocDelimiter reads the delimiter word at cmd[j:], removing quotes
-// and backslashes as the shell does. It returns the word and the index after it.
-func readHereDocDelimiter(cmd string, j int) (string, int, bool) {
+// and backslashes as the shell does. It returns the word, the index after it
+// and whether any part of it was quoted. ok is false for a word it cannot
+// read, including one split by a line continuation.
+func readHereDocDelimiter(cmd string, j int) (delim string, next int, quoted, ok bool) {
 	var b strings.Builder
 	var quote byte
 	k := j
@@ -410,22 +458,27 @@ func readHereDocDelimiter(cmd string, j int) (string, int, bool) {
 			}
 		case c == '\'' || c == '"':
 			quote = c
+			quoted = true
 		case c == '\\' && k+1 < len(cmd):
 			k++
+			if cmd[k] == '\n' {
+				return "", k, false, false
+			}
+			quoted = true
 			b.WriteByte(cmd[k])
 		case c == ' ' || c == '\t' || c == '\n' || strings.IndexByte(";|&<>()", c) >= 0:
 			if b.Len() == 0 || quote != 0 {
-				return "", k, false
+				return "", k, false, false
 			}
-			return b.String(), k, true
+			return b.String(), k, quoted, true
 		default:
 			b.WriteByte(c)
 		}
 	}
 	if quote != 0 || b.Len() == 0 {
-		return "", k, false
+		return "", k, false, false
 	}
-	return b.String(), k, true
+	return b.String(), k, quoted, true
 }
 
 // hereDocConsumerIsShell reports whether the simple command that owns the
