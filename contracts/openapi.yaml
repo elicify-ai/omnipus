@@ -4022,7 +4022,11 @@ paths:
         of being silently dropped, so the operator sees it before saving.
         Works from the create wizard (no agent id exists yet) and from an
         existing agent's edit form alike — mirrors POST /system/cli-validate's
-        stateless, body-driven shape. No subprocess is spawned.
+        stateless, body-driven shape. No subprocess is spawned. The program
+        is the path a person saved in Settings -> Third-party agents: with
+        none saved, or one that fails the program checks, the route refuses
+        with 400 and the text a run would be refused with, never falling back
+        to a program on $PATH.
       tags:
       - agents
       security:
@@ -4061,8 +4065,11 @@ paths:
         POST /system/cli-validate uses but independently tuned since this
         endpoint spends real tokens and holds a real subprocess (5/min and 1
         concurrent run per caller, vs. cli-validate's 20/min and 2), and
-        emits one audit event {cli, resolved binary, ok} per call, since —
-        like cli-validate — it spawns a caller-influenced binary/path.
+        emits one audit event {cli, resolved binary, ok} per call. The
+        program is the path a person saved in Settings -> Third-party agents,
+        checked as at real dispatch: with none saved, or one that fails the
+        checks, nothing is spawned and the body is ok false with the text a
+        run would be refused with, never falling back to a program on $PATH.
         Body-driven and agent-agnostic; works from the create wizard and an
         existing agent's edit form alike.
       tags:
