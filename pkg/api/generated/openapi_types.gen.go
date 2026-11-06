@@ -14579,7 +14579,7 @@ type Agent struct {
 		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 		Kind *AgentExecutorKind `json:"kind,omitempty"`
 
-		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
 		ProgramWarning *string `json:"program_warning,omitempty"`
 	} `json:"executor,omitempty"`
 
@@ -15088,7 +15088,7 @@ type AgentDetail struct {
 		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 		Kind *AgentDetailExecutorKind `json:"kind,omitempty"`
 
-		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
 		ProgramWarning *string `json:"program_warning,omitempty"`
 	} `json:"executor,omitempty"`
 
@@ -18323,7 +18323,7 @@ type ExecutorConfig struct {
 	// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 	Kind *ExecutorConfigKind `json:"kind,omitempty"`
 
-	// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+	// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
 	ProgramWarning *string `json:"program_warning,omitempty"`
 }
 
