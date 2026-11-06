@@ -1,0 +1,66 @@
+title: ProviderStatusFrame
+description: >
+  Server → client (issues #1478 and #1280). The state of the model-provider
+  call a running turn is waiting on, so the chat can tell a slow answer from a
+  stalled one and say when an automatic retry worked. `waiting`: nothing has
+  arrived from the provider since silent_since (the call is still open; the
+  silence limit ends it at stall_at when known; Stop stays available).
+  `responding`: data arrives again, or the call returned, after a `waiting`
+  notice — the client clears the notice. `recovered`: the call succeeded after
+  `retries` automatic retries (the "reconnected" note). Built from named fields
+  only, never provider text. The SPA keys one per-turn item on turn_id; each
+  newer frame for the turn replaces the previous one and the turn-end frame
+  clears it.
+type: object
+required:
+  - type
+  - session_id
+  - turn_id
+  - state
+  - sent_at
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: provider_status
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: Session whose turn is waiting on the provider.
+  turn_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Turn the status belongs to; keys the per-turn projection item.
+  state:
+    type: string
+    enum:
+      - waiting
+      - responding
+      - recovered
+    description: The provider-call state (see the frame description).
+  sent_at:
+    type: string
+    format: date-time
+    description: RFC 3339 server wall clock at frame publication; the client measures elapsed silence against it, skew-immune like provider_retry.
+  silent_since:
+    type: string
+    format: date-time
+    description: State `waiting` only — RFC 3339 server time of the last data from the provider (or the start of the call when nothing arrived yet).
+  stall_at:
+    type: string
+    format: date-time
+    description: State `waiting` only, when known — RFC 3339 server time at which the silence limit will end the call.
+  retries:
+    type: integer
+    minimum: 1
+    description: State `recovered` only — how many automatic retries the successful call needed.
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >-
+      Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+      absent on an unsequenced copy of this frame. This seq is dedup state, never
+      itself the resume cursor.

@@ -71,7 +71,7 @@ func TestFileTools_BlockAgentMetadata(t *testing.T) {
 			if !result.IsError {
 				t.Fatalf("write_file(%q): expected blocked error, got success: %s", fname, result.ForLLM)
 			}
-			assertMetadataGuardError(t, result.ForLLM, "write")
+			assertMetadataGuardError(t, result.ForLLM, "write", fname)
 			// File must NOT have been created on disk.
 			if _, err := os.Stat(filepath.Join(ws, strings.ToUpper(fname))); err == nil {
 				t.Errorf("write_file(%q): file was written despite guard", fname)
@@ -91,7 +91,7 @@ func TestFileTools_BlockAgentMetadata(t *testing.T) {
 			if !result.IsError {
 				t.Fatalf("read_file(%q): expected blocked error, got success: %s", fname, result.ForLLM)
 			}
-			assertMetadataGuardError(t, result.ForLLM, "read")
+			assertMetadataGuardError(t, result.ForLLM, "read", fname)
 		})
 
 		t.Run("edit_file/"+fname, func(t *testing.T) {
@@ -110,7 +110,7 @@ func TestFileTools_BlockAgentMetadata(t *testing.T) {
 			if !result.IsError {
 				t.Fatalf("edit_file(%q): expected blocked error, got success: %s", fname, result.ForLLM)
 			}
-			assertMetadataGuardError(t, result.ForLLM, "write")
+			assertMetadataGuardError(t, result.ForLLM, "write", fname)
 		})
 
 		t.Run("append_file/"+fname, func(t *testing.T) {
@@ -122,7 +122,7 @@ func TestFileTools_BlockAgentMetadata(t *testing.T) {
 			if !result.IsError {
 				t.Fatalf("append_file(%q): expected blocked error, got success: %s", fname, result.ForLLM)
 			}
-			assertMetadataGuardError(t, result.ForLLM, "write")
+			assertMetadataGuardError(t, result.ForLLM, "write", fname)
 		})
 	}
 }
@@ -302,7 +302,7 @@ func TestMetadataGuardError_StructuredJSON(t *testing.T) {
 
 // assertMetadataGuardError asserts that body is a USE_METADATA_TOOL error
 // pointing to the right tool name for the given op ("read" or "write").
-func assertMetadataGuardError(t *testing.T, body, op string) {
+func assertMetadataGuardError(t *testing.T, body, op, fname string) {
 	t.Helper()
 
 	var parsed map[string]any
@@ -321,9 +321,14 @@ func assertMetadataGuardError(t *testing.T, body, op string) {
 
 	sug, _ := errObj["suggestion"].(string)
 	var expectedTool string
-	if op == "read" {
-		expectedTool = "read_agent_metadata"
-	} else {
+	switch {
+	case strings.EqualFold(fname, "HEARTBEAT.md"):
+		// r17 7.12: heartbeats are per workspace, not per agent, so there is
+		// no agent tool to hand back; the guard names the workspace tool.
+		expectedTool = "update_workspace"
+	case op == "read":
+		expectedTool = "get_agent"
+	default:
 		expectedTool = "update_agent"
 	}
 	if !strings.Contains(sug, expectedTool) {

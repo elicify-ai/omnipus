@@ -87,6 +87,10 @@ func u22RecordTranscriptMutateMissed(msg, sessionID string, callID session.ToolC
 const (
 	toolCallStatusPending = "pending"
 	toolCallStatusDenied  = "denied"
+	// toolCallStatusRunning marks the record a dispatched call writes before it
+	// executes (started_tool_outcome.go::beginStartedTool); its outcome settles
+	// that record in place (turn_transcript.go::appendToolCallTranscript).
+	toolCallStatusRunning = "running"
 )
 
 // askPendingPlaceholdersWritten counts every recordAskPendingToolCall call

@@ -33,7 +33,7 @@ export type LLMErrorAttribution =
 export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -42,6 +42,7 @@ export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request
  */
 export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   media_unsupported: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it.",
+  media_too_large: "An image in this conversation is too large for this model’s size limit, even after Omnipus resized it automatically. Try a smaller image, or open Verbose chat for details.",
   provider_rejected: "The model declined to respond to this request. Try rephrasing it, or switch models.",
   request_too_large: "We built a request that was too large for this model to accept. Try shortening your message, or switch to a model with a larger limit.",
   provider_auth_failed: "The model provider rejected our credentials. Check this provider’s API key in Settings.",
@@ -75,6 +76,7 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
 /** The fault attribution for each code. Exhaustive by construction. */
 export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution> = {
   media_unsupported: "model",
+  media_too_large: "model",
   provider_rejected: "model",
   request_too_large: "product",
   provider_auth_failed: "config",

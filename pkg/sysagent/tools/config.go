@@ -594,6 +594,17 @@ var blockedConfigKeys = []blockedConfigKey{
 			"workspace its channel is bound to cannot explain a refused send, and the binding is " +
 			"enforcement configuration rather than a secret. The write stays blocked",
 	},
+	{
+		Key: "channels.*.outbound",
+		Reason: "it is the operator's decision whether the agent bound to this channel may start " +
+			"messages and to whom — changing it would let an agent grant itself or another agent new " +
+			"recipients without the operator's approval — change it in Connectors > Configure " +
+			"(\"Starting messages\"), with PUT /api/v1/channels/{id}/outbound, or, for Omnipus, " +
+			"with set_channel_outbound, which always asks for approval",
+		ReadOKReason: "the posting list is enforcement configuration, not credential material — an " +
+			"agent must be able to see which targets a channel may start messages to (list_channels " +
+			"shows the same list), as with the ownership record above. The write stays blocked",
+	},
 
 	// ---- security: the trust anchor, and one reserved sibling ----
 	//

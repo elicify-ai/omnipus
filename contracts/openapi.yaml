@@ -1802,6 +1802,24 @@ components:
       $ref: ./components/schemas/ChannelEnabledResponse.yaml
     ChannelTestResponse:
       $ref: ./components/schemas/ChannelTestResponse.yaml
+    ChannelOutbound:
+      $ref: ./components/schemas/ChannelOutbound.yaml
+    ChannelAvailability:
+      $ref: ./components/schemas/ChannelAvailability.yaml
+    ChannelOutboundRead:
+      $ref: ./components/schemas/ChannelOutboundRead.yaml
+    ChannelOutboundUpdateRequest:
+      $ref: ./components/schemas/ChannelOutboundUpdateRequest.yaml
+    ChannelOutboundWriteResponse:
+      $ref: ./components/schemas/ChannelOutboundWriteResponse.yaml
+    ChannelOutboundRejection:
+      $ref: ./components/schemas/ChannelOutboundRejection.yaml
+    ChannelConfigureError:
+      $ref: ./components/schemas/ChannelConfigureError.yaml
+    ChannelConfigureResponse:
+      $ref: ./components/schemas/ChannelConfigureResponse.yaml
+    ChannelRejectedSenders:
+      $ref: ./components/schemas/ChannelRejectedSenders.yaml
     ChannelRouting:
       $ref: ./components/schemas/ChannelRouting.yaml
     ChannelRoutingUpdateRequest:
@@ -1938,6 +1956,10 @@ components:
       $ref: ./components/schemas/AppStatePatchRequest.yaml
     SkillInstallRequest:
       $ref: ./components/schemas/SkillInstallRequest.yaml
+    SkillCopyRequest:
+      $ref: ./components/schemas/SkillCopyRequest.yaml
+    SkillDetail:
+      $ref: ./components/schemas/SkillDetail.yaml
     SkillSearchResult:
       $ref: ./components/schemas/SkillSearchResult.yaml
     SkillMarketplaceStatus:
@@ -2317,6 +2339,10 @@ components:
       $ref: ./components/schemas/SecretOptionsUpdateRequest.yaml
     Room:
       $ref: ./components/schemas/Room.yaml
+    RoomInvitationContext:
+      $ref: ./components/schemas/RoomInvitationContext.yaml
+    RoomInvitationStatus:
+      $ref: ./components/schemas/RoomInvitationStatus.yaml
     RoomCreateRequest:
       $ref: ./components/schemas/RoomCreateRequest.yaml
     RoomMembersUpdateRequest:
@@ -3242,8 +3268,14 @@ paths:
         The shared projector meters the larger prepared REST/history-WS encoding under
         a server-owned 4194304-byte soft budget; whole groups and advisory min_rows
         take precedence. At least one whole eligible group remains. True end, clear,
-        range or 100-source-group cap can underfill; bytes alone cannot underfill the
-        floor. An individual group's drawn weight may exceed the row target or 100.
+        range or 100-source-group cap can underfill; the soft budget alone cannot
+        underfill the floor. An individual group's drawn weight may exceed the row target or 100.
+        A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason
+        byte_ceiling) may stop below min_rows; the first group is always whole. Tool
+        results over 51,200 encoded bytes are shown as a HistoryResultPreview and
+        ordinary message text over 65,536 UTF-8 bytes as a preview with
+        content_original_size_bytes; getSessionHistoryEntry returns the full occurrence
+        (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)").
         No lifetime read/rebuild, 503/preparing state or full-history fallback.
       tags:
       - sessions
@@ -3349,14 +3381,123 @@ paths:
         '500':
           description: >
             Required index unavailable after the bounded reconciliation check:
-            ErrorResponse.error is exactly "Session history is unavailable. Retry
-            after the operator restores its index." A valid known prefix with at
+            ErrorResponse.error is exactly "This conversation's history could not be
+            loaded." A valid known prefix with at
             most 64 combined pending archive/disposition/confirmed rolled-expiry
             mutations can reconcile once; a missing/incompatible baseline,
             inconsistency or 65+ gap cannot seed a partial index or batch-walk history.
             Other required storage/projection failures retain the fixed redacted
             session-storage error. Prior view and authorized live controls remain
             usable; no success/empty partial history, 503 or preparing progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /sessions/{id}/messages/{history_position}:
+    get:
+      operationId: getSessionHistoryEntry
+      summary: Read one saved history occurrence in full
+      description: >
+        Returns the full public projection of exactly one saved history occurrence,
+        addressed by the same opaque same-session history_position a history page
+        carries (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)",
+        A2.1/A2.2). It is the same reduction as the page reader after tool-call
+        effects, cancellation and disposition, with display shortening off, at the
+        server's current read cut: the response never carries a HistoryResultPreview
+        marker and never carries content_original_size_bytes. It never returns the
+        private archive envelope or a pre-correction value, and the read writes
+        nothing (archive, positions, index, tool_results/ and model context are
+        unchanged). It is a position-addressed read, not a UI navigation destination,
+        an around selector or a message-ID resolver.
+        Authorization is identical to getSessionMessages and is applied in the same
+        order before any position work: the registered auth wrapper (valid cookie,
+        configured user bearer or CLI bearer; invalid or revoked credentials
+        refused), session-ID syntax, main-session eligibility, then session
+        existence/metadata. No new per-user ownership rule is introduced.
+        Refusal checks run in this precedence order: 401, 400 invalid session ID,
+        404 "session not found", 400 "invalid history position", 404 "history
+        position not found", 410 "history entry expired". This order does not
+        override the storage-primary rule shared with getSessionMessages: a cleanup
+        storage failure combined with cancellation, an unknown position or any
+        selector error is the sanitized storage 500, never 404 or 410.
+      tags:
+      - sessions
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Addressed session ID; access refusal precedes position validation or lookup.
+      - name: history_position
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+        description: >
+          Opaque same-session history position of the occurrence, exactly as a history
+          page, session detail or snapshot replay page carried it. The full tool result
+          of a HistoryResultPreview is addressed by this position plus ToolCall.id.
+      responses:
+        '200':
+          description: >
+            The full public projection of that one occurrence, with history_position
+            set. Never a HistoryResultPreview marker in any tool result and never
+            content_original_size_bytes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          description: >
+            ErrorResponse.error is exactly "invalid session ID" for a malformed session
+            ID (checked before any session lookup), or exactly "invalid history
+            position" for a malformed, blank, badly encoded, wrong-version or
+            non-47-character position (checked only after the session refusals below).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: >
+            ErrorResponse.error is exactly "session not found" for a missing session
+            store, session metadata that does not exist, or a main session the caller
+            is not eligible to read, checked before any position work (also when the
+            position is malformed). Otherwise exactly "history position not found" for
+            an unknown or foreign well-formed position; there is no foreign lookup, and
+            a foreign session's expired position is also unknown here.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: >
+            ErrorResponse.error is exactly "history entry expired": a same-session
+            position proven expired by its retention tombstone, including a sweep during
+            the read. No content and no other metadata. A corrupt or missing index is
+            never reported as expiry; it is the 500 below.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: >
+            The existing sanitized errors, all recoverable by retry: session metadata
+            that exists but cannot be read (corruption, permission or I/O) and an
+            unreadable workspace record during the main-session eligibility check use
+            the fixed redacted session-storage error; a required index that is
+            unavailable after the bounded reconciliation check uses exactly "Session
+            history is unavailable. Retry after the operator restores its index."; other
+            required storage/projection failures, including a cleanup storage failure
+            combined with cancellation, an unknown position or a selector error, use the
+            fixed redacted session-storage error.
           content:
             application/json:
               schema:
@@ -3526,7 +3667,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/Agent'
         '400':
-          $ref: '#/components/responses/400BadRequest'
+          description: >
+            Bad request — missing or invalid field. Also refused, nothing
+            saved: a tool policy of allow for an always-ask tool —
+            "set_channel_outbound always asks for approval; it can be set to
+            ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -3540,7 +3689,11 @@ paths:
             Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a
             per-agent tool policy of `ask` for Omnipus is refused — "Omnipus
             takes no per-agent Ask; set Ask globally or use Deny". `deny` is
-            accepted. No writes occurred.
+            accepted. No writes occurred. To return Omnipus to an always-ask
+            tool such as set_channel_outbound, clear the per-agent entry:
+            inheritance restores always-ask only while the global policy is
+            not deny (with a global deny the tool stays off; channels spec
+            FR-037, T-10 rows 8-9).
           content:
             application/json:
               schema:
@@ -3761,7 +3914,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/AgentToolsResponse'
         '400':
-          $ref: '#/components/responses/400BadRequest'
+          description: >
+            Bad request — missing or invalid field. Also refused, nothing
+            saved: a tool policy of allow for an always-ask tool —
+            "set_channel_outbound always asks for approval; it can be set to
+            ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -3775,7 +3936,11 @@ paths:
             Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a
             per-agent tool policy of `ask` for Omnipus is refused — "Omnipus
             takes no per-agent Ask; set Ask globally or use Deny". `deny` is
-            accepted. No writes occurred.
+            accepted. No writes occurred. To return Omnipus to an always-ask
+            tool such as set_channel_outbound, clear the per-agent entry:
+            inheritance restores always-ask only while the global policy is
+            not deny (with a global deny the tool stays off; channels spec
+            FR-037, T-10 rows 8-9).
           content:
             application/json:
               schema:
@@ -3857,7 +4022,11 @@ paths:
         of being silently dropped, so the operator sees it before saving.
         Works from the create wizard (no agent id exists yet) and from an
         existing agent's edit form alike — mirrors POST /system/cli-validate's
-        stateless, body-driven shape. No subprocess is spawned.
+        stateless, body-driven shape. No subprocess is spawned. The program
+        is the path a person saved in Settings -> Third-party agents: with
+        none saved, or one that fails the program checks, the route refuses
+        with 400 and the text a run would be refused with, never falling back
+        to a program on $PATH.
       tags:
       - agents
       security:
@@ -3896,8 +4065,11 @@ paths:
         POST /system/cli-validate uses but independently tuned since this
         endpoint spends real tokens and holds a real subprocess (5/min and 1
         concurrent run per caller, vs. cli-validate's 20/min and 2), and
-        emits one audit event {cli, resolved binary, ok} per call, since —
-        like cli-validate — it spawns a caller-influenced binary/path.
+        emits one audit event {cli, resolved binary, ok} per call. The
+        program is the path a person saved in Settings -> Third-party agents,
+        checked as at real dispatch: with none saved, or one that fails the
+        checks, nothing is spawned and the body is ok false with the text a
+        run would be refused with, never falling back to a program on $PATH.
         Body-driven and agent-agnostic; works from the create wizard and an
         existing agent's edit form alike.
       tags:
@@ -4111,9 +4283,14 @@ paths:
     post:
       operationId: postToolApproval
       summary: Resolve a pending tool approval (FR-011, FR-082)
-      description: 'Approve, deny, or cancel a pending tool call approval.
-
-        '
+      description: >
+        Approve, deny, or cancel a pending tool call approval. For an
+        always-ask tool (today exactly set_channel_outbound; channels spec
+        FR-038, T-10 row 15) the action allow (approve and record a grant) is
+        refused with 400 "set_channel_outbound always asks for approval; it
+        can be set to ask or deny, not allow" and nothing is recorded; only
+        allow_once, deny and cancel are accepted, and no approval of such a
+        tool is ever remembered. Every other tool is unchanged.
       tags:
       - Tools
       parameters:
@@ -4138,7 +4315,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ToolApprovalResponse'
         '400':
-          description: Malformed body or unknown action.
+          description: >
+            Malformed body or unknown action, or action allow for an
+            always-ask tool ("set_channel_outbound always asks for approval;
+            it can be set to ask or deny, not allow"; nothing recorded).
           content:
             application/json:
               schema:
@@ -4214,7 +4394,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/GlobalToolPolicies'
         '400':
-          description: Invalid policy values.
+          description: >
+            Invalid policy values. Also refused, nothing saved: storing allow
+            for an always-ask tool — "set_channel_outbound always asks for
+            approval; it can be set to ask or deny, not allow" (channels spec
+            FR-037, T-10 row 15).
           content:
             application/json:
               schema:
@@ -5292,9 +5476,19 @@ paths:
     put:
       operationId: configureChannel
       summary: Configure a channel
-      description: 'Merges request body fields into the channel''s config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. Returns the updated config with credential fields redacted.
-
-        '
+      description: >
+        Merges request body fields into the channel's config section. Fields
+        absent from the request body are not touched (merge, not replace). The
+        "enabled" field is reserved and ignored if sent. `outbound`,
+        `workspace_id` and `identity` cannot be set here, in any letter case:
+        400 (the outbound setting is changed only with PUT
+        /api/v1/channels/{id}/outbound; the binding only with the routing
+        route). `apply_outcome`, `apply_reason` and `apply_note` are stripped
+        from the body. When the save changes an access field or stores a
+        credential, or the connection is not current, the one connection is
+        restarted and the response reports the outcome in `apply_outcome`
+        (channels spec T-6, FR-050). Returns the updated config with
+        credential fields redacted.
       tags:
       - Channels
       parameters:
@@ -5319,14 +5513,21 @@ paths:
                 token: your-telegram-bot-token
       responses:
         '200':
-          description: Updated channel configuration (credentials redacted).
+          description: >
+            Updated channel configuration (credentials redacted) plus
+            apply_outcome, and apply_reason / apply_note where T-6 says.
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: true
+                $ref: '#/components/schemas/ChannelConfigureResponse'
         '400':
-          description: Invalid JSON body.
+          description: >
+            Invalid JSON body, or a field that cannot be set here. Texts:
+            "outbound cannot be set via configure; use PUT
+            /api/v1/channels/{id}/outbound"; the existing workspace_id and
+            identity refusals (set the binding with PUT
+            /api/v1/channels/{id}/routing). Matched in any spelling
+            encoding/json would bind to those fields. Nothing was changed.
           content:
             application/json:
               schema:
@@ -5339,6 +5540,158 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: >
+            The save did not complete; code says what durably changed:
+            could_not_save (nothing), credential_saved_not_saved (a credential
+            of this request was stored, the configuration was not), or
+            saved_not_refreshed (the file was written, the running
+            configuration was not refreshed and the connection was not
+            restarted).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelConfigureError'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+  /channels/{id}/outbound:
+    get:
+      operationId: getChannelOutbound
+      summary: Get a connection's outbound (start messages) setting
+      description: >
+        Returns whether the agent bound to this connection may start messages
+        and to whom, the live revision token, whether the connection is
+        running and whether its platform can start messages (channels spec
+        FR-021). Read from one live configuration snapshot.
+      tags:
+      - Channels
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel instance ID.
+        schema:
+          $ref: '#/components/schemas/ChannelId'
+        example: telegram
+      responses:
+        '200':
+          description: The outbound setting.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundRead'
+        '400':
+          description: Malformed channel id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Unknown channel type.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: setChannelOutbound
+      summary: Set a connection's outbound (start messages) setting
+      description: >
+        Replaces the connection's outbound policy and target list (channels
+        spec FR-020, FR-022). Targets are canonicalized and de-duplicated;
+        added Discord targets are looked up through the running connection
+        outside the settings lock, each call bounded by a 5-second deadline
+        that covers the rate-limit wait. The revision is re-checked under the
+        settings lock before saving. A permission-extending write needs the
+        saved and running configurations of the connection to correspond;
+        switching to reply_only or removing targets always works, in any
+        connection state. This is the only way to change the setting; every
+        other save path keeps it as stored. Admin only.
+      tags:
+      - Channels
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel instance ID.
+        schema:
+          $ref: '#/components/schemas/ChannelId'
+        example: telegram
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelOutboundUpdateRequest'
+      responses:
+        '200':
+          description: >
+            Saved and in force. warning is present only when the file was
+            written but the rest of the running configuration could not be
+            refreshed (the saved list is in force anyway, T-6b).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundWriteResponse'
+        '400':
+          description: >
+            invalid_targets (per-target errors in target_errors) or
+            too_many_targets (more than 20 after de-duplication). Nothing was
+            saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundRejection'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Unknown channel.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            stale_revision (the setting changed since it was read; reload and
+            retry), connect_first (adding a Discord target needs the
+            connection running), or saved_live_mismatch (the saved and running
+            configurations differ because an earlier change did not finish
+            applying; a permission-extending write waits until they correspond
+            again). Nothing was saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundRejection'
+        '422':
+          description: >
+            platform_cannot_start ("starting messages is not supported yet on
+            <Platform>") or platform_cannot_message_people ("this platform can
+            only answer, not start a direct message"). Nothing was saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundRejection'
+        '500':
+          description: >
+            "could not save the setting; nothing was changed" — the failure
+            happened before the file was written (no credential is involved
+            on this route).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            lookup_unavailable: Discord could not be reached or timed out
+            while checking an added target, including a rate-limit wait past
+            the deadline. Nothing was saved; try again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelOutboundRejection'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /channels/{id}/test:
     post:
       operationId: testChannel
@@ -7148,18 +7501,85 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
         '409':
-          $ref: '#/components/responses/409Conflict'
+          description: >
+            Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a
+            built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed
+            skill has local changes; resend with replace_local_changes: true),
+            SKILL_CHANGED (revision is the caller's expected revision and the
+            skill changed since it was read).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: >
+            Storage failure, before publication (error_stage names the failed
+            stage) or after publication (a partial save; message names the
+            undo).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
         '502':
           $ref: '#/components/responses/502BadGateway'
+  /skills/{name}/copy:
+    post:
+      operationId: copySkill
+      summary: Copy an installed or built-in skill to a new user-owned skill
+      description: >
+        Creates a new user-owned skill from the named skill; the copy's
+        frontmatter name is rewritten to new_id. The copy starts ungranted.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: name
+        in: path
+        required: true
+        description: Source skill slug.
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillCopyRequest'
+      responses:
+        '201':
+          description: Copy created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED). A copy refused by the save check (SAVE_CHECK_FAILED) answers 400.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Storage failure, before publication or after publication (partial save).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
   /skills/{name}:
     delete:
       operationId: deleteSkill
       summary: Delete an installed skill
       description: >
-        Removes an installed skill from the local skills directory. The skill
-        must not be the default skill, in use by any agent, or required by a
-        seeded dependency. On success the gateway removes the skill directory
-        and returns 204 No Content.
+        Deletes an installed user-owned skill through the change pipeline (a
+        delete_skill version is recorded; history is kept until retention).
+        revision is the caller's expected revision; a mismatch is 409
+        SKILL_CHANGED. Built-in skills are refused with 403.
       tags:
       - Skills
       security:
@@ -7178,16 +7598,32 @@ paths:
           $ref: '#/components/schemas/ConfigurationRevision'
         description: Revision returned by GET /skills for the reviewed installed skill.
       responses:
-        '204':
-          description: Skill removed.
+        '200':
+          description: Skill deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: The skill is a built-in skill and is read-only (BUILTIN_READ_ONLY).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '500':
+          description: Storage failure, before publication or after publication (partial deletion).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
   /activity:
     get:
       operationId: getActivity
@@ -7217,8 +7653,25 @@ paths:
   /upload:
     post:
       operationId: uploadFiles
-      summary: Upload files for a session
-      description: "Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.\nMax file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.\nsession_id may be supplied as a query parameter or as a form field before the file parts.\nReturns HTTP 201 on success.\n"
+      summary: Upload files for a session or into a workspace library
+      description: >
+        Streams multipart file uploads. Max file size per part: 100 MB. Data is
+        streamed directly to disk; the full file is never buffered in memory.
+        Returns HTTP 201 on success.
+
+
+        Two destinations. With workspace_id (query parameter, or a form field
+        before the file parts) each file is stored in that workspace's media
+        library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25,
+        FR-016): the chat copy in workspaces/<id>/media/ (returned as a
+        media://workspace/<id>/<uuid> ref) and the Library file under the
+        workspace's .library folder; no session is used or created. When both
+        workspace_id and session_id are given, workspace_id routes to the
+        library and session_id is ignored. When the workspace library is
+        unavailable the request fails with 503 and never falls back to the
+        session path. Without workspace_id, session_id (query parameter or form
+        field) is required and files go to ~/.omnipus/uploads/{session_id}/
+        (legacy path).
       tags:
       - Upload
       security:
@@ -7229,8 +7682,19 @@ paths:
         required: false
         schema:
           type: string
-        description: Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+        description: Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
         example: 550e8400-e29b-41d4-a716-446655440000
+      - name: workspace_id
+        in: query
+        required: false
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description: >
+          Workspace whose media library receives the files (#1449 C-I1). May
+          also be supplied as a multipart form field before the file parts.
+          Takes precedence over session_id.
       requestBody:
         required: true
         content:
@@ -7241,6 +7705,9 @@ paths:
                 session_id:
                   type: string
                   description: Session ID (alternative to query parameter).
+                workspace_id:
+                  type: string
+                  description: Workspace ID (alternative to the query parameter); must precede the file parts.
                 files:
                   type: array
                   items:
@@ -7258,6 +7725,14 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '503':
+          description: >
+            The workspace media library is unavailable (workspace_id given).
+            Nothing was stored and no session path was used instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '405':
           description: Method not allowed.
           content:
@@ -9061,7 +9536,11 @@ paths:
         semantics), but the 404 message names the specific missing
         directory rather than a bare "not found"; create it first with
         POST /library/{workspace_id}/mkdir. 409 if an entry already exists
-        at to_path.
+        at to_path. Chat copies (#1449 D26): a move inside one workspace keeps
+        a file's chat-copy association (the media entry's library_path follows
+        the file). A move to another workspace drops it: the moved file
+        becomes an ordinary file there and its chat copy stays in the original
+        workspace.
       tags:
       - Library
       security:
@@ -9112,7 +9591,8 @@ paths:
         semantics), but the 404 message names the specific missing
         directory rather than a bare "not found"; create it first with
         POST /library/{workspace_id}/mkdir. 409 if an entry already exists
-        at to_path.
+        at to_path. A copy is a new file with no chat-copy association
+        (#1449 D26): deleting the copy removes only the copy.
       tags:
       - Library
       security:
@@ -9219,6 +9699,21 @@ paths:
         Deleting a directory removes it and everything under it. Returns
         403 if path resolves outside the workspace's work tree; 404 if
         nothing exists at path.
+
+
+        Chat copies (#1449 D26, FR-086): deleting a file that has an
+        associated chat copy (LibraryEntry.chat_copy; the media entry whose
+        library_path names this file, in the same workspace) also deletes
+        that chat copy, bytes and media entry. Deleting a directory does so
+        for every associated file inside it. Retention owners (session
+        reference counts, group retention) never block an explicit deletion,
+        and nothing recreates a deleted copy. Order: chat copy first, Library
+        file last, so a failure leaves the entry listed and a repeat completes
+        the work; a chat copy that is already gone counts as removed. 204
+        when both are removed; 500 ErrorResponse "could not delete <name>
+        completely" when either removal failed (the Library file is then
+        still present). Every chat that showed the file then shows it as
+        unavailable. Deleting a group never deletes files (D19).
       tags:
       - Library
       security:
@@ -9641,7 +10136,8 @@ paths:
         does NOT auto-create missing destination directories — the message
         names the specific missing directory; create it first with
         POST /library/{workspace_id}/mkdir); 409 if an entry already exists
-        at "to".
+        at "to". A rename keeps a file's chat-copy association (#1449 D26):
+        the media entry's library_path follows the file.
       tags:
       - Library
       security:

@@ -30,10 +30,11 @@
 //     smokeTestTimeoutSeconds, vs. a ~15s zero-token --version probe).
 //   - No free path (T11 C-B1): a request carrying cli_path is refused with
 //     400 before any runner is created, in both inbound-validation modes.
-//   - Pre-spawn guard: the resolved target (the driver's own default binary
-//     name) MUST be a regular, executable file on
-//     $PATH — reuses isRegularExecutableFile (rest_clivalidate.go) — before
-//     any subprocess is started.
+//   - Pre-spawn guard: the program is the one a person saved in Settings ->
+//     Third-party agents, checked by the same thirdpartycli.RunProgram real
+//     dispatch uses, before any subprocess is started. With no saved path or
+//     a path that fails the checks the run is refused with the text a real
+//     run gets; there is no fallback to a program on $PATH.
 //   - Bounded run: a fixed, hardcoded trivial prompt (not operator-
 //     configurable in this pass), a small MaxTurns cap, and a short
 //     TimeoutSeconds — see the consts below for the exact values and
@@ -104,7 +105,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -331,21 +331,16 @@ func (a *restAPI) runExecutorSmokeTest(
 	start := time.Now()
 	ra.durationMs = func() int { return int(time.Since(start).Milliseconds()) }
 
-	// Pre-spawn guard (mirrors validateCLI's fail-closed pre-spawn check in
-	// rest_clivalidate.go): resolve the spawn target the SAME way the runtime
-	// spawn does, before guarding it, so the guard is authoritative over what
-	// would actually be exec'd. The request carries no path (T11 C-B1), so
-	// the target is the driver's own default binary name, resolved via $PATH
-	// exactly as the driver resolves it when RunOptions.CLIPath is empty.
-	target := runner.DefaultCLIBinary(ra.cli)
-	resolvedTarget, lpErr := exec.LookPath(target)
-	if lpErr != nil || !isRegularExecutableFile(resolvedTarget) {
-		return smokeTestFail(
-			fmt.Sprintf("%q CLI binary not found or not executable (%s)", ra.cli, target),
-			ra.durationMs(), false,
-		), target
+	// Pre-spawn guard: the same decision and the same refusal text as a real
+	// run (T11 C-B1, FR-9), so the guard is authoritative over what is
+	// exec'd. The request carries no path, and the resolved file is the one
+	// passed to the driver. A refused smoke test is the body's ok:false like
+	// every other failed run, and the audit record names the saved path.
+	row, resolved, refusal := a.executorProgram(ra.cli)
+	if refusal != "" {
+		return smokeTestFail(refusal, ra.durationMs(), false), row.Path
 	}
-	ra.resolvedBinary = absResolvePath(target)
+	ra.resolvedBinary = resolved
 
 	// Working-directory resolution: when agentID names a real, saved agent,
 	// run in THAT agent's own dedicated directory — the same place a genuine
@@ -496,6 +491,7 @@ func (a *restAPI) runExecutorSmokeTest(
 		Env:            sandbox.ScrubGatewayEnvForRunner(),
 		TimeoutSeconds: smokeTestTimeoutSeconds,
 		MaxTurns:       smokeTestMaxTurns,
+		CLIPath:        ra.resolvedBinary,
 		CLIArgs:        ra.safeArgs,
 		Model:          model,
 	})

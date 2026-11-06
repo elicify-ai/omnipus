@@ -13,12 +13,10 @@ import "github.com/elicify-ai/omnipus/pkg/tools"
 
 // Agent tools
 
-func (*AgentCreateTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
-func (*AgentGetTool) Category() tools.ToolCategory          { return tools.CategoryAgents }
-func (*AgentGetToolsTool) Category() tools.ToolCategory     { return tools.CategoryAgents }
-func (*AgentUpdateTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
-func (*AgentDeleteTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
-func (*AgentReadMetadataTool) Category() tools.ToolCategory { return tools.CategoryAgents }
+func (*AgentCreateTool) Category() tools.ToolCategory { return tools.CategoryAgents }
+func (*AgentGetTool) Category() tools.ToolCategory    { return tools.CategoryAgents }
+func (*AgentUpdateTool) Category() tools.ToolCategory { return tools.CategoryAgents }
+func (*AgentDeleteTool) Category() tools.ToolCategory { return tools.CategoryAgents }
 
 // Channel tools
 
@@ -73,10 +71,8 @@ func (*ModelsListTool) Category() tools.ToolCategory        { return tools.Categ
 
 // Skill tools
 
-func (*SkillRemoveTool) Category() tools.ToolCategory { return tools.CategorySkills }
-func (*SkillListTool) Category() tools.ToolCategory   { return tools.CategorySkills }
-func (*SkillCreateTool) Category() tools.ToolCategory { return tools.CategorySkills }
-func (*SkillEditTool) Category() tools.ToolCategory   { return tools.CategorySkills }
+func (*SkillListTool) Category() tools.ToolCategory { return tools.CategorySkills }
+func (*SkillEditTool) Category() tools.ToolCategory { return tools.CategorySkills }
 
 // System task tools: retired by DEL-23 (merged into the canonical pkg/tools
 // task family, which carries CategoryTasks itself). No sysagent task tool

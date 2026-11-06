@@ -1,74 +1,18 @@
 package agent
 
 import (
-	"bytes"
-	"os"
-	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
-	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
-
-// Oracle: #1274 RED brief R3. An error on some OTHER field does not count as a
-// path refusal: the exact supplied path and the path-specific reason must reach
-// ForLLM. The current required-soul failure must therefore remain visible.
-func TestL11274InvalidCLIPathsRefuseWithModelVisiblePathAndReason(t *testing.T) {
-	for _, cli := range []string{"claude-code", "codex", "opencode"} {
-		for _, class := range []string{"nonexistent", "directory", "non-executable"} {
-			t.Run(cli+"/"+class, func(t *testing.T) {
-				f := newL11274Fixture(t, "", false)
-				valid := l11274Executable(t, f.home, cli, true)
-				path, reasons := filepath.Join(filepath.Dir(valid), "missing-"+cli), []string{"does not exist", "not found", "no such file"}
-				switch class {
-				case "directory":
-					path, reasons = filepath.Dir(valid), []string{"directory", "not a file", "regular file"}
-				case "non-executable":
-					path, reasons = l11274Executable(t, f.home, cli, false), []string{"not executable", "permission denied", "cannot execute"}
-				}
-				before, err := workspace.ReadState(f.home, l11274WorkspaceID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				configBefore, err := os.ReadFile(f.configPath)
-				if err != nil {
-					t.Fatal(err)
-				}
-				result := f.execute(t, "create_agent", l11274CreateArgs("Rejected worker", cli, path))
-				message := l11274ModelRefusalReason(t, result)
-				if !strings.Contains(message, "cli_path") || !l11274ReasonNamesPath(message, path) {
-					t.Errorf("refusal must identify cli_path %q in the model-facing reason, got %q", path, message)
-				}
-				matched := false
-				for _, reason := range reasons {
-					matched = matched || strings.Contains(strings.ToLower(message), reason)
-				}
-				if !matched {
-					t.Errorf("%s refusal must explain that specific path fault (%v), got %q", class, reasons, message)
-				}
-				l11274AssertAbsent(t, f, "rejected-worker")
-				after, err := workspace.ReadState(f.home, l11274WorkspaceID)
-				if err != nil || !reflect.DeepEqual(before, after) {
-					t.Errorf("refused create mutated workspace/team/delegation: before=%+v, after=%+v, err=%v", before, after, err)
-				}
-				configAfter, err := os.ReadFile(f.configPath)
-				if err != nil || !bytes.Equal(configBefore, configAfter) {
-					t.Errorf("refused create changed persisted config, err=%v", err)
-				}
-			})
-		}
-	}
-}
 
 func TestL11274SchemaRefusalsNameTheRejectedInput(t *testing.T) {
 	for _, class := range []string{"unsupported-cli", "missing-cli", "missing-native-soul"} {
 		t.Run(class, func(t *testing.T) {
 			f := newL11274Fixture(t, "", false)
-			path := l11274Executable(t, f.home, "claude-code", true)
-			args := l11274CreateArgs("Schema refusal", "claude-code", path)
+			args := l11274CreateArgs("Schema refusal", "claude-code")
 			wantField, wantValue := "cli", "unsupported-cli"
 			switch class {
 			case "unsupported-cli":
@@ -80,7 +24,6 @@ func TestL11274SchemaRefusalsNameTheRejectedInput(t *testing.T) {
 				args["agent_type"] = "Main"
 				delete(args, "soul")
 				delete(args, "cli")
-				delete(args, "cli_path")
 				wantField, wantValue = "soul", "required"
 			}
 			result := f.execute(t, "create_agent", args)

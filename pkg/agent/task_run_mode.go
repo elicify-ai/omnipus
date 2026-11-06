@@ -44,10 +44,16 @@ type MainSessionResolver interface {
 }
 
 // SetMainSessionResolver installs the resolver (nil leaves every run ISOLATED).
+// It is one of the three session-plane parts a held boot-owed fire waits for
+// (releaseSessionPlaneWaiters).
 func (te *TaskExecutor) SetMainSessionResolver(r MainSessionResolver) {
-	if te != nil {
-		te.mainResolver = r
+	if te == nil {
+		return
 	}
+	te.mu.Lock()
+	te.mainResolver = r
+	te.mu.Unlock()
+	te.releaseSessionPlaneWaiters()
 }
 
 // taskRunMode is the derived mode of one run.

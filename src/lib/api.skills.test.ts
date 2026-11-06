@@ -40,7 +40,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
   describe('fetchSkills (tolerant installed-skills list)', () => {
     it('keeps valid skills and drops a malformed one (one bad skill must not hide the whole list)', async () => {
       const payload = [
-        { revision: '0'.repeat(64), id: 'good', name: 'Good', version: '2.1.0', verified: false, status: 'active', source: 'global' },
+        { has_local_changes: false, revision: '0'.repeat(64), id: 'good', name: 'Good', version: '2.1.0', verified: false, status: 'active', source: 'global' },
         // Structurally invalid: missing required version/verified/status.
         { id: 'bad', name: 'Bad' },
       ]
@@ -55,7 +55,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
 
     it('accepts a non-semver version like "1.0" (ClawHub versions are arbitrary)', async () => {
       const payload = [
-        { revision: '0'.repeat(64), id: 'cw', name: 'ClawHub Skill', version: '1.0', verified: false, status: 'active', source: 'global' },
+        { has_local_changes: false, revision: '0'.repeat(64), id: 'cw', name: 'ClawHub Skill', version: '1.0', verified: false, status: 'active', source: 'global' },
       ]
       fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
 
@@ -76,6 +76,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
     it('merges last_invoked from the raw response even though the Skill schema does not declare it', async () => {
       const payload = [
         {
+          has_local_changes: false,
           revision: '0'.repeat(64),
           id: 'release-notes',
           name: 'Release Notes',
@@ -86,6 +87,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
           last_invoked: '2026-08-15T10:00:00Z',
         },
         {
+          has_local_changes: false,
           revision: '0'.repeat(64),
           id: 'never-called',
           name: 'Never Called',
@@ -150,6 +152,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
 
   describe('installSkillBySlug', () => {
     const okSkill = {
+      has_local_changes: false,
       revision: 'b'.repeat(64),
       persistence_status: 'complete',
       activation_status: 'active',

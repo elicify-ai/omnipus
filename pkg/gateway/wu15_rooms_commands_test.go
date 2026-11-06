@@ -90,7 +90,7 @@ func TestWU15Rooms_SteeringAndMembershipCommandsRefuseWithMainLinks(t *testing.T
 				histories[id] = h.messages(id)
 			}
 			status, body := h.http(http.MethodPost, "/api/v1/rooms/"+room.Id+"/messages", gen.RoomMessageRequest{ClientMessageId: "refused-command", Text: text, Mentions: []string{}})
-			wu15RequireError(t, status, body, http.StatusUnprocessableEntity, "Rooms don't steer agents — use")
+			wu15RequireError(t, status, body, http.StatusUnprocessableEntity, "Rooms don't steer agents - use")
 			var refusal gen.ErrorResponse
 			require.NoError(t, json.Unmarshal(body, &refusal))
 			wantLinks := room.Members

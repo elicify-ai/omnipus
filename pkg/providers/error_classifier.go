@@ -3,6 +3,8 @@ package providers
 import (
 	"context"
 	"errors"
+	"io"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -382,6 +384,18 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		}
 	}
 
+	// A dropped connection on the send path (6b U3a): checked by type, after
+	// every message pattern so a fatal phrase still wins. Same class as a
+	// connection reset.
+	if isDroppedSendConnection(err) {
+		return &FailoverError{
+			Reason:   FailoverTimeout,
+			Provider: provider,
+			Model:    model,
+			Wrapped:  err,
+		}
+	}
+
 	return nil
 }
 
@@ -530,9 +544,27 @@ func parseDigits(s string) int {
 // us and the provider (a dropped or unreachable connection): the ONE vocabulary
 // the classifier's retry decision, the agent loop's inline retry and the
 // translator's wording all share (connectionDropPatterns).
+//
+// It also accepts a dropped connection on the send path by type
+// (isDroppedSendConnection), which no message pattern may match.
 func IsTransportFailure(err error) bool {
 	if err == nil {
 		return false
 	}
-	return matchesAny(strings.ToLower(err.Error()), connectionDropPatterns)
+	return isDroppedSendConnection(err) ||
+		matchesAny(strings.ToLower(err.Error()), connectionDropPatterns)
+}
+
+// isDroppedSendConnection reports a provider that accepted the connection and
+// closed it before any HTTP response: the HTTP client's *url.Error wrapping
+// io.EOF or io.ErrUnexpectedEOF (rendered as `Post "...": EOF`). The check is
+// typed and scoped to the send error on purpose: a bare "EOF" message pattern
+// would also match a clean io.EOF (normal stream completion) and the letters
+// "eof" inside unrelated words.
+func isDroppedSendConnection(err error) bool {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return false
+	}
+	return errors.Is(ue.Err, io.EOF) || errors.Is(ue.Err, io.ErrUnexpectedEOF)
 }

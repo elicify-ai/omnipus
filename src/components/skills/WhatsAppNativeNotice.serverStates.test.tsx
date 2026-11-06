@@ -274,7 +274,7 @@ describe.each(['row Enable', 'Save & Enable'] as const)('Connectors — ordinary
     const body: ErrorResponse = { error, ...(code ? { code } : {}) }
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       if (String(url).endsWith('/enable')) return json(body, status)
-      if (String(url).endsWith('/configure')) return json({})
+      if (String(url).endsWith('/configure')) return json({ apply_outcome: 'no_reload_needed' })
       if (String(url).endsWith('/channels')) return json([channel])
       return json({})
     })

@@ -627,6 +627,9 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 			}
 			continue
 		}
+		// r17 SR-2: the published roster (this agent's new env values, or
+		// their removal) re-derives the masking set before it goes live.
+		al.bindAgentEnvSensitive(cfg)
 		al.cfg = cfg
 		al.registry = newRegistry
 		al.mu.Unlock()
@@ -673,6 +676,7 @@ func (al *AgentLoop) rewireFastUpsertRegistry(newRegistry *AgentRegistry, cfg *c
 	wireDelegationInjectors(al, newRegistry)
 	wireWorkingDirInjectors(al, newRegistry)
 	wireModeNoteInjectors(al, newRegistry)
+	wireChannelsInjectors(al, newRegistry)
 	// ADR-072 R1 fix regression (live UAT, 2026-09-02): wireProjectShelfResolvers
 	// was only ever called once, from NewAgentLoop at boot — unlike its
 	// siblings above, it was never re-applied here, so a mounted project's

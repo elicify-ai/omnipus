@@ -40,7 +40,10 @@ properties:
       result — the SPA handles result as unknown and does not crash on null.
       When the result exceeded 1 MiB the value is a
       TruncatedResult sentinel. When marshaling the result failed the value is a
-      MarshalErrorResult sentinel.
+      MarshalErrorResult sentinel. On a history-origin frame whose saved
+      result exceeded 51,200 encoded bytes the value is a HistoryResultPreview
+      marker (`_history_preview` is a reserved key; chat-history paging spec,
+      "Amendment 2026-10-27 (founder, #1452 D2)", A2.2).
 
 
       anyOf, not oneOf: the bare `type: object` branch already matches any object,
@@ -68,6 +71,7 @@ properties:
             - type: boolean
       - $ref: TruncatedResult.yaml
       - $ref: MarshalErrorResult.yaml
+      - $ref: HistoryResultPreview.yaml
   status:
     type: string
     enum:

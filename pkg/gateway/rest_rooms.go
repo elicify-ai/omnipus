@@ -289,12 +289,18 @@ func (a *restAPI) postRoomMessage(w http.ResponseWriter, r *http.Request, roomID
 	if !requirePresentNonNull(w, r, "client_message_id", "text", "mentions") {
 		return
 	}
-	var req generated.RoomMessageRequest
-	if !decodeAndValidateStrict(w, r, "RoomMessageRequest", &req, a.agentLoop.GetConfig().Gateway.ValidateInbound) {
-		return
-	}
 	svc := a.roomService(w)
 	if svc == nil {
+		return
+	}
+	// #1449 A-12, FR-074: the byte limit in force is checked before any
+	// schema check, so an over-limit message is 422 naming the limit with
+	// inbound validation on and off.
+	if !refuseOversizeRoomText(w, r, svc.TextLimit()) {
+		return
+	}
+	var req generated.RoomMessageRequest
+	if !decodeAndValidateStrict(w, r, "RoomMessageRequest", &req, a.agentLoop.GetConfig().Gateway.ValidateInbound) {
 		return
 	}
 	if err := svc.PostMessage(roomID, req, requestUsername(r)); err != nil {
@@ -302,6 +308,29 @@ func (a *restAPI) postRoomMessage(w http.ResponseWriter, r *http.Request, roomID
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// refuseOversizeRoomText answers 422 when the text of the body is longer than
+// limit UTF-8 bytes, then restores the body for the decoder. A body whose
+// text cannot be read is left to the decoder.
+func refuseOversizeRoomText(w http.ResponseWriter, r *http.Request, limit int) bool {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	var probe struct { // not-wire-format: reads only the text length before validation
+		Text *string `json:"text"`
+	}
+	if json.Unmarshal(raw, &probe) != nil || probe.Text == nil {
+		return true
+	}
+	if err := rooms.CheckTextSize(len(*probe.Text), limit); err != nil {
+		writeRoomError(w, "message", err)
+		return false
+	}
+	return true
 }
 
 // requirePresentNonNull refuses (400) a JSON object body that lacks one of the

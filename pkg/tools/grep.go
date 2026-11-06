@@ -89,8 +89,8 @@ func (t *GrepTool) Description() string {
 			"it may name a folder or a single file, and it reaches exactly what read_file can read. "+
 			"Omnipus's protected files and other agents' and other workspaces' files are never reachable: "+
 			"a `path` naming one is refused, and a search never returns them. Agent metadata files "+
-			"(SOUL.md, HEARTBEAT.md, AGENT.md, MEMORY.md in an agent folder) and the skills registry's "+
-			"instruction files never appear as matches either; use the Skill tool for skills. Symbolic "+
+			"(SOUL.md, HEARTBEAT.md, AGENT.md, MEMORY.md in an agent folder) never appear as matches either. "+
+			"Skill folders are searched like any folder you can read; load a skill with the Skill tool. Symbolic "+
 			"links met while searching are not followed. Match paths are workspace-relative for anything "+
 			"inside your workspace, in mount-name form (e.g. \"my-mount/src/a.go\") for a mount searched "+
 			"by name or by the default search, and absolute with forward slashes everywhere else; a "+

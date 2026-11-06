@@ -121,6 +121,9 @@ func CanonicalChannelInstance(key string, inst ChannelInstanceConfig) (ChannelIn
 	if inst.Type == "" {
 		inst.Type = effectiveType
 	}
+	// U7: an Allow From saved as one string on an instance without a "type"
+	// key is split with the effective type's separators (WhatsApp: commas).
+	resolvePendingAllowFrom(&inst, effectiveType)
 	return inst, true
 }
 

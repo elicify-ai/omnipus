@@ -2,8 +2,10 @@ package systools_test
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -71,7 +73,7 @@ func TestWU3WorkspaceCreateDeleteCarryTheOutcomeEnvelope(t *testing.T) {
 // pre-read refusals as the setup verbs — never a silent fallback to the
 // conversation's own shelf.
 func TestWU3ListSkillsRefusesInvalidExplicitTarget(t *testing.T) {
-	d, ctx, _, _ := wu3ProjectTarget(t)
+	d, ctx, _, target := wu3ProjectTarget(t)
 	list := systools.NewSkillListTool(d)
 	for label, tc := range map[string]struct {
 		args map[string]any
@@ -99,10 +101,27 @@ func TestWU3ListSkillsRefusesInvalidExplicitTarget(t *testing.T) {
 	require.True(t, res.IsError, res.ForLLM)
 	assert.NotContains(t, res.ForLLM, "sales-only-body")
 
-	// Control: the valid explicit target lists the Sales shelf.
-	ok := wu3Success(t, list.Execute(ctx, map[string]any{"scope": "management", "name": "crm", "workspace_id": "sales"}))
+	// FR-051 / §5.3: removed name refuses independently; it must not mask
+	// the explicit-target cases above or serve as a positive list request.
+	removedName := wu3Error(t, list.Execute(ctx, map[string]any{"scope": "management", "name": "crm", "workspace_id": "sales"}), "INVALID_INPUT")
+	assert.Equal(t, "name was removed from list_skills; use get_skill with id and fields", removedName["message"])
+
+	// Control: the supported pure list identifies the actual Sales revision.
+	ok := wu3Success(t, list.Execute(ctx, map[string]any{"scope": "management", "workspace_id": "sales"}))
 	listed, isList := ok["skills"].([]any)
 	require.True(t, isList)
 	require.Len(t, listed, 1)
-	assert.Contains(t, wu3Object(t, listed[0])["content"], "sales-only-body")
+	project := wu3Object(t, listed[0])
+	assert.Equal(t, "crm", project["id"])
+	assert.Equal(t, "project", project["origin"])
+	assert.NotContains(t, project, "content", "§5.3 management rows are pure metadata")
+	revision, err := skills.ContentRevision(filepath.Join(target, "crm"))
+	require.NoError(t, err)
+	assert.Equal(t, revision, project["revision"], "same-name anchor cannot substitute for the explicit target")
+	// §15 preserves project content access through an explicit ordinary file.
+	read := tools.NewReadFileTool(filepath.Dir(filepath.Dir(target)), true, 0).Execute(ctx, map[string]any{"path": filepath.Join(target, "crm", "SKILL.md")})
+	require.False(t, read.IsError, read.ForLLM)
+	assert.Contains(t, read.ForLLM, "sales-only-body")
+	assert.NotContains(t, read.ForLLM, "default-only-body")
+	assert.Equal(t, "default", tools.ToolWorkspaceID(ctx), "explicit target does not rewrite the calling workspace")
 }

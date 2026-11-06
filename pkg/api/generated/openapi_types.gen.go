@@ -2048,6 +2048,48 @@ func (e CatalogProviderRegionGroup) Valid() bool {
 	}
 }
 
+// Defines values for ChannelAvailabilityState.
+const (
+	ChannelAvailabilityStateNotLoaded  ChannelAvailabilityState = "not_loaded"
+	ChannelAvailabilityStateNotRunning ChannelAvailabilityState = "not_running"
+	ChannelAvailabilityStateRunning    ChannelAvailabilityState = "running"
+)
+
+// Valid indicates whether the value is a known member of the ChannelAvailabilityState enum.
+func (e ChannelAvailabilityState) Valid() bool {
+	switch e {
+	case ChannelAvailabilityStateNotLoaded:
+		return true
+	case ChannelAvailabilityStateNotRunning:
+		return true
+	case ChannelAvailabilityStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelConfigureErrorCode.
+const (
+	ChannelConfigureErrorCodeCouldNotSave            ChannelConfigureErrorCode = "could_not_save"
+	ChannelConfigureErrorCodeCredentialSavedNotSaved ChannelConfigureErrorCode = "credential_saved_not_saved"
+	ChannelConfigureErrorCodeSavedNotRefreshed       ChannelConfigureErrorCode = "saved_not_refreshed"
+)
+
+// Valid indicates whether the value is a known member of the ChannelConfigureErrorCode enum.
+func (e ChannelConfigureErrorCode) Valid() bool {
+	switch e {
+	case ChannelConfigureErrorCodeCouldNotSave:
+		return true
+	case ChannelConfigureErrorCodeCredentialSavedNotSaved:
+		return true
+	case ChannelConfigureErrorCodeSavedNotRefreshed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelConfigureRequestIdentityKind.
 const (
 	ChannelConfigureRequestIdentityKindAgent ChannelConfigureRequestIdentityKind = "agent"
@@ -2066,6 +2108,33 @@ func (e ChannelConfigureRequestIdentityKind) Valid() bool {
 	}
 }
 
+// Defines values for ChannelConfigureResponseApplyOutcome.
+const (
+	ChannelConfigureResponseApplyOutcomeApplied           ChannelConfigureResponseApplyOutcome = "applied"
+	ChannelConfigureResponseApplyOutcomeAppliedNotRunning ChannelConfigureResponseApplyOutcome = "applied_not_running"
+	ChannelConfigureResponseApplyOutcomeFailed            ChannelConfigureResponseApplyOutcome = "failed"
+	ChannelConfigureResponseApplyOutcomeNoReloadNeeded    ChannelConfigureResponseApplyOutcome = "no_reload_needed"
+	ChannelConfigureResponseApplyOutcomeUnconfirmed       ChannelConfigureResponseApplyOutcome = "unconfirmed"
+)
+
+// Valid indicates whether the value is a known member of the ChannelConfigureResponseApplyOutcome enum.
+func (e ChannelConfigureResponseApplyOutcome) Valid() bool {
+	switch e {
+	case ChannelConfigureResponseApplyOutcomeApplied:
+		return true
+	case ChannelConfigureResponseApplyOutcomeAppliedNotRunning:
+		return true
+	case ChannelConfigureResponseApplyOutcomeFailed:
+		return true
+	case ChannelConfigureResponseApplyOutcomeNoReloadNeeded:
+		return true
+	case ChannelConfigureResponseApplyOutcomeUnconfirmed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelEntryIdentityKind.
 const (
 	ChannelEntryIdentityKindAgent ChannelEntryIdentityKind = "agent"
@@ -2078,6 +2147,24 @@ func (e ChannelEntryIdentityKind) Valid() bool {
 	case ChannelEntryIdentityKindAgent:
 		return true
 	case ChannelEntryIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelEntryOutboundPolicy.
+const (
+	ChannelEntryOutboundPolicyAgentMayStart ChannelEntryOutboundPolicy = "agent_may_start"
+	ChannelEntryOutboundPolicyReplyOnly     ChannelEntryOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelEntryOutboundPolicy enum.
+func (e ChannelEntryOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelEntryOutboundPolicyAgentMayStart:
+		return true
+	case ChannelEntryOutboundPolicyReplyOnly:
 		return true
 	default:
 		return false
@@ -2132,6 +2219,171 @@ func (e ChannelIdentityKind) Valid() bool {
 	case ChannelIdentityKindAgent:
 		return true
 	case ChannelIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundPolicy.
+const (
+	ChannelOutboundPolicyAgentMayStart ChannelOutboundPolicy = "agent_may_start"
+	ChannelOutboundPolicyReplyOnly     ChannelOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundPolicy enum.
+func (e ChannelOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundReadAvailabilityState.
+const (
+	ChannelOutboundReadAvailabilityStateNotLoaded  ChannelOutboundReadAvailabilityState = "not_loaded"
+	ChannelOutboundReadAvailabilityStateNotRunning ChannelOutboundReadAvailabilityState = "not_running"
+	ChannelOutboundReadAvailabilityStateRunning    ChannelOutboundReadAvailabilityState = "running"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundReadAvailabilityState enum.
+func (e ChannelOutboundReadAvailabilityState) Valid() bool {
+	switch e {
+	case ChannelOutboundReadAvailabilityStateNotLoaded:
+		return true
+	case ChannelOutboundReadAvailabilityStateNotRunning:
+		return true
+	case ChannelOutboundReadAvailabilityStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundReadOutboundPolicy.
+const (
+	ChannelOutboundReadOutboundPolicyAgentMayStart ChannelOutboundReadOutboundPolicy = "agent_may_start"
+	ChannelOutboundReadOutboundPolicyReplyOnly     ChannelOutboundReadOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundReadOutboundPolicy enum.
+func (e ChannelOutboundReadOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundReadOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundReadOutboundPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundRejectionCode.
+const (
+	ChannelOutboundRejectionCodeConnectFirst                ChannelOutboundRejectionCode = "connect_first"
+	ChannelOutboundRejectionCodeInvalidTargets              ChannelOutboundRejectionCode = "invalid_targets"
+	ChannelOutboundRejectionCodeLookupUnavailable           ChannelOutboundRejectionCode = "lookup_unavailable"
+	ChannelOutboundRejectionCodePlatformCannotMessagePeople ChannelOutboundRejectionCode = "platform_cannot_message_people"
+	ChannelOutboundRejectionCodePlatformCannotStart         ChannelOutboundRejectionCode = "platform_cannot_start"
+	ChannelOutboundRejectionCodeSavedLiveMismatch           ChannelOutboundRejectionCode = "saved_live_mismatch"
+	ChannelOutboundRejectionCodeStaleRevision               ChannelOutboundRejectionCode = "stale_revision"
+	ChannelOutboundRejectionCodeTooManyTargets              ChannelOutboundRejectionCode = "too_many_targets"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundRejectionCode enum.
+func (e ChannelOutboundRejectionCode) Valid() bool {
+	switch e {
+	case ChannelOutboundRejectionCodeConnectFirst:
+		return true
+	case ChannelOutboundRejectionCodeInvalidTargets:
+		return true
+	case ChannelOutboundRejectionCodeLookupUnavailable:
+		return true
+	case ChannelOutboundRejectionCodePlatformCannotMessagePeople:
+		return true
+	case ChannelOutboundRejectionCodePlatformCannotStart:
+		return true
+	case ChannelOutboundRejectionCodeSavedLiveMismatch:
+		return true
+	case ChannelOutboundRejectionCodeStaleRevision:
+		return true
+	case ChannelOutboundRejectionCodeTooManyTargets:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundRejectionTargetErrorsCode.
+const (
+	ChannelOutboundRejectionTargetErrorsCodeCannotMessagePeople    ChannelOutboundRejectionTargetErrorsCode = "cannot_message_people"
+	ChannelOutboundRejectionTargetErrorsCodeInvalidId              ChannelOutboundRejectionTargetErrorsCode = "invalid_id"
+	ChannelOutboundRejectionTargetErrorsCodeLookupUnavailable      ChannelOutboundRejectionTargetErrorsCode = "lookup_unavailable"
+	ChannelOutboundRejectionTargetErrorsCodeNotFound               ChannelOutboundRejectionTargetErrorsCode = "not_found"
+	ChannelOutboundRejectionTargetErrorsCodeUnsupportedChannelKind ChannelOutboundRejectionTargetErrorsCode = "unsupported_channel_kind"
+	ChannelOutboundRejectionTargetErrorsCodeUsernameNotAllowed     ChannelOutboundRejectionTargetErrorsCode = "username_not_allowed"
+	ChannelOutboundRejectionTargetErrorsCodeWildcardNotAllowed     ChannelOutboundRejectionTargetErrorsCode = "wildcard_not_allowed"
+	ChannelOutboundRejectionTargetErrorsCodeWrongPlatform          ChannelOutboundRejectionTargetErrorsCode = "wrong_platform"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundRejectionTargetErrorsCode enum.
+func (e ChannelOutboundRejectionTargetErrorsCode) Valid() bool {
+	switch e {
+	case ChannelOutboundRejectionTargetErrorsCodeCannotMessagePeople:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeInvalidId:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeLookupUnavailable:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeNotFound:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeUnsupportedChannelKind:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeUsernameNotAllowed:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeWildcardNotAllowed:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeWrongPlatform:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundUpdateRequestPolicy.
+const (
+	ChannelOutboundUpdateRequestPolicyAgentMayStart ChannelOutboundUpdateRequestPolicy = "agent_may_start"
+	ChannelOutboundUpdateRequestPolicyReplyOnly     ChannelOutboundUpdateRequestPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundUpdateRequestPolicy enum.
+func (e ChannelOutboundUpdateRequestPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundUpdateRequestPolicyAgentMayStart:
+		return true
+	case ChannelOutboundUpdateRequestPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundWriteResponseOutboundPolicy.
+const (
+	ChannelOutboundWriteResponseOutboundPolicyAgentMayStart ChannelOutboundWriteResponseOutboundPolicy = "agent_may_start"
+	ChannelOutboundWriteResponseOutboundPolicyReplyOnly     ChannelOutboundWriteResponseOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundWriteResponseOutboundPolicy enum.
+func (e ChannelOutboundWriteResponseOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundWriteResponseOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundWriteResponseOutboundPolicyReplyOnly:
 		return true
 	default:
 		return false
@@ -9665,6 +9917,27 @@ func (e RoomCreateRequestKind) Valid() bool {
 	}
 }
 
+// Defines values for RoomInvitationStatus.
+const (
+	RoomInvitationStatusGenerating  RoomInvitationStatus = "generating"
+	RoomInvitationStatusReady       RoomInvitationStatus = "ready"
+	RoomInvitationStatusUnavailable RoomInvitationStatus = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the RoomInvitationStatus enum.
+func (e RoomInvitationStatus) Valid() bool {
+	switch e {
+	case RoomInvitationStatusGenerating:
+		return true
+	case RoomInvitationStatusReady:
+		return true
+	case RoomInvitationStatusUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RoomMembersUpdateRequestAction.
 const (
 	RoomMembersUpdateRequestActionAdd    RoomMembersUpdateRequestAction = "add"
@@ -11228,6 +11501,60 @@ func (e SkillStatus) Valid() bool {
 	}
 }
 
+// Defines values for SkillDetailNeedsStatus.
+const (
+	SkillDetailNeedsStatusMissing SkillDetailNeedsStatus = "missing"
+	SkillDetailNeedsStatusPresent SkillDetailNeedsStatus = "present"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailNeedsStatus enum.
+func (e SkillDetailNeedsStatus) Valid() bool {
+	switch e {
+	case SkillDetailNeedsStatusMissing:
+		return true
+	case SkillDetailNeedsStatusPresent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillDetailShelf.
+const (
+	SkillDetailShelfBuiltin  SkillDetailShelf = "builtin"
+	SkillDetailShelfRegistry SkillDetailShelf = "registry"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailShelf enum.
+func (e SkillDetailShelf) Valid() bool {
+	switch e {
+	case SkillDetailShelfBuiltin:
+		return true
+	case SkillDetailShelfRegistry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillDetailState.
+const (
+	SkillDetailStateDeleted   SkillDetailState = "deleted"
+	SkillDetailStateInstalled SkillDetailState = "installed"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailState enum.
+func (e SkillDetailState) Valid() bool {
+	switch e {
+	case SkillDetailStateDeleted:
+		return true
+	case SkillDetailStateInstalled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SkillTrustResponseLevel.
 const (
 	SkillTrustResponseLevelAllowAll        SkillTrustResponseLevel = "allow_all"
@@ -12046,6 +12373,7 @@ const (
 	TaskOccurrenceSetOccurrenceRunsStatusDone       TaskOccurrenceSetOccurrenceRunsStatus = "done"
 	TaskOccurrenceSetOccurrenceRunsStatusFailed     TaskOccurrenceSetOccurrenceRunsStatus = "failed"
 	TaskOccurrenceSetOccurrenceRunsStatusInProgress TaskOccurrenceSetOccurrenceRunsStatus = "in_progress"
+	TaskOccurrenceSetOccurrenceRunsStatusMissed     TaskOccurrenceSetOccurrenceRunsStatus = "missed"
 	TaskOccurrenceSetOccurrenceRunsStatusSkipped    TaskOccurrenceSetOccurrenceRunsStatus = "skipped"
 )
 
@@ -12057,6 +12385,8 @@ func (e TaskOccurrenceSetOccurrenceRunsStatus) Valid() bool {
 	case TaskOccurrenceSetOccurrenceRunsStatusFailed:
 		return true
 	case TaskOccurrenceSetOccurrenceRunsStatusInProgress:
+		return true
+	case TaskOccurrenceSetOccurrenceRunsStatusMissed:
 		return true
 	case TaskOccurrenceSetOccurrenceRunsStatusSkipped:
 		return true
@@ -12088,6 +12418,7 @@ const (
 	TaskRunStatusDone       TaskRunStatus = "done"
 	TaskRunStatusFailed     TaskRunStatus = "failed"
 	TaskRunStatusInProgress TaskRunStatus = "in_progress"
+	TaskRunStatusMissed     TaskRunStatus = "missed"
 	TaskRunStatusSkipped    TaskRunStatus = "skipped"
 )
 
@@ -12099,6 +12430,8 @@ func (e TaskRunStatus) Valid() bool {
 	case TaskRunStatusFailed:
 		return true
 	case TaskRunStatusInProgress:
+		return true
+	case TaskRunStatusMissed:
 		return true
 	case TaskRunStatusSkipped:
 		return true
@@ -14309,11 +14642,17 @@ type Agent struct {
 	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Role AgentRole `json:"role"`
 
+	// SkillGrants Skill key → generation the grant is bound to (SD-30). Written wholesale by the server at every agent create/update from its own observation of the installed skill folders; requests stay name-only. An absent field or entry is unbound and authorizes nothing.
+	SkillGrants *map[string]string `json:"skill_grants,omitempty"`
+
 	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
 	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null). For `type: system` agents (e.g. the Judge), this is ALSO the judging rubric — one unified soul concept (ADR-052 FR-038, no separate `rubric` field); the Judge's soul is editable while the agent stays otherwise locked.
 	Soul string `json:"soul"`
+
+	// StaleSkillGrants Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). Computed by the server on the agent detail read (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is not listed. Omitted when empty.
+	StaleSkillGrants *[]string `json:"stale_skill_grants,omitempty"`
 
 	// Stats Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
 	Stats *struct {
@@ -14825,6 +15164,9 @@ type AgentDetail struct {
 
 	// Soul SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul).
 	Soul *string `json:"soul,omitempty"`
+
+	// StaleSkillGrants Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). The same list the REST agent detail returns as `stale_skill_grants`; empty when none is stale.
+	StaleSkillGrants *[]string `json:"stale_skill_grants,omitempty"`
 
 	// StoredOverrides The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included.
 	StoredOverrides *map[string]AgentDetailStoredOverrides `json:"stored_overrides,omitempty"`
@@ -15871,6 +16213,9 @@ type CatalogResizeLimits struct {
 
 	// MaxBytes Maximum encoded image size in bytes.
 	MaxBytes int `json:"max_bytes"`
+
+	// MaxPatches Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+	MaxPatches *int `json:"max_patches,omitempty"`
 }
 
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
@@ -15882,8 +16227,38 @@ type ChangePasswordRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
+// ChannelAvailability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+type ChannelAvailability struct {
+	// Reason Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+	Reason *string `json:"reason,omitempty"`
+
+	// State running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+	State ChannelAvailabilityState `json:"state"`
+}
+
+// ChannelAvailabilityState running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+type ChannelAvailabilityState string
+
+// ChannelConfigureError 500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056, FR-057, T-6b, T-6c). The code says what the request durably changed.
+type ChannelConfigureError struct {
+	// Code could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+	Code ChannelConfigureErrorCode `json:"code"`
+
+	// Detail Short reason, never a secret.
+	Detail *string `json:"detail,omitempty"`
+
+	// Error The normative text for the code. could_not_save: "could not save config". credential_saved_not_saved: "The credential was saved, but the configuration change was not: nothing else was applied. ..." (T-6b). saved_not_refreshed: "settings saved, but the running configuration could not be refreshed; the connection was not restarted".
+	Error string `json:"error"`
+}
+
+// ChannelConfigureErrorCode could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+type ChannelConfigureErrorCode string
+
 // ChannelConfigureRequest Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
 type ChannelConfigureRequest struct {
+	// AllowFrom Allowed sender ids for this channel instance ("Allow From"), one id per element. An empty list admits every sender. The server saves a list. For compatibility with older clients the server also accepts one string when inbound schema validation is off; it splits that string on commas (",", full-width "，") and, except on WhatsApp, on whitespace, trims each id and drops empty pieces. WhatsApp ids are account ids (digits@s.whatsapp.net or a group JID), not phone numbers, and split on commas only. A null value is refused with 400 and nothing is saved.
+	AllowFrom *[]string `json:"allow_from,omitempty"`
+
 	// AppId Application ID (used by Slack, Discord).
 	AppId *string `json:"app_id,omitempty"`
 
@@ -15933,6 +16308,22 @@ type ChannelConfigureRequest struct {
 
 // ChannelConfigureRequestIdentityKind Routing kind for this channel instance.
 type ChannelConfigureRequestIdentityKind string
+
+// ChannelConfigureResponse 200 body of PUT /api/v1/channels/{id}/configure: the updated channel configuration with credential fields redacted (structure varies by channel type), plus how the save was applied to the running connection (channels spec T-6, FR-050, FR-052).
+type ChannelConfigureResponse struct {
+	// ApplyNote Present whenever a reload was attempted (every outcome except no_reload_needed): "A connection restart was attempted; other connections and scheduled services may have paused briefly while it ran."
+	ApplyNote *string `json:"apply_note,omitempty"`
+
+	// ApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+	ApplyOutcome ChannelConfigureResponseApplyOutcome `json:"apply_outcome"`
+
+	// ApplyReason Present for applied_not_running (the availability reason) and failed (a fixed, secret-free phrase, never the raw error text). For failed, use "the configuration reload failed; details are in the server log", or, when the applied/current predicate reaches the pending-disposal leg, "the previous connection did not finish shutting down; the next save retries it". A config-changing save uses the reload phrase because the applied-hash check precedes the disposal check. An identical save with matching applied settings while a disposal remains pending uses the disposal phrase. Error details stay in the server log. Never a secret.
+	ApplyReason          *string                `json:"apply_reason,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// ChannelConfigureResponseApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+type ChannelConfigureResponseApplyOutcome string
 
 // ChannelCreateRequest Request body for POST /channels — creates a new channel instance. The instance key is derived as "<type>.<slug>" (ADR-029 FR-017).
 type ChannelCreateRequest struct {
@@ -16014,12 +16405,27 @@ type ChannelEntry struct {
 	// NativeAvailable WhatsApp only: whether the native (whatsmeow) transport is compiled into this binary. False on a lite build or an architecture where it is excluded. Omitted for channels to which it does not apply. When false, clients MUST NOT offer native mode (the QR pairing flow cannot work).
 	NativeAvailable *bool `json:"native_available,omitempty"`
 
+	// OutboundPolicy The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+	OutboundPolicy *ChannelEntryOutboundPolicy `json:"outbound_policy,omitempty"`
+
+	// RejectedSenders Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+	RejectedSenders *struct {
+		// Count How many messages were ignored since the adapter started.
+		Count int `json:"count"`
+
+		// Recent Canonical sender ids of the latest ignored senders, most recent first.
+		Recent []string `json:"recent"`
+	} `json:"rejected_senders,omitempty"`
+
 	// Transport Transport mechanism used by this channel.
 	Transport ChannelEntryTransport `json:"transport"`
 }
 
 // ChannelEntryIdentityKind Routing kind for this channel instance.
 type ChannelEntryIdentityKind string
+
+// ChannelEntryOutboundPolicy The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+type ChannelEntryOutboundPolicy string
 
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
@@ -16038,6 +16444,130 @@ type ChannelIdentity struct {
 
 // ChannelIdentityKind Routing kind for this channel instance.
 type ChannelIdentityKind string
+
+// ChannelOutbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+type ChannelOutbound struct {
+	// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+	Policy ChannelOutboundPolicy `json:"policy"`
+
+	// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+	Targets []string `json:"targets"`
+}
+
+// ChannelOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundPolicy string
+
+// ChannelOutboundRead Response of GET /api/v1/channels/{id}/outbound (channels spec FR-021), read from one live configuration snapshot.
+type ChannelOutboundRead struct {
+	// Availability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+	Availability struct {
+		// Reason Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+		Reason *string `json:"reason,omitempty"`
+
+		// State running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+		State ChannelOutboundReadAvailabilityState `json:"state"`
+	} `json:"availability"`
+
+	// Outbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+	Outbound struct {
+		// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+		Policy ChannelOutboundReadOutboundPolicy `json:"policy"`
+
+		// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+		Targets []string `json:"targets"`
+	} `json:"outbound"`
+
+	// Revision The channel revision token (FR-088) computed over the live configuration — the same token list_channels returns and the writer compares against expected_revision. "absent" when the connection is not configured.
+	Revision string `json:"revision"`
+
+	// StartSupported True only for platforms that can start messages in this release (Discord and Telegram). Other platforms show "not supported yet".
+	StartSupported bool `json:"start_supported"`
+}
+
+// ChannelOutboundReadAvailabilityState running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+type ChannelOutboundReadAvailabilityState string
+
+// ChannelOutboundReadOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundReadOutboundPolicy string
+
+// ChannelOutboundRejection Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502 (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
+// Safe-echo set: every string of this schema (error, target_errors[].target, target_errors[].reason) is restricted by its pattern to printable ASCII (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes (double quote, backslash, <, >, &). The server drops any other character before serializing; it never escapes or substitutes. Each string character therefore serializes to exactly one byte, which keeps the worst-case body at about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable characters for its binary sniff.
+type ChannelOutboundRejection struct {
+	// Code Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+	Code ChannelOutboundRejectionCode `json:"code"`
+
+	// Error Human-readable reason, in the safe-echo set. For 502 lookup_unavailable it is "Discord could not be reached to check <ids>; nothing was saved; try again", listing unavailable ids in request order until the next id would exceed 500 characters, then "+<N> more".
+	Error string `json:"error"`
+
+	// OmittedCount Present only when more than 10 entries were invalid: how many invalid entries are not listed in target_errors.
+	OmittedCount *int `json:"omitted_count,omitempty"`
+
+	// TargetErrors Per-target errors: the first 10 invalid entries in request order.
+	TargetErrors *[]struct {
+		// Code Why this entry was refused.
+		Code ChannelOutboundRejectionTargetErrorsCode `json:"code"`
+
+		// Index 0-based position of the entry in the request's targets array (the client shows it on textarea line index + 1). This is the identifier; target is only a hint.
+		Index int `json:"index"`
+
+		// Reason Fixed catalog text for the code, in the safe-echo set (the longest, unsupported_channel_kind's, is 115 characters).
+		Reason *string `json:"reason,omitempty"`
+
+		// Target A sanitized hint of the entry: its first 20 safe-echo characters after dropping every other character, plus "..." when more than 20 survived.
+		Target string `json:"target"`
+	} `json:"target_errors,omitempty"`
+}
+
+// ChannelOutboundRejectionCode Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+type ChannelOutboundRejectionCode string
+
+// ChannelOutboundRejectionTargetErrorsCode Why this entry was refused.
+type ChannelOutboundRejectionTargetErrorsCode string
+
+// ChannelOutboundUpdateRequest Request body of PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-022). The whole target list replaces the stored one. Targets are raw input: the server trims, canonicalizes, removes duplicates and then enforces the limit of 20 (too_many_targets).
+type ChannelOutboundUpdateRequest struct {
+	// ExpectedRevision The revision returned by GET /api/v1/channels/{id}/outbound (or list_channels). A different current revision is refused with 409 stale_revision.
+	ExpectedRevision string `json:"expected_revision"`
+
+	// Policy reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+	Policy ChannelOutboundUpdateRequestPolicy `json:"policy"`
+
+	// Targets Raw target entries, one per textarea line: a bare id or "platform:id". Rejections refer to an entry by its 0-based index in this array.
+	Targets []string `json:"targets"`
+}
+
+// ChannelOutboundUpdateRequestPolicy reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+type ChannelOutboundUpdateRequestPolicy string
+
+// ChannelOutboundWriteResponse Response of a successful PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-027, T-6b).
+type ChannelOutboundWriteResponse struct {
+	// Outbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+	Outbound struct {
+		// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+		Policy ChannelOutboundWriteResponseOutboundPolicy `json:"policy"`
+
+		// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+		Targets []string `json:"targets"`
+	} `json:"outbound"`
+
+	// Revision The new channel revision token (FR-088) over the live configuration.
+	Revision string `json:"revision"`
+
+	// Warning Present only when the file was written but the rest of the running configuration could not be refreshed. The saved list is in force anyway. Text: "Saved and in force for starting messages. Other settings could not be refreshed: <short reason>. Check the server log."
+	Warning *string `json:"warning,omitempty"`
+}
+
+// ChannelOutboundWriteResponseOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundWriteResponseOutboundPolicy string
+
+// ChannelRejectedSenders Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+type ChannelRejectedSenders struct {
+	// Count How many messages were ignored since the adapter started.
+	Count int `json:"count"`
+
+	// Recent Canonical sender ids of the latest ignored senders, most recent first.
+	Recent []string `json:"recent"`
+}
 
 // ChannelRouting Routing configuration for a single communication channel instance, as read back by GET and returned by PUT /channels/{id}/routing. Every channel is bound to a workspace and names that binding's main agent (omnipus-system-agent FR-127, K14); there is no global default agent and no unbound routing mode. An instance that has no binding yet is reported truthfully (FR-128): `bound` is false and both ids are empty strings — never an invented or legacy destination.
 type ChannelRouting struct {
@@ -17739,10 +18269,10 @@ type ExecutorCommandPreviewRequest struct {
 
 // ExecutorCommandPreviewResponse The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. cli_args tokens the safety filter would strip at real dispatch time are surfaced in dropped_args rather than silently omitted, so the operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored.
 type ExecutorCommandPreviewResponse struct {
-	// Argv The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_path/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why). Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
+	// Argv The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why). Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
 	Argv []string `json:"argv"`
 
-	// Binary The resolved binary name or path that would be spawned — the previewed cli_path verbatim when non-empty, otherwise the CLI's bare default command name (resolved via the OS $PATH at actual spawn time, which this preview cannot see into).
+	// Binary The program that would be spawned: the path a person saved in Settings -> Third-party agents for this CLI, exactly as saved. With no saved path, or a saved path that fails the program checks, the route refuses with 400 and the text a run would be refused with.
 	Binary string `json:"binary"`
 
 	// CommandLine argv joined into a single, shell-quoted display string (binary first), suitable for showing directly in the UI or copying into a terminal.
@@ -19413,6 +19943,9 @@ type LibraryContentResponse struct {
 
 // LibraryEntry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
 type LibraryEntry struct {
+	// ChatCopy True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+	ChatCopy *bool `json:"chat_copy,omitempty"`
+
 	// IsDir True when this entry is a directory.
 	IsDir bool `json:"is_dir"`
 
@@ -19773,6 +20306,9 @@ type MailAttachmentSaveResponse struct {
 
 	// Entry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
 	Entry struct {
+		// ChatCopy True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+		ChatCopy *bool `json:"chat_copy,omitempty"`
+
 		// IsDir True when this entry is a directory.
 		IsDir bool `json:"is_dir"`
 
@@ -21006,6 +21542,9 @@ type MediaLibraryEntry struct {
 	// LastRefcountSeenAt RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
 	LastRefcountSeenAt *time.Time `json:"last_refcount_seen_at,omitempty"`
 
+	// LibraryPath Workspace-relative path of this entry's Library file (for example .library/shot.png), with the same path rules as LibraryEntry.path (#1449 D26, FR-086). The durable association between the chat copy and the Library file: written when the file is published, kept across a rename or a move inside the workspace, cleared when the Library file is deleted or moved to another workspace. Absent when the entry has no associated Library file.
+	LibraryPath *string `json:"library_path,omitempty"`
+
 	// Mime MIME type sniffed from the stored bytes.
 	Mime *string `json:"mime,omitempty"`
 
@@ -21096,8 +21635,11 @@ type Message struct {
 	// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 
-	// Content Raw markdown/text content of the message.
+	// Content Raw markdown/text content of the message. On a history page this may be a display preview; see content_original_size_bytes.
 	Content *string `json:"content,omitempty"`
+
+	// ContentOriginalSizeBytes Present only when `content` is a read-time display preview of an ordinary user/assistant chat message (entry type `message` or omitted) whose saved text exceeds 65,536 UTF-8 bytes: `content` then holds its first at most 65,536 bytes cut back to a character boundary, and this field is the exact UTF-8 length of the full saved text (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). The full text is read through getSessionHistoryEntry. Unrelated to `truncated`/`truncation_reason`, which mean the turn itself was cut short. Never present on a getSessionHistoryEntry response, which carries the full content.
+	ContentOriginalSizeBytes *int `json:"content_original_size_bytes,omitempty"`
 
 	// ContextWindowNotice Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
 	ContextWindowNotice *struct {
@@ -21448,6 +21990,7 @@ type Message struct {
 		ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
 		// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+		// `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
 		Result *map[string]interface{} `json:"result,omitempty"`
 
 		// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
@@ -24069,7 +24612,7 @@ type RevisionEntry struct {
 // RevisionEntryVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 type RevisionEntryVerb string
 
-// Room A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}.
+// Room A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}. invitation_context_status is present on every room the server returns (#1449 FR-041): only an ad-hoc group started with Add participant from a main chat ever has a summary, every other group reports unavailable. invitation_context (with the text) is returned by GET /api/v1/rooms/{id} only.
 type Room struct {
 	// AllocatedCostMicroUsd Allocated cost in micro-dollars (§6.14).
 	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
@@ -24081,9 +24624,15 @@ type Room struct {
 	Generation int64 `json:"generation"`
 
 	// Hidden Team room below two conversation agents: hidden, history kept.
-	Hidden bool     `json:"hidden"`
-	Id     string   `json:"id"`
-	Kind   RoomKind `json:"kind"`
+	Hidden bool   `json:"hidden"`
+	Id     string `json:"id"`
+
+	// InvitationContext The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+	InvitationContext *RoomInvitationContext `json:"invitation_context,omitempty"`
+
+	// InvitationContextStatus State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+	InvitationContextStatus *RoomInvitationStatus `json:"invitation_context_status,omitempty"`
+	Kind                    RoomKind              `json:"kind"`
 
 	// Members Member agent ids. Never null.
 	Members []string `json:"members"`
@@ -24135,6 +24684,30 @@ type RoomHistoryResponse struct {
 	NextBeforeSeq *int64 `json:"next_before_seq,omitempty"`
 }
 
+// RoomInvitationContext The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+type RoomInvitationContext struct {
+	// AuthorAgentId The starting agent, whose model wrote the summary.
+	AuthorAgentId string `json:"author_agent_id"`
+
+	// CostMicroUsd Cost of the summary call in micro-dollars, counted once into the group's cost. Absent when no call ran.
+	CostMicroUsd *int64 `json:"cost_micro_usd,omitempty"`
+
+	// CostUnpriced True when the summary call ran but reported no price.
+	CostUnpriced *bool `json:"cost_unpriced,omitempty"`
+
+	// GeneratedAt When the summary became ready.
+	GeneratedAt *time.Time `json:"generated_at,omitempty"`
+
+	// Status State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+	Status RoomInvitationStatus `json:"status"`
+
+	// Text The summary text. Present only when status is ready.
+	Text *string `json:"text,omitempty"`
+}
+
+// RoomInvitationStatus State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+type RoomInvitationStatus string
+
 // RoomMembersUpdateRequest Body of PATCH /api/v1/rooms/{id}/members (spec omnipus-system-agent K24; FR-204, FR-207). The team room accepts only mute and unmute; removing a member below two agents follows the two-agent rule (FR-204).
 type RoomMembersUpdateRequest struct {
 	Action   RoomMembersUpdateRequestAction `json:"action"`
@@ -24148,9 +24721,14 @@ type RoomMembersUpdateRequestAction string
 type RoomMessageRequest struct {
 	ClientMessageId string `json:"client_message_id"`
 
+	// Media Files attached to the message (#1449 D3, FR-018): each a media://workspace/<this room's workspace id>/<id> reference returned by POST /upload with workspace_id. Every reference is resolved before anything is recorded; a reference that is not a file of this room's workspace, is missing or is stranded refuses the whole message with 422 and nothing is posted. More than 16 is a 400. The same reference listed twice is kept as listed. Attachments never count toward the text size limit.
+	Media *[]string `json:"media,omitempty"`
+
 	// Mentions Agent ids picked in the @-picker, or the reserved value `all`.
 	Mentions []string `json:"mentions"`
-	Text     string   `json:"text"`
+
+	// Text The message text: at most 65,536 UTF-8 bytes (counted in bytes, not characters); an operator can lower this limit with session_messaging.steer_body, never raise it (#1449 D24, D27). The server enforces the limit in force in UTF-8 bytes before any schema check, with inbound validation on and off, and answers 422 naming the size and the limit; maxLength states the same 65,536 maximum (a byte count is never less than the character count, so the server check always answers first). Text may be empty only when media is not empty: a message with neither non-blank text nor media is refused with 422.
+	Text string `json:"text"`
 }
 
 // RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
@@ -24979,7 +25557,7 @@ type SessionDetail struct {
 	// NextBefore Present iff available and has_earlier; equals the first selected history_position.
 	NextBefore *string `json:"next_before,omitempty"`
 
-	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
 	PageInfo *SessionHistoryPageInfo `json:"page_info,omitempty"`
 
 	// Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
@@ -25176,7 +25754,7 @@ type SessionHistoryResponse struct {
 	// NextBefore Present iff has_earlier, equal to the first selected history_position.
 	NextBefore *string `json:"next_before,omitempty"`
 
-	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
 	PageInfo  SessionHistoryPageInfo `json:"page_info"`
 	SessionId string                 `json:"session_id"`
 
@@ -25945,6 +26523,9 @@ type Skill struct {
 	Description *string `json:"description,omitempty"`
 	ErrorStage  *string `json:"error_stage,omitempty"`
 
+	// HasLocalChanges true when any of: (a) the newest version's kind is not install or install_replace (a restore of an install version counts as a change); (b) the live folder's current content revision differs from the newest version's revision (an outside change not yet recorded) — evaluated at read time, never by writing history; (c) history is missing or unreadable. Always false for built-ins.
+	HasLocalChanges bool `json:"has_local_changes"`
+
 	// Id Unique skill identifier (typically the skill directory name or npm package name).
 	Id string `json:"id"`
 
@@ -25986,8 +26567,82 @@ type SkillSource string
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string
 
+// SkillCopyRequest Request body for POST /api/v1/skills/{name}/copy: the name of the new user-owned copy. The copy starts ungranted.
+type SkillCopyRequest struct {
+	// NewId Slug of the new skill (letters, digits and single hyphens).
+	NewId string `json:"new_id"`
+}
+
+// SkillDetail Tool-only: the complete result envelope of the get_skill agent tool (skills spec §5.2). Not served by any REST route; it exists so the selectable `fields` names are generated and compared, not typed twice.
+type SkillDetail struct {
+	AbsentFields  *[]string `json:"absent_fields,omitempty"`
+	AllowedTools  *[]string `json:"allowed_tools,omitempty"`
+	Compatibility *string   `json:"compatibility,omitempty"`
+	Description   *string   `json:"description,omitempty"`
+	Files         *struct {
+		Items []struct {
+			Exec bool   `json:"exec"`
+			Path string `json:"path"`
+			Size int64  `json:"size"`
+		} `json:"items"`
+		Total int `json:"total"`
+	} `json:"files,omitempty"`
+	Folder          *string `json:"folder,omitempty"`
+	HasLocalChanges *bool   `json:"has_local_changes,omitempty"`
+
+	// Id The skill slug as it is on disk.
+	Id           string  `json:"id"`
+	Instructions *string `json:"instructions,omitempty"`
+	LastChange   *struct {
+		Actor       *string   `json:"actor,omitempty"`
+		At          *string   `json:"at,omitempty"`
+		Paths       *[]string `json:"paths,omitempty"`
+		ShippedWith *string   `json:"shipped_with,omitempty"`
+		Tool        *string   `json:"tool,omitempty"`
+		Unknown     *bool     `json:"unknown,omitempty"`
+	} `json:"last_change,omitempty"`
+	Metadata *map[string]string `json:"metadata,omitempty"`
+	Name     *string            `json:"name,omitempty"`
+	Needs    *[]struct {
+		Path    *string                `json:"path,omitempty"`
+		Program string                 `json:"program"`
+		Status  SkillDetailNeedsStatus `json:"status"`
+	} `json:"needs,omitempty"`
+
+	// Revision Content revision; null only for a deleted skill.
+	Revision        *string           `json:"revision"`
+	Shelf           *SkillDetailShelf `json:"shelf,omitempty"`
+	State           *SkillDetailState `json:"state,omitempty"`
+	TruncatedFields *[]string         `json:"truncated_fields,omitempty"`
+	Versions        *struct {
+		Items []struct {
+			Actor      string   `json:"actor"`
+			At         string   `json:"at"`
+			Id         string   `json:"id"`
+			Kind       string   `json:"kind"`
+			Paths      []string `json:"paths"`
+			PathsTotal int      `json:"paths_total"`
+			Tool       *string  `json:"tool,omitempty"`
+		} `json:"items"`
+		NextBefore *string `json:"next_before"`
+		Total      int     `json:"total"`
+	} `json:"versions,omitempty"`
+}
+
+// SkillDetailNeedsStatus defines model for SkillDetail.Needs.Status.
+type SkillDetailNeedsStatus string
+
+// SkillDetailShelf defines model for SkillDetail.Shelf.
+type SkillDetailShelf string
+
+// SkillDetailState defines model for SkillDetail.State.
+type SkillDetailState string
+
 // SkillInstallRequest Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
 type SkillInstallRequest struct {
+	// ReplaceLocalChanges Required true to replace an installed skill whose has_local_changes is true. Absent means false.
+	ReplaceLocalChanges *bool `json:"replace_local_changes,omitempty"`
+
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision *string `json:"revision,omitempty"`
 
@@ -26820,7 +27475,7 @@ type TaskOccurrenceSet struct {
 		// SessionId The matched run's chat session ID.
 		SessionId string `json:"session_id"`
 
-		// Status The matched run's status.
+		// Status The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
 		Status TaskOccurrenceSetOccurrenceRunsStatus `json:"status"`
 	} `json:"occurrence_runs,omitempty"`
 
@@ -26834,7 +27489,7 @@ type TaskOccurrenceSet struct {
 	Truncated bool `json:"truncated"`
 }
 
-// TaskOccurrenceSetOccurrenceRunsStatus The matched run's status.
+// TaskOccurrenceSetOccurrenceRunsStatus The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
 type TaskOccurrenceSetOccurrenceRunsStatus string
 
 // TaskRun One execution record for a task (ADR-050 / docs/internal/specs/task-run-history-spec.md §2.1) — a purely additive record layer. Runs are append-only and event-sourced: an "open" record is written when a dispatch is claimed (`status: in_progress`, `ended_at: null`) and a "close" record carrying the SAME `run_id` is appended when it finishes (`status: done|failed`, `result`, `ended_at`). Readers fold by `run_id`, last record wins. `Task.status`/`result`/`session_id` keep their existing behaviour completely unchanged (RD2) — TaskRun is read by the calendar occurrence overlay (`occurrence_runs` on TaskOccurrenceSet, `run_counts` on DayBucket) and the task-detail run-history list. Returned by GET /tasks/{id}/runs.
@@ -26863,7 +27518,7 @@ type TaskRun struct {
 	// StartedAt RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
 	StartedAt time.Time `json:"started_at"`
 
-	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
 	Status TaskRunStatus `json:"status"`
 
 	// TaskId The task this run belongs to.
@@ -26873,7 +27528,7 @@ type TaskRun struct {
 // TaskRunKind How the run started — an automatic trigger fire, or a user Run-now.
 type TaskRunKind string
 
-// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
 type TaskRunStatus string
 
 // TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
@@ -27438,7 +28093,7 @@ type TokenUsageSummary struct {
 
 // ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `deny` and `cancel` remain distinct non-approval resolution actions.
 type ToolApprovalActionRequest struct {
-	// Action Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+	// Action Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
 	Action ToolApprovalActionRequestAction `json:"action"`
 
 	// Scope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
@@ -27447,7 +28102,7 @@ type ToolApprovalActionRequest struct {
 	Scope *ToolApprovalActionRequestScope `json:"scope,omitempty"`
 }
 
-// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
 type ToolApprovalActionRequestAction string
 
 // ToolApprovalActionRequestScope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
@@ -27504,6 +28159,7 @@ type ToolCall struct {
 	ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
 	// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+	// `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
 	Result *map[string]interface{} `json:"result,omitempty"`
 
 	// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
@@ -29423,12 +30079,18 @@ type UploadFilesMultipartBody struct {
 
 	// SessionId Session ID (alternative to query parameter).
 	SessionId *string `json:"session_id,omitempty"`
+
+	// WorkspaceId Workspace ID (alternative to the query parameter); must precede the file parts.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // UploadFilesParams defines parameters for UploadFiles.
 type UploadFilesParams struct {
-	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
 	SessionId *string `form:"session_id,omitempty" json:"session_id,omitempty"`
+
+	// WorkspaceId Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Takes precedence over session_id.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // TranscribeAudioMultipartBody defines parameters for TranscribeAudio.
@@ -29573,6 +30235,9 @@ type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
 
 // EnableChannelJSONRequestBody defines body for EnableChannel for application/json ContentType.
 type EnableChannelJSONRequestBody = ChannelEnableRequest
+
+// SetChannelOutboundJSONRequestBody defines body for SetChannelOutbound for application/json ContentType.
+type SetChannelOutboundJSONRequestBody = ChannelOutboundUpdateRequest
 
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
 type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest
@@ -29736,6 +30401,9 @@ type UpdateThirdPartyAgentSettingsJSONRequestBody = ThirdPartyAgentSettings
 // InstallSkillJSONRequestBody defines body for InstallSkill for application/json ContentType.
 type InstallSkillJSONRequestBody = SkillInstallRequest
 
+// CopySkillJSONRequestBody defines body for CopySkill for application/json ContentType.
+type CopySkillJSONRequestBody = SkillCopyRequest
+
 // PatchAppStateJSONRequestBody defines body for PatchAppState for application/json ContentType.
 type PatchAppStateJSONRequestBody = AppStatePatchRequest
 
@@ -29834,6 +30502,14 @@ func (a *ChannelConfigureRequest) UnmarshalJSON(b []byte) error {
 	err := json.Unmarshal(b, &object)
 	if err != nil {
 		return err
+	}
+
+	if raw, found := object["allow_from"]; found {
+		err = json.Unmarshal(raw, &a.AllowFrom)
+		if err != nil {
+			return fmt.Errorf("error reading 'allow_from': %w", err)
+		}
+		delete(object, "allow_from")
 	}
 
 	if raw, found := object["app_id"]; found {
@@ -29959,6 +30635,13 @@ func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
 	var err error
 	object := make(map[string]json.RawMessage)
 
+	if a.AllowFrom != nil {
+		object["allow_from"], err = json.Marshal(a.AllowFrom)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'allow_from': %w", err)
+		}
+	}
+
 	if a.AppId != nil {
 		object["app_id"], err = json.Marshal(a.AppId)
 		if err != nil {
@@ -30047,6 +30730,102 @@ func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
 		object["webhook_secret"], err = json.Marshal(a.WebhookSecret)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'webhook_secret': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ChannelConfigureResponse. Returns the specified
+// element and whether it was found
+func (a ChannelConfigureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ChannelConfigureResponse
+func (a *ChannelConfigureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ChannelConfigureResponse to handle AdditionalProperties
+func (a *ChannelConfigureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["apply_note"]; found {
+		err = json.Unmarshal(raw, &a.ApplyNote)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_note': %w", err)
+		}
+		delete(object, "apply_note")
+	}
+
+	if raw, found := object["apply_outcome"]; found {
+		err = json.Unmarshal(raw, &a.ApplyOutcome)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_outcome': %w", err)
+		}
+		delete(object, "apply_outcome")
+	}
+
+	if raw, found := object["apply_reason"]; found {
+		err = json.Unmarshal(raw, &a.ApplyReason)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_reason': %w", err)
+		}
+		delete(object, "apply_reason")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ChannelConfigureResponse to handle AdditionalProperties
+func (a ChannelConfigureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.ApplyNote != nil {
+		object["apply_note"], err = json.Marshal(a.ApplyNote)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'apply_note': %w", err)
+		}
+	}
+
+	object["apply_outcome"], err = json.Marshal(a.ApplyOutcome)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'apply_outcome': %w", err)
+	}
+
+	if a.ApplyReason != nil {
+		object["apply_reason"], err = json.Marshal(a.ApplyReason)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'apply_reason': %w", err)
 		}
 	}
 
@@ -32032,6 +32811,13 @@ func (t SkillInstallRequest) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if t.ReplaceLocalChanges != nil {
+		object["replace_local_changes"], err = json.Marshal(t.ReplaceLocalChanges)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'replace_local_changes': %w", err)
+		}
+	}
+
 	if t.Revision != nil {
 		object["revision"], err = json.Marshal(t.Revision)
 		if err != nil {
@@ -32072,6 +32858,13 @@ func (t *SkillInstallRequest) UnmarshalJSON(b []byte) error {
 	err = json.Unmarshal(b, &object)
 	if err != nil {
 		return err
+	}
+
+	if raw, found := object["replace_local_changes"]; found {
+		err = json.Unmarshal(raw, &t.ReplaceLocalChanges)
+		if err != nil {
+			return fmt.Errorf("error reading 'replace_local_changes': %w", err)
+		}
 	}
 
 	if raw, found := object["revision"]; found {

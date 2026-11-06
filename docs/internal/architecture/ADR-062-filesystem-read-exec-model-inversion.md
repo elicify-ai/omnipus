@@ -93,6 +93,8 @@ The first draft used a different approach per platform and a reviewer broke the 
 | `logs/`, `browser/`, `system/` | `cli.token` (live gateway credential) |
 | | `entities/` (per-agent **tool policy**) |
 
+> **Amendment 2026-11-01 (skills as folders, skills spec r15 section 6).** `skills/` no longer sits wholly in the "must stay agent-accessible" column. Its first level is protected: the folder itself and every entry that starts with a dot or is not a valid skill name are refused for every tool. Below that, an installed skill folder is readable only when the agent may load that skill, or when the agent's effective `edit_skill` policy is not `deny` (then every installed skill is readable). `system/` stays unreachable for tools and child programs, which keeps `system/skill-history/` out of reach. On macOS and Linux with an enforcing kernel sandbox, `<home>/skills` is also write-denied for child programs, God Mode included; without a kernel rule the app-layer and text checks apply and outside changes are recorded.
+
 Note `agents/` and `entities/` are different things — workspaces versus policy — so excluding policy does not touch an agent's own working directory.
 
 The excluded set is **five entries at one level**. That matters for §4.2: the enumeration is small and shallow, not a filesystem walk.

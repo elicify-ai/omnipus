@@ -386,6 +386,7 @@ func (as *applySandboxState) resolveModeAndBackend() (*SandboxApplyResult, bool,
 			"reason", as.result.DisabledBy,
 			"mode", "off",
 			"backend", as.backendName)
+		warnSkillFoldersUnprotected()
 		if strings.EqualFold(as.opts.GetEnv("OMNIPUS_ENV"), "production") {
 			fmt.Fprint(as.opts.Stderr, productionNagBanner)
 			slog.Warn("sandbox.disabled.nag",
@@ -714,6 +715,7 @@ func (as *applySandboxState) applyNonLinuxSandbox() (*SandboxApplyResult, bool, 
 			"reason", degradedReason,
 			"selected_backend", as.backendName,
 			"requested_mode", string(as.mode))
+		warnSkillFoldersUnprotected()
 		as.result.Mode = as.mode
 		as.result.ApplyState = sandbox.ApplyState{
 			Mode:       as.mode,
@@ -898,6 +900,7 @@ func (as *applySandboxState) degradeAfterLandlockFailure(applyErr error) (*Sandb
 		"requested_mode", string(as.mode),
 		"fallback_backend", as.backendName,
 		"error", applyErr)
+	warnSkillFoldersUnprotected()
 
 	// Spawn sites use the registered base to derive kernel policies at
 	// fork time. After this degrade, no kernel policy will be enforced, so
@@ -1172,4 +1175,14 @@ func StartNagBanner(reason string, stderr *os.File) context.CancelFunc {
 		cancel()
 		wg.Wait()
 	}
+}
+
+// skillFoldersUnprotectedWarning is the skills spec r15 §6.3/§9.4 start-up
+// warning for every mode in which no kernel sandbox confines child
+// processes: only Omnipus's own checks protect skill folders, and changes a
+// script makes are detected later as outside changes.
+const skillFoldersUnprotectedWarning = "Skill folders are protected by Omnipus's own checks only in this mode; scripts can change them. Changes made that way are recorded as \"changed outside Omnipus\"."
+
+func warnSkillFoldersUnprotected() {
+	slog.Warn(skillFoldersUnprotectedWarning)
 }

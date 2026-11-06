@@ -69,6 +69,7 @@ import { queryClient } from '@/lib/queryClient'
 import { fetchSessionMessages } from '@/lib/api'
 import type { Message, SessionHistoryPage } from '@/lib/api'
 import { applyHistoryPageToBucket } from './history-merge'
+import { advanceHistoryEntryGenerations } from '@/lib/historyEntryReads'
 import { abortHistoryReads } from './history'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
@@ -307,6 +308,7 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: SessionHis
     return
   }
   let deferred = false
+  let committed = false
   try {
     withBucket(sid, (b) => {
       // C4: a busy bucket defers — the projection is HELD on the operation
@@ -316,9 +318,19 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: SessionHis
         op.heldProjection = fresh
         return {}
       }
-      const merged = mergeServerProjection(b, fresh.entries, op)
       abortHistoryReads(sid)
       const patch = applyHistoryPageToBucket(b, fresh, 'latest')
+      // #1452 S11c: the projection's display rows are its folded segment rows.
+      const seen = new Set<string>()
+      const display = fresh.entries.flatMap(entry => {
+        const owner = patch.historySourceAliases?.[entry.historyPosition]
+        const row = owner && owner !== entry.id && patch.messagesById?.[owner] ? patch.messagesById[owner] : patch.messagesById?.[entry.id]?.historyParts ? patch.messagesById[entry.id] : entry
+        if (seen.has(row.id)) return []
+        seen.add(row.id)
+        return [row]
+      })
+      const merged = mergeServerProjection(b, display, op)
+      committed = true
       return { ...patch, messagesById: merged.messagesById, messageOrder: merged.messageOrder,
         history: { ...patch.history!, viewGeneration: b.history.viewGeneration + 1, openedClearPositions: [] } }
     })
@@ -338,6 +350,8 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: SessionHis
     return
   }
   if (deferred) return
+  // #1452 D2 A2.4: an authoritative commit voids older full-content reads.
+  if (committed) advanceHistoryEntryGenerations(sid, fresh.entries.map(entry => entry.historyPosition))
   // C4: the intent clears only now — the projection carried this
   // operation's marker (a marker unknown at arm time) and it is in the
   // view: the fresh view starts at the divider.

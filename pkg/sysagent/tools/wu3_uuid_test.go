@@ -29,7 +29,7 @@ func TestWU3AgentCreationUsesRandomUUIDAndPreservesNameVerbatim(t *testing.T) {
 		assert.Equal(t, label, wu3AgentRead(t, d, id)["name"], "case and spacing are preserved")
 	}
 	assert.NotEqual(t, firstID, secondID, "same label creates two separate agents")
-	body := wu3Error(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"name": label}), "AMBIGUOUS")
+	body := wu3Error(t, systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"name": label, "fields": []any{"name"}}), "AMBIGUOUS")
 	assert.Contains(t, body["message"], label)
 }
 

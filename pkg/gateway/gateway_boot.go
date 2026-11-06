@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -295,6 +296,10 @@ type setupAndStartServicesState struct {
 	bootSweepCfg    config.PlanningConfig
 	providerCatalog *catalog.Catalog
 	api             *restAPI
+	// taskTrigger is created and prepared (boot classification) before
+	// startSchedulers starts any task producer; startSchedulers then starts
+	// it. nil when the agent loop has no task store.
+	taskTrigger *agent.TaskTriggerScheduler
 }
 
 func setupAndStartServices(
@@ -336,8 +341,35 @@ func setupAndStartServices(
 		return nil, err
 	}
 
+	// Boot recovery of interrupted task work, all of it BEFORE any task
+	// producer of this process (drain, cron engines, trigger engine, plan
+	// engine, REST listener) starts, so every in_progress claim it sees is the
+	// dead process's and none of this process's runs can be failed by it
+	// (6b review I2, re-review N1):
+	//   1. hold the goal transitions it makes: the goal outcome recorder and
+	//      its session stores are wired later (wireInteractiveServices,
+	//      setupPlans); buildRESTAPI replays them once they are (re-review N2);
+	//   2. reconcile tasks the dead process left in_progress;
+	//   3. classify the trigger scheduler's interrupted fires. startSchedulers
+	//      starts its engine later, with the decisions made here.
+	tools.HoldTaskGoalEndedUntilReplay()
+	agent.ReconcileInterruptedTasks(agent.GetTaskStore(stg.agentLoop))
+	if err := stg.prepareTaskTrigger(); err != nil {
+		return nil, err
+	}
+
+	// The task executor's session plane (launcher, lifecycle store, main
+	// resolver) is wired only after the schedulers start (setupPlans,
+	// startPlanEngine, buildRESTAPI). Mark it expected so the queued-task drain
+	// and owed trigger fires wait for it instead of dispatching unwired.
+	agent.GetTaskExecutor(stg.agentLoop).ExpectSessionPlane()
+
 	if runningServices, stop, err := stg.startSchedulers(); stop {
 		return runningServices, err
+	}
+
+	if hook := afterStartSchedulersHookForTest.Load(); hook != nil {
+		(*hook)(stg.agentLoop)
 	}
 
 	if runningServices, stop, err := stg.setupMediaAndChannels(); stop {
@@ -369,7 +401,45 @@ func setupAndStartServices(
 	return stg.startBackgroundServices()
 }
 
+// prepareTaskTrigger creates the task trigger scheduler and classifies the
+// dead process's interrupted fires (PrepareAfterPhysicalBoot). It MUST run
+// before startSchedulers, which starts the first task producers (cron engine,
+// queued-task drain) and only then starts this scheduler with the decisions
+// made here (re-review N1). No-op when the agent loop has no task store.
+func (stg *setupAndStartServicesState) prepareTaskTrigger() error {
+	tStore := agent.GetTaskStore(stg.agentLoop)
+	if tStore == nil {
+		return nil
+	}
+	stg.taskTrigger = agent.NewTaskTriggerScheduler(
+		filepath.Join(stg.homePath, "tasks_triggers", "jobs.json"),
+		tStore, agent.GetTaskExecutor(stg.agentLoop),
+	)
+	if err := stg.taskTrigger.PrepareAfterPhysicalBoot(); err != nil {
+		return fmt.Errorf("error preparing task trigger scheduler: %w", err)
+	}
+	return nil
+}
+
+// afterStartSchedulersHookForTest, when set, runs inside setupAndStartServices
+// right after startSchedulers returns and before setupMediaAndChannels: the
+// window in which the schedulers run and the task executor's session plane is
+// not yet wired. Nil in production; set only by tests through
+// SetAfterStartSchedulersHookForTest.
+var afterStartSchedulersHookForTest atomic.Pointer[func(*agent.AgentLoop)]
+
+// SetAfterStartSchedulersHookForTest installs fn as the hook run right after
+// startSchedulers returns (nil removes it). For tests only.
+func SetAfterStartSchedulersHookForTest(fn func(al *agent.AgentLoop)) {
+	if fn == nil {
+		afterStartSchedulersHookForTest.Store(nil)
+		return
+	}
+	afterStartSchedulersHookForTest.Store(&fn)
+}
+
 // startSchedulers constructs and starts the gateway's cron-backed scheduling and drain services in boot order.
+// The task trigger scheduler is not created here: prepareTaskTrigger must have run first.
 func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error) {
 	stg.runningServices = &services{credStore: stg.credStore, bundle: stg.bundle, sandboxResult: stg.sandboxResult, homePath: stg.homePath}
 
@@ -452,12 +522,16 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 	// scheduler). Boot-reconciles existing tasks' triggers, then the create/
 	// update/delete REST + tool paths (re)register/remove jobs via
 	// AgentLoop.NotifyTaskUpserted / NotifyTaskDeleted.
-	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
-		triggerStorePath := filepath.Join(stg.homePath, "tasks_triggers", "jobs.json")
-		stg.runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
-			triggerStorePath, tStore, agent.GetTaskExecutor(stg.agentLoop),
-		)
-		if startErr := stg.runningServices.TaskTrigger.Start(); startErr != nil {
+	if stg.taskTrigger != nil {
+		// Created and prepared by setupAndStartServices before any task
+		// producer started (re-review N1).
+		stg.runningServices.TaskTrigger = stg.taskTrigger
+		// Physical boot, not a same-process start: a one-time trigger whose
+		// run the dead prior process had started is owed that run here, once
+		// (founder decision 2026-10-29, Q1 A; the task-trigger half of
+		// #1484). Gateway reload restarts this scheduler with plain Start —
+		// reload must never replay.
+		if startErr := stg.runningServices.TaskTrigger.StartAfterPhysicalBoot(); startErr != nil {
 			return nil, true, fmt.Errorf("error starting task trigger scheduler: %w", startErr)
 		}
 		stg.agentLoop.SetTaskTriggerScheduler(stg.runningServices.TaskTrigger)
@@ -1371,14 +1445,18 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	startKnowledgeLifecycle(stg.homePath, stg.wsHandler, 0,
 		knowledgeDriftNotifier(stg.runningServices.notifStore, stg.agentLoop, stg.agentLoop.GetConfig))
 
-	// Recover tasks left "in_progress" by a crashed/abandoned previous process.
-	// Runs before the HTTP listener accepts connections (StartAll, below), so no
-	// handler can race reconciliation.
-	stg.api.reconcileStuckTasks()
+	// Hand the goal transitions held since the boot reconcile to the goal
+	// outcome recorder, now that it and its session stores are wired, so each
+	// interrupted task's goal keeps its lasting goal_outcome line (re-review
+	// N2).
+	if err := tools.ReplayHeldTaskGoalEnded(); err != nil {
+		slog.Error("gateway: boot goal outcome lines not written", "error", err)
+	}
 
 	// Drop blocked_by edges pointing at task files that no longer exist, so the
 	// dependency graph self-heals on boot (a waiting task gated only on an orphan
-	// would otherwise never advance). Same pre-listener safety window as above.
+	// would otherwise never advance). Runs before the HTTP listener accepts
+	// connections (StartAll, below), so no handler can race it.
 	stg.api.reconcileOrphanBlockedByEdges()
 
 	// Register additional endpoints for frontend features.
@@ -1604,6 +1682,23 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, bool, error
 	return nil, false, nil
 }
 
+// repairLibraryAssociationsOnce runs the #1449 association repair (A-14) for
+// every workspace whose library has not had it yet. Best-effort.
+func (stg *setupAndStartServicesState) repairLibraryAssociationsOnce() {
+	a := stg.agentLoop
+	if a == nil {
+		return
+	}
+	wsFiles, err := listWorkspaceFiles(stg.homePath)
+	if err != nil {
+		slog.Warn("library association repair: list workspaces failed", "error", err)
+		return
+	}
+	for _, ws := range wsFiles {
+		repairLibraryAssociations(stg.homePath, ws.ID, a.GetWorkspaceLibrary(ws.ID))
+	}
+}
+
 // startBackgroundServices starts the shutdown-aware orphan and browser cleanup loops and returns the running services.
 func (stg *setupAndStartServicesState) startBackgroundServices() (*services, error) {
 	// Start the orphan GC scheduler: runs Library.OrphanGC across every
@@ -1615,6 +1710,9 @@ func (stg *setupAndStartServicesState) startBackgroundServices() (*services, err
 		const orphanInterval = 1 * time.Hour
 		ticker := time.NewTicker(orphanInterval)
 		defer ticker.Stop()
+		// #1449 A-14: the one-time association repair for uploads made
+		// before the durable library_path existed, once per workspace.
+		stg.repairLibraryAssociationsOnce()
 		// ctx.Done() must be observed here (not a bare `for range ticker.C`,
 		// which never exits) — this goroutine outlives the process
 		// otherwise. See runCatalogRefreshLoop's doc comment for the shared
@@ -1639,7 +1737,13 @@ func (stg *setupAndStartServicesState) startBackgroundServices() (*services, err
 				continue
 			}
 			for _, ws := range wsFiles {
-				lib, libErr := library.New(stg.homePath, ws.ID)
+				// The process's own library instance when there is one, so
+				// the collector and the chat paths share one manifest view.
+				lib := a.GetWorkspaceLibrary(ws.ID)
+				var libErr error
+				if lib == nil {
+					lib, libErr = library.New(stg.homePath, ws.ID)
+				}
 				if libErr != nil {
 					slog.Warn("orphan-gc: open library", "workspace_id", ws.ID, "error", libErr)
 					continue
@@ -2023,6 +2127,9 @@ func wireChannelManager(cm *channels.Manager, al *agent.AgentLoop) {
 	// unbound or deleted since the request arrived) must be visible to the
 	// responding side, not only counted and logged.
 	cm.SetReturnRefusalObserver(al.ReportReturnRefusal)
+	// channels-spec-r8 FR-044: the dispatch and dequeue start checks read
+	// the same live configuration send_message reads.
+	cm.SetPolicySource(al.GetConfig)
 }
 
 // agentCheckerFunc adapts a func to the agentChecker interface used by the

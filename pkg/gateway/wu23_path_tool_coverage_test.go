@@ -23,6 +23,7 @@ func TestWU23_RegisteredPathToolsHaveProtectionProbes(t *testing.T) {
 		"send_file":             "TestWU23_AdditionalHostPathTools",
 		"serve_web":             "TestWU23_AdditionalHostPathTools",
 		"browser_upload_file":   "TestWU23_BrowserUploadProtectsInternalFiles",
+		"edit_skill":            "TestWU23_EditSkillPathProtectsOutsideFiles",
 		"knowledge_read":        "TestWU23_DedicatedKnowledgeStoreCannotEscape",
 		"knowledge_edit":        "TestWU23_DedicatedKnowledgeStoreCannotEscape",
 		"knowledge_restructure": "TestWU23_DedicatedKnowledgeStoreCannotEscape",

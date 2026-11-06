@@ -112,6 +112,16 @@ type HomeGuard struct {
 	// turn's session-scoped upload dirs, and workspace mounts. Inventory
 	// paths are never re-admitted by any entry.
 	Allow []AllowRoot
+
+	// SkillFolders are the real paths of the turn's loadable skill set
+	// (skills spec r15 §6.1 item 1): the registry skill folders the agent
+	// may read. Filled only by tools.ResolveTurnFSPolicy.
+	SkillFolders []string
+
+	// SkillsReadAll is the turn's effective edit_skill ≠ deny (§6.1 item 1):
+	// an editor reads every valid-slug skill folder. Registry control
+	// entries stay refused for everyone.
+	SkillsReadAll bool
 }
 
 // FSPolicy is the effective, fully-resolved filesystem policy for one agent

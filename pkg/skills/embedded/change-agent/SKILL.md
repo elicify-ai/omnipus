@@ -7,7 +7,7 @@ metadata:
 # Change an agent (W3)
 
 ## Prerequisites
-`tool:get_agent` for the stored configuration, overrides and current revision; `tool:get_agent_tools` for the effective policies — a compact plain-text inventory of tool names, effective allow/ask/deny and short descriptions, including denied tools; its existing-agent header carries the current revision (a preview header has no id or revision) and no separate per-agent override or ceiling metadata is returned; `tool:read_agent_metadata`; `tool:list_workspaces` to name every workspace the agent works in. Compare the effective policies with the stored overrides; report ceiling details as unavailable rather than inferring them from the effective list.
+`tool:get_agent` with `fields` for what you need — `["all"]` for the whole definition; every result carries the current revision. `fields: ["tool_permissions", "stored_overrides"]` gives each tool's effective allow/ask/deny (denied tools included, with the agent's own stored value of that exact key as `override`) and the raw stored per-agent map; `fields: ["soul", "agent_md"]` gives its instructions; `tool:list_workspaces` to name every workspace the agent works in. Compare the effective policies with the stored overrides; no separate ceiling metadata is returned, so report ceiling details as unavailable rather than inferring them from the effective list.
 
 ## Steps
 1. Read the agent's current settings and ask what should change.
