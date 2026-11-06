@@ -630,41 +630,43 @@ func TestShowToUser_MissingSecretUnderSymlinkedDirMatchesMissing(t *testing.T) {
 	}
 }
 
-// A symlink whose real path stays inside this workspace's Library is that
-// file. The open names the real file, not the symlink (resolver: EvalSymlinks,
-// then the path under the work dir). BS-6.10 / FR-014.
-func TestShowToUser_SymlinkToOwnFileOpensThatFile(t *testing.T) {
-	tool := chatLinksShowToUser(t, "BS-6.10 / FR-014")
+// C2 B1: only a regular file opens. An in-library symlink is not a regular
+// file, even when it points at one. The refusal is the not-found sentence
+// (BS-6.9), publishes no open, is audited (BS-6.15), and does not consume
+// the 5-call budget (BS-6.13). The file it points at still opens.
+func TestShowToUser_InLibrarySymlinkRefusedAsNotRegular(t *testing.T) {
+	tool := chatLinksShowToUser(t, "BS-6.9 / C2 B1")
 	ctx, work := chatLinksOwnFile(t)
+	ctx = chatLinksAuditRoot(ctx, "symlink-file-root")
 	target := filepath.Join(work, "notes", "plan.md")
 	link := filepath.Join(work, "notes", "via.md")
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
 	chatLinksSetWatching(t, tool, func(string) bool { return true })
-	direct := tool.Execute(ctx, map[string]any{"ref": "notes/plan.md"})
-	if direct == nil || direct.IsError || !strings.Contains(direct.ForLLM, chatLinksAsked) {
-		t.Fatalf("the file itself = %q, want %q (BS-6.10); the symlink case is not comparable until this passes", textOf(direct), chatLinksAsked)
+	missingCtx := chatLinksAuditRoot(ctx, "symlink-file-missing")
+	missing := tool.Execute(missingCtx, map[string]any{"ref": "gone-chat-links.md"})
+	res, rows := chatLinksAuditOnce(t, tool, ctx, "notes/via.md")
+	chatLinksExactRefusal(t, res, chatLinksNotFound, "via.md", "in-library symlink")
+	if missing == nil || res == nil || missing.ForLLM != res.ForLLM {
+		t.Errorf("symlink %q and missing %q must be byte-identical (BS-6.9 / C2 B1)", textOf(res), textOf(missing))
 	}
-	res := tool.Execute(ctx, map[string]any{"ref": "notes/via.md"})
-	if res == nil || res.IsError {
-		t.Fatalf("in-library symlink = %q, want success (BS-6.10)", textOf(res))
+	if !chatLinksAuditMatch(rows, chatLinksAuditDenied) {
+		t.Fatalf("symlink audit = %+v, want a denial with reason %q (BS-6.15)", rows, chatLinksAuditDenied)
 	}
-	if !strings.Contains(res.ForLLM, chatLinksAsked) {
-		t.Fatalf("result = %q, want %q (BS-6.10; the real file is plan.md)", res.ForLLM, chatLinksAsked)
+	for i := 0; i < 5; i++ {
+		open := tool.Execute(ctx, map[string]any{"ref": "notes/plan.md"})
+		if open == nil || open.IsError || !strings.Contains(open.ForLLM, chatLinksAsked) {
+			t.Fatalf("plan.md open %d = %q, want %q (BS-6.10); the symlink refusal must not consume budget (BS-6.13)", i+1, textOf(open), chatLinksAsked)
+		}
+		_, ws, rel, present := chatLinksOpenTarget(t, open)
+		if !present || ws != "W" || rel != "notes/plan.md" {
+			t.Fatalf("plan.md open target = present %v workspace %q path %q, want W notes/plan.md", present, ws, rel)
+		}
 	}
-	if strings.Contains(res.ForLLM, "via.md") {
-		t.Fatalf("result names the symlink instead of the real file: %q", res.ForLLM)
-	}
-	if !strings.Contains(res.ForLLM, chatLinksPlanLink) {
-		t.Fatalf("result = %q, want %q (FR-011)", res.ForLLM, chatLinksPlanLink)
-	}
-	if strings.Contains(res.ForLLM, chatLinksOutside) || strings.Contains(res.ForLLM, chatLinksNotFound) {
-		t.Fatalf("in-library symlink was refused: %q", res.ForLLM)
-	}
-	_, ws, rel, present := chatLinksOpenTarget(t, res)
-	if !present || ws != "W" || rel != "notes/plan.md" {
-		t.Fatalf("open target = present %v workspace %q path %q, want W notes/plan.md (FR-014)", present, ws, rel)
+	sixth := tool.Execute(ctx, map[string]any{"ref": "notes/plan.md"})
+	if sixth == nil || sixth.ForLLM != chatLinksRate {
+		t.Fatalf("sixth plan.md open = %q, want %q (BS-6.13); the symlink refusal must have left all 5 slots", textOf(sixth), chatLinksRate)
 	}
 }
 
