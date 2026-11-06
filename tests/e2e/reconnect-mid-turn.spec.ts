@@ -265,6 +265,14 @@ test.describe('reconnect mid-turn (ADR-082) — deterministic held stream (#1661
       await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
       const after = await normalizedAssistantText(assistantMessages(page).first())
       expect(after.length).toBeGreaterThanOrEqual(before.length)
+      // #1661 strengthening: every scripted delta is uniquely numbered, so the
+      // rendered answer must be EXACTLY the scripted sequence — a catch-up
+      // that drops (or duplicates) the deltas missed during the outage is now
+      // visible even though the prose itself is repetitive. The original
+      // length assertion above is unchanged; this pins byte-continuity of the
+      // incremental replay that reattached the live turn.
+      expect(after, 'S-10: the reattached answer must be the complete scripted sequence — no dropped or duplicated delta')
+        .toBe(provider.expectedHeldAnswer())
 
       // The scripted stream ran to its released end over the reattached
       // connection: exactly the scripted turn reached the provider, finished

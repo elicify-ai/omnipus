@@ -66,6 +66,12 @@ export interface HeldStreamProvider {
   /** Finish the held stream deterministically (finish chunk + [DONE]). A
    * no-op when nothing is held (already cancelled/crashed/released). */
   release(): void;
+  /** The exact answer the SPA must render for the held turn: the numbered
+   * delta sequence plus the release text once released — whitespace-
+   * normalized the same way fixtures/assistant-text.ts normalizes. Lets a
+   * test pin byte-continuity of catch-up (no dropped or duplicated delta)
+   * despite the prose being repetitive. */
+  expectedHeldAnswer(): string;
   /** Stop the HTTP server and tear down remaining connections. */
   close(): Promise<void>;
 }
@@ -100,10 +106,16 @@ interface HeldStream {
  */
 export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<HeldStreamProvider> {
   const chunkIntervalMs = opts.chunkIntervalMs ?? 150;
-  const chunkText = opts.chunkText ?? 'The tide keeps its own steady rhythm in this scripted stream. ';
-  const releaseText = opts.releaseText ?? ' The scripted stream now finishes. ';
+  const chunkText = opts.chunkText ?? 'The tide keeps its own steady rhythm in this scripted stream.';
+  const releaseText = opts.releaseText ?? ' The scripted stream now finishes.';
   const retryAnswer =
     'The scripted retry answer completes without holding. The held turn was already finished before this request arrived.';
+
+  // Each scripted delta is UNIQUELY numbered. A periodic delta stream cannot
+  // prove catch-up byte-continuity — a dropped middle chunk is invisible in
+  // repeated prose — so every delta carries its own sequence number and
+  // expectedHeldAnswer() reconstructs the exact answer the SPA must render.
+  const deltaText = (n: number): string => `${chunkText} (part ${n})`;
 
   const evidence: HeldStreamEvidence = {
     streamRequests: 0,
@@ -215,7 +227,7 @@ export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<
       const stream: HeldStream = {
         res,
         timer: setInterval(() => {
-          res.write(chunk({ content: chunkText }, null));
+          res.write(chunk({ content: deltaText(evidence.chunksSent + 1) }, null));
           evidence.chunksSent += 1;
         }, chunkIntervalMs),
         finished: false,
@@ -230,7 +242,7 @@ export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<
       });
       res.on('error', (error) => evidence.errors.push(`provider response: ${error.message}`));
       held = stream;
-      res.write(chunk({ role: 'assistant', content: chunkText }, null));
+      res.write(chunk({ role: 'assistant', content: deltaText(1) }, null));
       evidence.chunksSent += 1;
     });
   });
@@ -257,6 +269,12 @@ export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<
       clearInterval(stream.timer);
       stream.res.write(chunk({ content: releaseText }, 'stop') + 'data: [DONE]\n\n');
       stream.res.end();
+    },
+    expectedHeldAnswer(): string {
+      const parts: string[] = [];
+      for (let n = 1; n <= evidence.chunksSent; n += 1) parts.push(deltaText(n));
+      if (evidence.released > 0) parts.push(releaseText);
+      return parts.join('').replace(/\s+/g, ' ').trim();
     },
     close: () => new Promise<void>((resolve, reject) => {
       const stream = held;
