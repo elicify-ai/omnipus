@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
@@ -51,12 +52,10 @@ import (
 // (agent_field_rules_test.go) walks every gen.AgentUpdateRequest field via
 // reflection and asserts membership here matches firstForbiddenSubagent3pField's
 // actual verdict, so adding a field to one without the other fails CI.
-var subagent3pForbiddenUpdateFields = []string{
-	"tools_cfg",
-	"skills",
-	"fallback_models",
-	"model_params",
-}
+//
+// The list itself lives in Table T-AGENT (r17 §7.1,
+// pkg/agentmutation/policy.go::Subagent3pForbiddenUpdateFields).
+var subagent3pForbiddenUpdateFields = agentmutation.Subagent3pForbiddenUpdateFields()
 
 // subagent3pCreateOnlyExemptFields documents wire fields that are present on
 // gen.AgentCreateRequestMain but structurally absent from
@@ -134,6 +133,9 @@ func firstForbiddenSubagent3pField(req *gen.AgentUpdateRequest) (string, bool) {
 	}
 	if req.ModelParams != nil {
 		return "model_params", true
+	}
+	if req.Soul != nil {
+		return "soul", true
 	}
 	return "", false
 }

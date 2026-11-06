@@ -38,7 +38,6 @@
         "list_tasks_in_workspace": "deny",
         "list_workspaces": "deny",
         "plan_correct": "deny",
-        "read_agent_metadata": "deny",
         "run_doctor": "deny",
         "run_task": "ask",
         "set_config": "deny",

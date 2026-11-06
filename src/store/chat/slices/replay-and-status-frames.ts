@@ -51,6 +51,7 @@ import { sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import { insertHistoryMessageId } from '../cursor'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, RateLimitEventData, SessionChatState } from '../types'
+import { recordCombinedPart } from '../history-parts'
 
 
 
@@ -244,10 +245,14 @@ function handleSessionStateFrame(
         // answered directly (findOpenAssistantMessageId) rather than via a
         // separately-tracked flag.
         const bubbleOpen = findOpenAssistantMessageId(b.messageOrder, b.messagesById) !== null
+        // 6c F4: that lookup also returns a finished tail (a straggler tool's
+        // done placeholder). With the turn cleared, release a busy flag that no
+        // streaming row, running tool or steer-closed bubble backs.
+        const release = !bubbleOpen || busyFlagIsUnbacked({ ...b, activeTurnId: null })
         return {
           activeTurnId: null,
           activeTurnAgentId: null,
-          ...(bubbleOpen ? {} : { isStreaming: false }),
+          ...(release ? { isStreaming: false } : {}),
         }
       })
     }
@@ -443,6 +448,8 @@ function applyAssistantReplayCoalesce(
       if (candidate.pendingTextBoundary) {
         candidate.pendingTextBoundary = false
       }
+      // #1452 D1 S7/S2a: the replay coalesce's own paragraph-break joiner.
+      if (messageId) recordCombinedPart(candidate, messageId, '\n\n')
       candidate.content += '\n\n' + text
       // Keep the FIRST known model rather than the last — live
       // never shows a per-segment model tag at all (the
@@ -598,6 +605,8 @@ interface ReplayMessageFrameFields {
   replayReplyToMessageId: string | undefined
   replayReplyToParticipant: ReplayMessageFrame['reply_to_participant']
   replayRoomRef: ReplayMessageFrame['room_ref']
+  /** #1452 D2: present only when `text` is a display preview of a longer chat message. */
+  replayContentOriginalSizeBytes: ReplayMessageFrame['content_original_size_bytes']
 }
 
 function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayMessageFrameFields {
@@ -672,6 +681,7 @@ function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayM
     replayReplyToMessageId,
     replayReplyToParticipant,
     replayRoomRef: replayFrame.room_ref,
+    replayContentOriginalSizeBytes: replayFrame.content_original_size_bytes,
   }
 }
 
@@ -792,6 +802,7 @@ function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
     timestamp: messageTimestamp ?? new Date().toISOString(),
     status: 'done' as const,
     ...(role === 'user' && fields.replayClientMessageId ? { clientMessageId: fields.replayClientMessageId } : {}),
+    ...(fields.replayContentOriginalSizeBytes !== undefined && role !== 'system' ? { contentOriginalSizeBytes: fields.replayContentOriginalSizeBytes } : {}),
     ...(replayAgentId ? { agentId: replayAgentId } : {}),
     // Per-turn model record. Only on assistant messages (user/system turns
     // don't carry a producer model). Empty model is treated as
@@ -802,6 +813,8 @@ function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
     // cancellation entries only) — lets a later turn_canceled
     // replay entry find this exact message.
     ...(replayTurnId && role === 'assistant' ? { turnId: replayTurnId } : {}),
+    // #1452 S11a: a terminal outcome ends its turn segment in paged history.
+    ...(fields.replayTerminalOutcome && role === 'assistant' ? { historyBoundary: 'terminal_outcome' as const } : {}),
     // ADR-087 D2 — only meaningful on assistant messages (the
     // backend only ever stamps this on the last assistant
     // transcript entry of an incomplete turn). D4a: an entry

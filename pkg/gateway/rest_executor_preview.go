@@ -3,7 +3,9 @@
 // Stateless, agent-agnostic preview of the REAL command Omnipus would spawn
 // for a subagent_3p external-CLI worker with the given cli/model/cli_args/
 // max_tool_iterations settings. The request carries no cli_path (T11 C-B1):
-// one carrying it is refused with 400 before anything else runs. Unlike GET
+// one carrying it is refused with 400 before anything else runs. The program
+// is the one a person saved in Settings; without one that may run, the preview
+// is refused with the same text a run would be. Unlike GET
 // /api/v1/agents/executor-defaults (a hand-maintained description that must
 // be kept byte-accurate to the drivers by hand — see listExecutorDefaults'
 // doc comment), this endpoint calls the REAL buildArgs() logic each driver uses
@@ -25,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 // executorPreviewDroppedArg is the exact anonymous shape oapi-codegen
@@ -61,6 +64,19 @@ func decodeExecutorRequestRefusingFreePath(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	return decodeAndValidateBytes(w, raw, schemaName, dst, validateEnabled, "")
+}
+
+// executorProgram makes the spawn-time program decision for the preview and
+// smoke-test routes: the Settings row for cli, checked by the one
+// thirdpartycli.RunProgram real dispatch uses. refusal is the text a run would
+// be refused with right now, "" when the program may run; there is no fallback
+// to the driver's default name on $PATH. On success resolved is the checked
+// file, the one to exec.
+func (a *restAPI) executorProgram(cli string) (row config.ThirdPartyCLIConfig, resolved, refusal string) {
+	cfg := a.agentLoop.GetConfig()
+	row = cfg.Sandbox.ThirdPartyCLI(cli)
+	resolved, refusal = thirdpartycli.RunProgram(cli, row.Path, thirdPartyAgentWritable(a.homePath, cfg)...)
+	return row, resolved, refusal
 }
 
 // postAgentsExecutorPreview handles POST /api/v1/agents/executor-preview
@@ -141,7 +157,11 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 		droppedArgs = append(droppedArgs, executorPreviewDroppedArg{Flag: d.Flag, Reason: d.Reason})
 	}
 
-	binary := runner.DefaultCLIBinary(cli)
+	row, _, refusal := a.executorProgram(cli)
+	if refusal != "" {
+		jsonErr(w, http.StatusBadRequest, refusal)
+		return
+	}
 
 	var promptDelivery gen.ExecutorCommandPreviewResponsePromptDelivery
 	switch cli {
@@ -152,9 +172,9 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 	}
 
 	resp := gen.ExecutorCommandPreviewResponse{
-		Binary:         binary,
+		Binary:         row.Path,
 		Argv:           argv,
-		CommandLine:    shellQuoteCommandLine(append([]string{binary}, argv...)),
+		CommandLine:    shellQuoteCommandLine(append([]string{row.Path}, argv...)),
 		PromptDelivery: promptDelivery,
 		DroppedArgs:    droppedArgs,
 	}

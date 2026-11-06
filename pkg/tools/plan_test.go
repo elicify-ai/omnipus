@@ -322,7 +322,7 @@ func TestPlanCreateTool_ExplicitWorkspaceArg(t *testing.T) {
 	res := tool.Execute(ctx, map[string]any{
 		"title":          "Explicit workspace",
 		"owner_agent_id": "jim",
-		"workspace":      "ws-explicit",
+		"workspace_id":   "ws-explicit",
 		"dod":            validCriteriaArg(),
 		"rationale":      "Explicit workspace override, single member.",
 	})

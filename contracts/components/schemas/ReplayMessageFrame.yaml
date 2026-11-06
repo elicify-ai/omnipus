@@ -30,7 +30,22 @@ properties:
     description: Session being replayed.
   content:
     type: string
-    description: Message text.
+    description: >
+      Message text. On a history-origin replay page this may be a display
+      preview; see content_original_size_bytes.
+  content_original_size_bytes:
+    type: integer
+    minimum: 65537
+    readOnly: true
+    description: >
+      Present only when `content` is a read-time display preview of an ordinary
+      user/assistant chat message (entry type `message` or omitted) whose saved
+      text exceeds 65,536 UTF-8 bytes: `content` then holds its first at most
+      65,536 bytes cut back to a character boundary, and this field is the exact
+      UTF-8 length of the full saved text (chat-history paging spec, "Amendment
+      2026-10-27 (founder, #1452 D2)", A2.1/A2.2). The full text is read through
+      getSessionHistoryEntry. Unrelated to `truncated`/`truncation_reason`,
+      which mean the turn itself was cut short.
   role:
     type: string
     enum:

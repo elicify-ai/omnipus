@@ -906,13 +906,14 @@ func (pe *PlanEngine) buildCorrectionApplyFunc(planID string, req CorrectionRequ
 				return fmt.Errorf("wire edge %s->%s: %w", e.FromTaskID, e.ToTaskID, err)
 			}
 		}
-		// Targeted-retry: reset the specific failed member (idempotent:
-		// RestartReset errors on non-failed, which is the correct no-op).
+		// Targeted-retry: reset the specific failed member (idempotent: the
+		// reset errors on non-failed, which is the correct no-op). Automatic
+		// (r17 TK-30): a future trigger occurrence keeps the member waiting.
 		if req.Verb == CorrectionTargetedRetry && req.RetriedMemberID != "" {
-			if _, err := pe.taskStore.RestartReset(req.RetriedMemberID); err != nil {
+			if err := pe.autoResetFailedMember(req.RetriedMemberID); err != nil {
 				// Already reset (idempotent replay) — not fatal.
-				logger.DebugCF("plan_engine", "targeted-retry reset (may be idempotent no-op)",
-					map[string]any{"task_id": req.RetriedMemberID, "error": err.Error()})
+				logAutoResetError("targeted-retry reset",
+					map[string]any{"task_id": req.RetriedMemberID}, err)
 			}
 		}
 		// abandon terminates the plan rather than returning it to work, so it
@@ -936,10 +937,54 @@ func (pe *PlanEngine) buildCorrectionApplyFunc(planID string, req CorrectionRequ
 
 // --- Auto-reset + honest exit (G-10) ---------------------------------------
 
+// autoResetFailedMember is the one automatic reset of a failed plan member,
+// shared by the append/supersede auto-reset, the live targeted retry and its
+// boot replay (r17 TK-30). It resets through Store.AutoRestartReset, so a
+// member whose trigger still has a future occurrence waits in `inbox` instead
+// of becoming dispatchable, and then brings the trigger scheduler in line with
+// the persisted trigger under the task's coordination lock: a once trigger
+// attached while the member was failed has no live registration (a terminal
+// once task is unregistered), and the waiting member must be owned by a live
+// registration that fires it. Nobody asked for this reset, unlike a person's
+// PlayPlan or standalone restart, which keep Store.RestartReset.
+//
+// A reset error wraps the store's error (task.ErrNotRestartable for a member
+// that is no longer failed). A reconciliation error is returned after the
+// reset was persisted.
+func (pe *PlanEngine) autoResetFailedMember(id string) error {
+	unlock := task.LockTaskWriteOrder(id)
+	defer unlock()
+	t, err := pe.taskStore.AutoRestartReset(id)
+	if err != nil {
+		return err
+	}
+	if t.Trigger == nil || pe.agentLoop == nil {
+		return nil
+	}
+	if err := pe.agentLoop.ReconcileTaskScheduleLocked(t); err != nil {
+		return fmt.Errorf("member %q was reset to %q but its trigger schedule could not be reconciled: %w",
+			id, t.Status, err)
+	}
+	return nil
+}
+
+// logAutoResetError logs a failed automatic member reset. A member that is no
+// longer failed is the expected idempotent no-op of a replayed or repeated
+// retry (debug); any other failure is a warning.
+func logAutoResetError(msg string, fields map[string]any, err error) {
+	fields["error"] = err.Error()
+	if errors.Is(err, task.ErrNotRestartable) {
+		logger.DebugCF("plan_engine", msg+" (idempotent no-op: member not failed)", fields)
+		return
+	}
+	logger.WarnCF("plan_engine", msg, fields)
+}
+
 // autoResetLiveRoundFailedMembers resets every failed member back to `next`
-// (via RestartReset) EXCEPT done members, which are frozen and preserved. This
-// gives the failed members another chance after the adjudicator's correction
-// landed. Caller must hold planDecisionMu.
+// (via autoResetFailedMember; a member waiting for a future trigger
+// occurrence goes to `inbox`) EXCEPT done members, which are frozen and
+// preserved. This gives the failed members another chance after the
+// adjudicator's correction landed. Caller must hold planDecisionMu.
 //
 // There is deliberately NO superseded-member exclusion here, and this is not
 // an omission (ADR-055 fix wave, finding 3): supersede is only legal against a
@@ -957,7 +1002,7 @@ func (pe *PlanEngine) autoResetLiveRoundFailedMembers(planID string, tasks []tas
 		if t.Status != task.StatusFailed {
 			continue // only reset failed members; done/next/blocked/in_progress untouched
 		}
-		if _, err := pe.taskStore.RestartReset(t.ID); err != nil {
+		if err := pe.autoResetFailedMember(t.ID); err != nil {
 			logger.WarnCF("plan_engine", "auto-reset: could not reset failed member",
 				map[string]any{"plan_id": planID, "task_id": t.ID, "error": err.Error()})
 		}

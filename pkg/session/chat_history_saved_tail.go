@@ -29,6 +29,10 @@ func historyReuseSaved(t *chatHistoryIndexTree, cp, saved historyCheckpoint, ite
 			covered = item.address.ByteOffset+int64(len(item.bytes)) <= saved.ArchiveEnds[item.address.PartitionKey]
 		case item.disposition != nil:
 			covered = item.dispositionRef.Offset+item.dispositionRef.Length <= saved.DispositionEnd
+		case item.empty != "":
+			// A known-empty earlier partition is covered by the saved
+			// transaction only when that transaction already records its end.
+			_, covered = saved.ArchiveEnds[item.empty]
 		}
 		if !covered {
 			remaining = append(remaining, item)

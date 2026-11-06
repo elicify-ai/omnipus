@@ -146,27 +146,34 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 
 ## Third-party agents
 
-**Settings → Third-party agents** sets, once per tool, which program Omnipus starts for an external worker and which standard parameters it adds to every run. There is one row each for **Claude Code**, **Codex** and **opencode**. Every worker on that tool uses these values; you do not set them per worker.
+**Settings → Third-party agents** decides which program runs for each external command-line tool, and which standard parameters it always gets. There is one row each for **Claude Code**, **Codex** and **opencode**. Every external worker on that tool uses these values; you do not set them per worker. Only a person signed in to the web app can change this tab: agents cannot, through any tool, and `set_config` refuses the whole sandbox section. An agent can read the saved program and parameters for one worker, read-only, through `get_agent` (see below); it cannot read or change the Settings section itself.
 
 | Field | What it does |
 |---|---|
-| **Program path** | The full path of the tool's program on this machine. An empty field (shown as **Not set**) means no program is set for that tool. When nothing is saved yet, Omnipus pre-fills the field with the program it found on this machine, and a **Found at …** line under the field shows where it was found. Finding the program only looks at files; it never starts the program. A pre-filled path is not saved until you press **Save**. |
-| **Parameters** | One line of free text added to every run of that tool, exactly as you type it — any parameter the tool accepts, for example `--max-turns 40`. Leave it empty for none. Omnipus shows the parameters in full and adds no filter or warning. Line breaks are refused. |
+| **Program path** | The full path of the tool's program on this machine, for example `/opt/homebrew/bin/codex`. An empty field (shown as **Not set**) means no program is set for that tool. When nothing is saved yet, Omnipus pre-fills the field with the program it found on this machine, and a **Found at …** line under the field shows where it was found. Finding the program only looks at files; it never starts the program. A pre-filled path is not saved until you press **Save**. |
+| **Parameters** | The standard parameters: one line of free text added to every run of that tool, exactly as you type it — any parameter the tool accepts, for example `--max-turns 40`. Leave it empty for none. Omnipus shows the parameters in full and adds no filter or warning. |
 | **Check CLI** | Optional. Runs the program at the path currently typed in that row to read its version, and shows the result as a notice, for example **Codex CLI works: version 1.2.3.** It saves nothing. |
 | **Save** | One button saves all three rows together. |
 
-What happens when you save:
+**Checks when you save.** A program path must be absolute, point at a file that exists, is a regular file and can be run by the user Omnipus runs as. The file, and the folder holding it, must not be changeable by every user on the machine, and the file must not sit in a folder agents can write to (the Omnipus data folder, any workspace folder, or any extra folder the sandbox lets agents write). A link is followed to the real file; each link's folder is checked the same way. On Windows the file must end in `.exe`, `.com`, `.cmd` or `.bat`. Standard parameters may be at most 4,096 characters, with no line breaks.
 
-- Omnipus checks every row before it writes anything. If a row is refused — for example a program path inside a workspace folder — the reason appears under that field, the cursor moves to it, and **nothing is saved, the other rows included**. What you typed stays in place, so you can correct the field and save again.
-- The path is stored exactly as you typed it, and it is checked again before every run.
+**What happens when you save.**
+
+- Omnipus checks every row before it writes anything. If a field fails, the reason appears under that field, for example "The program path for Codex was not saved: it must be an absolute path.", the cursor moves to it, and **nothing is saved, the other rows included**. What you typed stays in place, so you can correct the field and save again.
+- The path is stored exactly as you typed it.
 - If your session has ended, the tab says to sign in again and keeps what you typed.
-- A successful save shows **Saved third-party agent settings.**
+- A successful save shows **Saved third-party agent settings.** Saving the same section from two browser tabs keeps the last save.
 
-Only a signed-in person can read or change this tab. Agents have no tool, setting or other route that changes it.
+**Checks on every run.** The program is checked again each time a worker starts. If no program is saved for that tool, or it no longer passes the checks, the run is refused before anything starts — for a delegation, no worker session is created — and the person or agent that started it sees the reason — for example "This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex." There is no fallback to a program found on the system path. The file that was checked is the file that runs. The command preview and **Send a test message** on a worker's **Runtime** tab use the same saved program and show the same refusal.
 
-The standard parameters are added after the worker's own **Additional CLI arguments**, so a standard parameter wins over a worker argument of the same name. A worker's own arguments still go through Omnipus's argument filter; the standard parameters do not. Parameters can widen what the tool may do — see [security](security.md#third-party-agent-programs-and-parameters) before adding one such as Codex's `--dangerously-bypass-approvals-and-sandbox`.
+**Standard parameters are yours, in clear.** They come after the worker's own **Additional CLI arguments**, so your value wins when both set the same flag. A worker's own arguments go through Omnipus's argument filter; the standard parameters do not. They are shown back and written to the audit log exactly as typed, so do not put keys or passwords in them: put secrets in the worker's own environment variables instead, which are always masked. Parameters can widen what the tool may do — see [security](security.md#third-party-agent-programs-and-parameters) before adding one such as Codex's `--dangerously-bypass-approvals-and-sandbox`.
+
+**Why agents cannot change it.** The program and its parameters decide what actually runs on your machine. Keeping them person-only means an agent cannot point a worker at a different program or add flags that lift the tool's safety settings. An agent can see the saved program and parameters for a worker (read-only) and whether a run would start.
+
+Every change is recorded in the audit log: a changed path or changed parameters, with the old and new value and who saved it. Every external-worker run is recorded too, with the program, the flags the safety filter dropped from the agent's own flags, and your standard parameters.
 
 Each worker's **Runtime** tab shows the saved program and parameters read-only, with a link back to this tab. See [agents](agents.md) for what the worker keeps per agent.
+
 
 ## Goal timers
 
@@ -290,6 +297,7 @@ Older versions capped a delegated session at 30 minutes. An install that still h
 Two limits stay, because they protect against a broken connection or command rather than limiting work:
 
 - each request to a model provider has its own request timeout (`request_timeout` on the model, 120 seconds when unset); a provider that stops answering is retried or reported as **The model provider didn't answer this request in time** — the turn itself is not stopped by a clock. For a streamed reply the same limit applies only to waiting for the reply to start; once it is streaming, only a total silence (`stream_stall_timeout`, 300 seconds by default) ends it, so a long reply that keeps arriving is never cut off;
+  - when an agent has a fallback model, each attempt on each model has its own limit. With `request_timeout` set on a model, that value is the limit for that model, longer or shorter than the default. Without it, the limit grows with the size of the request: 120 seconds for a request of up to about 100,000 tokens, 60 seconds more for every further 100,000 tokens or part of them, and never more than 10 minutes — for example about 6 minutes for a 440,000-token request. A very large conversation is therefore no longer cut off after 120 seconds on every model. The silence limit (`stream_stall_timeout`) is unchanged;
 - a shell command run by an agent has its own `timeout_seconds` (default 300 seconds), and the environment-setup tool has its own job timeout.
 
 ### Which new agents get a self-line
@@ -315,7 +323,7 @@ Two limits on what the key does:
 
 When one agent sends a message into another's turn — `delegate` with `action: steer`, `respond`, or `redirect` — the message is bounded by these keys in the `session_messaging` block of `config.json`:
 
-- `steer_body` — the largest message body, in bytes. Default **65,536**.
+- `steer_body` — the largest message body, in bytes. Default **65,536**. Group chats use it only up to 65,536 bytes: a smaller value lowers the group message limit (for people and agents alike), a larger one is clamped to 65,536 for groups ([group chats](group-chats.md#who-receives-your-message)). Messages between sessions use the value as it is.
 - `steer_rate` — how many steer, respond or redirect messages one agent may send to the same target per minute. Default **60**.
 - `steer_aggregate_body` — the most message bytes that may be waiting for one conversation at once, added up across its waiting ordinary messages. Default **1,048,576** (1 MiB). A message that would take the waiting total past this is refused with a named error and is never trimmed; the total comes back down as the agent reads what is waiting. At most 200 messages may wait for one conversation, whichever limit is reached first. Wake-ups and other control messages do not count.
 
@@ -345,7 +353,7 @@ Three protections are fixed in the code on purpose. They guard against malformed
 
 - [security](security.md) — the rest of the Security tab: the sandbox, the encrypted credential vault, and the audit log.
 - [tools](tools.md) — which tools agents may use, and the allow, ask, and deny permissions that govern them.
-- [agents](agents.md) — giving one agent its own model instead of the default, and the agent roster.
+- [agents](agents.md) — giving one agent its own model instead of the default, the agent roster, and external workers.
 - [memory](memory.md) — what the team remembers between chats, behind the Memory tab.
 - [connectors](connectors.md) — connector accounts and their credentials, managed on the Connectors screen.
 - [providers and models](providers-and-models.md) — how providers, sign-in methods, models, and defaults fit together.

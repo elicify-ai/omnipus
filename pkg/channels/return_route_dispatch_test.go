@@ -14,10 +14,10 @@ import (
 )
 
 // guestAnswer is what the server's reply path really publishes: the GUEST is the
-// author, OwnershipChecked stays false, and the captured owner is in Return.
+// author, Operation stays empty, and the captured owner is in Return.
 func guestAnswer(instance string) bus.OutboundMessage {
 	m := answer(instance)
-	m.OwnershipChecked = false
+	m.Operation = ""
 	return m
 }
 
@@ -46,8 +46,8 @@ func TestAuthorizeOutbound_GuestReturnAuthorizedByRouteNotOwnership(t *testing.T
 	}
 }
 
-// Router -> bus -> real dispatcher -> worker -> Send, with OwnershipChecked
-// false: the guest's answer reaches the channel; after a rebind it does not.
+// Router -> bus -> real dispatcher -> worker -> Send, with Operation empty:
+// the guest's answer reaches the channel; after a rebind it does not.
 func TestDispatchOutbound_GuestReturnReachesSendAndRebindStopsIt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

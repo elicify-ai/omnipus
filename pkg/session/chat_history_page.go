@@ -10,6 +10,21 @@ const DefaultChatHistoryLimit = 40
 const DefaultChatHistoryMinRows = 20
 const DefaultChatHistorySoftByteBudget int64 = 4 * 1024 * 1024
 
+// Display shortening and the hard page ceiling (chat-history paging spec,
+// "Amendment 2026-10-27 (founder, #1452 D2)", A2.1 and A2.3).
+const (
+	// ChatHistoryInlineResultMaxBytes equals gateway.InlineToolResultMaxBytes:
+	// a result whose JSON encoding is at most this size is shown whole.
+	ChatHistoryInlineResultMaxBytes = 51200
+	// ChatHistoryResultPreviewBytes bounds a shortened result's preview.
+	ChatHistoryResultPreviewBytes = 4096
+	// ChatHistoryTextDisplayMaxBytes bounds ordinary message content.
+	ChatHistoryTextDisplayMaxBytes = 65536
+	// DefaultChatHistoryByteCeiling is the server-owned page selection
+	// ceiling on the carrier meter. Not an operator setting.
+	DefaultChatHistoryByteCeiling int64 = 8388608
+)
+
 // ChatHistoryPageOptions is the non-wire input to the bounded history reader.
 type ChatHistoryPageOptions struct {
 	Limit          int
@@ -67,6 +82,7 @@ type ChatHistoryPageInfo struct {
 	RowCount            int
 	SourceGroupCount    int
 	SoftByteBudget      int64
+	ByteCeiling         int64
 	ProjectedBytes      int64
 	ByteBudgetExceeded  bool
 	StopReason          string
@@ -126,5 +142,40 @@ func (us *UnifiedStore) ReadChatHistoryPage(
 	sessionID string,
 	opts ChatHistoryPageOptions,
 ) (ChatHistoryPage, error) {
-	return us.readChatHistoryPage(ctx, sessionID, opts)
+	o, err := historyNormalizeOptions(opts)
+	if err != nil {
+		return ChatHistoryPage{}, err
+	}
+	if err = validateSessionID(sessionID); err != nil {
+		return ChatHistoryPage{}, err
+	}
+	return us.readChatHistoryPage(ctx, sessionID, func(t *chatHistoryIndexTree, dir string, cp historyCheckpoint) (ChatHistoryPage, error) {
+		return historySelect(t, dir, cp, o)
+	})
+}
+
+// ReadChatHistoryEntry returns the full public projection after effects of one
+// occurrence at the current read cut: the same reduction, cancellation and
+// disposition as ReadChatHistoryPage, with display shortening off. It runs
+// through the same bounded read attempt (cut capture, retention re-validation
+// and cleanup precedence) as the page reader. A well-formed position unknown
+// in this session is ErrHistoryPositionNotFound; one whose retention
+// tombstone proves expiry is ErrHistoryEntryExpired.
+func (us *UnifiedStore) ReadChatHistoryEntry(ctx context.Context, sessionID string, position HistoryPosition) (ChatHistoryEntry, error) {
+	if _, err := ParseHistoryPosition(string(position)); err != nil {
+		return ChatHistoryEntry{}, err
+	}
+	if err := validateSessionID(sessionID); err != nil {
+		return ChatHistoryEntry{}, err
+	}
+	p, err := us.readChatHistoryPage(ctx, sessionID, func(t *chatHistoryIndexTree, dir string, cp historyCheckpoint) (ChatHistoryPage, error) {
+		return historySelectEntry(t, dir, cp, position)
+	})
+	if err != nil {
+		return ChatHistoryEntry{}, err
+	}
+	if len(p.Entries) != 1 {
+		return ChatHistoryEntry{}, historyUnavailable("projection_error", ErrHistoryProjection)
+	}
+	return p.Entries[0], nil
 }

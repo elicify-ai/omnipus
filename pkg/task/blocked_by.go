@@ -264,7 +264,9 @@ func (s *Store) AdvanceBlockedDependents(completedID string) (advancedIDs []stri
 		mu := s.lock.Get(id)
 		mu.Lock()
 		fresh, reErr := s.load(id)
-		if reErr != nil || fresh.Status != StatusBlocked {
+		if reErr != nil || fresh.Status != StatusBlocked || TriggerHoldsPromotion(fresh, time.Now()) {
+			// r17 TK-30: a dependent still awaiting its own trigger stays
+			// waiting; the check reads the fresh state under its lock.
 			mu.Unlock()
 			continue
 		}

@@ -8,26 +8,15 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// CHECK R3-01 (silent-failure-hunter SF-01, remaining part): a mount whose
-// recognised skills folder cannot be INSPECTED is not a confirmed absence.
-// The fixture reproduces the finding's deterministic fault — the .claude
-// parent of the recognised skills folder is replaced by a regular file while
-// the real project tree is moved aside intact — so resolving
-// .claude/skills fails with a non-NotExist error (ENOTDIR on an intermediate
-// component). A workspace-scoped edit_skill / remove_skill / management list
-// must then refuse READ_FAILED and change nothing; it must never fall back to
-// the byte-identical installation-wide copy (same revision) and report
-// working. Each action runs on its own fixture so a first mutation can never
-// hide the next action's behaviour.
-//
-// Oracles: FR-032 effectful outcomes (READ_FAILED refusal, "failed: nothing
-// saved"); ADR-072 D4.1/D6 project-shelf precedence — only a COMPLETE scan
-// may prove a slug absent, so a healthy confirmed absence (the recognised
-// directory genuinely gone, NotExist) still falls back to the global copy.
+// r15 §§5.1–5.5/§15: project files stay ordinary mounted files. Preserve
+// the deterministic intermediate-component fault and unchanged-byte checks at
+// real file edit, project writer and checked management-list boundaries.
+// Removed implicit mutation fallback is explicitly retired in traceability.
 const wu3fix4PlantedFile = "regular file where the .claude directory used to be"
 
 // wu3fix4Shelf is one fixture: the sales mount of wu3ProjectTarget with the
@@ -107,51 +96,39 @@ func wu3fix4AssertRefusalChangedNothing(t *testing.T, s wu3fix4Shelf) {
 }
 
 func TestWU3IntermediateResolutionFailureRefusesWorkspaceSkillActions(t *testing.T) {
-	t.Run("edit refuses instead of editing the identical global copy", func(t *testing.T) {
+	t.Run("explicit project file edit refuses without touching global", func(t *testing.T) {
 		s := wu3fix4FaultedSalesShelf(t, wu3fix4BreakParentWithRegularFile)
-		edit := systools.NewSkillEditTool(s.deps).Execute(s.ctx, map[string]any{
-			"name": "crm", "content": string(s.projectBefore) + "\nMust not land globally.\n",
-			"revision": s.revision, "workspace_id": "sales",
-		})
-		wu3Error(t, edit, "READ_FAILED")
-		wu3Outcome(t, edit, "failed: nothing saved")
+		edit := tools.NewEditFileTool(filepath.Dir(s.claudeDir), true).Execute(s.ctx, map[string]any{"path": s.projectSkill, "old_text": string(s.projectBefore), "new_text": "Must not land globally."})
+		require.True(t, edit.IsError, "unresolvable project file must refuse: %s", edit.ForLLM)
+		_, _, err := skills.LookupProjectSkillChecked([]skills.ProjectMount{{Name: "sales", Root: filepath.Dir(s.claudeDir)}}, "crm")
+		require.Error(t, err, "intermediate resolution failure must not become confirmed absence")
 		wu3fix4AssertRefusalChangedNothing(t, s)
 	})
-
-	t.Run("remove refuses instead of deleting the identical global copy", func(t *testing.T) {
+	t.Run("project writer deletion refuses without touching global", func(t *testing.T) {
 		s := wu3fix4FaultedSalesShelf(t, wu3fix4BreakParentWithRegularFile)
-		remove := systools.NewSkillRemoveTool(s.deps).Execute(s.ctx, map[string]any{
-			"name": "crm", "revision": s.revision, "confirm": true, "workspace_id": "sales",
-		})
-		wu3Error(t, remove, "READ_FAILED")
-		wu3Outcome(t, remove, "failed: nothing saved")
+		writer := skills.NewSkillWriter(filepath.Join(s.claudeDir, "skills"))
+		require.Error(t, writer.RemoveSkillReviewed("crm", s.revision))
 		wu3fix4AssertRefusalChangedNothing(t, s)
 	})
-
-	t.Run("management listing refuses instead of presenting an incomplete shelf", func(t *testing.T) {
+	t.Run("management list refuses incomplete shelf", func(t *testing.T) {
 		s := wu3fix4FaultedSalesShelf(t, wu3fix4BreakParentWithRegularFile)
-		list := systools.NewSkillListTool(s.deps).Execute(s.ctx, map[string]any{
-			"scope": "management", "name": "crm", "workspace_id": "sales",
-		})
-		wu3Error(t, list, "READ_FAILED")
+		listed := systools.NewSkillListTool(s.deps).Execute(s.ctx, map[string]any{"scope": "management", "workspace_id": "sales"})
+		wu3Error(t, listed, "READ_FAILED")
 		wu3fix4AssertRefusalChangedNothing(t, s)
 	})
-
-	// Control (healthy confirmed absence): with the recognised skills folder
-	// genuinely gone — NotExist, not an unreadable parent — the documented
-	// fallback to the installation-wide copy keeps working. The refusal above
-	// must stay tied to the error class, never to any project-directory
-	// oddity.
-	t.Run("confirmed absence of the recognised directory still falls back to global", func(t *testing.T) {
+	t.Run("confirmed absence is complete and installed read is explicit", func(t *testing.T) {
 		s := wu3fix4FaultedSalesShelf(t, func(t *testing.T, s wu3fix4Shelf) {
 			require.NoError(t, os.RemoveAll(filepath.Join(s.claudeDir, "skills")))
 		})
-		content := string(s.projectBefore) + "\nEdited globally after confirmed absence.\n"
-		edit := systools.NewSkillEditTool(s.deps).Execute(s.ctx, map[string]any{
-			"name": "crm", "content": content, "revision": s.revision, "workspace_id": "sales",
-		})
-		wu3Outcome(t, edit, "working")
-		assert.Equal(t, content, string(wu3ReadFile(t, s.globalSkill)),
-			"absence is confirmed, so the documented global fallback applies")
+		shelf, collisions, err := skills.LookupProjectSkillChecked([]skills.ProjectMount{{Name: "sales", Root: filepath.Dir(s.claudeDir)}}, "crm")
+		require.NoError(t, err)
+		assert.Empty(t, shelf)
+		assert.Empty(t, collisions)
+		result := systools.NewGetSkillTool(s.deps).Execute(s.ctx, map[string]any{"id": "crm", "fields": []any{"instructions", "shelf"}})
+		body := wu3Success(t, result)
+		assert.Equal(t, "registry", body["shelf"])
+		assert.Contains(t, body["instructions"], "sales-only-body")
+		assert.Equal(t, s.globalBefore, wu3ReadFile(t, s.globalSkill))
+		assert.Equal(t, s.anchorBefore, wu3ReadFile(t, s.anchorSkill))
 	})
 }

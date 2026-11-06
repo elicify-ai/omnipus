@@ -18,6 +18,11 @@ const maxZipEntryBytes int64 = 5 * 1024 * 1024
 type ZipExtractionLimits struct {
 	MaxEntries       int
 	MaxExpandedBytes int64
+	// OwnerExecDir, when set, names one top-level folder of the archive
+	// (for example "scripts"): a regular file under it whose entry carries
+	// the owner exec bit keeps that one bit after extraction. No other bit
+	// is copied and no other file gains an exec bit.
+	OwnerExecDir string
 }
 
 // ExtractZipFile extracts a ZIP archive from disk to targetDir.
@@ -111,9 +116,27 @@ func ExtractZipFileWithLimits(zipPath string, targetDir string, limits ZipExtrac
 			return err
 		}
 		expandedBytes += written
+		if keepsOwnerExec(cleanName, mode, limits.OwnerExecDir) {
+			info, statErr := os.Stat(destPath)
+			if statErr != nil {
+				return fmt.Errorf("failed to read mode of %q: %w", f.Name, statErr)
+			}
+			if err := os.Chmod(destPath, info.Mode().Perm()|0o100); err != nil {
+				return fmt.Errorf("failed to keep the exec bit of %q: %w", f.Name, err)
+			}
+		}
 	}
 
 	return nil
+}
+
+// keepsOwnerExec reports whether the extracted regular file cleanName keeps
+// its entry's owner exec bit: only under the OwnerExecDir folder.
+func keepsOwnerExec(cleanName string, mode os.FileMode, dir string) bool {
+	if dir == "" || mode&0o100 == 0 || !mode.IsRegular() {
+		return false
+	}
+	return strings.HasPrefix(filepath.ToSlash(cleanName), dir+"/")
 }
 
 // extractSingleFile extracts one zip.File entry to destPath, with a size check.

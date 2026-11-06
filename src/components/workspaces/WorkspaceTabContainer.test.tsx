@@ -61,6 +61,25 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (key.includes('app-state')) {
         return { data: { onboarding_complete: true, dev_mode_bypass: false }, isLoading: false, isError: false }
       }
+      if (key.includes('rooms')) {
+        return {
+          data: {
+            id: 'room-1', workspace_id: 'ws-1', kind: 'squad', name: 'Launch',
+            members: ['mia', 'jim'], muted: [], paused: false, generation: 1,
+            allocated_cost_micro_usd: 0, allocated_cost_unpriced: false, hidden: false,
+          },
+          isLoading: false, isError: false, refetch: mockRefetchWorkspaces,
+        }
+      }
+      if (key.includes('agents')) {
+        return {
+          data: [
+            { id: 'mia', name: 'Mia', figure: 'Omnipus', role: 'general' },
+            { id: 'jim', name: 'Jim', figure: 'Man', role: 'general' },
+          ],
+          isLoading: false, isError: false,
+        }
+      }
       if (key.includes('archived')) {
         return { data: [], isLoading: false, isError: false }
       }
@@ -87,9 +106,13 @@ vi.mock('@/store/sidebar', () => ({
   SIDEBAR_PIN_BREAKPOINT: 1024,
 }))
 
-// Session store — only enterWorkspaceChat matters for the container
+// Session store — only enterWorkspaceChat matters for the container. The real
+// module is kept for everything else: the chat header slot (rendered by the
+// container) reaches the chat store, which registers its replay callbacks
+// with the session store at import time.
 const mockEnterWorkspaceChat = vi.fn()
-vi.mock('@/store/session', () => ({
+vi.mock('@/store/session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/store/session')>()),
   useSessionStore: (selector: ((s: { enterWorkspaceChat: (id: string) => void }) => unknown) | undefined) => {
     const state = { enterWorkspaceChat: mockEnterWorkspaceChat }
     return selector ? selector(state) : state
@@ -192,6 +215,49 @@ describe('WorkspaceTabContainer — layout', () => {
     })
 
     expect(screen.queryByTestId('chat-controls-mock')).toBeNull()
+  })
+
+  it('renders the chat header slot at the right end of the top bar row (#1449 D13)', async () => {
+    mockPathname = '/workspaces/ws-1/chat'
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    // The chat's own chrome sits in the SAME line as the workspace strip:
+    // no new row, no bar, no border, no background — and the strip keeps the
+    // left, with the slot at the right end.
+    const topBar = screen.getByTestId('workspace-top-bar')
+    const slot = screen.getByTestId('chat-header-slot')
+    expect(topBar.contains(slot)).toBe(true)
+    expect(topBar.lastElementChild).toBe(slot)
+    // The workspace strip is still on the left of that line.
+    expect(topBar.firstElementChild?.getAttribute('data-testid')).toBe('workspace-hamburger')
+    expect(topBar.querySelector('[data-testid="workspace-tab-strip"]')).not.toBeNull()
+  })
+
+  it('does NOT render the chat header slot outside the chat tab', async () => {
+    mockPathname = '/workspaces/ws-1/board'
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    expect(screen.queryByTestId('chat-header-slot')).toBeNull()
+  })
+
+  it('renders the Participants button in the header slot on a room page (S-98)', async () => {
+    // The rooms segment resolves to 'chat' for the strip, but a room is a
+    // different conversation: once the room record is known, the slot shows
+    // the Participants button and nothing of the remembered main chat.
+    mockPathname = '/workspaces/ws-1/rooms/room-1'
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    const slot = screen.getByTestId('chat-header-slot')
+    const button = await screen.findByRole('button', { name: 'Participants, 2 members' })
+    expect(slot.contains(button)).toBe(true)
+    expect(screen.queryByTestId('feed-kind-label')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add participant' })).toBeNull()
   })
 
   it('does NOT render a secondary breadcrumb row below the top bar', async () => {

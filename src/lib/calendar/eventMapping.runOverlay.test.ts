@@ -616,3 +616,110 @@ describe('occurrenceMs / dayStartMs threading', () => {
     expect((events[0].extendedProps as { dayStartMs: number }).dayStartMs).toBe(dayStart)
   })
 })
+
+// ─── State 6: missed — a fire that came due while Omnipus was down ────────────
+//
+// Founder decision 2026-10-29 (Q1 A): a missed Calendar run stays skipped,
+// never replayed, and the Calendar shows a VISIBLE "missed" note on that
+// run. Backend (9bd80b391): the boot sweep records one TaskRun close record
+// with status 'missed' for the missed instant; GET /tasks/occurrences
+// surfaces it in occurrence_runs (session_id '', has_result false).
+//
+// The chip must be its own state — NOT the retention-pruned 'no_record'
+// (whose tooltip explains a DIFFERENT situation) and NOT 'scheduled' —
+// with the chief-pinned tooltip text. The old 'No record' chip keeps its
+// existing text for retention-pruned runs (no run record at all).
+
+describe('four-state chip rule — state 6: missed (fire came due while down)', () => {
+  const MISSED_TOOLTIP =
+    'Omnipus was not running at this time; the run was skipped and will not be replayed.'
+
+  function setWithMissedRun(occurrenceMs: number) {
+    return makeOccurrenceSet({
+      occurrences_ms: [occurrenceMs],
+      occurrence_runs: [
+        {
+          occurrence_ms: occurrenceMs,
+          status: 'missed',
+          run_id: 'run-missed',
+          session_id: '',
+          has_result: false,
+        },
+      ],
+    })
+  }
+
+  it('individual instant with a matching missed run → its own status/glyph, the pinned tooltip, runId carried', () => {
+    const occurrenceMs = NOW - 60_000
+    const task = makeTask({ status: 'next' }) // task.status must not leak through
+    const events = mapToCalendarEvents([task], [setWithMissedRun(occurrenceMs)], NOW, NOW)
+
+    const ext = events[0].extendedProps
+    expect(ext?.status).toBe('missed')
+    expect(ext?.icon).toBe('MinusCircle')
+    if (ext?.kind === 'task-occurrence') {
+      expect(ext.tooltip).toBe(MISSED_TOOLTIP)
+      expect(ext.runId).toBe('run-missed')
+      expect(ext.sessionId).toBe('')
+      expect(ext.hasResult).toBe(false)
+    }
+  })
+
+  it('the missed chip is muted — never a failure/amber/status colour', () => {
+    const occurrenceMs = NOW - 60_000
+    const task = makeTask({ status: 'failed' }) // even a failed task must not paint the missed chip red
+    const events = mapToCalendarEvents([task], [setWithMissedRun(occurrenceMs)], NOW, NOW)
+
+    expect(events[0].backgroundColor).not.toBe(STATUS_STYLE.failed.bg)
+    expect(events[0].backgroundColor).not.toBe('#EAB308') // the skipped amber
+    expect(events[0].backgroundColor).toBe('#94A3B8') // the shared muted neutral family
+  })
+
+  it('a missed instant is NOT the retention-pruned no_record state (different situation, different note)', () => {
+    const occurrenceMs = NOW - 60_000
+    const task = makeTask()
+    const missed = mapToCalendarEvents([task], [setWithMissedRun(occurrenceMs)], NOW, NOW)
+    expect(missed[0].extendedProps?.status).toBe('missed')
+    expect(missed[0].extendedProps?.status).not.toBe('no_record')
+    if (missed[0].extendedProps?.kind === 'task-occurrence') {
+      expect(missed[0].extendedProps.tooltip).not.toBe(
+        'Run history unavailable — retention expired or the schedule changed since this ran.',
+      )
+    }
+  })
+
+  it('the missed glyph is visually distinct from the no_record glyph (WCAG 1.4.1 non-colour cue)', () => {
+    const missedMs = NOW - 120_000
+    const prunedMs = NOW - 60_000
+    const task = makeTask()
+    const set = makeOccurrenceSet({
+      occurrences_ms: [missedMs, prunedMs],
+      occurrence_runs: [
+        { occurrence_ms: missedMs, status: 'missed', run_id: 'run-missed', session_id: '', has_result: false },
+      ],
+    })
+
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
+    const byMs = new Map(
+      events
+        .filter((e) => e.extendedProps?.kind === 'task-occurrence')
+        .map((e) => [(e.extendedProps as { occurrenceMs: number }).occurrenceMs, e]),
+    )
+    expect(byMs.get(missedMs)?.extendedProps?.icon).toBe('MinusCircle')
+    expect(byMs.get(prunedMs)?.extendedProps?.icon).toBe('Circle')
+  })
+
+  it('REGRESSION: a retention-pruned past instant (no run at all) keeps the UNCHANGED no_record text', () => {
+    const occurrenceMs = NOW - 3_600_000
+    const task = makeTask()
+    const events = mapToCalendarEvents([task], [makeOccurrenceSet({ occurrences_ms: [occurrenceMs] })], NOW, NOW)
+
+    const ext = events[0].extendedProps
+    expect(ext?.status).toBe('no_record')
+    if (ext?.kind === 'task-occurrence') {
+      expect(ext.tooltip).toBe(
+        'Run history unavailable — retention expired or the schedule changed since this ran.',
+      )
+    }
+  })
+})

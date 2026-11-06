@@ -127,6 +127,7 @@ function makeFile(name: string, content: string): File {
 
 function installedSkill(id: string, skillRevision = 'a'.repeat(64)) {
   return {
+    has_local_changes: false,
     revision: skillRevision,
     id,
     name: id,
@@ -146,6 +147,7 @@ beforeEach(() => {
     changed_fields: ['skill'],
   })
   vi.mocked(installSkillBySlug).mockResolvedValue({
+    has_local_changes: false,
     revision: 'b'.repeat(64),
     persistence_status: 'complete',
     activation_status: 'active',
@@ -209,6 +211,7 @@ describe('SkillBrowser — ClawHub search', () => {
 
   it('carries the reviewed revision when replacing an installed skill', async () => {
     vi.mocked(fetchSkills).mockResolvedValue([{
+      has_local_changes: false,
       revision: 'a'.repeat(64), id: 'web-search', name: 'Web Search', version: '1.3.0',
       status: 'active', verified: true,
     }])

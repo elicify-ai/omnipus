@@ -3,19 +3,47 @@ import { SessionHistoryResponse } from '../../src/lib/api/generated/schemas';
 import { WsFrame } from '../../src/lib/api/generated/ws-schemas';
 import type { WebSocketRoute } from '@playwright/test';
 import { chatInput, waitForConnected } from './fixtures/selectors';
-import { test, HistoryHarness, observeTraffic, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
+import { test, seededHistoryTest, HistoryHarness, observeTraffic, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
 import { browseBack, dropSocket, expectedReaderOrdinals } from './fixtures/chat-history-paging/actions';
 import { ageRolledHistoryPartitions, sweepChatHistoryFixture } from './fixtures/chat-history';
-import { readerFixtureDays } from './fixtures/chat-history-paging/day-fixtures';
+import { INLINE_RESULT_BYTES, inlineToolMessage, readerFixtureDays } from './fixtures/chat-history-paging/day-fixtures';
 import { openSessionByDeepLink } from './fixtures/session-setup';
 import { assertRestoredControl, assertSessionStopped, controlProvider, floodRealJournal, pendingAction, reconnectWithPending,
   sendControlInstruction, stopHeldControlTurn, stopPendingControl, waitForPendingControl } from './fixtures/chat-history-paging/control-actions';
 import { terminalLogRows } from './fixtures/terminal-outcome-acceptance';
 import { CONTROL_RUNNING } from './fixtures/chat-history-paging/control-provider';
+import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness';
 
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
 test.describe.configure({ retries: 0 });
 test.setTimeout(240_000); // Real3,000-row UI traversal, not a clock-based oracle.
+
+// Q-T8 / B26: use the reload fixture's real addressed attach as the opening
+// prerequisite, then retain every DOM/focus/reconnect assertion. Replay done
+// alone is not readiness (D7). The unchanged whole-test deadline bounds this
+// event wait; no sleep or enlarged locator timeout substitutes for completion.
+// The full boot-mismatch case still requires a candidate browser run.
+async function openBootMismatchReader(history: HistoryHarness) {
+  const { page, sessionId } = history;
+  const before = history.traffic.frames.length;
+  const observer = observeAddressedAttachReadiness(page);
+  const pending = observer.arm(sessionId);
+  try {
+    await page.goto(`${history.origin}/#/sessions/${sessionId}`);
+    const proof = await pending.wait();
+    expect(proof.request.session_id, 'native request addresses the B26 reader').toBe(sessionId);
+    expect(proof.completion.session_id, 'native completion answers that same reader').toBe(sessionId);
+    expect(history.traffic.frames.slice(before).filter(frame => frame.type === 'catch_up_complete' && frame.session_id === sessionId),
+      'opening readiness still requires exactly one real completion').toHaveLength(1);
+    await expect(page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible();
+    await expect(chatInput(page)).toBeVisible();
+    await expect(chatInput(page)).toBeEnabled();
+    await waitForConnected(page);
+    expect(history.traffic.failures, 'opening retains generated-frame validation').toEqual([]);
+    await history.info.attach('b26-addressed-open', { contentType: 'application/json', body: JSON.stringify(proof) });
+    await settled(page);
+  } finally { pending.cancel(); observer.dispose(); }
+}
 
 test('T24 B04:transport loss after real replay but before complete retains the prior reader and never claims catch-up success', async ({ history, page }) => {
   await history.seed({ label: 'incomplete', count: 800, shape: 'varied' });
@@ -110,10 +138,9 @@ test('T24 B04:transport loss after real replay but before complete retains the p
   } finally { armed = false; await page.context().setOffline(false); }
 });
 
-test('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft and directly refreshes its closed interval', async ({ history, page }) => {
-  await history.seed({ label: 'snapshot', count: 3400 });
+seededHistoryTest({ label: 'snapshot', count: 3400 })('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft and directly refreshes its closed interval', async ({ history, page }) => {
   await history.authenticate();
-  await history.open();
+  await openBootMismatchReader(history);
   await browseBack(history, 300);
   const old = await anchor(page);
   await chatInput(page).fill('DRAFT_NOT_SENT_DURING_RECONNECT');
@@ -145,8 +172,7 @@ test('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft a
   await history.record('historical-boot-snapshot', { anchor: old });
 });
 
-test('T24 B47 B10: failed range refresh keeps cached rows/out-of-date/anchor, pauses prefetch and Retry repeats the SAME range', async ({ history, page }) => {
-  await history.seed({ label: 'refresh', count: 3400 });
+seededHistoryTest({ label: 'refresh', count: 3400 })('T24 B47 B10: failed range refresh keeps cached rows/out-of-date/anchor, pauses prefetch and Retry repeats the SAME range', async ({ history, page }) => {
   await history.authenticate();
   await history.open();
   await browseBack(history, 300);
@@ -315,7 +341,9 @@ test('T24 B47:500 held tool groups can require MORE than5 bounded byte-limited r
   await history.open();
   await browseBack(history, 300);
   const saved = await anchor(page);
-  expect(expectedReaderOrdinals(history), 'held500-group interval is the real large-tool fixture').toHaveLength(500);
+  const heldOrdinals = expectedReaderOrdinals(history);
+  expect(heldOrdinals, 'held500-group interval is the real large-tool fixture').toHaveLength(500);
+  expect(heldOrdinals.every((n) => n < 1000), 'all500 held owners use the re-derived inline-result costs').toBe(true);
   await history.gateway.kill9();
   history.gateway.assertStoppedForFixture();
   const before = history.traffic.pages.length;
@@ -327,6 +355,26 @@ test('T24 B47:500 held tool groups can require MORE than5 bounded byte-limited r
   const responses = history.traffic.pages.slice(before).map((r) => ({ url: new URL(r.url), page: SessionHistoryResponse.parse(r.body) }));
   expect(responses.every((r) => r.url.searchParams.has('window_start'))).toBe(true);
   expect(responses.reduce((sum, r) => sum + r.page.page_info.source_group_count, 0)).toBe(500);
+  // D-F1/A2.7:40 two-call owners fit4MiB (40×102KiB +8KiB envelope
+  // <4MiB);41×102,400 result bytes alone exceed it.500 owners therefore
+  // require12 byte-cut pages plus a20-owner end, not five100-group cap pages.
+  expect(40 * 102 * 1024 + 8 * 1024).toBeLessThan(4_194_304);
+  expect(41 * 2 * INLINE_RESULT_BYTES).toBeGreaterThan(4_194_304);
+  expect(responses).toHaveLength(Math.ceil(500 / 40));
+  expect(responses.flatMap((r) => r.page.entries.map((entry) => Number(entry.id.slice(-6)))).sort((a, b) => a - b)).toEqual(heldOrdinals);
+  for (const [index, response] of responses.entries()) {
+    const groups = index === responses.length - 1 ? 500 % 40 : 40;
+    expect(response.page.page_info).toMatchObject({ limit: 100, min_rows: 20,
+      source_group_count: groups, row_count: groups * 2, soft_byte_budget: 4_194_304,
+      stop_reason: index === responses.length - 1 ? 'range_end' : 'byte_budget', byte_budget_exceeded: false });
+    expect(response.page.page_info.projected_bytes).toBeGreaterThanOrEqual(groups * 2 * INLINE_RESULT_BYTES);
+    expect(response.page.page_info.projected_bytes).toBeLessThanOrEqual(4_194_304);
+    expect(response.page.page_info.budget_override).toBeUndefined();
+    for (const entry of response.page.entries) {
+      expect(entry.tool_calls).toEqual(inlineToolMessage('range-bytes', Number(entry.id.slice(-6)), history.ids.agent.id, 2).tool_calls);
+      expect(Buffer.byteLength(JSON.stringify(entry)), 'independent2KiB/owner envelope headroom').toBeLessThanOrEqual(102 * 1024);
+    }
+  }
   for (let i = 1; i < responses.length; i++) expect(responses[i].url.searchParams.get('before')).toBe(responses[i - 1].page.next_before);
   await expectAnchor(page, saved);
   await history.record('range-more-than-five-byte-pages');
@@ -335,8 +383,7 @@ test('T24 B47:500 held tool groups can require MORE than5 bounded byte-limited r
 for (const kind of ['approval', 'question'] as const) {
   test.describe(`T24 genuine pending ${kind}`, () => {
     test.use({ historyControlKind: kind });
-    test(`T24 B05 B06 B26: pending ${kind} survives old-reader reconnect and a fresh viewer gets the real current snapshot`, async ({ history, page, browser }, info) => {
-      await history.seed({ label: `pending-${kind}`, count: 3400 });
+    seededHistoryTest({ label: `pending-${kind}`, count: 3400 })(`T24 B05 B06 B26: pending ${kind} survives old-reader reconnect and a fresh viewer gets the real current snapshot`, async ({ history, page, browser }, info) => {
       await history.authenticate();
       await history.open();
       await browseBack(history, 300);
@@ -369,8 +416,7 @@ for (const kind of ['approval', 'question'] as const) {
 
 test.describe('T24 actual journal retention overflow', () => {
   test.use({ historyControlKind: 'stream' });
-  test('T24 B26: retention_exceeded (same boot) refreshes the held interval without teleporting to the newly published tail', async ({ history, page, browser }) => {
-    await history.seed({ label: 'journal-reader', count: 3400 });
+  seededHistoryTest({ label: 'journal-reader', count: 3400 })('T24 B26: retention_exceeded (same boot) refreshes the held interval without teleporting to the newly published tail', async ({ history, page, browser }) => {
     await history.authenticate();
     await history.open();
     await browseBack(history, 300);
@@ -403,6 +449,15 @@ test.describe('T24 actual journal retention overflow', () => {
       await expectAnchor(page, saved);
       await expect.poll(() => history.traffic.pages.slice(pagesBefore).filter((r) => new URL(r.url).searchParams.has('window_start')).length).toBeGreaterThan(0);
       expect(history.traffic.pages.slice(pagesBefore).every((r) => new URL(r.url).searchParams.has('window_start')), 'refresh addresses only the old held interval, not the omitted middle').toBe(true);
+      // B26: the held-interval refresh settles with the reader still at its
+      // anchor. Asserted BEFORE the cleanup so the Stop/turn events below do
+      // not land in the middle of the refresh (CI run 40913643836 stopped
+      // while the refresh was still committing; see the T24 B26 report).
+      await expect(page.getByText('Refreshing loaded messages…', { exact: true }), 'the held-interval refresh completes').toHaveCount(0);
+      await expect(historyScroller(page), 'refresh busy state clears').not.toHaveAttribute('aria-busy', 'true');
+      // Fail within the expect budget, not the whole test budget, if the row is gone.
+      await expect(historyRow(page, saved.id), 'the anchored row is still rendered after the refresh').toBeVisible();
+      await expectAnchor(page, saved);
       // ACCOMMODATION — revert when #1503 is fixed (founder decision 2026-10-29,
       // option C). Today the fifth filler does not fit the 1-MiB waiting-message
       // cap, is queued as the NEXT turn instead of being refused, and Stop does
@@ -417,6 +472,7 @@ test.describe('T24 actual journal retention overflow', () => {
       await stopHeldControlTurn(history, [controlTurn]);
       await assertSessionStopped(history);
       expect(controlProvider(history).failures()).toEqual([]);
+      await expect(historyRow(page, saved.id), 'the anchored row is still rendered after the cleanup Stops').toBeVisible();
       await expectAnchor(page, saved);
       expect(history.traffic.sends).toEqual([]);
       await history.record('same-boot-retention-exceeded-reader');

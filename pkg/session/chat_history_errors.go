@@ -13,6 +13,9 @@ var (
 	ErrInvalidHistoryPosition    = errors.New("invalid history position")
 	ErrInvalidHistoryPageRange   = errors.New("invalid history page range")
 	ErrHistoryProjection         = errors.New("history projection failed")
+	// ErrHistoryEntryExpired: a same-session position proven expired by its
+	// retention tombstone. Never inferred from a missing or corrupt index.
+	ErrHistoryEntryExpired = errors.New("history entry expired")
 )
 
 // ChatHistoryUnavailableError carries a fixed reason separately from its
@@ -33,4 +36,10 @@ func (e *ChatHistoryUnavailableError) Unwrap() error {
 func (e *ChatHistoryUnavailableError) Is(target error) bool {
 	return target == ErrChatHistoryUnavailable ||
 		(target == ErrHistoryProjection && e.Reason == "projection_error")
+}
+
+// historyIsStorageFailure reports an already typed storage_error.
+func historyIsStorageFailure(err error) bool {
+	var unavailable *ChatHistoryUnavailableError
+	return errors.As(err, &unavailable) && unavailable.Reason == "storage_error"
 }

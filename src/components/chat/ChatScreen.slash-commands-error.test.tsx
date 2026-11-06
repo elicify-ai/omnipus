@@ -82,7 +82,7 @@ vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   const mockSkills = [
-    { id: 'web-research', name: 'Web Research', version: '1.0', description: 'Web search and extraction', verified: true, status: 'active' },
+    { has_local_changes: false, id: 'web-research', name: 'Web Research', version: '1.0', description: 'Web search and extraction', verified: true, status: 'active' },
   ]
   // K.3 (bugfixes3 sign-off): `makeAgent` (src/test/factories.ts), not a
   // hand-rolled partial object literal — fills every schema-required Agent

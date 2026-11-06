@@ -7,7 +7,7 @@ metadata:
 # Capability plan (sub-skill of W1 and W18)
 
 ## Prerequisites
-Read-only look-ups only: `tool:find_skills` and `tool:list_skills`, `tool:get_agent_tools`, `tool:list_mcp_servers`, `tool:list_providers`. For an agent that does not exist yet, `tool:get_agent_tools` previews its defaults with `new_agent_type`: `Main` previews main defaults, `Subagent` and `subagent_3p` preview worker defaults — never create a throwaway agent to inspect them. The readback is a compact plain-text inventory of tool names, effective allow/ask/deny and short descriptions, including denied tools; a preview header has no id or revision, and no separate per-agent override or ceiling metadata is returned. No change tool is called from this skill.
+Read-only look-ups only: `tool:find_skills` and `tool:list_skills`, `tool:get_agent` with `fields: ["tool_permissions"]`, `tool:list_mcp_servers`, `tool:list_providers`. For an agent that does not exist yet, `tool:get_agent` previews its defaults with `new_agent_type` and `fields: ["tool_permissions"]`: `Main` previews main defaults, `Subagent` and `subagent_3p` preview worker defaults — never create a throwaway agent to inspect them. Each entry names the tool, its effective allow/ask/deny and, unless denied, a short description; denied tools are included. A preview has no id or revision, and no separate ceiling metadata is returned. No change tool is called from this skill.
 
 ## Steps
 1. Derive the abilities the purpose needs (one line each).

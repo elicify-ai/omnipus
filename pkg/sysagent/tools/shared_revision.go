@@ -5,8 +5,6 @@
 package systools
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,7 +36,7 @@ import (
 // landing 2) — landing 1 has no tool write to a mailbox.
 
 // revisionAbsent is the token of an entry that does not exist (FR-088).
-const revisionAbsent = "absent"
+const revisionAbsent = config.RevisionAbsent
 
 // expectedRevisionParam is the write tools' precondition argument.
 const expectedRevisionParam = "expected_revision"
@@ -52,19 +50,9 @@ const (
 	sharedChannel   sharedResourceKind = "channel"
 )
 
-// revisionHash returns a short, stable token for v: the first 16 hex digits
-// of the SHA-256 of its JSON encoding. v must hold only non-secret data.
-func revisionHash(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		// Only plain strings, bools and slices of them reach here; a marshal
-		// failure is a programming error. Fold it into the token so the write
-		// is refused (no expected token can match) instead of guarded by "".
-		b = []byte("unencodable:" + err.Error())
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])[:16]
-}
+// revisionHash returns a short, stable token for v (config.RevisionHash, the
+// one implementation REST shares). v must hold only non-secret data.
+func revisionHash(v any) string { return config.RevisionHash(v) }
 
 // providerRevisionRow is the non-secret projection of one configured row of a
 // provider: the effective endpoint, protocol and credential reference name.
@@ -212,26 +200,11 @@ func mcpServerRevision(cfg *config.Config, name string) string {
 	})
 }
 
-// channelRevision is the FR-088 token of channel instance id: a hash over the
-// instance id and every non-secret field of its configuration — platform type,
-// enabled state, binding (workspace and main agent), allow list, group and
-// mention settings and every credential reference name. The two fields that
-// can hold a secret value inline (webhook_url, service_account_json) are
-// excluded; their *_ref names are included. revisionAbsent when not configured.
+// channelRevision is the FR-088 token of channel instance id
+// (config.ChannelConfigRevision, shared with the REST outbound routes so
+// list_channels and GET /api/v1/channels/{id}/outbound return one token).
 func channelRevision(cfg *config.Config, id string) string {
-	if cfg == nil {
-		return revisionAbsent
-	}
-	ch, ok := cfg.Channels[id]
-	if !ok {
-		return revisionAbsent
-	}
-	ch.WebhookURL = config.SecureString{}
-	ch.ServiceAccountJSON = config.SecureString{}
-	return revisionHash(struct {
-		ID     string                       `json:"id"`
-		Config config.ChannelInstanceConfig `json:"config"`
-	}{ID: id, Config: ch})
+	return config.ChannelConfigRevision(cfg, id)
 }
 
 // sharedRevision returns the live token of one shared resource.

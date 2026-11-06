@@ -69,8 +69,23 @@ export type OccurrenceChipStatus = TaskStatus | 'scheduled' | 'no_record' | 'ski
  * distinct amber chip (`SKIPPED_STYLE`) rather than falling through
  * `STATUS_STYLE` (which stays `TaskStatus`-only — `skipped` is NOT a
  * `Task.status` value).
+ *
+ * `'missed'` (founder decision 2026-10-29, Q1 A — Calendar 6b; backend
+ * 9bd80b391) is a sixth REAL `TaskRun.status` member — a scheduled fire
+ * that came due while Omnipus was down, recorded once at the next boot for
+ * the missed instant and never replayed. It renders as its own muted chip
+ * (`MISSED_STYLE`) with the pinned downtime tooltip — deliberately NOT the
+ * retention-pruned `'no_record'` state, whose tooltip explains a different
+ * situation (retention expired / schedule changed).
  */
-export type RunDerivedChipStatus = 'done' | 'in_progress' | 'failed' | 'skipped' | 'scheduled' | 'no_record'
+export type RunDerivedChipStatus =
+  | 'done'
+  | 'in_progress'
+  | 'failed'
+  | 'skipped'
+  | 'missed'
+  | 'scheduled'
+  | 'no_record'
 
 /**
  * The three views offered by the toolbar (SP-39, side-panel wave 3 — Agenda is
@@ -105,6 +120,7 @@ export type StatusIconKey =
   | 'Circle' //      inbox / next (muted)
   | 'Clock' //       once-trigger "fires" chip (overrides status icon)
   | 'SkipForward' //  TaskRun.status === 'skipped' (overlap-guard, run-only)
+  | 'MinusCircle' //  TaskRun.status === 'missed' (downtime, run-only)
 
 /**
  * extendedProps carried on every FullCalendar EventInput we produce.
@@ -263,6 +279,22 @@ export const NO_RECORD_STYLE: ChipStyle = { bg: '#94A3B8', icon: 'Circle' }
  * fire was skipped".
  */
 export const SKIPPED_STYLE: ChipStyle = { bg: statusContract.cancelled.resolvedColor, icon: 'SkipForward' }
+
+/**
+ * "Missed" occurrence chip style — a real `TaskRun.status` value (not a
+ * synthetic day-vs-now state): a scheduled fire that came due while
+ * Omnipus was down, recorded once at the next boot for the missed instant,
+ * never replayed (founder decision 2026-10-29, Q1 A — Calendar 6b).
+ *
+ * Muted by decision (the founder asked for a visible MUTED note, and
+ * failure colours stay reserved for real run outcomes): the same
+ * `#94A3B8` neutral family already proven >=7:1 vs `CHIP_TEXT_COLOR` as
+ * `SCHEDULED_STYLE`/`NO_RECORD_STYLE`, made distinct by its glyph —
+ * `MinusCircle` ("this slot stayed empty"), versus no_record's `Circle`,
+ * scheduled's `Clock` and skipped's amber `SkipForward`. The pinned
+ * downtime tooltip (eventMapping's MISSED_TOOLTIP) carries the meaning.
+ */
+export const MISSED_STYLE: ChipStyle = { bg: '#94A3B8', icon: 'MinusCircle' }
 
 /** The forwarded ref both FullCalendarView and CalendarToolbar share. */
 export type CalendarApiRef = MutableRefObject<FullCalendar | null>

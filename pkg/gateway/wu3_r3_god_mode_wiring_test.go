@@ -4,7 +4,6 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -17,7 +16,7 @@ import (
 
 // pr-test-analyzer R2-03: the production wiring (wireSystemTools) hands the
 // live God Mode state to the system tools (Deps.GodModeActive). Booted with
-// God Mode available and switched on, get_agent_tools reports what runs: a
+// God Mode available and switched on, get_agent tool_permissions reports what runs: a
 // global ask does not clamp an agent's allow. Switched off, the same stored
 // values are clamped (control). Without the wiring the God Mode case would
 // report the clamp.
@@ -46,15 +45,15 @@ func TestWU3ProductionWiringPassesGodModeToSystemTools(t *testing.T) {
 			require.Equal(t, tc.godMode, agent.GodModeActive(rc.agentLoop.GetConfig()), "control: God Mode state of this boot")
 			inst, ok := rc.agentLoop.GetRegistry().GetAgent("omnipus")
 			require.True(t, ok)
-			tool, ok := inst.Tools.Get("get_agent_tools")
+			tool, ok := inst.Tools.Get("get_agent")
 			require.True(t, ok)
-			res := tool.Execute(tools.WithAgentID(context.Background(), "omnipus"), map[string]any{"id": "god-mode-subject"})
+			res := tool.Execute(tools.WithAgentID(context.Background(), "omnipus"), map[string]any{"id": "god-mode-subject", "fields": []any{"tool_permissions"}})
 			require.False(t, res.IsError, res.ForLLM)
-			// SPEC.md compact output: production-wired read-back is plain text, not effective_policies/clamped JSON.
+			// r17 7.12.1: production-wired read-back of the effective policy per tool.
 			state, err := agentstore.New(rc.homePath).ReadState("god-mode-subject")
 			require.NoError(t, err)
-			header := fmt.Sprintf("agent: god-mode-subject | name: Subject | kind: main | revision: %s", state.Revision)
-			body := defaultToolsParseCompact(t, res.ForLLM, header, rc.centralBuiltinReg.All())
+			identity := map[string]any{"id": "god-mode-subject", "revision": state.Revision}
+			body := defaultToolsParseInventory(t, res.ForLLM, identity, rc.centralBuiltinReg.All())
 			assert.Equal(t, tc.effective, body["read_file"], "production-wired God Mode must govern the compact effective policy")
 		})
 	}
