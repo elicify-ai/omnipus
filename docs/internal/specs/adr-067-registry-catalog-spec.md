@@ -1,5 +1,7 @@
 # Spec — ADR-067: registry-fed catalog and provider identity (D1 · D11 · D12)
 
+Status: Draft
+
 - **Source ADR:** `docs/internal/architecture/ADR-067-registry-fed-catalog-and-provider-identity.md` (Proposed 2026-08-22; §8a pass-2 resolutions MAJ-005/006/010/014 folded in). Companion review: `docs/internal/architecture/ADR-066-context-budget-and-tool-result-routing-review-pass2.md` (MAJ-004/005/006/010/014/015, MIN-003/004, open questions 7–8).
 - **Status:** Draft (plan-spec) · Phase 1 gate: the ADR treated as the confirmed brief · Phase 5.5 gate PASSED (§9) · **Grilled 2026-08-22 (`adr-067-registry-catalog-spec-review.md`, verdict BLOCK) — all findings resolved in §1.1 (BINDING); cross-spec seams (`cross-spec-review-adr-066-067-068.md`) resolved in §1.2 (BINDING); ADR-067 amended in its §8b.** `[A-n]` labels in the body now point at the *resolved* decision in §9, not an open assumption.
 - **Branch:** `feat/context-budget-and-tool-result-routing` (worktree `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-context-budget`). Facts read @ this tree on 2026-08-22.

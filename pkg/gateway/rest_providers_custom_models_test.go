@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -180,7 +181,7 @@ type customModelsFileState struct {
 func snapshotCustomModelsFile(t *testing.T, path string) customModelsFileState {
 	t.Helper()
 	body, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return customModelsFileState{}
 	}
 	require.NoError(t, err, "read test-owned file %s", path)
