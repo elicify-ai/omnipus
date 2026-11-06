@@ -72,8 +72,17 @@ func TestOfficeWriterExclusion_GatewaySeesOtherSessionGrant(t *testing.T) {
 	// bash write through the actual injected approval store, not God Mode.
 	command := "printf 'approved authority wrote' > '" + target + "'"
 	denied := tool.Execute(ctx, map[string]any{"command": command, "timeout_seconds": 5})
+	resolvedTarget, evalErr := filepath.EvalSymlinks(target)
+	require.NoError(t, evalErr)
+	resolvedRoot, evalErr := filepath.EvalSymlinks(root)
+	require.NoError(t, evalErr)
+	// §3.2: the write is refused where the access is created — after the
+	// containment check and BEFORE requestPreflightApproval — so the
+	// fs_preflight approval card must never be offered, with either answer.
 	require.True(t, denied.IsError, "negative control: no stored path authority must deny the write")
-	require.Equal(t, []string{"fs_preflight"}, approver.kinds)
+	require.Equal(t, officepreview.ProgramShellRefusal(resolvedTarget, "LibreOffice", resolvedRoot), denied.ForLLM,
+		"§3.2: the result is the fixed refusal sentence, not an approval denial")
+	require.Empty(t, approver.kinds, "§3.2: no approval card for a program-folder write — the old expectation of an offered fs_preflight card is the defect this assertion guards against")
 	original, err := os.ReadFile(target)
 	require.NoError(t, err)
 	require.Equal(t, "original resource", string(original))
@@ -82,7 +91,10 @@ func TestOfficeWriterExclusion_GatewaySeesOtherSessionGrant(t *testing.T) {
 	require.Empty(t, grants.PathGrantsFor("preview-session", "jim"), "preview caller must not borrow the writer's grant")
 	result := tool.Execute(ctx, map[string]any{"command": command, "timeout_seconds": 5})
 	require.False(t, result.IsError, "actual bash grant must permit the write: %s", result.ForLLM)
-	require.Equal(t, []string{"fs_preflight", "no_sandbox_ask"}, approver.kinds, "the positive write must not get a fresh path-widening approval")
+	// The stored grant already contains this write, so §3.2 does not refuse
+	// it and no path-widening card is needed: the ONLY card across both
+	// executes is the independent no-kernel approval.
+	require.Equal(t, []string{"no_sandbox_ask"}, approver.kinds, "the positive write must not get a fresh path-widening approval")
 	data, err := os.ReadFile(target)
 	require.NoError(t, err)
 	require.Equal(t, "approved authority wrote", string(data))

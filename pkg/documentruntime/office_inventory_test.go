@@ -1,6 +1,7 @@
 package documentruntime
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +36,7 @@ func assertOfficePackageInventory(t *testing.T, manifest Manifest) {
 		}
 	}
 	for _, old := range []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"} {
-		if _, err := os.Stat(filepath.Join(embedded, old, "SKILL.md")); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(embedded, old, "SKILL.md")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("retired package %s survived (AD-14: no aliases): %v", old, err)
 		}
 	}
