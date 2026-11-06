@@ -365,7 +365,7 @@ func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string
 			})
 		if _, delErr := ru.workspaceLib.Delete(mediaID); delErr != nil {
 			slog.Warn("rest: upload: rollback of media-library entry failed after stage failure",
-				"media_id", mediaID, "error", delErr)
+				"media_id", safeLogValue(mediaID), "error", safeLogValue(delErr.Error()))
 		}
 		ru.a.cleanupWorkspaceUploads(&ru.resp, ru.workspaceLib)
 		jsonServerFailure(ru.w, http.StatusInternalServerError, "could not stage uploaded file for agent access", stageErr)
@@ -377,7 +377,7 @@ func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string
 			map[string]any{"workspace_id": ru.workspaceID, "media_id": mediaID, "error": assocErr.Error()})
 		if _, delErr := ru.workspaceLib.Delete(mediaID); delErr != nil {
 			slog.Warn("rest: upload: rollback of media-library entry failed after association failure",
-				"media_id", mediaID, "error", delErr)
+				"media_id", safeLogValue(mediaID), "error", safeLogValue(delErr.Error()))
 		}
 		removeLibraryFile(ru.a.homePath, ru.workspaceID, workRelPath)
 		ru.a.cleanupWorkspaceUploads(&ru.resp, ru.workspaceLib)
@@ -544,7 +544,7 @@ func (a *restAPI) cleanupWorkspaceUploads(resp *gen.UploadFilesResponse, lib *li
 		}
 		if _, err := lib.Delete(mediaID); err != nil {
 			slog.Warn("rest: upload: cleanup workspace file failed",
-				"media_id", mediaID, "error", err)
+				"media_id", safeLogValue(mediaID), "error", safeLogValue(err.Error()))
 		}
 	}
 }
