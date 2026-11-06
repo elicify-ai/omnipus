@@ -165,7 +165,7 @@ func (a *restAPI) classifyHostFolder(full, name string) hostFolderEntryWire {
 	if _, _, err := workspace.CheckMountTarget(full, a.homePath); err != nil {
 		if errors.Is(err, workspace.ErrMountRefused) {
 			entry.Mountable = false
-			var program *workspace.ProgramFolderRefusal
+			var program *workspace.ProgramFolderError
 			if errors.As(err, &program) {
 				entry.Reason = strPtr("Contains or lies inside a document preview program folder — agents can never write there.")
 				return entry

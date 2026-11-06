@@ -104,7 +104,7 @@ func newCall(home string, gatewayPID int, gatewayStart string) (*call, error) {
 		return nil, err
 	}
 	dir := filepath.Join(scratchRoot(home), id)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err = os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create preview scratch: %w", err)
 	}
 	realDir, err := filepath.EvalSymlinks(dir)
@@ -118,7 +118,7 @@ func newCall(home string, gatewayPID int, gatewayStart string) (*call, error) {
 		return nil, fmt.Errorf("open preview scratch: %w", err)
 	}
 	c := &call{dir: dir, realDir: realDir, root: root, rec: ownerRecord{State: statePreparing, GatewayPID: gatewayPID, GatewayStart: gatewayStart}}
-	if err := c.publish(); err != nil {
+	if err = c.publish(); err != nil {
 		_ = root.Close()
 		_ = os.RemoveAll(dir)
 		return nil, err

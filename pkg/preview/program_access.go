@@ -12,6 +12,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
 )
 
+// programAccessError is a refusal whose text is the exact sentence the person
+// sees (spec §3.2), full stop included.
+type programAccessError string
+
+func (e programAccessError) Error() string { return string(e) }
+
 // RefuseNewProgramAccess checks candidate's entries that are added or changed
 // relative to published, in the fields ConfiguredWriteRoots treats as write
 // access. An entry that overlaps a program folder, or that Omnipus cannot
@@ -45,12 +51,12 @@ func RefuseNewProgramAccess(home string, published, candidate *config.Config) er
 func refuseEntry(field, entry string, roots []component.WriteRoot, folders []component.ProtectedFolder) error {
 	for _, root := range roots {
 		if root.All {
-			return fmt.Errorf("config error: %s entry %q: Omnipus cannot tell which folders it covers, "+
-				"so it may include a document preview program folder; write it as ^/<folder>(?:/\\|$).", field, entry)
+			return programAccessError(fmt.Sprintf("config error: %s entry %q: Omnipus cannot tell which folders it covers, "+
+				"so it may include a document preview program folder; write it as ^/<folder>(?:/\\|$).", field, entry))
 		}
 		if hit := component.FirstProtectedOverlap(folders, root.Path); hit != nil {
-			return fmt.Errorf("config error: %s entry %q would give agents write access to the %s program folder %s; "+
-				"agents can never get write access there.", field, entry, hit.Name, hit.Path)
+			return programAccessError(fmt.Sprintf("config error: %s entry %q would give agents write access to the %s program folder %s; "+
+				"agents can never get write access there.", field, entry, hit.Name, hit.Path))
 		}
 	}
 	return nil

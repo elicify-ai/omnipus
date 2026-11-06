@@ -199,7 +199,7 @@ func (a *restAPI) writeMountCreateError(w http.ResponseWriter, id, name string, 
 // workspace package refuses are told apart by the stable phrase it uses for
 // the operating-system class.
 func mountRefusalText(err error) string {
-	var program *workspace.ProgramFolderRefusal
+	var program *workspace.ProgramFolderError
 	if errors.As(err, &program) {
 		return program.Reason()
 	}
