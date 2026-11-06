@@ -3,8 +3,8 @@
 //
 // Nine e2e tests used to establish "a turn is genuinely mid-flight" by waiting
 // for >80 characters of answer text to become visible while the turn is still
-// running. On the CI primary model (MiniMax-M3.1-Flash-Preview since 5271074d6)
-// that window never opens: the model thinks invisibly for seconds and then
+// running. On the CI primary model (see tests/e2e/e2e-model.json) that
+// window never opens: the model thinks invisibly for seconds and then
 // delivers the whole answer inside ~430ms, so visible text coincides with
 // completion and the mid-turn gate fails every attempt. The gateway streams
 // correctly; the assumption about the MODEL's emission profile is what broke.

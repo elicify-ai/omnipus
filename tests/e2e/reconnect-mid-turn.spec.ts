@@ -178,8 +178,9 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
 })
 
 // S-10 — deterministic held-stream version (#1661). Moved out of the
-// live-model describe above: on the CI primary model (MiniMax-M3.1-Flash-
-// Preview) answer text becomes visible only at/near completion, so
+// live-model describe above: on the CI primary model (see
+// tests/e2e/e2e-model.json) answer text becomes visible only at/near
+// completion, so
 // startLongTurn's ">80 chars while running" gate was satisfied only at
 // completion and the "assistant is still working on this" state below was
 // unreachable. The gateway streams correctly; the model's emission profile

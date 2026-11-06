@@ -394,7 +394,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   // #1661: these are the deterministic held-stream scenarios — b, c and h
   // (both orderings, below) now script ONLY the external provider
   // (fixtures/held-stream-provider.ts) behind their own GatewayProcess,
-  // because on the CI primary model (MiniMax-M3.1-Flash-Preview) the
+  // because on the CI primary model (see tests/e2e/e2e-model.json) the
   // ">80 chars while running" mid-turn window never opens: answer text
   // becomes visible only at/near completion, so the old gates failed every
   // attempt even though the gateway streams correctly. Scenario titles,
@@ -545,6 +545,14 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       }
     }
   })
+})
+
+// Same deterministic describe, split at the h scenarios only for the 240-line
+// function budget (scripts/check-function-budget.sh): the identical title
+// keeps every full test name byte-identical, and the zero-retry scope carries
+// over — a broken catch-up is a property no retry establishes.
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  test.describe.configure({ retries: 0 })
 
   // F1: the held-open tab must choose the same single status regardless of
   // whether the optional lifecycle list or the boot-mismatch attach arrives first.

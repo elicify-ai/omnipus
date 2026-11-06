@@ -10,8 +10,9 @@
  * (fixtures/held-stream-provider.ts for T21/T22/T23/T26 — #1661; a dedicated
  * stop-label stream for T25). The browser, gateway and cancellation stay real;
  * only the external model is scripted, so the mid-turn window no longer
- * depends on the model's emission profile (issue #1661: MiniMax-M3.1-Flash-
- * Preview makes answer text visible only at/near completion). T24 retains
+ * depends on the model's emission profile (issue #1661: the CI primary
+ * model, see tests/e2e/e2e-model.json, makes answer text visible only at/near
+ * completion). T24 retains
  * live-model coverage. T25 covers the immediate "Stopping..." label, not
  * stuck-loop escalation.
  *
@@ -24,7 +25,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import http from 'node:http'
-import { expect, errors, type Browser, type BrowserContext, type Page, type Locator } from '@playwright/test'
+import { expect, errors, type BrowserContext, type Page, type Locator } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, closeSidebar, openSidebar, selectAgent, selectedAgentRow, waitForConnected } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
@@ -34,8 +35,8 @@ import {
   attachHeldStreamEvidence,
   expectTurnHeldMidStream,
   startHeldStreamProvider,
-  type HeldStreamProvider,
 } from './fixtures/held-stream-provider'
+import { expectCancelClosedStream, startHeldTurnHarness } from './fixtures/held-turn-harness'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -835,8 +836,8 @@ test.describe(() => {
 // ── T21/T22/T23/T26 — deterministic held-stream versions (#1661) ─────────────
 // The same four tests, moved out of the live-model set (issue #1661; see
 // planning-20261106/LLM-AGENTS-RED-TRIAGE.md group A). On the CI primary
-// model (MiniMax-M3.1-Flash-Preview) answer text only becomes visible at/near
-// completion, so the ">80 chars while still running" wait never opened a
+// model (see tests/e2e/e2e-model.json) answer text only becomes visible
+// at/near completion, so the ">80 chars while still running" wait never opened a
 // mid-turn window and these four failed every attempt — while the gateway's
 // streaming itself was correct. Titles, BDD scenarios and every original
 // assertion are unchanged; what changed is WHERE the mid-turn proof comes
@@ -862,40 +863,91 @@ test.describe(() => {
 // audit. A cancel that does nothing leaves the provider stream open forever
 // (the stop button never clears — the original assertions fail) and never
 // produces the post-cancel stream closure this describe additionally pins.
+// Historical defect record for T26 (moved out of the describe for the
+// 240-line function budget, scripts/check-function-budget.sh — text verbatim):
+// ─── 2026-07-28: two independent defects fixed, both of which made this test
+// fail 3/3 deterministically (verified on the CI worker at both branch HEAD and
+// the epic base 0da704cb — pre-existing, not an epic regression):
+//
+// 1. THE TEST RACED ITSELF. It hand-rolled its send and clicked Stop the instant
+//    `stop-btn` became visible. `stop-btn` renders off the CLIENT-side
+//    `isStreaming` flag (ChatScreen.tsx), which is set at SEND time — before the
+//    gateway has registered a cancellable turn. The click landed ~1.1–2.9s after
+//    send, `RequestCancel` found no active-turn hook via
+//    GetActiveTurnHookForSession (pkg/agent/cancel.go:240), emitted
+//    `was_fired:false`, and no-oped; the assistant then streamed to completion
+//    (11,788 tokens, untruncated). Proof nothing had claimed the turn at click
+//    time: the orphan watchdog's ClaimCancel on that same session SUCCEEDED 22s
+//    later. Its passing siblings (T21/T22/T23/T25) never hit this because they
+//    all go through `triggerLongStreamingTurn`, which additionally waits for the
+//    streaming anchor to accumulate >80 chars of REAL streamed text — the
+//    helper's own comment already named the gap ("The stop button (and even the
+//    streaming-message placeholder) appear BEFORE the first token"). Streamed
+//    assistant tokens can only come from a live, registered server-side turn, so
+//    that wait is a genuine server-side readiness gate, not a sleep. FIX: T26 now
+//    uses the same helper.
+//
+// 2. THE SPA NEVER BOUND TO THE TEST'S SESSION. It called a `createSession()`
+//    REST helper then `page.goto('/#/sessions/<id>')`. That does not bind — the
+//    SPA lazily mints its own session on first send (T24's helper documents the
+//    exact same finding). Live evidence: `createSession` minted one id, the turn
+//    ran on a different SPA-minted id, and BOTH cancel requests carried the
+//    literal `__pending` sentinel as session_id. FIX: drop the pre-minted session
+//    entirely, drive the turn from `/` like every other test here, and discover
+//    the session the SPA actually used by diffing OMNIPUS_HOME/sessions (T24's
+//    approach). The session-id assertion is STRENGTHENED, not weakened: the audit
+//    entries' session_id must now equal a session directory THIS test created —
+//    which the `__pending` sentinel can never satisfy.
+//
+// A note on WHERE the "before" snapshot is taken, because the obvious placement is
+// wrong and it fails in a way that looks like a pass. T24's helper says the SPA
+// "creates the session lazily on the first sent message"; for THIS route that is
+// not what happens. Measured on the CI worker (`stat` birth times vs. audit
+// timestamps, 3 consecutive runs against one warm gateway):
+//
+//     repeat  session dir born   cancel attempt   turn_id
+//       0     07:33:49.96        07:34:15.69      jim-turn-1
+//       1     07:34:21.54        07:34:35.84      mia-turn-2
+//       2     07:34:42.08        07:34:54.91      mia-turn-3
+//
+// The directory is minted EAGERLY, within ~3s of the route mounting and ~13-26s
+// BEFORE the turn is cancelled — not on send. So a snapshot taken after `/new`
+// already contains this test's own session, the diff comes out empty, and the
+// binding assertion fires. (The `mia-turn-*` ids corroborate the eager mint: the
+// session was already bound to the default agent before triggerLongStreamingTurn
+// switched the picker to Jim, so the picker label and the executing agent
+// disagree. Harmless here — T26 only needs a cancellable stream, and the cancel
+// fired 3/3 — but it is why the ids are not all `jim-turn-*`.)
+//
+// Snapshot BEFORE page.goto('/') therefore, not after `/new`. Taking it earlier
+// only ever SHRINKS the "before" set, so a session minted at any point during the
+// test still counts as new — the assertion stays exactly as strict while becoming
+// independent of when the SPA decides to mint. Do not move it back down: with the
+// late snapshot, run 0 passed and runs 1 and 2 failed, and run 0 passed only
+// because the gateway was cold and the mint happened to land ~1s AFTER the
+// snapshot. A sub-second accidental pass is not coverage.
+//
+// ─── 2026-10-11: the diff-based session binding is SUPERSEDED. Founder
+// decision D7 (DECISIONS.md, squad nav-agent-row-menu-20261011) removed the
+// agent-row "New chat" button, and triggerLongStreamingTurn now creates the
+// turn's session via freshChat (public REST POST /api/v1/sessions + the SPA's
+// own /sessions/<id> deep-link route) — which RETURNS the session id. The
+// audit rows below are bound to THAT exact id (was_fired attempt and
+// turn.cancelled must both carry it), which is strictly stronger than the old
+// "session_id ∈ dirs that appeared since the snapshot" set membership: the
+// __pending sentinel still cannot satisfy it, a neighbouring turn's id still
+// cannot either, and the whole eager-mint/snapshot-timing hazard this header
+// documents is gone because nothing is inferred from directory diffs anymore.
+// The snapshot stays only as failure diagnostics — now against the ISOLATED
+// GatewayProcess home, so the diagnostics describe exactly this test's own
+// gateway and no one else's.
+
 test.describe('deterministic held-stream cancellations (#1661)', () => {
   // Scope zero retries to these deterministic acceptances, not the file's
   // live-model siblings — the same reasoning as T25's describe below: a
   // broken cancel is a property no retry establishes, and burning 3 retries
   // on a deterministic acceptance only delays its red.
   test.describe.configure({ retries: 0 })
-
-  /** The isolated gateway on the scripted-provider seam + an authenticated
-   * browser context aimed at it. Fails safe: a context failure stops the
-   * already-started gateway instead of leaking the process. */
-  async function startHeldTurnHarness(browser: Browser, provider: HeldStreamProvider) {
-    const gateway = await GatewayProcess.start({ apiBase: provider.url, model: E2E_FALLBACK.model })
-    try {
-      const context = await browser.newContext({
-        baseURL: gateway.baseURL, storageState: await gateway.browserStorageState(),
-      })
-      const page = await context.newPage()
-      return { gateway, context, page }
-    } catch (error) {
-      await gateway.stop()
-      throw error
-    }
-  }
-
-  /** Post-cancel settlement: the REAL cancel closed the in-flight provider
-   * stream. "Cancel does nothing" cannot pass this: a no-op cancel leaves the
-   * stream open forever, the stop button never clears (original assertions)
-   * and this evidence never reaches 1. */
-  async function expectCancelClosedStream(provider: HeldStreamProvider, label: string): Promise<void> {
-    await expect.poll(() => provider.evidence.streamsClosed, {
-      timeout: 10_000, message: `${label}: the real cancel must close the in-flight provider stream`,
-    }).toBe(1)
-    expect(provider.evidence.released, `${label}: release() was never called — the cancel did this`).toBe(0)
-  }
 
   // ── T21: Web stop button cancels turn within 5 seconds (US-1.1, SC-1) ───────
   // Traces to: cancel-cross-channel-spec.md line 600 (T21)
@@ -1036,6 +1088,15 @@ test.describe('deterministic held-stream cancellations (#1661)', () => {
     },
   )
 
+})
+
+// Same deterministic describe, split per test only for the 240-line function
+// budget (scripts/check-function-budget.sh): the identical title keeps every
+// full test name byte-identical, and the zero-retry scope carries over — a
+// broken cancel is a property no retry establishes.
+test.describe('deterministic held-stream cancellations (#1661)', () => {
+  test.describe.configure({ retries: 0 })
+
   // ── T23: Web Escape key cancels during streaming (US-1.4) ───────────────────
   // Traces to: cancel-cross-channel-spec.md line 602 (T23)
   // BDD: Given a turn is actively streaming
@@ -1097,6 +1158,14 @@ test.describe('deterministic held-stream cancellations (#1661)', () => {
     },
   )
 
+})
+
+// Same deterministic describe, split at T26 only for the 240-line function
+// budget: identical title (full test names unchanged), zero retries carried
+// over.
+test.describe('deterministic held-stream cancellations (#1661)', () => {
+  test.describe.configure({ retries: 0 })
+
   // ── T26: Audit entries exist after cancel (US-5.1, US-5.2) ──────────────────
   // Traces to: cancel-cross-channel-spec.md line 605 (T26)
   // BDD: Given any cancel request lands at the gateway
@@ -1110,82 +1179,6 @@ test.describe('deterministic held-stream cancellations (#1661)', () => {
   // and was_fired:true below can no longer be lost to a model that finished
   // before the click landed.
   //
-  // ─── 2026-07-28: two independent defects fixed, both of which made this test
-  // fail 3/3 deterministically (verified on the CI worker at both branch HEAD and
-  // the epic base 0da704cb — pre-existing, not an epic regression):
-  //
-  // 1. THE TEST RACED ITSELF. It hand-rolled its send and clicked Stop the instant
-  //    `stop-btn` became visible. `stop-btn` renders off the CLIENT-side
-  //    `isStreaming` flag (ChatScreen.tsx), which is set at SEND time — before the
-  //    gateway has registered a cancellable turn. The click landed ~1.1–2.9s after
-  //    send, `RequestCancel` found no active-turn hook via
-  //    GetActiveTurnHookForSession (pkg/agent/cancel.go:240), emitted
-  //    `was_fired:false`, and no-oped; the assistant then streamed to completion
-  //    (11,788 tokens, untruncated). Proof nothing had claimed the turn at click
-  //    time: the orphan watchdog's ClaimCancel on that same session SUCCEEDED 22s
-  //    later. Its passing siblings (T21/T22/T23/T25) never hit this because they
-  //    all go through `triggerLongStreamingTurn`, which additionally waits for the
-  //    streaming anchor to accumulate >80 chars of REAL streamed text — the
-  //    helper's own comment already named the gap ("The stop button (and even the
-  //    streaming-message placeholder) appear BEFORE the first token"). Streamed
-  //    assistant tokens can only come from a live, registered server-side turn, so
-  //    that wait is a genuine server-side readiness gate, not a sleep. FIX: T26 now
-  //    uses the same helper.
-  //
-  // 2. THE SPA NEVER BOUND TO THE TEST'S SESSION. It called a `createSession()`
-  //    REST helper then `page.goto('/#/sessions/<id>')`. That does not bind — the
-  //    SPA lazily mints its own session on first send (T24's helper documents the
-  //    exact same finding). Live evidence: `createSession` minted one id, the turn
-  //    ran on a different SPA-minted id, and BOTH cancel requests carried the
-  //    literal `__pending` sentinel as session_id. FIX: drop the pre-minted session
-  //    entirely, drive the turn from `/` like every other test here, and discover
-  //    the session the SPA actually used by diffing OMNIPUS_HOME/sessions (T24's
-  //    approach). The session-id assertion is STRENGTHENED, not weakened: the audit
-  //    entries' session_id must now equal a session directory THIS test created —
-  //    which the `__pending` sentinel can never satisfy.
-  //
-  // A note on WHERE the "before" snapshot is taken, because the obvious placement is
-  // wrong and it fails in a way that looks like a pass. T24's helper says the SPA
-  // "creates the session lazily on the first sent message"; for THIS route that is
-  // not what happens. Measured on the CI worker (`stat` birth times vs. audit
-  // timestamps, 3 consecutive runs against one warm gateway):
-  //
-  //     repeat  session dir born   cancel attempt   turn_id
-  //       0     07:33:49.96        07:34:15.69      jim-turn-1
-  //       1     07:34:21.54        07:34:35.84      mia-turn-2
-  //       2     07:34:42.08        07:34:54.91      mia-turn-3
-  //
-  // The directory is minted EAGERLY, within ~3s of the route mounting and ~13-26s
-  // BEFORE the turn is cancelled — not on send. So a snapshot taken after `/new`
-  // already contains this test's own session, the diff comes out empty, and the
-  // binding assertion fires. (The `mia-turn-*` ids corroborate the eager mint: the
-  // session was already bound to the default agent before triggerLongStreamingTurn
-  // switched the picker to Jim, so the picker label and the executing agent
-  // disagree. Harmless here — T26 only needs a cancellable stream, and the cancel
-  // fired 3/3 — but it is why the ids are not all `jim-turn-*`.)
-  //
-  // Snapshot BEFORE page.goto('/') therefore, not after `/new`. Taking it earlier
-  // only ever SHRINKS the "before" set, so a session minted at any point during the
-  // test still counts as new — the assertion stays exactly as strict while becoming
-  // independent of when the SPA decides to mint. Do not move it back down: with the
-  // late snapshot, run 0 passed and runs 1 and 2 failed, and run 0 passed only
-  // because the gateway was cold and the mint happened to land ~1s AFTER the
-  // snapshot. A sub-second accidental pass is not coverage.
-  //
-  // ─── 2026-10-11: the diff-based session binding is SUPERSEDED. Founder
-  // decision D7 (DECISIONS.md, squad nav-agent-row-menu-20261011) removed the
-  // agent-row "New chat" button, and triggerLongStreamingTurn now creates the
-  // turn's session via freshChat (public REST POST /api/v1/sessions + the SPA's
-  // own /sessions/<id> deep-link route) — which RETURNS the session id. The
-  // audit rows below are bound to THAT exact id (was_fired attempt and
-  // turn.cancelled must both carry it), which is strictly stronger than the old
-  // "session_id ∈ dirs that appeared since the snapshot" set membership: the
-  // __pending sentinel still cannot satisfy it, a neighbouring turn's id still
-  // cannot either, and the whole eager-mint/snapshot-timing hazard this header
-  // documents is gone because nothing is inferred from directory diffs anymore.
-  // The snapshot stays only as failure diagnostics — now against the ISOLATED
-  // GatewayProcess home, so the diagnostics describe exactly this test's own
-  // gateway and no one else's.
 
   test(
     'T26 — audit log contains turn_cancel_attempt and turn_canceled entries after cancel',
