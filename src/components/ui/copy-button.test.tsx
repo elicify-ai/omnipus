@@ -148,7 +148,9 @@ describe('CopyButton — success flow (§2.8 Behaviour)', () => {
     act(() => vi.advanceTimersByTime(1500))
     await click(button)
     expect(writeText).toHaveBeenCalledTimes(2)
-    // 1500ms after the SECOND click the announcement must still be showing.
+    // 1500ms after the SECOND click the announcement must still be showing
+    // (the restart re-arms the timer at 2000ms from THIS click).
+    act(() => vi.advanceTimersByTime(1500))
     expect(theAnnouncementRegion()).toHaveTextContent('Copied')
     // 2000ms after the second click the region is empty again.
     act(() => vi.advanceTimersByTime(500))
