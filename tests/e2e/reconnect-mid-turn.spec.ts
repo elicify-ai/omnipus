@@ -210,7 +210,7 @@ test.describe('reconnect mid-turn (ADR-082) — deterministic held stream (#1661
       const before = await startLongTurn(page)
       // MID-TURN SIGNAL (#1661): the turn is provably still streaming when
       // the outage starts — stream open, deltas flowing, nothing released.
-      expectTurnHeldMidStream(provider, 'S-10')
+      await expectTurnHeldMidStream(provider, 'S-10')
 
       // THE OUTAGE HAS TO ACTUALLY LAST: #823 keeps drops under 15 seconds quiet,
       // then adds a calm continuation line to the interrupted assistant answer.

@@ -129,6 +129,27 @@ export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<
     res.end(chunk({ role: 'assistant', content }, 'stop') + 'data: [DONE]\n\n');
   };
 
+  // A scripted completion that still STREAMS at the fixture's cadence: the
+  // tests pin the running row while a response renders (catchup h's
+  // "Generate again" assertions observe the retry mid-stream), so a retry
+  // must not arrive in one burst — that would make the running state
+  // unobservable and the original assertion unsatisfiable.
+  const completePaced = (res: http.ServerResponse, content: string) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    const parts = content.match(/.{1,40}(\s|$)/g) ?? [content];
+    let i = 0;
+    const timer = setInterval(() => {
+      if (i < parts.length - 1) {
+        res.write(chunk({ content: parts[i] }, null));
+        i += 1;
+        return;
+      }
+      clearInterval(timer);
+      res.end(chunk({ content: parts[i] }, 'stop') + 'data: [DONE]\n\n');
+    }, chunkIntervalMs);
+    res.once('close', () => clearInterval(timer));
+  };
+
   const server = http.createServer((req, res) => {
     const bodyChunks: Buffer[] = [];
     req.on('data', (data: Buffer) => bodyChunks.push(data));
@@ -181,9 +202,11 @@ export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<
         return;
       }
       if (held !== null || evidence.streamRequests > 1) {
-        // A later scripted turn (retry/regenerate): answer complete, do not hold.
+        // A later scripted turn (retry/regenerate): answer complete, do not
+        // hold — but stream it at cadence so the retry stays observable
+        // mid-flight.
         evidence.retried += 1;
-        completeNow(res, retryAnswer);
+        completePaced(res, retryAnswer);
         return;
       }
       // THE HELD STREAM: deltas on a timer, no finish chunk, no [DONE] — the
@@ -275,10 +298,26 @@ export async function attachHeldStreamEvidence(info: TestInfo, label: string, pr
  *                          model, i.e. fail exactly when it mattered);
  *   released     === 0   — the fixture did not end the turn; only the test's
  *                          scripted release or a REAL teardown may.
+ *
+ * The deltas condition WAITS (bounded poll) instead of asserting instantly:
+ * the provider writes its first delta immediately and the second one at
+ * chunkIntervalMs, so a gate that reads the counter synchronously can run
+ * between the two writes and fail a perfectly healthy turn (this exact race
+ * burned catchup h's first keyless runs: UI text checks resolve on chunk 1,
+ * the gate ran at ~150ms against a 150ms chunk cadence). Polling turns the
+ * signal back into a WAIT for real mid-stream evidence — the same shape as
+ * the ">80 chars visible" wait it replaces, minus the model dependence.
+ * Callers MUST await this.
  */
-export function expectTurnHeldMidStream(provider: HeldStreamProvider, label: string): void {
+export async function expectTurnHeldMidStream(provider: HeldStreamProvider, label: string): Promise<void> {
+  await expect.poll(
+    () => provider.evidence.chunksSent,
+    {
+      timeout: 15_000,
+      message: `${label}: scripted deltas actually flowed through the gateway (bounded wait for the fixture's cadence — a burst-emitting live model never opens this window, the scripted stream always does)`,
+    },
+  ).toBeGreaterThan(1);
   expect(provider.evidence.streamRequests, `${label}: the real turn reached the scripted provider exactly once`).toBe(1);
-  expect(provider.evidence.chunksSent, `${label}: scripted deltas actually flowed through the gateway`).toBeGreaterThan(1);
   expect(provider.evidence.streamsClosed, `${label}: the provider stream is still open — the turn cannot have completed`).toBe(0);
   expect(provider.evidence.released, `${label}: the fixture did not end the turn — only the scripted release or a real teardown may`).toBe(0);
 }

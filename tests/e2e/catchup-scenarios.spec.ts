@@ -416,7 +416,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       // genuinely still streaming (stream open, deltas flowing). The old
       // ">80 chars while running" gate could coincide with completion on a
       // burst-emitting model; this evidence cannot.
-      expectTurnHeldMidStream(provider, 'catchup b')
+      await expectTurnHeldMidStream(provider, 'catchup b')
       // Real-browser follow-up (orchestrator): a hard reload lands on the
       // welcome/empty chat, not the previous session — the tab does not
       // reopen the last session on its own (checked: this is release
@@ -471,7 +471,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       await expect(stopButton(page), 'the turn must still be running before the outage or switch').toBeVisible()
       // MID-TURN SIGNAL (#1661) — same as scenario b: the provider evidence
       // proves the turn is genuinely still streaming before the UI moves.
-      expectTurnHeldMidStream(provider, 'catchup c')
+      await expectTurnHeldMidStream(provider, 'catchup c')
       // Capture chat A's real, server-assigned sidebar title BEFORE switching
       // away — this is what makes finding it again reliable (see
       // activeChatSessionId's own comment on why this beats guessing).
@@ -640,7 +640,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         // MID-TURN SIGNAL (#1661): the stream is provably still open right
         // before the SIGKILL — the Interrupted state below is then a real
         // mid-answer cut, never a post-completion fake.
-        expectTurnHeldMidStream(provider, `catchup h (${ordering})`)
+        await expectTurnHeldMidStream(provider, `catchup h (${ordering})`)
         crashed = true
         await gw.kill9()
         // The old 25ms/frame pacing existed to keep a live-model retry

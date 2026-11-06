@@ -923,7 +923,7 @@ test.describe('deterministic held-stream cancellations (#1661)', () => {
         await page.goto('/')
 
         await triggerLongStreamingTurn(page)
-        expectTurnHeldMidStream(provider, 'T21')
+        await expectTurnHeldMidStream(provider, 'T21')
 
         const stopBtn = page.locator('[data-testid="stop-btn"]')
         await stopBtn.click({ timeout: 15_000 })
@@ -979,7 +979,7 @@ test.describe('deterministic held-stream cancellations (#1661)', () => {
         await page.goto('/')
 
         await triggerLongStreamingTurn(page)
-        expectTurnHeldMidStream(provider, 'T22')
+        await expectTurnHeldMidStream(provider, 'T22')
 
         // Typing "/c" mid-stream: FR-3a requires the slash menu to appear during
         // streaming for commands tagged availableWhileStreaming: true. The held
@@ -1059,7 +1059,7 @@ test.describe('deterministic held-stream cancellations (#1661)', () => {
         await page.goto('/')
 
         await triggerLongStreamingTurn(page)
-        expectTurnHeldMidStream(provider, 'T23')
+        await expectTurnHeldMidStream(provider, 'T23')
 
         // triggerLongStreamingTurn only returns once stop-btn is visible, i.e.
         // isStreaming is already true and ChatScreen's document-level Escape
@@ -1251,7 +1251,7 @@ test.describe('deterministic held-stream cancellations (#1661)', () => {
         // held-stream provider, and expectTurnHeldMidStream additionally proves the
         // stream is still open when the Stop click below fires.
         const turnSessionId = await triggerLongStreamingTurn(page)
-        expectTurnHeldMidStream(provider, 'T26')
+        await expectTurnHeldMidStream(provider, 'T26')
 
         // Cancel the turn.
         const stopBtn = page.locator('[data-testid="stop-btn"]')
