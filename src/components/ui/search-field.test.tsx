@@ -15,9 +15,11 @@
  * reflow rows of §2.1 "Assertable" are class/token proxies here; their real
  * checks are the manifest's browser/pointer/reflow kinds (§2.10).
  */
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import * as React from 'react'
 import { createRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
+import { Dialog, DialogContent, DialogTitle } from './dialog'
 import { SearchField, SearchToolbar } from './search-field'
 
 // Fresh props per test — no mock state leaks across tests (order independence).
@@ -110,51 +112,74 @@ describe('SearchField — clear button [Q1]', () => {
   })
 })
 
-describe('SearchField — Escape [Q1 recommended option A]', () => {
-  function renderWithDocListener(props: Parameters<typeof baseProps>[0]) {
-    const docListener = vi.fn()
-    document.addEventListener('keydown', docListener)
-    const utils = render(<SearchField {...baseProps(props)} />)
-    return {
-      input: screen.getByRole('searchbox', { name: 'Search connectors' }),
-      docListener,
-      cleanup: () => {
-        document.removeEventListener('keydown', docListener)
-        utils.unmount()
-      },
-    }
+describe('SearchField — Escape inside the real Radix Dialog (§2.1, CHECK finding 1)', () => {
+  // The round-1 tests here used a BUBBLE-phase document listener and claimed
+  // "the enclosing dialog stays open". That was weaker than its title: Radix
+  // dismissable layers (Dialog, Sheet, Popover) listen for Escape on
+  // `document` in the CAPTURE phase (react-dismissable-layer dist), so they
+  // see the key before any input-level handler runs, and a bubble listener
+  // proves nothing about them (CHECK finding 1, team-lead round 4: contract
+  // §2.1 stands — Escape with text clears the field AND the dialog stays
+  // open; Escape on an empty field lets the dialog close). These cases
+  // render the real kit Dialog — real Radix, no mock — and assert the
+  // CONTRACT outcome, replacing the old listener tests.
+  function DialogWithSearchField({ initial, clearable = true }: { initial: string; clearable?: boolean }) {
+    const [open, setOpen] = React.useState(true)
+    const [value, setValue] = React.useState(initial)
+    return (
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogTitle>Filter</DialogTitle>
+          <SearchField
+            value={value}
+            onValueChange={setValue}
+            placeholder="Search connectors…"
+            aria-label="Search connectors"
+            clearable={clearable}
+          />
+        </DialogContent>
+      </Dialog>
+    )
   }
 
-  it('with clearable and non-empty text, Escape clears the text and stops propagation so an enclosing dialog stays open', () => {
-    const onValueChange = vi.fn()
-    const { input, docListener, cleanup } = renderWithDocListener({ value: 'webhook', onValueChange })
-    fireEvent.keyDown(input, { key: 'Escape' })
-    expect(onValueChange).toHaveBeenCalledWith('')
-    // Stopped: the surrounding dialog/sheet must not see this Escape.
-    expect(docListener).not.toHaveBeenCalled()
-    cleanup()
+  async function openAndFocus(initial: string, clearable?: boolean) {
+    render(<DialogWithSearchField initial={initial} clearable={clearable} />)
+    const input = screen.getByRole('searchbox', { name: 'Search connectors' })
+    act(() => input.focus())
+    // Instrument check: the dialog is open BEFORE the key, so a pass can
+    // never come from "it never rendered".
+    expect(screen.getByRole('dialog', { name: 'Filter' })).toBeInTheDocument()
+    return input
+  }
+
+  it('with clearable and non-empty text, Escape clears the field AND the dialog stays open', async () => {
+    const input = await openAndFocus('webhook')
+    fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' })
+    // The clear happens (controlled value flows back through the harness).
+    expect(input).toHaveValue('')
+    // Let any dismissal that is going to happen happen (the alert-dialog
+    // suite's close idiom shows dismissal lands within this window).
+    await act(async () => { await Promise.resolve() })
+    // THE CONTRACT: the enclosing dialog is still open.
+    expect(screen.getByRole('dialog', { name: 'Filter' })).toBeInTheDocument()
   })
 
-  it('with an empty value, Escape is not handled and reaches the surrounding pop-up', () => {
-    const onValueChange = vi.fn()
-    const { input, docListener, cleanup } = renderWithDocListener({ value: '', onValueChange })
-    fireEvent.keyDown(input, { key: 'Escape' })
-    expect(onValueChange).not.toHaveBeenCalled()
-    expect(docListener).toHaveBeenCalledTimes(1)
-    cleanup()
+  it('with an empty field, Escape is not handled and the dialog closes as usual', async () => {
+    const input = await openAndFocus('')
+    fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' })
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Filter' })).not.toBeInTheDocument(),
+    )
+    expect(input).toHaveValue('')
   })
 
-  it('with clearable={false}, Escape is never handled even with text', () => {
-    const onValueChange = vi.fn()
-    const { input, docListener, cleanup } = renderWithDocListener({
-      value: 'webhook',
-      clearable: false,
-      onValueChange,
-    })
-    fireEvent.keyDown(input, { key: 'Escape' })
-    expect(onValueChange).not.toHaveBeenCalled()
-    expect(docListener).toHaveBeenCalledTimes(1)
-    cleanup()
+  it('with clearable={false} and text, Escape is never handled and the dialog closes as usual', async () => {
+    const input = await openAndFocus('webhook', false)
+    fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' })
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Filter' })).not.toBeInTheDocument(),
+    )
+    expect(input).toHaveValue('webhook')
   })
 })
 

@@ -123,6 +123,20 @@ describe('CopyButton — success flow (§2.8 Behaviour)', () => {
     expect(writeText).toHaveBeenCalledWith('resolved-fn-value')
   })
 
+  it('during "Copied" feedback the button gains no aria-description (CHECK F2)', async () => {
+    render(<CopyButton value="hello" />)
+    const button = screen.getByRole('button', { name: 'Copy' })
+    await click(button)
+    // The announcement lives in the ONE region (K2), not on the control.
+    expect(theAnnouncementRegion()).toHaveTextContent('Copied')
+    // CopyButton passes no description of its own, so the button must carry
+    // none at all — the announcement must not leak onto it (the mutant
+    // `feedbackDescription ?? announcement ?? ariaDescription` in
+    // button.tsx::Button writes "Copied" here and fails this line).
+    expect(button).not.toHaveAttribute('aria-description')
+    expect(button).toHaveAccessibleName('Copy')
+  })
+
   it('keeps "Copied" at COPY_FEEDBACK_MS - 1 and is empty again exactly at COPY_FEEDBACK_MS', async () => {
     render(<CopyButton value="hello" />)
     await click(screen.getByRole('button', { name: 'Copy' }))
