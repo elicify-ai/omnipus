@@ -13,6 +13,7 @@ package thirdpartycli
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -212,6 +213,38 @@ func AgentWritableRoots(home string, cfg *config.Config) []string {
 		out = append(out, cfg.Sandbox.AllowedPaths...)
 	}
 	return out
+}
+
+// PresetAuditWithheld stands in for preset text in an audit entry when the
+// configuration is missing: the entry says so rather than holding clear text.
+const PresetAuditWithheld = "[not recorded: the sensitive-data filter is unavailable]"
+
+// PresetAuditFilter returns the function preset text goes through on its way
+// into an audit entry (T11 §4 Audit). It obeys tools.filter_sensitive_data the
+// way pkg/agent's filterExternalString does: switch on, the config's
+// sensitive-data replacer with no short-content fast path; switch off, the text
+// as typed. Only the audit copy is filtered; the worker gets the preset as
+// typed. With no config the switch cannot be read, so nothing is known to allow
+// clear text: every non-empty value becomes PresetAuditWithheld and the failure
+// is logged. The same applies to a missing replacer with the switch on.
+func PresetAuditFilter(cfg *config.Config) func(string) string {
+	if cfg != nil && !cfg.Tools.IsFilterSensitiveDataEnabled() {
+		return func(s string) string { return s }
+	}
+	var replacer *strings.Replacer
+	if cfg != nil {
+		replacer = cfg.SensitiveDataReplacer()
+	}
+	if replacer == nil {
+		slog.Error("audit: sensitive-data filter unavailable; preset text withheld from the audit entry")
+		return func(s string) string {
+			if s == "" {
+				return ""
+			}
+			return PresetAuditWithheld
+		}
+	}
+	return replacer.Replace
 }
 
 // ProgramWarning returns the exact text a run of an external worker on cli

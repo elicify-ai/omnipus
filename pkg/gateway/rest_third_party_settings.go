@@ -244,6 +244,7 @@ func writeThirdPartyRows(m map[string]any, rows map[string]config.ThirdPartyCLIC
 }
 
 // auditThirdPartyChanges records each changed path and preset (r17 §3.10).
+// Preset values go through thirdpartycli.PresetAuditFilter (T11 §4 Audit).
 // A failed audit write is logged, never silent.
 func (a *restAPI) auditThirdPartyChanges(r *http.Request, previous, saved map[string]config.ThirdPartyCLIConfig) {
 	if a.auditor == nil {
@@ -259,7 +260,8 @@ func (a *restAPI) auditThirdPartyChanges(r *http.Request, previous, saved map[st
 			a.logThirdPartyAudit("settings.third_party_agents.path_changed", actor, cli, "path", before.Path, after.Path)
 		}
 		if before.PresetArgs != after.PresetArgs {
-			a.logThirdPartyAudit("settings.third_party_agents.preset_changed", actor, cli, "preset_args", before.PresetArgs, after.PresetArgs)
+			filter := thirdpartycli.PresetAuditFilter(a.agentLoop.GetConfig())
+			a.logThirdPartyAudit("settings.third_party_agents.preset_changed", actor, cli, "preset_args", filter(before.PresetArgs), filter(after.PresetArgs))
 		}
 	}
 }
