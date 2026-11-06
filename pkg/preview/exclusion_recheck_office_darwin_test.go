@@ -189,10 +189,11 @@ IFS= read -r gate || exit 0
 	}
 }
 
-// R5: losing the store does not revoke an already-running child's policy or
-// open descriptor. This is distinct from a new turn failing to load a mount.
+// T-69 / S2 amendment (2026-11-05): listed but unreadable authority still
+// fails closed. A removed record with a surviving writer is now the explicit
+// §3.2 boundary item 1; dropped_record was removed by spec, not made to pass.
 func TestWriteExclusionRejectsUnknownAuthorityWithLiveWriter(t *testing.T) {
-	for _, fault := range []string{"malformed_record", "record_is_directory", "dropped_record", "mount_list_error", "identity_error"} {
+	for _, fault := range []string{"malformed_record", "record_is_directory", "mount_list_error", "identity_error"} {
 		t.Run(fault, func(t *testing.T) {
 			base, home, work := recheckKernelRoot(t), t.TempDir(), t.TempDir()
 			t.Setenv("OMNIPUS_HOME", home)
@@ -227,8 +228,6 @@ func TestWriteExclusionRejectsUnknownAuthorityWithLiveWriter(t *testing.T) {
 			case "record_is_directory":
 				require.NoError(t, os.Remove(record))
 				require.NoError(t, os.Mkdir(record, 0700))
-			case "dropped_record":
-				require.NoError(t, os.Remove(record))
 			case "mount_list_error":
 				dir := workspace.MountStoreDir(home)
 				require.NoError(t, os.Rename(dir, dir+"-unavailable"))

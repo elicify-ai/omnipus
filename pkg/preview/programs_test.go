@@ -39,6 +39,9 @@ func fakeOfficeProcess() int {
 	if strings.HasPrefix(string(behavior), "retry_") {
 		return officeRetryProcess(string(behavior))
 	}
+	if strings.HasPrefix(string(behavior), "scratch_") {
+		return scratchLinkOfficeProcess()
+	}
 	receipt := fakeOfficeReceipt{Args: os.Args[1:], Env: os.Environ(), PID: os.Getpid()}
 	if string(behavior) == "tree" {
 		child := exec.Command("/bin/sleep", "30")
