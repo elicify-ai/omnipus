@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -430,18 +431,9 @@ func (t *ExecTool) guardCommandClassified(ctx context.Context, command, cwd stri
 			continue
 		}
 
-		if strings.HasPrefix(raw, "//") && start > 0 {
-			before := cmd[:start]
-			isWebURL := false
-			for _, scheme := range webSchemes {
-				if strings.HasSuffix(before, scheme) {
-					isWebURL = true
-					break
-				}
-			}
-			if isWebURL {
-				continue
-			}
+		if strings.HasPrefix(raw, "//") && start > 0 &&
+			slices.ContainsFunc(webSchemes, func(scheme string) bool { return strings.HasSuffix(cmd[:start], scheme) }) {
+			continue
 		}
 
 		use.quotedStandAlone = !expansionDerived && standAloneQuotedLiteral(cmd, start, end) // T11 #882, conditions 1-3 and 6

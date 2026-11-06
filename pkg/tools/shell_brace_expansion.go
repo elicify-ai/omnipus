@@ -25,7 +25,11 @@
 // a script file named "-" or /dev/stdin, or a here-document behind a wrapper
 // such as env, command or nice). Unquoted separators end a simple command
 // even without whitespace (`true;bash -c ...`), and a shell's arguments are
-// read only from its own simple command.
+// read only from its own simple command. A backslash-newline line
+// continuation outside quotes in any text scanned here also answers "may
+// expand" (T11 round 7, S5c, founder 2026-11-01 "S5c A"): bash removes the
+// pair before it splits words, so `ba\<newline>sh` is the word bash, while
+// shellQuoteMask reads the pair as one escaped character and would hide it.
 //
 // Residual, stated: a non-shell program that hands its own data to a shell
 // (Python's os.system, perl system) is not followed; the guard reads command
@@ -73,6 +77,9 @@ func mayBraceExpand(cmd string, depth int) bool {
 		if b.shell && mayBraceExpand(cmd[b.start:b.end], depth+1) {
 			return true
 		}
+	}
+	if hasUnquotedLineContinuation(cmd, inBody) {
+		return true
 	}
 	// An unquoted command separator ends a simple command even without
 	// whitespace (`true;bash -c ...`). Each simple command is judged on its
@@ -125,6 +132,35 @@ func mayBraceExpand(cmd string, depth int) bool {
 		}
 		if simpleCommandMayBraceExpand(words, depth) {
 			return true
+		}
+	}
+	return false
+}
+
+// hasUnquotedLineContinuation reports whether cmd holds a backslash followed
+// by a newline outside quotes, using shellQuoteMask's quoting rules, ignoring
+// positions marked in skip (here-document bodies: a body fed to a shell is
+// scanned on its own by the recursion, a body fed to another program is
+// data). Bash removes such a pair before it identifies words (Bash Reference
+// Manual, "Escape Character"). Inside single quotes the pair is literal;
+// inside double quotes bash removes it too, but it only joins text within one
+// quoted word and creates no new word, so it does not count here.
+func hasUnquotedLineContinuation(cmd string, skip []bool) bool {
+	var quote byte // 0 = unquoted, '\'' or '"' = inside that quote
+	for i := 0; i < len(cmd); i++ {
+		ch := cmd[i]
+		if ch == '\\' && quote != '\'' {
+			if quote == 0 && !skip[i] && i+1 < len(cmd) && cmd[i+1] == '\n' {
+				return true
+			}
+			i++
+			continue
+		}
+		switch {
+		case quote == 0 && (ch == '\'' || ch == '"'):
+			quote = ch
+		case quote != 0 && ch == quote:
+			quote = 0
 		}
 	}
 	return false

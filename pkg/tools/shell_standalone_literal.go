@@ -33,6 +33,12 @@
 // dicts, f-strings) or a here-document fed to a non-shell program do not
 // disable the rule.
 //
+// The same scan also withholds the rule when any of that shell text holds a
+// backslash-newline line continuation outside quotes (T11 round 7, S5c,
+// founder 2026-11-01 "S5c A"): the shell joins the lines before it reads the
+// words, so a continued interpreter name such as `ba\<newline>sh` would
+// otherwise hide a shell reading its script from a pipe.
+//
 // The guard still reads command text only; this rule does not make it a
 // boundary. What stays refused is recorded in the spec ("Recorded
 // limitation").
