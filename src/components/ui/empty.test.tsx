@@ -38,7 +38,7 @@ describe('Empty — slot contract', () => {
   })
 
   it('the root carries the dashed-border centered layout from the contract', () => {
-    const { container } = render(<Empty data-testid="empty-root" />)
+    const { container } = render(<Empty />)
     const root = container.querySelector('[data-slot="empty"]')!
     expect(root).toHaveClass(
       'flex',
@@ -134,7 +134,7 @@ describe('EmptyTitle / EmptyDescription / EmptyContent — typography', () => {
 
   it('className passes through on the root', () => {
     // Passthrough class uses a token spacing value (closed scale, spacing lock).
-    const { container } = render(<Empty className="mt-[var(--space-4)]" data-testid="root" />)
+    const { container } = render(<Empty className="mt-[var(--space-4)]" />)
     const root = container.querySelector('[data-slot="empty"]')!
     expect(root).toHaveClass('mt-[var(--space-4)]')
   })
