@@ -13,9 +13,10 @@ import (
 )
 
 // TestGuard_HereDocumentLogicalBoundaries covers T11 section 3.1, FR-1/FR-2
-// and S5c. Boundary oracles are GNU Bash Reference Manual section 3.6.6 and
-// independent bash -n checks. Quoting, tab placement, backslash parity and
-// end-of-input distinguish document data from following shell text.
+// and S5c. Boundary oracles are GNU Bash Reference Manual section 3.6.6,
+// independent bash -n checks and harmless Bash/dash boundary probes. Quoting,
+// tab placement, backslash parity and end-of-input distinguish document data
+// from following shell text.
 // Fixtures reach only the real guard; no fixture command is executed.
 func TestGuard_HereDocumentLogicalBoundaries(t *testing.T) {
 	tool, cwd := guardFixture(t)
@@ -38,6 +39,9 @@ func TestGuard_HereDocumentLogicalBoundaries(t *testing.T) {
 	tail := `echo "echo {'/tm',}p/x" | ba` + continuation + "sh"
 	physical := "python3 <<EOF\nnote\nEOF\n" + tail
 	nested := "bash -c '" + strings.ReplaceAll(tail, "'", "'\\''") + "'"
+	backslashEnd := "EOF" + continuation
+	singleBackslash := "python3 <<'EOF\\'\nnote\n"
+	doubleBackslash := "python3 <<\"EOF\\\\\"\nnote\n"
 
 	cases := []struct {
 		name, cmd string
@@ -70,6 +74,16 @@ func TestGuard_HereDocumentLogicalBoundaries(t *testing.T) {
 			"python3 <<EOF\n" + literal + "EO" + continuation + "F", false, 1},
 		{"terminal pair at input end stays allowed",
 			"python3 <<EOF\n" + literal + "EOF" + continuation, false, 1},
+		{"continued delimiter word refuses",
+			"python3 <<EO" + continuation + "F\nnote\nEOF\n" + tail, true, 2},
+		{"single-quoted backslash physical end refuses",
+			singleBackslash + backslashEnd + tail, true, 2},
+		{"single-quoted backslash body stays allowed",
+			singleBackslash + joined + tail + "\n" + backslashEnd, false, 3},
+		{"double-quoted backslash physical end refuses",
+			doubleBackslash + backslashEnd + tail, true, 2},
+		{"double-quoted backslash body stays allowed",
+			doubleBackslash + joined + tail + "\n" + backslashEnd, false, 3},
 	}
 
 	ctx := context.Background()
