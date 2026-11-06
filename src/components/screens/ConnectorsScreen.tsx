@@ -29,6 +29,7 @@ import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
 import { channelSlug } from '@/components/ui/channel-logo'
 import {
   fetchChannels,
+  fetchChannelConfig,
   enableChannel,
   disableChannel,
   createChannelInstance,
@@ -81,9 +82,11 @@ function deriveBaseType(channel: ChannelEntry): string {
 // backend data). A bare-key entry that is neither enabled nor workspace-bound
 // is a template — "available", not configured; the moment the operator enables
 // it, binds it, or creates a namespaced <type>.<slug> instance it counts as
-// real. Known trade-off: a token saved on a bare stub left disabled AND
-// unbound keeps the type in the roster — acceptable, since Save & Enable is
-// the configure flow's primary action.
+// real. The list wire has no credential marker, so a token saved on such a
+// stub is indistinguishable from a never-configured one until GET
+// /channels/{id} returns the "[configured]" sentinel (#1569). That read is
+// limited to these disabled bare stubs. A sentinel promotes the stub to its
+// own card; without one it stays a roster tile.
 
 type ConfiguredChannelEntry = ChannelEntry & { instance_id: string }
 
@@ -92,6 +95,30 @@ type ConfiguredChannelEntry = ChannelEntry & { instance_id: string }
  *  the live `configuringChannel` state and its close-animation-surviving ref
  *  carry this same shape. */
 type ConfiguringChannel = { id: string; name: string; nativeAvailable?: boolean }
+
+const NO_SAVED_CREDENTIAL_IDS: readonly string[] = []
+
+// readSavedBareStubIds reads GET /channels/{id} for the disabled bare stubs
+// named in key (newline-separated). A "[configured]" sentinel means a
+// credential is saved. A failed read is logged and that stub stays
+// unconfigured, so it remains a roster tile instead of disappearing.
+async function readSavedBareStubIds(key: string): Promise<string[]> {
+  const saved: string[] = []
+  await Promise.all(key.split('\n').map(async (id) => {
+    try {
+      const config = await fetchChannelConfig(id)
+      if (configHasSavedCredential(config)) saved.push(id)
+    } catch (err) {
+      logError({
+        event: 'channelStubConfigReadFailed',
+        instanceId: id,
+        message: err instanceof Error ? err.message : 'config read failed',
+      })
+    }
+  }))
+  saved.sort()
+  return saved
+}
 
 function isTemplateStub(channel: ChannelEntry): boolean {
   // Bare-type key = no "." (ADR-029 instance grammar is <type>.<slug>; only
@@ -106,36 +133,52 @@ function isTemplateStub(channel: ChannelEntry): boolean {
   )
 }
 
-function isConfigured(channel: ChannelEntry): channel is ConfiguredChannelEntry {
-  return channel.instance_id !== undefined && !isTemplateStub(channel)
+// CONFIGURED_SENTINEL is the redacted-config marker (rest_channels.go::redactChannelConfig).
+// The same literal ChannelConfigPanel uses; it is never a secret value.
+const CONFIGURED_SENTINEL = '[configured]'
+
+function configHasSavedCredential(config: Record<string, unknown>): boolean {
+  return Object.values(config).some((value) => value === CONFIGURED_SENTINEL)
+}
+
+function isConfigured(channel: ChannelEntry, credentialSaved: ReadonlySet<string>): channel is ConfiguredChannelEntry {
+  if (channel.instance_id === undefined) return false
+  if (!isTemplateStub(channel)) return true
+  return credentialSaved.has(channel.instance_id)
 }
 
 /** "Available but unconfigured" — the static placeholder rows (no instance_id)
  *  plus the DefaultConfig bare-type template stubs (see isTemplateStub). */
 type UnconfiguredChannelEntry = ChannelEntry
 
-function isUnconfigured(channel: ChannelEntry): channel is UnconfiguredChannelEntry {
-  return channel.instance_id === undefined || isTemplateStub(channel)
+function isUnconfigured(channel: ChannelEntry, credentialSaved: ReadonlySet<string>): channel is UnconfiguredChannelEntry {
+  if (channel.instance_id === undefined) return true
+  return isTemplateStub(channel) && !credentialSaved.has(channel.instance_id)
 }
 
 // ── Channel instance row (US-9 AS-2: binding-first title) ────────────────────
 
 // Hoisted to module scope (A10) — a fixed lookup table, not per-render state.
-type ConnectionStatus = 'degraded' | 'enabled' | 'unconfigured'
+type ConnectionStatus = 'degraded' | 'enabled' | 'unconfigured' | 'off'
 
 const STATUS_BADGE: Record<ConnectionStatus, { variant: 'error' | 'success' | 'muted'; label: string }> = {
   degraded:     { variant: 'error',   label: 'Failed to start' },
   enabled:      { variant: 'success', label: 'Enabled' },
   unconfigured: { variant: 'muted',   label: 'Not configured' },
+  // A saved credential that is turned off is not "never configured".
+  off:          { variant: 'muted',   label: 'Off' },
 }
 
-function connectionStatusOf(channel: ChannelEntry): ConnectionStatus {
+function connectionStatusOf(channel: ChannelEntry, savedCredential: boolean): ConnectionStatus {
   if (channel.degraded === true) return 'degraded'
-  return channel.enabled ? 'enabled' : 'unconfigured'
+  if (channel.enabled) return 'enabled'
+  if (savedCredential) return 'off'
+  return 'unconfigured'
 }
 
 interface ChannelInstanceRowProps {
   channel: ConfiguredChannelEntry
+  savedCredential: boolean
   workspaceNameById: Map<string, string>
   agentNameById: Map<string, string>
   onConfigure: () => void
@@ -145,6 +188,7 @@ interface ChannelInstanceRowProps {
 
 function ChannelInstanceRow({
   channel,
+  savedCredential,
   workspaceNameById,
   agentNameById,
   onConfigure,
@@ -181,7 +225,7 @@ function ChannelInstanceRow({
   // empty ids. Never an invented or legacy destination.
   const isUnbound = routing?.bound === false
 
-  const connectionStatus = connectionStatusOf(channel)
+  const connectionStatus = connectionStatusOf(channel, savedCredential)
   const isDegraded = connectionStatus === 'degraded'
 
   return (
@@ -285,6 +329,7 @@ interface ChannelTypeGroupProps {
   baseType: string
   displayName: string
   instances: ConfiguredChannelEntry[]
+  credentialSaved: ReadonlySet<string>
   workspaceNameById: Map<string, string>
   agentNameById: Map<string, string>
   onConfigure: (channel: ConfiguredChannelEntry) => void
@@ -297,6 +342,7 @@ function ChannelTypeGroup({
   baseType,
   displayName,
   instances,
+  credentialSaved,
   workspaceNameById,
   agentNameById,
   onConfigure,
@@ -329,6 +375,7 @@ function ChannelTypeGroup({
             <ChannelInstanceRow
               key={instanceId}
               channel={channel}
+              savedCredential={credentialSaved.has(instanceId)}
               workspaceNameById={workspaceNameById}
               agentNameById={agentNameById}
               onConfigure={() => onConfigure(channel)}
@@ -356,9 +403,12 @@ function ChannelTypeGroup({
 interface ChannelRosterProps {
   types: UnconfiguredChannelEntry[]
   onConfigureType: (channel: UnconfiguredChannelEntry) => void
+  // The populated list already shows the disclaimer under the groups. The
+  // empty-state roster is the only surface, so it keeps its own.
+  includeDisclaimer?: boolean
 }
 
-function ChannelRoster({ types, onConfigureType }: ChannelRosterProps) {
+function ChannelRoster({ types, onConfigureType, includeDisclaimer = true }: ChannelRosterProps) {
   return (
     <div data-testid="channel-roster" className="space-y-[var(--space-3)]">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-[var(--space-2)]">
@@ -382,7 +432,7 @@ function ChannelRoster({ types, onConfigureType }: ChannelRosterProps) {
           )
         })}
       </div>
-      <BrandDisclaimer />
+      {includeDisclaimer && <BrandDisclaimer />}
     </div>
   )
 }
@@ -969,17 +1019,35 @@ export function ConnectorsScreen() {
     queryFn: fetchMailboxes,
   })
 
+  // Disabled bare stubs look like never-configured templates on the list.
+  // One config read each — and only those — separates a saved credential
+  // (#1569). channelsUpdatedAt re-reads them when the list itself refreshes.
+  const disabledBareStubKey = channels
+    .filter((channel) => isTemplateStub(channel))
+    .map((channel) => channel.instance_id as string)
+    .sort()
+    .join('\n')
+  const channelsUpdatedAt = channelsState?.dataUpdatedAt ?? 0
+  const { data: credentialSavedIds = NO_SAVED_CREDENTIAL_IDS } = useQuery({
+    queryKey: ['channel-stub-credentials', disabledBareStubKey, channelsUpdatedAt],
+    queryFn: () => readSavedBareStubIds(disabledBareStubKey),
+    enabled: disabledBareStubKey !== '',
+    retry: false,
+  })
+  const credentialSaved = useMemo(() => new Set(credentialSavedIds), [credentialSavedIds])
+
   // "Configured" (FR-008) = has a persisted instance — the backend only sets
   // instance_id on entries backed by a real config.Channels[] map key; the
-  // static "available but unconfigured" placeholder rows omit it.
-  const configuredInstances = channels.filter(isConfigured)
+  // static "available but unconfigured" placeholder rows omit it. A disabled
+  // bare stub joins this list only after its config read shows a saved credential.
+  const configuredInstances = channels.filter((channel) => isConfigured(channel, credentialSaved))
   // Every instance key currently in use — the create Sheet dedupes its
   // auto-generated key against this set.
   const existingInstanceIds = useMemo(
     () => new Set(allChannels.map((c) => c.instance_id).filter((v): v is string => v !== undefined)),
     [allChannels],
   )
-  const unconfiguredChannels = channels.filter(isUnconfigured)
+  const unconfiguredChannels = channels.filter((channel) => isUnconfigured(channel, credentialSaved))
 
   // Derive the set of known base types (both configured and connectable) for
   // the create-Sheet's type picker.
@@ -997,14 +1065,14 @@ export function ConnectorsScreen() {
       const baseType = deriveBaseType(c)
       if (!typeDisplayName.has(baseType)) typeDisplayName.set(baseType, c.name)
       if (c.native_available !== undefined) nativeAvailableByType.set(baseType, c.native_available)
-      if (isConfigured(c)) {
+      if (isConfigured(c, credentialSaved)) {
         const arr = groupedInstances.get(baseType) ?? []
         arr.push(c)
         groupedInstances.set(baseType, arr)
       }
     }
     return { typeDisplayName, nativeAvailableByType, groupedInstances }
-  }, [channels])
+  }, [channels, credentialSaved])
 
   const groupedTypeOrder = useMemo(() => Array.from(groupedInstances.keys()).sort(), [groupedInstances])
 
@@ -1099,6 +1167,7 @@ export function ConnectorsScreen() {
             baseType={baseType}
             displayName={typeDisplayName.get(baseType) ?? baseType}
             instances={groupedInstances.get(baseType) ?? []}
+            credentialSaved={credentialSaved}
             workspaceNameById={workspaceNameById}
             agentNameById={agentNameById}
             onConfigure={(channel) =>
@@ -1115,6 +1184,13 @@ export function ConnectorsScreen() {
             onAddAnother={openCreateFor}
           />
         ))}
+        {unconfiguredChannels.length > 0 && (
+          <ChannelRoster
+            types={unconfiguredChannels}
+            onConfigureType={configureType}
+            includeDisclaimer={false}
+          />
+        )}
         <BrandDisclaimer />
       </div>
     )
