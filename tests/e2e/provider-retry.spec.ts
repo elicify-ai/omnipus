@@ -9,11 +9,17 @@
  * Oracles come from the SPEC ONLY:
  *   - MIN-005: the injected 429 carries `retry-after: 3` (suite speed); the
  *     120 s formatting is component-level (ProviderRetryIndicator.test.tsx).
- *   - D3 row 1 template (§6): "«Provider» is busy. Retrying automatically in
- *     mm:ss (attempt n of max)." — asserted as the countdown line for
- *     attempt 2 of 3 and then attempt 3 of 3 (two 429s before the answer,
- *     per the mock's 429/429/200 script; C-8: attempt numbers are the call
- *     ABOUT to be made).
+ *   - D3 row 1 countdown template, under the per-error-code wording the
+ *     product shipped for #1280/#1478 (retryProblemClause in
+ *     ProviderRetryIndicator.tsx): a 429 renders "«Provider» is
+ *     rate-limiting requests right now. Retrying automatically in mm:ss
+ *     (attempt n of max)." — asserted as the countdown line for attempt 2
+ *     of 6 and then attempt 3 of 6 (two 429s before the answer, per the
+ *     mock's 429/429/200 script). The cap is 6 because this spec's gateway
+ *     is a SINGLE-candidate chain (GatewayProcess onboards no
+ *     fallback_models), so the issue #1280 last-candidate plan governs:
+ *     RetryPlanMaxAttempts = 6 (pkg/providers/retry_plan.go). Attempt
+ *     numbers are the call ABOUT to be made.
  *   - A-5: the terminal state is the assistant's answer replacing the
  *     indicator (no success-coloured "cleared" state in e2e either).
  *   - Scan 1 (DG-1/DG-2, MAJ-105): the raw provider body — here carrying the
@@ -252,7 +258,7 @@ test.describe('provider-messages row 20 (A-1, A-5, DG-1, DG-2, MIN-005)', () => 
       await input.fill('Say hello.');
       await input.press('Enter');
 
-      // ── A-1: the countdown line, D3 template, attempt 2 of 3 ──
+      // ── A-1: the countdown line, D3 template, attempt 2 of 6 ──
       // Scoped to the indicator's visible <span> (not its sr-only live-region
       // <div>, ProviderRetryIndicator.tsx): the same line is deliberately
       // rendered twice — once for screen readers, once for sighted users — so
@@ -262,7 +268,9 @@ test.describe('provider-messages row 20 (A-1, A-5, DG-1, DG-2, MIN-005)', () => 
         page
           .getByTestId('provider-retry-indicator')
           .locator('span')
-          .filter({ hasText: /is busy\. Retrying automatically in \d+:\d{2} \(attempt 2 of 3\)\./ }),
+          .filter({
+            hasText: /is rate-limiting requests right now\. Retrying automatically in \d+:\d{2} \(attempt 2 of 6\)\./,
+          }),
       ).toBeVisible({ timeout: 20_000 });
 
       // ── A-5: the terminal answer replaces the indicator ──
@@ -273,11 +281,11 @@ test.describe('provider-messages row 20 (A-1, A-5, DG-1, DG-2, MIN-005)', () => 
         () => (window as unknown as { __pmTexts?: string[] }).__pmTexts ?? [],
       );
       const timeline = texts.join('\n');
-      // First wait: attempt 2 of 3 ...
+      // First wait: attempt 2 of 6 ...
       expect(timeline).toContain('Retrying automatically in');
-      expect(timeline).toContain('(attempt 2 of 3)');
-      // ... second wait: attempt 3 of 3 (the second 429's frame) ...
-      expect(timeline).toContain('(attempt 3 of 3)');
+      expect(timeline).toContain('(attempt 2 of 6)');
+      // ... second wait: attempt 3 of 6 (the second 429's frame) ...
+      expect(timeline).toContain('(attempt 3 of 6)');
 
       // ── Row 14's wire contract, re-proven at the SPA boundary ──
       const retryFrames = frames
@@ -295,11 +303,12 @@ test.describe('provider-messages row 20 (A-1, A-5, DG-1, DG-2, MIN-005)', () => 
       ).toBeGreaterThanOrEqual(1);
 
       const first = retryFrames[0];
-      // C-8 / MIN-005 / MIN-104: the call ABOUT to be made, the wire
-      // retry-after, the chain max.
+      // #1280 plan / MIN-005 / MIN-104: the call ABOUT to be made, the wire
+      // retry-after, the chain max — for a single-candidate chain the plan
+      // cap is RetryPlanMaxAttempts = 6 (pkg/providers/retry_plan.go).
       expect(first['attempt']).toBe(2);
       expect(first['retry_after_seconds']).toBe(3);
-      expect(first['max_attempts']).toBe(3);
+      expect(first['max_attempts']).toBe(6);
       for (const field of ['session_id', 'turn_id', 'provider', 'model', 'sent_at', 'retry_at']) {
         expect(typeof first[field], `retry frame field ${field}`).toBe('string');
         expect(first[field], `retry frame field ${field} non-empty`).not.toBe('');
