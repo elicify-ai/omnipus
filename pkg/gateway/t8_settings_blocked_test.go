@@ -33,8 +33,11 @@ func TestThirdPartySettings_PathPresetAndPersonOnly(t *testing.T) {
 		}
 		detected, ok := t8SettingsRow(t, rows, "codex")["detected"].(map[string]any)
 		require.True(t, ok)
-		assert.Equal(t, bin, detected["path"])
-		_, err := os.Stat(marker)
+		// CliDetectEntry.path is fully resolved, including a symlinked temp root.
+		resolved, err := filepath.EvalSymlinks(bin)
+		require.NoError(t, err)
+		assert.Equal(t, resolved, detected["path"])
+		_, err = os.Stat(marker)
 		require.ErrorIs(t, err, os.ErrNotExist, "detection must never exec a candidate")
 		var disk map[string]any
 		require.NoError(t, json.Unmarshal(f.disk(t), &disk))
@@ -255,7 +258,9 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 		det, ok := t8SettingsRow(t, rows, "claude-code")["detected"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, link, det["link_path"])
-		assert.Equal(t, target, det["path"])
+		resolved, err := filepath.EvalSymlinks(target)
+		require.NoError(t, err)
+		assert.Equal(t, resolved, det["path"])
 	})
 }
 
