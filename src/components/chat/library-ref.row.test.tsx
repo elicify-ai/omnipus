@@ -3,7 +3,7 @@
  * live (InlineMedia) and after the same frame is applied as history.
  * Mounting AssistantMediaItem directly is not this test.
  */
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from '@/store/chat'
 import { emptySessionState } from '@/store/chat/session'
@@ -77,7 +77,7 @@ describe('library_ref reaches the real assistant row (BS-5.1)', () => {
   it.each([
     ['file', '/api/v1/media/plan.md', 'plan.md', 'notes/plan.md'],
     ['image', '/api/v1/media/pic.png', 'pic.png', 'pics/pic.png'],
-  ] as const)('shows the %s download address and Library target live and from history', (kind, url, filename, path) => {
+  ] as const)('shows the %s download address and Library target live and from history', async (kind, url, filename, path) => {
     // jsdom fires error for every image src and ChatImage then replaces the
     // element. Keep the address on the img so the assertion can see it.
     const src = vi.spyOn(HTMLImageElement.prototype, 'src', 'set').mockImplementation(function (this: HTMLImageElement, value: string) {
@@ -86,7 +86,7 @@ describe('library_ref reaches the real assistant row (BS-5.1)', () => {
     const message = deliver(kind, url, filename, path)
     live.id = message.id
     const { unmount } = render(<AssistantMessage />)
-    expectDownload(kind, url, filename)
+    await expectDownload(kind, url, filename)
     unmount()
 
     render(
@@ -97,18 +97,38 @@ describe('library_ref reaches the real assistant row (BS-5.1)', () => {
         pairedReplyToIds={new Set()}
       />,
     )
-    expectDownload(kind, url, filename)
+    await expectDownload(kind, url, filename)
     src.mockRestore()
   })
 })
 
-function expectDownload(kind: 'file' | 'image', url: string, filename: string) {
+async function expectDownload(kind: 'file' | 'image', url: string, filename: string) {
   expect(screen.getByRole('button', { name: `Open ${filename} in Library` })).toBeInTheDocument()
   if (kind === 'file') {
-    expect(screen.getByRole('link', { name: filename })).toHaveAttribute('href', url)
+    // docs/library.md: Open in Library sits next to the download button.
+    // docs/using-omnipus-ui.md: that button fetches the file. The address is
+    // the media URL (the old link href); a button cannot carry it.
+    await expectFileDownload(url, filename)
     return
   }
   const image = document.querySelector(`img[src="${url}"]`)
   expect(image, 'image address').not.toBeNull()
   expect(image).toHaveAttribute('aria-label', `View: ${filename}`)
+}
+
+/** Download is a button named "Download <filename>" that fetches the media URL. */
+async function expectFileDownload(url: string, filename: string) {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(new Blob(['bytes']), { status: 200 }))
+  const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:chat-file')
+  const revokeObjectUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  try {
+    fireEvent.click(screen.getByRole('button', { name: `Download ${filename}` }))
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(url, { credentials: 'same-origin' })
+    })
+  } finally {
+    fetchSpy.mockRestore()
+    createObjectUrl.mockRestore()
+    revokeObjectUrl.mockRestore()
+  }
 }

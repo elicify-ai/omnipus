@@ -61,16 +61,16 @@ func TestResolveHostPath_TurnWorkDirIsNotTheLibrary(t *testing.T) {
 func realTempDir(t *testing.T) string {
 	t.Helper()
 	raw := t.TempDir()
-	real, err := filepath.EvalSymlinks(raw)
+	resolved, err := filepath.EvalSymlinks(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return real
+	return resolved
 }
 
 func writeMount(t *testing.T, home, id, name, hostPath string) error {
 	t.Helper()
-	realHost, err := filepath.EvalSymlinks(hostPath)
+	resolvedHost, err := filepath.EvalSymlinks(hostPath)
 	if err != nil {
 		return err
 	}
@@ -78,14 +78,14 @@ func writeMount(t *testing.T, home, id, name, hostPath string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(recordPath), 0o755); err != nil {
-		return err
+	if mkdirErr := os.MkdirAll(filepath.Dir(recordPath), 0o755); mkdirErr != nil {
+		return mkdirErr
 	}
 	body, err := json.Marshal(map[string]any{
 		"workspace_id": id,
 		"mounts": []map[string]string{{
 			"name":      name,
-			"host_path": filepath.Clean(realHost),
+			"host_path": filepath.Clean(resolvedHost),
 		}},
 	})
 	if err != nil {

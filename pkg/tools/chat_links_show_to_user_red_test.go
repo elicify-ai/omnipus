@@ -62,19 +62,19 @@ func chatLinksLibraryWork(t *testing.T) string {
 	t.Helper()
 	home := os.Getenv("OMNIPUS_HOME")
 	if home == "" {
-		real, err := filepath.EvalSymlinks(t.TempDir())
+		resolved, err := filepath.EvalSymlinks(t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv("OMNIPUS_HOME", real)
-		home = real
+		t.Setenv("OMNIPUS_HOME", resolved)
+		home = resolved
 	}
 	work, err := workspace.SafeWorkDir(home, "W")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(work, 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(work, 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
 	return work
 }
@@ -556,4 +556,121 @@ func TestShowToUser_HardLinkAliasMatchesMissing(t *testing.T) {
 	if !chatLinksAuditMatch(rows, chatLinksAuditDenied) {
 		t.Fatalf("alias audit = %+v, want a denial with reason %q (BS-6.15)", rows, chatLinksAuditDenied)
 	}
+}
+
+// chatLinksResolvedHome is a temp OMNIPUS_HOME with symlinks evaluated, so a
+// carve-out path and the workspace work dir share one real root.
+func chatLinksResolvedHome(t *testing.T) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OMNIPUS_HOME", resolved)
+	return resolved
+}
+
+// FR-014 judges the secret carve-out on the real path, not only the cleaned
+// lexical path. The Library name is not a secret; the file it points at is
+// (BS-6.9 / SEC-3). This is an existing file, not a dangling link (S-02 stays
+// uncovered).
+func TestShowToUser_SymlinkToSecretMatchesMissing(t *testing.T) {
+	home := chatLinksResolvedHome(t)
+	secret := filepath.Join(home, "credentials.json")
+	if err := os.WriteFile(secret, []byte("SECRET-BYTES"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := chatLinksShowToUser(t, "BS-6.9 / SEC-3 / FR-014")
+	ctx, work := chatLinksOwnFile(t)
+	link := filepath.Join(work, "notes", "alias.md")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Fatal(err)
+	}
+	missing := tool.Execute(ctx, map[string]any{"ref": "gone-chat-links.md"})
+	res, rows := chatLinksAuditOnce(t, tool, chatLinksAuditRoot(ctx, "audit-symlink-secret"), "notes/alias.md")
+	chatLinksExactRefusal(t, res, chatLinksNotFound, "alias.md", "symlink to credentials")
+	if res != nil && (strings.Contains(res.ForLLM, "SECRET-BYTES") ||
+		strings.Contains(res.ForLLM, "credentials.json") ||
+		strings.Contains(res.ForLLM, chatLinksOutside)) {
+		t.Fatalf("symlink refusal leaks the secret or uses the outside sentence: %q (BS-6.9 / SEC-3)", res.ForLLM)
+	}
+	if missing == nil || res == nil || missing.ForLLM != res.ForLLM {
+		t.Errorf("symlink %q and missing %q must be byte-identical (BS-6.9)", textOf(res), textOf(missing))
+	}
+	if !chatLinksAuditMatch(rows, chatLinksAuditDenied) {
+		t.Fatalf("symlink audit = %+v, want a denial with reason %q (BS-6.15)", rows, chatLinksAuditDenied)
+	}
+}
+
+// A missing master.key reached through a directory symlink still cannot be
+// resolved as a path. FR-014 checks the real path of the deepest existing
+// ancestor, and B2 forbids the outside sentence for that missing secret.
+func TestShowToUser_MissingSecretUnderSymlinkedDirMatchesMissing(t *testing.T) {
+	home := chatLinksResolvedHome(t)
+	existing := filepath.Join(home, "credentials.json")
+	if err := os.WriteFile(existing, []byte("SECRET-BYTES"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := chatLinksShowToUser(t, "BS-6.9 / B2 / FR-014")
+	ctx, work := chatLinksOwnFile(t)
+	dirLink := filepath.Join(work, "notes", "box")
+	if err := os.Symlink(home, dirLink); err != nil {
+		t.Fatal(err)
+	}
+	missing := tool.Execute(ctx, map[string]any{"ref": "gone-chat-links.md"})
+	gotExisting := tool.Execute(ctx, map[string]any{"ref": existing})
+	res := tool.Execute(ctx, map[string]any{"ref": "notes/box/master.key"})
+	chatLinksExactRefusal(t, res, chatLinksNotFound, "master.key", "missing secret through a directory symlink")
+	chatLinksExactRefusal(t, gotExisting, chatLinksNotFound, "credentials.json", "existing carve-out")
+	if res == nil || strings.Contains(res.ForLLM, chatLinksOutside) {
+		t.Fatalf("missing secret through a symlink = %q, want the not-found sentence, never the outside sentence (BS-6.9 B2)", textOf(res))
+	}
+	if missing == nil || gotExisting == nil || res.ForLLM != missing.ForLLM || res.ForLLM != gotExisting.ForLLM {
+		t.Errorf("symlink-missing %q, missing %q, existing %q must be byte-identical (BS-6.9 B2)", textOf(res), textOf(missing), textOf(gotExisting))
+	}
+}
+
+// A symlink whose real path stays inside this workspace's Library is that
+// file. The open names the real file, not the symlink (resolver: EvalSymlinks,
+// then the path under the work dir). BS-6.10 / FR-014.
+func TestShowToUser_SymlinkToOwnFileOpensThatFile(t *testing.T) {
+	tool := chatLinksShowToUser(t, "BS-6.10 / FR-014")
+	ctx, work := chatLinksOwnFile(t)
+	target := filepath.Join(work, "notes", "plan.md")
+	link := filepath.Join(work, "notes", "via.md")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	chatLinksSetWatching(t, tool, func(string) bool { return true })
+	direct := tool.Execute(ctx, map[string]any{"ref": "notes/plan.md"})
+	if direct == nil || direct.IsError || !strings.Contains(direct.ForLLM, chatLinksAsked) {
+		t.Fatalf("the file itself = %q, want %q (BS-6.10); the symlink case is not comparable until this passes", textOf(direct), chatLinksAsked)
+	}
+	res := tool.Execute(ctx, map[string]any{"ref": "notes/via.md"})
+	if res == nil || res.IsError {
+		t.Fatalf("in-library symlink = %q, want success (BS-6.10)", textOf(res))
+	}
+	if !strings.Contains(res.ForLLM, chatLinksAsked) {
+		t.Fatalf("result = %q, want %q (BS-6.10; the real file is plan.md)", res.ForLLM, chatLinksAsked)
+	}
+	if strings.Contains(res.ForLLM, "via.md") {
+		t.Fatalf("result names the symlink instead of the real file: %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, chatLinksPlanLink) {
+		t.Fatalf("result = %q, want %q (FR-011)", res.ForLLM, chatLinksPlanLink)
+	}
+	if strings.Contains(res.ForLLM, chatLinksOutside) || strings.Contains(res.ForLLM, chatLinksNotFound) {
+		t.Fatalf("in-library symlink was refused: %q", res.ForLLM)
+	}
+	_, ws, rel, present := chatLinksOpenTarget(t, res)
+	if !present || ws != "W" || rel != "notes/plan.md" {
+		t.Fatalf("open target = present %v workspace %q path %q, want W notes/plan.md (FR-014)", present, ws, rel)
+	}
+}
+
+func textOf(res *ToolResult) string {
+	if res == nil {
+		return ""
+	}
+	return res.ForLLM
 }

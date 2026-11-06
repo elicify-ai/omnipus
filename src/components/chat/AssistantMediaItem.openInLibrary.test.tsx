@@ -4,8 +4,8 @@
  * the import fails with BLOCKED instead of a collection error.
  */
 import type { ReactNode } from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { useUiStore } from '@/store/ui'
 
 describe('AssistantMediaItem Open in Library', () => {
@@ -40,6 +40,26 @@ describe('AssistantMediaItem Open in Library', () => {
       id: 'library',
       context: { workspaceId: 'W', path: 'notes/plan.md' },
     })
-    expect(screen.getByRole('link', { name: 'plan.md' })).toHaveAttribute('href', '/api/v1/media/plan.md')
+    // A non-image file is a card with a download button that fetches the file
+    // (docs/using-omnipus-ui.md). The button has no href; the address is the
+    // media URL the card was given (BS-5.1: the card shows download).
+    await expectFileDownload('/api/v1/media/plan.md', 'plan.md')
   })
 })
+
+/** Download is a button named "Download <filename>" that fetches the media URL. */
+async function expectFileDownload(url: string, filename: string) {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(new Blob(['bytes']), { status: 200 }))
+  const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:chat-file')
+  const revokeObjectUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  try {
+    fireEvent.click(screen.getByRole('button', { name: `Download ${filename}` }))
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(url, { credentials: 'same-origin' })
+    })
+  } finally {
+    fetchSpy.mockRestore()
+    createObjectUrl.mockRestore()
+    revokeObjectUrl.mockRestore()
+  }
+}

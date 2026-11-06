@@ -105,11 +105,11 @@ func emitShowToUser(t *testing.T, sessionID string, res *tools.ToolResult) ToolE
 
 func realHome(t *testing.T) string {
 	t.Helper()
-	real, err := filepath.EvalSymlinks(t.TempDir())
+	resolved, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return real
+	return resolved
 }
 
 func mustLibrary(t *testing.T, home, id string) string {
@@ -118,8 +118,8 @@ func mustLibrary(t *testing.T, home, id string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(work, 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(work, 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
 	return work
 }

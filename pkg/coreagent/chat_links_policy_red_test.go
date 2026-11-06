@@ -15,8 +15,10 @@ import (
 )
 
 func TestShowToUser_PolicySeed(t *testing.T) {
-	if got := len(coreagent.AllStaticToolNames()); got != 120 {
-		t.Errorf("static catalog size = %d, want 120 after show_to_user (BS-6.14 test 12: 119 → 120)", got)
+	// BS-6.14 test 12 adds exactly one tool (show_to_user). The release
+	// catalog this branch merged is 120, so the pin is 121.
+	if got := len(coreagent.AllStaticToolNames()); got != 121 {
+		t.Errorf("static catalog size = %d, want 121 after show_to_user (release catalog 120 + this tool; BS-6.14 test 12)", got)
 	}
 	inCatalog := false
 	for _, name := range coreagent.AllStaticToolNames() {
