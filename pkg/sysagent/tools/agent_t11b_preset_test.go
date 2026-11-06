@@ -4,6 +4,7 @@
 package systools
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -55,8 +56,9 @@ func TestAgentTools_RejectPathOrPresetArguments(t *testing.T) {
 				require.NoError(t, rejectUnknownAgentFields(map[string]any{"name": "Codex worker"}, tool.allowed))
 				err := rejectUnknownAgentFields(map[string]any{field: "/agent/attempt"}, tool.allowed)
 				require.Error(t, err, "FR-11: %s must refuse %s, not silently discard or accept it", tool.name, field)
-				fe, ok := err.(*agentmutation.FieldError)
-				require.True(t, ok, "a forbidden write needs a field-attributed input error; got %T", err)
+				var fe *agentmutation.FieldError
+				require.True(t, errors.As(err, &fe), "a forbidden write needs a field-attributed input error; got %T", err)
+				require.Same(t, fe, err, "retain the original top-level FieldError assertion; a wrapper must not broaden this test")
 				require.Equal(t, agentmutation.InvalidInput, fe.Code)
 				require.Equal(t, []string{field}, fe.Fields)
 				require.Contains(t, fe.Error(), field)

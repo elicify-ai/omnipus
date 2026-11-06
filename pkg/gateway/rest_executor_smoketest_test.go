@@ -2,8 +2,8 @@
 // POST /api/v1/agents/executor-smoke-test (rest_executor_smoketest.go).
 //
 // Happy-path/fatal-error/timeout tests drive the REAL driver dispatch path
-// (runner.NewDriver → ClaudeDriver.Run) against a fake stub-script binary on
-// a test-controlled PATH (T11 C-B1 removes request cli_path), the same technique
+// (runner.NewDriver → ClaudeDriver.Run) against a stub-script binary saved in
+// Settings (T11 §4 / FR-9; no request cli_path), the same technique
 // pkg/agent/runner/lifecycle_test.go's writeStubScript uses — proving the
 // endpoint really calls through argv construction, NDJSON parsing, and event
 // draining, not a mocked shortcut. Rate-limit/in-flight-cap tests inject a
@@ -69,23 +69,21 @@ func postExecutorSmokeTest(t *testing.T, api *restAPI, body string) (int, gen.Ex
 	return w.Code, resp
 }
 
-// installSmokeTestDefaultCLI puts only this test's stub at the default Claude
-// binary name. No request chooses a path (T11 C-B1). The original PATH remains
-// behind the stub directory so the timeout script can use the system sleep.
-// The lookup control prevents accidentally executing a developer's real CLI.
-func installSmokeTestDefaultCLI(t *testing.T, body string) {
+// installSmokeTestSavedCLI saves only this test's executable in the real
+// Settings config (T11 §4 / FR-9). Neither the request nor PATH chooses it.
+// PATH is untouched, so the timeout script can still use the system sleep.
+func installSmokeTestSavedCLI(t *testing.T, api *restAPI, body string) {
 	t.Helper()
-	source := writeScript(t, body)
-	name := "claude"
+	program := writeScript(t, body)
 	if runtime.GOOS == "windows" {
-		name += ".cmd"
+		withExtension := program + ".cmd"
+		require.NoError(t, os.Rename(program, withExtension))
+		program = withExtension
 	}
-	program := filepath.Join(filepath.Dir(source), name)
-	require.NoError(t, os.Rename(source, program))
-	t.Setenv("PATH", filepath.Dir(program)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	resolved, err := exec.LookPath("claude")
-	require.NoError(t, err, "instrument: the default CLI must resolve to this test's stub")
+	resolved, err := exec.LookPath(program)
+	require.NoError(t, err, "instrument: the saved fixture is an executable file")
 	require.Equal(t, program, resolved, "instrument: never use a host-installed CLI")
+	t11bSaveProgram(t, api, "claude-code", program)
 }
 
 // --- (a) happy path: real driver dispatch against a fake claude-code binary ---
@@ -98,7 +96,7 @@ func TestPostAgentsExecutorSmokeTest_HappyPath(t *testing.T) {
 	defer cleanup()
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 
-	installSmokeTestDefaultCLI(t, `#!/bin/sh
+	installSmokeTestSavedCLI(t, api, `#!/bin/sh
 printf '%s\n' '{"type":"result","subtype":"success","result":"2"}'
 exit 0
 `)
@@ -123,7 +121,7 @@ func TestPostAgentsExecutorSmokeTest_FatalErrorEvent(t *testing.T) {
 	defer cleanup()
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 
-	installSmokeTestDefaultCLI(t, `#!/bin/sh
+	installSmokeTestSavedCLI(t, api, `#!/bin/sh
 printf '%s\n' '{"type":"result","subtype":"error","error":"boom happened"}'
 exit 0
 `)
@@ -232,7 +230,7 @@ func TestPostAgentsExecutorSmokeTest_Timeout(t *testing.T) {
 	// smokeTestDrainGrace backstop fired instead of the driver's own prompt
 	// timeout). With "exec", the sleeping process IS the direct child, so
 	// killing it closes its stdout fd immediately.
-	installSmokeTestDefaultCLI(t, `#!/bin/sh
+	installSmokeTestSavedCLI(t, api, `#!/bin/sh
 exec sleep 10
 `)
 	body := `{"cli":"claude-code"}`
@@ -257,10 +255,14 @@ func TestPostAgentsExecutorSmokeTest_MissingBinary(t *testing.T) {
 	defer cleanup()
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 
-	// A genuinely absent default program, not a rejected free-path request.
-	t.Setenv("PATH", t.TempDir())
-	_, lookupErr := exec.LookPath("claude")
-	require.Error(t, lookupErr, "instrument: the isolated PATH contains no default CLI")
+	// A nonempty saved Settings path whose file has disappeared, not an
+	// absent saved path or a rejected free-path request (T11 §4 / FR-9).
+	installDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	missing := filepath.Join(installDir, "missing-claude.cmd")
+	_, statErr := os.Stat(missing)
+	require.True(t, os.IsNotExist(statErr), "instrument: the configured file really is missing; stat=%v", statErr)
+	t11bSaveProgram(t, api, "claude-code", missing)
 	factoryCalls := 0
 	original := smokeTestNewDriver
 	smokeTestNewDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
@@ -272,8 +274,10 @@ func TestPostAgentsExecutorSmokeTest_MissingBinary(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	assert.False(t, resp.Ok)
 	require.NotNil(t, resp.Error)
+	assert.Equal(t, t11bMissingProgramText("Claude Code", missing), *resp.Error,
+		"this row must exercise a missing configured program, not an absent Settings path")
 	assert.Nil(t, resp.ResponseText)
-	assert.Zero(t, factoryCalls, "a missing default binary must fail before runner creation")
+	assert.Zero(t, factoryCalls, "a missing configured binary must fail before runner creation")
 }
 
 // --- consent: a permission request must be denied by default, not silently dropped ---
@@ -347,7 +351,7 @@ func TestPostAgentsExecutorSmokeTest_PermissionRequestDeniedByDefault(t *testing
 	defer cleanup()
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 
-	installSmokeTestDefaultCLI(t, "#!/bin/sh\nexit 0\n")
+	installSmokeTestSavedCLI(t, api, "#!/bin/sh\nexit 0\n")
 	fake := &permissionRequestFakeDriver{}
 	orig := smokeTestNewDriver
 	smokeTestNewDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
@@ -427,7 +431,7 @@ func TestPostAgentsExecutorSmokeTest_DangerousCLIArgFiltered_ClaudeCode(t *testi
 	defer cleanup()
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 
-	installSmokeTestDefaultCLI(t, "#!/bin/sh\nexit 0\n")
+	installSmokeTestSavedCLI(t, api, "#!/bin/sh\nexit 0\n")
 	fake := &capturingFakeDriver{}
 	orig := smokeTestNewDriver
 	smokeTestNewDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
@@ -607,7 +611,7 @@ func TestPostAgentsExecutorSmokeTest_InflightCapHandler(t *testing.T) {
 	// A real regular executable so the pre-spawn guard passes and control
 	// reaches the injected fake driver. Its body is never actually run —
 	// smokeTestNewDriver is swapped below.
-	installSmokeTestDefaultCLI(t, "#!/bin/sh\nexit 0\n")
+	installSmokeTestSavedCLI(t, api, "#!/bin/sh\nexit 0\n")
 	body := `{"cli":"claude-code"}`
 
 	entered := make(chan struct{}, 4)
@@ -696,7 +700,7 @@ func TestPostAgentsExecutorSmokeTest_RateLimited(t *testing.T) {
 	defer cleanup()
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 
-	installSmokeTestDefaultCLI(t, "#!/bin/sh\nexit 0\n")
+	installSmokeTestSavedCLI(t, api, "#!/bin/sh\nexit 0\n")
 	orig := smokeTestNewDriver
 	smokeTestNewDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
 		return &instantFakeDriver{text: "2"}, nil
@@ -748,7 +752,7 @@ func TestPostAgentsExecutorSmokeTest_AuditEmitted(t *testing.T) {
 	require.NoError(t, err)
 	api.auditor = logger
 
-	installSmokeTestDefaultCLI(t, `#!/bin/sh
+	installSmokeTestSavedCLI(t, api, `#!/bin/sh
 printf '%s\n' '{"type":"result","subtype":"success","result":"2"}'
 exit 0
 `)
@@ -812,7 +816,7 @@ func TestPostAgentsExecutorSmokeTest_WorkspaceRemoved_Success(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	installSmokeTestDefaultCLI(t, `#!/bin/sh
+	installSmokeTestSavedCLI(t, api, `#!/bin/sh
 printf '%s\n' '{"type":"result","subtype":"success","result":"2"}'
 exit 0
 `)
@@ -834,14 +838,32 @@ func TestPostAgentsExecutorSmokeTest_WorkspaceRemoved_Error(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	installSmokeTestDefaultCLI(t, `#!/bin/sh
-printf '%s\n' '{"type":"result","subtype":"error","error":"boom happened"}'
+	marker := filepath.Join(t.TempDir(), "fatal-run-workdir")
+	installSmokeTestSavedCLI(t, api, fmt.Sprintf(`#!/bin/sh
+# Record only an existing cwd, so absence of leftovers cannot pass before spawn.
+[ -d "$PWD" ] || exit 2
+pwd -P > %q
+printf 'existed\n' >> %q
+printf '%%s\n' '{"type":"result","subtype":"error","error":"boom happened"}'
 exit 0
-`)
+`, marker, marker))
 	body := `{"cli":"claude-code"}`
 	code, resp := postExecutorSmokeTest(t, api, body)
 	require.Equal(t, http.StatusOK, code)
 	assert.False(t, resp.Ok)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, agent.UserMessageForCode(agent.CodeUnknown), *resp.Error,
+		"fatal CLI output must reach the sanitizer, not an earlier path refusal")
+	raw, err := os.ReadFile(marker)
+	require.NoError(t, err, "the real fatal process must have observed its scratch workspace")
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	require.Len(t, lines, 2)
+	require.Equal(t, "existed", lines[1])
+	root, err := filepath.EvalSymlinks(filepath.Join(home, smokeTestRunsSubdir))
+	require.NoError(t, err)
+	assert.Equal(t, root, filepath.Dir(lines[0]), "the recorded cwd was an ephemeral smoke workspace")
+	_, err = os.Stat(lines[0])
+	assert.True(t, os.IsNotExist(err), "the workspace that actually ran must be removed; stat=%v", err)
 	assertNoSmokeTestRunsLeftover(t, home)
 }
 
@@ -900,7 +922,7 @@ func TestPostAgentsExecutorSmokeTest_WorkspaceRemoved_ClientDisconnect(t *testin
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	installSmokeTestDefaultCLI(t, "#!/bin/sh\nexit 0\n")
+	installSmokeTestSavedCLI(t, api, "#!/bin/sh\nexit 0\n")
 	const teardownDelay = 300 * time.Millisecond
 	fake := &delayedCloseFakeDriver{entered: make(chan struct{}), teardownDelay: teardownDelay}
 	orig := smokeTestNewDriver
@@ -1056,7 +1078,7 @@ func TestPostAgentsExecutorSmokeTest_AgentIDResolvesToRealWorkspace(t *testing.T
 	}
 	api, agentID, workspace := newTestRestAPIWithWorkspaceAgent(t)
 
-	installSmokeTestDefaultCLI(t, "#!/bin/sh\nexit 0\n")
+	installSmokeTestSavedCLI(t, api, "#!/bin/sh\nexit 0\n")
 	fake := &capturingFakeDriver{}
 	orig := smokeTestNewDriver
 	smokeTestNewDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
@@ -1113,7 +1135,7 @@ func TestPostAgentsExecutorSmokeTest_AgentIDIsCoreTeamMember_UsesWorkspaceShared
 	wsJSON := fmt.Sprintf(`{"id":"smoke-test-team-ws","core_team":[%q]}`, agentID)
 	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "smoke-test-team-ws.json"), []byte(wsJSON), 0o644))
 
-	installSmokeTestDefaultCLI(t, "#!/bin/sh\nexit 0\n")
+	installSmokeTestSavedCLI(t, api, "#!/bin/sh\nexit 0\n")
 	fake := &capturingFakeDriver{}
 	orig := smokeTestNewDriver
 	smokeTestNewDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
@@ -1180,7 +1202,7 @@ func runExecutorSmokeTestEphemeralScratchScenario(
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	installSmokeTestDefaultCLI(t, "#!/bin/sh\nexit 0\n")
+	installSmokeTestSavedCLI(t, api, "#!/bin/sh\nexit 0\n")
 	fake := &capturingFakeDriver{}
 	orig := smokeTestNewDriver
 	smokeTestNewDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {

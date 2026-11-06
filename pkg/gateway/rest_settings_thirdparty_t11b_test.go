@@ -17,7 +17,6 @@ import (
 	"testing"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/stretchr/testify/require"
@@ -30,42 +29,41 @@ var (
 
 const t11bSettingsURL = "/api/v1/settings/third-party-agents"
 
-func t11bSettingsAPI(t *testing.T) (*restAPI, *http.ServeMux, string) {
+func t11bSettingsAPI(t *testing.T) (*restAPI, *t8SettingsFixture, string) {
 	t.Helper()
-	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{
-			Users:    []config.UserConfig{{Username: "t11b-person", TokenHash: mustBcryptHash(t, t11bPersonToken)}},
-			CLIToken: &config.TokenEntry{Hash: mustBcryptHash(t, t11bCLIToken)},
-		},
-		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
-			Home: home, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096,
-		}},
-	}
-	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
-	api := &restAPI{agentLoop: al, homePath: home}
-	// Use the SAME config withAuth actually reads, not a substitute in the
-	// request context (which its config snapshot would overwrite).
-	cfg = al.GetConfig()
-	raw, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(home, "config.json"), raw, 0o600))
-	mux := http.NewServeMux()
-	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
-	return api, mux, home
+	f := t8SettingsAPI(t) // real login, issued cookies and production middleware
+	// Keep a real machine credential for the negative probe. The selector below
+	// chooses this credential; it never injects a person or CLI role into context.
+	hash := mustBcryptHash(t, t11bCLIToken)
+	require.NoError(t, f.api.agentLoop.MutateConfig(func(cfg *config.Config) error {
+		cfg.Gateway.CLIToken = &config.TokenEntry{Hash: hash}
+		return config.SaveConfig(f.api.configPath(), cfg)
+	}))
+	require.NoError(t, f.api.agentLoop.GetConfig().Gateway.VerifyCLIToken(t11bCLIToken),
+		"instrument: the negative probe presents a valid configured CLI token")
+	f.token = t11bCLIToken
+	return f.api, f, f.api.homePath
 }
 
-func t11bRequest(t *testing.T, mux *http.ServeMux, token, method, url, body string) *httptest.ResponseRecorder {
+func t11bRequest(t *testing.T, f *t8SettingsFixture, token, method, url, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(method, url, strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		r.Header.Set("Authorization", "Bearer "+token)
+	actor := "signed-out"
+	switch token {
+	case t11bPersonToken:
+		actor = "person"
+	case t11bCLIToken:
+		actor = "token"
+	case "":
+	default:
+		t.Fatalf("SETUP: unknown T11-B actor selector %q", token)
 	}
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, r)
+	var request any
+	if body != "" {
+		request = json.RawMessage(body) // retain the object, not a JSON-encoded string
+	}
+	// f.call keeps the issued CSRF pair for every probe, but includes the real
+	// session cookie only for the person. No authority boundary is bypassed.
+	w := f.call(t, method, url, request, actor)
 	if w.Code == http.StatusNotFound {
 		t.Fatalf("BLOCKED: %s %s handler not implemented — required by T11 §4 / FR-6, FR-7; body=%s", method, url, w.Body.String())
 	}
@@ -113,7 +111,7 @@ func t11bSettingsBody(t *testing.T, claude, codex, opencode gen.CliPreset) gen.T
 	return req
 }
 
-func t11bPut(t *testing.T, mux *http.ServeMux, req gen.ThirdPartyAgentSettings) *httptest.ResponseRecorder {
+func t11bPut(t *testing.T, mux *t8SettingsFixture, req gen.ThirdPartyAgentSettings) *httptest.ResponseRecorder {
 	t.Helper()
 	raw, err := json.Marshal(req)
 	require.NoError(t, err)

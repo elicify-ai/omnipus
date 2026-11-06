@@ -77,7 +77,7 @@ import { useUiStore } from '@/store/ui'
 // effective_preset_args / program_warning are the read-only fields T8's
 // contract defines (ExecutorConfig, 1243ed887).
 const NO_PATH_WARNING =
-  'This agent cannot run: no program path is set for Codex. A person can set it in Settings -> Third-party agents -> Codex.'
+  'This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex.'
 
 function codexWorker(overrides: Partial<NonNullable<Agent['executor']>> = {}): Agent {
   return {
@@ -182,7 +182,7 @@ describe('AgentProfile Runtime — the preset line is read-only and links to Set
 
     const block = screen.getByTestId('profile-cli-path')
     const link = within(block).getByRole('link', { name: /settings/i })
-    expect(link).toHaveAttribute('href', expect.stringContaining('settings'))
+    expect(link).toHaveAttribute('href', '/settings?tab=third-party-agents')
   })
 })
 

@@ -364,11 +364,11 @@ func TestR5_F1_ExecutorSmokeTestPreparationFailureIsFixedText(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 	r5Block(t, home)
-	stub := writeScript(t, "#!/bin/sh\nexit 0\n")
+	t11bSavedProgram(t, api, "claude-code")
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents/executor-smoke-test",
-		strings.NewReader(`{"cli":"claude-code","cli_path":`+strconvQuote(stub)+`}`))
+		strings.NewReader(`{"cli":"claude-code"}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.RemoteAddr = t.Name() + ":0"
 	api.HandleAgents(w, r)
@@ -378,6 +378,11 @@ func TestR5_F1_ExecutorSmokeTestPreparationFailureIsFixedText(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.False(t, resp.Ok)
 	require.NotNil(t, resp.Error, "the failure is still reported")
+	// Characterization pin for WHICH preparation branch ran; the independent
+	// R5 oracle remains ok:false plus no path/OS-detail leakage below. No spec
+	// supplies this branch's exact prose, so this is not copy verification.
+	assert.Equal(t, "could not prepare scratch workspace. Check disk space, permissions and the CLI installation; details are in the server log.", *resp.Error,
+		"must reach scratch preparation, not FR-9 or the removed cli_path request")
 	r5AssertClean(t, w.Body.String(), home)
 }
 

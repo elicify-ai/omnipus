@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,6 +48,7 @@ func postExecutorPreview(t *testing.T, api *restAPI, body any) (int, gen.Executo
 // endpoint must never diverge from it).
 func TestPostAgentsExecutorPreview_Claude_HappyPath(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
+	program := t11bSavedProgram(t, api, "claude-code")
 	code, resp := postExecutorPreview(t, api, map[string]any{
 		"cli":   "claude-code",
 		"model": "sonnet",
@@ -62,12 +64,14 @@ func TestPostAgentsExecutorPreview_Claude_HappyPath(t *testing.T) {
 		runner.RunOptions{Model: "sonnet", Input: "<prompt>", MaxTurns: mtiShippedDefaultGlobal},
 	)
 	assert.Equal(t, wantArgv, resp.Argv)
-	assert.Equal(t, "claude", resp.Binary)
+	assert.Equal(t, program, resp.Binary, "FR-9: the saved Settings path, never the default name")
 	assert.Equal(t, gen.ExecutorCommandPreviewResponsePromptDeliveryStdin, resp.PromptDelivery)
 	assert.Empty(t, resp.DroppedArgs)
 	assert.Nil(t, resp.ModelDroppedReason)
 
-	wantCmd := "claude"
+	// The fixture name includes a space: POSIX single-quote syntax protects
+	// the saved program as one shell token (including any apostrophe in TMPDIR).
+	wantCmd := "'" + strings.ReplaceAll(program, "'", "'\\''") + "'"
 	for _, a := range wantArgv {
 		wantCmd += " " + a
 	}
@@ -82,9 +86,11 @@ func TestPostAgentsExecutorPreview_Claude_HappyPath(t *testing.T) {
 
 // TestPostAgentsExecutorPreview_Codex_HappyPath mirrors the claude-code
 // happy-path test for codex with no free path (T11 C-B1), retaining the
-// default binary and flag-ordering guarantee (--ask-for-approval before exec).
+// flag-ordering guarantee (--ask-for-approval before exec). FR-9 requires the
+// person-saved Settings path instead of the superseded default-name fallback.
 func TestPostAgentsExecutorPreview_Codex_HappyPath(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
+	program := t11bSavedProgram(t, api, "codex")
 	model := "gpt-5-codex"
 	code, resp := postExecutorPreview(t, api, gen.ExecutorCommandPreviewRequest{
 		Cli: gen.ExternalCliToolCodex, Model: &model,
@@ -95,7 +101,7 @@ func TestPostAgentsExecutorPreview_Codex_HappyPath(t *testing.T) {
 		Model: "gpt-5-codex", Input: "<prompt>",
 	})
 	assert.Equal(t, wantArgv, resp.Argv)
-	assert.Equal(t, "codex", resp.Binary)
+	assert.Equal(t, program, resp.Binary, "FR-9: the saved Settings path, never the default name")
 	assert.Equal(t, gen.ExecutorCommandPreviewResponsePromptDeliveryStdin, resp.PromptDelivery)
 	assert.Empty(t, resp.DroppedArgs)
 	assert.Nil(t, resp.ModelDroppedReason)
@@ -106,6 +112,7 @@ func TestPostAgentsExecutorPreview_Codex_HappyPath(t *testing.T) {
 // tokens the response schema documents as the real prompt's position.
 func TestPostAgentsExecutorPreview_Opencode_HappyPath(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
+	program := t11bSavedProgram(t, api, "opencode")
 	code, resp := postExecutorPreview(t, api, map[string]any{
 		"cli":   "opencode",
 		"model": "anthropic/claude-3-5-sonnet",
@@ -116,7 +123,7 @@ func TestPostAgentsExecutorPreview_Opencode_HappyPath(t *testing.T) {
 		Model: "anthropic/claude-3-5-sonnet", Input: "<prompt>",
 	})
 	assert.Equal(t, wantArgv, resp.Argv)
-	assert.Equal(t, "opencode", resp.Binary)
+	assert.Equal(t, program, resp.Binary, "FR-9: the saved Settings path, never the default name")
 	assert.Equal(t, gen.ExecutorCommandPreviewResponsePromptDeliveryPositionalArgumentAfter, resp.PromptDelivery)
 	assert.Nil(t, resp.ModelDroppedReason)
 
@@ -144,6 +151,7 @@ func TestPostAgentsExecutorPreview_Opencode_HappyPath(t *testing.T) {
 // requirement driving this endpoint.
 func TestPostAgentsExecutorPreview_DangerousCLIArgDropped_WithReason(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
+	t11bSavedProgram(t, api, "claude-code")
 	code, resp := postExecutorPreview(t, api, map[string]any{
 		"cli":      "claude-code",
 		"cli_args": "--add-dir /tmp/x --dangerously-skip-permissions",
@@ -183,6 +191,7 @@ func TestPostAgentsExecutorPreview_DangerousCLIArgDropped_WithReason(t *testing.
 // BuildOpencodeArgs itself does internally.
 func TestPostAgentsExecutorPreview_Opencode_ModelDroppedReason(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
+	t11bSavedProgram(t, api, "opencode")
 	code, resp := postExecutorPreview(t, api, map[string]any{
 		"cli":   "opencode",
 		"model": "gpt-5-codex",
@@ -202,6 +211,7 @@ func TestPostAgentsExecutorPreview_Opencode_ModelDroppedReason(t *testing.T) {
 // check.
 func TestPostAgentsExecutorPreview_ClaudeCode_ModelDroppedReasonNeverSet(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
+	t11bSavedProgram(t, api, "claude-code")
 	code, resp := postExecutorPreview(t, api, map[string]any{
 		"cli":   "claude-code",
 		"model": "not-provider-shaped",
@@ -234,6 +244,7 @@ func mtiArgvTurnCap(argv []string) string {
 func TestPostAgentsExecutorPreview_MaxToolIterations_DefaultsToGlobalLimit(t *testing.T) {
 	mtiUnsetEnv(t)
 	api := executorDefaultsTestAPI(t)
+	t11bSavedProgram(t, api, "claude-code")
 	code, resp := postExecutorPreview(t, api, map[string]any{
 		"cli": "claude-code",
 	})
@@ -264,6 +275,7 @@ func TestPostAgentsExecutorPreview_MaxToolIterations_ExplicitZero_Refused(t *tes
 func TestPostAgentsExecutorPreview_MaxToolIterations_ExplicitValueRespected(t *testing.T) {
 	mtiUnsetEnv(t)
 	api := executorDefaultsTestAPI(t)
+	t11bSavedProgram(t, api, "claude-code")
 	code, resp := postExecutorPreview(t, api, map[string]any{
 		"cli":                 "claude-code",
 		"max_tool_iterations": 30,
@@ -279,6 +291,7 @@ func TestPostAgentsExecutorPreview_MaxToolIterations_ExplicitValueRespected(t *t
 func TestPostAgentsExecutorPreview_MaxToolIterations_AboveGlobalCapped(t *testing.T) {
 	mtiUnsetEnv(t)
 	api := executorDefaultsTestAPI(t)
+	t11bSavedProgram(t, api, "claude-code")
 	code, resp := postExecutorPreview(t, api, map[string]any{
 		"cli":                 "claude-code",
 		"max_tool_iterations": 300,

@@ -74,7 +74,7 @@ func TestPostAgentsExecutorSmokeTest_RawErrorLoggedServerSide(t *testing.T) {
 	})
 
 	const rawErr = "boom happened raw provider text 4f8c9"
-	installSmokeTestDefaultCLI(t, `#!/bin/sh
+	installSmokeTestSavedCLI(t, api, `#!/bin/sh
 printf '%s\n' '{"type":"result","subtype":"error","error":"boom happened raw provider text 4f8c9"}'
 exit 0
 `)
