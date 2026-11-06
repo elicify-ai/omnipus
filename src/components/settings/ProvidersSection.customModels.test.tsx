@@ -115,7 +115,7 @@ async function addModelAndSave() {
   fireEvent.click(screen.getByTestId(`add-model-${CUSTOM_ID}`))
   expect(screen.getByTestId(`model-list-${CUSTOM_ID}`), 'the draft must contain the entered slug').toHaveTextContent(MODEL_SLUG)
   fireEvent.click(screen.getByTestId(`save-provider-${CUSTOM_ID}`))
-  fireEvent.click(await screen.findByRole('button', { name: 'Save API key', exact: true }))
+  fireEvent.click(await screen.findByRole('button', { name: /^Save API key$/ }))
 }
 
 it('resends the custom base and protocol, but not the key, when saving models after normal creation', async () => {
@@ -138,7 +138,7 @@ it('resends the custom base and protocol, but not the key, when saving models af
   fireEvent.change(screen.getByTestId('custom-endpoint-protocol'), { target: { value: 'openai-compatible' } })
   fireEvent.change(screen.getByTestId('custom-endpoint-api-key'), { target: { value: TEST_KEY } })
   fireEvent.click(screen.getByTestId('custom-endpoint-submit'))
-  fireEvent.click(await screen.findByRole('button', { name: 'Save API key', exact: true }))
+  fireEvent.click(await screen.findByRole('button', { name: /^Save API key$/ }))
 
   await waitFor(() => expect(client.isMutating()).toBe(0))
   expect(await screen.findByTestId(`provider-row-${CUSTOM_ID}`), 'normal creation must produce a configured row').toBeVisible()
