@@ -75,7 +75,7 @@ The chat switch is the one place that can turn Auto-approve **on** when the glob
 
 - **The program and its standard parameters are person-only.** They are set in **Settings → Third-party agents** (see [settings](settings.md#third-party-agents)). An agent that sends a `cli_path` is refused, and a worker's kind and command-line tool cannot change after it is created.
 - **Environment values are always masked.** A worker's stored environment values are shown as `••••••` when they are read back, in the web app or through `get_agent`.
-- **Standard parameters are shown in clear and are not filtered.** Your value is passed exactly as typed, so keys and passwords belong in the worker's masked environment, never in the standard parameters.
+- **Standard parameters are shown in clear and the argument filter does not touch them.** Your value is passed to the tool exactly as typed, so keys and passwords belong in the worker's masked environment, never in the standard parameters.
 - **Agents can look, not change.** An agent can read a worker's saved program and parameters, read-only, and whether a run would start.
 
 ### Third-party agent programs and parameters
@@ -84,7 +84,7 @@ The program each external tool runs, and the standard parameters added to every 
 
 The standard parameters may hold **any** parameter the tool accepts; Omnipus does not filter them and shows no warning. **Omnipus does not sandbox external command-line tools**: they start in their working folder with a reduced environment and their web traffic routed through Omnipus's egress proxy, but no Omnipus file confinement applies to them, and a working folder is not a boundary. Claude Code already runs with its own permission prompts turned off. A Codex parameter such as `--dangerously-bypass-approvals-and-sandbox` also turns off Codex's own sandbox, and Codex can then read and write anything the user account running Omnipus can. Add such a parameter only if you accept that.
 
-Every external-worker run writes one audit entry with the program, the flags the safety filter dropped from the agent's own flags, and the standard parameters exactly as typed. A run that uses standard parameters also carries the note "person preset used; flag filter bypassed for preset parameters", even when no parameter is one the filter would drop. When a standard parameter is one the filter would drop from an agent, the entry also says so and gives the reason.
+Every external-worker run writes one audit entry with the program, the flags the safety filter dropped from the agent's own flags, and the standard parameters. The audit copy of the parameters passes through the sensitive-data filter: any value Omnipus holds as a secret is replaced by `[FILTERED]`, while the tool still receives what you typed. The filter only knows secrets Omnipus already holds, so a key that exists only in the parameters stays readable in the audit log. If the filter cannot run, the entry says the text was not recorded instead of holding clear text. A run that uses standard parameters also carries the note "person preset used; flag filter bypassed for preset parameters", even when no parameter is one the filter would drop. When a standard parameter is one the filter would drop from an agent, the entry also says so and gives the reason.
 
 ### Auto-approve and the kernel sandbox
 
