@@ -108,16 +108,30 @@ func (a *restAPI) enableChannel(w http.ResponseWriter, r *http.Request, channelI
 // one on reserves an unowned pairing attempt for its start (M1, M2): a
 // refusal changes nothing (409 pairing_in_progress, or 404 while it is being
 // deleted). An enable of a connector already on is idempotent and reserves
-// nothing.
+// nothing. A confirmed reload whose adapter is not running is not a plain
+// success (#1568): the enabled flag stays saved and the response is the
+// contract's 500 ErrorResponse with Configure's not-running sentence.
 func (a *restAPI) enableChannelOrdinary(w http.ResponseWriter, channelID string) {
 	var attemptID string
 	opts := channelEnableOptions{requireExisting: pairingCapable(channelID), attemptID: &attemptID}
 	outcome := a.applyChannelEnabled(w, channelID, true, opts)
 	switch {
 	case attemptID == "":
-		if outcome != enableFailed {
-			jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
+		if outcome == enableFailed {
+			return
 		}
+		// A confirmed reload can still leave the adapter not running (the
+		// start failed and was recorded). The enabled flag is already saved;
+		// do not answer the plain 200 success Configure refuses in the same
+		// case (#1568). An unconfirmed reload keeps today's reply: the start
+		// may still finish.
+		if outcome == enableConfirmed {
+			if msg := a.ordinaryEnableStartFailure(channelID); msg != "" {
+				jsonErr(w, http.StatusInternalServerError, msg)
+				return
+			}
+		}
+		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
 	case outcome == enableFailed:
 		a.agentLoop.ReleasePairing(channelID, attemptID)
 	case outcome == enableUnconfirmed:
@@ -128,6 +142,29 @@ func (a *restAPI) enableChannelOrdinary(w http.ResponseWriter, channelID string)
 		a.agentLoop.SettlePairing(channelID, attemptID)
 		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
 	}
+}
+
+// ordinaryEnableStartFailure is the sentence Configure shows when a confirmed
+// reload left the connection not running (channelConfigureOutcome.ts
+// notRunningText, fed by Availability). Empty means the adapter is running, or
+// no manager is wired to observe a start, so the caller keeps the plain
+// success. It never changes what was saved.
+func (a *restAPI) ordinaryEnableStartFailure(channelID string) string {
+	if a.agentLoop == nil {
+		return ""
+	}
+	mgr := a.agentLoop.GetChannelManager()
+	if mgr == nil {
+		return ""
+	}
+	avail := mgr.Availability(channelID)
+	if avail.State == channels.AvailabilityRunning {
+		return ""
+	}
+	if avail.Reason == "" {
+		return "Saved, but the connection is not running."
+	}
+	return "Saved, but the connection is not running: " + avail.Reason + "."
 }
 
 // admitOrdinaryPairing reserves the unowned attempt of a QR-paired connector
