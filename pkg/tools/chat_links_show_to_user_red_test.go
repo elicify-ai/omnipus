@@ -654,6 +654,14 @@ func TestShowToUser_InLibrarySymlinkRefusedAsNotRegular(t *testing.T) {
 	if !chatLinksAuditMatch(rows, chatLinksAuditDenied) {
 		t.Fatalf("symlink audit = %+v, want a denial with reason %q (BS-6.15)", rows, chatLinksAuditDenied)
 	}
+	// chatLinksAuditOnce closed its logger. The opens and the rate-limited
+	// call need their own live logger, read only after those calls return.
+	budgetDir := t.TempDir()
+	budgetLogger, err := audit.NewLogger(audit.LoggerConfig{Dir: budgetDir, RetentionDays: 1})
+	if err != nil {
+		t.Fatalf("audit.NewLogger: %v", err)
+	}
+	chatLinksSetAudit(t, tool, budgetLogger)
 	for i := 0; i < 5; i++ {
 		open := tool.Execute(ctx, map[string]any{"ref": "notes/plan.md"})
 		if open == nil || open.IsError || !strings.Contains(open.ForLLM, chatLinksAsked) {
@@ -667,6 +675,10 @@ func TestShowToUser_InLibrarySymlinkRefusedAsNotRegular(t *testing.T) {
 	sixth := tool.Execute(ctx, map[string]any{"ref": "notes/plan.md"})
 	if sixth == nil || sixth.ForLLM != chatLinksRate {
 		t.Fatalf("sixth plan.md open = %q, want %q (BS-6.13); the symlink refusal must have left all 5 slots", textOf(sixth), chatLinksRate)
+	}
+	budgetRows := readAuditRows(t, budgetLogger, budgetDir)
+	if !chatLinksAuditSuccess(budgetRows) || !chatLinksAuditMatch(budgetRows, chatLinksAuditRate) {
+		t.Fatalf("budget audit = %+v, want the plan.md opens and the rate-limit refusal (BS-6.15)", budgetRows)
 	}
 }
 
