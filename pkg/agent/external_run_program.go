@@ -6,6 +6,8 @@ package agent
 
 import (
 	"context"
+	"log/slog"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -88,11 +90,35 @@ func (ed *runExternalCLISubTurnState) reportProgramRefusal(text string) error {
 // run that applies preset parameters (T11 §4 Audit, FR-10).
 const presetUseNote = "person preset used; flag filter bypassed for preset parameters"
 
+// presetAuditWithheld stands in for preset text on the external_cli.run entry
+// when the sensitive-data filter cannot run: the entry says so rather than
+// holding clear text.
+const presetAuditWithheld = "[not recorded: the sensitive-data filter is unavailable]"
+
+// presetAuditFilter returns the function preset text goes through on its way
+// into the external_cli.run entry (T11 §4 Audit): the config's sensitive-data
+// replacer. Only the audit copy is filtered; the worker gets the preset as
+// typed. Unlike filterExternalString it does not honour
+// tools.filter_sensitive_data, because that switch off would mean clear text
+// in the audit log. With no config or replacer there is no safe way to filter,
+// so every value becomes presetAuditWithheld and the failure is logged.
+func (al *AgentLoop) presetAuditFilter() func(string) string {
+	var replacer *strings.Replacer
+	if cfg := al.GetConfig(); cfg != nil {
+		replacer = cfg.SensitiveDataReplacer()
+	}
+	if replacer == nil {
+		slog.Error("external_cli.run: sensitive-data filter unavailable; preset text withheld from the audit entry")
+		return func(string) string { return presetAuditWithheld }
+	}
+	return replacer.Replace
+}
+
 // auditRunSpawn writes the external_cli.run audit entry for one spawn
 // (r17 §3.10): agent, CLI, entered and resolved program, the agent flags the
-// filter drops, the preset as typed and presetUseNote when set, and
-// filter_bypassed_by_person_preset with the filter's reasons whenever a
-// preset token is one the filter would drop from an agent. Write failures
+// filter drops, the preset through presetAuditFilter and presetUseNote when
+// set, and filter_bypassed_by_person_preset with the filter's reasons whenever
+// a preset token is one the filter would drop from an agent. Write failures
 // are logged by audit.Emit.
 func (ed *runExternalCLISubTurnState) auditRunSpawn(ctx context.Context, cli string) {
 	key := runner.FilterKey(cli)
@@ -109,12 +135,13 @@ func (ed *runExternalCLISubTurnState) auditRunSpawn(ctx context.Context, cli str
 		"agent_flags_dropped": agentFlags,
 	}
 	if ed.presetText != "" {
-		fields["preset_args"] = ed.presetText
+		filter := ed.al.presetAuditFilter()
+		fields["preset_args"] = filter(ed.presetText)
 		fields["note"] = presetUseNote
 		if _, bypassed := runner.FilterDangerousCLIArgsDetailed(key, ed.presetArgs); len(bypassed) > 0 {
 			reasons := make([]string, 0, len(bypassed))
 			for _, d := range bypassed {
-				reasons = append(reasons, d.Flag+": "+d.Reason)
+				reasons = append(reasons, filter(d.Flag+": "+d.Reason))
 			}
 			fields["filter_bypassed_by_person_preset"] = true
 			fields["filter_reason"] = reasons
