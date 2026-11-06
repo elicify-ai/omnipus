@@ -141,4 +141,27 @@ describe('preview-group facts on shortened history pages (§5.2)', () => {
     expect(media).toHaveLength(2)
     expect(media.every((item) => item.pageNumber !== undefined)).toBe(true)
   })
+
+  it('two tool calls sharing the same page URLs stay two complete groups (§5.2, B-40)', () => {
+    // Both frames carry IDENTICAL page URLs — the shortened page re-delivers
+    // a second preview of the same unchanged document under another tool
+    // call. The dedup key is (tool_call_id, URL): URL-only dedupe would
+    // collapse the second group into the first and drop its pages.
+    act(() => {
+      useChatStore.getState().handleFrame(pageFrame('call-1', 'complete'))
+      useChatStore.getState().handleFrame(pageFrame('call-2', 'complete'))
+    })
+    const media = sessionMedia()
+    expect(media).toHaveLength(4) // 2 pages × 2 groups, not 2
+    expect(new Set(media.map((item) => item.toolCallId))).toEqual(new Set(['call-1', 'call-2']))
+    const blocks = partitionMedia(media)
+    const groups = blocks.filter((block) => block.kind === 'group')
+    expect(groups).toHaveLength(2)
+    for (const block of groups) {
+      if (block.kind !== 'group') continue
+      expect([...(block.group.pages.map((page) => page.pageNumber) as number[])].sort((a, b) => a - b)).toEqual([1, 2])
+      expect(block.group.preview?.page_count).toBe(12)
+      expect(block.group.preview?.source_name).toBe('report.docx')
+    }
+  })
 })
