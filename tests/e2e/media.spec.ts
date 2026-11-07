@@ -212,11 +212,16 @@ test(
     //   download event + path + read-back ............................... ~20s
     //   a11y scan ......................................................... 10s
     // Worst-case total: 35 + 60 + 188 + 15 + 20 + 10 = 328s.
-    // Previous budget (120s) predated the guard: a real (if slow) turn that
-    // called send_file AFTER the count assertion resolved on a mid-turn blip
-    // had no wall-clock left to reach the download-link assertion, and CI run
-    // 42334402301 (shard llm-light) burned two of its four attempts exactly
-    // there — reply arrived, link never did within 15s.
+    // The outer budget must also cover the guard below, which can add up to
+    // its full 188s allowance (8s gap + 180s follow-up ceiling) before the
+    // 15s link assertion even starts — hence 120s → 360s (328s + margin).
+    // VERIFIED FACTS (CI run 42334402301, shard llm-light): attempts 1-2
+    // failed at ~21s on the 15s download-link assertion — the old 120s outer
+    // budget had NOT fired — and attempts 3-4 failed on the 60s count
+    // assertion. Why the link never appeared is SUSPECTED (the mid-turn blip
+    // race the guard addresses), not established: the gateway log has no
+    // send_file error, which does not distinguish "never called" from
+    // "called without an error being logged".
     test.setTimeout(360_000);
 
     // Seed a real fixture file directly on disk inside the workspace's work/
@@ -257,18 +262,20 @@ test(
     // Guard against the premature-"complete" race described at the top of
     // waitForTurnFullyDone above — the SAME instrument gap test (a) already
     // fixed. The count assertion reads data-status, and the first LLM
-    // completion segment of this turn can end (done:true) before send_file
-    // has run at all, so `toHaveCount(countBefore + 1)` can resolve on that
-    // blip while the tool call is still ahead of the model. Without this
-    // wait, the download-link assertion's 15s budget starts from the blip and
-    // expires before send_file lands — a failure that looks like a missing
-    // media frame but is really a mid-turn snapshot. If the model never calls
-    // send_file, this wait ends with no follow-up call observed and the link
-    // assertion still fails below — the guard cannot turn a real
+    // completion segment of this turn CAN end (done:true) before send_file
+    // has run, so `toHaveCount(countBefore + 1)` can resolve on that blip
+    // while the tool call is still ahead of the model. SUSPECTED, not
+    // established for the incident below: without this wait, the
+    // download-link assertion's 15s budget would start from such a blip and
+    // expire before send_file lands — a failure that looks like a missing
+    // media frame but would really be a mid-turn snapshot. If the model never
+    // calls send_file, this wait ends with no follow-up call observed and the
+    // link assertion still fails below — the guard cannot turn a real
     // non-compliance into a pass, it only stops measuring from the wrong
-    // moment. (CI run 42334402301, shard llm-light: attempts 1-2 failed
-    // exactly at that 15s link budget with no send_file error anywhere in the
-    // gateway log.)
+    // moment. (CI run 42334402301, shard llm-light — verified: attempts 1-2
+    // failed at ~21s, at that 15s link budget, with no send_file error in the
+    // gateway log; missing logs do not distinguish "never called" from
+    // "called cleanly", so the blip mechanism remains a hypothesis.)
     await waitForTurnFullyDone(page, 8_000);
 
     // Structural assertion: the non-image branch of InlineMedia renders an

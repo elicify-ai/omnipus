@@ -107,6 +107,59 @@ export async function getCsrfToken(page: Page): Promise<string> {
   return csrfCookie.value
 }
 
+/**
+ * Durable record of one ACTUAL transport-level replay in apiFetch (its GET/PUT
+ * reset retry): a test annotation plus a small JSON attachment, plus one
+ * sanitized stderr line. A replay that recovers makes the test pass on its
+ * FIRST Playwright attempt, so the no-flaky gate — which only counts
+ * Playwright-level retries (stats.flaky) — sees nothing, and a fully green job
+ * uploads no failure artifacts; annotations and attachments land in the
+ * always-uploaded JSON report, and the stderr line survives in the job log.
+ * Records method, route, error message and attempt numbers only — never
+ * headers, cookies or request/response bodies.
+ */
+function recordTransportReplay(
+  method: string,
+  path: string,
+  error: string,
+  failedAttempt: number,
+): void {
+  const errBrief = error.slice(0, 200)
+  const description =
+    `${method} ${path}: attempt ${failedAttempt} failed with a transport reset ` +
+    `(${errBrief}); replayed once as attempt ${failedAttempt + 1} after 1000ms — ` +
+    'recovered transport failure, not a Playwright-level retry'
+  // Kept deliberately: the job log is retained even for a green run, so the
+  // warning is the one record that survives even a lost report upload.
+  console.warn(`[apiFetch] transport reset replayed: ${description}`)
+  try {
+    // test.info() throws outside a running test; apiFetch is also reachable
+    // from worker-level setup, where the retry still applies but there is no
+    // test result to attach evidence to.
+    const info = test.info()
+    info.annotations.push({ type: 'transport-reset-replayed', description })
+    info.attach(`transport-reset-replay-${method.toLowerCase()}-${Date.now()}.json`, {
+      body: JSON.stringify(
+        {
+          kind: 'transport-reset-replayed',
+          method,
+          path,
+          error: errBrief,
+          failed_attempt: failedAttempt,
+          retried_attempt: failedAttempt + 1,
+          delay_ms: 1_000,
+        },
+        null,
+        2,
+      ),
+      contentType: 'application/json',
+    })
+  } catch {
+    // No running test to record against — the replay already happened and the
+    // stderr line above is the remaining evidence.
+  }
+}
+
 export async function apiFetch<T = unknown>(
   page: Page,
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
@@ -115,22 +168,35 @@ export async function apiFetch<T = unknown>(
 ): Promise<ApiResult<T>> {
   // Transport-level retry, for exactly one failure class: the peer reset the
   // TCP connection before a response arrived ("socket hang up" / ECONNRESET).
-  // CI run 42334402301, shard llm-conformance-plan (job 128297656734):
-  // Conformance_t3b's PUT /api/v1/agents/{id}/tools died this way ~1-3s after
-  // the preceding GET on the same context succeeded, and the no-flaky gate
-  // failed the shard even though the retried attempt passed 7.3m later. The
-  // gateway log for that window shows no panic, no error and no connection
-  // close it could have chosen (gateway_panic.log empty; the reload that ran
-  // 05:17:58→05:18:28 does NOT restart the HTTP listener — stopAndCleanupServices
-  // skips the channel manager when isReload). The one connection-closing
-  // mechanism the server does have is the keep-alive idle deadline:
-  // Manager.SetupHTTPServer (pkg/channels/manager.go) sets ReadTimeout/Write-
-  // Timeout 30s and no IdleTimeout, so an idle keep-alive connection is closed
-  // after 30s — and a Node-side client (unlike a browser) does not transpar-
-  // ently replay a request that raced that close. This gateway's own SPA and
-  // every real client tolerate the same close; replaying the transport error
-  // here matches them instead of turning a normal server behaviour into a
-  // shard-failing flake.
+  //
+  // VERIFIED FACTS (CI run 42334402301, shard llm-conformance-plan, job
+  // 128297656734): Conformance_t3b's PUT /api/v1/agents/{id}/tools died with
+  // "socket hang up", the no-flaky gate failed the shard even though the
+  // retried attempt passed 7.3m later, and the gateway log for that window
+  // shows no panic, no error and no connection close it could have chosen
+  // (gateway_panic.log empty; the reload that ran 05:17:58→05:18:28 does NOT
+  // restart the HTTP listener — stopAndCleanupServices skips the channel
+  // manager when isReload). The job's call log has no GET/PUT start
+  // timestamps, so how long the PUT ran before the reset, and whether it rode
+  // a long-idle socket, are NOT established.
+  //
+  // SUSPECTED, NOT ESTABLISHED (hypotheses, ranked per the 2026-11-07 CHECK):
+  // (1) the config reload overlapping the in-flight PUT — a reload-backed
+  // write can be slower than the HTTP write deadline: Manager.SetupHTTPServer
+  // (pkg/channels/manager.go) sets ReadTimeout/WriteTimeout 30s while the
+  // reload wait allows up to 90s (pkg/gateway/gateway.go), so the response
+  // write can be abandoned on a live listener. See the focused gateway issue
+  // about reload-backed writes being slower than the HTTP write deadline.
+  // (2) the keep-alive idle close — SetupHTTPServer sets no IdleTimeout, so
+  // an idle keep-alive connection is closed after ~30s, and a Node-side
+  // client does not transparently replay a request that raced that close.
+  // Which mechanism (if either) fired in the incident is unverified.
+  //
+  // The replay is therefore a bounded workaround for either hypothesis, not
+  // a claim about what the server did or what other clients tolerate. Every
+  // actual replay is recorded as a test annotation + attachment
+  // (recordTransportReplay below) so a green run still shows the transport
+  // failure in the retained CI evidence.
   //
   // WHY ONLY GET AND PUT: GET is idempotent. The suite's single PUT is the
   // revision-guarded read-modify-write of PUT /api/v1/agents/{id}/tools
@@ -174,6 +240,10 @@ export async function apiFetch<T = unknown>(
       if (attempt === attempts - 1 || !TRANSPORT_RESET.test(msg)) {
         throw err
       }
+      // A retry was actually decided on: leave the durable record before the
+      // replay, so a successful recovery still shows in the report (a failed
+      // replay is visible anyway, and the annotation rides that failure too).
+      recordTransportReplay(method, path, msg, attempt + 1)
     }
   }
   // Unreachable: the loop either returns or throws; kept for control-flow analysis.
