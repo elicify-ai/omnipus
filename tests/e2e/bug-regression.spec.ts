@@ -578,6 +578,13 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
         [BUG3A_MARKER_TAB_B]: { kind: 'hold' },
       })
       let gw: GatewayProcess | null = null
+      // Hoisted so the finally can close every page this test opened BEFORE
+      // stopping the gateway (round-3 cleanup-order fix, diag D1): a page left
+      // open across gw.stop() retries against a stopped endpoint, and the
+      // failure trace then shows a misleading connection-refused burst that is
+      // the test's own teardown noise, not gateway deafness.
+      let page2: Page | null = null
+      let bodyError: unknown
       try {
         gw = await GatewayProcess.start({
           apiBase: mock.url,
@@ -589,7 +596,7 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
         // no second login (and the session-token slot stays single).
         await loginToGateway(page, gw)
         await awaitWorkspaceChrome(page)
-        const page2 = await context.newPage()
+        page2 = await context.newPage()
         await page2.goto(gw.baseURL)
         await awaitWorkspaceChrome(page2)
 
@@ -729,9 +736,35 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
             .filter((r) => r.marker === BUG3A_MARKER_TAB_A && r.answered).length,
           'tab A must have been answered exactly once at the mock',
         ).toBe(1)
+      } catch (err) {
+        bodyError = err
       } finally {
+        // Cleanup order (round-3 fix, diag D1): close every page this test
+        // opened BEFORE stopping the gateway. A page left open across
+        // gw.stop() retries against a stopped endpoint, and a failure's trace
+        // then shows a misleading connection-refused burst that is the test's
+        // own teardown noise, not gateway deafness. Close errors are
+        // collected — never swallowed — and the gateway stop below still runs
+        // when a close throws. The body's own error takes precedence over a
+        // cleanup error so triage keeps the real failure.
+        const closeErrors: unknown[] = []
+        for (const p of [page2, page]) {
+          if (!p) continue
+          try {
+            await p.close()
+          } catch (err) {
+            closeErrors.push(err)
+          }
+        }
         if (gw) await gw.stop()
         await mock.close()
+        if (bodyError !== undefined) throw bodyError
+        if (closeErrors.length > 0) {
+          throw new Error(
+            'cleanup: closing the test pages failed: ' +
+              closeErrors.map((e) => (e instanceof Error ? e.message : String(e))).join('; '),
+          )
+        }
       }
     },
   )
@@ -806,6 +839,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         [BUG5A_MARKER]: { kind: 'answer', text: BUG5A_ANSWER },
       })
       let gw: GatewayProcess | null = null
+      let bodyError: unknown
       try {
         gw = await GatewayProcess.start({
           apiBase: mock.url,
@@ -855,9 +889,30 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         // equality rejects that (CHECK F2).
         await expect(settledReplyWithText(page, BUG5A_ANSWER)).toBeVisible({ timeout: 15_000 })
         await expect(settledReplyBodies(page)).toHaveText([BUG5A_ANSWER], { timeout: 15_000 })
+      } catch (err) {
+        bodyError = err
       } finally {
+        // Cleanup order (round-3 fix, diag D1): close the page BEFORE stopping
+        // the gateway — a page left open across gw.stop() retries against a
+        // stopped endpoint and the trace then shows a misleading
+        // connection-refused burst. Close errors are collected — never
+        // swallowed — and the gateway stop still runs when a close throws.
+        // The body's own error takes precedence over a cleanup error.
+        const closeErrors: unknown[] = []
+        try {
+          await page.close()
+        } catch (err) {
+          closeErrors.push(err)
+        }
         if (gw) await gw.stop()
         await mock.close()
+        if (bodyError !== undefined) throw bodyError
+        if (closeErrors.length > 0) {
+          throw new Error(
+            'cleanup: closing the test pages failed: ' +
+              closeErrors.map((e) => (e instanceof Error ? e.message : String(e))).join('; '),
+          )
+        }
       }
     },
   )
@@ -880,6 +935,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         [BUG5B_MARKER_TWO]: { kind: 'answer', text: BUG5B_ANSWER_TWO },
       })
       let gw: GatewayProcess | null = null
+      let bodyError: unknown
       try {
         gw = await GatewayProcess.start({
           apiBase: mock.url,
@@ -933,9 +989,30 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
           [BUG5B_ANSWER_ONE, BUG5B_ANSWER_TWO],
           { timeout: 15_000 },
         )
+      } catch (err) {
+        bodyError = err
       } finally {
+        // Cleanup order (round-3 fix, diag D1): close the page BEFORE stopping
+        // the gateway — a page left open across gw.stop() retries against a
+        // stopped endpoint and the trace then shows a misleading
+        // connection-refused burst. Close errors are collected — never
+        // swallowed — and the gateway stop still runs when a close throws.
+        // The body's own error takes precedence over a cleanup error.
+        const closeErrors: unknown[] = []
+        try {
+          await page.close()
+        } catch (err) {
+          closeErrors.push(err)
+        }
         if (gw) await gw.stop()
         await mock.close()
+        if (bodyError !== undefined) throw bodyError
+        if (closeErrors.length > 0) {
+          throw new Error(
+            'cleanup: closing the test pages failed: ' +
+              closeErrors.map((e) => (e instanceof Error ? e.message : String(e))).join('; '),
+          )
+        }
       }
     },
   )
