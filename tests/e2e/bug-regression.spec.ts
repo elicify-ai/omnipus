@@ -478,18 +478,79 @@ async function loginToGateway(page: Page, gw: GatewayProcess): Promise<void> {
  *
  * The earlier probe waited for the "Show sidebar" hamburger, which is NOT a
  * readiness signal: SidebarShowButton renders null whenever the sidebar is
- * open or pinned (`const visible = (isPinned && canPin) || isOpen; if
- * (visible) return null`), and the sidebar store persists isOpen to
- * localStorage ('omnipus-sidebar', src/store/sidebar.ts) — shared across every
- * tab of the same browser context. After tab A's freshChat opens the sidebar,
- * tab B rehydrates it OPEN and the hamburger never exists there, so the old
- * probe timed out on the second tab DETERMINISTICALLY, whatever the machine
- * load (CHECK F3: the no-retry attempt failed on the second tab at load mean
- * 11.69 — state, not CPU).
+ * pinned and can dock, or open in this tab (`const visible = (isPinned &&
+ * canPin) || isOpen; if (visible) return null`). Corrected mechanism (CHECK
+ * round 2 — this comment previously said the store persists isOpen and that
+ * tab A's freshChat rehydrates tab B open; BOTH wrong):
+ * src/store/sidebar.ts::useSidebarStore persists ONLY isPinned (partialize,
+ * "Only persist the pin preference, not open/close state"), and both tabs'
+ * readiness waits run BEFORE either freshChat, so isOpen is false on both
+ * tabs at this point and the legitimate hamburger-free state here is a
+ * persisted pin. Which state actually hid the hamburger in CHECK round 1's
+ * second-tab timeout remains Unknown — what matters for readiness is that
+ * the hamburger is not guaranteed to exist while the top bar is.
  */
 async function awaitWorkspaceChrome(page: Page): Promise<void> {
   await page.getByTestId('workspace-top-bar').waitFor({ state: 'visible', timeout: 45_000 })
 }
+
+// ta4-cleanup-helper (probe-bound) start — settleCleanup owns the whole
+// clean-up error contract; the ta4 probe compiles this exact slice.
+interface CleanupStep {
+  name: string
+  run: () => Promise<void>
+}
+
+/**
+ * Run every clean-up step independently, then settle the error contract
+ * demanded by CHECK round 2 (R2-F1, R2-F2):
+ * - every step runs even when an earlier step rejects — each is awaited in
+ *   its own try and its failure collected, so no clean-up is skipped (R2-F2);
+ * - if the body failed, its own thrown value wins and is NEVER swallowed: a
+ *   rejection whose VALUE is undefined still throws (R2-F1 — the test tracks
+ *   failure with a separate boolean, not the value), rethrown verbatim when
+ *   no step failed, else as an AggregateError whose FIRST entry is the body
+ *   value with the step failures appended. AggregateError over annotations:
+ *   every failure stays in the thrown error itself, the helper needs no
+ *   Playwright scope, and no step failure can be dropped;
+ * - if only steps failed, one failure is rethrown verbatim, several as one
+ *   AggregateError;
+ * - on success it fulfils.
+ */
+async function settleCleanup(
+  body: { failed: boolean; error: unknown },
+  steps: CleanupStep[],
+): Promise<void> {
+  const stepErrors: unknown[] = []
+  const stepNames: string[] = []
+  for (const step of steps) {
+    try {
+      await step.run()
+    } catch (err) {
+      stepErrors.push(err)
+      stepNames.push(`${step.name}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  if (body.failed) {
+    if (stepErrors.length > 0) {
+      throw new AggregateError(
+        [body.error, ...stepErrors],
+        `the test body failed AND ${stepErrors.length} clean-up step(s) also failed (${stepNames.join('; ')})`,
+      )
+    }
+    throw body.error
+  }
+  if (stepErrors.length === 1) {
+    throw stepErrors[0]
+  }
+  if (stepErrors.length > 1) {
+    throw new AggregateError(
+      stepErrors,
+      `${stepErrors.length} clean-up steps failed (${stepNames.join('; ')})`,
+    )
+  }
+}
+// ta4-cleanup-helper end
 
 /**
  * A SETTLED assistant reply and nothing else: the assistantMessages shape
@@ -584,6 +645,10 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       // failure trace then shows a misleading connection-refused burst that is
       // the test's own teardown noise, not gateway deafness.
       let page2: Page | null = null
+      // bodyFailed is tracked SEPARATELY from the thrown value (CHECK R2-F1):
+      // a body rejection whose value is undefined must still count as a
+      // failure, never as success.
+      let bodyFailed = false
       let bodyError: unknown
       try {
         gw = await GatewayProcess.start({
@@ -737,34 +802,33 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
           'tab A must have been answered exactly once at the mock',
         ).toBe(1)
       } catch (err) {
+        bodyFailed = true
         bodyError = err
       } finally {
-        // Cleanup order (round-3 fix, diag D1): close every page this test
-        // opened BEFORE stopping the gateway. A page left open across
-        // gw.stop() retries against a stopped endpoint, and a failure's trace
-        // then shows a misleading connection-refused burst that is the test's
-        // own teardown noise, not gateway deafness. Close errors are
-        // collected — never swallowed — and the gateway stop below still runs
-        // when a close throws. The body's own error takes precedence over a
-        // cleanup error so triage keeps the real failure.
-        const closeErrors: unknown[] = []
-        for (const p of [page2, page]) {
-          if (!p) continue
-          try {
-            await p.close()
-          } catch (err) {
-            closeErrors.push(err)
-          }
-        }
-        if (gw) await gw.stop()
-        await mock.close()
-        if (bodyError !== undefined) throw bodyError
-        if (closeErrors.length > 0) {
-          throw new Error(
-            'cleanup: closing the test pages failed: ' +
-              closeErrors.map((e) => (e instanceof Error ? e.message : String(e))).join('; '),
-          )
-        }
+        // Pages still close BEFORE the gateway stops (round-3 diag D1); every
+        // clean-up step runs independently with its failure collected (CHECK
+        // R2-F2); the body's own thrown value — undefined included — always
+        // wins and is never swallowed (CHECK R2-F1). settleCleanup owns the
+        // full contract; see its doc comment.
+        await settleCleanup(
+          { failed: bodyFailed, error: bodyError },
+          [
+            {
+              name: 'close tab B page',
+              run: async () => {
+                if (page2) await page2.close()
+              },
+            },
+            { name: 'close tab A page', run: () => page.close() },
+            {
+              name: 'stop gateway',
+              run: async () => {
+                if (gw) await gw.stop()
+              },
+            },
+            { name: 'close mock provider', run: () => mock.close() },
+          ],
+        )
       }
     },
   )
@@ -839,6 +903,8 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         [BUG5A_MARKER]: { kind: 'answer', text: BUG5A_ANSWER },
       })
       let gw: GatewayProcess | null = null
+      // bodyFailed is tracked SEPARATELY from the thrown value (CHECK R2-F1).
+      let bodyFailed = false
       let bodyError: unknown
       try {
         gw = await GatewayProcess.start({
@@ -890,29 +956,26 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         await expect(settledReplyWithText(page, BUG5A_ANSWER)).toBeVisible({ timeout: 15_000 })
         await expect(settledReplyBodies(page)).toHaveText([BUG5A_ANSWER], { timeout: 15_000 })
       } catch (err) {
+        bodyFailed = true
         bodyError = err
       } finally {
-        // Cleanup order (round-3 fix, diag D1): close the page BEFORE stopping
-        // the gateway — a page left open across gw.stop() retries against a
-        // stopped endpoint and the trace then shows a misleading
-        // connection-refused burst. Close errors are collected — never
-        // swallowed — and the gateway stop still runs when a close throws.
-        // The body's own error takes precedence over a cleanup error.
-        const closeErrors: unknown[] = []
-        try {
-          await page.close()
-        } catch (err) {
-          closeErrors.push(err)
-        }
-        if (gw) await gw.stop()
-        await mock.close()
-        if (bodyError !== undefined) throw bodyError
-        if (closeErrors.length > 0) {
-          throw new Error(
-            'cleanup: closing the test pages failed: ' +
-              closeErrors.map((e) => (e instanceof Error ? e.message : String(e))).join('; '),
-          )
-        }
+        // Same contract as Bug-3-a (CHECK R2-F1/R2-F2): the page closes before
+        // the gateway stops, every clean-up step runs independently with
+        // failures collected, and the body's own thrown value — undefined
+        // included — always wins and is never swallowed.
+        await settleCleanup(
+          { failed: bodyFailed, error: bodyError },
+          [
+            { name: 'close page', run: () => page.close() },
+            {
+              name: 'stop gateway',
+              run: async () => {
+                if (gw) await gw.stop()
+              },
+            },
+            { name: 'close mock provider', run: () => mock.close() },
+          ],
+        )
       }
     },
   )
@@ -935,6 +998,8 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         [BUG5B_MARKER_TWO]: { kind: 'answer', text: BUG5B_ANSWER_TWO },
       })
       let gw: GatewayProcess | null = null
+      // bodyFailed is tracked SEPARATELY from the thrown value (CHECK R2-F1).
+      let bodyFailed = false
       let bodyError: unknown
       try {
         gw = await GatewayProcess.start({
@@ -990,29 +1055,26 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
           { timeout: 15_000 },
         )
       } catch (err) {
+        bodyFailed = true
         bodyError = err
       } finally {
-        // Cleanup order (round-3 fix, diag D1): close the page BEFORE stopping
-        // the gateway — a page left open across gw.stop() retries against a
-        // stopped endpoint and the trace then shows a misleading
-        // connection-refused burst. Close errors are collected — never
-        // swallowed — and the gateway stop still runs when a close throws.
-        // The body's own error takes precedence over a cleanup error.
-        const closeErrors: unknown[] = []
-        try {
-          await page.close()
-        } catch (err) {
-          closeErrors.push(err)
-        }
-        if (gw) await gw.stop()
-        await mock.close()
-        if (bodyError !== undefined) throw bodyError
-        if (closeErrors.length > 0) {
-          throw new Error(
-            'cleanup: closing the test pages failed: ' +
-              closeErrors.map((e) => (e instanceof Error ? e.message : String(e))).join('; '),
-          )
-        }
+        // Same contract as Bug-3-a (CHECK R2-F1/R2-F2): the page closes before
+        // the gateway stops, every clean-up step runs independently with
+        // failures collected, and the body's own thrown value — undefined
+        // included — always wins and is never swallowed.
+        await settleCleanup(
+          { failed: bodyFailed, error: bodyError },
+          [
+            { name: 'close page', run: () => page.close() },
+            {
+              name: 'stop gateway',
+              run: async () => {
+                if (gw) await gw.stop()
+              },
+            },
+            { name: 'close mock provider', run: () => mock.close() },
+          ],
+        )
       }
     },
   )
