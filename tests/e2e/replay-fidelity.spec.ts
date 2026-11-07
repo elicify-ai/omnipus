@@ -29,6 +29,7 @@ import { expectA11yClean } from './fixtures/a11y'
 // asserts the default policy directly — see its own comment.
 import { assistantMessages, chatInput, sendButton, waitForConnected } from './fixtures/selectors'
 import { assistantReplyChallenge } from './fixtures/assistant-reply-acceptance'
+import { attachWhileTurnActive } from './fixtures/turn-liveness'
 import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -777,8 +778,9 @@ test(
         turnStopButton,
         'PREREQUISITE: the turn is live — the composer Stop button has replaced ' +
           'Send while the turn streams (OmnipusComposer.tsx:1017/:1032). If this ' +
-          'fails, no turn ever started streaming and nothing below can measure a ' +
-          'terminal transition.',
+          'fails, no turn was OBSERVED streaming: it never started, or it errored, ' +
+          'was cancelled or completed before Stop could be observed (this check ' +
+          'cannot tell which), so nothing below can measure a terminal transition.',
       ).toBeVisible({ timeout: 10_000 })
 
       // ── Step 3: while the agent is still streaming, attach page2 ──
@@ -787,7 +789,14 @@ test(
       await page.waitForTimeout(800)
       const targetReady = readiness2.arm(sessionId)
       try {
-        const [, targetProof] = await Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()])
+        // Active-at-attach proof (CHECK 3 F1): the Stop marker must be visible
+        // immediately before AND after the real attach. If the turn ended in the
+        // 800ms gap or during the attach, this FAILS (naming which) instead of
+        // letting an ordinary completed-history replay satisfy the delivery
+        // assertions below (fixtures/turn-liveness.ts).
+        const [, targetProof] = await attachWhileTurnActive(turnStopButton, () =>
+          Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()]),
+        )
         expect(targetProof.request.session_id, 'the warm second viewer actually requests the target session').toBe(sessionId)
         expect(targetProof.completion.session_id, 'the real target catch-up completes before replay assertions').toBe(sessionId)
         await expect(page2.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({ timeout: 15_000 })
@@ -816,8 +825,9 @@ test(
         // alone does not distinguish them); it is NOT evidence of delivery loss.
         // Once it passes, the unchanged delivery assertions below have their
         // full windows to catch genuine delivery gaps (FR-I-009), and a model
-        // that finishes without emitting the sentinel now fails immediately and
-        // diagnosably instead of burning the whole window.
+        // that finishes without emitting the sentinel no longer waits on the
+        // turn's own clock; the unchanged nonce/count assertions still bound it
+        // at their own 180s windows.
         await expect(
           turnStopButton,
           'the turn reaches its terminal state (composer Stop unmounts as streaming ' +
@@ -836,14 +846,13 @@ test(
 
         // page2 attached AFTER the turn started, so the only way it could see the
         // assistant message is if live forwarding picked up where replay left off
-        // — that's what FR-I-009 demands and what we're verifying. We require at
-        // least 1.5s of wall-clock since send to confirm we observed a real
-        // mid-turn attach (the 800ms attach delay + page2 setup means anything
-        // above that floor proves page2 attached *after* the user message but
-        // *during* the turn). The previous 3s floor failed when GLM-5v-turbo
-        // streamed the 600-word reply in <3s, even though the mid-turn-attach
-        // contract was still satisfied (page2 attached at 800ms, well within
-        // the streaming window).
+        // — that's what FR-I-009 demands and what we're verifying. That the
+        // attach really overlapped the live turn is proved by the Stop-marker
+        // bracket around the attach above (attachWhileTurnActive), NOT by
+        // elapsed time: a wall-clock floor cannot order an attach against a
+        // turn's end. The 1.5s floor below is only a coarse sanity check that
+        // the 800ms attach delay plus page2 setup actually elapsed; the previous
+        // 3s floor failed when GLM-5v-turbo streamed the 600-word reply in <3s.
         const wallClock = Date.now() - sendStart
         expect(wallClock).toBeGreaterThanOrEqual(1_500)
 
