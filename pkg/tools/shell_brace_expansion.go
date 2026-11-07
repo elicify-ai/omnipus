@@ -43,6 +43,8 @@ package tools
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 )
 
 const maxBraceScanDepth = 4
@@ -113,21 +115,25 @@ func isShellOrEval(program string) bool {
 	return recognisedProgram(program) != ""
 }
 
+// recognisedProgramNames is braceExpandingShells plus eval, the names
+// recognisedProgram accepts. Order does not matter: no two of them are equal
+// under case folding.
+var recognisedProgramNames = func() []string {
+	names := make([]string, 0, len(braceExpandingShells)+1)
+	for name := range braceExpandingShells {
+		names = append(names, name)
+	}
+	return append(names, "eval")
+}()
+
 // recognisedProgram returns the recognised shell or eval name that word spells,
-// or "" for any other word. It is the one place these names are recognised.
-// Letter case is ignored, under the same simple case folding as
-// strings.EqualFold: a case-insensitive filesystem, such as the macOS default,
+// or "" for any other word. It is the one place these names are recognised
+// here, and it uses the same matcher as the command-rule interpreter check
+// (shellrule.FoldedName): letter case is ignored under simple Unicode case
+// folding, because a case-insensitive filesystem, such as the macOS default,
 // runs bash for `BASH` and for other case-folded spellings of the name.
 func recognisedProgram(word string) string {
-	if strings.EqualFold(word, "eval") {
-		return "eval"
-	}
-	for name := range braceExpandingShells {
-		if strings.EqualFold(word, name) {
-			return name
-		}
-	}
-	return ""
+	return shellrule.FoldedName(word, recognisedProgramNames)
 }
 
 // isRecognisedShell reports a word naming one of braceExpandingShells, in any

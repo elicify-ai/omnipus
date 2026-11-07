@@ -207,24 +207,28 @@ func unwrapWrappers(seg, head string, args []string, resolve HeadResolver) (fina
 // actually execute — the ONE thing findDenyBinaryWordIn/hasAskOrDenyRules
 // can inspect, since no head resolution can ever recover the real command
 // from it.
+//
+// Every name is recognised through FoldedName, in any letter case: the head
+// normaliser lowercases ASCII only, and a case-insensitive filesystem runs
+// the same interpreter for a non-ASCII case fold of its name.
 func detectInterpreterForm(head string, args []string) (scriptText string, ok bool) {
 	switch {
-	case head == "bash" || head == "sh" || head == "zsh":
+	case FoldedName(head, []string{"bash", "sh", "zsh"}) != "":
 		if len(args) >= 2 && args[0] == "-c" {
 			return strings.Join(args[1:], " "), true
 		}
 		return "", false
-	case head == "eval" || head == "source":
+	case FoldedName(head, []string{"eval", "source"}) != "":
 		if len(args) >= 1 {
 			return strings.Join(args, " "), true
 		}
 		return "", false
-	case head == "perl" || head == "ruby" || head == "node":
+	case FoldedName(head, []string{"perl", "ruby", "node"}) != "":
 		if len(args) >= 2 && args[0] == "-e" {
 			return strings.Join(args[1:], " "), true
 		}
 		return "", false
-	case strings.HasPrefix(head, "python"):
+	case hasFoldedPrefix(head, "python"):
 		if len(args) >= 2 && args[0] == "-c" {
 			return strings.Join(args[1:], " "), true
 		}
