@@ -90,20 +90,22 @@ func TestGuard_HereDocumentLogicalBoundaries(t *testing.T) {
 	physicalRefusal := tool.guardCommand(ctx, physical, cwd)
 	require.Contains(t, physicalRefusal, "path outside working dir", "FR-2/S5c: physical-boundary control must refuse")
 	require.Contains(t, physicalRefusal, `"/tm"`, "fixture: the reference refusal must concern the S5c literal")
-	literalRefusal := tool.guardCommand(ctx, "echo {a,b}; python3 -c \""+strings.TrimSuffix(literal, "\n")+"\"", cwd)
-	require.Contains(t, literalRefusal, "path outside working dir", "FR-2/S5: an unquoted brace withholds the literal exception")
-	require.Contains(t, literalRefusal, `"`+absent+`/v1/users"`, "fixture: the literal reference must concern the full absent path")
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			// Raw byte-pair counts include an escaped pair in the even-parity case.
 			require.Equal(t, c.rawPairs, strings.Count(c.cmd, continuation), "fixture: raw backslash/newline pair count")
 			t.Logf("T11_BOUNDARY name=%q refuse=%t command=%q", c.name, c.refuse, c.cmd)
+			if c.refuse && strings.Contains(c.cmd, absent+"/v1/users") {
+				// Q11 preserves this command's complete normal refusal. A
+				// one-line reference names a different command segment.
+				t11CheckHereDocRuleCase(t, tool, cwd, t11HereDocRuleCase{
+					c.name, c.cmd, false, false, "path outside working dir", absent + "/v1/users",
+				})
+				return
+			}
 			got := tool.guardCommand(ctx, c.cmd, cwd)
 			if c.refuse {
 				path, reference := "/tm", physicalRefusal
-				if strings.Contains(c.cmd, absent+"/v1/users") {
-					path, reference = absent+"/v1/users", literalRefusal
-				}
 				require.NotEmpty(t, got, "Q11/FR-2: the unsupported envelope or prior shell refusal uses the normal check\ncommand: %q", c.cmd)
 				require.Contains(t, got, "path outside working dir", "FR-2: retain the existing path refusal")
 				require.Contains(t, got, `"`+path+`"`, "FR-2: refusal concerns the specified literal")

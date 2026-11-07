@@ -76,6 +76,7 @@ func TestGuard_HereDocumentWholeCommandRule(t *testing.T) {
 	cases = append(cases, t11HereDocMarkerCases(absent)...)
 	cases = append(cases, t11HereDocBoundaryCases(absent)...)
 	cases = append(cases, t11HereDocNormalAllowances()...)
+	cases = append(cases, t11HereDocAdditionalCases(absent)...)
 	proofs := t11HereDocProofCases()
 	require.Len(t, proofs, 36, "fixture: preserve all 36 commissioned R11 proof inputs")
 	cases = append(cases, proofs...)
