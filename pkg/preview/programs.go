@@ -141,7 +141,7 @@ func (p protocolProgram) publishAndGo(proc *launcher.Process) error {
 	if err != nil {
 		return fmt.Errorf("identify: %w", err)
 	}
-	if err := p.call.running(id, proc.PID, append([]string{p.self, p.target}, p.extraExes...)); err != nil {
+	if err := p.call.running(id, append([]string{p.self, p.target}, p.extraExes...)); err != nil {
 		return fmt.Errorf("owner record: %w", err)
 	}
 	return proc.Go()
@@ -288,6 +288,13 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 			return pdf, hooks.unconfined, nil
 		}
 		if attempt == 1 && proc.ExitCode() == officeRestartExit {
+			// Spec §3.4 D6: the first start may have replaced <id>/work; a
+			// second start on a folder it chose would get sandbox rules built
+			// from that folder, so the call ends instead. Limit: a process that
+			// escaped the group could still swap it after this check.
+			if !o.call.workUnreplaced() {
+				return nil, hooks.unconfined, programFailure("conversion failed: scratch unavailable")
+			}
 			// "out/ holds no document.pdf before the retry" (D3.3): an
 			// unreadable leftover is removed; a removal failure ends here, and
 			// so does a link leading outside scratch (D3.7).
@@ -354,7 +361,7 @@ func (o officeConversion) startOnce(ctx context.Context, spec launcher.Spec) (*l
 	}
 	id, err := identify(proc.PID, o.self)
 	if err == nil {
-		err = o.call.running(id, proc.PID, append([]string{o.self, o.executable}, o.extraExes...))
+		err = o.call.running(id, append([]string{o.self, o.executable}, o.extraExes...))
 	}
 	if err == nil {
 		err = proc.Go()

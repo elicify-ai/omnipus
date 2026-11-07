@@ -62,6 +62,21 @@ Limits of this protection:
   folder while a preview runs is seen by the next preview, which refuses; the
   running preview is not stopped.
 
+If Omnipus stops during a preview, its next start ends the preview programs
+that were left running and removes their temporary folders. It acts only on a
+record Omnipus wrote outside the programs' own folder, and it stops a program
+only when its process ID, start time and program file all match that record.
+Limits of this cleanup:
+
+- On Windows, and when the programs run without the sandbox, nothing keeps the
+  programs from changing that record. This gives them nothing they could not
+  already do: they then run with Omnipus's own account and could stop those
+  processes and delete those folders themselves.
+- A program that left its process group, or a group whose first process has
+  already ended, is not stopped. A process that no longer matches its record
+  (for example a reused process ID) is not stopped either: its folder is kept
+  and the gateway log reports it at start.
+
 ## Landlock rights are gated by kernel version
 
 Omnipus asks the kernel for a set of Landlock rights when it applies the sandbox. Each right arrived with a specific kernel version, so an older kernel may not know all of them. The ABI (application binary interface — here, the version of Landlock's interface your kernel exposes) is reported by the kernel; Omnipus asks only for the rights that version supports.

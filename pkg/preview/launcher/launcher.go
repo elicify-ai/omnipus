@@ -15,8 +15,9 @@
 // If stdin closes before the go-byte, run-limited exits without starting
 // anything.
 //
-//   - Linux: address-space (or data) / CPU / file-size / open-file limits and a
-//     parent-death SIGKILL, then execve of the target. The parent starts the
+//   - Linux: data (RLIMIT_DATA, no address-space limit; spec §3.1 D1) / stack /
+//     CPU / file-size / open-file limits and a parent-death SIGKILL, then
+//     execve of the target. The parent starts the
 //     launcher in its own process group, which execve keeps.
 //   - macOS: CPU / file-size / open-file limits, then execve. macOS rejects
 //     address-space, data and resident-size limits (S-1), so memory is best
@@ -26,8 +27,11 @@
 //   - Windows: a Job Object with memory, process-count, CPU-time and
 //     kill-on-close limits; the launcher assigns itself, starts the target as
 //     its child inside the job, passes its own stdio handles through and
-//     relays the exit code. Killing the launcher, or the gateway's death,
-//     closes the job and ends the whole tree.
+//     relays the exit code. Killing the launcher closes the job and ends the
+//     whole tree. The job handle lives in the launcher, with nothing watching
+//     the gateway, so after the gateway's death a hanging target may run on
+//     until startup recovery stops the launcher or its CPU limit ends it
+//     (spec §3.3, §3.4 D7).
 package launcher
 
 import (

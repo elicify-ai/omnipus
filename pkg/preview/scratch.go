@@ -27,15 +27,17 @@ const (
 	stateDone      = "done"
 )
 
-const ownerFile = "owner.json"
+// A call folder holds the owner record and the scratch folder (spec §3.4 D1).
+const (
+	ownerFile = "owner.json"
+	workName  = "work"
+)
 
-// socketDirPattern is the only name recovery removes for a record's socket_dir:
-// exactly what call.makeSocketDir creates. The record sits in the scratch
-// folder, which the converter can rewrite, so a prefix check is not enough: a
-// path may start like a socket folder and climb out through "..". This name
-// has no such step and stays one level below /private/tmp, where the worst a
-// forged record can name is another preview's socket folder. A link there is
-// safe too: RemoveAll removes the link, never its target.
+// socketDirPattern only guards against a damaged record: the record is out of
+// the converter's reach (spec §3.4 D1), and its socket_dir is published
+// straight after call.makeSocketDir created that folder. A path of any other
+// shape — one that climbs out through "..", for one — is never removed. A link
+// at a matching name is safe too: RemoveAll removes the link, never its target.
 var socketDirPattern = regexp.MustCompile(`^/private/tmp/o-[0-9a-f]{8}$`)
 
 // procIdentity is what recovery must match before it kills anything.
@@ -45,33 +47,44 @@ type procIdentity struct {
 	Executable string `json:"executable"`
 }
 
-// ownerRecord is $OMNIPUS_HOME/tmp/preview/<id>/owner.json.
+// ownerRecord is $OMNIPUS_HOME/tmp/preview-calls/<id>/owner.json, beside the
+// scratch folder and out of the converter's reach (spec §3.4 D1). It names no
+// process group: recovery stops the launcher's own group, whose number is the
+// launcher's PID (D4).
 type ownerRecord struct {
 	State        string `json:"state"`
 	GatewayPID   int    `json:"gateway_pid"`
 	GatewayStart string `json:"gateway_start"`
 	// Launcher is set once run-limited is started, before its go-byte.
 	Launcher *procIdentity `json:"launcher,omitempty"`
-	PGID     int           `json:"pgid,omitempty"`
 	// Executables the launcher PID may legitimately show: the launcher
 	// itself before execve, the target after it, and a LibreOffice helper.
 	Executables []string `json:"executables,omitempty"`
 	SocketDir   string   `json:"socket_dir,omitempty"`
 }
 
-// scratchRoot is $OMNIPUS_HOME/tmp/preview.
-func scratchRoot(home string) string { return filepath.Join(home, "tmp", "preview") }
+// scratchRoot is $OMNIPUS_HOME/tmp/preview-calls, the folder holding one call
+// folder per call (spec §3.4 D1). The name is new on purpose: a converter
+// could write the old tmp/preview/<id>/owner.json, so that root is never read.
+func scratchRoot(home string) string { return filepath.Join(home, "tmp", "preview-calls") }
 
-// call is one preview call's scratch folder and owner record.
+// call is one preview call: its call folder <id> (gateway only) holding the
+// owner record and its scratch folder <id>/work (spec §3.4 D1).
 type call struct {
+	// dir is the scratch folder <id>/work, all the converter can write.
 	dir string
 	// realDir is dir with its links resolved, recorded before the first start.
 	realDir string
 	// root is the handle on dir, opened before the first start; it stays open
 	// until finish. After any LibreOffice start the output read, the retry
-	// cleanup, the profile reseed and the end-of-call removal go through it
-	// (spec §3.1 D3.7). The owner record does not: publish writes it by path.
-	root       *os.Root
+	// cleanup, the profile reseed and the emptying of scratch go through it
+	// (spec §3.1 D3.7).
+	root *os.Root
+	// callDir is the call folder <id>; callRoot is its handle, opened before
+	// the first start. The final removal of work goes through callRoot (§3.4
+	// D5); publish writes the record by path, outside the converter's reach.
+	callDir    string
+	callRoot   *os.Root
 	socketDir  string
 	mu         sync.Mutex
 	rec        ownerRecord
@@ -106,53 +119,73 @@ func randomID(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// newCall creates the scratch folder and publishes the preparing record
-// (AD-8 step 1).
+// newCall creates the call folder, publishes the preparing record, creates
+// the scratch folder and opens both handles (AD-8 step 1, spec §3.4 D2). No
+// program has started yet, so nothing here can be raced by the converter.
 func newCall(home string, gatewayPID int, gatewayStart string) (*call, error) {
 	id, err := randomID(8)
 	if err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(scratchRoot(home), id)
-	if err = os.MkdirAll(dir, 0o700); err != nil {
+	if err = os.MkdirAll(scratchRoot(home), 0o700); err != nil {
 		return nil, fmt.Errorf("create preview scratch: %w", err)
 	}
-	realDir, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, fmt.Errorf("resolve preview scratch: %w", err)
+	callDir := filepath.Join(scratchRoot(home), id)
+	if err = os.Mkdir(callDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create preview scratch: %w", err)
 	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, fmt.Errorf("open preview scratch: %w", err)
-	}
-	c := &call{dir: dir, realDir: realDir, root: root, rec: ownerRecord{State: statePreparing, GatewayPID: gatewayPID, GatewayStart: gatewayStart}}
-	if err = c.publish(); err != nil {
-		_ = root.Close()
-		_ = os.RemoveAll(dir)
+	c := &call{dir: filepath.Join(callDir, workName), callDir: callDir, rec: ownerRecord{State: statePreparing, GatewayPID: gatewayPID, GatewayStart: gatewayStart}}
+	if err = c.open(); err != nil {
+		_ = os.RemoveAll(callDir)
 		return nil, err
 	}
 	return c, nil
 }
 
+// open publishes the preparing record, creates the scratch folder and opens
+// both handles, in the order of spec §3.4 D2. On failure every handle it
+// opened is closed again; the caller removes the call folder.
+func (c *call) open() error {
+	if err := c.publish(); err != nil {
+		return err
+	}
+	if err := os.Mkdir(c.dir, 0o700); err != nil {
+		return fmt.Errorf("create preview scratch: %w", err)
+	}
+	realDir, err := filepath.EvalSymlinks(c.dir)
+	if err != nil {
+		return fmt.Errorf("resolve preview scratch: %w", err)
+	}
+	callRoot, err := os.OpenRoot(c.callDir)
+	if err != nil {
+		return fmt.Errorf("open preview scratch: %w", err)
+	}
+	root, err := callRoot.OpenRoot(workName)
+	if err != nil {
+		_ = callRoot.Close()
+		return fmt.Errorf("open preview scratch: %w", err)
+	}
+	c.realDir, c.callRoot, c.root = realDir, callRoot, root
+	return nil
+}
+
+// publish writes the owner record to <id>/owner.json, a folder the converter
+// cannot write (spec §3.4 D5).
 func (c *call) publish() error {
 	data, err := json.Marshal(c.rec)
 	if err != nil {
 		return err
 	}
-	return fileutil.WriteFileAtomic(filepath.Join(c.dir, ownerFile), data, 0o600)
+	return fileutil.WriteFileAtomic(filepath.Join(c.callDir, ownerFile), data, 0o600)
 }
 
 // running records the launcher identity before the go-byte (AD-8 step 3).
-func (c *call) running(id procIdentity, pgid int, executables []string) error {
+func (c *call) running(id procIdentity, executables []string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.rec.State = stateRunning
 	c.rec.Launcher = &id
-	c.rec.PGID = pgid
 	c.rec.Executables = executables
-	c.rec.SocketDir = c.socketDir
 	return c.publish()
 }
 
@@ -163,14 +196,14 @@ func (c *call) idle() error {
 	defer c.mu.Unlock()
 	c.rec.State = statePreparing
 	c.rec.Launcher = nil
-	c.rec.PGID = 0
 	c.rec.Executables = nil
 	return c.publish()
 }
 
-// finish marks the call done and removes its folders (AD-8 step 5). A
-// removal failure is logged; startup recovery retries it. Only the first call
-// acts: the handle on the scratch folder is closed after it.
+// finish marks the call done and removes its folders (AD-8 step 5, spec §3.4
+// D2): the socket folder, scratch, the record and the call folder. A removal
+// failure is logged and keeps the record, so startup recovery retries it. Only
+// the first call acts: both handles are closed after it.
 func (c *call) finish() {
 	c.mu.Lock()
 	if c.finished {
@@ -194,6 +227,8 @@ func (c *call) finish() {
 
 // makeSocketDir creates the macOS LibreOffice socket folder: a per-call 0700
 // /private/tmp/o-<8 random> (shorter than the 104-byte socket path limit).
+// The record names it at once (spec §3.4 D2), so a crash from here on still
+// lets recovery remove it; if that publish fails the folder is removed again.
 func (c *call) makeSocketDir() (string, error) {
 	id, err := randomID(4)
 	if err != nil {
@@ -202,6 +237,13 @@ func (c *call) makeSocketDir() (string, error) {
 	dir := filepath.Join("/private/tmp", "o-"+id)
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rec.SocketDir = dir
+	if err := c.publish(); err != nil {
+		c.rec.SocketDir = ""
+		return "", errors.Join(err, os.Remove(dir))
 	}
 	c.socketDir = dir
 	return dir, nil
@@ -224,7 +266,7 @@ type RecoveryReport struct {
 	Warnings []string
 }
 
-// Recover runs AD-8 startup recovery over $OMNIPUS_HOME/tmp/preview. self
+// Recover runs AD-8 startup recovery over $OMNIPUS_HOME/tmp/preview-calls. self
 // identifies this gateway so its own folders are never touched.
 func Recover(home string, selfPID int, selfStart string) RecoveryReport {
 	var rep RecoveryReport
@@ -247,6 +289,8 @@ func Recover(home string, selfPID int, selfStart string) RecoveryReport {
 	return rep
 }
 
+// recoverOne handles one call folder <id>. It reads only <id>/owner.json and
+// nothing inside work as data (spec §3.4 D3).
 func recoverOne(dir string, selfPID int, selfStart string, rep *RecoveryReport) {
 	name := filepath.Base(dir)
 	data, err := os.ReadFile(filepath.Join(dir, ownerFile))
@@ -281,7 +325,10 @@ func recoverOne(dir string, selfPID int, selfStart string, rep *RecoveryReport) 
 				rep.Warnings = append(rep.Warnings, fmt.Sprintf("preview folder %s kept: process %d does not match its record (PID reused?)", name, rec.Launcher.PID))
 				return
 			}
-			killGroup(rec.PGID)
+			// The launcher leads its own group, so the group's number is its
+			// PID (spec §3.4 D4). killGroup is a no-op on Windows, where
+			// killPID ends the launcher and its Job Object (D7).
+			killGroup(rec.Launcher.PID)
 			killPID(rec.Launcher.PID)
 			if !waitGone(rec.Launcher.PID, 5*time.Second) {
 				rep.Warnings = append(rep.Warnings, fmt.Sprintf("preview folder %s kept: process %d did not end", name, rec.Launcher.PID))
@@ -294,11 +341,36 @@ func recoverOne(dir string, selfPID int, selfStart string, rep *RecoveryReport) 
 		return
 	}
 	removeRecordedSocketDir(rec.SocketDir, name, rep)
-	if err := os.RemoveAll(dir); err != nil {
+	if err := removeCallFolder(dir); err != nil {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("preview folder %s could not be removed: %v", name, err))
 		return
 	}
 	rep.Removed++
+}
+
+// removeCallFolder removes a dead call's folder in the order of spec §3.4 D3:
+// work and anything else first, the record last, then the folder. A failure
+// stops before the record goes, so the next start retries.
+func removeCallFolder(dir string) error {
+	if err := os.RemoveAll(filepath.Join(dir, workName)); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() == ownerFile {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, ownerFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Remove(dir)
 }
 
 // removeRecordedSocketDir removes a dead call's socket folder. A recorded path

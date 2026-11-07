@@ -129,18 +129,36 @@ func (c *call) createInside(name string, data []byte) error {
 	return errors.Join(err, f.Close())
 }
 
-// removeScratch empties the scratch folder through the handle, closes the
-// handle and removes the now empty folder. RemoveAll removes a link itself,
-// never what it points to.
+// removeScratch removes the call's folders in the order of spec §3.4 D2:
+// empty work through its handle, close that handle, remove work through the
+// call folder's handle (§3.4 D5), remove the record, close the call folder's
+// handle and remove the call folder (Windows will not delete an open folder).
+// Any failure before the record goes keeps the record, so startup recovery
+// retries. RemoveAll removes a link itself, never what it points to.
 func (c *call) removeScratch() error {
-	err := c.clearScratch()
-	if closeErr := c.root.Close(); err == nil {
-		err = closeErr
+	err := errors.Join(c.clearScratch(), c.root.Close())
+	if err == nil {
+		err = c.callRoot.RemoveAll(workName)
 	}
-	if err != nil {
+	if err == nil {
+		err = c.callRoot.Remove(ownerFile)
+	}
+	if err = errors.Join(err, c.callRoot.Close()); err != nil {
 		return err
 	}
-	return os.Remove(c.dir)
+	return os.Remove(c.callDir)
+}
+
+// workUnreplaced reports whether <id>/work is still the real folder the call's
+// scratch handle was opened on (spec §3.4 D6). A first start could replace it,
+// with a link included; a second start must not run on a folder it chose.
+func (c *call) workUnreplaced() bool {
+	named, err := c.callRoot.Lstat(workName)
+	if err != nil || !named.IsDir() {
+		return false
+	}
+	opened, err := c.root.Stat(".")
+	return err == nil && os.SameFile(named, opened)
 }
 
 func (c *call) clearScratch() error {
