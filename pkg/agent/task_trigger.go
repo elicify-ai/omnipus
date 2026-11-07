@@ -736,6 +736,19 @@ func (s *TaskTriggerScheduler) Stop() {
 	s.sweepWG.Wait()
 }
 
+// EngineStopping implements cron.EngineStopNotified. The shared engine calls
+// it before cancelling in-flight runs, so a handed-off one-time run ends as
+// interrupted by the gateway (its job kept for one replay at the next boot)
+// even when the gateway stops the shared engine before this scheduler (T10
+// FR-06, 6b U2b).
+func (s *TaskTriggerScheduler) EngineStopping() {
+	s.mu.Lock()
+	s.stopping = true
+	s.mu.Unlock()
+}
+
+var _ cron.EngineStopNotified = (*TaskTriggerScheduler)(nil)
+
 // SetClock overrides the time source for both this scheduler's own "now"
 // (used for RRULE next-occurrence math) and the underlying CronService, so
 // the two never disagree under a test clock. Must be called before Start.

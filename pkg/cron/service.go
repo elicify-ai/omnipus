@@ -649,7 +649,8 @@ func (cs *CronService) startNoLoop() error {
 
 // Stop signals the runLoop via stopChan and waits for it to exit (#1450), then
 // cancels the parallel lane context and blocks (bounded) on in-flight runs
-// (W-3 blocking drain). Waiting for the loop first guarantees no dispatch from
+// (W-3 blocking drain). Kind handlers that implement EngineStopNotified are
+// told before the cancel. Waiting for the loop first guarantees no dispatch from
 // this run window can add to the lane after the drain has begun, and no loop
 // goroutine of this window outlives Stop.
 //
@@ -681,7 +682,14 @@ func (cs *CronService) Stop() {
 	runs := cs.laneRuns
 	cs.laneRuns = nil
 	drainTimeout := cs.stopDrainTimeout
+	notify := cs.stopNotifiedHandlersUnsafe()
 	cs.mu.Unlock()
+
+	// Before the cancel below reaches any in-flight run (kinds.go,
+	// EngineStopNotified).
+	for _, n := range notify {
+		n.EngineStopping()
+	}
 
 	if loopDone != nil {
 		<-loopDone

@@ -430,17 +430,21 @@ func (s *LoopScheduler) IdleExpirySweep(cfg config.PlanningConfig, now time.Time
 				map[string]any{"session_id": sessionID, "job_id": job.ID, "why": why})
 			continue
 		}
-		// Every loop job of the session goes, not only this one (FR-05): a
-		// leftover step must not survive the expiry.
-		if rerr := s.removeSessionJobs(sessionID); rerr != nil {
-			logger.WarnCF("agent", "loop idle sweep: could not remove the loop's jobs — not expiring this pass",
-				map[string]any{"session_id": sessionID, "error": rerr.Error()})
+		// The stopped state and every loop job of the session go together
+		// under the session's lock (FR-05): a leftover step must not survive
+		// the expiry, and a settling turn cannot add one after it.
+		prior, serr := s.al.stopSessionLoop(sessionID, store, s, fmt.Sprintf("idle-expired after %d day(s)", maxDays))
+		if serr != nil {
+			logger.WarnCF("agent", "loop idle sweep: could not save the stopped loop state — not expiring this pass",
+				map[string]any{"session_id": sessionID, "error": serr.Error()})
 			continue
 		}
 		expired[sessionID] = true
-		// stopLoop Releases the "loop" R5 admission-cap slot (paired with the
-		// Admit("loop") call at set time) as part of its shared body.
-		s.al.stopLoop(sessionID, store, meta.LoopMode, meta.LoopMaxRuns, meta.LoopRunCount, fmt.Sprintf("idle-expired after %d day(s)", maxDays))
+		if prior.mode != "" {
+			// Releases the "loop" R5 admission-cap slot (paired with the
+			// Admit("loop") call at set time) and publishes the stopped frame.
+			s.al.finishLoopStop(sessionID, prior.mode, prior.maxRuns, prior.run)
+		}
 	}
 }
 

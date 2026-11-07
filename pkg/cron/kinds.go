@@ -56,6 +56,28 @@ func (cs *CronService) RegisterKindHandler(kind string, handler ScheduledRunner)
 	return nil
 }
 
+// EngineStopNotified is implemented by a kind handler that must learn the
+// engine is stopping before the engine cancels its in-flight runs. Stop
+// calls EngineStopping on every such registered handler, outside the engine
+// lock, before the cancel: a run cancelled by the engine stopping is then
+// told apart from a run a person stopped, whichever caller stopped the
+// shared engine first (T10 FR-06, 6b U2b).
+type EngineStopNotified interface {
+	EngineStopping()
+}
+
+// stopNotifiedHandlersUnsafe lists the registered handlers that implement
+// EngineStopNotified. Caller holds cs.mu.
+func (cs *CronService) stopNotifiedHandlersUnsafe() []EngineStopNotified {
+	var out []EngineStopNotified
+	for _, h := range cs.kindHandlers {
+		if n, ok := h.(EngineStopNotified); ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // handlerForUnsafe resolves the handler for kind: the registered kind handler
 // when one is installed, otherwise the SetRunner fallback. Caller holds cs.mu.
 func (cs *CronService) handlerForUnsafe(kind string) ScheduledRunner {

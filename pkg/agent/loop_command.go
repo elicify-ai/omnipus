@@ -112,14 +112,14 @@ func (al *AgentLoop) applyLoopCommandPrompt(
 	// Every loop job of the session goes — not only the one LoopJobID names —
 	// so a revoked step cannot mutate or chain alongside the replacement
 	// (T10 FR-05).
-	existing, merr := store.GetMeta(sessionID)
-	if rerr := ls.removeSessionJobs(sessionID); rerr != nil {
-		logger.WarnCF("agent", "loop: failed to remove the session's previous loop jobs",
-			map[string]any{"session_id": sessionID, "error": rerr.Error()})
-		return true, true, "Could not start the loop (internal error removing the previous schedule)."
+	prior, serr := al.stopSessionLoop(sessionID, store, ls, "replaced by new /loop")
+	if serr != nil {
+		logger.WarnCF("agent", "loop: could not stop the previous loop; no new loop started",
+			map[string]any{"session_id": sessionID, "error": serr.Error()})
+		return true, true, "Could not start the loop (internal error stopping the previous loop). The previous loop is still running."
 	}
-	if merr == nil && existing != nil && existing.LoopMode != "" {
-		al.stopLoop(sessionID, store, existing.LoopMode, existing.LoopMaxRuns, existing.LoopRunCount, "replaced by new /loop")
+	if prior.mode != "" {
+		al.finishLoopStop(sessionID, prior.mode, prior.maxRuns, prior.run)
 	}
 
 	maxRuns := config.DefaultLoopMaxRuns
@@ -269,31 +269,70 @@ func (al *AgentLoop) loopStatusReply(sessionID string, store *session.UnifiedSto
 // stopLoopCommand implements user-invoked `/loop stop` (FR-073): removes the
 // cron job and clears loop state, returning the user-facing reply.
 func (al *AgentLoop) stopLoopCommand(sessionID string, store *session.UnifiedStore, ls *LoopScheduler) string {
-	meta, err := store.GetMeta(sessionID)
-	hadLoop := err == nil && meta != nil && meta.LoopMode != ""
-	// Every loop job of the session goes, not only the one LoopJobID names
-	// (T10 FR-05): a leftover step would otherwise keep the loop alive.
-	if rerr := ls.removeSessionJobs(sessionID); rerr != nil {
-		logger.WarnCF("agent", "loop: failed to remove the session's loop jobs on stop",
-			map[string]any{"session_id": sessionID, "error": rerr.Error()})
-		return "Could not stop the loop (internal error removing the schedule). Try again."
+	prior, err := al.stopSessionLoop(sessionID, store, ls, "stopped by user")
+	if err != nil {
+		logger.WarnCF("agent", "loop: could not stop the loop",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return "Could not stop the loop (internal error saving the stopped state). The loop is still running; try again."
 	}
-	mode, maxRuns, run := "", 0, 0
-	if hadLoop {
-		mode, maxRuns, run = meta.LoopMode, meta.LoopMaxRuns, meta.LoopRunCount
-	}
-	al.stopLoop(sessionID, store, mode, maxRuns, run, "stopped by user")
-	if !hadLoop {
+	if prior.mode == "" {
 		return "No active loop to stop."
 	}
+	al.finishLoopStop(sessionID, prior.mode, prior.maxRuns, prior.run)
 	return "Loop stopped."
 }
 
-// stopLoop clears the session's loop fields — the shared body for
-// `/loop stop`, the run-cap brake (LoopScheduler.RunScheduled), and a
-// replace-on-set. Does NOT remove the cron job itself; callers that know a
-// job is in flight (as opposed to already auto-deleted by cron for a
-// one-shot "at" fire) must call LoopScheduler.RemoveJob separately.
+// loopStopPrior is the loop a stopSessionLoop call stopped: its own mode,
+// run limit and run count as saved before the stop. mode is "" when the
+// session had no active loop.
+type loopStopPrior struct {
+	mode    string
+	maxRuns int
+	run     int
+}
+
+// stopSessionLoop stops the session's loop as one mutation under the
+// session's lock, the same lock post-turn settlement holds across its
+// selected-step check and its writes (T10 FR-05(g)): a stop either happens
+// before a settlement (which then finds no loop and changes nothing) or after
+// it (and then also removes the successor that settlement added).
+//
+// The stopped state is saved first and every loop job of the session is
+// removed after it. A failed save is returned and nothing else changes, so
+// the loop keeps running exactly as saved and the caller must not report it
+// stopped (spec section 8). A failed job removal after a saved stop is
+// logged only: the loop is durably stopped, and a leftover job removes
+// itself when it fires (RunScheduled step 1) or at the next boot recovery.
+//
+// It publishes nothing; the caller runs finishLoopStop for an active prior
+// loop once this returns without error.
+func (al *AgentLoop) stopSessionLoop(sessionID string, store *session.UnifiedStore, ls *LoopScheduler, note string) (loopStopPrior, error) {
+	var prior loopStopPrior
+	err := store.UpdateMetaLocked(sessionID, func(meta *session.UnifiedMeta, set func(session.MetaPatch) error) error {
+		if meta != nil && meta.LoopMode != "" {
+			prior = loopStopPrior{mode: meta.LoopMode, maxRuns: meta.LoopMaxRuns, run: meta.LoopRunCount}
+			if err := set(loopStoppedPatch()); err != nil {
+				prior = loopStopPrior{}
+				return fmt.Errorf("save the stopped loop state: %w", err)
+			}
+		}
+		if err := ls.removeSessionJobs(sessionID); err != nil {
+			logger.WarnCF("agent", "loop: the loop is stopped but some of its jobs could not be removed; each removes itself when it fires",
+				map[string]any{"session_id": sessionID, "error": err.Error(), "note": note})
+		}
+		return nil
+	})
+	if err != nil {
+		return loopStopPrior{}, err
+	}
+	return prior, nil
+}
+
+// stopLoop clears the session's loop fields and, only when that save
+// succeeded, publishes the stop (finishLoopStop); a failed save is returned
+// and nothing is published. It neither takes the session's lock nor removes
+// any loop job: a stop of a loop that may still fire or settle uses
+// stopSessionLoop instead.
 //
 // priorMode/priorMaxRuns/priorRun are the loop's OWN mode/max_runs/run_count
 // as the caller last read it, BEFORE this call zeroes the session's loop
@@ -306,12 +345,14 @@ func (al *AgentLoop) stopLoopCommand(sessionID string, store *session.UnifiedSto
 // priorMode == "" (no loop was actually active — e.g. `/loop stop` with
 // nothing running) suppresses the frame entirely: there is no real
 // transition to report, and an all-zero frame would fail validation anyway.
-func (al *AgentLoop) stopLoop(sessionID string, store *session.UnifiedStore, priorMode string, priorMaxRuns, priorRun int, note string) {
+func (al *AgentLoop) stopLoop(sessionID string, store *session.UnifiedStore, priorMode string, priorMaxRuns, priorRun int, note string) error {
 	if err := store.SetMeta(sessionID, loopStoppedPatch()); err != nil {
-		logger.WarnCF("agent", "loop: failed to clear loop state",
-			map[string]any{"session_id": sessionID, "error": err.Error(), "note": note})
+		// Not stopped: no admission release and no "stopped" frame for a
+		// stopped state that was never saved (spec section 8).
+		return fmt.Errorf("loop: clear the loop state (%s): %w", note, err)
 	}
 	al.finishLoopStop(sessionID, priorMode, priorMaxRuns, priorRun)
+	return nil
 }
 
 // loopStoppedPatch is the stopped shape of a session's loop state: every
