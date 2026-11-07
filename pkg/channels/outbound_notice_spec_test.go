@@ -5,6 +5,7 @@ package channels
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -44,11 +45,42 @@ func t16LogFile(t *testing.T) string {
 	return path
 }
 
-func t16QueueDrops(t *testing.T, path string) int {
+// t16QueueDropMessage is enqueueOutbound's exact full-queue log message.
+const t16QueueDropMessage = "Outbound queue full, message dropped"
+
+// t16QueueDrops counts the full-queue drops of ONE channel and chat. The log
+// file is process-wide (the logger is a package global), so a drop logged by
+// any other Manager in the same test binary lands in it too (#1676: a
+// straggling dispatcher of TestRunWorker_NoConfigRaceAcrossReload, channel
+// mock-race, chat 1). Each complete line is one JSON event and must parse; only
+// a trailing fragment without its newline is not yet a complete event (the
+// logger may be mid-append while t16Wait polls) and is left for the next read.
+func t16QueueDrops(t *testing.T, path, channel, chatID string) int {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
-	return strings.Count(string(raw), "Outbound queue full")
+	complete := string(raw)
+	if i := strings.LastIndexByte(complete, '\n'); i >= 0 {
+		complete = complete[:i]
+	} else {
+		complete = ""
+	}
+	drops := 0
+	for _, line := range strings.Split(complete, "\n") {
+		if line == "" {
+			continue
+		}
+		var event struct {
+			Message string `json:"message"`
+			Channel string `json:"channel"`
+			ChatID  string `json:"chat_id"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(line), &event), "log line is not one JSON event: %q", line)
+		if event.Message == t16QueueDropMessage && event.Channel == channel && event.ChatID == chatID {
+			drops++
+		}
+	}
+	return drops
 }
 
 func TestT16b_FullQueue_StartPublishesNoNoticeWhileOrdinaryReplyStillDoes(t *testing.T) {
@@ -113,7 +145,7 @@ func TestT16b_FullQueue_StartPublishesNoNoticeWhileOrdinaryReplyStillDoes(t *tes
 			}
 			require.Equal(t, capacity, len(worker.queue), "instrument: actual worker queue is full")
 			require.NoError(t, mb.PublishOutbound(ctx, drop))
-			t16Wait(t, func() bool { return t16QueueDrops(t, path) >= 1 }, "S-86: full-queue drop did not reach real enqueueOutbound")
+			t16Wait(t, func() bool { return t16QueueDrops(t, path, "discord", "222") >= 1 }, "S-86: full-queue drop did not reach real enqueueOutbound")
 			releaseOnce.Do(func() { close(release) })
 			t16Wait(t, func() bool { return len(worker.queue) == 0 }, "instrument: released queue did not drain")
 			require.NoError(t, mb.PublishOutbound(ctx, bus.OutboundMessage{Channel: "discord", ChatID: "222", Content: "QA queue fence"}))
@@ -141,7 +173,7 @@ func TestT16b_FullQueue_StartPublishesNoNoticeWhileOrdinaryReplyStillDoes(t *tes
 			delete(counts, notice)
 			require.Equal(t, map[string]int{"QA first in flight": 1, "QA queued filler": capacity, "QA queue fence": 1, "QA final notice fence": 1}, counts,
 				"exact queue attempts; dropped start/reply never reaches Send")
-			drops := t16QueueDrops(t, path)
+			drops := t16QueueDrops(t, path, "discord", "222")
 			if isStart {
 				require.Equal(t, 0, notices, "S-86: no start-derived notice reaches chat")
 				require.Equal(t, 1, drops, "S-86: a wrongly published notice cannot hide by overflowing the still-full queue")
