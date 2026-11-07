@@ -62,7 +62,7 @@
 // primary's and the fallback's (fixtures/e2e-model-keys.ts). The global-setup
 // preflight throws immediately if either is unset.
 
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { assistantMessages, dismissStaleDialogOverlay } from './selectors'
 import { freshChat } from './session-setup'
 import { saveStubCliProgram, stubCliExecutor, type StubCliTexts } from './stub-external-cli'
@@ -115,49 +115,137 @@ export async function getCsrfToken(page: Page): Promise<string> {
  * Playwright-level retries (stats.flaky) — sees nothing, and a fully green job
  * uploads no failure artifacts; annotations and attachments land in the
  * always-uploaded JSON report, and the stderr line survives in the job log.
- * Records method, route, error message and attempt numbers only — never
- * headers, cookies or request/response bodies.
+ *
+ * SANITIZED BY CONSTRUCTION (2026-11-07 CHECK finding 4): the record carries
+ * ONLY the whitelisted error CLASS token (classifyTransportReset) plus
+ * route/attempt metadata — never the raw error text. A reset message can echo
+ * request headers or URL query values in its first characters, and the old
+ * `error.slice(0, 200)` copied that text into stderr, the annotation and the
+ * attachment. No headers, cookies or request/response bodies are recorded.
+ *
+ * NO BLANKET CATCH (2026-11-07 CHECK finding 1): a reporting failure is never
+ * swallowed. The only tolerated case is "no running test" — detected by
+ * currentTestInfo's exact-message discriminator (isTestInfoUnavailableError),
+ * which RETHROWS anything else. Every write below (annotations.push, attach)
+ * propagates its own failure to the awaiting apiFetch, which fails the test
+ * loudly at the reporting failure instead of silently continuing to a pass
+ * without the promised record.
  */
-function recordTransportReplay(
+export const TRANSPORT_RESET = /socket hang up|ECONNRESET|ECONNABORTED|EPIPE/i
+
+/**
+ * Whitelisted CLASS token for a transport-reset error. Called only on errors
+ * that already matched TRANSPORT_RESET (apiFetch's retry decision), so the
+ * token always describes the failure class the replay was decided on; the
+ * 'unclassified-reset' fallback exists so a future TRANSPORT_RESET widening
+ * can never turn into silent arbitrary-text recording.
+ */
+export function classifyTransportReset(errorText: string): string {
+  const m = TRANSPORT_RESET.exec(errorText)
+  return m ? m[0].toLowerCase().replace(/\s+/g, '-') : 'unclassified-reset'
+}
+
+export interface ReplayRecord {
+  description: string
+  attachmentName: string
+  attachmentBody: string
+  stderrLine: string
+}
+
+/** Pure record builder — exported for the fixture unit tests
+ * (conformance-helpers.test.ts), which pin the sanitized shape. */
+export function buildReplayRecord(
   method: string,
   path: string,
-  error: string,
+  errorText: string,
   failedAttempt: number,
-): void {
-  const errBrief = error.slice(0, 200)
+): ReplayRecord {
+  const errorClass = classifyTransportReset(errorText)
   const description =
     `${method} ${path}: attempt ${failedAttempt} failed with a transport reset ` +
-    `(${errBrief}); replayed once as attempt ${failedAttempt + 1} after 1000ms — ` +
+    `(class ${errorClass}); replayed once as attempt ${failedAttempt + 1} after 1000ms — ` +
     'recovered transport failure, not a Playwright-level retry'
-  // Kept deliberately: the job log is retained even for a green run, so the
-  // warning is the one record that survives even a lost report upload.
-  console.warn(`[apiFetch] transport reset replayed: ${description}`)
-  try {
-    // test.info() throws outside a running test; apiFetch is also reachable
-    // from worker-level setup, where the retry still applies but there is no
-    // test result to attach evidence to.
-    const info = test.info()
-    info.annotations.push({ type: 'transport-reset-replayed', description })
-    info.attach(`transport-reset-replay-${method.toLowerCase()}-${Date.now()}.json`, {
-      body: JSON.stringify(
-        {
-          kind: 'transport-reset-replayed',
-          method,
-          path,
-          error: errBrief,
-          failed_attempt: failedAttempt,
-          retried_attempt: failedAttempt + 1,
-          delay_ms: 1_000,
-        },
-        null,
-        2,
-      ),
-      contentType: 'application/json',
-    })
-  } catch {
-    // No running test to record against — the replay already happened and the
-    // stderr line above is the remaining evidence.
+  const attachmentName = `transport-reset-replay-${method.toLowerCase()}-${Date.now()}.json`
+  const attachmentBody = JSON.stringify(
+    {
+      kind: 'transport-reset-replayed',
+      method,
+      path,
+      error_class: errorClass,
+      failed_attempt: failedAttempt,
+      retried_attempt: failedAttempt + 1,
+      delay_ms: 1_000,
+    },
+    null,
+    2,
+  )
+  return {
+    description,
+    attachmentName,
+    attachmentBody,
+    stderrLine: `[apiFetch] transport reset replayed: ${description}`,
   }
+}
+
+/**
+ * The TestInfo surface recordTransportReplay writes to. Injectable so the
+ * fixture unit tests can exercise the recording path without a Playwright
+ * runner; production callers omit it and get the real test.info().
+ */
+export type ReplayEvidenceSink = Pick<TestInfo, 'annotations' | 'attach'>
+
+/**
+ * Playwright 1.61.1 throws EXACTLY this message from test.info() when
+ * currentTestInfo() is null (node_modules/playwright/lib/common/index.js, the
+ * `test.info` implementation). Pinned so the fallback below stays a NARROWED
+ * exception discriminator, never a blanket catch.
+ */
+export const TEST_INFO_UNAVAILABLE_MESSAGE = 'test.info() can only be called while test is running'
+
+/** True only for the known "no running test" error — anything else is an
+ * unexpected failure that must propagate (never swallowed). Exported for the
+ * fixture unit tests. */
+export function isTestInfoUnavailableError(err: unknown): boolean {
+  return err instanceof Error && err.message === TEST_INFO_UNAVAILABLE_MESSAGE
+}
+
+/**
+ * test.info() for the current context, or null when there is no running test
+ * (apiFetch is also reachable from worker-level setup, where the retry still
+ * applies but there is no test result to attach evidence to). The catch is
+ * deliberately NARROWED: only the exact known unavailable-test error returns
+ * null; any other error is rethrown so a reporting failure is loud.
+ */
+function currentTestInfo(): ReplayEvidenceSink | null {
+  try {
+    return test.info()
+  } catch (err) {
+    if (isTestInfoUnavailableError(err)) return null
+    throw err
+  }
+}
+
+export async function recordTransportReplay(
+  method: string,
+  path: string,
+  errorText: string,
+  failedAttempt: number,
+  info: ReplayEvidenceSink | null = currentTestInfo(),
+): Promise<void> {
+  const record = buildReplayRecord(method, path, errorText, failedAttempt)
+  // Kept deliberately FIRST: the job log is retained even for a green run, so
+  // the warning is the one record that survives even a lost report upload —
+  // and the only record in worker-level setup, where there is no test result.
+  console.warn(record.stderrLine)
+  if (!info) return
+  // No try/catch here on purpose (CHECK 2026-11-07 finding 1): an annotation
+  // or attachment failure propagates to the awaiting apiFetch and fails the
+  // test loudly — a replay must never succeed silently without its record.
+  info.annotations.push({ type: 'transport-reset-replayed', description: record.description })
+  await info.attach(record.attachmentName, {
+    body: record.attachmentBody,
+    contentType: 'application/json',
+  })
 }
 
 export async function apiFetch<T = unknown>(
@@ -207,7 +295,6 @@ export async function apiFetch<T = unknown>(
   // is deliberately NOT retried: replaying a create after a lost response
   // would duplicate the entity silently — exactly the quiet-corruption shape
   // this suite must not paper over.
-  const TRANSPORT_RESET = /socket hang up|ECONNRESET|ECONNABORTED|EPIPE/i
   const attempts = method === 'GET' || method === 'PUT' ? 2 : 1
   let lastErr: unknown
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -243,7 +330,9 @@ export async function apiFetch<T = unknown>(
       // A retry was actually decided on: leave the durable record before the
       // replay, so a successful recovery still shows in the report (a failed
       // replay is visible anyway, and the annotation rides that failure too).
-      recordTransportReplay(method, path, msg, attempt + 1)
+      // Awaited so a RECORDING failure fails loudly here (it must never be
+      // swapped for a quiet retry that passes without its record).
+      await recordTransportReplay(method, path, msg, attempt + 1)
     }
   }
   // Unreachable: the loop either returns or throws; kept for control-flow analysis.
