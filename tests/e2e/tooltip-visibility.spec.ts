@@ -15,11 +15,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { backdropWorkspace, installSidebarBackdropEdges } from './fixtures/sidebar-session-backdrop';
 
-// Long enough that the chat identity cannot keep the room the LABELLED
-// strip would need: the header reaches its icons-only mode the same way it
-// does for a real user with a long session title.
-const LONG_AGENT_NAME = 'Q83 Reader With A Deliberately Long Display Name That Has To Be Truncated';
-
 // How long the shell may take to render before the run is a finding.
 const READINESS_TIMEOUT_MS = 30_000;
 
@@ -42,6 +37,13 @@ const TAB_SEGMENTS = ['board', 'calendar', 'media', 'mail', 'team'] as const;
 test.use({ storageState: { cookies: [], origins: [] } });
 test.describe.configure({ retries: 0 });
 
+// The strip's current mode. SETUP navigation only — the oracle is the
+// data-mode assertion inside openIconsStrip, which fails loudly with its own
+// message if the strip never gets to icons.
+async function stripMode(page: Page): Promise<string | null> {
+  return page.getByTestId('workspace-header-entries').getAttribute('data-mode');
+}
+
 async function openIconsStrip(page: Page, options: { userFontSize?: number } = {}) {
   // Pin the sidebar the way the app persists the preference — the zustand
   // persist key "omnipus-sidebar" (src/store/sidebar.ts). A fresh visit is
@@ -51,20 +53,57 @@ async function openIconsStrip(page: Page, options: { userFontSize?: number } = {
     window.localStorage.setItem(key as string, value as string);
   }, ['omnipus-sidebar', JSON.stringify({ state: { isPinned: true }, version: 0 })]);
 
-  const traffic = await installSidebarBackdropEdges(page, { agentName: LONG_AGENT_NAME });
+  const traffic = await installSidebarBackdropEdges(page);
   await page.setViewportSize(VIEWPORT);
   await page.goto(`/#/workspaces/${backdropWorkspace.id}/chat`, { waitUntil: 'domcontentloaded' });
 
   // READINESS: the header line, with its real chat identity, is on screen.
   await expect(page.getByTestId('workspace-top-bar'), 'the workspace header never appeared').toBeVisible({ timeout: READINESS_TIMEOUT_MS });
 
-  // The 20px root is applied the way the product applies it at runtime
-  // (ProfileSection sets --user-font-size on documentElement; the strip
-  // re-measures through its ResizeObserver and re-picks its mode).
+  // The 20px root is applied the same way CR-1 applies it — a direct
+  // documentElement fontSize set, the geometric spec family's proven
+  // mechanism (measured in the ta7 probe: the strip's rem-based widths and
+  // mode re-pick follow it) — BEFORE the panel is opened and dragged, so
+  // every rem-based width below is the root size the case is named for.
   if (options.userFontSize) {
     await page.evaluate((size) => {
-      document.documentElement.style.setProperty('--user-font-size', `${size}px`);
+      document.documentElement.style.fontSize = `${size}px`;
     }, options.userFontSize);
+  }
+
+  // Reach icons-only mode the way the product actually gets there (the CR-1
+  // setup in workspace-header-standalone.spec.ts): open the Tasks panel and
+  // drag the panel divider so the chat column's strip room falls into the
+  // icons band. By design (#1449) chat titles shorten BEFORE the strip
+  // steps down, so a long agent name never forces icons-only — the old
+  // long-name setup failed CI round 5 for exactly that reason and is gone.
+  await page.getByTestId('workspace-tab-board').click();
+  await expect(page.getByTestId('tasks-heading')).toBeVisible({ timeout: READINESS_TIMEOUT_MS });
+  // With the panel open the chat column sits at its app-enforced 360px
+  // minimum (measured at both roots here; CR-1 measured the same floor at
+  // 1280px), where the strip is in its narrow menu mode; the strip steps UP
+  // to icons only as the column widens. The exact threshold is
+  // content-dependent (measured here: first icons at a 455px column at the
+  // 14px default root and 515px at a 20px root; CR-1 measured icons at a
+  // 435px column at 1280px at a 20px root), so the drag walks the divider
+  // wider in bounded steps until the mode engages. The MODE assertion below
+  // stays the oracle: if icons mode is unreachable the walk exhausts and the
+  // assertion fails with its own message — no hard-coded width can silently
+  // drift out of an environment's band. The bound is SETUP: the widest
+  // column the walk may try.
+  const widestColumnPx = 700;
+  for (let width = 380; width <= widestColumnPx; width += 20) {
+    const separator = page.getByTestId('panel-resize-separator');
+    const sepRect = await separator.boundingBox();
+    if (!sepRect) throw new Error('BLOCKED: native panel divider did not render');
+    const column = await page.getByTestId('app-main-content').boundingBox();
+    if (!column) throw new Error('BLOCKED: the chat column did not render');
+    const shift = column.x + width - sepRect.x;
+    await page.mouse.move(sepRect.x + sepRect.width / 2, sepRect.y + sepRect.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(sepRect.x + shift, sepRect.y + sepRect.height / 2, { steps: 12 });
+    await page.mouse.up();
+    if (await stripMode(page) === 'icons') break;
   }
 
   // INSTRUMENT: R45 measures the ICONS-ONLY strip. If the product never
@@ -128,8 +167,13 @@ for (const userFontSize of [undefined, 20] as const) {
       // Leave the bubble before the next tab: move the pointer well away
       // from trigger and bubble (the content is hoverable, so only a move
       // outside that area closes it) and wait until it is gone, so each
-      // measurement is of exactly one bubble.
-      await page.mouse.move(VIEWPORT.width / 2, VIEWPORT.height - 40);
+      // measurement is of exactly one bubble. The move is STEPPED on purpose:
+      // a single far mousemove teleport delivers no boundary events along a
+      // pointer path, and Radix's close-on-leave never fires (measured in the
+      // ta7 probe: a teleport left the bubble open for seconds; a stepped
+      // move closes it) — a stepped move is what a real pointer leaving
+      // looks like.
+      await page.mouse.move(VIEWPORT.width / 2, VIEWPORT.height - 40, { steps: 8 });
       await expect(bubble, `the ${segment} tooltip never closed before the next measurement`).toHaveCount(0);
     }
 
