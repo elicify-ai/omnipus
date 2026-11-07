@@ -750,6 +750,37 @@ test(
       const userMsgs = page.locator('[data-message-id].flex-row-reverse')
       await expect(userMsgs).toHaveCount(1, { timeout: 5_000 })
 
+      // ── Step 2b: PROVE the turn is live before anything waits on its end ──
+      // The 2026-11-07 CHECK found the old terminal gate below
+      // ([data-status="running"] count reaching 0) passing an ACTIVE turn:
+      // the virtualized renderer hardcodes data-status="complete" on the
+      // assistant row (src/components/chat/ChatScreen.tsx
+      // VirtualAssistantMessageRow, data-status="complete" at :1209; only the
+      // flat AssistantMessage path derives it from message.status?.type,
+      // :1562), so a zero-running-row count proves nothing about the turn —
+      // and the incident traces recorded exactly that: row "complete" while
+      // the page still showed the turn as active. The turn-level liveness
+      // marker is the composer Stop button instead: SESSION_COMPOSER_PROFILE
+      // has stop:true for every chat session
+      // (src/components/chat/composer/OmnipusComposer.tsx :136-143, wired at
+      // :315), and that button mounts exactly while
+      // `profile.stop && (isStreaming || goalRunning || stopping ||
+      // stopAllArmed)` (:1017, data-testid="stop-btn" at :1032). No goal runs
+      // and nobody cancels in this test, so Stop is visible exactly while the
+      // chat store holds isStreaming=true — the turn's true live state,
+      // renderer-independent: the button lives in the composer, so this one
+      // marker gates BOTH the virtualized row path and the flat
+      // AssistantMessage path. Suite precedent: waitForTurnFullyDone
+      // (chat.spec.ts / media.spec.ts) watches the same stop-btn.
+      const turnStopButton = page.locator('[data-testid="stop-btn"]')
+      await expect(
+        turnStopButton,
+        'PREREQUISITE: the turn is live — the composer Stop button has replaced ' +
+          'Send while the turn streams (OmnipusComposer.tsx:1017/:1032). If this ' +
+          'fails, no turn ever started streaming and nothing below can measure a ' +
+          'terminal transition.',
+      ).toBeVisible({ timeout: 10_000 })
+
       // ── Step 3: while the agent is still streaming, attach page2 ──
       // Wait ~800ms after send so we are reliably mid-stream but well before
       // the assistant message completes.
@@ -767,24 +798,31 @@ test(
         const userMsgs2 = page2.locator('[data-message-id].flex-row-reverse')
         await expect(userMsgs2).toHaveCount(1, { timeout: 10_000 })
 
-        // ── Step 4: wait for the turn to actually finish, then judge delivery ──
+        // ── Step 4: wait for the turn's TRUE terminal state, then judge delivery ──
         // The provider owns this clock. Both CI incidents in the header ended
         // with the turn STILL active when a flat reply window expired, which
         // makes a delivery assertion fail looking exactly like the event-loss
-        // this test exists to catch. Gate on the same marker the delivery
-        // oracle excludes: ChatScreen renders the live assistant placeholder
-        // with data-status={message.status?.type} ("running" until the turn
-        // settles; user rows carry data-status from a plain string, never
-        // "running"). If THIS wait expires the turn never reached a terminal
-        // state within 300s of provider time — a latency/stall failure of the
-        // model, not a delivery loss. Once it passes, the assertions below
-        // have their full windows to catch genuine delivery gaps (FR-I-009),
-        // and a model that finishes without emitting the sentinel now fails
-        // immediately and diagnosably instead of burning the whole window.
+        // this test exists to catch. The old gate here watched
+        // [data-status="running"] reach count 0 — but the virtualized renderer
+        // stamps every assistant row data-status="complete" (ChatScreen.tsx:1209;
+        // only the flat path uses message.status?.type, :1562), so that gate
+        // passed immediately on an active turn (CHECK 2026-11-07, finding 2).
+        // The gate now watches the proven-live marker from Step 2b instead: the
+        // composer Stop button ([data-testid="stop-btn"],
+        // OmnipusComposer.tsx:1017/:1032 — visible exactly while the store holds
+        // isStreaming) unmounting, i.e. the turn's real terminal transition.
+        // If THIS wait expires, the turn never reached a terminal state within
+        // 300s — latency or stall, of the provider OR the product (this wait
+        // alone does not distinguish them); it is NOT evidence of delivery loss.
+        // Once it passes, the unchanged delivery assertions below have their
+        // full windows to catch genuine delivery gaps (FR-I-009), and a model
+        // that finishes without emitting the sentinel now fails immediately and
+        // diagnosably instead of burning the whole window.
         await expect(
-          page.locator('[data-message-id][data-status="running"]'),
-          'the active turn reaches a terminal state within the provider budget',
-        ).toHaveCount(0, { timeout: 300_000 })
+          turnStopButton,
+          'the turn reaches its terminal state (composer Stop unmounts as streaming ' +
+            'ends) within the provider budget',
+        ).not.toBeVisible({ timeout: 300_000 })
 
         // Only completed assistant rows may satisfy the delivery oracle; user
         // input, a running placeholder or a system cancellation notice cannot.
