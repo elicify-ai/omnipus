@@ -34,3 +34,31 @@ If the reply has no valid marker, Omnipus uses a **15-minute** delay instead of 
 A loop stops after **100 runs by default**. An operator can configure a different positive run limit; a running loop keeps the limit it started with. Use bare `/loop` to see its current count and saved limit.
 
 A run counts after it executes, even if that run returns an error. The limit is not a promise of 100 successful answers. Use `/loop stop` to stop the schedule sooner.
+
+A failed run is recorded and the loop continues on its next step. It is not retried on a separate backoff timer. A loop whose owner is no longer a registered agent, or whose owner is a worker, does not start a turn. The gateway log says the owner is unavailable. Workers run only when another agent delegates to them, never on a timer.
+
+## After a restart
+
+Chat loops share the one timer with heartbeats and scheduled tasks (see [calendar](calendar.md)). Only a real gateway restart recomputes them. Saving settings does not stop the timer, drop a step, or apply a new retry gap.
+
+Saved "next run" times and "still running" flags from the previous process are hints. Startup works them out again before anything is allowed to fire.
+
+| What was saved | What startup does |
+|---|---|
+| A self-paced loop whose next check is still in the future | That one step is kept. |
+| A self-paced loop whose next check is already overdue, or whose step is missing | One fresh step, scheduled for startup plus the delay the loop last saved. If no positive delay was saved, that delay is about one second (the same delay a new self-paced loop uses for its first run). Missed checks are not replayed. After that step runs, the agent chooses the next delay as usual, so the chain continues. |
+| An interval loop that still has its repeating job | That job is kept. Startup sets its next time to one interval after the gateway starts, so a check that was due while Omnipus was down is not replayed. |
+| An interval loop whose job is missing | One fresh repeating job at the saved interval. Its first run is one interval after startup. |
+| A loop that has already reached its run limit | Stopped. Nothing is armed. |
+| A saved loop with no usable owner, mode or interval | Stopped. |
+| Loop jobs whose chat no longer has loop state | Removed. They do not run. |
+
+An active loop from an older install, whose job lived in a separate file, continues the same way: that file is not read, and startup arms exactly one fresh step from the chat's saved loop state.
+
+## Replacing or stopping a loop
+
+Starting another loop in the same chat, or `/loop stop`, removes every loop step for that chat. A step that had already started cannot change the replacement: it does not add to the run count, does not apply the run limit, and does not schedule a competing next step.
+
+## If recovery cannot be saved
+
+Startup must record which step is next, or record that a finished loop stopped. If that write fails, the gateway does not finish starting. The error names the chat (`error recovering /loop schedules`). No heartbeat, loop or scheduled task fires in that process. The next start tries again from what is still saved on disk. Nothing is marked stopped unless that stopped state was actually saved.

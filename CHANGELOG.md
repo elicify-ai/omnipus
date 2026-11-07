@@ -4,6 +4,21 @@ All notable changes to Omnipus will be documented in this file. The format is ba
 
 Pre-1.0 versions are tracked by the active release branch rather than by tagged release, and are subject to change without notice.
 
+## [Unreleased] — scheduling (one timer)
+
+### Removed
+
+- **`/api/v1/schedules` is gone.** Every route on that collection (list, create, read, update, delete, run, pause) is removed. `GET /api/v1/automations` is removed in the same change. Any `/api/` path with no route, including those, answers HTTP 404 and JSON `{"error":"endpoint not found"}`, not a web page. If you called the schedules API directly, stop: there is no replacement schedules resource. Scheduled work is a task. The web address `/automations` still redirects to the Calendar.
+- **`schedules.max_concurrent_runs` is gone**, and so is the fixed lane limit it pretended to set. An old key in `config.json` is ignored and dropped the next time the file is saved. While memory has headroom there is no fixed count of scheduled dispatches. When memory is under pressure, or cannot be measured, at most two scheduled dispatches run at once and the rest wait. A task run already handed to its agent is not cancelled when that limit falls.
+
+### Changed
+
+- **Heartbeats, chat loops and scheduled tasks share one timer**, stored in `cron/jobs.json`. A saved job of any other kind, including an old `agent_turn` schedule, is dropped once at startup and named in the gateway log. Heartbeats are rebuilt from workspace settings. Task schedules are rebuilt from the tasks. An active chat loop is not stopped by the merge: startup arms one fresh step from the chat's saved loop state. A settings reload does not stop or rebuild the timer. `schedules.retry_backoff_ms` still applies only at the next process start.
+- **Run now on a scheduled task** (`POST /api/v1/tasks/{id}/runs`) uses up the armed time so it does not also fire later. The Calendar offers **Run now** on that armed time (even when it is still in the future) and, unchanged, on a past time. A one-time chip's panel and a day bucket that contains the armed time reach the same action (**Run next armed occurrence** on the bucket). Changing a scheduled task's status to Next or In Progress, or restarting it, is refused and the message points at Run now.
+- **The agent that created a task gets one copy of the run's result** in its main chat in that workspace, when it is not already the assignee or the starter. A task a person created sends no creator copy. A creator outside that workspace gets no result message. A skipped time tells nobody.
+- **A run that never started** puts one plain sentence in the task result and the task conversation: "The task could not be started. Check the agent and try again; details are in the server log." The goal record and the chat outcome line include that sentence, with a short prefix. The cause stays in the gateway log.
+- **A chat loop survives a gateway restart as one next step**, not a replay of every missed check. If that recovery cannot be saved, the gateway does not finish starting and nothing on the timer runs; the next start retries. Details: [chat loops](docs/loops.md), [Calendar](docs/calendar.md).
+
 ## [Unreleased] — `feat/browser-streaming-performance`
 
 ### Changed

@@ -196,9 +196,23 @@ Read the gateway diagnostic log. These cron warnings remain visible at the defau
 | `no owning agent` (`reason: owner-missing`) | The job has no owning agent ID, so it cannot run through the agent runner. | Check its agent assignment and workspace heartbeat configuration. |
 | `one-time job was running when the previous process stopped; running it again` | At gateway startup, a one-time schedule of the gateway's own scheduler was found mid-run from the previous process, which stopped before saving the outcome. It runs again once, so it may repeat work the stopped run already did. A one-time time that passed while the gateway was not running is still skipped, not replayed. | Check whether the stopped run already did the work. |
 | `one-time trigger was running when the previous process stopped; running it again at this boot` | The same recovery for a scheduled task's one-time trigger (a task set to run once): the previous process started that run and stopped before saving the outcome, so the next gateway start runs it again once. A one-time time that passed while the gateway was not running is still skipped, not replayed, and a trigger you edited while the gateway was down keeps the edited rule instead. | Check whether the stopped run already did the work. |
-| `scheduled fire was missed while Omnipus was down; recorded, not replayed` | A task's scheduled fire (its next pending occurrence, or a one-time time) came due while the gateway was not running. It is recorded once as a `missed` entry on the task's run history and the Calendar, so the gap is visible; it is never replayed. | Nothing to do — the entry is informational. Re-run the task manually with Run-now if it should catch up. |
+| `scheduled fire was missed while Omnipus was down; recorded, not replayed` | A task's scheduled fire (its next pending occurrence, or a one-time time) came due while the gateway was not running. It is recorded once as a `missed` entry on the task's run history and the Calendar, so the gap is visible; it is never replayed. | Nothing to do — the entry is informational. Re-run the task manually with **Run now** if it should catch up. See [Calendar](calendar.md#run-a-scheduled-task-now). |
+| `cron: dropped a stored job of a non-registered kind` | At startup a saved timer job was not a heartbeat, a chat loop or a scheduled task (an old `agent_turn` schedule from the removed schedules API is the usual case). It is dropped once and does not run. | Nothing, if you no longer use that old API schedule. Heartbeats, task schedules and chat loops are rebuilt from their own saved settings. |
+| `cron: scheduled run waiting for admission: memory limit reached` | Memory is tight, or cannot be measured, so a scheduled dispatch is waiting. At most two run at once in that state. There is no `schedules.max_concurrent_runs` setting to raise. | Free memory, or wait. The run is queued, not discarded. A task run that already started is not cancelled. |
 
 Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed to persist Running reset` diagnostics are logged at **ERROR**, with `job_id` (or `job_ids` for a batch) and the underlying storage error. Work may already have happened even though its latest state was not saved. Resolve the disk, permissions or path problem before relying on the saved state after a restart. The error does not undo completed work, and retrying may repeat earlier actions.
+
+## The gateway does not finish starting
+
+If startup cannot save a chat loop's next step, or cannot save that a finished loop has stopped, the gateway stops before the timer is turned on. The error contains `error recovering /loop schedules` and names the chat. No heartbeat, loop or scheduled task runs in that process. Fix the disk or permissions problem and start again; the next start retries from what is still saved. A loop is not marked stopped unless that stopped state was saved. See [chat loops](loops.md#if-recovery-cannot-be-saved).
+
+## A task says it could not be started
+
+When a task run is refused before any work begins, the task result and an error line in the task conversation say:
+
+> The task could not be started. Check the agent and try again; details are in the server log.
+
+The goal record and the chat outcome line include that sentence, with a short prefix that names the failed task (`owning task reached failed:` on the goal; the outcome line starts `Goal "…" ended with its task (failed):`). The gateway log keeps the cause (hooks, a connected tool server, a missing agent, or a runner that could not be resolved). That cause is not copied into the task, the conversation or the goal. The refusal does not use up a retry. Check the agent, then start the task again. See [tasks](tasks.md#if-the-run-never-started).
 
 ## The model provider can't be reached or is busy
 

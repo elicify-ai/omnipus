@@ -49,6 +49,51 @@ Leaving Repeat on Does not repeat, with a time set, creates a one-time task that
 
 You edit a series as a whole: you cannot change one occurrence alone or drag its chip to another day.
 
+## Run a scheduled task now
+
+**Run now** starts a scheduled task before its next time, or runs a past time again. It is `POST /api/v1/tasks/{id}/runs`. An empty body, or a body with no `occurrence_ms`, is the task-level action. A body with `occurrence_ms` names one scheduled time (milliseconds since 1970, UTC). A start that is accepted answers HTTP 202; the run itself begins after that answer.
+
+The **armed** time is the next time the timer is actually set to fire for that task. The Calendar reads it from the server (`armed_occurrence_ms` on the occurrence list). It is not guessed from the repeat rule.
+
+| Where you are | What you can press | What happens |
+|---|---|---|
+| A repeating chip at the armed time, even when that time is still in the future | **Run now** | That armed time runs now and is used up. It does not also fire when the clock reaches it. |
+| A repeating chip for a past time | **Run now** | That past time runs again, as it did before. The armed future time is left alone. |
+| Any other future time | Nothing | The button is hidden. A request that names that time is refused: "this time is not the task's next scheduled run, so it cannot be run now; refresh the calendar and try again". |
+| A one-time chip | Opens the task panel; the button is **Run now**, not **Start Task** | Task-level Run now, with no `occurrence_ms`. |
+| A day bucket whose day contains the armed time | **Run next armed occurrence** | The same task-level Run now. The day's run history is unchanged. If the armed time is on another day, the button is absent. |
+
+On a task-level Run now, an armed time is used up. If nothing is armed, the task runs as an ordinary task. A task that still has a future schedule but whose timer registration is missing is refused: "this task's schedule is out of sync, so Run now cannot use it; save the schedule again, then retry".
+
+Using an armed time early records that scheduled time, not the moment you pressed the button. The series continues from the next time after both "now" and that used-up time. A restart before the original clock time does not bring the used-up time back. If the gateway stops after Run now has been accepted and before the run actually starts, that time stays used up and is not replayed.
+
+These requests are refused and do not start a second run:
+
+| Situation | Message |
+|---|---|
+| An automatic run of this task is already queued and waiting for a free slot | "an automatic run of this task is already queued and will start shortly, so Run now did not start another run". That queued run still starts once. |
+| The schedule changed while Run now was starting | "the task's schedule changed while Run now was starting, so nothing was run; refresh and try again". |
+| The task is already running | "this task is already running". |
+| Omnipus is shutting down | "Omnipus is shutting down, so the run was not started". |
+
+A task with a schedule cannot be started by changing its status to **Next** or **In Progress**, and it cannot be restarted. Both are refused before anything is saved, with: "this task runs on a schedule, so it cannot be started by changing its status or restarting it; use Run now (POST /api/v1/tasks/{id}/runs) to run its next scheduled occurrence now". The status change answers HTTP 400. Restart (`POST /api/v1/tasks/{id}/restart`) answers HTTP 409. The task panel does not offer those two statuses, and if you try it says "A scheduled task starts with Run now, not a status change." A task with no schedule still starts with **Start Task** and can still be restarted. The Board and List still hide scheduled tasks, so their **Run** and **Restart** buttons are not the way to start one.
+
+An agent's `run_task` uses the same Run now path. A repeating series whose last run is **Done** can still be run now. A finished one-time task cannot.
+
+## Who is told when a run finishes
+
+The agent assigned to the task, and the agent that started the run when one did, get the result in their main chat in that workspace. The message is the same for each of them. The header looks like `Task run done: "title" (run <id>)` — or `failed`, or `stopped` when a person stopped it — and the full result follows.
+
+When an **agent** created the task, that creator gets one copy of the same message, in its main chat in the task's workspace, once that run has actually finished:
+
+- A task a person created sends no creator copy, even if the person's name matches an agent id.
+- If the creator is already the assignee or the agent that started the run, they get that one message, not a second copy.
+- An agent who is not a member of the workspace the task belongs to gets no result message and no substitute status message.
+- A skipped or missed time, where nothing ran, tells nobody.
+- If that run recorded no recipient at all (no eligible main chat for the assignee, and no agent starter), the creator is not sent a copy either. The copy is added only alongside at least one recipient the run already had.
+- If the creator's chat in that workspace cannot be resolved, the loss is written on the task's own conversation ("The completion notice for … could not be delivered") and nobody else is substituted in.
+- If a late result loses to a Stop, the notice is the stopped outcome, once. A conflict while the task is not finished sends nothing.
+
 ## What you see on the calendar
 
 Week and Day use labelled chips with the meanings below. Month represents the event data with status dots rather than these chip labels; when a task repeats more than three times in a day, the server groups that day into a single entry for the broader Month range, and the grid shows only its dot. A date's hover text lists up to three event titles and may include that day's grouping label. The toolbar also has an agent filter, set to All agents by default, which narrows the grid to one agent or to unassigned work the moment you pick a name.
@@ -64,7 +109,10 @@ An agent heartbeat is separate from scheduled task work and does not appear on t
 
 ## Limits and things to watch
 
+- **Heartbeats, chat loops and scheduled tasks share one timer.** They are three kinds of job (`heartbeat`, `loop` and `task`) on one engine, stored in `cron/jobs.json` under the data directory. A settings reload does not stop that timer or rebuild it. Stopping the gateway stops it before Omnipus waits for work already running, so a new heartbeat, loop step or scheduled task does not start during shutdown. A job saved as any other kind, including an old `agent_turn` schedule from the removed schedules API, is dropped once at startup and named in the gateway log. Heartbeats are rebuilt from workspace settings, task schedules from the tasks, and an active chat loop from the chat's saved loop state (see [loops](loops.md)).
+- **There is no fixed cap on how many scheduled runs start at once.** `schedules.max_concurrent_runs` is gone. An old copy of that key in `config.json` is ignored and dropped the next time the file is saved. While the machine has memory to spare, no configured number holds scheduled dispatches back. When memory is under pressure, or when it cannot be measured, at most two scheduled dispatches run at the same time and the rest wait. The wait is a gateway warning, `cron: scheduled run waiting for admission: memory limit reached`. A task run that has already been handed to its agent is not cut off when memory tightens; only the next dispatch waits. The retry gaps for a heartbeat (`schedules.retry_backoff_ms`, one minute, two minutes, then five minutes unless you set others) are read only when the gateway process starts. A settings reload keeps the gaps the process started with.
 - **A scheduled run has no time limit.** It runs until the agent finishes or someone stops it. Older versions stopped a run after five minutes (`schedules.run_timeout_seconds`, or a per-schedule timeout); those settings are now ignored. Runs recorded with the status **timeout** by an older version keep that status in the history.
+- **A failed task occurrence is not retried on a backoff.** The next scheduled time is the retry. A heartbeat that fails for a passing reason (the provider is briefly unreachable, for example) is tried again on the gaps above, then returns to its normal interval. A chat loop records the error and continues; see [loops](loops.md).
 - Restarting or reloading the gateway does not add extra triggers for a scheduled task. If earlier starts left duplicate internal triggers, startup keeps one per task and logs each removed duplicate before the scheduler can fire. This cleanup does not change your task definitions or recorded task runs.
 - A missed run is skipped, never replayed. If the server was down at the fire time, that occurrence is gone, and After N occurrences counts planned runs, not completed ones. The exception is a one-time run the server actually started and that a gateway crash, shutdown or restart then interrupted in the middle: the next gateway start runs that one again, once. A run you stopped yourself (the Stop button, the `/stop` command, or stopping the task) is not run again.
 - After a gateway start, task work begins only once your agents are ready to take it. A scheduled run that comes due after Omnipus has checked its schedule for missed runs, a one-time run that is being run again after an interruption, and tasks in the **Next** column that start on their own wait for that moment. They can start a few seconds late, but each still runs exactly once.

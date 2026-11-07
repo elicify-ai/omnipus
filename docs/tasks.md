@@ -48,6 +48,8 @@ Task tags are shown in the info panel and List, not on Board cards or Graph node
 
 To start a saved task later, press **Run** on its card (a play symbol), drag it into **In Progress**, or press **Start Task** in the panel. The engine then drives it: the agent works toward the goal, each run is judged against your criteria, and the card's status follows.
 
+A task with a schedule is not on the Board or the List. Start it early from the [Calendar](calendar.md) with **Run now** (`POST /api/v1/tasks/{id}/runs`). Changing its status to **Next** or **In Progress**, or restarting it (`POST /api/v1/tasks/{id}/restart`), is refused before anything is saved. The message points at Run now: "this task runs on a schedule, so it cannot be started by changing its status or restarting it; use Run now (POST /api/v1/tasks/{id}/runs) to run its next scheduled occurrence now". The panel hides those two status choices and shows **Run now** instead of **Start Task**. A task with no schedule is unchanged.
+
 ### Task runs never ask for approval
 
 A task run never stops to ask you for approval, however you started it (changed 2026-10-13). Tool calls that Auto-approve, an operator `command_rules` rule or an "Always Allow" grant cover run as usual. Any other call that would need approval is refused at once: the task's conversation shows "Not run: needs approval, and task and plan runs never ask.", the agent reports what was blocked, and the task ends **Failed** with that explanation. Helpers the agent starts follow the same rule, and writing into the task's conversation does not change it. To let a task use such a tool, turn Auto-approve on, add a rule, or set the tool to Allow — see [security](security.md#task-plan-scheduled-and-other-unattended-runs). On a host without an enforcing kernel sandbox, Auto-approve runs only read-only shell commands and rule-covered ones, so more runs end blocked there.
@@ -157,11 +159,23 @@ A task flows from Inbox toward Done; Blocked hangs off to the side until its dep
 
 Click or tap a card or List row and the task detail panel slides in. The separate info icon opens a read-only details panel first; **Open task** inside it opens the task detail panel. Every field in the detail panel saves as you edit; there is no Save button. From here you can:
 
-- Change the status, assign a different agent, or move the task to another plan.
+- Change the status, assign a different agent, or move the task to another plan. On a task with a schedule, **Next** and **In Progress** are not offered; the panel says "A scheduled task starts with Run now, not a status change."
 - Edit the goal, priority, tags, dependencies, due date, and checklist.
-- Press **Start Task** while it is idle, **Retry** after a failure, or **Stop/Clear goal loop** while it runs. Stop and Delete both ask for confirmation.
+- Press **Start Task** while an ordinary task is idle, **Run now** on a task with a schedule, **Retry** after a failure, or **Stop/Clear goal loop** while it runs. Stop and Delete both ask for confirmation. **Retry** is itself Run now: it opens a fresh run and leaves the failed one in the history.
 - Press **Open in Chat** to read the run's conversation, once it has run.
 - Read the **Run history**: one row per attempt, its outcome, and a link into that run's chat. Above it sit the latest verdicts on each acceptance criterion, with the evidence behind them — the judge is explained in [goals](goals.md).
+
+## Who is told when a run finishes
+
+The assignee, and the agent that started the run when one did, get the result in their main chat. When an agent created the task, that creator gets one copy of the same full message, once, in its main chat in the task's workspace. A person who created the task gets no creator copy. A creator who is already the assignee or the starter is not told twice. A creator who is not a member of that workspace gets no result and no substitute message. A skipped time tells nobody. If the run has no recipient at all, the creator is not copied either. If the creator's chat cannot be resolved, the loss is written on the task conversation and nobody is substituted. The same rules are spelled out on the [Calendar](calendar.md#who-is-told-when-a-run-finishes) page.
+
+## If the run never started
+
+When a run is refused before any work begins — the agent's startup hooks or connected tool servers could not start, the agent is gone, or its runner could not be resolved — the task's result and an error line in the task conversation are exactly:
+
+> The task could not be started. Check the agent and try again; details are in the server log.
+
+The goal record's reason is that sentence prefixed with `owning task reached failed:`. The chat outcome line wraps the same text again (`Goal "…" ended with its task (failed): …`), so the sentence is inside it rather than standing alone. The cause, which can include paths or tokens, stays in the gateway log and is not copied into any of those places. This ending does not use up a retry attempt.
 
 ## Limits and things to watch
 

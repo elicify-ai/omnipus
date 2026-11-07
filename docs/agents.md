@@ -334,6 +334,8 @@ A heartbeat is a scheduled check-in for one agent in one workspace. The same age
 
 If nothing needs attention, the agent records an all-clear. The sidebar lists chat agents, not individual heartbeat sessions. Heartbeat check-ins use that agent's main chat. After a successful check-in, the next interval is counted from that check-in's completion, in the same heartbeat conversation; no gateway restart is needed between check-ins. Scheduled task work is a different feature; the [calendar](calendar.md) page covers it.
 
+A heartbeat is one of three jobs on the single timer, together with [chat loops](loops.md) and scheduled tasks. Saving settings does not restart that timer. After a real gateway restart, the next heartbeat interval is counted from startup; a check-in that was due while Omnipus was down is not replayed. A heartbeat that fails for a passing reason is tried again after one minute, then two, then five (unless `schedules.retry_backoff_ms` sets other gaps, which apply only at the next process start). A scheduled task does not use those gaps: its next time is the retry.
+
 ## Limits and things to watch
 
 - Ordinary built-in agents' identity and base instructions are protected. Model and supported execution limits remain editable, as do tool policies, connector assignments and skills.

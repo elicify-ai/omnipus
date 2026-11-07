@@ -282,7 +282,7 @@ Leave the field blank and live available memory governs each new turn, reported 
 
 There is no time limit. A delegated session — like a task, a scheduled run, a plan's supervision turn or an external CLI worker — runs until it finishes or someone stops it: **Stop** in the chat, `delegate` with `action: "stop_all"`, or stopping the task or plan. Long work is never cut off part-way by a timer.
 
-Older versions capped a delegated session at 30 minutes. An install that still has `performance.delegation_timeout_minutes`, `agents.defaults.timeout_seconds` or `schedules.run_timeout_seconds` in its `config.json`, or a `timeout_seconds` in an agent's settings file, keeps working: the values are ignored, and each is dropped the next time its file is saved. A `timeout_seconds` that an agent still passes to `delegate` is accepted and ignored.
+Older versions capped a delegated session at 30 minutes. An install that still has `performance.delegation_timeout_minutes`, `agents.defaults.timeout_seconds` or `schedules.run_timeout_seconds` in its `config.json`, or a `timeout_seconds` in an agent's settings file, keeps working: the values are ignored, and each is dropped the next time its file is saved. A `timeout_seconds` that an agent still passes to `delegate` is accepted and ignored. `schedules.max_concurrent_runs` is removed the same way: an old value is ignored and dropped on the next save. How many scheduled dispatches may run is decided from live memory, not from that key; see [configuration](operations/configuration.md#scheduled-work).
 
 Two limits stay, because they protect against a broken connection or command rather than limiting work:
 

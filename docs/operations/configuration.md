@@ -24,3 +24,13 @@ The gateway listens on port `5000` by default. The web app, application programm
 Provider and model choices change over time. Use the live Providers screen for the available catalog and [Providers and models](../providers-and-models.md) for the user-facing explanation rather than copying a provider list into configuration documentation.
 
 Changes that affect the listening address, public origin, or boot-time sandbox require a gateway restart. The relevant specialist page identifies restart-gated fields.
+
+## Scheduled work
+
+Heartbeats, chat loops and scheduled tasks are three job kinds on one timer. The only store is `cron/jobs.json` under the data directory. Older separate timer files are not read. A job whose kind is not `heartbeat`, `loop` or `task` — including an `agent_turn` job left by the removed schedules API — is dropped at startup and named in the gateway log. Heartbeats are rebuilt from workspace settings, task schedules from the tasks, and an active chat loop gets one fresh step from the chat's saved loop state. See [Calendar](../calendar.md), [chat loops](../loops.md) and [agents](../agents.md).
+
+`schedules.max_concurrent_runs` is removed. A config file that still contains it loads; the key has no effect and is dropped the next time the file is saved. There is no fixed number of scheduled dispatches. While memory has headroom, none are held back by a count. When memory is under pressure, or cannot be measured, at most two scheduled dispatches run at once and further ones wait (`cron: scheduled run waiting for admission: memory limit reached`). A task run already handed to its agent is not cancelled when the limit falls.
+
+`schedules.retry_backoff_ms` is the only remaining schedules setting. It is the gap, in milliseconds, before each retry of a heartbeat that failed for a passing reason. The default is one minute, two minutes, then five (`[60000, 120000, 300000]`). It is read when the gateway process starts. A settings reload does not change the running timer. `schedules.run_timeout_seconds` is still ignored: a scheduled run has no time limit.
+
+`POST /api/v1/schedules` and the rest of that collection, and `GET /api/v1/automations`, are removed. Any `/api/` path with no route, including those, answers HTTP 404 and JSON `{"error":"endpoint not found"}` — not a web page. Callers that used the schedules API directly have to stop; scheduled work is a task, and running the next time early is `POST /api/v1/tasks/{id}/runs` ([Calendar](../calendar.md#run-a-scheduled-task-now)). The web address `/automations` still redirects to the Calendar.
