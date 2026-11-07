@@ -57,6 +57,29 @@ export interface HeldStreamEvidence {
   retried: number;
   /** Unexpected or failed scripted-provider traffic. */
   errors: string[];
+  /** Per-script state when `scripts` is used (empty otherwise): the
+   * multi-prompt branch (#1661 Bug-3-a) asserts on these — one tab's prompt
+   * held while another's is answered, per prompt, not as one global count. */
+  promptRecords: HeldStreamPromptRecord[];
+}
+
+/** Per-script record for the `scripts` branch (see HeldStreamOptions.scripts). */
+export interface HeldStreamPromptRecord {
+  /** The script's prompt substring (same matching rule as promptIncludes). */
+  promptIncludes: string;
+  /** What this script does: keep the stream open, or answer it complete. */
+  behavior: 'hold' | 'answer';
+  /** Matching streaming requests seen for this prompt. */
+  requests: number;
+  /** True while this prompt's stream is currently held open. */
+  held: boolean;
+  /** Completed answers served for an 'answer' script. */
+  answered: number;
+  /** Times the client aborted while this prompt's stream was held — the
+   * wire-level cancel signal (the gateway cancelling the provider call). */
+  clientClosed: number;
+  /** Times release() finished this prompt's held stream. */
+  released: number;
 }
 
 // not-wire-format: a test fixture handle, not an Omnipus wire type.
@@ -76,6 +99,18 @@ export interface HeldStreamProvider {
   close(): Promise<void>;
 }
 
+/** One branch of the multi-prompt script (see HeldStreamOptions.scripts). */
+export interface HeldStreamScript {
+  /** Substring identifying this prompt (same matching rule as promptIncludes). */
+  promptIncludes: string;
+  /** 'hold' keeps this prompt's stream open until release() or a real cancel;
+   * 'answer' completes it with answerText (streamed at the fixture's cadence
+   * so the answer stays observable mid-flight, like the retry path). */
+  behavior: 'hold' | 'answer';
+  /** Reply text for behavior 'answer' (required there). */
+  answerText?: string;
+}
+
 export interface HeldStreamOptions {
   /** Substring identifying the user prompt of the turn to hold (the same
    * matching rule T25's stop-label provider uses: any user message that
@@ -88,12 +123,23 @@ export interface HeldStreamOptions {
   chunkText?: string;
   /** Text of the final delta written by release(). */
   releaseText?: string;
+  /** Multi-prompt branch (#1661 Bug-3-a and the replay tests): branch the
+   * reply per prompt instead of the single held prompt — hold one tab's
+   * message, answer another's. When set, matching walks these scripts and
+   * each gets a record in evidence.promptRecords. Matching scans the LAST
+   * user message backwards so a later turn's request matches its own script
+   * rather than an earlier turn's marker still present in the sent history
+   * (the gateway sends the whole conversation). Single-hold behaviour
+   * (promptIncludes) is unchanged and still used when scripts is omitted. */
+  scripts?: HeldStreamScript[];
 }
 
 interface HeldStream {
   res: http.ServerResponse;
   timer: NodeJS.Timeout;
   finished: boolean;
+  /** The script record this stream is held for (scripts branch only). */
+  record: HeldStreamPromptRecord | null;
 }
 
 /**
@@ -125,6 +171,15 @@ export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<
     released: 0,
     retried: 0,
     errors: [],
+    promptRecords: (opts.scripts ?? []).map((script) => ({
+      promptIncludes: script.promptIncludes,
+      behavior: script.behavior,
+      requests: 0,
+      held: false,
+      answered: 0,
+      clientClosed: 0,
+      released: 0,
+    })),
   };
   let held: HeldStream | null = null;
 
@@ -198,12 +253,86 @@ export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<
         return;
       }
       const messages = Array.isArray(body.messages) ? body.messages as Record<string, unknown>[] : [];
+      const userText = (content: unknown): string => typeof content === 'string' ? content : Array.isArray(content) ?
+        content.map((part: Record<string, unknown>) => part.type === 'text' ? part.text : '').join('') : '';
+
+      if (opts.scripts) {
+        // Multi-prompt branch: walk the user messages BACKWARDS so a later
+        // turn's request matches its own script, not an earlier turn's marker
+        // still present in the sent conversation history.
+        let matched: HeldStreamScript | null = null;
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+          const message = messages[i];
+          if (message.role !== 'user') continue;
+          const text = userText(message.content);
+          const hit = opts.scripts.find((script) => text.includes(script.promptIncludes));
+          if (hit) {
+            matched = hit;
+            break;
+          }
+        }
+        const record = matched ?
+          evidence.promptRecords.find((entry) => entry.promptIncludes === matched!.promptIncludes) ?? null :
+          null;
+        evidence.streamRequests += 1;
+        if (!matched || !record) {
+          // Answer complete so no turn can hang on the fixture; evidence flags it.
+          evidence.unmatchedStreams += 1;
+          evidence.errors.push(`unexpected streaming prompt (only scripted prompts are held or answered)`);
+          completeNow(res, 'FIXTURE_ERROR: unexpected streaming prompt');
+          return;
+        }
+        record.requests += 1;
+        if (matched.behavior === 'answer') {
+          record.answered += 1;
+          completePaced(res, matched.answerText ?? `FIXTURE_ERROR: answer script for "${matched.promptIncludes}" has no answerText`);
+          return;
+        }
+        if (held !== null) {
+          // One hold slot, as in the single-prompt path: a second hold cannot
+          // be served — answer at cadence and flag instead of hanging a turn.
+          evidence.retried += 1;
+          evidence.errors.push(`hold requested for "${matched.promptIncludes}" while another stream is already held`);
+          completePaced(res, retryAnswer);
+          return;
+        }
+        // THE HELD STREAM for this script: deltas on a timer, no finish chunk,
+        // no [DONE] — the turn cannot complete until release(), a real cancel
+        // or a crash. The per-script record is the test's branch oracle.
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const stream: HeldStream = {
+          res,
+          timer: setInterval(() => {
+            res.write(chunk({ content: deltaText(evidence.chunksSent + 1) }, null));
+            evidence.chunksSent += 1;
+          }, chunkIntervalMs),
+          finished: false,
+          record,
+        };
+        res.once('close', () => {
+          clearInterval(stream.timer);
+          if (!stream.finished) {
+            stream.finished = true;
+            evidence.streamsClosed += 1;
+            // The client (the gateway cancelling the provider call on turn
+            // Stop) closed a stream the fixture did not finish: the wire-level
+            // cancel signal for this prompt.
+            record.clientClosed += 1;
+          }
+          if (held === stream) held = null;
+          record.held = false;
+        });
+        res.on('error', (error) => evidence.errors.push(`provider response: ${error.message}`));
+        held = stream;
+        record.held = true;
+        res.write(chunk({ role: 'assistant', content: deltaText(1) }, null));
+        evidence.chunksSent += 1;
+        return;
+      }
+
       const hasPrompt = messages.some((message) => {
         if (message.role !== 'user') return false;
-        const content = message.content;
-        const text = typeof content === 'string' ? content : Array.isArray(content) ?
-          content.map((part: Record<string, unknown>) => part.type === 'text' ? part.text : '').join('') : '';
-        return text.includes(opts.promptIncludes);
+        return userText(message.content).includes(opts.promptIncludes);
       });
       evidence.streamRequests += 1;
       if (!hasPrompt) {
@@ -231,6 +360,7 @@ export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<
           evidence.chunksSent += 1;
         }, chunkIntervalMs),
         finished: false,
+        record: null,
       };
       res.once('close', () => {
         clearInterval(stream.timer);
@@ -266,6 +396,7 @@ export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<
       stream.finished = true;
       evidence.released += 1;
       evidence.streamsClosed += 1;
+      if (stream.record) stream.record.released += 1;
       clearInterval(stream.timer);
       stream.res.write(chunk({ content: releaseText }, 'stop') + 'data: [DONE]\n\n');
       stream.res.end();
