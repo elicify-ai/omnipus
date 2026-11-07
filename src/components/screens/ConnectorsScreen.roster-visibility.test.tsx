@@ -441,7 +441,11 @@ describe('Connectors — a failed saved-settings read strands nothing (D2/F1)', 
   // never its operation. This test clicks Retry on the failed card, requires a
   // NEW saved-settings request for that id, and requires the honest
   // failed→recovered classification (Off card, controls retained) while
-  // another stub's read is still unresolved.
+  // another stub's read is still unresolved. Round 7 (CHECK round 3): an
+  // HTTP-only retry that fetches and DISCARDS the response also passed that —
+  // the failed card already showed Off and its controls — so the test now
+  // additionally requires the failed state to clear: the notice and its
+  // Retry control are gone once the successful re-read is applied.
   it('clicking Retry re-requests that stub\'s saved settings and recovers the card honestly while another stub stays unresolved', async () => {
     // Discord's FIRST read fails; its later reads (the Retry's refetch)
     // succeed with a stored-credential body. Matrix's read never settles.
@@ -454,6 +458,8 @@ describe('Connectors — a failed saved-settings read strands nothing (D2/F1)', 
     // The failed state: card, controls, notice, Retry — D2's established shape.
     const failedCard = await screen.findByTestId('channel-card-discord')
     expect(within(failedCard).getByText(/saved settings could not be/i)).toBeInTheDocument()
+    expect(within(failedCard).getByRole('button', { name: /retry/i }),
+      'instrument: the Retry control must be present before the recovery is asserted').toBeInTheDocument()
     const readsBeforeRetry = f.configReads.filter((id) => id === 'discord').length
     expect(readsBeforeRetry, 'instrument: the failed first read for discord settled exactly once').toBe(1)
 
@@ -470,6 +476,19 @@ describe('Connectors — a failed saved-settings read strands nothing (D2/F1)', 
     // The recovered classification is honest: the re-read found a stored
     // credential, so the Off card renders — with its controls retained.
     const recoveredCard = await screen.findByTestId('channel-card-discord')
+    // ORACLE (F8 recovery — CHECK round 3): the failed state must actually
+    // CLEAR, not just fire another request. The failed-settings notice and
+    // its Retry control are D2's failed-card shape; only a refetch that
+    // APPLIES the successful response removes them. A retry that fetches and
+    // discards the response leaves the classification query errored — the
+    // notice and Retry control stay on the card.
+    await waitFor(() => {
+      expect(within(screen.getByTestId('channel-card-discord')).queryByText(/saved settings could not be/i),
+        'F8: a successful Retry must recover the failed state — the failed-settings notice must clear, not just another request fire')
+        .not.toBeInTheDocument()
+    })
+    expect(within(screen.getByTestId('channel-card-discord')).queryByRole('button', { name: /retry/i }),
+      'F8: the Retry control must be gone once the re-read recovered the saved settings').not.toBeInTheDocument()
     await requireOffBadge(recoveredCard, 'discord (recovered)')
     expect(within(recoveredCard).getByRole('button', { name: 'Configure discord' })).toBeInTheDocument()
     expect(within(recoveredCard).getByTestId('channel-toggle-discord')).toHaveTextContent('Enable')
