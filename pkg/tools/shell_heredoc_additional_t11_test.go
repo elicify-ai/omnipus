@@ -10,7 +10,7 @@ package tools
 func t11HereDocAdditionalCases(absent string) []t11HereDocRuleCase {
 	path := absent + "/v1/users"
 	body := "print('" + path + "')\nPY\n"
-	out := make([]t11HereDocRuleCase, 0, 7) // 4 case variants, 2 other refusals and 1 normal allowance.
+	out := make([]t11HereDocRuleCase, 0, 8) // 4 case variants, 3 other refusals and 1 normal allowance.
 	for _, shell := range []string{"BASH", "Bash", "ZSH", "EVAL"} {
 		out = append(out, t11HereDocRuleCase{
 			"case variant shell " + shell, shell + " <<'PY'\n" + body,
@@ -18,6 +18,8 @@ func t11HereDocAdditionalCases(absent string) []t11HereDocRuleCase {
 		})
 	}
 	return append(out,
+		t11HereDocRuleCase{"quoted marker trailing space", "python3 <<'PY '\n" + body,
+			false, false, "path outside working dir", path},
 		t11HereDocRuleCase{"dotted program token", "python3.12 <<'PY'\n" + body,
 			false, false, "path outside working dir", path},
 		t11HereDocRuleCase{"quoted shift in one-liner with literal", "python3 -c \"print('" + path + "'); print(1<<2)\"",
