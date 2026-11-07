@@ -424,6 +424,8 @@ The operator must correct the storage layout; **Retry** does not remove or repla
 
 Other session reads and writes that hit a storage failure answer in the same way — "This session could not be read / renamed / deleted / created because session storage failed. Check disk space and permissions, then retry. Details are in the server log." — with the cause only in the log.
 
+A sent file that Omnipus no longer knows is not a storage failure. The chat opens with that one card left out, and the gateway log gets a warning, `replay: skipped file card, media ref unknown to the store`, naming the session and the file's reference. Any other error while reading a file's record still fails the read with the message above.
+
 ## Two more errors with short fixes
 
 **"priority must be between 1 and 5"** — task priority runs from 1 (highest) to 5 (lowest); 3 is the default, and anything outside the range is rejected.
