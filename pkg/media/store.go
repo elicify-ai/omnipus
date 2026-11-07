@@ -32,10 +32,25 @@ const (
 // (CleanExpired) never expires them — they stay resolvable so chat history keeps
 // rendering — and they are freed only by ReleaseAll when the owning session is
 // deleted. The full scope is SessionInlineScopePrefix + "<sessionID>" so a single
-// ReleaseAll frees all of a session's inline media. Other forget_only scopes
-// (user uploads, send_file) are NOT pinned and still age out of the in-memory
-// index via CleanExpired (their files are preserved; only the ref is dropped).
+// ReleaseAll frees all of a session's inline media. Sent files are pinned too
+// (SentFileScopePrefix). Other forget_only scopes (user uploads) are NOT pinned
+// and still age out of the in-memory index via CleanExpired (their files are
+// preserved; only the ref is dropped).
 const SessionInlineScopePrefix = "tool:inline:session:"
+
+// SentFileScopePrefix is the media-store scope prefix for files the send_file
+// tool delivered; the full scope is SentFileScopePrefix + "<channel>:<chatID>".
+// Entries under it are pinned from the TTL cleaner like session inline media, so
+// the file's card and download keep working in chat history. Unlike session
+// inline media, nothing releases them when a session is deleted. send_file
+// stores them forget_only, so the store never deletes the file and a pinned
+// entry costs one registry row, not a copy of the file.
+const SentFileScopePrefix = "tool:send_file:"
+
+// isPinnedScope reports whether entries in scope are exempt from CleanExpired.
+func isPinnedScope(scope string) bool {
+	return strings.HasPrefix(scope, SessionInlineScopePrefix) || strings.HasPrefix(scope, SentFileScopePrefix)
+}
 
 // MediaMeta holds metadata about a stored media file.
 type MediaMeta struct {
@@ -449,14 +464,12 @@ func (s *FileMediaStore) ReleaseAll(scope string) error {
 	return nil
 }
 
-// CleanExpired removes all entries older than MaxAge that use
-// CleanupPolicyDeleteOnCleanup. Entries with CleanupPolicyForgetOnly are
-// intentionally skipped — they are session-bound and must remain fully
-// resolvable until their session is released via ReleaseAll. Releasing them
-// here would cause 404s when revisiting chat history that contains
-// tool-generated screenshots or charts.
+// CleanExpired removes all entries older than MaxAge, except pinned scopes (see
+// isPinnedScope). Those must stay fully resolvable: dropping them here would
+// cause 404s when revisiting chat history that contains tool-generated
+// screenshots, charts or sent files.
 //
-// Phase 1 (under lock): identify expired delete_on_cleanup entries and remove
+// Phase 1 (under lock): identify expired, unpinned entries and remove them
 // from maps.
 // Phase 2 (no lock): delete store-managed files from disk to minimize lock
 // contention.
@@ -479,14 +492,11 @@ func (s *FileMediaStore) CleanExpired() int {
 		if !entry.storedAt.Before(cutoff) {
 			continue
 		}
-		// Never TTL-expire SESSION-PINNED inline media (scope prefix
-		// SessionInlineScopePrefix): it must stay resolvable so chat history keeps
-		// rendering tool-generated screenshots/charts, and it is freed explicitly
-		// by ReleaseAll on session delete. Other forget_only entries (user uploads,
-		// send_file) are NOT pinned — they still age out of the in-memory index
-		// here as before (their files are preserved; only the ref is dropped),
-		// which avoids an unbounded ref leak for those non-session scopes.
-		if scope, ok := s.refToScope[ref]; ok && strings.HasPrefix(scope, SessionInlineScopePrefix) {
+		// Never TTL-expire pinned scopes: session inline media and sent files stay
+		// resolvable so chat history keeps rendering them. Other forget_only entries
+		// (user uploads) are NOT pinned — they still age out of the in-memory index
+		// here as before (their files are preserved; only the ref is dropped).
+		if scope, ok := s.refToScope[ref]; ok && isPinnedScope(scope) {
 			continue
 		}
 

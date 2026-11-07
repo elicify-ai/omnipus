@@ -11,6 +11,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -1211,7 +1212,15 @@ func buildMediaFrame(
 		// send_file). Replaying both produces a duplicate image in the
 		// SPA. Skip refs whose path was already emitted in this replay.
 		if mediaStore != nil && seenPaths != nil {
-			if path, err := mediaStore.ResolveWithOpts(refStr, media.ResolveOpts{}); err == nil && path != "" {
+			path, err := mediaStore.ResolveWithOpts(refStr, media.ResolveOpts{})
+			if errors.Is(err, media.ErrNotFound) {
+				// The store no longer knows this ref, so its card could only be
+				// dead. Keep the rest of the group and tell the operator.
+				logsafeWarn("replay: skipped file card, media ref unknown to the store",
+					"session_id", sessionID, "ref", refStr)
+				continue
+			}
+			if err == nil && path != "" {
 				if _, dup := seenPaths[path]; dup {
 					continue
 				}

@@ -172,7 +172,7 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	mediaType := detectMediaType(resolved)
-	scope := fmt.Sprintf("tool:send_file:%s:%s", channel, chatID)
+	scope := fmt.Sprintf("%s%s:%s", media.SentFileScopePrefix, channel, chatID)
 
 	// If this exact path is already registered (e.g. browser.screenshot
 	// stored an inline copy and the LLM is now telling us to deliver
