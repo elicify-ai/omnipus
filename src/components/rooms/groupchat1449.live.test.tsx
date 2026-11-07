@@ -2,15 +2,21 @@
 // Oracles: docs/internal/specs/1449-group-chat-spec.md S-35, S-36, S-50, S-98.
 // Real RoomScreen. Only the socket and fetch are doubled.
 import type { ComponentType } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { screen, within } from '@testing-library/react'
 import {
-  Network, ROOM_ID, WS, delivery, entry, mountAt, openRoom, requiredExport, resetRealStores, room, snapshot, stopHarness,
+  Network, ROOM_ID, WS, delivery, entry, loadRoomScreen, mountAt, openRoom, requiredExport, resetRealStores, room, snapshot, stopHarness,
 } from '../../../tests/l1-room-ui/harness'
 import type { WsConnection } from '@/lib/ws'
 
 let net: Network
 let connection: WsConnection | undefined
+
+// #1572: module transformation uses the existing beforeAll hook budget — the
+// RoomScreen import must not run inside the first test's 30 s testTimeout,
+// where an abort would leak its late mount into the next case (K45 cascade);
+// same shape as RoomTranscript.anchor.test.tsx.
+beforeAll(async () => { await loadRoomScreen() })
 
 beforeEach(() => {
   resetRealStores()
