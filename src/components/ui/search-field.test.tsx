@@ -226,7 +226,11 @@ describe('SearchField — one Escape does one thing (D-K1, CHECK round 2)', () =
 
   function openFieldBesideLayer(kind: 'dialog' | 'popover') {
     render(<FieldBesideLayer kind={kind} />)
-    const input = screen.getByRole('searchbox', { name: 'Search connectors' })
+    // A modal Radix Dialog hides the page behind it from assistive technology BY DESIGN; this test dispatches Escape at that field directly, so the Dialog side looks it up with hidden: true (a default Popover hides nothing).
+    const input = screen.getByRole(
+      'searchbox',
+      kind === 'dialog' ? { name: 'Search connectors', hidden: true } : { name: 'Search connectors' },
+    )
     // Instrument: the layer is open BEFORE the key, so a pass can never
     // come from "it never rendered". Radix Popover content is role="dialog"
     // too (dist), so both layers are queried the same named way.
