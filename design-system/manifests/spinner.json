@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "component": "Spinner",
+  "exports": [
+    "Spinner"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/spinner.tsx",
+  "documentation": "docs/internal/design/components/spinner.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "status",
+    "decorative"
+  ],
+  "sizes": [
+    "sm",
+    "lg"
+  ],
+  "states": [
+    "loading"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/spinner.stories.tsx",
+      "exports": [
+        "Default",
+        "Large"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "spinner-unit",
+      "kind": "unit",
+      "file": "src/components/ui/spinner.test.tsx",
+      "test": "Spinner — status semantics (§2.7) default renders a status region labelled \"Loading\"",
+      "applicable": true
+    },
+    {
+      "id": "spinner-interaction",
+      "kind": "interaction",
+      "applicable": false,
+      "reason": "Spinner is presentational; actions placed inside it are covered by their own Button contract."
+    },
+    {
+      "id": "spinner-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Spinner [check:spinner-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "spinner-keyboard",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "Spinner creates no focus target or keyboard operation."
+    },
+    {
+      "id": "spinner-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Spinner [check:spinner-browser] browser",
+      "story": "Default",
+      "applicable": true,
+      "requiredTargets": [
+        {
+          "selector": "[data-testid=\"spinner\"] [role=\"status\"]",
+          "attribute": "aria-label",
+          "value": "Loading connectors"
+        }
+      ]
+    },
+    {
+      "id": "spinner-pointer",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "Spinner is not a hit target."
+    },
+    {
+      "id": "spinner-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Spinner [check:spinner-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "spinner-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Spinner [check:spinner-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "spinner-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Spinner [check:spinner-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "spinner-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Spinner [check:spinner-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "spinner-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Spinner [check:spinner-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}
