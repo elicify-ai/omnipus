@@ -76,6 +76,7 @@ import {
 import { useChatAgents } from './useChatAgents'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
+import { AssistantMediaItem } from './AssistantMediaItem'
 import {
   AssistantMessageConnectionStatus,
   UnansweredUserMessageStatus,
@@ -704,23 +705,9 @@ function InlineMedia() {
 
   return (
     <div className="flex flex-col gap-[var(--space-2)] mt-[var(--space-2)]">
-      {storeMsg.media.map((m, i) =>
-        m.type === 'image' ? (
-          <div key={`${m.url}-${i}`} className="max-w-2xl">
-            <ChatImage
-              src={m.url}
-              alt={m.caption || m.filename}
-              filename={m.filename}
-            />
-            {m.caption && (
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
-            )}
-          </div>
-        ) : (
-          // FR-081: the same file card as the settled rows.
-          <ChatFileAttachment key={`${m.url}-${i}`} media={m} />
-        ),
-      )}
+      {storeMsg.media.map((m, i) => (
+        <AssistantMediaItem key={`${m.url}-${i}`} kind={m.type === 'image' ? 'image' : 'file'} url={m.url} filename={m.filename} caption={m.caption} contentType={m.contentType} libraryRef={m.libraryRef} />
+      ))}
     </div>
   )
 }
@@ -1220,23 +1207,9 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
             <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
-              {mediaItems.map((m, i) =>
-                m.type === 'image' ? (
-                  <div key={`${m.url}-${i}`} className="max-w-2xl">
-                    <ChatImage
-                      src={m.url}
-                      alt={m.caption || m.filename}
-                      filename={m.filename}
-                    />
-                    {m.caption && (
-                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
-                    )}
-                  </div>
-                ) : (
-                  // FR-002: a keyboard-operable download with an inline error and Retry.
-                  <ChatFileAttachment key={`${m.url}-${i}`} media={m} />
-                ),
-              )}
+              {mediaItems.map((m, i) => (
+                <AssistantMediaItem key={`${m.url}-${i}`} kind={m.type === 'image' ? 'image' : 'file'} url={m.url} filename={m.filename} caption={m.caption} contentType={m.contentType} libraryRef={m.libraryRef} />
+              ))}
             </div>
           )}
 
@@ -1267,7 +1240,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
               (incorrectly) rendering the paragraph as one unbroken block. */}
           {partGroups.map(group => <div key={group.key} data-history-part={group.position}>{group.parts.map((part: DisplayPart, idx) => {
             if (part.type === 'text') {
-              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
+              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} chatLinks />
             }
             if (part.type === 'more') return <HistoryShowRest key={`more-${part.position}`} sessionId={activeSessionId ?? ''} position={part.position} originalSizeBytes={part.originalSizeBytes} />
             const callId = part.call.id

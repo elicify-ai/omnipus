@@ -134,6 +134,13 @@ export function shouldRenderToolCall(
       // outcome still forces visibility, same as ToolSearch.
       return isError
 
+    case 'show_to_user':
+      // chat-links spec FR-018: a successful call's reader-facing surface is
+      // the Library opening (or the "Open in Library" notice), not the call
+      // chip. A refusal (other workspace, missing file, rate limit, …) has no
+      // other surface, so an error still forces visibility, like ToolSearch.
+      return isError
+
     case 'set_goal':
       // ADR-088 D5/A-3 (work-first goal flow), re-anchored by ADR-082 D9:
       // `set_goal` is the working agent's write-path for the goal record

@@ -952,6 +952,10 @@ describe('ClientFrameTypes — contract test', () => {
       // `chat` channel).
       'session_mode_update',
       'mail_panel_observer',
+      // chat-links spec, Contract section: ChatPresenceFrame is client→server
+      // (wired like PingFrame). Not a server frame, so it belongs in this set.
+      // session_id length is 1..255 (architect clarification 2026-10-29).
+      'chat_presence',
     ])
     expect(new Set(ClientFrameTypes)).toEqual(expectedTypes)
   })

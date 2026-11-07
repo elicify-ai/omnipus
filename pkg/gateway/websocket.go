@@ -187,6 +187,11 @@ type WSHandler struct {
 	// to this connection's chat ID and revoke through teardown's UnbindAll.
 	mailPresence atomic.Pointer[email.PanelPresence]
 
+	// chatPresence holds which chats a tab is watching right now
+	// (chat_presence.go, chat-links D-presence). Nil on a handler built
+	// without newWSHandler, which then reads "not watching" everywhere.
+	chatPresence *chatPresenceStore
+
 	// activeConns tracks in-flight ServeHTTP goroutines so Wait() can block
 	// until all connections have fully torn down (used by tests to avoid
 	// tempdir cleanup races).
@@ -537,6 +542,7 @@ func newWSHandler(
 		devicePairingRegistry: newDevicePairingRegistry(),
 		pairingStore:          pairing.NewPairingStore(),
 		hubs:                  newHubRegistry(newHubBootID()),
+		chatPresence:          newChatPresenceStore(nil),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: wsCheckOrigin(allowedOrigin),
 		},
@@ -558,6 +564,7 @@ func newWSHandler(
 		agentLoop.SetClearHeldHook(h.announceClearHeld)
 		agentLoop.SetClearReleasedHook(h.releaseClearHeld)
 		agentLoop.SetRequestDeliveredHook(h.announceHeldRequestDelivered)
+		agentLoop.SetUserWatching(h.userWatching)
 		h.wireSecretRequests()
 	}
 	// Per-session state kept outside the hub is released with the hub
@@ -695,6 +702,8 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// logout and browser quit converge here because they all end the
 		// socket — so no separate presence sweeper or heartbeat exists.
 		h.revokeMailPanelObservers(chatID)
+		// chat-links D-presence: a closed connection watches nothing.
+		h.chatPresence.dropConn(wc)
 		wc.close()
 
 		// Emit observability counters at connection teardown so operators can
@@ -1425,6 +1434,18 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			return wsHandlerReadLoopContinue
 		}
 		wh.h.handleMailPanelObserverFrame(wh.wc, wh.chatID, f)
+	case string(generated.WsFrameTypeChatPresence):
+		// chat-links D-presence: this tab is (or stopped) watching a chat.
+		// Shape-validated by the schema gate above (wsFrameSchemaName →
+		// ChatPresenceFrame); the handler re-checks the bounds for installs
+		// running with validate_inbound off, and authorises the session.
+		var f generated.ChatPresenceFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			wh.wc.inboundDropped.Add(1)
+			slog.Warn("ws: malformed chat_presence frame", "chat_id", wh.chatID)
+			return wsHandlerReadLoopContinue
+		}
+		wh.h.handleChatPresence(wh.wc, f)
 	case string(generated.WsFrameTypeAskUserAnswer):
 		// AskUserQuestion card submission/cancel (askuserquestion-tool-
 		// spec v3 §3): bridge to askuser.Registry.Submit / CancelByUser.
@@ -1481,6 +1502,9 @@ func wsFrameSchemaName(frameType string) string {
 		return "AttachRoomFrame"
 	case string(generated.WsFrameTypePing):
 		return "PingFrame"
+	// chat-links contract item (e): the client→server presence frame.
+	case string(generated.WsFrameTypeChatPresence):
+		return "ChatPresenceFrame"
 	// ADR-038 finding #3: the 4 browser-live client→server frame types.
 	// These never arrive on the chat WS this function primarily serves —
 	// browser_ws.go's own readLoop is the actual caller for these cases —

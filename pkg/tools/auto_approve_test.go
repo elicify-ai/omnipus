@@ -184,9 +184,10 @@ func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
 	// entries; the other 19 are tools added after that file (bash, mail and
 	// secret tools, answer_request, update_plan, read_conversation and the
 	// three new reads). Skills r15 §10 then removes create_skill and
-	// remove_skill and adds get_skill (121 - 2 + 1 = 120).
-	if len(table) != 120 {
-		t.Errorf("table has %d entries, want 120 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02 -- plus answer_request, founder gap 5, 2026-10-11 -- plus the nine omnipus-system-agent §6.5 tools, 2026-10-13; r17 and r15 §10 changes as above)", len(table))
+	// remove_skill and adds get_skill (121 - 2 + 1 = 120). Plus show_to_user
+	// (chat-links spec test 12, FR-019; AutoRuns) -- total 121.
+	if len(table) != 121 {
+		t.Errorf("table has %d entries, want 121 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02 -- plus answer_request, founder gap 5, 2026-10-11 -- plus the nine omnipus-system-agent §6.5 tools, 2026-10-13; r17 and r15 §10 changes as above -- plus show_to_user, chat-links FR-019)", len(table))
 	}
 	if got := table["bash"]; got != AutoShellMode {
 		t.Errorf("bash class = %s, want shell_mode (bash keeps its own mechanism, §3.7)", got)

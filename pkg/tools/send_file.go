@@ -58,7 +58,7 @@ func NewSendFileTool(
 
 func (t *SendFileTool) Name() string { return "send_file" }
 func (t *SendFileTool) Description() string {
-	return "Send a local file (image, document, etc.) to the user on the current chat channel."
+	return "Send a local file (image, document, etc.) to the user on the current chat channel. On web chat, a Library file's result includes a link: line whose omnipus://file/ link is the one to show; do not invent a link, and on any other channel refer to the file by name."
 }
 func (t *SendFileTool) Scope() ToolScope       { return ScopeCore }
 func (t *SendFileTool) Category() ToolCategory { return CategoryCommunication }
@@ -179,8 +179,9 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// that same file), reuse the existing ref instead of minting a
 	// second one. Without this, the SPA receives two media frames for
 	// one image and the user sees the screenshot twice.
+	sent := sendFileResultText(ctx, channel, filename, resolved)
 	if existingRef, ok := t.mediaStore.RefByPath(resolved); ok {
-		return MediaResult(fmt.Sprintf("File %q sent to user", filename), []string{existingRef})
+		return MediaResult(sent, []string{existingRef})
 	}
 
 	ref, err := t.mediaStore.Store(resolved, media.MediaMeta{
@@ -193,7 +194,23 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("failed to register media: %v", err))
 	}
 
-	return MediaResult(fmt.Sprintf("File %q sent to user", filename), []string{ref})
+	return MediaResult(sent, []string{ref})
+}
+
+// sendFileByNameNote tells the agent how to refer to a file it sent over a
+// channel outside Omnipus (chat-links spec BS-5.3, D-A): the recipient gets
+// the file itself and no Omnipus link.
+const sendFileByNameNote = "The recipient is outside Omnipus: refer to the file by name, not by a link."
+
+// sendFileResultText is the success text: on web chat a Library file gets the
+// shared link line (FR-011); on any other channel the agent is told to use
+// the file's name instead.
+func sendFileResultText(ctx context.Context, channel, filename, resolved string) string {
+	text := fmt.Sprintf("File %q sent to user", filename)
+	if channel != webChannelName {
+		return text + ". " + sendFileByNameNote
+	}
+	return withLinkLine(text, LinkLine(ctx, config.OmnipusHomeDir(), resolved))
 }
 
 // detectMediaType determines the MIME type of a file.

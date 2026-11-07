@@ -35,3 +35,11 @@ properties:
   caption:
     type: string
     description: Optional human-readable caption for display below the media.
+  library_ref:
+    $ref: './LibraryRef.yaml'
+    description: >
+      Library address of the sent file (chat-links spec, R5 and FR-021).
+      Present for a file in a workspace Library or one of its mounted
+      folders, for every media type; the web chat shows "Open in Library"
+      on non-image file cards only. Omitted for a file outside every Library
+      and when the session's workspace is unknown.
