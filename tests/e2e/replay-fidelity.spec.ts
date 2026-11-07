@@ -671,16 +671,26 @@ test(
   //
   // Traces to: sprint-i-historical-replay-fidelity-spec.md BDD Scenario 9; TDD row 25.
   //
-  // 360s total / 180s per reply window — sized for the in-suite LLM latency regime
-  // test (d) already documents (90-150s under full-suite model contention). The
-  // 78162a02c CI artifacts show the failure mode when this test keeps the old
-  // 90s/60s budget: BOTH contexts streamed the identical answer in lockstep while
-  // the turn was still active, and the closing nonce had not arrived on either
-  // page when the 60s window expired (`123 × locator resolved to 0 elements` at
-  // :757, retry passing in 20-28s on model speed alone). No event was lost; the
-  // window was shorter than the provider. Verdict: /workspace/logs/t6b/fix-ci-fe/flake-verdict.md
+  // 660s total: the reply windows stay at 180s each, but a terminal-state gate
+  // (Step 4 below) now lets the turn itself take up to 300s of provider time
+  // before delivery is judged. Still sized for the in-suite LLM latency regime
+  // test (d) already documents (90-150s under full-suite model contention). Two
+  // CI artifacts pin the failure mode of budgeting the reply window alone:
+  // 78162a02c (90s/60s era) — BOTH contexts streamed the identical answer in
+  // lockstep while the turn was still active, and the closing nonce had not
+  // arrived on either page when the 60s window expired (`123 × locator resolved
+  // to 0 elements` at :757, retry passing in 20-28s on model speed alone) — and
+  // PR #1673's ui-heavy job 128306439762 (2026-11-07, 360s/180s era) — the CI
+  // primary (tests/e2e/e2e-model.json) streamed ~600 words over ~150s and was
+  // STILL running ("Mia is working on it"; failure screenshots show both pages
+  // byte-identical, the video's last text/usage delta at ~150s of a 189s
+  // recording) when the flat 180s reply2 wait expired at 181s (`362 × locator
+  // resolved to 0 elements` at :766, retry passing in 29.6s). Both times no
+  // event was lost; the window was shorter than the provider. Verdicts:
+  // /workspace/logs/t6b/fix-ci-fe/flake-verdict.md and
+  // /workspace/logs/team-a-restart-20261107/ciflake2-report.md
   async ({ page, browser }) => {
-    test.setTimeout(360_000)
+    test.setTimeout(660_000)
 
     // ── Step 1: page1 — fresh session ──
     await page.goto('/')
@@ -757,7 +767,25 @@ test(
         const userMsgs2 = page2.locator('[data-message-id].flex-row-reverse')
         await expect(userMsgs2).toHaveCount(1, { timeout: 10_000 })
 
-        // ── Step 4: both contexts receive the final assistant message ──
+        // ── Step 4: wait for the turn to actually finish, then judge delivery ──
+        // The provider owns this clock. Both CI incidents in the header ended
+        // with the turn STILL active when a flat reply window expired, which
+        // makes a delivery assertion fail looking exactly like the event-loss
+        // this test exists to catch. Gate on the same marker the delivery
+        // oracle excludes: ChatScreen renders the live assistant placeholder
+        // with data-status={message.status?.type} ("running" until the turn
+        // settles; user rows carry data-status from a plain string, never
+        // "running"). If THIS wait expires the turn never reached a terminal
+        // state within 300s of provider time — a latency/stall failure of the
+        // model, not a delivery loss. Once it passes, the assertions below
+        // have their full windows to catch genuine delivery gaps (FR-I-009),
+        // and a model that finishes without emitting the sentinel now fails
+        // immediately and diagnosably instead of burning the whole window.
+        await expect(
+          page.locator('[data-message-id][data-status="running"]'),
+          'the active turn reaches a terminal state within the provider budget',
+        ).toHaveCount(0, { timeout: 300_000 })
+
         // Only completed assistant rows may satisfy the delivery oracle; user
         // input, a running placeholder or a system cancellation notice cannot.
         // Page2 first — it attached mid-turn so it's the harder case (FR-I-009).
