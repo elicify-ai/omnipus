@@ -270,20 +270,3 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 		assert.Equal(t, resolved, det["path"])
 	})
 }
-
-func t8AuditScalars(v any) []string {
-	var out []string
-	switch x := v.(type) {
-	case string:
-		out = append(out, x)
-	case map[string]any:
-		for _, child := range x {
-			out = append(out, t8AuditScalars(child)...)
-		}
-	case []any:
-		for _, child := range x {
-			out = append(out, t8AuditScalars(child)...)
-		}
-	}
-	return out
-}

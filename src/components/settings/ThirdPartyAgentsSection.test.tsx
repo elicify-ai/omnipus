@@ -253,6 +253,30 @@ describe('FR-7: whole-section save and failures', () => {
     expect(codexParams()).toHaveValue(PRESET)
     expect(putCalls()).toHaveLength(1)
   })
+  it('shows the exact saved-but-not-applied server notice for a saved_not_refreshed 500', async () => {
+    // Round-3 dispatch: display the server sentence exactly, without falsely
+    // saying the durable save failed. This is response INPUT, not UI output
+    // copied into an oracle; exact input-to-visible-message identity is required.
+    const serverSentence = 'third-party agent settings were saved, but they are not applied yet; ' +
+      'save again or restart Omnipus to apply them'
+    const response: ErrorResponse = { error: serverSentence, code: 'saved_not_refreshed' }
+    putSettings = async () => json(response, 500)
+    renderSection(); await loaded()
+    fireEvent.change(codexPathInput(), { target: { value: '/Users/me/bin/saved-codex' } })
+    fireEvent.change(codexParams(), { target: { value: PRESET } })
+    fireEvent.click(saveButton())
+
+    const notice = await screen.findByRole('alert')
+    expect(notice).toBeVisible()
+    expect(notice.textContent).toBe(serverSentence)
+    expect(notice).not.toHaveTextContent('Could not save:')
+    expect(codexPathInput()).toHaveValue('/Users/me/bin/saved-codex')
+    expect(codexParams()).toHaveValue(PRESET)
+    expect(putCalls()).toHaveLength(1)
+    expect(JSON.parse(putCalls()[0].body ?? '')).toEqual(expectedSave('/Users/me/bin/saved-codex', PRESET))
+    expect(publishedMessages()).toEqual([])
+    expect(saveButton()).toBeEnabled()
+  })
   it('shows a failed save rather than announcing success and keeps the draft', async () => {
     putSettings = async () => json({ error: 'The server is unavailable. Please try again in a moment.' }, 503)
     renderSection(); await loaded()
