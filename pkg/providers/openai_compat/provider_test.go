@@ -1506,24 +1506,27 @@ func TestParseStreamResponse_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestParseStreamResponse_EmptyStream verifies that a stream containing only [DONE]
-// produces empty content, no error, and finish_reason "stop".
-// Traces to: inferred from parseStreamResponse implementation in provider.go
+// TestParseStreamResponse_EmptyStream verifies that a stream containing only
+// [DONE] — no finish_reason, no content, no tool calls — fails as a typed
+// empty-stream error and is never returned as a synthesized success
+// (issue #1664 B8, founder decision 2026-11-07 Q3 A; oracle:
+// /workspace/logs/fix-1664/verify-report.md §B8). The NAME is kept from the
+// legacy assertion this rewrite replaces: that one locked the old wrong
+// behaviour ("empty content, no error, finish_reason stop" — a clean empty
+// stream as success) and was traced to the implementation, not to a spec.
+// A stream that DOES carry finish_reason "stop" with empty content stays a
+// success on the FR-006 path (out of scope here).
 func TestParseStreamResponse_EmptyStream(t *testing.T) {
 	// BDD: Given a stream with only [DONE]
 	// When parseStreamResponse is called
-	// Then empty content, no error, finish_reason "stop"
+	// Then a typed empty-stream error (common.ErrEmptyStream, errors.Is-able
+	//      — asserted against the sentinel in tests/go/issue1664), never a
+	//      successful empty answer
 	reader := buildSSEStream(nil, true)
 
 	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil)
-	if err != nil {
-		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
-	}
-	if resp.Content != "" {
-		t.Fatalf("Content = %q, want empty", resp.Content)
-	}
-	if resp.FinishReason != "stop" {
-		t.Fatalf("FinishReason = %q, want %q", resp.FinishReason, "stop")
+	if err == nil {
+		t.Fatalf("parseStreamResponse([DONE]-only) error = nil, want a typed empty-stream error; got resp = %+v (finish_reason %q) — issue #1664 B8: an empty stream is not a success", resp, resp.FinishReason)
 	}
 }
 
