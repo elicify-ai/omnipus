@@ -4,12 +4,12 @@ Status: Draft
 
 | Field | Value |
 |---|---|
-| Created / revised | 2026-10-30 (architect, plan-spec) / fix round 1 (grill 1: BLOCK 1C/10M/4m) / RQ update (native pdfium program, gpt-6-luna row) / **final correction after grill 2 (BLOCK 1C/12M/2m/2obs) — no third grill** / **2026-10-31 architect amendment after the O3 Linux measurement (§3.1): Linux memory limit = data limit, launcher order unchanged, LibreOffice exit-81 retry, shared pdfium library (D1 A)** / **2026-11-05 architect amendment: S2 = A (§3.2 rewritten: write access to a program folder is refused where it is created), SR1 (§3.1 D3.7 anchored scratch operations; §3.3 deferred findings), O8 (T-91 manual Linux limits job)** / **2026-11-07 architect amendment: founder Q18, Q19, Q22, Q23, Q24 (§3.4)** |
+| Created / revised | 2026-10-30 (architect, plan-spec) / fix round 1 (grill 1: BLOCK 1C/10M/4m) / RQ update (native pdfium program, gpt-6-luna row) / **final correction after grill 2 (BLOCK 1C/12M/2m/2obs) — no third grill** / **2026-10-31 architect amendment after the O3 Linux measurement (§3.1): Linux memory limit = data limit, launcher order unchanged, LibreOffice exit-81 retry, shared pdfium library (D1 A)** / **2026-11-05 architect amendment: S2 = A (§3.2 rewritten: write access to a program folder is refused where it is created), SR1 (§3.1 D3.7 anchored scratch operations; §3.3 deferred findings), O8 (T-91 manual Linux limits job)** / **2026-11-07 architect amendment: founder Q18, Q19, Q22, Q23, Q24, Q26 (§3.4)** |
 | Size | Feature (tools, agent media path, providers, sandbox, packaging, chat UI, skills) → RED/GREEN/CHECK, 5-reviewer gate, hands-on UAT (touches `pkg/agent`) |
 | Baseline | `origin/release/v0.1.1` at `4cad412bf` (read-only); grill 2 used `b7d4483c9`. backend-lead re-checks every cited symbol on the planning commit |
 | Supersedes | T11 spec (`landing/t11:docs/internal/specs/t11-documents-and-3p-agents-spec-full.md`) §2.4: the on-hold `convert_document` design (#1489) is retired, not built |
 | Issues | #1489 (re-scoped here); #1506 (Omnipus signing: gates the trimmed macOS LibreOffice and the renderer's signing) |
-| Previous versions | `.bak-round1` (before fix round 1), `.bak-rq` (before RQ update), `.bak-round2` (before this final correction); commit `a0ad39455` (before the 2026-11-05 amendment); commit `1c2ca4870` (before the 2026-11-07 amendment) |
+| Previous versions | `.bak-round1` (before fix round 1), `.bak-rq` (before RQ update), `.bak-round2` (before this final correction); commit `a0ad39455` (before the 2026-11-05 amendment); commit `1c2ca4870` (before the 2026-11-07 amendment); commit `46f269277` (before the Q26 addition) |
 | Governing ADR | **Built-in agent configuration, skills, and visual file reading** (ADR-090) — dated amendment W0 |
 
 ## 0. Bottom line
@@ -51,6 +51,7 @@ Agents keep creating Office files and PDFs with the skills' Python libraries; wh
 | **Q22** | Founder, 2026-11-07 | **A**: accept the limit on Windows and in the disclosed "without sandbox" fallback, and state it in the spec (§3.4 D7). |
 | **Q23** | Founder, 2026-11-07 | **A**: add the second-start guard and T-100 this round (§3.4 D6). |
 | **Q24** | Founder, 2026-11-07 | **A**: fix the settings routes that lose the refusal text, in one commit, this round (§3.4 D9). Asked as "19 routes"; the exact scope is 19 code sites serving 20 routes, one of which is not mechanical. |
+| **Q26** | Founder, 2026-11-07 | **A**: "All of them now": every other config writer that hides the refusal reason is fixed this round, including `POST /auth/login`, `/auth/logout` and `/auth/change-password`; the sign-in routes need security-lead's review in the gate (§3.4 D9b). |
 
 ## 2. Round responses
 
@@ -276,7 +277,9 @@ Status: decided 2026-11-05 (founder S2 = A, asked 2026-11-01, confirmed 2026-11-
 |---|---|
 | SEC-R1-02 … SEC-R1-06 (security review round 1, all Medium) | **Known, deferred to tracked issues, not this round** (founder SR1, 2026-11-05): SEC-R1-02 #1608, SEC-R1-03 #1609, SEC-R1-04 #1610, SEC-R1-05 #1611, SEC-R1-06 #1612. Until they are fixed the code does not meet this spec at those points: Retry's protected-source check (§5.2), Retry's special-file read and admission hold (§5.2, AD-6), Retry's settle target with a reused call ID (§5.2), a dangling mount-record link read as "no access" (AD-4), and upload rendering that reads the PDF before admission (AD-6 "taken before reading or copying the source"). Report: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/office-preview-build-20261030/review-r1/security-report.md`. |
 | Write folders `ConfiguredWriteRoots` does not list | **Unknown, open — team-lead raises it.** `pkg/preview/writeroots.go::ConfiguredWriteRoots` lists agent homes, workspaces, mounts, `tools.allow_write_paths`, `sandbox.allowed_paths` and remembered grants, but not the writable folders of `environment_setup` (`pkg/tools/environment_setup_runner.go::setupAllowRoots`: the target's prefix, cache and tmp) or the document runtime cache (`pkg/tools/shell_env.go`, the `Writable: true` root for `doc.layout.Cache`). Whether a program folder can lie inside them is not established; if it can, neither the §3.2 refusal nor the per-call check sees it. |
-| Other config writers that lose the refusal text (2026-11-07) | **Open, not in this round — team-lead raises it.** The §3.4 D9 list is the 20 routes the founder approved. The same gap exists at: `PUT /settings/context`, `PUT /settings/memory`, `PUT /settings/third-party-agents`, `PUT /providers/default-model`, `PUT /integrations/providers/{id}`, `PUT /performance`, `DELETE /providers/{id}`, `POST /onboarding/complete`, `POST /providers/{id}/sign-in`, `POST /auth/login`, `POST /auth/logout` (declares no 400), `POST /auth/change-password`, `pkg/gateway/rest_workspaces.go::unbindChannelInstancesForWorkspace`, `::removeMailboxesForWorkspace`, Bedrock profile saves. `PUT /channels/{id}/outbound` is unchecked. Effect: while `config.json` holds a refused entry, those saves give a generic failure, and login answers `login failed` until the file is fixed. |
+| Other config writers that lose the refusal text (2026-11-07) | **Moved into this round** by founder Q26 = A: §3.4 D9b lists them. |
+| Refused sign-out (2026-11-07) | **Known, existing; for security-lead and the founder.** When the config write in `pkg/gateway/rest_auth.go::HandleLogout` fails, for any reason including a refusal, the server-side session stays valid; the screen signs out locally and only logs it. Not changed by this round. |
+| Sign-in poll's undeclared 500 (2026-11-07) | **Known, existing contract gap.** `pkg/gateway/rest_sign_in.go::handleProviderSignInPoll` answers 500 on other failures, and `POST /providers/{id}/sign-in/poll` declares no 500. Not changed by this round; issue to be proposed, none filed. |
 | Windows launcher after gateway death (2026-11-07) | **Inferred, not run.** AD-2, AD-8 and `pkg/preview/launcher/launcher.go` say the gateway's death closes the job. In `pkg/preview/launcher/child_windows.go::Main` the job handle lives in the launcher, with nothing watching the gateway, so a hanging target may run on until recovery or its CPU limit ends it. T-99 covers the recovery stop. Issue proposed to team-lead, none filed. |
 | Recovery warnings do not reach `doctor` (2026-11-07) | **Verified, existing gap.** AD-8 and `pkg/preview/scratch.go::RecoveryReport` say each warning becomes a doctor line; `pkg/gateway/gateway_boot.go::startDocumentPreview` only logs them. Issue proposed to team-lead, none filed. |
 
@@ -364,7 +367,46 @@ Every route below saves through the shared config writer, which can return the r
 
 **Route 7, `PUT /channels/{id}/configure`.** With no credential stored yet, a refusal answers 400 `ErrorResponse` with the exact §3.2 text. With a credential already stored, it keeps the coded 500 `credential_saved_not_saved`, because that credential really is stored and the person must know; its `error` text is the existing sentence, one space, then the §3.2 sentence. The screen shows `error`, not `detail` (`src/lib/api/channels.ts::withConfigureErrorText`). `::configureWriteFailureCode` keeps its classification. No contract change on this route.
 
-**Contract.** `backend-lead` adds `'400'` (the existing `400BadRequest` response) to routes 6, 8, 11 and 13 in `contracts/openapi.yaml` and regenerates with `scripts/gen-contracts.sh`, in the same commit (Hard Constraint 8). D1 to D8 change no contract: `owner.json` crosses no gateway/SPA boundary.
+**D9b. The other config writers (founder Q26 = A, 2026-11-07).** Every other gateway writer that hides the refusal reason is fixed in the same commit as D9, including sign-in, sign-out and password change. All of these save through the same shared writer, so the same on-disk entry refuses them. The helper and its placement rule are the same as in D9 unless the row names its own rule.
+
+| # | Route or caller | Handler (`pkg/gateway`) | 400 declared at `46f269277` | Developer action |
+|---|---|---|---|---|
+| 21 | `POST /auth/login` | `rest_auth.go::HandleLogin` | yes | helper, after the invalid-credentials branch. The writer runs the closure, which checks the password, before the refusal check (`rest_config.go::writeRefusableConfigJSONLocked`), so only a person with valid credentials ever sees the text |
+| 22 | `POST /auth/logout` | `rest_auth.go::HandleLogout` | **no** | helper; **add 400** |
+| 23 | `POST /auth/change-password` | `rest_auth.go::HandleChangePassword` | yes | helper, after its 401 and 404 branches |
+| 24 | `PUT /settings/context` | `rest_context_settings.go::putContextSettings` | yes | helper |
+| 25 | `PUT /settings/memory` | `rest_memory_settings.go::putMemorySettings` | yes | helper |
+| 26 | `PUT /settings/third-party-agents` | `rest_third_party_settings.go::putThirdPartyAgentSettings` | yes | helper |
+| 27 | `PUT /providers/default-model` | `rest_default_model.go::putDefaultModel` | yes | helper |
+| 28 | `PUT /integrations/providers/{id}` | `rest_integrations_save.go::persistIntegrationProviderUpdate` | yes | helper |
+| 29 | `POST /onboarding/complete` | `rest_onboarding.go::restAPIHandleCompleteOnboarding.persistConfig` | yes | helper, after the username-taken branch |
+| 30 | `DELETE /workspaces/{id}` | `rest_workspaces.go::restAPIHandleWorkspaceDelete.removeRecord`, via `::unbindChannelInstancesForWorkspace` | yes | helper; the workspace is not deleted, as today on any failure of that step |
+| 31 | `DELETE /providers/{id}` | `rest_providers_delete.go::runProviderDelete` | yes | **own rule** |
+| 32 | `PUT /performance` | `rest_performance_max_tool_iterations.go::writePerformanceLocked` | yes | **own rule** |
+| 33 | `POST /providers/{id}/sign-in/poll` | `rest_sign_in.go::handleProviderSignInPoll`, via `::ensureSignedInProviderRow` | yes | **own rule** |
+| 34 | `PUT /channels/{id}/outbound` | `rest_channels_outbound.go::putChannelOutbound`, via `::commitOutboundChange` | yes, but its body is `ChannelOutboundRejection` | **own rule and contract change** |
+
+Own rules:
+
+| # | Rule |
+|---|---|
+| 31 | At each refused write in `::runProviderDelete`, while nothing has been committed yet (`defaultChanged` false), return status 400 with the §3.2 text; the handler already writes that with `jsonErr`. Once an earlier write in the same request was committed, keep today's 500 `{deleted:false}`. In practice the same on-disk entry refuses the first write, so that branch is not reached |
+| 32 | `::configWriteFailure` passes a refusal through unchanged. Nothing lowered yet: 400 `ErrorResponse` with the §3.2 text. Agents already lowered: the existing rollback runs; if every agent was restored, 400 with the §3.2 text; if any was not, today's 500 rollback-incomplete answer stands, because that broken state matters more. The comment in `::writePerformanceLocked` saying the writer "only fails reading, parsing, serializing or writing" is corrected |
+| 33 | The sign-in credential is already stored when the write is refused (as today on any failure there). Answer 400 `ErrorResponse` with `failed to configure signed-in provider: ` followed by the §3.2 text. It is 400, not 500, because the screen shows server text only for non-5xx answers (`src/lib/api-error.ts::ApiError.fromResponse` replaces any 5xx text with a generic message; `src/components/providers/SignInDialog.tsx` shows `getErrorMessage`) |
+| 34 | The route's 400 body is `ChannelOutboundRejection`, whose `error` allows only a safe-echo character set without `"`, `\`, `<`, `>` and `&`; the §3.2 text can hold all of these (the quoted entry, Windows paths). Contract shape: add the code `program_access_refused` to `contracts/components/schemas/ChannelOutboundRejection.yaml` (enum and description). Answer 400 with that code and this fixed text: `config error: config.json holds a write entry that would give agents write access to a document preview program folder; nothing was saved. Saving any other setting shows the entry.` The starting-messages screen already shows `error` for any code it does not handle itself (`src/components/connectors/ChannelOutboundSection.tsx`, `default` branch), so the regenerated types are the only frontend change |
+
+Writers with no answer to a person:
+
+| Caller | Today | Action |
+|---|---|---|
+| `rest_workspaces.go::removeMailboxesForWorkspace` (best-effort cascade inside `DELETE /workspaces/{id}`, after the record is gone) | logs only the error type | log the refusal text too (it holds no credential); the response does not change |
+| `rest_providers_bedrock_region.go::persistBedrockInferenceProfiles` (background cache) | logs the error, text included | none |
+| `pkg/sysagent/tools/workspace.go::WorkspaceDeleteTool.Execute`, through the gateway hook `UnbindWorkspaceChannels` | puts the error text in the tool result | none |
+| `signin_provider.go::restAPIHost.MutateConfig` | no production caller found | none; a future caller uses the helper |
+
+Security notes for security-lead (founder Q26: the sign-in routes need security-lead's review at the gate). (a) Any user with valid credentials, not only an admin, can see the text on rows 21 to 23. It names one config entry and the program folder and holds no credential. A generic text for non-admins was rejected because it would hide the reason again, against Q26. (b) A refused sign-out leaves the server-side session valid. This is true today for any write failure there, and the screen signs out locally and only logs the failure. Recorded in §3.3, not changed here.
+
+**Contract.** `backend-lead` adds `'400'` (the existing `400BadRequest` response) to D9 routes 6, 8, 11 and 13 and D9b route 22 in `contracts/openapi.yaml`, adds the code `program_access_refused` to `contracts/components/schemas/ChannelOutboundRejection.yaml` (D9b route 34), and regenerates with `scripts/gen-contracts.sh`, in the same commit as D9 and D9b and before their handler changes (Hard Constraint 8). D1 to D8 change no contract: `owner.json` crosses no gateway/SPA boundary.
 
 **Comments that change with this code.** `pkg/preview/scratch.go::socketDirPattern` (today states a bound security review rejected), `::call` (`root` field), `::ownerRecord`, `::scratchRoot`, `::Recover` (old path); `pkg/preview/launcher/launcher.go` package comment: Linux "address-space (or data)" (§3.1 D1 chose data only), and Windows "or the gateway's death, closes the job" unless T-99 proves it true (§3.3).
 
@@ -374,7 +416,7 @@ Every route below saves through the shared config writer, which can return the r
 
 *Negative.* Tests that assume the old path or `PGID` change (T-92 onward; each keeps its strength, and the identity assertion in `pkg/preview/retry_office_test.go` is replaced by T-94, never deleted). macOS CI is off (`.github/workflows/cross-platform.yml`), so macOS rows are proven only by local runs bound to the exact commit. A socket folder created just before a crash, before its publish, is left behind empty; nothing has run by then, and the window is accepted.
 
-*Neutral.* User documentation: none needed for D1 to D7, because no user-visible behaviour changes and `docs/documents.md`, `docs/security.md` and `docs/operations/sandbox-limitations.md` do not describe the scratch layout or recovery. D7's limit is already covered by those pages' Windows and unconfined exposure text (§17). D8 fixes a failure against what the pages already promise. D9 needs none either: `docs/documents.md` ("What previews need") already promises the exact text on a save; docs-verifier confirms both at the §17 audit.
+*Neutral.* User documentation: none needed for D1 to D7, because no user-visible behaviour changes and `docs/documents.md`, `docs/security.md` and `docs/operations/sandbox-limitations.md` do not describe the scratch layout or recovery. D7's limit is already covered by those pages' Windows and unconfined exposure text (§17). D8 fixes a failure against what the pages already promise. D9 needs none either: `docs/documents.md` ("What previews need") already promises the exact text on a save. D9b changes what sign-in, sign-out, password change, onboarding and the starting-messages screen show, so §17 has a 2026-11-07 row for it. docs-verifier confirms all of these at the §17 audit.
 
 **Alternatives considered.**
 
@@ -612,7 +654,7 @@ Resolver candidates mirror `packageChromeRootCandidates` (`<exe>/../office`, `<e
 | B-65 | A confined converter replaces its scratch folder with a link leading outside / later record updates and end-of-call cleanup / nothing outside is read, removed, created or written; the real record is updated (§3.4 D5) | Error | US-5.1 |
 | B-66 | First LibreOffice start replaces its scratch folder, then exits 81 / exit-81 handling / `conversion failed: scratch unavailable`, no second start (§3.4 D6) | Error | US-5.1 |
 | B-67 | Home where `tmp` exists, agent turn with its real read model / the agent previews an Office file twice / both previews produce pages; only `<id>/work` was opened up (§3.4 D8) | Edge | US-1.4 |
-| B-68 | `config.json` on disk holds an overlapping entry the published configuration lacks / a person saves an unrelated setting through a §3.4 D9 route / 400 with the exact §3.2 text and the file unchanged; channel configure with a credential already stored keeps its coded 500, carrying the same sentence | Error | US-5.4 |
+| B-68 | `config.json` on disk holds an overlapping entry the published configuration lacks / a person saves an unrelated setting through a §3.4 D9 or D9b route, or signs in, signs out or changes a password / 400 with the exact §3.2 text and the file unchanged; channel configure with a credential already stored keeps its coded 500 carrying the same sentence; the D9b own-rule routes answer as D9b states | Error | US-5.4 |
 
 ## 13. TDD plan
 
@@ -720,6 +762,7 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | T-101 | **A normal call leaves nothing** (§3.4 D2). After success, failure and Stop, `tmp/preview-calls` holds no `<id>`. If `work` cannot be removed, the record survives as `done` and the next start retries. Not a pass if only `work` is checked: a leaked record or `<id>` goes unnoticed | Integration | B-21, B-22 |
 | T-102 | **Repeat preview from an agent turn** (§3.4 D8, FR-054). A real Office preview, twice in a row, from an agent turn, on a home where `tmp` already exists, through the real confinement hooks with the turn's real read model (`sandbox.RegisterTurnPolicyBase`, `sandbox.KernelPolicyForTurn`) and real LibreOffice. Both previews produce pages. A second check inspects the resulting policy: it allows `<id>/work` and nothing wider. Not a pass if: `ReadModel` is nil (true of every existing test); there is only one preview; `tmp` is absent; no policy base is registered (the policy is then nil); confinement is off; real LibreOffice is missing (fail, never skip). macOS: local receipt on the exact commit. Linux: same test where the kernel sandbox enforces; result Unknown until run. Hands-on row U-M1 stays as the separate check on the candidate | Integration (Mac, Linux) | B-67 |
 | T-103 | **Refusal text on the §3.4 D9 routes** (FR-053). One table test with one row per route and an assertion that it has 20 rows. Each row needs a valid target, or the route's 404 answers before the save. Each row writes an overlapping `tools.allow_write_paths` or `sandbox.allowed_paths` entry **directly into `config.json`**, so the published configuration lacks it, then calls the route. Expected: 400, `error` byte-equal to the §3.2 text, `config.json` byte-identical. A second case per site: a write failure that is not a refusal keeps today's 500. Route 7 runs both D9 sub-cases. Not a pass if: the entry is added through a handler, so `updateConfig`'s own mapping answers; only the status is checked | Integration | B-68 |
+| T-104 | **Refusal text on the §3.4 D9b writers** (FR-053, founder Q26). Same set-up as T-103: an overlapping entry written directly into `config.json`, one row per D9b route, and an assertion that there are 14 rows. Helper rows: 400, `error` byte-equal to the §3.2 text, `config.json` byte-identical. Auth rows: login with the right password gets 400 with the text, no session token stored, no session cookie set; login with a wrong password still gets 401; change-password with a wrong current password still gets 401. Own-rule rows: 31, provider delete without a new default gets 400 and the provider is still there; 32, nothing lowered gets 400; agents lowered and all restored gets 400 with every agent back at its old value; 33, sign-in poll gets 400 with the stated prefix and text; 34, outbound gets 400 whose body passes the generated `ChannelOutboundRejection` schema, with code `program_access_refused` and the fixed text byte-equal; 30, the workspace still exists. Cascade row: the log line for `removeMailboxesForWorkspace` holds the refusal text. Not a pass if: the login row uses a wrong password, so it answers on the 401 path; the outbound row checks the status alone; a row has no valid target, so a 404 answers first | Integration | B-68 |
 
 **Windows inventory (T-41):** `TestPreviewDocument_Windows*`, `TestRunLimited_WindowsJob*`, `TestPreviewRecovery_Windows*`, `TestOfficeRegister_Windows*`, `TestInspectors_Windows*` and the renderer's own smoke/limits/cancel tests built from the C sources; the receipt step lists every expected test name and fails on a missing, skipped or failed one.
 
@@ -782,7 +825,7 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | FR-050 | MUST resolve every post-start gateway file operation in a call's scratch folder through a handle opened before the first start, never reaching outside it (§3.1 D3.7, founder SR1). |
 | FR-051 | MUST keep the owner record outside the converter's write reach wherever the converter has a file boundary; recovery MUST act only on that record and MUST derive the process group from the verified launcher, never from a stored number (§3.4 D1–D4, founder Q18). Where no file boundary exists the limit in §3.4 D7 applies (founder Q22). |
 | FR-052 | MUST NOT start the converter again when its scratch folder was replaced; the call ends with the existing `conversion failed: scratch unavailable` text (§3.4 D6, founder Q23). |
-| FR-053 | MUST answer a configuration refusal on every route of §3.4 D9 with the exact §3.2 text, as a 400 except for the stated channel-configure case (founder Q24). |
+| FR-053 | MUST answer a configuration refusal on every route of §3.4 D9 and D9b with the exact §3.2 text, as a 400, except where D9 or D9b states the route's own rule; writers with no answer to a person MUST log the text (founder Q24, Q26). |
 | FR-054 | MUST let a preview started from an agent turn use its own scratch folder on a home where `tmp` exists, every time; the fix MUST open only `<id>/work` (§3.4 D8). |
 
 | ID | Success criterion |
@@ -857,7 +900,7 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | FR-050 | US-5 | B-63, B-65 | T-90, T-98 |
 | FR-051 | US-5 | B-64 | T-92, T-93, T-94, T-95, T-96, T-97, T-99, T-101 |
 | FR-052 | US-5 | B-66 | T-100 |
-| FR-053 | US-5 | B-68 | T-103 |
+| FR-053 | US-5 | B-68 | T-103, T-104 |
 | FR-054 | US-1 | B-67 | T-102 |
 
 ## 16. Hands-on UAT rows (Mac first; standard UAT model per Q6)
@@ -903,15 +946,16 @@ Installer rows need Apple silicon; the Intel dev Mac uses operator registration.
 | `docs/operations/platform-support.md` | per platform/route |
 | `docs/documents.md` "What previews need" (2026-11-05) | replace "access added later (a settings change or a new approval) turns the component off" and the "What the check does not cover yet" bullet with the §3.2 refusals, their exact texts and the §3.2 boundary items; keep the in-force ("unsafe location", `doctor`) behaviour |
 | The user page that documents workspace mounts (backend-lead locates it; a grep of `docs/*.md` on 2026-11-05 found no page naming today's mount refusals) | a mount that is, lies inside or contains a document preview program folder is refused (supersedes warn-and-allow for `/` and other containing folders in that case), with the REST and picker texts of §3.2 |
+| `docs/documents.md` "What previews need" (2026-11-07, §3.4 D9b) | while `config.json` holds an entry that would give agents write access to a program folder, every save is refused with the §3.2 text, including sign-in, password change and finishing onboarding; sign-out still signs out on screen; the starting-messages screen shows the fixed D9b row 34 sentence instead; fix the entry in `config.json` to clear it |
 
 ## 18. Work breakdown
 
 | # | Owner | Work |
 |---|---|---|
 | W0 | architect; team-lead | Dated amendment of **Built-in agent configuration, skills, and visual file reading** (D5 components, D6 tool + thumbnails + native-PDF rule, native-component exception); root `CLAUDE.md` ADR-090 paragraph; T11 §2.4 pointer |
-| W1 | qa-lead (A) | RED for every active row of §13 (T-01…T-80, T-85…T-90, T-92…T-103; T-81…T-84 retired), fixtures, Windows inventory; T-91 is a manual measurement job, run by team-lead |
+| W1 | qa-lead (A) | RED for every active row of §13 (T-01…T-80, T-85…T-90, T-92…T-104; T-81…T-84 retired), fixtures, Windows inventory; T-91 is a manual measurement job, run by team-lead |
 | W2 | backend-lead | §5.2 contract first; S-1, S-2; renderer + CI builds; launcher; protocol; tool; converter, sandbox, budgets, recovery; §4 routing and serializers; thumbnails, display field, replay, Retry route; registration commands; policies; packaging; readiness and runtime changes; notices; docs drafts |
-| W2b | backend-lead | §3.4 D1–D8 in `pkg/preview`; §3.4 D9 as its own commit: helper, 20 routes, the four `'400'` contract entries and regeneration |
+| W2b | backend-lead | §3.4 D1–D8 in `pkg/preview`; §3.4 D9 and D9b as their own commit: contract entries and regeneration first, then the helper, the 34 routes, the own rules and the cascade log. Security-lead reviews D9b rows 21–23 and 33 at the gate (founder Q26) |
 | W3 | frontend-lead | §5.3–5.5 after the contract lands; viewer focus; docs draft |
 | W4 | prometheus-prompt-engineer | `elicify-office` per AD-14/§6; prompts; tool description |
 | W4b | backend-lead (script code) + prometheus (text) | inspector fixes that T-72 proves necessary |
@@ -919,7 +963,7 @@ Installer rows need Apple silicon; the Intel dev Mac uses operator registration.
 | W6 | docs-verifier | §17 audit |
 | W7 | uat-tester + uat-validator | §16 rows on the exact candidate |
 
-Order: contract → RED ∥ S-1/S-2 → GREEN (W2 ∥ W3 ∥ W4 ∥ W4b) → CHECK → 5-reviewer gate → candidate CI → UAT → founder yes.
+Order: contract → RED ∥ S-1/S-2 → GREEN (W2 then W2b, ∥ W3 ∥ W4 ∥ W4b; W2b's contract entries land before its handler changes) → CHECK → 5-reviewer gate → candidate CI → UAT → founder yes.
 
 ## 19. Ambiguities and assumptions
 
@@ -947,9 +991,11 @@ Order: contract → RED ∥ S-1/S-2 → GREEN (W2 ∥ W3 ∥ W4 ∥ W4b) → CHE
 
 None open. FQ1 (r2) = B and FQ2 (r2) = A are applied. 2026-11-05: S2 = A (with both side effects, A), SR1 and O8 = A are applied (§3.1 D3.7, §3.2, §3.3, T-91). One open point for team-lead to raise: §3.3 "Write folders `ConfiguredWriteRoots` does not list" (Unknown). Two architect decisions the founder may veto: (1) Windows and dev Macs use an operator registration command instead of an environment variable (R2-MAJ-005); (2) a component that any agent can write is disabled for everyone until that access is removed (R2-MAJ-012).
 
-2026-11-07: Q18, Q19, Q22, Q23 and Q24 = A are applied (§3.4). One new open point for team-lead to raise: §3.3 "Other config writers that lose the refusal text".
+2026-11-07: Q18, Q19, Q22, Q23 and Q24 = A are applied (§3.4). Q26 = A is applied (§3.4 D9b), which closes the open point on the other config writers. §3.3 adds two known existing items: the refused sign-out and the sign-in poll's undeclared 500.
 
 ## 22. Evidence used
 Code reads on `origin/release/v0.1.1` (`4cad412bf`): thumbnail storage (`normalization.go::storeInlineDataURL`, `media/store.go::SessionInlineScopePrefix`, `CleanExpired`, `rest_sessions.go`), delivery (`webchat_channel.go::SendMedia`, `replay.go::buildMediaFrame`, `MediaFrame.yaml`, `MediaPart.yaml`), chat UI (`ChatScreen.tsx::InlineMedia`, `ChatImage.tsx`, `MediaLightbox.tsx`, `image-lightbox.tsx`), PDF routing (`loop_media.go::resolveMediaRefsWithOffload`, `pdfCapableModel`, `encodePDFToDataURL`, `media_present.go`), runtime (`documentruntime/provision.go::ProvisionFirstParty`, `shell_env.go::documentEnvTurn`), packaging (`package_chrome.go`, `.goreleaser.yaml`, `Dockerfile.goreleaser`, `install.sh`), CI (`cross-platform.yml::windows-tools-tests`). Grill round 2 report (its provider-serializer, launcher, recovery, viewer and extractor citations at `b7d4483c9` are relied on as reviewer-verified, not re-read here), founder answers, skills review, spike, review B, T11 files read first-hand on 2026-10-30.
 
 2026-11-07 (§3.4): code reads on `landing/office-preview` at `1c2ca4870`: `pkg/preview/scratch.go`, `scratch_anchor.go`, `programs.go`, `confine_unix.go`, `launcher/*`; `pkg/sandbox/seatbelt_profile.go`, `seatbelt_cache.go`; `pkg/fspolicy/secretset_kernel.go`; `pkg/gateway/rest_config.go::writeRefusableConfigJSONLocked` and the D9 handlers. Declared responses read from `contracts/openapi.yaml`. The macOS boundary was checked on macOS 26.5.2 under a hand-built profile, not the production render and not a live gateway; that check is kept out of this repository. Linux and Windows behaviour was read, not run.
+
+2026-11-07 (§3.4 D9b): every call site of the shared config writer in non-test `pkg/gateway` files listed by script; failure handling read per handler; declared responses and the `ChannelOutboundRejection` schema read from `contracts/`; the screen's error display read in `src/lib/api-error.ts`, `src/routes/-login-local.tsx`, `src/components/providers/SignInDialog.tsx`, `src/components/connectors/ChannelOutboundSection.tsx`.
