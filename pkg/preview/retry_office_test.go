@@ -42,7 +42,7 @@ func officeRetryProcess(behavior string) int {
 		return 70
 	}
 	n := len(starts) + 1
-	raw, err := os.ReadFile(ownerFile)
+	raw, err := os.ReadFile(filepath.Join("..", ownerFile)) // §3.4 D1: cwd is work/; the record is the call folder
 	if err != nil {
 		return 71
 	}
@@ -188,7 +188,8 @@ func assertOfficeRetryRecord(t *testing.T, r officeRetryReceipt, executable stri
 	}
 	require.Equal(t, executable, r.Owner.Launcher.Executable)
 	require.Contains(t, r.Owner.Executables, executable)
-	require.Equal(t, r.LauncherPID, r.Owner.PGID)
+	// §3.4 D4: no stored process-group number. The group proof is T-94
+	// (TestPreviewRecovery_StopsOnlyTheVerifiedProcessGroup), not a field compare.
 	require.Equal(t, "same authorized input", r.Input)
 	var profile struct {
 		Items []struct {

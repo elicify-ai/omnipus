@@ -123,11 +123,16 @@ func d9ConfigureTelegram(t *testing.T, api *restAPI) {
 	require.Equal(t, http.StatusOK, w.Code, "instrument: telegram must configure cleanly; body=%s", w.Body.String())
 }
 
-func TestD9SettingsRoutesRefuseProgramFolderOverlap(t *testing.T) {
-	rows := []struct {
-		name  string
-		setup func(t *testing.T, refusalCase bool) (d9Outcome, string)
-	}{
+// d9RouteRow is one §3.4 D9 settings route. The table is outside the test
+// function so that function stays within the size budget. Rows, assertions
+// and subtest names are unchanged.
+type d9RouteRow struct {
+	name  string
+	setup func(t *testing.T, refusalCase bool) (d9Outcome, string)
+}
+
+func d9SettingsRouteRowsEarly() []d9RouteRow {
+	return []d9RouteRow{
 		{"01_audit_log", func(t *testing.T, refusalCase bool) (d9Outcome, string) {
 			api := newTestRestAPIWithHome(t)
 			refusal, before := "", []byte(nil)
@@ -296,6 +301,11 @@ func TestD9SettingsRoutesRefuseProgramFolderOverlap(t *testing.T) {
 			api.deleteAgentMailbox(w, "mia", "ws_my")
 			return d9Outcome{w.Code, w.Body.Bytes(), api.configPath(), before}, refusal
 		}},
+	}
+}
+
+func d9SettingsRouteRowsLate() []d9RouteRow {
+	return []d9RouteRow{
 		{"12_mcp_create", func(t *testing.T, refusalCase bool) (d9Outcome, string) {
 			api := newTestRestAPIWithHome(t)
 			refusal, before := "", []byte(nil)
@@ -428,6 +438,10 @@ func TestD9SettingsRoutesRefuseProgramFolderOverlap(t *testing.T) {
 			return d9Outcome{w.Code, w.Body.Bytes(), api.configPath(), before}, refusal
 		}},
 	}
+}
+
+func TestD9SettingsRoutesRefuseProgramFolderOverlap(t *testing.T) {
+	rows := append(d9SettingsRouteRowsEarly(), d9SettingsRouteRowsLate()...)
 	require.Len(t, rows, 20, "§3.4 D9: one row per route — the table must cover all 20")
 
 	for _, row := range rows {

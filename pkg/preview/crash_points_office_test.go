@@ -82,7 +82,7 @@ func gatewayCrashChildMain(stage, home string) {
 	if stage != "after_launcher_start" {
 		id, idErr := identify(proc.PID, self)
 		if idErr == nil {
-			idErr = c.running(id, proc.PID, []string{self})
+			idErr = c.running(id, []string{self})
 		}
 		if idErr != nil {
 			os.Exit(66)
@@ -153,6 +153,14 @@ func init() {
 	}
 }
 
+// d1TargetStartedGlob is where §3.4 D1 puts the converter's "I started"
+// marker: the working folder is <id>/work, under tmp/preview-calls, not
+// beside owner.json. A glob of <id>/target-started matches nothing, so an
+// empty result would pass without looking.
+func d1TargetStartedGlob(home string) string {
+	return filepath.Join(home, "tmp", "preview-calls", "*", "work", "target-started")
+}
+
 func TestPreviewRecovery_CrashPointsKillHelperGateway(t *testing.T) {
 	exe, err := os.Executable()
 	require.NoError(t, err)
@@ -214,7 +222,11 @@ func TestPreviewRecovery_CrashPointsKillHelperGateway(t *testing.T) {
 			// Pre-go-byte stages: the target's marker never appears (the call
 			// folder id is generated, so discover any marker under the root).
 			if !stage.targetMayStart {
-				markers, _ := filepath.Glob(filepath.Join(scratchRoot(home), "*", "target-started"))
+				// §3.4 D1: the converter's cwd is <id>/work, so the marker is
+				// preview-calls/<id>/work/target-started. A glob of <id>/target-started
+				// matches nothing and "absent" would pass without looking.
+				markers, err := filepath.Glob(d1TargetStartedGlob(home))
+				require.NoError(t, err)
 				require.Empty(t, markers,
 					"T-95: the target never ran before the go-byte — its marker must be absent")
 			}
@@ -244,4 +256,19 @@ func TestPreviewRecovery_CrashPointsKillHelperGateway(t *testing.T) {
 			require.Empty(t, leftovers, "T-95: no call folder remains after recovery")
 		})
 	}
+}
+
+// TestPreviewCrashMarkerGlobFindsAWorkMarker is the positive control for
+// T-95's "the marker never appears" check. The same glob must find a marker
+// that really exists at <id>/work/target-started; otherwise an empty result
+// proves nothing.
+func TestPreviewCrashMarkerGlobFindsAWorkMarker(t *testing.T) {
+	home := t.TempDir()
+	marker := filepath.Join(home, "tmp", "preview-calls", "probe", "work", "target-started")
+	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o700))
+	require.NoError(t, os.WriteFile(marker, []byte("1"), 0o600))
+	found, err := filepath.Glob(d1TargetStartedGlob(home))
+	require.NoError(t, err)
+	require.Equal(t, []string{marker}, found,
+		"T-95 instrument: the marker glob finds target-started at <id>/work when one exists")
 }

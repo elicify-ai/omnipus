@@ -130,16 +130,12 @@ func TestPreviewRecord_IsOutOfConverterReach(t *testing.T) {
 	require.Equal(t, os.Getpid(), record.GatewayPID)
 }
 
-// recordPathFor locates the trusted owner record: the call folder one level
-// above the scratch folder. Before §3.4 D1 lands, the record sits INSIDE
-// scratch (the old layout), where the test fails.
+// recordPathFor is the §3.4 D1 call folder: one level above work (c.dir).
+// There is no fallback into scratch. A record inside work is the converter's
+// file, and accepting it would let a correct layout fail to be required.
 func recordPathFor(t *testing.T, c *call) string {
 	t.Helper()
-	newLayout := filepath.Dir(c.dir)
-	if data, err := os.ReadFile(filepath.Join(newLayout, ownerFile)); err == nil && json.Valid(data) {
-		return newLayout
-	}
-	return c.dir
+	return filepath.Dir(c.dir)
 }
 
 // guardSwapEvidence reads the fake's launch counter from the root it moved
@@ -148,7 +144,7 @@ func recordPathFor(t *testing.T, c *call) string {
 func guardSwapEvidence(t *testing.T, c *call) (string, string) {
 	t.Helper()
 	record, err := readPreviewOwnerAt(t, recordPathFor(t, c))
-	require.NoError(t, err)
+	require.NoError(t, err, "§3.4 D1: the trusted record is the call folder, one level above work")
 	moved := filepath.Join(record.SocketDir, "moved-root")
 	starts, err := os.ReadFile(filepath.Join(moved, "guard-starts"))
 	require.NoError(t, err, "instrument: the fake's own launch counter survived inside the recorded socket folder")
@@ -199,22 +195,19 @@ func TestPreviewPublish_ReplacedScratchNeverRedirectsGatewayWrites(t *testing.T)
 	c.finish()
 	require.Equal(t, before, scratchOutsideSnapshot(t, outside),
 		"T-98: the replaced scratch folder must not redirect a gateway write — E keeps its sentinel and gains no .tmp-* file")
-	record, err := readPreviewOwnerAt(t, realRecordDir(t, c, realDir))
+	record, err := readPreviewOwnerAt(t, realRecordDir(t, c))
 	require.NoError(t, err, "T-98: the REAL record (not one written through the link) is updated")
 	require.Equal(t, stateDone, record.State, "T-98: the real record reaches done")
 	require.NoDirExists(t, c.dir, "end-of-call cleanup unlinks the replacement")
 }
 
-// realRecordDir finds the owner record that is NOT behind the replacement
-// link: inside the moved scratch (old layout) or at the call folder (§3.4 D1).
-func realRecordDir(t *testing.T, c *call, realDir string) string {
+// realRecordDir is the §3.4 D1 call folder, one level above work. A copy
+// inside the moved scratch is not the trusted record.
+func realRecordDir(t *testing.T, c *call) string {
 	t.Helper()
-	if _, err := os.Stat(filepath.Join(realDir, ownerFile)); err == nil {
-		return realDir
-	}
 	callDir := filepath.Dir(c.dir)
 	require.FileExists(t, filepath.Join(callDir, ownerFile),
-		"T-98: neither the moved record nor the call-folder record exists")
+		"T-98 §3.4 D1: the trusted record is the call folder, one level above work, not a file inside scratch")
 	return callDir
 }
 

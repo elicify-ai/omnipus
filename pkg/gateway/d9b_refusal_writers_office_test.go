@@ -60,9 +60,46 @@ func d9bCaptureLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	buf := &bytes.Buffer{}
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	return buf
+}
+
+// d9bCascadeRefusal decodes the refusal attribute on the cascade log record.
+// JSON decoding, not the text handler: the §3.2 sentence always contains
+// quotes, and a text handler escapes those, so a raw search can never match.
+// The compared value is the decoded string, byte-equal to the §3.2 text.
+func d9bCascadeRefusal(t *testing.T, raw string) string {
+	t.Helper()
+	var seen []string
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var rec map[string]json.RawMessage
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		var msg string
+		if rawMsg, ok := rec["msg"]; ok {
+			_ = json.Unmarshal(rawMsg, &msg)
+		}
+		if !strings.Contains(msg, "cascade mailboxes") {
+			continue
+		}
+		seen = append(seen, msg)
+		rawRefusal, ok := rec["refusal"]
+		if !ok {
+			continue
+		}
+		var decoded string
+		require.NoError(t, json.Unmarshal(rawRefusal, &decoded),
+			"FR-053 cascade: the refusal attribute must be a JSON string")
+		return decoded
+	}
+	t.Fatalf("FR-053 cascade: removeMailboxesForWorkspace must log the §3.2 text in a refusal attribute; cascade records seen: %v", seen)
+	return ""
 }
 
 // d9bBindMailbox drives the real PUT mailbox route so the (agent, workspace)
@@ -77,11 +114,16 @@ func d9bBindMailbox(t *testing.T, api *restAPI, agentID, workspaceID string) {
 	require.Equal(t, http.StatusOK, w.Code, "instrument: the mailbox must bind cleanly; body=%s", w.Body.String())
 }
 
-func TestD9bWritersRefuseProgramFolderOverlap(t *testing.T) {
-	rows := []struct {
-		name  string
-		setup func(t *testing.T) (d9Outcome, string)
-	}{
+// d9bWriterRow is one §3.4 D9b writer. The table is outside the test
+// function so that function stays within the size budget. Rows, assertions
+// and subtest names are unchanged.
+type d9bWriterRow struct {
+	name  string
+	setup func(t *testing.T) (d9Outcome, string)
+}
+
+func d9bWriterRows() []d9bWriterRow {
+	return []d9bWriterRow{
 		{"21_login", func(t *testing.T) (d9Outcome, string) {
 			api, _ := newTestRestAPIWithUser(t, "d9buser", "Pass1111")
 			refusal, before := d9SeedOverlap(t, api)
@@ -252,13 +294,19 @@ func TestD9bWritersRefuseProgramFolderOverlap(t *testing.T) {
 		}},
 		{"34_channel_outbound", func(t *testing.T) (d9Outcome, string) {
 			f, _ := t14Fixture(t)
-			refusal, before := d9SeedOverlap(t, f.api)
+			_, before := d9SeedOverlap(t, f.api)
 			revision := t14Read(t, f, "discord").Revision
 			require.NotEmpty(t, revision, "instrument: the fixture's outbound revision is readable")
 			w := t14Put(t, f, "discord", "reply_only", []string{"222"}, revision)
-			return d9Outcome{w.Code, w.Body.Bytes(), f.api.configPath(), before}, refusal
+			// §3.4 D9b row 34: code program_access_refused and the fixed sentence,
+			// not the §3.2 text. That text cannot fit this body's safe-echo set.
+			return d9Outcome{w.Code, w.Body.Bytes(), f.api.configPath(), before}, d9bOutboundFixedText
 		}},
 	}
+}
+
+func TestD9bWritersRefuseProgramFolderOverlap(t *testing.T) {
+	rows := d9bWriterRows()
 	require.Len(t, rows, 14, "§3.4 D9b: one row per route — the table must cover all 14 (rows 21 to 34)")
 
 	for _, row := range rows {
@@ -417,8 +465,8 @@ func TestD9bWritersRefuseProgramFolderOverlap(t *testing.T) {
 		api.HandleWorkspaces(w, r)
 		require.Equal(t, http.StatusOK, w.Code,
 			"FR-053 cascade: the delete's answer does not change on a best-effort cascade failure; body=%s", w.Body.String())
-		require.Contains(t, logs.String(), refusal,
-			"FR-053 cascade: the removeMailboxesForWorkspace log line holds the refusal text")
+		require.Equal(t, refusal, d9bCascadeRefusal(t, logs.String()),
+			"FR-053 cascade: the decoded refusal attribute is the §3.2 text, byte-equal")
 		after, err := os.ReadFile(api.configPath())
 		require.NoError(t, err)
 		require.Contains(t, string(after), "mailboxes",

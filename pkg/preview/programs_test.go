@@ -168,6 +168,7 @@ func assertPreviewTreeEnd(t *testing.T, home, mode string) {
 	}, time.Second, 5*time.Millisecond, "converter and grandchild must reach the running state")
 	require.True(t, processAlive(receipt.PID))
 	require.True(t, processAlive(receipt.Child), "positive control: grandchild was alive before cancellation")
+	// §3.4 D1: the running record is the call folder, one level above work.
 	record := readPreviewOwner(t, c)
 	require.Equal(t, "running", record.State)
 	require.NotNil(t, record.Launcher)
