@@ -59,6 +59,8 @@ import {
   updateTask,
   fetchAgents,
   fetchTaskRuns,
+  runNextArmedOccurrence,
+  runNowRefusalMessage,
   buildTaskAssigneeItems,
   tasksQueryKeys,
   getErrorMessage,
@@ -86,6 +88,7 @@ import { TaskChecklistField } from '@/components/workspaces/TaskChecklistField'
 import { TaskResultField } from '@/components/workspaces/TaskResultField'
 import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
 import { TaskRunsList } from '@/components/workspaces/TaskRunsList'
+import { Play } from '@phosphor-icons/react'
 
 export interface CalendarEventSlideOverProps {
   open: boolean
@@ -271,6 +274,43 @@ export function CalendarEventSlideOver({
   )
   const upcomingPreview = previewSet ? upcomingInstants(previewSet, 3) : []
 
+  // ── T10 armed-occurrence read (schedules-t10-spec-r6.md FR-16, US-9) ───────
+  // `armed_occurrence_ms` is the live scheduler registration's next instant,
+  // projected by the server onto the task's occurrence set. The server only
+  // returns a set for a task that has occurrences inside the queried range,
+  // so when the clicked occurrence or bucket lies outside the preview window
+  // a second read widens the range to cover it. Same endpoint, same cache
+  // family (`['tasks','occurrences']`), so every invalidation re-reads both.
+  const armedRange = useMemo(() => {
+    const starts = [previewRange.from]
+    const ends = [previewRange.to]
+    if (selectedOccurrenceMs != null) {
+      starts.push(selectedOccurrenceMs)
+      ends.push(selectedOccurrenceMs + 1)
+    }
+    if (selectedBucketDayRange) {
+      starts.push(selectedBucketDayRange.startMs)
+      ends.push(selectedBucketDayRange.endMs)
+    }
+    return { from: Math.min(...starts), to: Math.max(...ends) }
+  }, [previewRange, selectedOccurrenceMs, selectedBucketDayRange])
+  const armedNeedsWiderRead = armedRange.from !== previewRange.from || armedRange.to !== previewRange.to
+  const widerArmedQuery = useOccurrences({
+    workspaceId,
+    activeStart: new Date(armedRange.from),
+    activeEnd: new Date(armedRange.to),
+    enabled: open && isEdit && !!workspaceId && armedNeedsWiderRead,
+  })
+  const armedSourceData = armedNeedsWiderRead ? widerArmedQuery.data : previewQuery.data
+  const armedOccurrenceMs = armedSourceData?.find((s) => s.task_id === task?.id)?.armed_occurrence_ms ?? null
+  // Bucket mode (R4-M04): one "Run next armed occurrence" action, only when
+  // the armed instant falls inside the bucket's half-open day range.
+  const armedInBucket =
+    selectedBucketDayRange != null &&
+    armedOccurrenceMs != null &&
+    armedOccurrenceMs >= selectedBucketDayRange.startMs &&
+    armedOccurrenceMs < selectedBucketDayRange.endMs
+
   // ── ADR-050 RD8 / spec §4.3 — resolve the clicked occurrence's own run ─────
   // A calendar occurrence chip carries selectedOccurrenceMs; re-point the
   // Run status / Result / Open-in-Chat sections at THAT occurrence's run
@@ -340,6 +380,24 @@ export function CalendarEventSlideOver({
     },
     onError: (err) => {
       setSaveError(getErrorMessage(err, 'Failed to create event'))
+    },
+  })
+
+  // E4 from a bucket: the task-level run-now with no occurrence_ms — the
+  // server consumes the armed occurrence (or refuses truthfully, e.g. while
+  // an automatic delivery is queued). Success or refusal, the occurrence and
+  // run truth is re-read before another action renders.
+  const runArmedMutation = useMutation({
+    mutationFn: () => runNextArmedOccurrence(task!.id),
+    onSuccess: () => {
+      invalidateCalendarQueries()
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.runs(task!.id) })
+      addToast({ message: 'Task started.', variant: 'success' })
+    },
+    onError: (err) => {
+      invalidateCalendarQueries()
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.runs(task!.id) })
+      addToast({ message: runNowRefusalMessage(err, 'Failed to start task'), variant: 'error' })
     },
   })
 
@@ -691,6 +749,19 @@ export function CalendarEventSlideOver({
                       day). TaskChecklistField stays — it's task-scoped, not
                       occurrence/day-scoped. */}
                   <TaskChecklistField task={task} />
+                  {armedInBucket && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8 self-start"
+                      onClick={() => runArmedMutation.mutate()}
+                      disabled={runArmedMutation.isPending}
+                      aria-label="Run next armed occurrence"
+                    >
+                      <Play size={13} weight="fill" />
+                      {runArmedMutation.isPending ? 'Starting…' : 'Run next armed occurrence'}
+                    </Button>
+                  )}
                   <TaskRunsList
                     taskId={task.id}
                     dayRange={selectedBucketDayRange!}
@@ -707,7 +778,7 @@ export function CalendarEventSlideOver({
                       Couldn't load this occurrence's run status.
                     </p>
                   )}
-                  <TaskRunStatusField task={task} occurrence={occurrenceContext} />
+                  <TaskRunStatusField task={task} occurrence={occurrenceContext} armedOccurrenceMs={armedOccurrenceMs} />
                   <TaskChecklistField task={task} />
                   {showResultAndChat && <TaskResultField task={task} occurrence={occurrenceContext} />}
                   {showResultAndChat && (

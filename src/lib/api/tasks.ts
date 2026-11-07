@@ -1,6 +1,6 @@
 // tasks.ts: Tasks, board moves, evidence, verdicts and run history
 
-import { isApiError as isApiErrorFn, getErrorMessage } from '../api-error'
+import { isApiError as isApiErrorFn, getErrorMessage, parseServerErrorField } from '../api-error'
 import type { ZodType } from 'zod'
 import { z } from 'zod'
 import {
@@ -379,4 +379,36 @@ export function runTaskNow(taskId: string, occurrenceMs?: number | null): Promis
     init.body = JSON.stringify(body)
   }
   return request<void>(`/tasks/${encodeURIComponent(taskId)}/runs`, init)
+}
+
+/**
+ * POST /tasks/{id}/runs with an explicit request object that names no
+ * occurrence — the task-level run-now (T10 spec r6, eligibility row E4).
+ * The server decides: an armed occurrence is consumed, nothing armed is an
+ * ordinary dispatch, a queued automatic delivery or a de-armed future
+ * trigger is refused truthfully. Used by the Calendar's "Run next armed
+ * occurrence" bucket action, which must never send an `occurrence_ms`
+ * (the bucket names only its day, never an instant).
+ */
+/**
+ * The on-screen message for a refused run-now (T10 spec r6, US-9). The
+ * server's refusals are written to be shown: they name the real blocker — an
+ * automatic delivery already queued (E0), a future instant that is not the
+ * armed one (E3), an unsynced schedule (E4 de-armed), the run-now route for a
+ * status start. The shared ApiError policy replaces a 409's text with a
+ * generic "conflicts with the current state" line, which would hide that
+ * blocker, so for 400/409 the server's own `error` text is used when present.
+ * Every other failure keeps the shared message.
+ */
+export function runNowRefusalMessage(err: unknown, fallback: string): string {
+  if (isApiErrorFn(err) && (err.status === 400 || err.status === 409)) {
+    const reason = parseServerErrorField(err.body)
+    if (reason) return reason
+  }
+  return getErrorMessage(err, fallback)
+}
+
+export function runNextArmedOccurrence(taskId: string): Promise<void> {
+  const body: RunNowRequest = {}
+  return request<void>(`/tasks/${encodeURIComponent(taskId)}/runs`, { method: 'POST', body: JSON.stringify(body) })
 }

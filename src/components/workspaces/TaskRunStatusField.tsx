@@ -23,6 +23,17 @@
 // resolved for it yet. `now` is an injected prop (never a bare `Date.now()`
 // read inline) so this gate is deterministically testable.
 //
+// T10 amendment to D1 (schedules-t10-spec-r6.md, US-9 eligibility table):
+// the ONE future occurrence that does offer Run now is the task's currently
+// armed occurrence (`armedOccurrenceMs`, read by the caller from the
+// occurrences response's `armed_occurrence_ms` — the live scheduler
+// registration, never client RRULE math). Running it is row E1: the server
+// consumes that occurrence, so nothing fires again at the original instant.
+// Any other future instant (E3) stays hidden; unknown/absent armed state
+// (not yet loaded, de-armed, no registration) keeps D1's hide. On a refusal
+// the occurrences and runs queries are re-read before another action is
+// rendered (stale clicks are resolved by the server, never guessed here).
+//
 // "Run now" calls runTaskNow (POST /tasks/{id}/runs, ADR-050 RD7) — this
 // opens/re-opens a TaskRun record. There is no dedicated /start endpoint;
 // the server dispatches the agent once the run is opened (see
@@ -38,7 +49,7 @@
 // colors, or which transitions are legal.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { runTaskNow, isApiError, tasksQueryKeys } from '@/lib/api'
+import { runTaskNow, runNowRefusalMessage, tasksQueryKeys } from '@/lib/api'
 import type { Task } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
@@ -62,9 +73,15 @@ export interface TaskRunStatusFieldProps {
    * Defaults to real "now"; tests pin it for determinism.
    */
   now?: number
+  /**
+   * The task's currently armed occurrence instant (`armed_occurrence_ms`
+   * from the occurrences response), or null/undefined when none is armed
+   * or it is not known yet. Only consulted with an occurrence context.
+   */
+  armedOccurrenceMs?: number | null
 }
 
-export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskRunStatusFieldProps) {
+export function TaskRunStatusField({ task, occurrence, now = Date.now(), armedOccurrenceMs }: TaskRunStatusFieldProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
@@ -74,6 +91,8 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
   // D1 (operator decision 2026-07-20): a future occurrence never offers
   // Run-now, whether or not a run has already resolved for it.
   const isFutureOccurrence = hasOccurrenceContext && occurrenceMs! > now
+  // T10 E1: the selected instant IS the live armed occurrence.
+  const isArmedOccurrence = hasOccurrenceContext && armedOccurrenceMs != null && occurrenceMs === armedOccurrenceMs
   // A resolved run always renders its own badge. Absent a run, the
   // task-level fallback badge renders ONLY when there's no occurrence
   // context at all — an occurrence with no run yet shows a text state
@@ -93,11 +112,14 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       addToast({ message: 'Task started.', variant: 'success' })
     },
-    onError: (err: unknown) =>
-      addToast({
-        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task',
-        variant: 'error',
-      }),
+    onError: (err: unknown) => {
+      // T10: a refusal (e.g. the occurrence is no longer armed, or an
+      // automatic delivery is already queued) means this view is stale —
+      // re-read the server's occurrence and run truth before another action.
+      queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] })
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.runs(task.id) })
+      addToast({ message: runNowRefusalMessage(err, 'Failed to start task'), variant: 'error' })
+    },
   })
 
   const badgeStatus = run ? run.status : task.status
@@ -122,11 +144,11 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
 
   // Run-now gate: task-level (no occurrence context) uses the existing
   // status-transition gate, unaffected by D1. Occurrence-scoped: never for a
-  // future occurrence (D1); otherwise any resolved run can be re-run unless
+  // future occurrence (D1) unless it is the armed one (T10 E1); otherwise any resolved run can be re-run unless
   // it's currently in flight, and an unresolved (no-run) past/current
   // occurrence is always actionable — there's nothing to gate against yet.
   const canRunNow = hasOccurrenceContext
-    ? !isFutureOccurrence && (run ? run.status !== 'in_progress' : true)
+    ? (!isFutureOccurrence || isArmedOccurrence) && (run ? run.status !== 'in_progress' : true)
     : taskLevelCanRunNow
 
   return (

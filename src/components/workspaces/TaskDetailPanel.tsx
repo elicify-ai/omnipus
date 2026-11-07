@@ -14,6 +14,7 @@ import {
   setTaskDependencies,
   stopTaskGoalLoop,
   runTaskNow,
+  runNowRefusalMessage,
   isApiError,
   getErrorMessage,
   tasksQueryKeys,
@@ -474,6 +475,33 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task', variant: 'error' }),
   })
 
+  // T10 Run now (schedules-t10-spec-r6.md US-9 matrix row 4, eligibility
+  // row E4) — the start control of a schedule-bearing task. POST
+  // /tasks/{id}/runs with no occurrence_ms: the server consumes the armed
+  // occurrence, or dispatches ordinarily when nothing is armed, or refuses
+  // truthfully (de-armed trigger, queued automatic delivery). No status
+  // write precedes it. Success or refusal, task, run and occurrence truth
+  // is re-read.
+  const { mutate: doRunNow, isPending: isRunningNow } = useMutation({
+    mutationFn: () => {
+      if (!task) return Promise.reject(new Error('No task selected'))
+      return runTaskNow(task.id)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] })
+      if (task) queryClient.invalidateQueries({ queryKey: tasksQueryKeys.runs(task.id) })
+      addToast({ message: 'Task started.', variant: 'success' })
+    },
+    onError: (err: unknown) => {
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] })
+      if (task) queryClient.invalidateQueries({ queryKey: tasksQueryKeys.runs(task.id) })
+      addToast({ message: runNowRefusalMessage(err, 'Failed to start task'), variant: 'error' })
+    },
+  })
+
   // Retry = re-run a failed task via a FRESH run (ADR-050 RD7 / spec §3.4,
   // §4.4). POST /tasks/{id}/runs with occurrence_ms omitted opens a new run
   // and dispatches it — the prior failed run's status/result/session stay
@@ -607,15 +635,30 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   // Done-terminal guard — mirror the board DnD `canDropTransition` so the panel
   // and the kanban agree on which status transitions the backend will accept.
   // (Can't leave `done` or `blocked`; can't enter `blocked`.)
+  // T10 (schedules-t10-spec-r6.md US-9, R5-M03): a schedule-bearing task
+  // (`once`/`recurring`) never starts through a status write — neither
+  // `in_progress` (PATCH-status Start) nor `next` (the ordinary drain). Its
+  // start control is Run now (POST /tasks/{id}/runs), so the server's
+  // trigger-aware routing decides before any status mutation. The server
+  // refuses both transitions too; the panel simply does not offer them.
+  function isScheduledStatusStart(target: Task['status']): boolean {
+    return !!task && isScheduledTrigger(task.trigger) && (target === 'in_progress' || target === 'next')
+  }
+
   function isStatusDisabled(target: Task['status']): boolean {
     if (!task) return false
     if (target === task.status) return false
+    if (isScheduledStatusStart(target)) return true
     return !canDropTransition(task.status, target).ok
   }
 
   function handleStatusChange(target: Task['status']) {
     if (!task) return
     if (target === task.status) return
+    if (isScheduledStatusStart(target)) {
+      setStatusError('A scheduled task starts with Run now, not a status change.')
+      return
+    }
     const verdict = canDropTransition(task.status, target)
     if (!verdict.ok) {
       setStatusError(verdict.reason ?? 'That status change is not allowed.')
@@ -647,6 +690,10 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const noWorkspaceForAssignment = !task.workspace_id
 
   const isStartable = task.status === 'inbox' || task.status === 'next'
+  const isScheduleBearing = isScheduledTrigger(task.trigger)
+  // Same task-level gate TaskRunStatusField applies: startable statuses, plus
+  // a recurring series whose last run is done (a series is never final).
+  const canRunNow = isStartable || (task.status === 'done' && task.trigger?.type === 'recurring')
   const isFailed = task.status === 'failed'
   const isRunning = task.status === 'in_progress'
   const blockedBy = task.blocked_by ?? []
@@ -1143,8 +1190,20 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           calendar's recurring-task edit slide-over (TaskChecklistField). */}
       <TaskChecklistField task={task} />
 
-      {/* Start button — inbox / next tasks */}
-      {isStartable && (
+      {/* Run now — schedule-bearing tasks (T10): never the PATCH-status Start. */}
+      {isScheduleBearing && canRunNow && (
+        <Button
+          className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8"
+          onClick={() => doRunNow()}
+          disabled={isRunningNow}
+        >
+          <Play size={13} weight="fill" />
+          {isRunningNow ? 'Starting…' : 'Run now'}
+        </Button>
+      )}
+
+      {/* Start button — inbox / next tasks without a schedule */}
+      {!isScheduleBearing && isStartable && (
         <Button
           className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8"
           onClick={() => doStart()}
