@@ -27,7 +27,7 @@
 
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Page } from '@playwright/test'
+import { test, type Page } from '@playwright/test'
 import {
   apiFetch,
   BASE_URL,
@@ -337,5 +337,52 @@ describe('isTestInfoUnavailableError', () => {
     ['undefined', undefined],
   ])('rejects %s', (_label: string, candidate: unknown) => {
     expect(isTestInfoUnavailableError(candidate)).toBe(false)
+  })
+})
+
+// The REAL default path: recordTransportReplay with NO injected sink resolves
+// its sink through currentTestInfo() -> test.info(). The runner boundary
+// (test.info) is the one faked edge; currentTestInfo's narrowed catch and the
+// recorder's default-argument lookup run for REAL. This is what kills a
+// blanket "return null on any test.info() error" edit (CHECK 3 finding F2),
+// which the injected-sink and standalone-discriminator cases above cannot see.
+describe('recordTransportReplay default test.info() lookup (no injected sink)', () => {
+  it('rejects with the unexpected test.info() error instead of suppressing it (CHECK 3 F2)', async () => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(test, 'info').mockImplementation(() => {
+      throw new Error('reporter exploded')
+    })
+    await expect(recordTransportReplay('GET', '/api/v1/example', 'ECONNRESET', 1)).rejects.toThrow(
+      'reporter exploded',
+    )
+  })
+
+  it('rejects with a thrown non-Error value instead of suppressing it (CHECK 3 F2)', async () => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(test, 'info').mockImplementation(() => {
+      throw TEST_INFO_UNAVAILABLE_MESSAGE // same text, but a string, not an Error
+    })
+    await expect(recordTransportReplay('GET', '/api/v1/example', 'ECONNRESET', 1)).rejects.toBe(
+      TEST_INFO_UNAVAILABLE_MESSAGE,
+    )
+  })
+
+  it('falls back to the stderr-only record for the exact unavailable-test error', async () => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(test, 'info').mockImplementation(() => {
+      throw new Error(TEST_INFO_UNAVAILABLE_MESSAGE)
+    })
+    await expect(recordTransportReplay('GET', '/api/v1/example', 'ECONNRESET', 1)).resolves.toBeUndefined()
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(String(warnSpy.mock.calls[0][0])).toContain('[apiFetch] transport reset replayed')
+  })
+
+  it('writes to the sink test.info() returns when a test is running', async () => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const sink = makeSink()
+    vi.spyOn(test, 'info').mockImplementation(() => sink as unknown as ReturnType<typeof test.info>)
+    await recordTransportReplay('PUT', '/api/v1/example', 'ECONNRESET', 1)
+    expect(sink.annotations).toHaveLength(1)
+    expect(sink.attached).toHaveLength(1)
   })
 })

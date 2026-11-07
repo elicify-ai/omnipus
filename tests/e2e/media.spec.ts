@@ -86,13 +86,13 @@ async function resolveWorkspaceId(page: Page): Promise<string> {
  * `followUpCeilingMs` is how long a follow-up LLM call (stop button visible
  * again) may run before this guard gives up waiting. Default 180s — the same
  * ceiling as test (a)'s own count assertion, kept for the two-browser-tool-call
- * flow. Test (b) passes 60s explicitly: its follow-up call is a single short
- * reply after ONE forced send_file call, and 60s is test (b)'s own MEASURED
- * one-segment latency ceiling under real CI load (CI run 42252059326: both
- * count-assertion attempts 3-4 exhausted the full 60s window without a first
- * reply landing). A ceiling is a worst case, not a measurement of success —
- * the guard remains advisory (its catch below); the delivery assertions after
- * it are what actually fails on missing content.
+ * flow. Test (b) passes 60s explicitly as a POLICY ALLOWANCE, not a measured
+ * latency: its follow-up call is expected to be a single short reply after ONE
+ * forced send_file call, and 60s matches the count assertion that precedes the
+ * guard. No successful run of test (b) exists in the CI evidence (see the
+ * budget comment in test (b)), so no successful follow-up latency has been
+ * observed for it. The guard remains advisory (its catch below); the delivery
+ * assertions after it are what actually fail on missing content.
  */
 async function waitForTurnFullyDone(page: Page, gapMs = 8_000, followUpCeilingMs = 180_000): Promise<void> {
   const stopBtn = page.locator('[data-testid="stop-btn"]');
@@ -224,25 +224,39 @@ test(
     //   a11y scan ......................................................... 10s
     // Worst-case total: 35 + 60 + 68 + 15 + 20 + 10 = 208s.
     //
-    // MEASURED, not assumed (CI run 42252059326, shard llm-light,
-    // pw-results.json — the four attempts of THIS test): 22.3s, 25.5s, 62.8s,
-    // 63.2s wall-clock, all four failing INSIDE inner budgets (attempts 1-2 on
-    // the 15s download-link assertion, attempts 3-4 on the 60s count
-    // assertion); the old 120s outer budget NEVER fired. So the measured
-    // record supports NO larger outer budget: the 5267bd455 raise to 360s only
-    // mirrored the guard's inherited unmeasured 180s follow-up ceiling. This
-    // budget instead anchors the guard's follow-up ceiling on THIS test's own
-    // measured one-segment latency under real CI load — 60s, the count ceiling
-    // that attempts 3-4 exhausted in full — passed explicitly at the guard
-    // call below (test (a) keeps the default 180s for its heavier
-    // two-browser-tool-call flow). Why the link never appeared is SUSPECTED
-    // (the mid-turn blip race the guard addresses), not established: the
-    // gateway log has no send_file error, which does not distinguish "never
-    // called" from "called without an error being logged" — and attempts 3-4's
-    // count failures are NOT claimed resolved by any of this.
-    // Outer budget: 208s worst case + ~15% scheduling margin = 240s (2.0x the
-    // old 120s — exactly at, not over, the 2026-11-07 CHECK re-audit's ">2x"
-    // boundary; recorded for that re-audit).
+    // WHAT THE CI EVIDENCE DOES AND DOES NOT SHOW (shard llm-light,
+    // pw-results.json of release/v0.1.1 runs 42252059326, 42334402301 and
+    // 42366141699, three runs, 12 attempts of THIS test): attempt durations
+    // 22.3/25.5/62.8/63.2s, 21.5/21.1/62.5/62.4s and 27.1/21.1/62.4/20.6s.
+    // ALL 12 FAILED, inside inner budgets (the 15s download-link assertion or
+    // the 60s count assertion); none reached the old 120s outer budget, and no
+    // attempt PASSED. A failed wait is a lower bound on how long we waited
+    // without success, not an upper bound on successful latency, so these
+    // numbers establish NO latency ceiling for this test: the successful
+    // latency of (b) is UNKNOWN. (Test (a), a different flow, passed in 27-35s
+    // in the same runs; it is not evidence for (b).)
+    //
+    // So the 240s below is NOT empirically justified and is not claimed to fix
+    // the failures. It is a policy budget that exists for one reason: the
+    // waitForTurnFullyDone leg added below lengthens the sum of this test's own
+    // inner timeouts, and test.setTimeout is a hard governor that must not cut
+    // an inner wait short. The sum uses allowances, not measurements:
+    //   Sidebar agent selection + input visibility ..................... ~35s (allowance)
+    //   assistantMessages toHaveCount ceiling ........................... 60s (enforced)
+    //   waitForTurnFullyDone: gapMs(8s) + follow-up ceiling(60s) ........ 68s (enforced)
+    //   downloadLink toBeVisible ceiling ................................ 15s (enforced)
+    //   download event + path + read-back ............................... ~20s (allowance, no explicit timeout)
+    //   a11y scan ......................................................... 10s (allowance, no explicit timeout)
+    // Sum of those allowances: 35 + 60 + 68 + 15 + 20 + 10 = 208s, plus ~15%
+    // scheduling margin = 240s (2.0x the old 120s). The 5267bd455 raise to 360s
+    // only mirrored the guard's inherited 180s follow-up ceiling, which is why
+    // the guard's ceiling is now passed explicitly. Why the link never appeared
+    // is SUSPECTED (the mid-turn blip race the guard addresses), not
+    // established: the gateway log has no send_file error, which does not
+    // distinguish "never called" from "called without an error being logged".
+    // That 12 of 12 attempts failed, including attempts that failed at the
+    // 60s count assertion before this guard runs, argues AGAINST a pure
+    // latency explanation and is not resolved by this change.
     test.setTimeout(240_000);
 
     // Seed a real fixture file directly on disk inside the workspace's work/
@@ -297,10 +311,10 @@ test(
     // failed at 22.3s/25.5s, at that 15s link budget, with no send_file error
     // in the gateway log; missing logs do not distinguish "never called" from
     // "called cleanly", so the blip mechanism remains a hypothesis.) The
-    // explicit 60s follow-up ceiling: this test's own measured one-segment
-    // latency ceiling (attempts 3-4 exhausted the 60s count window in full) —
-    // see the budget comment above; the heavier two-tool-call test (a) keeps
-    // the function default.
+    // explicit 60s follow-up ceiling is a policy allowance, not a measured
+    // latency (no successful run of this test exists in the evidence) — see
+    // the budget comment above; the heavier two-tool-call test (a) keeps the
+    // function default.
     await waitForTurnFullyDone(page, 8_000, 60_000);
 
     // Structural assertion: the non-image branch of InlineMedia renders an
