@@ -12,7 +12,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/security"
@@ -1679,34 +1678,6 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 						return rt.runProviderAttempt(ctx, rt.activeProvider, provider, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
 					})
 				}
-				cat := rt.al.getCapabilityCatalog()
-				budget := resizeBudgetForModel(cat, provider, model, int(catalog.DefaultResizeLimits.MaxBytes))
-				// §7.4 (read paths): one attach per candidate, reused across
-				// this candidate's in-place retries — same request re-sent
-				// (cache reset per round in callProviderOnce; see
-				// runProviderAttempt's block for the cache-miss-on-error rule).
-				attachKey := provider + "/" + model
-				candidateMessages, imageErr := func() ([]providers.Message, error) {
-					if cached, ok := rt.providerCallAttachCache[attachKey]; ok {
-						return cached, nil
-					}
-					m, err := attachTurnInspectionImagesWithBudget(ctx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, provider, model), budget)
-					if err != nil {
-						return nil, err
-					}
-					// Issue #1435 R1: this candidate's own budget applies to
-					// ordinary inline image media too — a tighter fallback
-					// candidate must not receive the looser primary's image
-					// bytes. Request-local fit; history stays canonical.
-					m = fitOrdinaryImageMediaToBudget(m, budget)
-					if rt.providerCallAttachCache != nil {
-						rt.providerCallAttachCache[attachKey] = m
-					}
-					return m, nil
-				}()
-				if imageErr != nil {
-					return nil, imageErr
-				}
 				// Resolve the exact configured pair. A missing named fallback
 				// is a refusal, never permission to borrow another client.
 				rt.ts.agent.mu.RLock()
@@ -1718,12 +1689,14 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 				if p == nil {
 					p = rt.activeProvider // legacy, explicitly unpinned candidate
 				}
-				rt.ts.setLastProducedModel(model)
-				rt.ts.setLastProducedProvider(provider)
+				// Effort-levels S-88/S-95: every candidate runs the same attempt
+				// body as a single candidate (image attach once per candidate,
+				// streaming when the provider and channel allow it, accounting
+				// of the attempt). C-10 counts THIS attempt only; the chain
+				// ends instead of falling back once bytes of an attempt showed.
 				return rt.callWithEffort(provider, model, func(opts map[string]any) (*providers.LLMResponse, error) {
-					response, err := p.Chat(ctx, candidateMessages, toolDefsForCall, model, opts)
-					rt.accountProviderAttempt(provider, model, response, err)
-					return response, err
+					rt.providerCallStreamedBytes.Store(0)
+					return rt.runProviderAttempt(ctx, p, provider, model, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
 				})
 			},
 		)

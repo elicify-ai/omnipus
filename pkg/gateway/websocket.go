@@ -1705,10 +1705,14 @@ type wsStreamer struct {
 	statsCacheWrite       int
 	callAccounting        []session.TranscriptEntry
 	callAccountingSet     bool
-	statsTokens           int64
-	statsCostUSD          float64
-	statsDuration         time.Duration
-	statsTurnFailed       bool // set by SetTurnFailed when the engine used a synthetic fallback
+	// turnReasoning is the agent's own turn sum over every call of the turn
+	// (agent.TurnReasoningStreamer); turnReasoningSet says it was handed over.
+	turnReasoning    *int
+	turnReasoningSet bool
+	statsTokens      int64
+	statsCostUSD     float64
+	statsDuration    time.Duration
+	statsTurnFailed  bool // set by SetTurnFailed when the engine used a synthetic fallback
 
 	// transcriptPersisted records that the agent loop already wrote this
 	// streamer's narration to the transcript via
