@@ -13119,11 +13119,11 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+             * @description Machine-readable reason. 400: invalid_targets, too_many_targets, program_access_refused (config.json holds a write entry that would give agents write access to a document preview program folder; office preview spec §3.4 D9b row 34). 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
              * @example invalid_targets
              * @enum {string}
              */
-            code: "invalid_targets" | "too_many_targets" | "platform_cannot_start" | "platform_cannot_message_people" | "stale_revision" | "connect_first" | "lookup_unavailable" | "saved_live_mismatch";
+            code: "invalid_targets" | "too_many_targets" | "platform_cannot_start" | "platform_cannot_message_people" | "stale_revision" | "connect_first" | "lookup_unavailable" | "saved_live_mismatch" | "program_access_refused";
             /** @description Per-target errors: the first 10 invalid entries in request order. */
             target_errors?: {
                 /**
@@ -19699,6 +19699,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             500: components["responses"]["500InternalServerError"];
         };
@@ -22289,6 +22290,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
@@ -22735,6 +22737,7 @@ export interface operations {
                     "application/json": components["schemas"]["MailboxRemovalResult"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             /** @description Agent not found, or no mailbox configured for the agent in this workspace. */
             404: {
@@ -22832,6 +22835,7 @@ export interface operations {
                     "application/json": components["schemas"]["RotateTokenResponse"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
@@ -25000,6 +25004,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
         };

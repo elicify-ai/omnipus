@@ -411,6 +411,9 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("rest: add mcp server", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
@@ -520,6 +523,9 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 		return nil
 	}); err != nil {
 		slog.Error("rest: delete mcp server", "id", id, "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
@@ -857,6 +863,9 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 		slog.Error("rest: patch mcp server", "id", id, "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}

@@ -2289,6 +2289,7 @@ const (
 	ChannelOutboundRejectionCodeLookupUnavailable           ChannelOutboundRejectionCode = "lookup_unavailable"
 	ChannelOutboundRejectionCodePlatformCannotMessagePeople ChannelOutboundRejectionCode = "platform_cannot_message_people"
 	ChannelOutboundRejectionCodePlatformCannotStart         ChannelOutboundRejectionCode = "platform_cannot_start"
+	ChannelOutboundRejectionCodeProgramAccessRefused        ChannelOutboundRejectionCode = "program_access_refused"
 	ChannelOutboundRejectionCodeSavedLiveMismatch           ChannelOutboundRejectionCode = "saved_live_mismatch"
 	ChannelOutboundRejectionCodeStaleRevision               ChannelOutboundRejectionCode = "stale_revision"
 	ChannelOutboundRejectionCodeTooManyTargets              ChannelOutboundRejectionCode = "too_many_targets"
@@ -2306,6 +2307,8 @@ func (e ChannelOutboundRejectionCode) Valid() bool {
 	case ChannelOutboundRejectionCodePlatformCannotMessagePeople:
 		return true
 	case ChannelOutboundRejectionCodePlatformCannotStart:
+		return true
+	case ChannelOutboundRejectionCodeProgramAccessRefused:
 		return true
 	case ChannelOutboundRejectionCodeSavedLiveMismatch:
 		return true
@@ -16508,7 +16511,7 @@ type ChannelOutboundReadOutboundPolicy string
 // ChannelOutboundRejection Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502 (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
 // Safe-echo set: every string of this schema (error, target_errors[].target, target_errors[].reason) is restricted by its pattern to printable ASCII (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes (double quote, backslash, <, >, &). The server drops any other character before serializing; it never escapes or substitutes. Each string character therefore serializes to exactly one byte, which keeps the worst-case body at about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable characters for its binary sniff.
 type ChannelOutboundRejection struct {
-	// Code Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+	// Code Machine-readable reason. 400: invalid_targets, too_many_targets, program_access_refused (config.json holds a write entry that would give agents write access to a document preview program folder; office preview spec §3.4 D9b row 34). 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
 	Code ChannelOutboundRejectionCode `json:"code"`
 
 	// Error Human-readable reason, in the safe-echo set. For 502 lookup_unavailable it is "Discord could not be reached to check <ids>; nothing was saved; try again", listing unavailable ids in request order until the next id would exceed 500 characters, then "+<N> more".
@@ -16533,7 +16536,7 @@ type ChannelOutboundRejection struct {
 	} `json:"target_errors,omitempty"`
 }
 
-// ChannelOutboundRejectionCode Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+// ChannelOutboundRejectionCode Machine-readable reason. 400: invalid_targets, too_many_targets, program_access_refused (config.json holds a write entry that would give agents write access to a document preview program folder; office preview spec §3.4 D9b row 34). 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
 type ChannelOutboundRejectionCode string
 
 // ChannelOutboundRejectionTargetErrorsCode Why this entry was refused.

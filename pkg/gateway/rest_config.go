@@ -806,6 +806,9 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Error("rest: save config for token rotation", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}

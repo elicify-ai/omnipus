@@ -5510,6 +5510,7 @@ export const ChannelOutboundRejection = z.object({
     "connect_first",
     "lookup_unavailable",
     "saved_live_mismatch",
+    "program_access_refused",
   ]),
   target_errors: z
     .array(
@@ -9358,6 +9359,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: MailboxRemovalResult,
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
@@ -9726,6 +9732,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     requestFormat: "json",
     response: z.void(),
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -10182,6 +10193,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: ChannelEnabledResponse,
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
@@ -10490,6 +10506,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     requestFormat: "json",
     response: RotateTokenResponse,
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -12751,6 +12772,11 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
     ],
     response: z.void(),
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,

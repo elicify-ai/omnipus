@@ -64,6 +64,10 @@ func (e *outboundRejectionError) Error() string {
 	return string(e.Body.Code) + ": " + e.Body.Error
 }
 
+// outboundProgramAccessRefusedText is §3.4 D9b row 34's fixed sentence.
+const outboundProgramAccessRefusedText = "config error: config.json holds a write entry that would give agents " +
+	"write access to a document preview program folder; nothing was saved. Saving any other setting shows the entry."
+
 func outboundRejection(status int, code gen.ChannelOutboundRejectionCode, text string) *outboundRejectionError {
 	return &outboundRejectionError{Status: status, Body: gen.ChannelOutboundRejection{
 		Code: code, Error: truncateSafeEcho(text, outboundErrorMaxLen),
@@ -401,6 +405,7 @@ func (a *restAPI) commitOutboundChange(id string, desired *config.ChannelOutboun
 	})
 	a.outboundDedicatedWrite = false
 	var refreshErr *configRefreshError
+	var refusal *requestRefusalError
 	var warning *string
 	switch {
 	case writeErr == nil:
@@ -423,6 +428,14 @@ func (a *restAPI) commitOutboundChange(id string, desired *config.ChannelOutboun
 		text := "Saved and in force for starting messages. Other settings could not be refreshed: " +
 			"the running configuration could not be reloaded. Check the server log."
 		warning = &text
+	case errors.As(writeErr, &refusal):
+		// §3.4 D9b row 34: the rejection's safe-echo set cannot carry the
+		// §3.2 text (quotes, backslashes), so the person gets a fixed sentence
+		// and the full text goes to the log.
+		logsafeWarn("rest: channel outbound refused by the program-folder check",
+			"channel", id, "refusal", refusal.Error())
+		return none, outboundRejection(http.StatusBadRequest, gen.ChannelOutboundRejectionCodeProgramAccessRefused,
+			outboundProgramAccessRefusedText)
 	default:
 		return none, writeErr
 	}

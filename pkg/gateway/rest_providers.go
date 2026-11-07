@@ -851,6 +851,9 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 		return nil
 	}); err != nil {
 		slog.Error("rest: save config for provider update", "error", err)
+		if writeRequestRefusal(p.w, err) {
+			return false
+		}
 		jsonServerFailure(p.w, http.StatusInternalServerError, "could not save config", err)
 		return false
 	}

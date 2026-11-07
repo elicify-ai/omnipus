@@ -966,6 +966,9 @@ func (ro *restAPIHandleCompleteOnboarding) persistConfig() bool {
 			return ro.refuseUsernameTaken()
 		}
 		slog.Error("onboarding: complete transaction failed", "error", err)
+		if writeRequestRefusal(ro.w, err) {
+			return true
+		}
 		jsonErr(ro.w, http.StatusInternalServerError, "onboarding failed")
 		return true
 	}
