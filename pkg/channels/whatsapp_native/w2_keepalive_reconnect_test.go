@@ -141,3 +141,43 @@ func TestKeepAlive_StopWhileReconnectPendingDoesNotDial(t *testing.T) {
 	require.Equal(t, int32(1), server.handshakes.Load(),
 		"R3: Stop while the keepalive reconnect is pending produces no dial")
 }
+
+// TestKeepAlive_RestoredAfterThresholdStillDialsOnceAndEndsConnected is R3 (d),
+// chief 2026-11-07 16:00Z: the library reports KeepAliveRestored after the
+// failure already passed whatsmeow.KeepAliveMaxFailTime. One restored event
+// arrives while our reconnect is still pending, and another after that dial
+// has completed. The channel still dials exactly once (that pending reconnect),
+// never a second time, and ends connected rather than stuck.
+func TestKeepAlive_RestoredAfterThresholdStillDialsOnceAndEndsConnected(t *testing.T) {
+	f, server, client, _ := w2StartLinkedAgainstFakeServer(t)
+	require.Equal(t, int32(1), server.handshakes.Load(), "instrument: exactly the initial dial so far")
+	held, release := fix1HoldCapturedReconnect(t)
+	f.ch.eventHandler(w2KeepAliveTimeout(whatsmeow.KeepAliveMaxFailTime+time.Second, 1))
+	w2WaitOurReconnectHeld(t, held)
+	f.ch.eventHandler(&events.KeepAliveRestored{})
+	select {
+	case <-server.connected:
+		t.Fatal("KeepAliveRestored while the keepalive reconnect was pending completed a handshake; that dial is not the one still held")
+	default:
+	}
+	require.Equal(t, int32(1), server.handshakes.Load(),
+		"R3 (d): KeepAliveRestored while our reconnect is pending must not dial on its own")
+	release()
+	select {
+	case <-server.connected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pending reconnectWithBackoff did not dial after KeepAliveRestored arrived while it was held")
+	}
+	require.True(t, client.IsConnected(), "R3 (d): the one reconnect dial leaves the client connected")
+	f.ch.eventHandler(&events.KeepAliveRestored{})
+	select {
+	case <-server.connected:
+		t.Fatalf("KeepAliveRestored after the reconnect completed dialled again (handshakes=%d)", server.handshakes.Load())
+	case <-time.After(5 * time.Second):
+	}
+	require.Equal(t, int32(2), server.handshakes.Load(),
+		"R3 (d): a KeepAliveRestored after the threshold still produces exactly one reconnect dial, and it is the one that was already pending")
+	require.True(t, client.IsConnected(), "R3 (d): the channel ends connected")
+	require.True(t, f.ch.IsRunning(), "R3 (d): the channel is not left stopped")
+	require.False(t, f.ch.reconnecting, "R3 (d): the channel is not left stuck in a reconnect")
+}
