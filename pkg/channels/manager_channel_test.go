@@ -10,6 +10,8 @@ import (
 )
 
 func TestToChannelHashes(t *testing.T) {
+	previousLevel := logger.GetLevel()
+	t.Cleanup(func() { logger.SetLevel(previousLevel) })
 	logger.SetLevel(logger.DEBUG)
 	cfg := config.DefaultConfig()
 	results := toChannelHashes(cfg)
