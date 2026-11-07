@@ -67,7 +67,9 @@ func WithApprovalFacts(args, facts map[string]any) map[string]any {
 	if len(facts) == 0 {
 		return args
 	}
-	out := make(map[string]any, len(args)+len(facts))
+	// No len(args)+len(facts) capacity. That add inside make is the
+	// go/allocation-size-overflow pattern; the hint is not semantic.
+	out := make(map[string]any)
 	for k, v := range args {
 		out[k] = v
 	}

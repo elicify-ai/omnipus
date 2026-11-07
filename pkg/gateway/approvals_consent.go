@@ -98,7 +98,9 @@ func consentArgsHash(e *approvalEntry) string {
 	hash, err := audit.ArgsHash(e.Args)
 	if err != nil {
 		slog.Error("approval audit: could not hash the approved arguments; args_hash is empty",
-			"approval_id", e.ApprovalID, "tool", e.ToolName, "error", err)
+			"approval_id", safeLogValue(e.ApprovalID),
+			"tool", safeLogValue(e.ToolName),
+			"error", safeLogValue(err.Error()))
 	}
 	return hash
 }

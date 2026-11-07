@@ -285,7 +285,9 @@ var outboundCardFactKeys = []string{"connection", "current_outbound", "new_outbo
 // new_policy, added_count, removed_count and revision. The card's target
 // lists never reach an audit row. The card itself (requestArgs) is unchanged.
 func ChannelOutboundAskAuditArgs(requestArgs map[string]any) map[string]any {
-	out := make(map[string]any, len(requestArgs)+3)
+	// No len(requestArgs)+3 capacity. That add inside make is the
+	// go/allocation-size-overflow pattern; the hint is not semantic.
+	out := make(map[string]any)
 	for k, v := range requestArgs {
 		out[k] = v
 	}
