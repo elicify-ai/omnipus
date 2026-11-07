@@ -423,6 +423,10 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) (startErr error) {
 	}
 
 	client := whatsmeow.NewClient(deviceStore, waLogger)
+	// reconnectWithBackoff is the single owner of reconnecting (#1687): the
+	// library's own auto-reconnect would dial a second time after a remote drop
+	// and could race a stop. events.Disconnected is still emitted without it.
+	client.EnableAutoReconnect = false
 	c.mu.Lock()
 	resource.client, resource.container = client, container
 	resource.liveClient.Store(client)
