@@ -15,14 +15,16 @@ import { cn } from '@/lib/utils'
 // closes as usual. The whole rule is gated by `clearable` and lives in
 // `clearsOnEscape` below, so a different answer is a one-line change.
 //
-// Keeping an enclosing pop-up open (contract §2.1): Radix dismissable layers
-// (Dialog, Sheet, Popover, every DismissableLayer) listen for Escape on
-// `document` in the CAPTURE phase, before this input's own handler runs, and
-// dismiss unless the event is already `defaultPrevented`. So while Escape
-// would clear text, a window capture-phase listener (window runs before
-// document) marks that Escape `defaultPrevented`; every layer then skips its
-// dismissal, without any layer having to know about SearchField. The input's
-// own handler does the clear and stops bubble-phase listeners.
+// One Escape does one thing (contract §2.1, team-lead decision D-K1).
+// Radix dismissable layers (Dialog, Sheet, Popover, every DismissableLayer)
+// listen for Escape on `document` in the CAPTURE phase, before this input's
+// own handler runs, and dismiss unless the event is already
+// `defaultPrevented`. A window capture-phase listener runs before them. It
+// CLAIMS the Escape (preventDefault, so no layer dismisses; the input then
+// clears) only when the text would clear AND the field is inside the topmost
+// open layer, or no layer is open. When an open layer does not contain the
+// field, the Escape is left to that layer: it closes and the field keeps its
+// value.
 export interface SearchFieldProps {
   value: string
   onValueChange: (value: string) => void
@@ -44,6 +46,33 @@ export interface SearchFieldProps {
 // grow-with-minimum sizing itself, so the toolbar never has to read or merge
 // a child's className.
 const SearchToolbarContext = React.createContext(false)
+
+// Why the DOM and not a registry: Radix keeps its layer stack in an internal
+// context (DismissableLayerContext, not exported in 1.1.x), so the next best
+// source is the structure Radix itself renders for an open layer: a popper
+// wrapper (Popover, menus, Select, Tooltip, HoverCard) or an open
+// dialog/alertdialog content (Dialog, AlertDialog, Sheet). Layers portal to
+// the end of <body> in the order they open, and a nested layer comes after
+// its parent, so the last match in document order is the topmost. A
+// hand-kept registry would need every layer to opt in and would silently miss
+// raw Radix layers and third-party ones.
+const LAYER_SELECTOR = [
+  '[data-radix-popper-content-wrapper]',
+  '[role="dialog"][data-state="open"]',
+  '[role="alertdialog"][data-state="open"]',
+].join(', ')
+
+// A popper wrapper stays mounted while its content plays the exit animation;
+// its content then reads data-state="closed" and no longer counts as open.
+function isOpenLayer(element: Element) {
+  if (!element.hasAttribute('data-radix-popper-content-wrapper')) return true
+  return element.firstElementChild?.getAttribute('data-state') !== 'closed'
+}
+
+function topmostOpenLayer(doc: Document): Element | null {
+  const open = Array.from(doc.querySelectorAll(LAYER_SELECTOR)).filter(isOpenLayer)
+  return open.length > 0 ? open[open.length - 1] : null
+}
 
 function clearsOnEscape(clearable: boolean, value: string) {
   return clearable && value !== ''
@@ -94,11 +123,17 @@ const SearchField = React.forwardRef<HTMLInputElement, SearchFieldProps>(functio
   React.useEffect(() => {
     clearsRef.current = clearsOnEscape(clearable, value)
   }, [clearable, value])
+  // The Escape event this field claimed; the input's handler clears only for it.
+  const claimedRef = React.useRef<Event | null>(null)
   React.useEffect(() => {
     const view = inputRef.current?.ownerDocument.defaultView
     if (!view) return
     function claimEscape(event: KeyboardEvent) {
-      if (event.key !== 'Escape' || event.target !== inputRef.current || !clearsRef.current) return
+      const input = inputRef.current
+      if (event.key !== 'Escape' || !input || event.target !== input || !clearsRef.current) return
+      const layer = topmostOpenLayer(input.ownerDocument)
+      if (layer !== null && !layer.contains(input)) return
+      claimedRef.current = event
       event.preventDefault()
     }
     view.addEventListener('keydown', claimEscape, { capture: true })
@@ -124,6 +159,9 @@ const SearchField = React.forwardRef<HTMLInputElement, SearchFieldProps>(functio
         onChange={(event) => onValueChange(event.target.value)}
         onKeyDown={(event) => {
           if (event.key !== 'Escape' || !clearsOnEscape(clearable, value)) return
+          // Not claimed: an open layer that does not contain the field gets this Escape.
+          if (claimedRef.current !== event.nativeEvent) return
+          claimedRef.current = null
           event.stopPropagation()
           event.preventDefault()
           onValueChange('')
