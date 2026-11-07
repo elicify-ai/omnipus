@@ -8590,6 +8590,11 @@
       "reason": "Exact test-only boundary for the effort picker layout and blocked-step nearest marker (FD-16 P-Q1 A, S-10): the test imports the domain effort picker it verifies. No production import, public export, scanner rule, or QA assertion is changed."
     },
     {
+      "path": "src/components/ui/model-effort-picker.wireframe.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for the effort chip, popover, blocked step and catalog states as the founder-approved wireframes draw them: the test imports the domain effort picker it verifies. No production import, public export, scanner rule, or QA assertion is changed."
+    },
+    {
       "path": "src/components/settings/ProvidersSection.removalRefused.test.tsx",
       "kind": "test",
       "reason": "Exact test-only boundary for #1620 T8: mounts the existing application-classified ToastContainer beside the real ProvidersSection so the refused DELETE shows the real visible notice. The application-only import is confined to this test; no production consumer, public export, scanner rule, or assertion is changed."

@@ -20,7 +20,7 @@
 import * as React from 'react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Info } from '@phosphor-icons/react'
+import { CaretDown, CircleNotch, Info } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import type { ProvidersCatalog } from '@/lib/api'
@@ -83,6 +83,9 @@ export interface ModelEffortPickerProps {
 
 export const MUTED_EFFORT_TEXT = "Omnipus can't change effort for this model."
 
+/** The effort popover's help line (wireframe effort popover). */
+const EFFORT_HELP_TEXT = 'How much the model thinks before answering. More effort is slower and costs more.'
+
 const NOT_SET = ''
 
 /** The one catalog read every picker shares (ADR-068's catalog query). */
@@ -143,6 +146,62 @@ function isTopRow(value: string): boolean {
   return value === NOT_SET || value === PROVIDER_DEFAULT
 }
 
+/** Lit bars per value in the wireframes' five-bar glyph (preview `barsHtml`). */
+const LIT_BARS: Record<string, number> = { off: 0, none: 0, minimal: 1, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, on: 3 }
+const BAR_HEIGHTS = [3, 5, 7, 9, 10]
+
+/** The small signal-bar glyph of a level (decoration; the level's name carries the meaning). */
+function EffortBars({ value }: { value: string }) {
+  const lit = LIT_BARS[value]
+  if (lit === undefined) return null
+  return (
+    <svg aria-hidden="true" data-effort-bars={lit} viewBox="0 0 14 10" width="14" height="10" fill="currentColor" className="shrink-0">
+      {BAR_HEIGHTS.map((height, index) => (
+        <rect key={height} x={index * 3} y={10 - height} width="2" height={height} rx="1" fillOpacity={index < lit ? 1 : 0.25} />
+      ))}
+    </svg>
+  )
+}
+
+/**
+ * A top row's content: radio dot, name and muted sub-text. Not set keeps its
+ * text "Not set: Agent's setting: High" (the ": " is screen-reader only);
+ * Provider default draws "provider decides" from an attribute so its text
+ * and name stay "Provider default".
+ */
+function TopRowContent({ item, checked }: { item: EffortItem; checked: boolean }) {
+  const split = item.value === NOT_SET ? item.label.indexOf(': ') : -1
+  const name = split >= 0 ? item.label.slice(0, split) : item.label
+  const sub = split >= 0 ? item.label.slice(split + 2) : null
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        data-effort-dot=""
+        className={cn(
+          'h-[var(--space-2-5)] w-[var(--space-2-5)] shrink-0 rounded-full border',
+          checked ? 'border-[var(--color-accent)] bg-[var(--color-accent)]' : 'border-[var(--color-muted)]',
+        )}
+      />
+      <span>{name}</span>
+      {sub !== null ? (
+        <>
+          <span className="sr-only">:</span>{' '}
+          <span data-effort-sub="" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+            {sub}
+          </span>
+        </>
+      ) : (
+        <span
+          aria-hidden="true"
+          data-effort-sub="provider decides"
+          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] after:content-[attr(data-effort-sub)]"
+        />
+      )}
+    </>
+  )
+}
+
 /**
  * The radio list (FD-16 P-Q1 A, "Design-System Components"): one radio group,
  * Not set and Provider default as full-width rows on top, then the model's own
@@ -173,9 +232,10 @@ function EffortRadioList({ items, checked, onCommit, disabled, ariaLabel, neares
           onCommit(item.value)
         }}
         aria-describedby={isNearest ? nearestId : undefined}
-        className={top ? 'basis-full whitespace-normal p-[var(--space-2)]' : 'w-auto min-w-0 flex-1 basis-0 flex-col whitespace-normal justify-center gap-0 px-[var(--space-1)] py-[var(--space-2)] text-center'}
+        className={top ? 'basis-full justify-start gap-[var(--space-2)] whitespace-normal p-[var(--space-2)] text-left' : 'w-auto min-w-0 flex-1 basis-0 flex-col whitespace-normal justify-center gap-[var(--space-0-5)] px-[var(--space-1)] py-[var(--space-2)] text-center'}
       >
-        {item.label}
+        {top ? <TopRowContent item={item} checked={selected === item.value} /> : <EffortBars value={item.value} />}
+        {!top && item.label}
         {isNearest && (
           <span aria-hidden="true" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             nearest
@@ -216,23 +276,37 @@ interface PickerBodyProps extends ModelEffortPickerProps {
   onCommit: (value: string) => void
 }
 
+/**
+ * Catalog loading or failed (S-07): the stored value as text, no choices; a
+ * failure offers Retry. Copy as the wireframes word it: "Loading model
+ * details. Saved effort: High." / "Couldn't load model details. Saved effort:
+ * High. Retry".
+ */
+function CatalogStateLine({ status, saved, onRetry }: { status: 'pending' | 'error'; saved: string; onRetry: () => void }) {
+  const value = <span>{effortLabel(saved)}</span>
+  if (status === 'pending') {
+    return (
+      <span className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+        <CircleNotch data-effort-spinner="" size={12} aria-hidden="true" className="shrink-0 animate-spin motion-reduce:animate-none" />
+        <span>Loading model details. Saved effort: {value}.</span>
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex flex-wrap items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]">
+      <FormError error="Couldn't load model details." className="mt-0" />
+      <span className="text-[var(--color-muted)]">Saved effort: {value}.</span>
+      <Button type="button" variant="link" size="sm" onClick={onRetry}>
+        Retry
+      </Button>
+    </span>
+  )
+}
+
 function PickerBody({ catalogStatus, row, onRetry, onCommit, ...props }: PickerBodyProps) {
   const stored = effectiveStored(props, props.value.effort)
   if (catalogStatus !== 'success') {
-    // Loading or failed: the stored value as text, no choices (S-07).
-    return (
-      <div className="space-y-[var(--space-1)]">
-        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{effortLabel(stored)}</p>
-        {catalogStatus === 'error' && (
-          <div className="flex items-center gap-[var(--space-2)]">
-            <FormError error="Could not load this model's effort options." className="mt-0" />
-            <Button type="button" variant="outline" size="sm" onClick={onRetry}>
-              Retry
-            </Button>
-          </div>
-        )}
-      </div>
-    )
+    return <CatalogStateLine status={catalogStatus} saved={stored} onRetry={onRetry} />
   }
   const presentation = presentationOf(row)
   if (presentation === 'none') return null
@@ -300,6 +374,23 @@ interface ChipDescription {
   amber: boolean
   /** A visible sentence under the chip explaining the amber state, if any. */
   hint?: string
+  /** The value the chip's bar glyph draws, if any. */
+  bars?: string
+  /** A stored level this model no longer offers: the popover's warning sentence. */
+  staleReason?: string
+}
+
+/** The wireframes' stale-level sentences: the popover reason and the settings line. */
+function staleSentences(stored: string, model: string, sent: string | null): { reason: string; line: string } {
+  const phrase = `effort "${effortLabel(stored)}" is no longer offered by ${model}.`
+  if (sent === null) {
+    const tail = 'Turns go out with no effort setting until you pick one.'
+    return { reason: `Your saved ${phrase} ${tail}`, line: `Saved ${phrase} ${tail}` }
+  }
+  return {
+    reason: `Your saved ${phrase} Turns use ${sent}, the nearest level, until you pick one.`,
+    line: `Saved ${phrase} Turns use ${sent} (nearest) until you pick one.`,
+  }
 }
 
 /** Recap slots on a model that cannot turn reasoning off (Interaction states, Settings Memory). */
@@ -309,7 +400,8 @@ function describeChip(props: EffortControlProps, row: ServedRow, items: EffortIt
   const stored = effectiveStored(props, props.value.effort)
   if (stored === NOT_SET) {
     const inherited = inheritedText(props.scope, props.inherit, row)
-    return { text: inherited.text, spoken: `Not set: ${inherited.text}`, inherited: true, amber: inherited.differs }
+    const bars = props.inherit && props.inherit !== '' ? props.inherit : undefined
+    return { text: inherited.text, spoken: `Not set: ${inherited.text}`, inherited: true, amber: inherited.differs, bars }
   }
   const label = effortLabel(stored)
   if (itemForStored(items, stored) === undefined) {
@@ -319,12 +411,38 @@ function describeChip(props: EffortControlProps, row: ServedRow, items: EffortIt
     }
     // A stored value this model no longer offers keeps its text; say what is sent (FR-022).
     const mapping = mapEffort(stored, effortTargetOf(row))
-    const sent = mapping.blocked || mapping.value === PROVIDER_DEFAULT || mapping.value === NOT_SET ? 'nothing sent here' : `sent as ${effortLabel(mapping.value)} here`
+    const nothingSent = mapping.blocked || mapping.value === PROVIDER_DEFAULT || mapping.value === NOT_SET
+    const sent = nothingSent ? 'nothing sent here' : `sent as ${effortLabel(mapping.value)} here`
     const text = `${label}, ${sent}`
-    return { text, spoken: text, inherited: false, amber: true }
+    const sentences = staleSentences(stored, props.value.model, nothingSent ? null : effortLabel(mapping.value))
+    return {
+      text,
+      spoken: text,
+      inherited: false,
+      amber: true,
+      staleReason: sentences.reason,
+      // Settings surfaces carry the sentence under the chip; the composer only in its popover.
+      hint: props.scope === 'chat' ? undefined : sentences.line,
+    }
   }
   const text = props.setByCommand ? `${label}, set for this conversation` : label
-  return { text, spoken: text, inherited: false, amber: false }
+  return { text, spoken: text, inherited: false, amber: false, bars: stored }
+}
+
+/** The popover's title "Effort · {model}", then the help line, or the stale-level warning instead of it. */
+function PopoverHeader({ model, staleReason }: { model: string; staleReason?: string }) {
+  return (
+    <div>
+      <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">
+        Effort <span className="text-[var(--color-muted)]">· {model}</span>
+      </p>
+      {staleReason === undefined ? (
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{EFFORT_HELP_TEXT}</p>
+      ) : (
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]">{staleReason}</p>
+      )}
+    </div>
+  )
 }
 
 /** The effort chip and its popover (S-07, S-10 to S-14, S-54, S-57, S-73, S-74). */
@@ -350,6 +468,10 @@ export function EffortControl(props: EffortControlProps) {
   const row = findServedRow(catalog, props.value.provider, props.value.model)
   const name = props.contextName ?? 'Effort'
   const popoverOpen = open || pendingSwitch !== null
+  // The nothing-sendable step's spoken sentence (Accessibility table); the
+  // step itself shows the wireframe's longer text.
+  const spoken =
+    pendingSwitch?.kind === 'nothing_sendable' ? `${pendingSwitch.model} can't turn reasoning off here. Let the provider decide, or cancel.` : announcement
 
   // The picker's one polite live region (FR-053). It carries the mapping note
   // with its Change link when a switch remapped the value, else the latest
@@ -369,7 +491,7 @@ export function EffortControl(props: EffortControlProps) {
           </Button>
         </>
       ) : (
-        announcement
+        spoken
       )}
     </span>
   )
@@ -406,17 +528,7 @@ export function EffortControl(props: EffortControlProps) {
     // Loading / failed: stored value as text, no choices; failure offers Retry (S-07).
     return (
       <span className={cn('inline-flex items-center gap-[var(--space-2)]', className)}>
-        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-          {effortLabel(effectiveStored(props, props.value.effort))}
-        </span>
-        {status === 'error' && (
-          <>
-            <FormError error="Could not load this model's effort options." className="mt-0" />
-            <Button type="button" variant="outline" size="sm" onClick={retry}>
-              Retry
-            </Button>
-          </>
-        )}
+        <CatalogStateLine status={status} saved={effectiveStored(props, props.value.effort)} onRetry={retry} />
         {liveRegion}
       </span>
     )
@@ -450,8 +562,8 @@ export function EffortControl(props: EffortControlProps) {
             data-testid={props['data-testid']}
             className="gap-[var(--space-1)] text-[var(--color-muted)]"
           >
-            Effort
             <Info size={12} aria-hidden="true" />
+            Effort
           </Button>
         </Tooltip>
         <span id={descriptionId} className="sr-only">
@@ -464,6 +576,8 @@ export function EffortControl(props: EffortControlProps) {
 
   const items = effortItems(effortTargetOf(row), offersNotSet(props) ? `Not set: ${inheritedText(props.scope, props.inherit, row).text}` : null)
   const chip = describeChip(props, row, items)
+  // Settings surfaces show the chip as a field: an "Effort" key and a caret (wireframe shot-3).
+  const field = props.scope !== 'chat'
 
   function focusInitial() {
     const content = contentRef.current
@@ -505,11 +619,18 @@ export function EffortControl(props: EffortControlProps) {
               chip.inherited ? 'border-dashed border-[var(--color-border)]' : 'border-solid border-[var(--color-border)]',
             )}
           >
+            {field && (
+              <span aria-hidden="true" className="text-[var(--color-muted)]">
+                Effort
+              </span>
+            )}
             {chip.amber && <span aria-hidden="true" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-warning)]" />}
             {props.setByCommand && !chip.amber && (
               <span aria-hidden="true" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-accent)]" />
             )}
+            {!chip.amber && !props.setByCommand && chip.bars !== undefined && <EffortBars value={chip.bars} />}
             {chip.text}
+            {field && <CaretDown size={12} aria-hidden="true" className="shrink-0" />}
           </Button>
         </PopoverTrigger>
         <PopoverContent
@@ -539,9 +660,18 @@ export function EffortControl(props: EffortControlProps) {
           }}
         >
           {pendingSwitch ? (
-            <BlockedStep pending={pendingSwitch} catalogRow={findServedRow(catalog, pendingSwitch.provider, pendingSwitch.model)} onCommit={commit} onCancel={closeWithCancel} />
+            <BlockedStep
+              pending={pendingSwitch}
+              previousModel={props.value.model}
+              catalogRow={findServedRow(catalog, pendingSwitch.provider, pendingSwitch.model)}
+              onCommit={commit}
+              onCancel={closeWithCancel}
+            />
           ) : (
-            <PickerBody {...props} catalogStatus={status} row={row} onRetry={retry} onCommit={commit} />
+            <div className="space-y-[var(--space-2)]">
+              <PopoverHeader model={props.value.model} staleReason={chip.staleReason} />
+              <PickerBody {...props} catalogStatus={status} row={row} onRetry={retry} onCommit={commit} />
+            </div>
           )}
         </PopoverContent>
       </Popover>
@@ -557,19 +687,28 @@ export function EffortControl(props: EffortControlProps) {
 
 interface BlockedStepProps {
   pending: EffortPendingSwitch
+  /** The model the slot stays on until the step is answered. */
+  previousModel: string
   catalogRow: ServedRow
   onCommit: (effort: string) => void
   onCancel: () => void
 }
 
-/** The pick-a-level step (S-10, S-11) or the "Let the provider decide" step (S-73). */
-function BlockedStep({ pending, catalogRow, onCommit, onCancel }: BlockedStepProps) {
+const BLOCKED_TITLE = 'text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]'
+const BLOCKED_HELP = 'text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]'
+
+/**
+ * The pick-a-level step (S-10, S-11) or the "Let the provider decide" step
+ * (S-73), laid out as the wireframe draws it: a title, where you stay, the
+ * choices, then the provider-decides escape and Cancel.
+ */
+function BlockedStep({ pending, previousModel, catalogRow, onCommit, onCancel }: BlockedStepProps) {
+  const stay = `You stay on ${previousModel} until you do.`
   if (pending.kind === 'nothing_sendable') {
     return (
       <div className="space-y-[var(--space-2)]">
-        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
-          {`${pending.model} can't turn reasoning off here. Let the provider decide, or cancel.`}
-        </p>
+        <p className={BLOCKED_TITLE}>{`${pending.model} can't turn reasoning off`}</p>
+        <p className={BLOCKED_HELP}>{`This model has no levels to pick. You can let the provider decide, or stay where you are. ${stay}`}</p>
         <div className="flex gap-[var(--space-2)]">
           <Button type="button" size="sm" data-effort-action="provider-default" onClick={() => onCommit(PROVIDER_DEFAULT)}>
             Let the provider decide
@@ -584,10 +723,23 @@ function BlockedStep({ pending, catalogRow, onCommit, onCancel }: BlockedStepPro
   const items = levelItems(effortTargetOf(catalogRow))
   return (
     <div className="space-y-[var(--space-2)]">
-      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
-        {`${pending.model} can't turn reasoning off. Pick a level to finish switching.`}
+      {/* One sentence for the spec's copy, shown as the wireframe's title
+          line plus its first help line. */}
+      <p className={cn(BLOCKED_HELP, 'first-line:text-[length:var(--type-body-compact-size)] first-line:font-semibold first-line:text-[var(--color-secondary)]')}>
+        {`${pending.model} can't turn reasoning off. `}
+        <br />
+        {'Pick a level to finish switching.'}
       </p>
+      <p className={BLOCKED_HELP}>{stay}</p>
       <EffortRadioList items={items} checked={undefined} onCommit={onCommit} ariaLabel={`Effort for ${pending.model}`} nearest={pending.nearest} />
+      <div className="flex items-center justify-between gap-[var(--space-2)]">
+        <Button type="button" variant="link" size="sm" onClick={() => onCommit(PROVIDER_DEFAULT)}>
+          Let the provider decide instead
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
     </div>
   )
 }
