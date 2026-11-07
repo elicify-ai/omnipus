@@ -344,9 +344,6 @@ func TestT10_BootRecoversActiveLoopThroughGatewayStage(t *testing.T) {
 // that fails must abort the REAL gateway boot, name the session, and leave the
 // engine unactivated.
 func TestT10_BootAbortsWhenLoopRecoveryCannotPersist(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("directory permissions do not bind root; the injected write failure needs a non-root user")
-	}
 	st := t10BootStage(t)
 	sid := t10SeedIntervalLoop(t, st, 10, 10) // limit reached: recovery must persist the stopped state
 	var sessionDirs []string
@@ -357,8 +354,9 @@ func TestT10_BootAbortsWhenLoopRecoveryCannotPersist(t *testing.T) {
 		return nil
 	}))
 	require.Len(t, sessionDirs, 1, "SETUP: exactly one session directory for the seeded loop")
-	require.NoError(t, os.Chmod(sessionDirs[0], 0o555))
-	t.Cleanup(func() { _ = os.Chmod(sessionDirs[0], 0o755) })
+	// In-process failure of exactly the stopped-state write (works as root).
+	failures := 0
+	t10FailSessionStopWrites(t, sid, &failures)
 
 	var mu sync.Mutex
 	var events []string
@@ -376,6 +374,7 @@ func TestT10_BootAbortsWhenLoopRecoveryCannotPersist(t *testing.T) {
 	_, stop, err := st.startSchedulers()
 	require.Error(t, err, "a loop recovery write failure must fail the boot")
 	assert.True(t, stop)
+	assert.GreaterOrEqual(t, failures, 1, "instrument: the injected stopped-state write failure was actually hit")
 	assert.Contains(t, err.Error(), "error recovering /loop schedules")
 	assert.Contains(t, err.Error(), sid, "the failure names the session")
 	mu.Lock()

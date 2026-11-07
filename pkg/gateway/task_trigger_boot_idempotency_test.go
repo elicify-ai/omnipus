@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -112,9 +113,6 @@ func TestTaskTriggerGatewayBootIdempotency(t *testing.T) {
 // store refuses the write that removes a duplicate trigger job) must abort the
 // boot with the preparation error, nothing activated, and the store unchanged.
 func TestTaskTriggerGatewayBootAbortsWhenPreparationFails(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("directory permissions do not bind root; the injected write failure needs a non-root user")
-	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("OMNIPUS_HOME", home)
@@ -173,9 +171,6 @@ func TestTaskTriggerGatewayBootAbortsWhenPreparationFails(t *testing.T) {
 	require.NoError(t, os.WriteFile(storePath, data, 0o600))
 	before, err := os.ReadFile(storePath)
 	require.NoError(t, err)
-	cronDir := filepath.Dir(storePath)
-	require.NoError(t, os.Chmod(cronDir, 0o555))
-	t.Cleanup(func() { _ = os.Chmod(cronDir, 0o755) })
 
 	stage2, _, closeStage2 := newStage()
 	defer closeStage2()
@@ -185,15 +180,27 @@ func TestTaskTriggerGatewayBootAbortsWhenPreparationFails(t *testing.T) {
 		SetSchedulerBootObserverForTest(func(string, *cron.CronService))
 	})
 	require.True(t, ok, "BLOCKED: pre-activation boot observer not implemented")
-	observer.SetSchedulerBootObserverForTest(func(label string, _ *cron.CronService) {
+	// In-process failure of the engine's store write (works as root): armed once
+	// the real checked load is done, so only the preparation's write fails.
+	saveFailures := 0
+	observer.SetSchedulerBootObserverForTest(func(label string, cs *cron.CronService) {
 		mu.Lock()
 		defer mu.Unlock()
 		events = append(events, label)
+		if label == "checked_load" {
+			cs.SetSaveStoreTestHook(func() error {
+				saveFailures++
+				return errors.New("injected engine store write failure")
+			})
+		}
 	})
 	defer observer.SetSchedulerBootObserverForTest(nil)
 
 	_, stop, err = stage2.startSchedulers()
 	require.Error(t, err, "a failed task preparation must fail the boot")
+	mu.Lock()
+	assert.GreaterOrEqual(t, saveFailures, 1, "instrument: the injected store write failure was actually hit")
+	mu.Unlock()
 	assert.True(t, stop)
 	assert.Contains(t, err.Error(), "error preparing task trigger scheduler")
 	mu.Lock()
