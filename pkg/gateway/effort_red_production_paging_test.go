@@ -267,6 +267,13 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 	done3 := f.turn(t, "PAGE-T3", "B")
 	assert.NotContains(t, effortRequireType[map[string]any](t, done3["stats"]), "reasoning_tokens")
 	effortPagingAssertIncremental(t, f, done1, done2, done3)
+	answers := effortPagingAssertStoredAnswers(t, f)
+	effortPagingAssertOlderRefresh(t, f, answers)
+	effortPagingAssertContributorCut(t, f, t1done)
+}
+
+func effortPagingAssertStoredAnswers(t *testing.T, f *effortProductionTurn) map[string]map[string]any {
+	t.Helper()
 	entries, err := f.al.GetSessionStore().ReadTranscript(f.sid)
 	require.NoError(t, err)
 	answers := map[string]map[string]any{}
@@ -317,6 +324,11 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 			assert.NotContains(t, answer, "turn_reasoning_tokens")
 		}
 	}
+	return answers
+}
+
+func effortPagingAssertOlderRefresh(t *testing.T, f *effortProductionTurn, answers map[string]map[string]any) {
+	t.Helper()
 	// Before later turns, the actual snapshot carries all three answers.
 	snapshot := effortPagingAttach(t, f)
 	for id, answer := range answers {
@@ -357,6 +369,10 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 		page = effortPagingRead(t, f, "limit=20&min_rows=1&before="+url.QueryEscape(before))
 	}
 	require.Len(t, found, 3, "scrolling older pages must really encounter each answer")
+}
+
+func effortPagingAssertContributorCut(t *testing.T, f *effortProductionTurn, t1done time.Time) {
+	t.Helper()
 	// Second real session: 18 later user/answer rows leave B's answer on the
 	// far side of a twenty-row boundary from the earlier contributing call.
 	meta, err := f.al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
