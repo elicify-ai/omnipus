@@ -1,0 +1,40 @@
+title: ExecutorConfigUpdate
+description: >
+  Executor block of an agent update (WRITE model). Editable for custom
+  subagent_3p agents only ("Only external-CLI workers have a runtime
+  environment."). `kind` (derived from the agent type), `cli` (locked after
+  create; create a new agent to switch CLIs) and `cli_path` (the program is
+  set by a person in Settings -> Third-party agents) are rejected as unknown
+  fields.
+type: object
+additionalProperties: false
+properties:
+  env_overrides:
+    type: object
+    additionalProperties:
+      type: string
+    description: >
+      MERGE: each supplied name is added or its value replaced; names not
+      supplied are kept; {} is a no-op. The merged result obeys the create
+      limits (at most 64 entries, name pattern ^[A-Za-z_][A-Za-z0-9_]*$ and
+      at most 128 characters, value at most 8,192 characters, OMNIPUS_*
+      refused). A value equal to the read mask "••••••" is refused.
+    example:
+      DEBUG: "1"
+  env_overrides_remove:
+    type: array
+    maxItems: 64
+    items:
+      type: string
+    description: >
+      Names to remove from the stored environment. A name that is not stored
+      is reported as absent_removed, not refused. A name that is both set in
+      env_overrides and listed here is refused 400.
+    example:
+      - "DEBUG"
+  cli_args:
+    type: string
+    description: >
+      Replacement CLI arguments, one string, stored as typed. Shell
+      metacharacters warn, never refuse.
+    example: "--max-turns 5"

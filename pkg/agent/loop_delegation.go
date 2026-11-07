@@ -18,11 +18,19 @@ import (
 // has depth 0; each nested sub-turn increments it. Returns 0 when no turnState is
 // present (e.g. ad-hoc/raw invocations or tests) — a conservative default that
 // never spuriously trips the depth cap.
+//
+// A helper or task session runs its own root turn (turnState depth 0) but
+// carries its chain depth on ctx (tools.WithDelegationDepth, seeded by
+// withSteeredDelegationDepth and the task executor). The larger of the two is
+// the depth the gate checks, so a depth-1 helper is refused here with the
+// depth policy (r17 US-21 AS-3, scenario 21.3) rather than only later by the
+// launcher's backstop.
 func currentDelegationDepth(ctx context.Context) int {
-	if ts := turnStateFromContext(ctx); ts != nil {
-		return ts.depth
+	depth := tools.ToolDelegationDepth(ctx)
+	if ts := turnStateFromContext(ctx); ts != nil && ts.depth > depth {
+		depth = ts.depth
 	}
-	return 0
+	return depth
 }
 
 // agentExistsChecker builds the read-only registry existence probe threaded

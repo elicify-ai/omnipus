@@ -13,7 +13,10 @@ export function liveProjectionBucket(bucket: SessionChatState): SessionChatState
   // No canonical page yet: existing live/pending rows are the current view,
   // not an old reader interval. Never use an unrelated old range as fallback.
   if (!order.length && !bucket.history.readerPositions.length) order.push(...bucket.messageOrder)
-  return { ...bucket, messagesById: { ...Object.fromEntries(recent.map(row => [row.id, row])), ...bucket.messagesById }, messageOrder: order }
+  // #1452 S11b: a restored cached row owns its saved calls, as its row does on the reader.
+  const owners = Object.fromEntries(recent.flatMap(row => (row.tool_calls ?? []).map(call => [call.id, row.id])))
+  return { ...bucket, messagesById: { ...Object.fromEntries(recent.map(row => [row.id, row])), ...bucket.messagesById }, messageOrder: order,
+    ...(Object.keys(owners).length ? { toolCallOwnerMessageId: { ...owners, ...bucket.toolCallOwnerMessageId } } : {}) }
 }
 
 export function withLiveHistoryBucket(withBucket: HistorySliceContext['withBucket'], sid: string | null, update: Parameters<HistorySliceContext['withBucket']>[1]): void {

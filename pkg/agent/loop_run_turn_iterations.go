@@ -143,7 +143,7 @@ turnLoop:
 			// do NOT increment the outer iteration counter (which would consume the agent's
 			// MaxIterations budget for what is purely a provider-level retry).
 		agentLoopRunTurnConductorRunIterationsRetryResponseLoop1:
-			for strings.TrimSpace(er.cn.responseContent) == "" && emptyResponseRetries < maxEmptyResponseRetries {
+			for strings.TrimSpace(er.cn.responseContent) == "" && emptyResponseRetries < maxEmptyResponseRetries && !er.cn.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
 				emptyResponseRetries++
 				logger.WarnCF("agent", "Empty response from LLM, retrying", map[string]any{
 					"agent_id":  er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -280,6 +280,11 @@ turnLoop:
 	if hook := naturalExitSteeringPollTestHook; hook != nil {
 		hook()
 	}
+	// #1534 Q1 = A: a stopped turn never continues for steering; input left
+	// in the queue is handled after the turn, not inside it.
+	if er.cn.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+		return agentLoopRunTurnConductorNext
+	}
 	if steerMsgs, steerCorrelationIDs, steerItems := er.cn.rc.rx.rr.rq.ri.dequeueSteeringForContinuation(); len(steerMsgs) > 0 {
 		er.cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
@@ -333,6 +338,11 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 			return agentLoopRunTurnConductorRunIterationsRetryResponseBreak
 		}
 	}
+	// #1534 Q1 = A: same rule as the main call site (prepareIteration).
+	if er.cn.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+		er.cn.endTurnAtStop()
+		return agentLoopRunTurnConductorRunIterationsRetryResponseBreakL2
+	}
 	er.cn.rc.rx.rr.rq.ri.rf.response = retryResp
 	er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.Content
 	// Reasoning is never presented as the answer (effort-levels FR-018).
@@ -370,6 +380,11 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 
 // prepareIteration prepares one provider iteration and records its usage.
 func (cn *agentLoopRunTurnConductorRunIterations) prepareIteration() agentLoopRunTurnConductorRunIterationsFlow {
+	// #1534 Q1 = A: a Stop claimed at a tool boundary (or anywhere between
+	// rounds) ends the turn here — no wrap-up provider round follows it.
+	if cn.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+		return cn.endTurnAtStop()
+	}
 	switch cn.rc.rx.rr.rq.ri.beginIteration() {
 	case agentLoopRunTurnIterationReturn:
 		cn.rc.ret0 = cn.rc.rx.rr.rq.ri.ret0
@@ -435,6 +450,11 @@ func (cn *agentLoopRunTurnConductorRunIterations) prepareIteration() agentLoopRu
 		cn.rc.ret1 = cn.rc.rx.rr.ret1
 		cn.ret0 = agentLoopRunTurnConductorReturn
 		return agentLoopRunTurnConductorRunIterationsReturn
+	}
+	// #1534 Q1 = A: a success that returned after the Stop claim is
+	// ignored — its content, narration and tool calls were never shown.
+	if cn.rc.rx.rr.rq.ri.rf.err == nil && cn.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+		return cn.endTurnAtStop()
 	}
 
 	switch cn.rc.rx.rr.handleProviderResponse() {

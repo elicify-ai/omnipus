@@ -59,7 +59,7 @@ export function page(entries: Message[], options: PageOptions = {}): SessionHist
       // Default datasets are one narration row per whole source group. Tool
       // datasets supply their independently counted drawn weight explicitly.
       row_count: options.rows ?? entries.length, source_group_count: entries.length,
-      soft_byte_budget: 4194304, projected_bytes: 0, byte_budget_exceeded: false,
+      soft_byte_budget: 4194304, byte_ceiling: 8_388_608, projected_bytes: 0, byte_budget_exceeded: false,
       stop_reason: options.earlier ? 'row_target' : 'end', retention_generation: 'fixture-retained-1',
       context: { spans: [], duplicate_ids: [] },
       ...(first ? { first_position: first, last_position: last } : {}),

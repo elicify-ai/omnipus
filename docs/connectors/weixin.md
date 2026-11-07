@@ -51,3 +51,7 @@ channel.
 **Capabilities implemented:** `TypingCapable` (typing status via iLink API), `MediaSender` (image and file upload/download via CDN). Supports inbound images, voice, and file attachments.
 
 **Rate limits.** Avoid high-frequency automated broadcasts; WeChat anti-spam systems may restrict accounts that send messages at excessive rates.
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

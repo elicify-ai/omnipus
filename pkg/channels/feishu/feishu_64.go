@@ -510,6 +510,7 @@ func (c *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 		CanonicalID: identity.BuildCanonicalID("feishu", senderID),
 	}
 	if !c.IsAllowedSender(senderInfo) {
+		c.RecordRejected(senderInfo.CanonicalID)
 		return nil
 	}
 

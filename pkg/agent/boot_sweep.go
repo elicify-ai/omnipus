@@ -218,7 +218,9 @@ func (r *SteerBootRecovery) sessionIDs() ([]string, error) {
 	return out, nil
 }
 
-func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notice func(string, string)) error {
+func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notice func(string, string)) (err error) {
+	var toolErr error
+	defer func() { err = errors.Join(toolErr, err) }()
 	rec, err := r.Lifecycle.Load(id)
 	if err != nil || rec == nil {
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
@@ -251,6 +253,12 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		// continuation this same boot already admitted.
 		r.recoverStoppedChildNotice(ctx, rec, notice)
 		return nil
+	}
+	// A prior-boot execution died with the process, so its running tool-call
+	// records are settled to interrupted whatever the stop arms below decide.
+	if rec.ExecutionID != nil && !rec.Terminal() && (r.BootEpoch == nil || r.BootEpoch.Current() == 0 || rec.ExecutionID.BootSeq < r.BootEpoch.Current()) &&
+		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued || rec.State == session.LifecycleNeedsInput) {
+		toolErr = r.interruptRunningToolCalls(id, notice)
 	}
 	stopLandedByBoot := false
 	var interruptedErr error
@@ -1534,13 +1542,16 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 	}
 
 	// (3) targeted_retry resets the specific failed member. Idempotent by way
-	// of RestartReset's own contract: it errors on a non-failed task, which on
-	// a re-apply is the correct no-op (the member is already `next`), so this
-	// is logged rather than returned — mirroring the live apply exactly.
+	// of the reset's own contract: it errors on a non-failed task, which on
+	// a re-apply is the correct no-op (the member is already reset), so this
+	// is logged rather than returned — mirroring the live apply exactly. The
+	// replay is automatic (nobody asked at boot), so it shares the live
+	// path's autoResetFailedMember: a future trigger occurrence keeps the
+	// member waiting in `inbox` (r17 TK-30).
 	if rec.Revision.Verb == plan.RevisionTargetedRetry && rec.Revision.RetriedMemberID != "" {
-		if _, err := pe.taskStore.RestartReset(rec.Revision.RetriedMemberID); err != nil {
-			logger.DebugCF("plan_engine", "intent replay: targeted-retry reset (may be an idempotent no-op)",
-				map[string]any{"plan_id": rec.PlanID, "task_id": rec.Revision.RetriedMemberID, "error": err.Error()})
+		if err := pe.autoResetFailedMember(rec.Revision.RetriedMemberID); err != nil {
+			logAutoResetError("intent replay: targeted-retry reset",
+				map[string]any{"plan_id": rec.PlanID, "task_id": rec.Revision.RetriedMemberID}, err)
 		}
 	}
 

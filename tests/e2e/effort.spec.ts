@@ -15,7 +15,9 @@ import { wireHistoryPage, wireHistorySnapshot, wireAvailableDetail, fixtureHisto
 import type { ClientFrame, ServerFrame } from '../../src/lib/api/generated/asyncapi-types'
 import { WsFrame } from '../../src/lib/api/generated/ws-schemas'
 
-const MODEL='deepseek/deepseek-v4.1-flash'
+// A fixture model id (never a real one: scripts/check-no-hardcoded-e2e-model.sh); the
+// stub peer and the routed catalog below are the only places that serve it.
+const MODEL='effort-fixture/levels-model'
 const NOTE=`Sent as Low: ${MODEL} doesn't offer Medium.`
 const CATALOG={schema_version:'2.0.0',version:'v2026.10.31',updated_at:'2026-10-31T00:00:00Z',source:'test',served_from:'embedded',stale:false,
  default_resize_limits:{long_edge_px:2048,max_bytes:10485760},providers:[{id:'openrouter',name:'OpenRouter',company:'OpenRouter',api:'https://openrouter.ai/api/v1',protocol:'openai-compatible',protocols:[{protocol:'openai-compatible',api:'https://openrouter.ai/api/v1'}],tier:'popular',auth_methods:['api_key'],aliases:[],locality:'cloud',models:[{

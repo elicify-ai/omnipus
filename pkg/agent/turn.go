@@ -102,6 +102,11 @@ type turnState struct {
 	// userInputInWindow is set by assembleMessages when this turn's re-read
 	// instruction is already the newest line of the model window.
 	userInputInWindow bool
+	// skillsMenuGeneration is skills.Generation() read just before this
+	// turn's system prompt was assembled (assembleMessages). The session menu
+	// freeze refreezes when it differs from the frozen generation (skills spec
+	// r15 FR-053: the next turn's menu reflects a committed change).
+	skillsMenuGeneration uint64
 
 	agent *AgentInstance
 	opts  processOptions
@@ -464,6 +469,10 @@ type turnState struct {
 	// Last streamer used during this turn. Finalized once at turn end
 	// to send the "done" frame, preventing premature done signals mid-turn.
 	lastStreamer bus.Streamer
+	// stopShown is the text the last provider attempt streamed before a
+	// user Stop claim that the answer does not hold yet (#1534, see
+	// stop_turn_end.go). Guarded by mu.
+	stopShown string
 
 	// Transcript recording fields (nil transcriptStore disables recording)
 	transcriptSessionID string
@@ -596,11 +605,15 @@ type turnState struct {
 	// downgrade-retry". Initialized to false (zero value of atomic.Bool).
 	mediaRetryDone atomic.Bool
 
-	// imageRetryDone is the per-turn guard for IMAGE-only downgrades. The
-	// pass-2 media-downgrade fix split the per-turn guard into image-class
-	// and pdf-class, so a PDF rejection in a turn with both media types
-	// cannot consume the image-retry budget (and vice versa). Each LLM
-	// call may consume at most one downgrade per media class.
+	// imageRetryDone is the guard for IMAGE-only downgrades. The pass-2
+	// media-downgrade fix split the guard into image-class and pdf-class,
+	// so a PDF rejection in a turn with both media types cannot consume the
+	// image-retry budget (and vice versa). Within one LLM-call sequence at
+	// most one image downgrade fires (FR-019 unchanged). Issue #1435: the
+	// guard resets at each sequence entry (callLLMWithRetries) — one stored
+	// oversized image replayed from history on the next iteration must be
+	// strippable again instead of failing every remaining iteration once
+	// the single per-turn strip was spent.
 	imageRetryDone atomic.Bool
 
 	// outcomeRelabel is the FR-017a relabel-on-success contract. When the
@@ -1881,7 +1894,7 @@ func (ts *turnState) currentApprovalOrigin() approvalOrigin {
 // (a joined steering message or a held group request). Approvals already
 // raised keep their label; later ones carry the merged origin.
 func (ts *turnState) noteConsumedOrigin(o approvalOrigin) {
-	if ts == nil || o.Label == "" {
+	if ts == nil || o.none {
 		return
 	}
 	ts.approvalOriginMu.Lock()

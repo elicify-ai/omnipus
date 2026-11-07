@@ -84,11 +84,23 @@ type ResizeLimits struct {
 	// MaxBytes is the max file size after the quality ladder. int64 keeps
 	// byte counts exact on 32-bit targets.
 	MaxBytes int64 `json:"max_bytes"`
+	// MaxPatches is the max number of 32x32-pixel tiles a vision provider
+	// counts in one image: ceil(width/32) * ceil(height/32) (issue #1435 —
+	// OpenAI/ChatGPT's 30,000-patch limit is the supplied value). Zero means
+	// the provider's patch accounting is unknown and no patch cap applies;
+	// the resize ladder then bounds the image by LongEdgePx and MaxBytes
+	// alone. Consumers MUST treat zero as "no limit", never as a zero budget.
+	MaxPatches int `json:"max_patches"`
 }
 
 // DefaultResizeLimits is the budget served when no document is loaded at
 // all (E7). A loaded document's own default_resize_limits wins over it.
-var DefaultResizeLimits = ResizeLimits{LongEdgePx: 7680, MaxBytes: 10 << 20}
+// MaxPatches carries the catalog's reconciled patch ceiling (the
+// default_resize_limits row's value); 30000 is the known strictest supplied
+// provider limit (OpenAI), applied to model-agnostic paths — tool-result
+// images enter history and are replayed to whichever provider serves the
+// next turn, so the default must fit the known strictest cap.
+var DefaultResizeLimits = ResizeLimits{LongEdgePx: 7680, MaxBytes: 10 << 20, MaxPatches: 30000}
 
 // Document is the validated 2.0.0 catalog (§5 "Document shape"). Every
 // invariant of FR-002 and FR-033 holds on a Document returned by

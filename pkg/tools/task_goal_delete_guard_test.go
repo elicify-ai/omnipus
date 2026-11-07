@@ -98,6 +98,21 @@ var knownTaskDeleters = []taskDeleter{
 		why:   "removes media-library entries staged by a workspace upload. Media entries, not tasks.",
 	},
 	{
+		where: "pkg/gateway.restAPI.deleteChatCopies",
+		why: "removes the chat-copy media-library entries associated with a Library file " +
+			"being deleted (#1449 D26, library.Library.Delete). Media entries, not tasks.",
+	},
+	{
+		where: "pkg/gateway.gatewayRoomDeps.UnpublishAnswerFile",
+		why: "removes the media-library entry a group answer published when the answer is " +
+			"rejected and nothing else keeps it (#1449 FR-078 (4)). Media entries, not tasks.",
+	},
+	{
+		where: "pkg/media/library.Library.PublishWithID",
+		why: "removes the just-uploaded media-library entry whose SHA-256 does not match the " +
+			"staged file (create-or-adopt rollback, #1449 FR-078 (2)). Media entries, not tasks.",
+	},
+	{
 		where: "pkg/channels/feishu.FeishuChannel.ReactToMessage",
 		why: "removes a Feishu message REACTION over the Lark SDK " +
 			"(MessageReaction.Delete returns (resp, err)). Nothing to do with tasks.",

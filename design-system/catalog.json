@@ -120,6 +120,22 @@
       ]
     },
     {
+      "source": "src/components/ui/avatar-stack.tsx",
+      "classification": "composite",
+      "exports": [
+        "AvatarStack",
+        "AvatarStackItem",
+        "AvatarStackProps"
+      ],
+      "publicExports": [
+        "AvatarStack"
+      ],
+      "publicTypes": [
+        "AvatarStackItem",
+        "AvatarStackProps"
+      ]
+    },
+    {
       "source": "src/components/ui/badge.tsx",
       "classification": "primitive",
       "exports": [

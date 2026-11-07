@@ -6,13 +6,14 @@ import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useConnectionStore } from '@/store/connection'
 import { clearLibraryAttachments } from '@/lib/library-attachment'
 import { resolveWorkspaceSwitch } from '@/components/panel-shell/workspaceSwitch'
 import { getPanelDefinition } from '@/components/panel-shell/registry'
 import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
 import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 import { ChatControls } from '@/components/chat/ChatControls'
-import { ChatHeaderSlot } from '@/components/chat/ChatHeaderSlot'
+import { ChatHeaderSlot, roomIdOfPath } from '@/components/chat/ChatHeaderSlot'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { Button } from '@/components/ui/button'
 import { SidebarShowButton } from '@/components/layout/SidebarShowButton'
@@ -80,6 +81,21 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
+
+  // #1632: browser "online" is not this socket. React Query therefore does not
+  // refetch when the gateway socket comes back, and this shell stayed on the
+  // error until Retry. One refetch on a down-to-up edge, and only while the
+  // list is still in error: subscribe to the boolean so a repeat connected
+  // notification or any other store write does not start another request, and
+  // a screen that already loaded is left mounted (no loader flash).
+  const isConnected = useConnectionStore((s) => s.isConnected)
+  const wasConnectedRef = useRef(isConnected)
+  useEffect(() => {
+    const wasConnected = wasConnectedRef.current
+    wasConnectedRef.current = isConnected
+    if (wasConnected || !isConnected || !workspacesError) return
+    void refetchWorkspaces()
+  }, [isConnected, workspacesError, refetchWorkspaces])
 
   // Resolve 'inbox' alias to the real default workspace id.
   useEffect(() => {
@@ -256,6 +272,9 @@ function WorkspaceTabContainerView({
 }) {
   const location = useLocation()
   const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
+  // #1449 FR-065 / ADR A9.4: "Open browser" acts on the remembered SESSION;
+  // a group page is not that session, so the control is not offered there.
+  const onRoomPage = roomIdOfPath(location.pathname, workspace.id) !== null
 
   return (
     <WorkspaceContext.Provider value={workspace}>
@@ -291,7 +310,7 @@ function WorkspaceTabContainerView({
               and browser controls keep their natural width at every mode. */}
           <WorkspaceTabBar workspaceId={workspace.id} workspaceName={workspace.name} />
 
-          {activeSegment === 'chat' && (
+          {activeSegment === 'chat' && !onRoomPage && (
             <div className="flex shrink-0 items-center justify-end px-[var(--space-2-5)]" data-testid="workspace-chat-controls">
               <ChatControls />
             </div>

@@ -375,10 +375,9 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			// ADR-072 D5: absence of a grant list denies every skill now, so
-			// this test must explicitly grant "shell" — it used to resolve
-			// under the old "no allowlist = unrestricted" default.
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir, Skills: []string{"shell"}}},
+			// ADR-072 D5 + r15 SD-30: grant the installed generation through
+			// actual persistence before constructing the activation snapshot.
+			List: []config.AgentConfig{persistSkillGrantFixture(t, tmpDir, config.AgentConfig{ID: "mia", Home: tmpDir, Skills: []string{"shell"}})},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -443,9 +442,8 @@ func TestProcessMessage_SkillTokenAloneRunsSkill(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			// ADR-072 D5: absence of a grant list denies every skill now, so
-			// this test must explicitly grant "shell".
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir, Skills: []string{"shell"}}},
+			// ADR-072 D5 + r15 SD-30: persist a binding to the installed shell.
+			List: []config.AgentConfig{persistSkillGrantFixture(t, tmpDir, config.AgentConfig{ID: "mia", Home: tmpDir, Skills: []string{"shell"}})},
 		},
 	}
 	msgBus := bus.NewMessageBus()

@@ -107,6 +107,13 @@ func (n *asyncNotifierImpl) publishOriginWarning(ctx context.Context, event Asyn
 	if !allowed {
 		return nil
 	}
+	// #1507 (FR-070): a connection-fed main never falls back to the last
+	// sender's chat; the warning is declined, logged and counted.
+	if n.loop.mainConnectorTurn(event.Channel, event.TranscriptSessionID) {
+		tool, _ := asyncNotifyFinishedTool(event)
+		refuseMainConnectorToolOutput(tool, event.Channel, event.TranscriptSessionID)
+		return nil
+	}
 	if n.loop.bus.TryPublishOutbound(bus.OutboundMessage{
 		Channel: event.Channel, ChatID: event.ChatID, SessionID: event.TranscriptSessionID, Content: content,
 	}) {

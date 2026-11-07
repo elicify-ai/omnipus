@@ -56,6 +56,7 @@ function renderScreen() {
 }
 
 const grantedNeverInvoked: Skill = {
+  has_local_changes: false,
   revision: '0'.repeat(64),
   id: 'release-notes',
   name: 'Release Notes',
@@ -68,6 +69,7 @@ const grantedNeverInvoked: Skill = {
 }
 
 const invokedRecently: Skill = {
+  has_local_changes: false,
   revision: '0'.repeat(64),
   id: 'daily-briefing',
   name: 'Daily Briefing',

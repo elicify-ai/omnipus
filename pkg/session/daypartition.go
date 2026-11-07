@@ -632,6 +632,17 @@ type TranscriptEntry struct {
 	SubagentState   *generated.SubagentStateFrame   `json:"subagent_state,omitempty"`
 	SubagentMessage *generated.SubagentMessageFrame `json:"subagent_message,omitempty"`
 	SubagentEnd     *generated.SubagentEndFrame     `json:"subagent_end,omitempty"`
+
+	// displayContentOriginalSize is set only on a bounded history-page copy
+	// whose ordinary message Content was shortened for display (chat-history
+	// paging spec, Amendment 2026-10-27 D2, A2.1). Never persisted, never set
+	// on a canonical, model or full-content read.
+	displayContentOriginalSize int
+	// displayUnavailable marks a bounded history-page stand-in for a record
+	// the streamed display read could not read (A2.8): only ID and Role are
+	// set and the projector shows the D4 per-item placeholder. Never
+	// persisted, never set on a canonical, model or full-content read.
+	displayUnavailable bool
 }
 
 // SystemSubtypeGoalOutcome is the TranscriptEntry.SystemSubtype value of a goal
@@ -706,6 +717,11 @@ type ToolCall struct {
 	// holds the PROJECTED text the model saw; the full content stays on the
 	// window archive line and in the gateway tool_results/ store.
 	ContentState string `json:"content_state,omitempty"`
+
+	// historyPreview is set only on a bounded history-page copy whose Result
+	// was replaced by a display preview (A2.1); Result is then nil. Never
+	// persisted, never set on a canonical, model or full-content read.
+	historyPreview *HistoryResultDisplay
 }
 
 // NewSessionID generates a ULID-based session ID prefixed with "session_".

@@ -62,3 +62,7 @@ Feishu (international name: Lark) is a ByteDance enterprise collaboration platfo
 **Capabilities implemented:** `MessageEditor` (card patch), `PlaceholderCapable` (interactive card placeholder), `ReactionCapable` (emoji reaction + undo), `MediaSender` (image upload and file upload). Outbound messages are sent as interactive Lark cards with markdown rendering; plain-text fallback is used when the card table limit (error code 11310) is exceeded.
 
 **Token cache invalidation.** The channel detects Feishu error code `99991663` (invalid tenant token) and invalidates the SDK token cache immediately, avoiding the default ~2-hour stale-token window.
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

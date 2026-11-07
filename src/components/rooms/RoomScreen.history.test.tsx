@@ -13,12 +13,12 @@
  * T23 needs a real browser and is covered by
  * tests/e2e/room-history-paging.spec.ts (CI only).
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { act, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { RoomEntry } from '@/lib/api/generated/asyncapi-types'
 import type { RoomHistoryResponse } from '@/lib/api/generated/openapi-types'
-import { Network, entry, openRoom, snapshot, stopHarness, ROOM_ID } from '../../../tests/l1-room-ui/harness'
+import { Network, entry, loadRoomScreen, openRoom, resetRealStores, snapshot, stopHarness, ROOM_ID } from '../../../tests/l1-room-ui/harness'
 
 const fetchRoomHistory = vi.hoisted(() => vi.fn<(roomId: string, opts?: { beforeSeq?: number; limit?: number }) => Promise<RoomHistoryResponse>>())
 vi.mock('@/lib/api/rooms', async (importOriginal) => ({
@@ -44,11 +44,26 @@ const firstPage = () => olderPage([
 
 let connection: ReturnType<typeof import('../../../tests/l1-room-ui/harness').connectSocket>['connection']
 
+// #1572: module transformation uses the existing beforeAll hook budget — the
+// RoomScreen import must not run inside the first test's 30 s testTimeout.
+// Under pod load it exceeds the budget there, the aborted test's late mount
+// leaked into the following cases (the K45 cascade); same shape as
+// RoomTranscript.anchor.test.tsx.
+beforeAll(async () => { await loadRoomScreen() })
+
 function scrollLogToTop(): void {
-  const log = screen.getByRole('log', { name: 'Group conversation' })
-  Object.defineProperty(log, 'scrollTop', { configurable: true, value: 0 })
+  const log = screen.getByRole('region', { name: 'Conversation history' })
+  // A value-only scrollTop is read-only. The shared list assigns it while
+  // opening, and that assignment must not crash the page.
+  let scrollTop = 0
+  Object.defineProperty(log, 'scrollTop', {
+    configurable: true,
+    get: () => scrollTop,
+    set: (value: number) => { scrollTop = value },
+  })
   Object.defineProperty(log, 'scrollHeight', { configurable: true, value: 800 })
   Object.defineProperty(log, 'clientHeight', { configurable: true, value: 400 })
+  scrollTop = 0
   fireEvent.scroll(log)
 }
 
@@ -60,13 +75,16 @@ async function mountRoomWithHistoryHint() {
     complete: true, has_older: true,
   }))
   connection = mounted.connection
-  expect(screen.getByText(/Earlier messages aren't shown/)).toBeInTheDocument()
+  expect(screen.getByText(/Show earlier messages/)).toBeInTheDocument()
   return mounted
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   fetchRoomHistory.mockReset()
+  // #1572: every case starts from the real stores' initial state, so a late
+  // mount or connection from an aborted case cannot poison the next one.
+  resetRealStores()
 })
 
 afterEach(async () => {
@@ -92,10 +110,13 @@ describe('T23 — the integrated scroll-up flow (design D6)', () => {
     await waitFor(() => expect(fetchRoomHistory).toHaveBeenCalledTimes(1))
     // Oldest DISPLAYED entry seq — never the live room high-water (5), never
     // seq - 1 (4): the design's D6 cursor rule.
-    expect(fetchRoomHistory).toHaveBeenCalledWith(ROOM_ID, { beforeSeq: 3 })
-    // Default limit: the param is omitted entirely (server default 100).
-    const call = fetchRoomHistory.mock.calls[0] as unknown as [string, { limit?: number }]
-    expect(call[1]).not.toHaveProperty('limit')
+    // Oldest displayed seq stays 3. The page size is the shared history rule:
+    // limit between 20 and 100 (spec, history pages of 20..100), not "omitted".
+    const call = fetchRoomHistory.mock.calls[0] as unknown as [string, { beforeSeq?: number; limit?: number }]
+    expect(call[0]).toBe(ROOM_ID)
+    expect(call[1].beforeSeq, 'oldest displayed seq, not the live high-water').toBe(3)
+    expect(call[1].limit, 'history page size is between 20 and 100').toBeGreaterThanOrEqual(20)
+    expect(call[1].limit, 'history page size is between 20 and 100').toBeLessThanOrEqual(100)
     // One in-flight request per room: scrolling again while it resolves
     // issues no second request.
     scrollLogToTop()
@@ -108,7 +129,7 @@ describe('T23 — the integrated scroll-up flow (design D6)', () => {
 
     scrollLogToTop()
 
-    await waitFor(() => expect(screen.queryByText(/Earlier messages aren't shown/)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText(/Show earlier messages/)).not.toBeInTheDocument())
     // The whole history is now visible, in order.
     for (const text of ['entry-1', 'entry-2', 'entry-3', 'entry-4', 'entry-5']) {
       expect(screen.getByText(text)).toBeInTheDocument()
@@ -128,7 +149,7 @@ describe('T24 — recoverable earlier-history error (design D6)', () => {
 
     // Inline, recoverable — never a blank transcript: rows and hint remain.
     expect(screen.getByText('entry-5')).toBeInTheDocument()
-    expect(screen.getByText(/Earlier messages aren't shown/)).toBeInTheDocument()
+    expect(screen.getByText(/Show earlier messages/)).toBeInTheDocument()
     const retry = await screen.findByRole('button', { name: 'Retry' })
     expect(retry).toBeVisible()
 
@@ -137,13 +158,15 @@ describe('T24 — recoverable earlier-history error (design D6)', () => {
     await userEvent.keyboard('{Enter}')
 
     await waitFor(() => expect(fetchRoomHistory).toHaveBeenCalledTimes(2))
-    // Same boundary — the request that failed is the one retried.
-    expect(fetchRoomHistory).toHaveBeenNthCalledWith(2, ROOM_ID, { beforeSeq: 3 })
+    // #1449 spec S-44/S-45: retry the same bounded page, including its size.
+    // Shared sizing (chat-history-paging-spec.md D5): H=400 from scrollLogToTop,
+    // unmeasured A=80, so clamp(ceil(2*400/80), 20, 100) = 20.
+    expect(fetchRoomHistory).toHaveBeenNthCalledWith(2, ROOM_ID, { beforeSeq: 3, limit: 20 })
 
     // A later valid terminal page clears error and hint.
     fetchRoomHistory.mockResolvedValueOnce(firstPage())
     await userEvent.click(retry)
-    await waitFor(() => expect(screen.queryByText(/Earlier messages aren't shown/)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText(/Show earlier messages/)).not.toBeInTheDocument())
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
     // Sending stays enabled the whole time — no "Loading the conversation…" gate.
     expect(screen.queryByText('Loading the conversation…')).toBeNull()

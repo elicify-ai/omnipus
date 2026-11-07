@@ -45,6 +45,7 @@ func (te *TaskExecutor) runTask(
 		defer te.wg.Done()
 		release()
 		cancel()
+		te.settleTriggeredOnceRun(t.ID, redispatchTaskID) // 6b U2b, before the slot is released
 		te.mu.Lock()
 		delete(te.running, t.ID)
 		te.mu.Unlock()
@@ -495,6 +496,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		defer te.wg.Done()
 		release()
 		cancel()
+		te.settleTriggeredOnceRun(t.ID, redispatchTaskID) // 6b U2b, before the slot is released
 		te.mu.Lock()
 		delete(te.running, t.ID)
 		te.mu.Unlock()

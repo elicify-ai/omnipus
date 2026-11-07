@@ -38,7 +38,7 @@ func TestListJobs_ResolvedPostureAcrossSeededRoster(t *testing.T) {
 		// SPEC.md Table (2026-10-22): list_jobs is Allow for both Main and Worker core sets.
 		coreagent.IDMia:        "allow",
 		coreagent.IDJim:        "allow",
-		coreagent.IDOmnipus:    "deny", // SPEC.md Founder exclusion: Omnipus keeps its baseline system policy.
+		coreagent.IDOmnipus:    "allow", // r17 7.14.2 change 1 / D-7: Omnipus gains list_jobs to see the helpers it runs.
 		coreagent.IDWorker:     "allow",
 		coreagent.IDPlanner:    "allow",
 		coreagent.IDResearcher: "allow",

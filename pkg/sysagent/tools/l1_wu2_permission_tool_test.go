@@ -37,7 +37,7 @@ func l1WU2PermissionFixture(t *testing.T, id string) (*systools.Deps, *agentstor
 	before, err := store.ReadState(id)
 	require.NoError(t, err)
 	t.Run("get_agent_positive_control", func(t *testing.T) {
-		lookup := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"id": id})
+		lookup := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"id": id, "fields": []any{"name"}})
 		require.False(t, lookup.IsError, "positive control: real get_agent sees the same durable entity: %s", lookup.ForLLM)
 		readback := parseSuccess(t, lookup.ForLLM)
 		assert.Equal(t, id, readback["id"])

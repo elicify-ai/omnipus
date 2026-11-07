@@ -119,3 +119,7 @@ When neither is set, the bot responds to all messages in group spaces (permissiv
 
 - **Webhook-mode `webhook_url` is a bearer secret.** The URL contains a `?key=…` query parameter that grants posting rights to the space. Do not commit it to `config.json` in plain text — store the URL itself in the credential store and reference it via `_ref` patterns (the field name follows the convention used elsewhere; see your config for the exact key).
 - **Bot-mode signature verification runs inside the connector**, not in the shared gateway. It parses the `Google-Signature` header, fetches Google's public keys with caching, verifies the request body, and rejects mismatches. If you front the bot endpoint with a reverse proxy, **do not strip the `Google-Signature` header** — that breaks verification. The shared gateway does not verify this signature itself.
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

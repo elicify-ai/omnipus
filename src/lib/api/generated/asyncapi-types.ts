@@ -33,6 +33,7 @@ export type WsFrameType =
   | "replay_provider_fallback"
   | "rate_limit"
   | "provider_retry"
+  | "provider_status"
   | "context_window_notice"
   | "provider_fallback"
   | "media"
@@ -99,6 +100,7 @@ export type WsFrameType =
 export interface HistoryEntryOrigin {
   position: string;
   entry_id?: string;
+  turn_id?: string;
 }
 
 export interface SessionHistoryState {
@@ -196,6 +198,14 @@ export interface RoomDeliveryState {
   reason?: string;
 }
 
+export interface MediaPart {
+  type: "image" | "audio" | "video" | "file";
+  url: string;
+  filename: string;
+  content_type: string;
+  caption?: string;
+}
+
 export interface RoomEntry {
   id: string;
   room_id: string;
@@ -203,6 +213,7 @@ export interface RoomEntry {
   client_message_id?: string;
   author: RoomEntryAuthor;
   text: string;
+  attachments?: Array<MediaPart>;
   addressees: Array<string>;
   after_pause: boolean;
   deliveries: Array<RoomDeliveryState>;
@@ -257,6 +268,7 @@ export interface RoomMetaFrame {
   read_only_reason?: string;
   allocated_cost_micro_usd: number;
   allocated_cost_unpriced: boolean;
+  invitation_context_status?: "generating" | "ready" | "unavailable";
 }
 
 export interface ChatParticipant {
@@ -398,7 +410,7 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
+  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
@@ -411,7 +423,7 @@ export interface LLMError {
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
+  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
   message: string;
   retryable: boolean;
   provider_message?: boolean;
@@ -456,6 +468,12 @@ export interface MarshalErrorResult {
 export interface ToolResultRef {
   _ref: true;
   ref: string;
+  original_size_bytes: number;
+  preview: string;
+}
+
+export interface HistoryResultPreview {
+  _history_preview: true;
   original_size_bytes: number;
   preview: string;
 }
@@ -613,6 +631,7 @@ export interface ReplayMessageFrame {
   type: "replay_message";
   session_id: string;
   content: string;
+  content_original_size_bytes?: number;
   role: "user" | "assistant" | "system" | "turn_canceled";
   id?: string;
   reply_to_message_id?: string;
@@ -689,6 +708,18 @@ export interface ProviderRetryFrame {
   seq?: number;
 }
 
+export interface ProviderStatusFrame {
+  type: "provider_status";
+  session_id: string;
+  turn_id: string;
+  state: "waiting" | "responding" | "recovered";
+  sent_at: string;
+  silent_since?: string;
+  stall_at?: string;
+  retries?: number;
+  seq?: number;
+}
+
 export interface ContextWindowNoticeFrameNotice {
   kind: "provider_retry" | "mid_turn";
   message: string;
@@ -733,14 +764,6 @@ export interface LibraryChangedFrame {
   workspace_id: string;
   path?: string;
   reason?: string;
-}
-
-export interface MediaPart {
-  type: "image" | "audio" | "video" | "file";
-  url: string;
-  filename: string;
-  content_type: string;
-  caption?: string;
 }
 
 export interface MediaFrame {
@@ -795,6 +818,8 @@ export interface AskUserQuestionCard {
   card_id: string;
   session_id: string;
   agent_id: string;
+  room_ref?: RoomRef;
+  origin_label?: string;
   status: "pending" | "answered" | "cancelled";
   created_at: string;
   default_safe_at?: string;
@@ -1390,9 +1415,10 @@ export interface SessionHistoryPageInfo {
   row_count: number;
   source_group_count: number;
   soft_byte_budget: number;
+  byte_ceiling: number;
   projected_bytes: number;
   byte_budget_exceeded: boolean;
-  stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget";
+  stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget" | "byte_ceiling";
   budget_override?: "height_floor" | "atomic_group";
   first_position?: string;
   last_position?: string;
@@ -1509,6 +1535,7 @@ export type WsFrame =
   | ToolResultProjectionFrame
   | RateLimitFrame
   | ProviderRetryFrame
+  | ProviderStatusFrame
   | ContextWindowNoticeFrame
   | ProviderFallbackFrame
   | ProviderFallbackNote
@@ -1621,6 +1648,7 @@ export type ServerFrame =
   | ToolResultProjectionFrame
   | RateLimitFrame
   | ProviderRetryFrame
+  | ProviderStatusFrame
   | ContextWindowNoticeFrame
   | ProviderFallbackFrame
   | ProviderFallbackNote

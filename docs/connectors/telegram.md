@@ -63,6 +63,16 @@ The Telegram channel receives messages via long polling (30-second timeout) usin
 5. Optionally set `allow_from` to a list of numeric user IDs to restrict access (find your ID via `@userinfobot`).
 6. Run `omnipus start` to start the service.
 
+## Starting messages
+
+In the connector's **Configure → Starting messages** section (see [Starting messages](../connectors.md#starting-messages)) each entry is a Telegram chat id:
+
+- a positive id is a person. Under Telegram's rules a bot can message a person only after that person has started a chat with the bot; Omnipus does not check this.
+- a negative id is a group or channel.
+- a forum topic is written `chat_id/topic_id`: the group's negative chat id, a slash, and the topic number, for example `-1001234567890/42`. A topic is accepted only after a negative chat id.
+
+Write ids as plain numbers or with the `telegram:` prefix; usernames such as `@alice` and `*` are refused.
+
 ## Built-in Commands
 
 At startup Telegram registers Omnipus's built-in bot commands automatically via `CommandRegistrarCapable`. Registration retries in the background after increasing delays if the Telegram API is temporarily unavailable. The installed server supplies the command list; use `/help` for its current commands rather than an older fixed list. Hidden commands and aliases are not registered in Telegram's menu. A command whose name Telegram cannot display, such as `/stop-redirect`, can still work when typed if the server supports it.

@@ -115,3 +115,7 @@ To place a quotation after the list instead, use a blank line and leave `>` unin
 - Placeholder message with in-place edit on final reply (`MessageEditor`)
 - Auto-join invited rooms (`join_on_invite`)
 - End-to-end encryption via `goolm` + `cryptohelper` (opt-in via `crypto_passphrase_ref`)
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

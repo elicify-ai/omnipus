@@ -54,7 +54,9 @@ type AskUserQuestionCard struct {
 	CreatedAt    string   `json:"created_at"`
 	// When the set carries at least one default_safe question: the instant those questions auto-resolve to their recommendation (created_at + the fixed 30 minutes). Drives the countdown line.
 	DefaultSafeAt *string `json:"default_safe_at,omitempty"`
-	Questions     []struct {
+	// Server-derived origin label captured when the question was created (#1449 C-I6, FR-050), e.g. "for group <name>". Immutable once the card exists. Present together with room_ref when the question was raised by work that answers exactly one group's request (D23, D28); the group then shows the card too. Absent for every other question.
+	OriginLabel *string `json:"origin_label,omitempty"`
+	Questions   []struct {
 		Context     *string `json:"context,omitempty"`
 		DefaultSafe *bool   `json:"default_safe,omitempty"`
 		Header      string  `json:"header"`
@@ -66,6 +68,7 @@ type AskUserQuestionCard struct {
 		Question    string  `json:"question"`
 		Recommended *string `json:"recommended,omitempty"`
 	} `json:"questions"`
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
 	// Transcript session id the set is parked on (session-scoped).
 	SessionId string `json:"session_id"`
 	Status    string `json:"status"`
@@ -755,6 +758,15 @@ type HistoryEntryOrigin struct {
 	EntryId *string `json:"entry_id,omitempty"`
 	// Same-session occurrence fingerprint; canonical unpadded base64url SHA-256.
 	Position string `json:"position"`
+	// Original recorded turn ID of the persisted source record (its own TranscriptEntry.TurnID) when nonempty; omitted when that record has no recorded turn, which means unknown. Never filled from the active turn, session state, a neighbouring record or any inference (chat-history paging spec, D1 S11d).
+	TurnId *string `json:"turn_id,omitempty"`
+}
+
+// HistoryResultPreview — Read-time display marker for a saved tool result whose JSON encoding exceeds 51,200 bytes, emitted only on a history-origin tool_call_result frame of a snapshot replay page (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2). Distinct from ToolResultRef (`_ref`, live offload store) and TruncatedResult (`_truncated`, not retrievable). The full value is read through REST getSessionHistoryEntry by the frame's history_origin position plus call_id. The UTF-8 length of `preview` is at most 4,096 bytes; that byte rule is enforced at the real server and browser boundaries, maxLength is only the character-count bound. Keep in sync by hand with contracts/components/schemas/HistoryResultPreview.yaml.
+type HistoryResultPreview struct {
+	HistoryPreview    bool   `json:"_history_preview"`
+	OriginalSizeBytes int    `json:"original_size_bytes"`
+	Preview           string `json:"preview"`
 }
 
 // JudgeVerdictFrame — Server → client. Live push of a judge adjudication (ADR-049 D2/D4/NFR-5) — the WS carrier of a judge verdict. The other carrier is the persisted session-transcript entry (Message.type=judge_verdict / Message.verdict, contract C12); both carry the same shape so they cannot silently disagree.
@@ -1056,6 +1068,20 @@ type ProviderRetryFrame struct {
 	Type      string `json:"type"`
 }
 
+// ProviderStatusFrame — Server → client (issues #1478 and #1280). The state of the model-provider call a running turn is waiting on: `waiting` (nothing has arrived since silent_since; the silence limit ends the call at stall_at when known), `responding` (data arrives again, or the call returned, after a `waiting` notice), `recovered` (the call succeeded after `retries` automatic retries). Named fields only, never provider text. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
+type ProviderStatusFrame struct {
+	Retries *int   `json:"retries,omitempty"`
+	SentAt  string `json:"sent_at"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
+	Seq         *int64  `json:"seq,omitempty"`
+	SessionId   string  `json:"session_id"`
+	SilentSince *string `json:"silent_since,omitempty"`
+	StallAt     *string `json:"stall_at,omitempty"`
+	State       string  `json:"state"`
+	TurnId      string  `json:"turn_id"`
+	Type        string  `json:"type"`
+}
+
 // RateLimitFrame — Server → client rate limit applied (SEC-26). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (c) per the ADR-057 W5 audit (FR-089) — a DOCUMENTED PRE-EXISTING GAP, audited and recorded here rather than fixed (operator decision 11): the underlying RateLimitPayload (pkg/agent/events.go) carries no SessionID field at all; this frame's session_id is reconstructed downstream from the connection's chat→session map at serialization time.
 type RateLimitFrame struct {
 	AgentId           *string `json:"agent_id,omitempty"`
@@ -1107,6 +1133,8 @@ type ReplayMessageFrame struct {
 	// #823 catch-up redesign §4.7. Present on a replayed user entry persisted with a client-supplied id. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	Content         string  `json:"content"`
+	// Present only when `content` is a read-time display preview of an ordinary user/assistant chat message (entry type `message` or omitted) on a history-origin replay page: `content` then holds the first at most 65,536 UTF-8 bytes on a character boundary and this is the exact UTF-8 length of the full saved text (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2). Unrelated to truncated/truncation_reason. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
+	ContentOriginalSizeBytes *int `json:"content_original_size_bytes,omitempty"`
 	// Effort levels spec (FR-058). Copied from this entry's own stored effort record (answering assistant entries only). Absent when the entry has none. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
 	Effort *EffortRecord `json:"effort,omitempty"`
 	// session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and replay must retain the SAME association so the SPA joins each bubble to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier replayed message.
@@ -1174,8 +1202,10 @@ type RoomEntry struct {
 	// Resolved addressee agent ids. Never null.
 	Addressees []string `json:"addressees"`
 	// True for an answer to work consumed before a /pause; such an answer never forwards its mentions (§6.11).
-	AfterPause bool            `json:"after_pause"`
-	Author     RoomEntryAuthor `json:"author"`
+	AfterPause bool `json:"after_pause"`
+	// Images and files of the entry (#1449 D3, FR-016, FR-020), in the order they were sent. Each part's url is the workspace media URL (/api/v1/media/workspace/<workspace id>/<id>). Absent means none. A file deleted later in the Library keeps its part here; fetching it then fails and the chat shows the file as unavailable (D26).
+	Attachments []MediaPart     `json:"attachments,omitempty"`
+	Author      RoomEntryAuthor `json:"author"`
 	// Echo of RoomMessageRequest.client_message_id for a person's entry.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	// Per-member delivery states for this entry. Never null.
@@ -1183,7 +1213,8 @@ type RoomEntry struct {
 	Id         string              `json:"id"`
 	RoomId     string              `json:"room_id"`
 	// Position in the room transcript; strictly increasing.
-	Seq       int64  `json:"seq"`
+	Seq int64 `json:"seq"`
+	// The message text. New messages and agent answers are refused above the group message limit (#1449 D24, D27: at most 65,536 UTF-8 bytes, lowered by session_messaging.steer_body), stated on RoomMessageRequest.text. A stored entry keeps this wider maximum (TD-8): an entry written under an earlier, larger operator setting still opens and shows in full (S-152). May be empty when the entry carries attachments.
 	Text      string `json:"text"`
 	Timestamp string `json:"timestamp"`
 }
@@ -1214,16 +1245,18 @@ type RoomMemberStateFrame struct {
 
 // RoomMetaFrame — Server → client (spec omnipus-system-agent K45). The room's members, mutes, pause state, allocated cost or read-only state changed. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
 type RoomMetaFrame struct {
-	AllocatedCostMicroUsd int64    `json:"allocated_cost_micro_usd"`
-	AllocatedCostUnpriced bool     `json:"allocated_cost_unpriced"`
-	Generation            int64    `json:"generation"`
-	Members               []string `json:"members"`
-	Muted                 []string `json:"muted"`
-	Paused                bool     `json:"paused"`
-	ReadOnlyReason        *string  `json:"read_only_reason,omitempty"`
-	RoomId                string   `json:"room_id"`
-	Seq                   int64    `json:"seq"`
-	Type                  string   `json:"type"`
+	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
+	AllocatedCostUnpriced bool  `json:"allocated_cost_unpriced"`
+	Generation            int64 `json:"generation"`
+	// Invitation summary state (#1449 FR-045). The text itself never travels on a frame: on ready, an open Participants panel refetches getRoom.
+	InvitationContextStatus *string  `json:"invitation_context_status,omitempty"`
+	Members                 []string `json:"members"`
+	Muted                   []string `json:"muted"`
+	Paused                  bool     `json:"paused"`
+	ReadOnlyReason          *string  `json:"read_only_reason,omitempty"`
+	RoomId                  string   `json:"room_id"`
+	Seq                     int64    `json:"seq"`
+	Type                    string   `json:"type"`
 }
 
 // RoomRef — Reference from a main-session entry (or an approval) to the room (group chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215, FR-251). Display and navigation data only: it never grants access to the room. `role` says whether the entry is the room's request to this agent or this agent's answer into the room; a room pre-admission approval card (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomRef) — keep both copies in sync by hand.
@@ -1339,13 +1372,15 @@ type SessionHistoryContext struct {
 	} `json:"spans"`
 }
 
-// SessionHistoryPageInfo — Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+// SessionHistoryPageInfo — Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
 type SessionHistoryPageInfo struct {
 	// Present iff the soft budget was exceeded to keep the floor or an atomic group.
 	BudgetOverride *string `json:"budget_override,omitempty"`
 	// True iff projected bytes exceed the soft budget; requires budget_override.
-	ByteBudgetExceeded bool                  `json:"byte_budget_exceeded"`
-	Context            SessionHistoryContext `json:"context"`
+	ByteBudgetExceeded bool `json:"byte_budget_exceeded"`
+	// Server-owned hard page selection ceiling, currently 8388608 bytes (8 MiB), on the same meter as projected_bytes (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.3). Before adding any further group, selection stops with stop_reason byte_ceiling if the page with that group would exceed it, even below min_rows. The first group is always returned whole, so projected_bytes <= byte_ceiling holds unless source_group_count is 1. A page selection limit, not a heap or absolute response-size guarantee; not an operator setting.
+	ByteCeiling int64                 `json:"byte_ceiling"`
+	Context     SessionHistoryContext `json:"context"`
 	// First selected occurrence in ascending acceptance order; absent iff empty.
 	FirstPosition *string `json:"first_position,omitempty"`
 	// Last selected occurrence in ascending acceptance order; absent iff empty.
@@ -1371,7 +1406,7 @@ type SessionHistoryPageInfo struct {
 	SoftByteBudget int64 `json:"soft_byte_budget"`
 	// Number of selected whole source groups, not the number of replay frames.
 	SourceGroupCount int `json:"source_group_count"`
-	// Actual selection boundary. row_target/source_cap take precedence when their boundary coincides with bytes. True end, closed clear/range or source cap may underfill; bytes alone may not cut below min_rows or split a whole group.
+	// Actual selection boundary. row_target/source_cap take precedence when their boundary coincides with bytes. True end, closed clear/range or source cap may underfill; the soft byte_budget may not cut below min_rows. byte_ceiling is the one byte stop allowed below min_rows, and it is reported when the next group would exceed both the soft budget and the ceiling. No byte stop splits a whole group.
 	StopReason string `json:"stop_reason"`
 	// Optional indication that selection reached a protected exact clear marker. Earlier retained groups remain reachable only through explicit clear crossing.
 	StoppedAtClear *bool `json:"stopped_at_clear,omitempty"`
@@ -1727,7 +1762,7 @@ type ToolCallResultFrame struct {
 	Error         *string             `json:"error,omitempty"`
 	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
 	ParentCallId  *string             `json:"parent_call_id,omitempty"`
-	// Tool return value. Any JSON type or null (null is the contract for error frames and cancelled calls with no admitted result). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes. Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf` reasoning that branch 1's permissive `type: [object, array, ...]` already matched every object, so a genuine oneOf would double-match every $ref sentinel/family member against its own union. That diagnosis was correct but `anyOf` was the wrong fix: under `anyOf` nothing is ever rejected, including a malformed PermissionDenied missing `permanent` — the seven $refs below became unreachable as constraints, which nullifies ADR-060 §7 item 2's own rationale for admitting new members ("when the union is ever made executable, a member missing from it would be the silent-drop failure ADR-058 §7 item 4 warned about" — an anyOf over a universal branch can never be made executable). Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that excludes every reserved discriminator key the nine $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark) — `_truncated`, `_marshal_error`, `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is correctly rejected, rather than silently passing through branch (b). ADR-034's external-file-$ref constraint does not block this — these are internal `#/components/schemas/...` refs (D4). Verified by compiling this exact file with santhosh-tekuri/jsonschema/v6: pkg/api/generated/contract_test.go wraps one fixture per family member in a real ToolCallResultFrame and validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each producer's output standalone and asserts a malformed member is rejected. F13 follow-up hardening: the object catch-all's `error` exclusion below now keys on `error` being a STRING, not merely present — see that branch's own description for why (settleAskToolCallTranscript / buildSyncDelegateResult persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the four `error`-keyed $refs and must still match the catch-all). Regression fixture: pkg/api/generated/tool_call_result_error_key_contract_test.go. Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits `Result any`. So this is a spec-correctness fix (the union now actually constrains what a conformant producer may emit) with no generated-code behavior change; the hand-written detectors (isPermissionDenied and friends) remain the real enforcement at the SPA read boundary.
+	// Tool return value. Any JSON type or null (null is the contract for error frames and cancelled calls with no admitted result). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes. Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf` reasoning that branch 1's permissive `type: [object, array, ...]` already matched every object, so a genuine oneOf would double-match every $ref sentinel/family member against its own union. That diagnosis was correct but `anyOf` was the wrong fix: under `anyOf` nothing is ever rejected, including a malformed PermissionDenied missing `permanent` — the seven $refs below became unreachable as constraints, which nullifies ADR-060 §7 item 2's own rationale for admitting new members ("when the union is ever made executable, a member missing from it would be the silent-drop failure ADR-058 §7 item 4 warned about" — an anyOf over a universal branch can never be made executable). Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that excludes every reserved discriminator key the ten $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark; #1452 D2 added HistoryResultPreview) — `_truncated`, `_marshal_error`, `_ref`, `_history_preview`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is correctly rejected, rather than silently passing through branch (b). ADR-034's external-file-$ref constraint does not block this — these are internal `#/components/schemas/...` refs (D4). Verified by compiling this exact file with santhosh-tekuri/jsonschema/v6: pkg/api/generated/contract_test.go wraps one fixture per family member in a real ToolCallResultFrame and validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each producer's output standalone and asserts a malformed member is rejected. F13 follow-up hardening: the object catch-all's `error` exclusion below now keys on `error` being a STRING, not merely present — see that branch's own description for why (settleAskToolCallTranscript / buildSyncDelegateResult persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the four `error`-keyed $refs and must still match the catch-all). Regression fixture: pkg/api/generated/tool_call_result_error_key_contract_test.go. Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits `Result any`. So this is a spec-correctness fix (the union now actually constrains what a conformant producer may emit) with no generated-code behavior change; the hand-written detectors (isPermissionDenied and friends) remain the real enforcement at the SPA read boundary.
 	Result any `json:"result"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ToolCallResultFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
@@ -1888,6 +1923,7 @@ const (
 	WsFrameTypeReplayProviderFallback   WsFrameType = "replay_provider_fallback"
 	WsFrameTypeRateLimit                WsFrameType = "rate_limit"
 	WsFrameTypeProviderRetry            WsFrameType = "provider_retry"
+	WsFrameTypeProviderStatus           WsFrameType = "provider_status"
 	WsFrameTypeContextWindowNotice      WsFrameType = "context_window_notice"
 	WsFrameTypeProviderFallback         WsFrameType = "provider_fallback"
 	WsFrameTypeMedia                    WsFrameType = "media"

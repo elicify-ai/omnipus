@@ -25,7 +25,7 @@ var wu3ChangeFamilies = []string{
 	"create_workspace", "update_workspace", "delete_workspace",
 	"configure_provider", "add_mcp_server", "remove_mcp_server",
 	"configure_channel", "enable_channel", "disable_channel",
-	"create_skill", "edit_skill", "remove_skill", "install_skill", "environment_setup",
+	"edit_skill", "install_skill", "environment_setup", // r15 §10 retires the other skill verbs.
 }
 
 // wu3DurableInventory snapshots every file under the stores a change tool can
@@ -155,7 +155,7 @@ func TestWU3RegistrySchemaEnvelopeControls(t *testing.T) {
 	assert.NotEqual(t, "failed: nothing saved", body["outcome"], "a valid call is executed, not refused")
 	assert.NotEmpty(t, body["changed_fields"], "the valid control really saved")
 
-	read := reg.ExecuteWithContext(context.Background(), "get_agent", map[string]any{"id": float64(1)}, "", "", nil)
+	read := reg.ExecuteWithContext(context.Background(), "get_agent", map[string]any{"id": float64(1), "fields": []any{"name"}}, "", "", nil)
 	require.True(t, read.IsError, "control: the read call is schema-invalid")
 	assert.True(t, strings.HasPrefix(read.ForLLM, "invalid arguments for tool"),
 		"a read tool's refusal is not wrapped in a change verdict: %s", read.ForLLM)

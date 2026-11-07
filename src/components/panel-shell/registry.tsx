@@ -37,6 +37,11 @@ const WorkspaceTeamPanel = lazy(async () => {
   return { default: module.TeamPanel }
 })
 
+const ParticipantsPanel = lazy(async () => {
+  const module = await import('@/components/rooms/ParticipantsPanel')
+  return { default: module.ParticipantsPanel }
+})
+
 const CalendarPanel = lazy(async () => {
   const module = await import('@/components/screens/CalendarScreen')
   return { default: module.CalendarScreen }
@@ -114,6 +119,11 @@ function CalendarPanelContent(props: PanelContentProps) {
       render={(id) => <CalendarPanel workspaceId={id} />}
     />
   )
+}
+
+/** #1449 D6: the group chat's Participants panel. Its context names the room. */
+function ParticipantsPanelContent(props: PanelContentProps) {
+  return <ParticipantsPanel shellProps={props} />
 }
 
 /** The workspace search codec shared by every workspace-scoped panel: the
@@ -197,6 +207,25 @@ export const panels: readonly PanelDefinition[] = [
     content: CalendarPanelContent,
     fullScreen: {
       ...workspaceFullScreenCodec(),
+    },
+  },
+  {
+    // #1449 D6 / ADR-20261028 A10: opened only from a group chat's header
+    // Participants button; never a strip entry. The full-screen route needs
+    // both the workspace and the room.
+    id: 'participants',
+    title: 'Participants',
+    content: ParticipantsPanelContent,
+    fullScreen: {
+      toSearch: ({ workspaceId, roomId }) => ({
+        ...(workspaceId ? { workspace: workspaceId } : {}),
+        ...(roomId ? { room: roomId } : {}),
+      }),
+      fromSearch: (search) => {
+        const workspaceId = optionalSearchString(search.workspace)
+        const roomId = optionalSearchString(search.room)
+        return workspaceId && roomId ? { workspaceId, roomId } : null
+      },
     },
   },
 ]
