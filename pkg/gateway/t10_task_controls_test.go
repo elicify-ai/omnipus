@@ -147,15 +147,32 @@ func TestT10_RunTaskToolConsumesRealArmedOccurrence(t *testing.T) {
 			tool.SetStartTaskNow(f.api.taskExecutor.StartTaskNow)
 			result := tool.Execute(context.Background(), map[string]any{"task_id": f.id})
 			require.False(t, result.IsError, result.ForLLM)
-			rows := t10AwaitCompletedRuns(t, f, wantRuns)
+			// S-H.11 / S-H.2: the oracle is the run run_task just started. A prior
+			// occurrence's saved result (seeded for recurring-done) is not that
+			// run and must not be required to carry its success text.
+			rows := t10AwaitEndedRuns(t, f, wantRuns)
 			manual := []task.TaskRun{}
 			for _, row := range rows {
 				if row.Kind == task.RunKindManual {
 					manual = append(manual, row)
 				}
 			}
-			require.Len(t, manual, 1)
+			require.Len(t, manual, 1, "run_task starts exactly one new run")
+			assert.Equal(t, task.StatusDone, manual[0].Status)
+			assert.Contains(t, manual[0].Result, taskRunNowSuccessSummary, "the run started by run_task carries the occurrence outcome")
 			assert.Equal(t, &f.at, manual[0].OccurrenceMs)
+			assert.NotEmpty(t, manual[0].SessionID)
+			if variant == "recurring-done" {
+				var prior []task.TaskRun
+				for _, row := range rows {
+					if row.Kind == task.RunKindScheduled {
+						prior = append(prior, row)
+					}
+				}
+				require.Len(t, prior, 1)
+				assert.Equal(t, task.StatusDone, prior[0].Status)
+				assert.Equal(t, "prior scheduled result", prior[0].Result, "the earlier occurrence's result is left as it was saved")
+			}
 			t10AssertConsumptionMarker(t, f, &f.at)
 			f.clk.advance(time.UnixMilli(f.at).Sub(f.clk.Now()))
 			f.s.RunDueJobs(f.clk.Now())
@@ -168,4 +185,26 @@ func TestT10_RunTaskToolConsumesRealArmedOccurrence(t *testing.T) {
 			assert.Len(t, runs, wantRuns, "tool consumes the armed occurrence, never ordinary dispatch plus duplicate automatic fire")
 		})
 	}
+}
+
+// t10AwaitEndedRuns waits until want runs have all ended. It does not require
+// every historical run to contain the new run's success text: S-H.11's oracle
+// is the run run_task just started (S-H.2), not a prior occurrence's result.
+func t10AwaitEndedRuns(t *testing.T, f *t10TaskEntryFixture, want int) []task.TaskRun {
+	t.Helper()
+	var rows []task.TaskRun
+	require.Eventually(t, func() bool {
+		var err error
+		rows, err = f.api.taskStore.ListRuns(f.id)
+		if err != nil || len(rows) != want {
+			return false
+		}
+		for _, r := range rows {
+			if r.EndedAt == nil {
+				return false
+			}
+		}
+		return true
+	}, 8*time.Second, time.Millisecond, "run_task's occurrence must settle in task run history")
+	return rows
 }
