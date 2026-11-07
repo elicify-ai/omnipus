@@ -9442,7 +9442,7 @@ export interface components {
         };
         /**
          * AgentDetail
-         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Extension point: the effort fields of the effort feature are added here when that feature lands.
+         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Effort (effort-levels spec FR-071): reasoning_effort is the primary's stored effort, each fallback_models entry carries its own, and each model_chain entry lists effort_options.
          */
         AgentDetail: {
             /** @example 550e8400-e29b-41d4-a716-446655440000 */
@@ -9461,6 +9461,11 @@ export interface components {
             model?: string;
             /** @description The stored primary provider key ("" when not pinned). */
             provider?: string;
+            /**
+             * @description The primary model's stored effort as written ("high", "provider_default", "on", "off"), never the resolved value. null when Not set (stored "") or when it does not apply (subagent_3p external-CLI workers). Effort-levels spec FR-071, S-76.
+             * @example high
+             */
+            readonly reasoning_effort?: string | null;
             /** @description The stored fallback entries, as stored. */
             fallback_models?: components["schemas"]["FallbackModel"][];
             model_params?: components["schemas"]["AgentModelParams"];
@@ -9540,6 +9545,15 @@ export interface components {
              * @example false
              */
             accepts_images: boolean | null;
+            /**
+             * @description The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+             * @example [
+             *       "provider_default",
+             *       "low",
+             *       "high"
+             *     ]
+             */
+            effort_options: string[] | null;
             /** @description Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise. */
             warning?: string;
         };

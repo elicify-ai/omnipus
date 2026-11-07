@@ -1823,6 +1823,7 @@ type AgentDetail = {
   locked?: boolean | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: (string | null) | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
   max_tool_iterations?: (number | null) | undefined;
@@ -1863,6 +1864,7 @@ type AgentModelChainEntry = {
   provider_configured: boolean;
   model_offered: boolean | null;
   accepts_images: boolean | null;
+  effort_options: Array<string> | null;
   warning?: string | undefined;
 };
 type AgentPreview = {
@@ -8235,6 +8237,7 @@ export const AgentModelChainEntry: z.ZodType<AgentModelChainEntry> = z.object({
   provider_configured: z.boolean(),
   model_offered: z.boolean().nullable(),
   accepts_images: z.boolean().nullable(),
+  effort_options: z.array(z.string()).nullable(),
   warning: z.string().optional(),
 });
 export const AgentDetail: z.ZodType<AgentDetail> = z.object({
@@ -8247,6 +8250,7 @@ export const AgentDetail: z.ZodType<AgentDetail> = z.object({
   locked: z.boolean().optional(),
   model: z.string().optional(),
   provider: z.string().optional(),
+  reasoning_effort: z.string().max(32).nullish(),
   fallback_models: z.array(FallbackModel).optional(),
   model_params: AgentModelParams.optional(),
   max_tool_iterations: z.number().int().gte(1).nullish(),

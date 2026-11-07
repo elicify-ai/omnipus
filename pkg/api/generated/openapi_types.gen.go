@@ -15077,7 +15077,7 @@ type AgentDependencyList struct {
 // AgentDependencyListDependenciesKind defines model for AgentDependencyList.Dependencies.Kind.
 type AgentDependencyListDependenciesKind string
 
-// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Extension point: the effort fields of the effort feature are added here when that feature lands.
+// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Effort (effort-levels spec FR-071): reasoning_effort is the primary's stored effort, each fallback_models entry carries its own, and each model_chain entry lists effort_options.
 type AgentDetail struct {
 	// AbsentFields Result metadata, never selectable: requested properties the full object does not carry. Absent or empty when none.
 	AbsentFields *[]string `json:"absent_fields,omitempty"`
@@ -15159,6 +15159,9 @@ type AgentDetail struct {
 		// AcceptsImages The resolved model's image-input capability; null when not known.
 		AcceptsImages *bool `json:"accepts_images"`
 
+		// EffortOptions The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+		EffortOptions *[]string `json:"effort_options"`
+
 		// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
 		Model string `json:"model"`
 
@@ -15193,6 +15196,9 @@ type AgentDetail struct {
 
 	// Provider The stored primary provider key ("" when not pinned).
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort The primary model's stored effort as written ("high", "provider_default", "on", "off"), never the resolved value. null when Not set (stored "") or when it does not apply (subagent_3p external-CLI workers). Effort-levels spec FR-071, S-76.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
@@ -15313,6 +15319,9 @@ type AgentMCPBinding struct {
 type AgentModelChainEntry struct {
 	// AcceptsImages The resolved model's image-input capability; null when not known.
 	AcceptsImages *bool `json:"accepts_images"`
+
+	// EffortOptions The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+	EffortOptions *[]string `json:"effort_options"`
 
 	// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
 	Model string `json:"model"`
