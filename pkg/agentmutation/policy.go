@@ -233,9 +233,13 @@ func Subagent3pForbiddenUpdateFields() []string {
 	return append([]string(nil), subagent3pForbiddenUpdateFields...)
 }
 
+// sharedAgentLeaves includes the effort rows (effort-levels spec "Agent-tool
+// parity", FR-064/FR-071): the primary's reasoning_effort and each
+// fallback's own, on both create and update.
 var sharedAgentLeaves = []string{
-	"color", "description", "fallback_models[].model", "fallback_models[].provider", "figure", "max_tool_iterations",
-	"model", "model_params.max_tokens", "model_params.temperature", "name", "provider", "role", "skills[]", "soul", "voice",
+	"color", "description", "fallback_models[].model", "fallback_models[].provider", "fallback_models[].reasoning_effort",
+	"figure", "max_tool_iterations", "model", "model_params.max_tokens", "model_params.temperature", "name", "provider",
+	"reasoning_effort", "role", "skills[]", "soul", "voice",
 }
 
 const agentPermissionsReason = "AG-07: on an existing agent these change only through set_agent_permissions; update_agent refuses them"

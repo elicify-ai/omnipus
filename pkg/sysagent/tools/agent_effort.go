@@ -199,3 +199,41 @@ func addStoredEffort(store *agentstore.Store, id string, fields []string, body m
 	body["fallback_models"] = fallbacks
 	return nil
 }
+
+// ridesDefaultModel reports whether the agent primary has no model of its
+// own and so rides the default model (primaryEffortPair's rule).
+func ridesDefaultModel(a *config.AgentConfig) bool {
+	return a.Model == nil || strings.TrimSpace(a.Model.Primary) == ""
+}
+
+// chainEffortOptions is one model_chain entry's effort_options (FR-065, D8):
+// the values for the entry's pair, in order, or nil (JSON null) when the
+// catalog has no row for the pair, the model does not reason, or the agent
+// is an external-CLI worker, which takes no effort at all (S-77). The pair
+// is the resolver's provider when it found one, else the entry's own.
+func chainEffortOptions(a *config.AgentConfig, entry map[string]any, provider, model string, ridesDefault bool) any {
+	if a.IsExternalCLIWorker() || model == "" {
+		return nil
+	}
+	if resolved, ok := entry["provider"].(string); ok && resolved != "" {
+		provider = resolved
+	}
+	t, known := servedEffort(agentEffortPair{provider: provider, model: model})
+	if !known || !t.Reasons {
+		return nil
+	}
+	opts := []string{}
+	if ridesDefault {
+		opts = append(opts, "") // Not set: the default model's own effort applies
+	}
+	opts = append(opts, effortdialect.ValueProviderDefault)
+	opts = append(opts, t.Levels...)
+	switch {
+	case t.Switch && len(t.Levels) == 0:
+		opts = append(opts, effortdialect.ValueOff, effortdialect.ValueOn)
+	case t.Switch && !slices.Contains(t.Levels, effortdialect.ValueNone):
+		// The levels already turn reasoning on; the switch adds only Off.
+		opts = append(opts, effortdialect.ValueOff)
+	}
+	return opts
+}
