@@ -86,6 +86,8 @@ For any other model, check the provider's documentation for **tool use**, **tool
 
 Some providers cannot be enumerated from a published catalog. Ollama and other local providers depend on what is installed on your machine, so Omnipus requests their live list. A custom endpoint has no catalog to enumerate; you maintain its model names under **Models** in that provider's settings.
 
+Editing a custom endpoint's model names keeps its saved base URL and protocol; you do not need to enter them again. You only enter both when you first add the endpoint. If a save is refused, Settings shows the reason and keeps your unsaved model names in the editor so you can fix the problem and save again. If the endpoint was removed or changed while you were saving, the save fails and asks you to reload.
+
 ## What the provider check proves
 
 When Omnipus configures a provider with `configure_provider`, it checks the saved entry straight away: the configured endpoint (your own address if you set one, otherwise the catalog's) is asked for its model list over that provider's protocol, with the saved key. A local provider such as Ollama is checked without a key. The result is `working` when the list comes back and `saved but not working` with the reason otherwise — a refused key, an unreachable address, or a protocol that has no model list. A passing check does not prove that a particular model runs, that you have quota, or that the model supports tools.
