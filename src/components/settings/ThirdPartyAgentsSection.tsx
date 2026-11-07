@@ -27,6 +27,7 @@ import {
   isApiError,
   updateThirdPartyAgentSettings,
 } from '@/lib/api'
+import { parseServerErrorField } from '@/lib/api-error'
 import type {
   CliPreset,
   CliValidateResponse,
@@ -70,8 +71,11 @@ function saveFailureMessage(err: unknown): string {
     return 'Your session has ended. Sign in again, then save; your changes are still here.'
   }
   // The write reached disk, so "Could not save" would be false; the server's
-  // text says what happened and what to do.
-  if (isApiError(err) && err.code === 'saved_not_refreshed') return err.userMessage
+  // text says what happened and what to do. The client replaces every 5xx
+  // text with a generic one in userMessage, so read the sentence from the body.
+  if (isApiError(err) && err.code === 'saved_not_refreshed') {
+    return parseServerErrorField(err.body) ?? err.userMessage
+  }
   return `Could not save: ${getErrorMessage(err, 'unknown error')}`
 }
 
