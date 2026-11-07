@@ -36,7 +36,7 @@ func TestCronLogsThroughSlogNotTheStdlibLogger(t *testing.T) {
 	cs.SetRunner(&recordingRunner{})
 	interval := int64(60000)
 	hostile := "evil\r12:00:00 ERR forged\x1b[31m"
-	job, err := cs.AddJobFull(JobSpec{Name: hostile, AgentID: "mia",
+	job, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: hostile, AgentID: "mia",
 		Schedule: CronSchedule{Kind: "every", EveryMS: &interval}})
 	require.NoError(t, err)
 

@@ -18,12 +18,12 @@ func crashTwoAtJobs(t *testing.T, clk *fakeClock) (string, string, string) {
 	t.Helper()
 	cs, path := newAutonomyService(t, clk)
 	due := clk.Now().Add(time.Minute).UnixMilli()
-	keep, err := cs.AddJobFull(JobSpec{Name: "once", Message: "m", AgentID: "owner",
+	keep, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "once", Message: "m", AgentID: "owner",
 		Schedule: CronSchedule{Kind: "at", AtMS: &due}})
 	if err != nil {
 		t.Fatalf("AddJobFull once: %v", err)
 	}
-	drop, err := cs.AddJobFull(JobSpec{Name: "occurrence", Message: "m", AgentID: "owner",
+	drop, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "occurrence", Message: "m", AgentID: "owner",
 		Schedule: CronSchedule{Kind: "at", AtMS: &due}})
 	if err != nil {
 		t.Fatalf("AddJobFull occurrence: %v", err)

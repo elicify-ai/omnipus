@@ -101,6 +101,7 @@ func TestU6_DEL15_AddJobFullRefusesOwnerlessJob(t *testing.T) {
 
 	atMS := int64(4_000_000_000_000) // far future; value is irrelevant to the assertion
 	job, err := cs.AddJobFull(JobSpec{
+		Kind:     KindHeartbeat,
 		Name:     "u6-ownerless",
 		Schedule: CronSchedule{Kind: "at", AtMS: &atMS},
 		Message:  "no owner supplied",

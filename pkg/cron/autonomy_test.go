@@ -72,7 +72,7 @@ func newAutonomyService(t *testing.T, clk Clock) (*CronService, string) {
 // addDueJob inserts an enabled recurring job whose NextRun is in the past.
 func addDueJob(t *testing.T, cs *CronService, owner string) *CronJob {
 	t.Helper()
-	job, err := cs.AddJobFull(JobSpec{Name: "due", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "do it", AgentID: "u6-test-owner"})
+	job, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "due", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "do it", AgentID: "u6-test-owner"})
 	if err != nil {
 		t.Fatalf("AddJob: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestAddJobFull_RefusesOwnerlessJob(t *testing.T) {
 	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	cs, _ := newAutonomyService(t, clk)
 
-	job, err := cs.AddJobFull(JobSpec{Name: "orphan", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "x"})
+	job, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "orphan", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "x"})
 	if err == nil {
 		t.Fatalf("AddJobFull with no AgentID must be refused (DEL-15), got job %+v", job)
 	}
@@ -254,7 +254,7 @@ func TestAddJobFull_RefusesOwnerlessJob(t *testing.T) {
 		t.Fatalf("a refused owner-less job must not be persisted, got %d job(s)", got)
 	}
 	// A whitespace-only owner is owner-less too.
-	if _, err := cs.AddJobFull(JobSpec{Name: "blank", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, AgentID: "  "}); err == nil {
+	if _, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "blank", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, AgentID: "  "}); err == nil {
 		t.Fatal("AddJobFull with a whitespace-only AgentID must be refused (DEL-15)")
 	}
 }

@@ -136,6 +136,7 @@ func TestTaskTriggerRestoreSafety(t *testing.T) {
 		seed.SetClock(clk)
 		for range 2 {
 			_, err := seed.AddJobFull(cron.JobSpec{
+				Kind: cron.KindTask,
 				Name: "task:" + tk.ID, Message: tk.ID, AgentID: tk.AgentID,
 				Schedule: cron.CronSchedule{Kind: "at", AtMS: &due},
 			})

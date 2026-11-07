@@ -159,7 +159,7 @@ func TestReload_DoesNotRestartEngineOrStrandRunning(t *testing.T) {
 	st.runningServices = svc
 	defer func() { release(); cs.Stop(); cs.WaitForLane() }()
 	interval := int64(60000)
-	spec := cron.JobSpec{Name: "reload-held", AgentID: "mia", Message: "held-heartbeat", Schedule: cron.CronSchedule{Kind: "every", EveryMS: &interval}}
+	spec := cron.JobSpec{Kind: cron.KindHeartbeat, Name: "reload-held", AgentID: "mia", Message: "held-heartbeat", Schedule: cron.CronSchedule{Kind: "every", EveryMS: &interval}}
 	// Seed a typed persisted fixture on the pre-T10 engine. Kind-at-creation is
 	// checked independently; it must not prevent exercising the real reload bug.
 	j, err := cs.AddJobFull(spec)

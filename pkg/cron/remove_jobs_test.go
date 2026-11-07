@@ -27,6 +27,7 @@ func TestCronRemoveJobs(t *testing.T) {
 		due := time.Now().Add(48 * time.Hour).UnixMilli()
 		for _, name := range []string{"original", "duplicate", "unrelated"} {
 			_, err := cs.AddJobFull(JobSpec{
+				Kind: KindHeartbeat,
 				Name: name, Message: name, AgentID: "agent-a",
 				Schedule: CronSchedule{Kind: "at", AtMS: &due},
 			})

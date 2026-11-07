@@ -32,7 +32,7 @@ func TestOneTimeJob1484_RunInterruptedByCrash_StaysRunnable(t *testing.T) {
 	clk := newFakeClock(time.Date(2026, 10, 22, 6, 59, 0, 0, time.UTC))
 	cs, path := newAutonomyService(t, clk)
 	due := clk.Now().Add(time.Minute).UnixMilli()
-	job, err := cs.AddJobFull(JobSpec{Name: "routine", Message: "brief", AgentID: "owner",
+	job, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "routine", Message: "brief", AgentID: "owner",
 		Schedule: CronSchedule{Kind: "at", AtMS: &due}})
 	if err != nil {
 		t.Fatalf("AddJobFull: %v", err)
@@ -92,7 +92,7 @@ func TestOneTimeJob1484_MissedWhileDown_StaysSkippedAcrossRestarts(t *testing.T)
 	clk := newFakeClock(time.Date(2026, 10, 23, 6, 0, 0, 0, time.UTC))
 	cs, path := newAutonomyService(t, clk)
 	due := clk.Now().Add(time.Hour).UnixMilli() // 07:00
-	if _, err := cs.AddJobFull(JobSpec{Name: "routine", Message: "brief", AgentID: "owner",
+	if _, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "routine", Message: "brief", AgentID: "owner",
 		Schedule: CronSchedule{Kind: "at", AtMS: &due}}); err != nil {
 		t.Fatalf("AddJobFull: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestOneTimeJob1484_CompletedRunNotRepeatedAfterRestart(t *testing.T) {
 	cs, path := newAutonomyService(t, clk)
 	due := clk.Now().Add(time.Minute).UnixMilli()
 	enabled := true
-	job, err := cs.AddJobFull(JobSpec{Name: "keep", Message: "m", AgentID: "owner", Enabled: &enabled,
+	job, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "keep", Message: "m", AgentID: "owner", Enabled: &enabled,
 		Schedule: CronSchedule{Kind: "at", AtMS: &due}})
 	if err != nil {
 		t.Fatalf("AddJobFull: %v", err)

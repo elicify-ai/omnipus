@@ -23,7 +23,7 @@ import (
 
 // heartbeatJobKind marks a cron job as a workspace-scoped heartbeat (vs. a
 // user schedule). Shared with listSessions so isHeartbeatJob stays consistent.
-const heartbeatJobKind = "heartbeat"
+const heartbeatJobKind = cron.KindHeartbeat
 
 // heartbeatJobNamePrefix namespaces heartbeat jobs so the reconciler can
 // find and own exactly its jobs without colliding with user-created schedules.
@@ -213,7 +213,8 @@ func ReconcileHeartbeatSchedules(
 		}
 		// Create a new heartbeat job.
 		enabled := true
-		created, err := cs.AddJobFull(cron.JobSpec{
+		_, err := cs.AddJobFull(cron.JobSpec{
+			Kind:        heartbeatJobKind,
 			Name:        name,
 			Schedule:    cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
 			Message:     d.message,
@@ -224,15 +225,6 @@ func ReconcileHeartbeatSchedules(
 		if err != nil {
 			recordErr(fmt.Errorf("heartbeat reconcile: add %s: %w", name, err))
 			continue
-		}
-		// AddJobFull stamps Payload.Kind="agent_turn"; re-stamp it as a heartbeat
-		// so isHeartbeatJob recognizes it on the next reconcile by kind, not just
-		// name. The returned job is a copy carrying the assigned ID.
-		if created != nil {
-			created.Payload.Kind = heartbeatJobKind
-			if err := cs.UpdateJob(created); err != nil {
-				recordErr(fmt.Errorf("heartbeat reconcile: stamp kind %s: %w", name, err))
-			}
 		}
 	}
 

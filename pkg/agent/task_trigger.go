@@ -753,6 +753,7 @@ func (s *TaskTriggerScheduler) jobSpecFor(t *task.Task, sched cron.CronSchedule)
 		ownerID = taskTriggerOwnerSentinel
 	}
 	return cron.JobSpec{
+		Kind:     cron.KindTask,
 		Name:     fmt.Sprintf("task:%s", t.ID),
 		Schedule: sched,
 		// Message carries the task ID so RunScheduled can look it up.

@@ -44,7 +44,7 @@ func TestI1CronHotReloadPreservesLiveRunning(t *testing.T) {
 	old.SetStopDrainTimeout(time.Millisecond)
 	require.NoError(t, old.Start())
 	interval := int64(300000)
-	job, err := old.AddJobFull(cron.JobSpec{Name: "live-heartbeat", AgentID: "mia",
+	job, err := old.AddJobFull(cron.JobSpec{Kind: cron.KindHeartbeat, Name: "live-heartbeat", AgentID: "mia",
 		SessionMode: cron.SessionModeContinue, SessionID: "live-heartbeat-session",
 		Schedule: cron.CronSchedule{Kind: "every", EveryMS: &interval}, Message: "live work"})
 	require.NoError(t, err)

@@ -112,7 +112,7 @@ func TestTaskTrigger_BootRestorationPrecedesReconciliation(t *testing.T) {
 	require.NoError(t, store.Create(tk))
 	path := filepath.Join(home, "tasks_triggers", "jobs.json")
 	seed := cron.NewCronService(path)
-	_, err := seed.AddJobFull(cron.JobSpec{Name: "task:" + tk.ID, Message: tk.ID, AgentID: tk.AgentID, Schedule: cron.CronSchedule{Kind: "at", AtMS: &at}})
+	_, err := seed.AddJobFull(cron.JobSpec{Kind: cron.KindTask, Name: "task:" + tk.ID, Message: tk.ID, AgentID: tk.AgentID, Schedule: cron.CronSchedule{Kind: "at", AtMS: &at}})
 	require.NoError(t, err)
 	valid, err := os.ReadFile(path)
 	require.NoError(t, err)

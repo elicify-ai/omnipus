@@ -93,6 +93,7 @@ func newLoopService(t *testing.T, everyMS int64) *CronService {
 	t.Helper()
 	cs := NewCronService(filepath.Join(t.TempDir(), "cron", "jobs.json"))
 	if _, err := cs.AddJobFull(JobSpec{
+		Kind:     KindHeartbeat,
 		Name:     "stop-test",
 		Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(everyMS)},
 		Message:  "m",

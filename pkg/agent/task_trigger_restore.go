@@ -40,7 +40,7 @@ func (s *TaskTriggerScheduler) restoreStoredJobs() error {
 	groups := make(map[string][]cron.CronJob)
 	for _, job := range s.cs.ListJobs(true) {
 		id := job.Payload.Message
-		if id != "" && job.Name == "task:"+id && job.Payload.Kind == "agent_turn" {
+		if id != "" && job.Name == "task:"+id && job.Payload.Kind == cron.KindTask {
 			groups[id] = append(groups[id], job)
 		}
 	}

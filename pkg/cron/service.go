@@ -246,8 +246,12 @@ type CronService struct {
 	// clock is the injected time source (W-5). Defaults to realClock.
 	clock Clock
 
-	// runner is the agent fire path (W-3/runner seam); nil until SetRunner.
+	// runner is the fallback fire path (W-3/runner seam) for a registered
+	// kind with no handler of its own; nil until SetRunner.
 	runner ScheduledRunner
+	// kindHandlers maps a registered kind to its handler (kinds.go,
+	// RegisterKindHandler). Guarded by mu; handlers run outside it (FR-22).
+	kindHandlers map[string]ScheduledRunner
 
 	// Memory-governed dispatch admission (admission.go, T10 FR-07). admitMu
 	// is a leaf lock, never held while mu is taken or a runner executes.
@@ -803,13 +807,20 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	startTime := cs.now().UnixMilli()
 
 	cs.mu.Lock()
-	// Snapshot the runner under the lock we already hold (SetRunner is a one-time
-	// boot wiring, but this keeps the read race-free and avoids a second RLock).
-	runner := cs.runner
+	var runner ScheduledRunner
 	var callbackJob *CronJob
 	for i := range cs.store.Jobs {
 		job := &cs.store.Jobs[i]
 		if job.ID == jobID {
+			// Fail closed on a non-registered kind (FR-02): record the error,
+			// disarm the job, never dispatch it.
+			if !IsRegisteredKind(job.Payload.Kind) {
+				cs.refuseUnregisteredUnsafe(job)
+				cs.mu.Unlock()
+				return
+			}
+			// Snapshot the kind's handler under the lock; it runs outside it.
+			runner = cs.handlerForUnsafe(job.Payload.Kind)
 			// Overlap guard (FR-008): skip if the previous run is still going.
 			// A skipped recurring job must still recompute its next fire so it
 			// is not lost (RunDueJobs cleared NextRunAtMS before dispatch).
@@ -982,6 +993,23 @@ func invokeRun(
 		return runner.RunScheduled(ctx, job)
 	}
 	return "", nil
+}
+
+// refuseUnregisteredUnsafe records a refused dispatch of a job whose kind is
+// not registered and disarms it so it does not fire again (T10 FR-02). Caller
+// holds cs.mu.
+func (cs *CronService) refuseUnregisteredUnsafe(job *CronJob) {
+	err := unregisteredKindError(job.Payload.Kind)
+	slog.Error("cron: refused to dispatch a job of a non-registered kind",
+		"job_id", job.ID, "job", job.Name, "kind", job.Payload.Kind, "error", err)
+	job.Enabled = false
+	job.State.NextRunAtMS = nil
+	job.State.LastStatus = "error"
+	job.State.LastError = err.Error()
+	job.UpdatedAtMS = cs.clockNowUnsafeMS()
+	if saveErr := cs.saveStoreUnsafe(); saveErr != nil {
+		slog.Error("cron failed to save store", "job_id", job.ID, "error", saveErr)
+	}
 }
 
 // clearRunningUnsafe forces Running=false for the job and persists, used as a
@@ -1180,7 +1208,20 @@ func (cs *CronService) loadStore() error {
 		return err
 	}
 
-	return json.Unmarshal(data, cs.store)
+	if err := json.Unmarshal(data, cs.store); err != nil {
+		return err
+	}
+	// Keep only registered kinds; drop everything else once, loudly, and
+	// persist the drop so it is not repeated (T10 FR-14, FR-25).
+	if dropped := cs.dropUnregisteredKindsUnsafe(); dropped > 0 {
+		slog.Warn("cron: dropped stored jobs of non-registered kinds at load",
+			"count", dropped, "store", cs.storePath)
+		if err := cs.saveStoreUnsafe(); err != nil {
+			slog.Error("cron: failed to persist the dropped non-registered jobs; they are dropped again at the next load",
+				"store", cs.storePath, "error", err)
+		}
+	}
+	return nil
 }
 
 func (cs *CronService) saveStoreUnsafe() error {
@@ -1203,6 +1244,9 @@ func (cs *CronService) saveStoreUnsafe() error {
 // the REST handler avoids the two-write create window (AddJob + UpdateJob) that
 // briefly persists a job with an empty owner.
 type JobSpec struct {
+	// Kind is the job's final kind, set in the creating write: one of
+	// KindHeartbeat, KindLoop, KindTask (T10 FR-02). Any other value is refused.
+	Kind        string
 	Name        string
 	Schedule    CronSchedule
 	Message     string
@@ -1228,6 +1272,9 @@ type JobSpec struct {
 // rather than persisted for a later backfill. Returns a caller-owned deep copy
 // of the stored job.
 func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
+	if !IsRegisteredKind(spec.Kind) {
+		return nil, unregisteredKindError(spec.Kind)
+	}
 	if strings.TrimSpace(spec.AgentID) == "" {
 		return nil, errors.New("cron: a job needs an explicit owner (AgentID); owner-less jobs are not created")
 	}
@@ -1256,7 +1303,7 @@ func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 		Enabled:  enabled,
 		Schedule: spec.Schedule,
 		Payload: CronPayload{
-			Kind:    "agent_turn",
+			Kind:    spec.Kind,
 			Message: spec.Message,
 			Command: spec.Command,
 		},

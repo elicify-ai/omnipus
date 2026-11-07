@@ -18,7 +18,7 @@ import (
 func t10ReloadHeartbeat(t *testing.T, cs *cron.CronService) *cron.CronJob {
 	t.Helper()
 	every := int64(3600000)
-	j, err := cs.AddJobFull(cron.JobSpec{Name: "T10 reload heartbeat", AgentID: "mia", Message: "retry", Schedule: cron.CronSchedule{Kind: "every", EveryMS: &every}})
+	j, err := cs.AddJobFull(cron.JobSpec{Kind: cron.KindHeartbeat, Name: "T10 reload heartbeat", AgentID: "mia", Message: "retry", Schedule: cron.CronSchedule{Kind: "every", EveryMS: &every}})
 	require.NoError(t, err)
 	j.Payload.Kind = "heartbeat"
 	require.NoError(t, cs.UpdateJob(j))

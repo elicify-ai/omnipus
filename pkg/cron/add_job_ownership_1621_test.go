@@ -18,6 +18,7 @@ func TestCronService_AddJobFullReturnsCallerOwnedJob(t *testing.T) {
 		// specified one-minute interval/at-time after the fixed fixture clock.
 		want.State = CronJobState{NextRunAtMS: int64Ptr(want.UpdatedAtMS + 60_000)}
 		spec := JobSpec{
+			Kind: KindHeartbeat,
 			Name: want.Name, Message: want.Payload.Message, Command: want.Payload.Command,
 			AgentID: want.AgentID, SessionMode: want.SessionMode, RunIsolated: want.RunIsolated,
 			CreatedBy: want.CreatedBy, SessionID: want.SessionID,

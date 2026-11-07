@@ -67,7 +67,7 @@ func TestI1CronSkipWarnCarriesJobID(t *testing.T) {
 				owner, message = "mia", "cron job skipped: previous run still in progress"
 			}
 			interval := int64(60000)
-			job, err := cs.AddJobFull(JobSpec{Name: "diagnostic-skip", AgentID: owner,
+			job, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "diagnostic-skip", AgentID: owner,
 				Schedule: CronSchedule{Kind: "every", EveryMS: &interval}})
 			require.NoError(t, err)
 			if reason == "owner-missing" {
@@ -102,7 +102,7 @@ func TestI1CronPersistFailureErrorCarriesJobID(t *testing.T) {
 			cs := NewCronService(path)
 			cs.SetRunner(&recordingRunner{})
 			interval := int64(60000)
-			job, err := cs.AddJobFull(JobSpec{Name: "diagnostic-write", AgentID: "mia",
+			job, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "diagnostic-write", AgentID: "mia",
 				Schedule: CronSchedule{Kind: "every", EveryMS: &interval}})
 			require.NoError(t, err)
 			// A directory at the file target is a real atomic-write refusal on

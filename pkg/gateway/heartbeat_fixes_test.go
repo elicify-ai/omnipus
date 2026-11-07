@@ -476,6 +476,7 @@ func TestWorkspaceDelete_Cascade(t *testing.T) {
 	enabled := true
 	cronJobName := heartbeatJobName(wsID, agentID)
 	_, err = cs.AddJobFull(cron.JobSpec{
+		Kind:     cron.KindHeartbeat,
 		Name:     cronJobName,
 		Schedule: cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
 		Message:  "Check.",
@@ -618,6 +619,7 @@ func TestBoot_NoLegacyHeartbeatJobs(t *testing.T) {
 	everyMS := int64(10) * 60_000
 	enabled := true
 	_, err := cs.AddJobFull(cron.JobSpec{
+		Kind:     cron.KindHeartbeat,
 		Name:     "heartbeat:mia", // legacy key — no workspace segment
 		Schedule: cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
 		Message:  "legacy heartbeat",
@@ -791,6 +793,7 @@ func TestWorkspacePUT_CoreTeamShrinkReleasesHeartbeat(t *testing.T) {
 	enabled := true
 	cronJobName := heartbeatJobName(wsID, agentA)
 	_, err = cs.AddJobFull(cron.JobSpec{
+		Kind:     cron.KindHeartbeat,
 		Name:     cronJobName,
 		Schedule: cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
 		Message:  "Check.",

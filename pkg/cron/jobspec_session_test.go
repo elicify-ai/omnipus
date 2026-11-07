@@ -29,6 +29,7 @@ func TestJobSpec_SessionID_RoundTrips(t *testing.T) {
 
 	everyMS := int64(300000) // 5 min
 	spec := JobSpec{
+		Kind: KindHeartbeat,
 		Name: "heartbeat:ws-alpha:mia",
 		Schedule: CronSchedule{
 			Kind:    "every",
@@ -68,6 +69,7 @@ func TestJobSpec_SessionID_EmptyOK(t *testing.T) {
 
 	everyMS := int64(300000)
 	spec := JobSpec{
+		Kind:        KindHeartbeat,
 		Name:        "normal-job",
 		Schedule:    CronSchedule{Kind: "every", EveryMS: &everyMS},
 		Message:     "tick",

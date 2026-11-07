@@ -18,7 +18,7 @@ func TestI1CronBulkPersistFailureErrorCarriesJobIDs(t *testing.T) {
 			cs.SetRunner(&recordingRunner{})
 			owner := "mia"
 			interval := int64(60000)
-			job, err := cs.AddJobFull(JobSpec{Name: "diagnostic-bulk", AgentID: owner,
+			job, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "diagnostic-bulk", AgentID: owner,
 				Schedule: CronSchedule{Kind: "every", EveryMS: &interval}})
 			require.NoError(t, err)
 			require.NoError(t, cs.startNoLoop())

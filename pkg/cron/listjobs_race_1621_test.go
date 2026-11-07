@@ -23,6 +23,7 @@ func TestCronService_ListJobsConcurrentWithExecution(t *testing.T) {
 
 	const intervalMS = int64(1000) // A one-second recurring fixture; no real timer runs.
 	job, err := cs.AddJobFull(JobSpec{
+		Kind: KindHeartbeat,
 		Name: "ListJobs concurrent reader",
 		Schedule: CronSchedule{
 			Kind: "every", EveryMS: int64Ptr(intervalMS),
@@ -37,7 +38,7 @@ func TestCronService_ListJobsConcurrentWithExecution(t *testing.T) {
 	require.NoError(t, cs.UpdateJob(job))
 	jobID := job.ID
 	wantPayload := CronPayload{
-		Kind: "agent_turn", Message: "read every returned job field", Command: "fixture-command",
+		Kind: KindHeartbeat, Message: "read every returned job field", Command: "fixture-command",
 	}
 
 	type readResult struct {

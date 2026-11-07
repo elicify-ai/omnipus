@@ -23,7 +23,7 @@ func listJobsStoredFixture() CronJob {
 			Kind: "every", EveryMS: int64Ptr(60_000), TZ: "UTC",
 		},
 		Payload: CronPayload{
-			Kind: "agent_turn", Message: "original message", Command: "original-command",
+			Kind: KindHeartbeat, Message: "original message", Command: "original-command",
 		},
 		State: CronJobState{
 			NextRunAtMS: int64Ptr(base + 60_000), LastRunAtMS: int64Ptr(base - 60_000),

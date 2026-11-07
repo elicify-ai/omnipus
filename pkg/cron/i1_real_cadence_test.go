@@ -16,7 +16,7 @@ import (
 func TestI1RealCronLoopRunsTwoConsecutiveTicks(t *testing.T) {
 	cs := NewCronService(filepath.Join(t.TempDir(), "jobs.json"))
 	interval := int64(30) // tiny engine interval, not the product heartbeat minimum
-	job, err := cs.AddJobFull(JobSpec{Name: "healthy-heartbeat", AgentID: "mia",
+	job, err := cs.AddJobFull(JobSpec{Kind: KindHeartbeat, Name: "healthy-heartbeat", AgentID: "mia",
 		SessionMode: SessionModeContinue, SessionID: "same-heartbeat-session",
 		Schedule: CronSchedule{Kind: "every", EveryMS: &interval}, Message: "tick"})
 	require.NoError(t, err)

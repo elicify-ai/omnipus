@@ -89,7 +89,7 @@ func TestT10_LoopRecoveryPreservesForeignKindsByteForByte(t *testing.T) {
 	var foreign []cron.CronJob
 	for _, kind := range []string{"heartbeat", "task"} {
 		at := f.clk.Now().Add(2 * time.Hour).UnixMilli()
-		j, err := f.ls.cs.AddJobFull(cron.JobSpec{Name: "loop:" + f.sid, AgentID: "native-agent", Message: f.sid, Schedule: cron.CronSchedule{Kind: "at", AtMS: &at}})
+		j, err := f.ls.cs.AddJobFull(cron.JobSpec{Kind: kind, Name: "loop:" + f.sid, AgentID: "native-agent", Message: f.sid, Schedule: cron.CronSchedule{Kind: "at", AtMS: &at}})
 		require.NoError(t, err)
 		j.Payload.Kind = kind
 		j.State.LastError = "foreign-history-" + kind

@@ -166,6 +166,7 @@ func TestRunner_SessionMode_Continue_ThroughLane(t *testing.T) {
 	defer cs.Stop()
 
 	job, err := cs.AddJobFull(cron.JobSpec{
+		Kind:        cron.KindHeartbeat,
 		Name:        "standup",
 		Schedule:    cron.CronSchedule{Kind: "every", EveryMS: i64Ptr(60000)},
 		Message:     "standup",

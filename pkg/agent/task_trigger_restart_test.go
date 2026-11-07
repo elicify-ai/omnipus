@@ -100,6 +100,7 @@ func TestTaskTriggerRestart(t *testing.T) {
 		var removed []string
 		for i := 0; i < 3; i++ {
 			job, err := engine.AddJobFull(cron.JobSpec{
+				Kind: cron.KindTask,
 				Name: "task:" + tk.ID, Message: tk.ID, AgentID: tk.AgentID,
 				Schedule: cron.CronSchedule{Kind: "at", AtMS: &due},
 			})

@@ -95,7 +95,7 @@ func TestRoomsFix4_PartialRoomSyncStillReleasesHeartbeat(t *testing.T) {
 	require.Empty(t, heartbeatJobsFor(cs), "a successful no-op retry must not leave a removed member scheduled")
 	// Normal user schedules are independent and remain intact.
 	every := int64(60_000)
-	userJob, err := cs.AddJobFull(cron.JobSpec{Name: "independent-user-job", Schedule: cron.CronSchedule{Kind: "every", EveryMS: &every}, Message: "User task", AgentID: "mia"})
+	userJob, err := cs.AddJobFull(cron.JobSpec{Kind: cron.KindTask, Name: "independent-user-job", Schedule: cron.CronSchedule{Kind: "every", EveryMS: &every}, Message: "User task", AgentID: "mia"})
 	require.NoError(t, err)
 	require.NotNil(t, userJob)
 	response = putWorkspaceBody(t, api, wsID, `{"core_team":["mia"]}`)

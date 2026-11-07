@@ -175,6 +175,7 @@ func TestReconcileHeartbeat_LeavesUserSchedulesAlone(t *testing.T) {
 	everyMS := int64(60_000)
 	en := true
 	_, err := cs.AddJobFull(cron.JobSpec{
+		Kind:     cron.KindTask,
 		Name:     "my-daily-digest",
 		Schedule: cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
 		Message:  "digest",

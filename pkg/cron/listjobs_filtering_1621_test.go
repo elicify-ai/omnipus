@@ -18,7 +18,7 @@ func TestCronService_ListJobsPreservesStoredFieldsAndFiltering(t *testing.T) {
 	enabledOnce := CronJob{
 		ID: "enabled-once", Name: "stored one-time job", Enabled: true,
 		Schedule: CronSchedule{Kind: "at", AtMS: int64Ptr(2_000_000_000_000)},
-		Payload:  CronPayload{Kind: "agent_turn", Message: "one-time message"},
+		Payload:  CronPayload{Kind: KindHeartbeat, Message: "one-time message"},
 		State: CronJobState{
 			NextRunAtMS: int64Ptr(2_000_000_000_000), Running: true,
 		},
@@ -40,7 +40,7 @@ func TestCronService_ListJobsPreservesStoredFieldsAndFiltering(t *testing.T) {
 	disabledCron := CronJob{
 		ID: "disabled-cron", Name: "disabled cron job", Enabled: false,
 		Schedule: CronSchedule{Kind: "cron", Expr: "15 9 * * 1", TZ: "Europe/Warsaw"},
-		Payload:  CronPayload{Kind: "agent_turn", Message: "disabled message", Command: "disabled-command"},
+		Payload:  CronPayload{Kind: KindHeartbeat, Message: "disabled message", Command: "disabled-command"},
 		State: CronJobState{
 			LastRunAtMS: int64Ptr(1_700_000_000_000), LastStatus: "ok",
 		},

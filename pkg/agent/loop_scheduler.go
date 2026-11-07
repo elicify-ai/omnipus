@@ -31,7 +31,7 @@ import (
 
 // loopJobKind marks a cron job as belonging to /loop (mirrors
 // heartbeatJobKind's convention, pkg/gateway/heartbeat_schedule.go).
-const loopJobKind = "loop"
+const loopJobKind = cron.KindLoop
 
 // firstSelfPacedRunDelayMS is the delay used for a self-paced loop's very
 // first run. It is NOT zero: cron.CronService.computeNextRun's "at" branch
@@ -113,6 +113,7 @@ func (s *LoopScheduler) ListEnabledJobs() []cron.CronJob {
 func (s *LoopScheduler) AddInterval(ownerAgentID, sessionID string, everyMS int64) (string, error) {
 	everyCopy := everyMS
 	job, err := s.cs.AddJobFull(cron.JobSpec{
+		Kind:        loopJobKind,
 		Name:        loopJobName(sessionID),
 		Schedule:    cron.CronSchedule{Kind: "every", EveryMS: &everyCopy},
 		Message:     sessionID, // payload carries the session id; RunScheduled reads loop state from session meta
@@ -121,10 +122,6 @@ func (s *LoopScheduler) AddInterval(ownerAgentID, sessionID string, everyMS int6
 	})
 	if err != nil {
 		return "", fmt.Errorf("loop_scheduler: add interval job: %w", err)
-	}
-	job.Payload.Kind = loopJobKind
-	if uerr := s.cs.UpdateJob(job); uerr != nil {
-		return "", fmt.Errorf("loop_scheduler: stamp interval job kind: %w", uerr)
 	}
 	return job.ID, nil
 }
@@ -141,6 +138,7 @@ func (s *LoopScheduler) AddInterval(ownerAgentID, sessionID string, everyMS int6
 func (s *LoopScheduler) AddOneShot(ownerAgentID, sessionID string, delayMS int64) (string, error) {
 	at := s.cs.Now().UnixMilli() + delayMS
 	job, err := s.cs.AddJobFull(cron.JobSpec{
+		Kind:        loopJobKind,
 		Name:        loopJobName(sessionID),
 		Schedule:    cron.CronSchedule{Kind: "at", AtMS: &at},
 		Message:     sessionID,
@@ -149,10 +147,6 @@ func (s *LoopScheduler) AddOneShot(ownerAgentID, sessionID string, delayMS int64
 	})
 	if err != nil {
 		return "", fmt.Errorf("loop_scheduler: add one-shot job: %w", err)
-	}
-	job.Payload.Kind = loopJobKind
-	if uerr := s.cs.UpdateJob(job); uerr != nil {
-		return "", fmt.Errorf("loop_scheduler: stamp one-shot job kind: %w", uerr)
 	}
 	return job.ID, nil
 }
