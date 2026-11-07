@@ -46,19 +46,19 @@ Saved "next run" times and "still running" flags from the previous process are h
 | What was saved | What startup does |
 |---|---|
 | A self-paced loop whose next check is still in the future | That one step is kept. |
-| A self-paced loop whose next check is already overdue, or whose step is missing | One fresh step, scheduled for startup plus the delay the loop last saved. If no positive delay was saved, that delay is about one second (the same delay a new self-paced loop uses for its first run). Missed checks are not replayed. After that step runs, the agent chooses the next delay as usual, so the chain continues. |
+| A self-paced loop whose next check is already overdue, or whose step is missing | One new step, scheduled for startup plus the delay the loop last saved. If no positive delay was saved, that delay is about one second (the same delay a new self-paced loop uses for its first run). Missed checks are not replayed. After that step runs, the agent chooses the next delay as usual, so the chain continues. |
 | An interval loop that still has its repeating job | That job is kept. Startup sets its next time to one interval after the gateway starts, so a check that was due while Omnipus was down is not replayed. |
 | An interval loop whose job is missing | One fresh repeating job at the saved interval. Its first run is one interval after startup. |
 | A loop that has already reached its run limit | Stopped. Nothing is armed. |
-| A saved loop with no usable owner, mode or interval | Stopped. |
+| No existing step can be kept, and the saved state (owner, mode, interval) cannot create one | Stopped. Keeping an existing step is separate from checking whether its owner can still run it. |
 | Loop jobs whose chat no longer has loop state | Removed. They do not run. |
 
-An active loop from an older install, whose job lived in a separate file, continues the same way: that file is not read, and startup arms exactly one fresh step from the chat's saved loop state.
+An active loop from an older install, whose job lived in a separate file, continues the same way: that file is not read, and startup rebuilds one next step from the chat's saved loop state.
 
 ## Replacing or stopping a loop
 
-Starting another loop in the same chat, or `/loop stop`, removes every loop step for that chat. A step that had already started cannot change the replacement: it does not add to the run count, does not apply the run limit, and does not schedule a competing next step.
+Starting another loop in the same chat, or `/loop stop`, is meant to leave only the selected next step. **Pending a production fix:** in the current build, a turn that finishes at the same moment can leave a competing step, and if saving the stopped state fails, the command can still say "Loop stopped." while the saved loop stays active and may restart at the next boot. Do not rely on Stop or replacement being instant and permanent until that fix is verified.
 
 ## If recovery cannot be saved
 
-Startup must record which step is next, or record that a finished loop stopped. If that write fails, the gateway does not finish starting. The error names the chat (`error recovering /loop schedules`). No heartbeat, loop or scheduled task fires in that process. The next start tries again from what is still saved on disk. Nothing is marked stopped unless that stopped state was actually saved.
+During startup recovery, the gateway must record which step is next, or record that a finished loop stopped. If that write fails, the gateway does not finish starting. The error names the chat (`error recovering /loop schedules`). No heartbeat, loop or scheduled task fires in that process. The next start tries again from what is still saved on disk. During startup recovery, nothing is marked stopped unless that stopped state was actually saved.
