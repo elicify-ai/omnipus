@@ -120,6 +120,7 @@ func effortPagingAssertIncremental(t *testing.T, f *effortProductionTurn, live .
 	hub := f.handler.hubs.getOrCreate(f.sid)
 	hub.mu.Lock()
 	journal := append([]journalEntry(nil), hub.journal...)
+	head := hub.head
 	hub.mu.Unlock()
 	want := map[string][]byte{}
 	for _, entry := range journal {
@@ -132,7 +133,20 @@ func effortPagingAssertIncremental(t *testing.T, f *effortProductionTurn, live .
 	wc := makeTestConn()
 	wc.sendCh = make(chan []byte, 1024)
 	t.Cleanup(wc.close)
-	seq, boot := int64(0), f.handler.hubs.bootID
+	// Journal seqs are issued from the process-wide registry counter
+	// (ws_session_hub.go::getOrCreate), so this chat's retained numbering does
+	// not start at 1 and a cursor below the retained start is correctly
+	// answered "retention_exceeded" with a full snapshot (ws_session_hub.go::
+	// bind). Take the reconnect position from the chat's real starting number:
+	// journal[0].seq-1, the largest cursor whose incremental tail is still the
+	// whole retained journal ("seq > since_seq").
+	var seq int64
+	if len(journal) > 0 {
+		seq = int64(journal[0].seq) - 1
+	} else {
+		seq = int64(head) // empty journal: only the head itself is servable
+	}
+	boot := f.handler.hubs.bootID
 	f.handler.handleAttachSessionWithAck(context.Background(), "effort-paging-incremental", f.sid, &attachCursor{SinceSeq: &seq, BootID: &boot}, nil, wc)
 	got := map[string]map[string]any{}
 	incremental := false
@@ -252,8 +266,17 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 	answers := map[string]map[string]any{}
 	realTool := false
 	for _, entry := range entries {
-		if entry.Role == "tool" && strings.Contains(entry.Content, "REAL-PAGING-TOOL-7731") {
-			realTool = true
+		// The admitted tool result is persisted on the tool_call entry itself:
+		// ToolCalls[].Result["text"] carries the exact admitted text (prompt
+		// guard fence included). A transcript row never carries Role "tool" —
+		// that role exists only as a provider message (tool_result_admit.go's
+		// choke point), so the released scan shape could never match.
+		for _, tc := range entry.ToolCalls {
+			if tc.Tool == "read_file" && tc.Status == "success" {
+				if text, ok := tc.Result["text"].(string); ok && strings.Contains(text, "REAL-PAGING-TOOL-7731") {
+					realTool = true
+				}
+			}
 		}
 		if entry.Content == "ANSWER-T1" || entry.Content == "ANSWER-T2" || entry.Content == "ANSWER-T3" {
 			answers[entry.ID] = effortPublicJSON(t, entry)
@@ -317,6 +340,11 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, f.al.GetSessionLifecycleStore().Persist(&session.LifecycleRecord{SessionID: meta.ID, Generation: 1, State: session.LifecycleRunning, Origin: &session.Origin{Kind: session.OriginKindChat}, AgentID: "mia", WorkspaceID: testHarnessWorkspaceMembershipID, OwnerScopeKind: session.OwnerScopeHuman}))
 	f.sid = meta.ID
+	// The live done for this session reaches a conn bound to ITS hub. A
+	// sending conn already bound elsewhere keeps that binding by contract
+	// (websocket_chat.go's intake bind), so the harness conn — bound to the
+	// first session at setup — is rebound here, exactly as the setup bound it.
+	bindTestConnToSession(f.handler, "effort-production", meta.ID, f.wc)
 	f.turn(t, "PAGE-T1", "")
 	second, err := f.al.GetSessionStore().ReadTranscript(f.sid)
 	require.NoError(t, err)
