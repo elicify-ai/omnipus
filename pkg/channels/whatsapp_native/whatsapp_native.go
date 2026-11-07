@@ -69,8 +69,11 @@ type WhatsAppNativeChannel struct {
 	runCancel    context.CancelFunc
 	reconnectMu  sync.Mutex
 	reconnecting bool
-	stopping     atomic.Bool    // set once Stop begins; prevents new wg.Add calls
-	wg           sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
+	// keepAliveFailedSince is the LastSuccess of the keepalive failure that last
+	// claimed a reconnect, guarded by reconnectMu (native_keepalive.go).
+	keepAliveFailedSince time.Time
+	stopping             atomic.Bool    // set once Stop begins; prevents new wg.Add calls
+	wg                   sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
 
 	// connectsInFlight counts connectNative calls inside client.ConnectContext;
 	// nativeStopMark names the run context a stop has begun for. They pair
@@ -425,7 +428,8 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) (startErr error) {
 	client := whatsmeow.NewClient(deviceStore, waLogger)
 	// reconnectWithBackoff is the single owner of reconnecting (#1687): the
 	// library's own auto-reconnect would dial a second time after a remote drop
-	// and could race a stop. events.Disconnected is still emitted without it.
+	// and could race a stop. events.Disconnected is still emitted without it;
+	// the keepalive case is ours too (native_keepalive.go).
 	client.EnableAutoReconnect = false
 	c.mu.Lock()
 	resource.client, resource.container = client, container
@@ -659,6 +663,8 @@ func (c *WhatsAppNativeChannel) eventHandler(evt any) {
 			defer c.wg.Done()
 			c.reconnectWithBackoff()
 		}()
+	case *events.KeepAliveTimeout:
+		c.handleKeepAliveTimeout(ev)
 	}
 }
 
