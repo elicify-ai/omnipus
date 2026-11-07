@@ -1149,6 +1149,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // S-57 / U20: a committed model/effort save that fails shows the server's
   // previous model and effort again and puts focus on the effort chip; the
   // footer keeps the save error. A successful save drops the captured pair.
+  // The focus timer is cleared only on unmount: a saveStatus change in the
+  // same tick must not cancel the focus move.
+  const revertFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (revertFocusTimerRef.current !== null) clearTimeout(revertFocusTimerRef.current)
+  }, [])
   useEffect(() => {
     const acknowledged = primaryAcknowledgedRef.current
     if (!acknowledged) return
@@ -1160,8 +1166,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setReasoningEffort(acknowledged.effort)
     setPrimaryEffortNote(null)
     // The next tick lets a closing popover finish its own focus return first.
-    const timer = setTimeout(() => primaryChipRef.current?.focus(), 0)
-    return () => clearTimeout(timer)
+    if (revertFocusTimerRef.current !== null) clearTimeout(revertFocusTimerRef.current)
+    revertFocusTimerRef.current = setTimeout(() => {
+      revertFocusTimerRef.current = null
+      primaryChipRef.current?.focus()
+    }, 0)
   }, [saveStatus])
 
   // Item 1 (MERGE-BLOCKER — sheet-close data loss): AgentProfile is mounted

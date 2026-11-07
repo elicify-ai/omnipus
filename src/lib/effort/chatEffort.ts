@@ -39,9 +39,6 @@ export function effortRecordNote(record: EffortRecord | undefined): string | nul
       return record.sent ? effortTurnNote('mapped', model, record.chosen, record.sent) : effortTurnNote('empty_candidate', model, record.chosen)
     case 'not_supported':
       return effortTurnNote('not_supported', model, record.chosen)
-    case 'provider_default':
-      // The serving model reasons but has nothing Omnipus can send (mapping table, nothing-sendable column).
-      return effortTurnNote('nothing_sendable', model, record.chosen)
     case 'continuation':
       return `Effort not sent: ${model} was continuing a tool call without its own reasoning.`
     case 'rejected':
@@ -51,6 +48,10 @@ export function effortRecordNote(record: EffortRecord | undefined): string | nul
     case 'extra_body':
       return `Your config's extra_body sent reasoning_effort=${record.sent ?? ''} instead.`
   }
+  // The contract's `provider_default` reason is never written: a Provider
+  // default choice is stored without a reason (pkg/agent/effort_request.go::record),
+  // and a model with nothing sendable is recorded as `not_supported`. No note.
+  return null
 }
 
 /** "Effort: High" — what the request carried; null when the turn has no effort record. */
