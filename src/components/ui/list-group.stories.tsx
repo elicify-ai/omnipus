@@ -19,7 +19,14 @@ const meta = {
     designSystem: {
       keyboard: [{ trigger: '[data-testid="list-group"] [aria-controls]', key: 'Enter', expectExpanded: true }],
       pointerTargets: ['[data-testid="list-group"] [aria-controls]'],
-      forcedColors: { focus: ['[data-testid="list-group"] [aria-controls]'], states: [{ selector: '[data-testid="list-group"] [aria-controls]', attribute: 'aria-expanded', value: 'false' }] },
+      forcedColors: {
+        // The rendered-component target the forced-colors check resolves
+        // (boundaries[0] or differences[0]): the toggle's text must stay
+        // distinct from its own background, as DisclosureRow declares.
+        differences: [{ cue: 'foreground', selector: '[data-testid="list-group"] [aria-controls]', property: 'color', againstSelector: '[data-testid="list-group"] [aria-controls]', againstProperty: 'backgroundColor' }],
+        focus: ['[data-testid="list-group"] [aria-controls]'],
+        states: [{ selector: '[data-testid="list-group"] [aria-controls]', attribute: 'aria-expanded', value: 'false' }],
+      },
       reflowExemptions: [],
       browserAssertions: [{ selector: '[data-testid="list-group"] [aria-controls]', attribute: 'aria-expanded', value: 'false' }],
     },
