@@ -34,7 +34,7 @@ GREEN, scratch-clone mutation checks, proof-of-failability checklist completion 
 
 ## Round 6 — chip strings, founder decision 2026-11-07
 
-The visible chip is the level actually used, or "Nothing sent". The longer sentence is the accessible name. Dashed outline means inherited (`data-effort-inherited`); the amber dot (`data-effort-mark=attention`) means a different level was sent, or nothing was sent; the gold dot (`data-effort-mark=command`) means `/effort`. C5 (XHigh versus "Extra high") is unchanged: it is still an open question.
+The visible chip is the level actually used, or "Nothing sent". The control itself is named "Effort" (its `aria-label`); the longer sentence is its tooltip and accessible description (`aria-describedby`), not its name. Dashed outline means inherited (`data-effort-inherited`); the amber dot (`data-effort-mark=attention`) means a different level was sent, or nothing was sent; the gold dot (`data-effort-mark=command`) means `/effort`. C5 (XHigh versus "Extra high") is unchanged: it is still an open question.
 
 | Place | What the test or spec now requires |
 |---|---|
@@ -44,7 +44,7 @@ The visible chip is the level actually used, or "Nothing sent". The longer sente
 | Same file, CHECK6 F5 | `getByRole('dialog', { name: 'Effort · {model}' })` for the ordinary popover and `getByRole('dialog', { name: 'Finish switching to {model}' })` for the blocked step. |
 | Spec of record `effort-levels-spec-r10.md` | S-12, S-41, S-72, S-87, the composer state row, the journey, the stale-level row, and the plain-copy line now say the same. |
 
-C4 keeps one sentence, "Omnipus can't change effort for this model.", as the muted chip's text and its accessible name.
+C4 keeps one sentence, "Omnipus can't change effort for this model.", as the muted chip's text; the control is still named "Effort" and the sentence is its tooltip and accessible description (`aria-describedby`), not its name.
 
 ## Round-4 test reconciliation — author observations, not independent CHECK
 
@@ -281,7 +281,7 @@ Each active scenario has an explicit row. A named failing test is not a claim th
 | S-46 | P-K `TestT_K1_S46_VendoredCatalogCarriesReasoning` | RED: actual vendored data checked, not assigned away. |
 | S-47 | Deleted scenario | N/A tombstone. |
 | S-48 | A-S `TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice`; A-O exact oracle; A-M stale rows | RED: actual refreshed request/record and byte-preserved choice; High requires exact nested OpenRouter encoding and no foreign carriers. |
-| S-49 | A-S same actual refresh workflow; A-O exact oracle; A-M stale rows | RED: Max remains stored while request/record must map to exact nested High; flat/contradictory encodings cannot satisfy the oracle. |
+| S-49 | A-S same actual refresh workflow; A-O exact oracle; A-M stale rows | RED: Max remains stored while the chip shows High (the sent value, amber dot) and request/record must map to exact nested High; flat/contradictory encodings cannot satisfy the oracle. |
 | S-50 | G `TestT_GW_AgentPrimaryEffortSavedAndReadBack`; C codecs | RED: strict shape still refuses new effort; exact GET/disk/reopen checks coded. |
 | S-51 | A-R `TestT_S2_S51_DefaultModelEffortUsed`; A-O exact oracle | RED: explicit Medium default and a genuinely default-riding agent; exact `reasoning:{effort:medium}`, foreign carriers forbidden. |
 | S-52 | A-R `TestT_S2_S52_UnsetFallbackSendsNothing` | PIN: actual fallback carries no primary/conversation effort; not a positive-effort implementation claim. |
