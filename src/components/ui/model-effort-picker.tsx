@@ -128,7 +128,10 @@ function inheritedText(
   if (mapping.blocked) return { text: `${base}, nothing sent here`, differs: true, used: null }
   const same =
     mapping.value === inherited || ((mapping.value === 'none' || mapping.value === 'off') && (inherited === 'off' || inherited === 'none'))
-  if (same || mapping.value === NOT_SET || mapping.value === PROVIDER_DEFAULT) return { text: base, differs: false, used: inherited }
+  if (same) return { text: base, differs: false, used: inherited }
+  // A level the model can't take maps to Provider default (no effort field,
+  // D2): say so; never show the inherited level as if it were sent.
+  if (mapping.value === NOT_SET || mapping.value === PROVIDER_DEFAULT) return { text: `${base}, nothing sent here`, differs: true, used: null }
   return { text: `${base}, sent as ${effortLabel(mapping.value)} here`, differs: true, used: mapping.value }
 }
 
@@ -191,7 +194,7 @@ function TopRowContent({ item, checked }: { item: EffortItem; checked: boolean }
           checked ? 'border-[var(--color-accent)] bg-[var(--color-accent)]' : 'border-[var(--color-muted)]',
         )}
       />
-      <span>{name}</span>
+      <span className="whitespace-nowrap">{name}</span>
       {sub !== null ? (
         <>
           <span className="sr-only">:</span>{' '}
@@ -240,7 +243,7 @@ function EffortRadioList({ items, checked, onCommit, disabled, ariaLabel, neares
           onCommit(item.value)
         }}
         aria-describedby={isNearest ? nearestId : undefined}
-        className={top ? 'basis-full justify-start gap-[var(--space-2)] whitespace-normal p-[var(--space-2)] text-left' : 'w-auto min-w-0 flex-1 basis-0 flex-col whitespace-normal justify-center gap-[var(--space-0-5)] px-[var(--space-1)] py-[var(--space-2)] text-center'}
+        className={top ? 'basis-full justify-start gap-[var(--space-2)] whitespace-normal p-[var(--space-2)] text-left' : 'w-auto min-w-0 pointer-coarse:min-w-[var(--target-touch-minimum)] flex-1 basis-0 flex-col whitespace-normal justify-center gap-[var(--space-0-5)] px-[var(--space-1)] py-[var(--space-2)] text-center'}
       >
         {top ? <TopRowContent item={item} checked={selected === item.value} /> : <EffortBars value={item.value} />}
         {!top && item.label}
@@ -451,11 +454,22 @@ function describeChip(props: EffortControlProps, row: ServedRow, items: EffortIt
   }
 }
 
+/** The chip's leading mark: amber dot (attention), gold dot (set by `/effort`), else the level's bars. */
+function ChipLead({ chip, setByCommand }: { chip: ChipDescription; setByCommand: boolean }) {
+  if (chip.amber) {
+    return <span aria-hidden="true" data-effort-mark="attention" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-warning)]" />
+  }
+  if (setByCommand) {
+    return <span aria-hidden="true" data-effort-mark="command" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-accent)]" />
+  }
+  return chip.bars === undefined ? null : <EffortBars value={chip.bars} />
+}
+
 /** The popover's title "Effort · {model}", then the help line, or the stale-level warning instead of it. */
-function PopoverHeader({ model, staleReason }: { model: string; staleReason?: string }) {
+function PopoverHeader({ id, model, staleReason }: { id: string; model: string; staleReason?: string }) {
   return (
     <div>
-      <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">
+      <p id={id} className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">
         Effort <span className="text-[var(--color-muted)]">· {model}</span>
       </p>
       {staleReason === undefined ? (
@@ -487,6 +501,7 @@ export function EffortControl(props: EffortControlProps) {
   const contentRef = useRef<HTMLDivElement>(null)
   const descriptionId = useId()
   const hintId = useId()
+  const titleId = useId()
   const row = findServedRow(catalog, props.value.provider, props.value.model)
   const name = props.contextName ?? 'Effort'
   const popoverOpen = open || pendingSwitch !== null
@@ -646,13 +661,7 @@ export function EffortControl(props: EffortControlProps) {
                 Effort
               </span>
             )}
-            {chip.amber && (
-              <span aria-hidden="true" data-effort-mark="attention" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-warning)]" />
-            )}
-            {props.setByCommand && !chip.amber && (
-              <span aria-hidden="true" data-effort-mark="command" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-accent)]" />
-            )}
-            {!chip.amber && !props.setByCommand && chip.bars !== undefined && <EffortBars value={chip.bars} />}
+            <ChipLead chip={chip} setByCommand={props.setByCommand === true} />
             {chip.text}
             {field && <CaretDown size={12} aria-hidden="true" className="shrink-0" />}
           </Button>
@@ -660,6 +669,8 @@ export function EffortControl(props: EffortControlProps) {
         <PopoverContent
           ref={contentRef}
           align="start"
+          aria-labelledby={pendingSwitch ? undefined : titleId}
+          aria-label={pendingSwitch ? `Finish switching to ${pendingSwitch.model}` : undefined}
           className="w-72"
           onFocusOutside={(event) => {
             // The model list closing hands focus back to its own button; that
@@ -693,7 +704,7 @@ export function EffortControl(props: EffortControlProps) {
             />
           ) : (
             <div className="space-y-[var(--space-2)]">
-              <PopoverHeader model={props.value.model} staleReason={chip.staleReason} />
+              <PopoverHeader id={titleId} model={props.value.model} staleReason={chip.staleReason} />
               <PickerBody {...props} catalogStatus={status} row={row} onRetry={retry} onCommit={commit} />
             </div>
           )}
@@ -756,8 +767,8 @@ function BlockedStep({ pending, previousModel, catalogRow, onCommit, onCancel }:
       </p>
       <p className={BLOCKED_HELP}>{stay}</p>
       <EffortRadioList items={items} checked={undefined} onCommit={onCommit} ariaLabel={`Effort for ${pending.model}`} nearest={pending.nearest} />
-      <div className="flex items-center justify-between gap-[var(--space-2)]">
-        <Button type="button" variant="link" size="sm" onClick={() => onCommit(PROVIDER_DEFAULT)}>
+      <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
+        <Button type="button" variant="link" size="sm" className="px-0" onClick={() => onCommit(PROVIDER_DEFAULT)}>
           Let the provider decide instead
         </Button>
         <Button type="button" variant="outline" size="sm" onClick={onCancel}>

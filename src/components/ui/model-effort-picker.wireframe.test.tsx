@@ -49,6 +49,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 const LEVELS_MODEL = 'wireframe-fixture/low-medium-high'
 const MUTED_MODEL = 'wireframe-fixture/budget-only'
 const PREVIOUS_MODEL = 'wireframe-fixture/previous'
+const NONE_ONLY_MODEL = 'wireframe-fixture/none-only'
 
 const CATALOG = {
   schema_version: '2.0.0',
@@ -73,6 +74,8 @@ const CATALOG = {
       models: [
         { id: LEVELS_MODEL, reasoning: { levels: ['low', 'medium', 'high'], switch: false } },
         { id: MUTED_MODEL, reasoning: { levels: [], switch: false } },
+        // D2 case 25: High into levels ["none"], no switch, maps to Provider default (no effort field).
+        { id: NONE_ONLY_MODEL, reasoning: { levels: ['none'], switch: false } },
       ].map((m) => ({ ...m, name: m.id, context_window: 128000, max_output_tokens: 8192, input_modalities: ['text'], tool_call: true, status: 'active' })),
     },
   ],
@@ -102,7 +105,8 @@ describe('effort popover as drawn in the wireframes', () => {
     const chip = await screen.findByTestId('chip')
     expect(litBars(chip)).toBe('3')
     await user.click(chip)
-    const dialog = await screen.findByRole('dialog')
+    // CHECK6 F5: the dialog is named by its title.
+    const dialog = await screen.findByRole('dialog', { name: `Effort · ${LEVELS_MODEL}` })
     const title = within(dialog).getByText(`· ${LEVELS_MODEL}`)
     expect(title.parentElement?.textContent).toBe(`Effort · ${LEVELS_MODEL}`)
     expect(within(dialog).getByText(HELP)).toBeInTheDocument()
@@ -193,6 +197,18 @@ describe('chip text as the founder decided (C1 to C3, 2026-11-07)', () => {
     expect(blocked.querySelector('[data-effort-mark="attention"]')).not.toBeNull()
   })
 
+  it('C1 (CHECK6 F1): an inherited level the model turns into Provider default shows "Nothing sent" with the attention dot, never the level', async () => {
+    renderWithCatalog(
+      <EffortControl value={{ provider: 'openrouter', model: NONE_ONLY_MODEL, effort: '' }} scope="chat" inherit="high" data-testid="chip" />,
+    )
+    const chip = await screen.findByTestId('chip')
+    expect(chip.textContent).toBe('Nothing sent')
+    expect(chip).toHaveAttribute('data-effort-inherited', 'true')
+    expect(chip).toHaveAccessibleName("Effort: Not set: Agent's setting: High, nothing sent here")
+    expect(chip.querySelector('[data-effort-mark="attention"]')).not.toBeNull()
+    expect(litBars(chip)).toBeNull()
+  })
+
   it('C2: after /effort the chip shows the gold dot and the level only; the name says "set for this conversation"', async () => {
     renderWithCatalog(
       <EffortControl value={{ provider: 'openrouter', model: LEVELS_MODEL, effort: 'high' }} scope="chat" setByCommand data-testid="chip" />,
@@ -224,6 +240,8 @@ describe('blocked switch step as drawn in the wireframes', () => {
     )
     const { unmount } = renderWithCatalog(view)
     await screen.findByRole('radio', { name: 'Low' })
+    // CHECK6 F5: the blocked step's dialog is named after the switch it finishes.
+    expect(screen.getByRole('dialog', { name: `Finish switching to ${LEVELS_MODEL}` })).toBeInTheDocument()
     expect(screen.getByText(`You stay on ${PREVIOUS_MODEL} until you do.`)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Let the provider decide instead' }))
     expect(onSwitchComplete).toHaveBeenCalledWith('provider_default')
