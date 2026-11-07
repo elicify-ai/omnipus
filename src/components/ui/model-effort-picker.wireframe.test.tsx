@@ -132,8 +132,11 @@ describe('effort popover as drawn in the wireframes', () => {
       <EffortControl value={{ provider: 'openrouter', model: LEVELS_MODEL, effort: 'max' }} scope="default-model" data-testid="chip" />,
     )
     const chip = await screen.findByTestId('chip')
-    // Spec: the value as written plus what is sent, amber dot.
-    expect(chip).toHaveTextContent('Max, sent as High here')
+    // Founder C3 (2026-11-07): the chip shows the level actually used with the
+    // amber dot; the accessible name keeps the saved value and what is sent.
+    expect(chip.textContent).toBe('EffortHigh')
+    expect(chip).toHaveAccessibleName('Effort: Max, sent as High here')
+    expect(chip.querySelector('[data-effort-mark="attention"]')).not.toBeNull()
     expect(screen.getByText(`Saved effort "Max" is no longer offered by ${LEVELS_MODEL}. Turns use High (nearest) until you pick one.`)).toBeInTheDocument()
     await user.click(chip)
     const dialog = await screen.findByRole('dialog')
@@ -157,6 +160,47 @@ describe('effort popover as drawn in the wireframes', () => {
     const muted = await screen.findByTestId('muted')
     expect(muted.firstElementChild?.tagName.toLowerCase()).toBe('svg')
     expect(muted.textContent).toBe('Effort')
+  })
+})
+
+describe('chip text as the founder decided (C1 to C3, 2026-11-07)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchProvidersCatalog).mockResolvedValue(CATALOG)
+  })
+
+  it('C1: an inherited value shows only the level actually used, dashed; the name keeps the source', async () => {
+    renderWithCatalog(
+      <>
+        <EffortControl value={{ provider: 'openrouter', model: LEVELS_MODEL, effort: '' }} scope="chat" inherit="high" data-testid="same" />
+        <EffortControl value={{ provider: 'openrouter', model: LEVELS_MODEL, effort: '' }} scope="chat" inherit="max" data-testid="mapped" />
+        <EffortControl value={{ provider: 'openrouter', model: LEVELS_MODEL, effort: '' }} scope="chat" inherit="off" data-testid="blocked" />
+      </>,
+    )
+    const same = await screen.findByTestId('same')
+    expect(same.textContent).toBe('High')
+    expect(same).toHaveAttribute('data-effort-inherited', 'true')
+    expect(same).toHaveAccessibleName("Effort: Not set: Agent's setting: High")
+    expect(litBars(same)).toBe('3')
+    const mapped = screen.getByTestId('mapped')
+    expect(mapped.textContent).toBe('High')
+    expect(mapped).toHaveAccessibleName("Effort: Not set: Agent's setting: Max, sent as High here")
+    // Spec UI table: an inherited value sent differently keeps the amber dot.
+    expect(mapped.querySelector('[data-effort-mark="attention"]')).not.toBeNull()
+    expect(same.querySelector('[data-effort-mark]')).toBeNull()
+    const blocked = screen.getByTestId('blocked')
+    expect(blocked.textContent).toBe('Nothing sent')
+    expect(blocked).toHaveAccessibleName("Effort: Not set: Agent's setting: Off, nothing sent here")
+    expect(blocked.querySelector('[data-effort-mark="attention"]')).not.toBeNull()
+  })
+
+  it('C2: after /effort the chip shows the gold dot and the level only; the name says "set for this conversation"', async () => {
+    renderWithCatalog(
+      <EffortControl value={{ provider: 'openrouter', model: LEVELS_MODEL, effort: 'high' }} scope="chat" setByCommand data-testid="chip" />,
+    )
+    const chip = await screen.findByTestId('chip')
+    expect(chip.textContent).toBe('High')
+    expect(chip).toHaveAccessibleName('Effort: High, set for this conversation')
+    expect(chip.querySelector('[data-effort-mark="command"]')).not.toBeNull()
   })
 })
 

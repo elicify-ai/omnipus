@@ -117,16 +117,24 @@ function effectiveStored(props: Pick<ModelEffortPickerProps, 'scope' | 'inherit'
 }
 
 /** "Agent's setting: High", plus ", sent as Medium here" / ", nothing sent here" when the model differs (S-12, S-72, S-87). */
-function inheritedText(scope: EffortScope, inherit: string | undefined, row: ServedRow): { text: string; differs: boolean } {
+function inheritedText(
+  scope: EffortScope,
+  inherit: string | undefined,
+  row: ServedRow,
+): { text: string; differs: boolean; used: string | null } {
   const inherited = inherit && inherit !== '' ? inherit : PROVIDER_DEFAULT
   const base = `${inheritPrefix(scope)}: ${effortLabel(inherited)}`
   const mapping = mapEffort(inherited, effortTargetOf(row))
-  if (mapping.blocked) return { text: `${base}, nothing sent here`, differs: true }
+  if (mapping.blocked) return { text: `${base}, nothing sent here`, differs: true, used: null }
   const same =
     mapping.value === inherited || ((mapping.value === 'none' || mapping.value === 'off') && (inherited === 'off' || inherited === 'none'))
-  if (same || mapping.value === NOT_SET || mapping.value === PROVIDER_DEFAULT) return { text: base, differs: false }
-  return { text: `${base}, sent as ${effortLabel(mapping.value)} here`, differs: true }
+  if (same || mapping.value === NOT_SET || mapping.value === PROVIDER_DEFAULT) return { text: base, differs: false, used: inherited }
+  return { text: `${base}, sent as ${effortLabel(mapping.value)} here`, differs: true, used: mapping.value }
 }
+
+/** The chip's visible word when nothing is sent (wireframe `chipLabel`). */
+const NOTHING_SENT = 'Nothing sent'
+
 
 interface EffortRadioListProps {
   items: EffortItem[]
@@ -366,7 +374,11 @@ export interface EffortControlProps extends ModelEffortPickerProps {
 }
 
 interface ChipDescription {
-  /** The chip's visible text. */
+  /**
+   * The chip's visible text: the level actually used (founder C1 to C3,
+   * 2026-11-07, wireframe `chipLabel`). Where it comes from and what was
+   * saved live in the accessible name (`spoken`) and the dashed outline.
+   */
   text: string
   /** The value part of the accessible name. */
   spoken: string
@@ -400,8 +412,14 @@ function describeChip(props: EffortControlProps, row: ServedRow, items: EffortIt
   const stored = effectiveStored(props, props.value.effort)
   if (stored === NOT_SET) {
     const inherited = inheritedText(props.scope, props.inherit, row)
-    const bars = props.inherit && props.inherit !== '' ? props.inherit : undefined
-    return { text: inherited.text, spoken: `Not set: ${inherited.text}`, inherited: true, amber: inherited.differs, bars }
+    const text = inherited.used === null ? NOTHING_SENT : effortLabel(inherited.used)
+    return {
+      text,
+      spoken: `Not set: ${inherited.text}`,
+      inherited: true,
+      amber: inherited.differs,
+      bars: inherited.used ?? undefined,
+    }
   }
   const label = effortLabel(stored)
   if (itemForStored(items, stored) === undefined) {
@@ -413,11 +431,10 @@ function describeChip(props: EffortControlProps, row: ServedRow, items: EffortIt
     const mapping = mapEffort(stored, effortTargetOf(row))
     const nothingSent = mapping.blocked || mapping.value === PROVIDER_DEFAULT || mapping.value === NOT_SET
     const sent = nothingSent ? 'nothing sent here' : `sent as ${effortLabel(mapping.value)} here`
-    const text = `${label}, ${sent}`
     const sentences = staleSentences(stored, props.value.model, nothingSent ? null : effortLabel(mapping.value))
     return {
-      text,
-      spoken: text,
+      text: nothingSent ? NOTHING_SENT : effortLabel(mapping.value),
+      spoken: `${label}, ${sent}`,
       inherited: false,
       amber: true,
       staleReason: sentences.reason,
@@ -425,8 +442,13 @@ function describeChip(props: EffortControlProps, row: ServedRow, items: EffortIt
       hint: props.scope === 'chat' ? undefined : sentences.line,
     }
   }
-  const text = props.setByCommand ? `${label}, set for this conversation` : label
-  return { text, spoken: text, inherited: false, amber: false, bars: stored }
+  return {
+    text: label,
+    spoken: props.setByCommand ? `${label}, set for this conversation` : label,
+    inherited: false,
+    amber: false,
+    bars: stored,
+  }
 }
 
 /** The popover's title "Effort · {model}", then the help line, or the stale-level warning instead of it. */
@@ -624,9 +646,11 @@ export function EffortControl(props: EffortControlProps) {
                 Effort
               </span>
             )}
-            {chip.amber && <span aria-hidden="true" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-warning)]" />}
+            {chip.amber && (
+              <span aria-hidden="true" data-effort-mark="attention" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-warning)]" />
+            )}
             {props.setByCommand && !chip.amber && (
-              <span aria-hidden="true" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-accent)]" />
+              <span aria-hidden="true" data-effort-mark="command" className="h-[var(--space-2)] w-[var(--space-2)] rounded-full bg-[var(--color-accent)]" />
             )}
             {!chip.amber && !props.setByCommand && chip.bars !== undefined && <EffortBars value={chip.bars} />}
             {chip.text}
