@@ -7,10 +7,12 @@
 //     quoted);
 //   - the script of a nested shell: `sh|bash|zsh|dash|ksh|mksh|ash|fish -c
 //     SCRIPT` anywhere in the command (so `find -exec sh -c`, `xargs sh -c`,
-//     `env bash -c` are covered), and the arguments of `eval`.
+//     `env bash -c` are covered), and the arguments of `eval`. These names are
+//     recognised in any letter case, by recognisedProgram alone.
 //
 // Here-documents (Q11 A): exactly one form keeps the rule, the whole command
-// being a plain non-shell program and one plain single-quoted marker
+// being a plain program that is not a recognised shell or eval name and one
+// plain single-quoted marker
 // (isPlainHereDocument). Any other `<<`, wherever it appears in any text
 // scanned here, withholds the rule. There is deliberately no scanner for where
 // other forms end: comments, arithmetic, delimiter quoting and line joining
@@ -32,8 +34,9 @@
 //
 // Residual, stated: a non-shell program that hands its own data to a shell
 // (Python's os.system, perl system, or a program told to run its input) is not
-// followed; the guard reads command text only. The here-document form promises
-// only that the launching shell treats the text as data.
+// followed; the guard reads command text only. Shells are known by name only:
+// a renamed or versioned shell is not recognised. The here-document form
+// promises only that the launching shell treats the text as data.
 
 package tools
 
@@ -105,12 +108,33 @@ func isPlainWord(w string) bool {
 	return w != ""
 }
 
-// isShellOrEval reports a program whose standard input is shell text. Case is
-// ignored: on a case-insensitive filesystem, such as the macOS default, `BASH`
-// runs bash.
+// isShellOrEval reports a program whose standard input is shell text.
 func isShellOrEval(program string) bool {
-	name := strings.ToLower(program)
-	return braceExpandingShells[name] || name == "eval"
+	return recognisedProgram(program) != ""
+}
+
+// recognisedProgram returns the recognised shell or eval name that word spells,
+// or "" for any other word. It is the one place these names are recognised.
+// Letter case is ignored, under the same simple case folding as
+// strings.EqualFold: a case-insensitive filesystem, such as the macOS default,
+// runs bash for `BASH` and for other case-folded spellings of the name.
+func recognisedProgram(word string) string {
+	if strings.EqualFold(word, "eval") {
+		return "eval"
+	}
+	for name := range braceExpandingShells {
+		if strings.EqualFold(word, name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// isRecognisedShell reports a word naming one of braceExpandingShells, in any
+// letter case; eval is not a shell here.
+func isRecognisedShell(word string) bool {
+	name := recognisedProgram(word)
+	return name != "" && name != "eval"
 }
 
 func mayBraceExpand(cmd string, depth int) bool {
@@ -239,13 +263,13 @@ func redirectionOperatorEnd(cmd string, mask []bool, op int) int {
 // arguments of eval and the script of any brace-expanding shell in it.
 func simpleCommandMayBraceExpand(words []string, depth int) bool {
 	for i, w := range words {
-		if w == "eval" && i+1 < len(words) {
+		if recognisedProgram(w) == "eval" && i+1 < len(words) {
 			if mayBraceExpand(strings.Join(words[i+1:], " "), depth+1) {
 				return true
 			}
 			continue
 		}
-		if braceExpandingShells[filepath.Base(w)] && nestedShellMayBraceExpand(words[i+1:], depth) {
+		if isRecognisedShell(filepath.Base(w)) && nestedShellMayBraceExpand(words[i+1:], depth) {
 			return true
 		}
 	}
