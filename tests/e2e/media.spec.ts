@@ -102,7 +102,11 @@ async function waitForTurnFullyDone(page: Page, gapMs = 8_000, followUpCeilingMs
     // Stop button appeared — wait for it to vanish (follow-up LLM call done).
     await expect(stopBtn).not.toBeVisible({ timeout: followUpCeilingMs });
   } catch {
-    // Stop button did not reappear within gapMs — the turn is fully done.
+    // ADVISORY ONLY (inherited catch, not completion proof): this runs when
+    // the stop button did not reappear within gapMs (the usual meaning: no
+    // follow-up call) OR when the follow-up call's disappearance wait expired
+    // (the turn may STILL be running). It deliberately does not decide
+    // anything; the delivery assertions that follow are the oracle.
   }
 }
 
@@ -211,18 +215,7 @@ test(
   // detection returns for a plain-text file — so this is robust even if
   // magic-byte detection is inconclusive for text.
   async ({ page }) => {
-    // Budget (WORST-CASE ceiling, computed the same way test (a) above and
-    // chat.spec.ts (b) were: test.setTimeout is a hard governor, so it must
-    // sum every step's own worst-case timeout, INCLUDING the
-    // waitForTurnFullyDone leg added below for the same mid-turn done:true
-    // blip race (a) documents):
-    //   Sidebar agent selection + input visibility ..................... ~35s
-    //   assistantMessages toHaveCount ceiling ........................... 60s
-    //   waitForTurnFullyDone: gapMs(8s) + follow-up ceiling(60s) ........ 68s
-    //   downloadLink toBeVisible ceiling ................................ 15s
-    //   download event + path + read-back ............................... ~20s
-    //   a11y scan ......................................................... 10s
-    // Worst-case total: 35 + 60 + 68 + 15 + 20 + 10 = 208s.
+    // Outer budget for this test. See the evidence and allowance table below.
     //
     // WHAT THE CI EVIDENCE DOES AND DOES NOT SHOW (shard llm-light,
     // pw-results.json of release/v0.1.1 runs 42252059326, 42334402301 and
